@@ -286,6 +286,18 @@ function wireLedger(container, members) {
   });
 }
 
+// Pull the pay memo out of a ledger row's meta JSON. `meta` arrives as a raw
+// string and is absent on most kinds, so anything unparseable is just "no memo".
+function memoOf(meta) {
+  if (!meta) return null;
+  try {
+    const memo = JSON.parse(meta).memo;
+    return typeof memo === "string" && memo ? memo : null;
+  } catch {
+    return null;
+  }
+}
+
 async function refreshLedger(container, members) {
   const host = container.querySelector("[data-ledger]");
   const picked = _ledgerMemberPicker ? _ledgerMemberPicker.getValue() : "0";
@@ -308,6 +320,7 @@ async function refreshLedger(container, members) {
   }
   const rows = entries.map((e) => {
     const sign = e.amount >= 0 ? "+" : "";
+    const memo = memoOf(e.meta);
     return `
       <tr>
         <td>${fmtTs(e.created_at)}</td>
@@ -315,12 +328,13 @@ async function refreshLedger(container, members) {
         <td>${esc(e.kind)}</td>
         <td style="text-align:right;">${sign}${e.amount}</td>
         <td>${e.actor_id ? esc(memberName(members, e.actor_id)) : "—"}</td>
+        <td>${memo ? esc(memo) : "—"}</td>
       </tr>`;
   }).join("");
   host.innerHTML = `
     <div style="overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>When</th><th>Member</th><th>Kind</th><th>Amount</th><th>By</th></tr></thead>
+        <thead><tr><th>When</th><th>Member</th><th>Kind</th><th>Amount</th><th>By</th><th>Memo</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;

@@ -390,7 +390,10 @@ both.
 (default **on**) is the kill switch for alt-funneling; `/bank pay` refuses with a
 branded notice when it is off. **Transfers do not mint** — the recipient's
 `transfer_in` credit takes **no** booster multiplier (the ×1.5 is a faucet-only patron
-bonus); a transfer only moves existing currency between wallets.
+bonus); a transfer only moves existing currency between wallets. An optional
+**memo** rides `/bank pay` — collapsed to a single trimmed line and length-capped,
+stored verbatim under a `memo` key on both ledger rows and surfaced (escaped at
+render time) in the wallet ledger and the dashboard bank-manager ledger.
 
 ## 6. Sinks (The Perk Shop)
 
@@ -414,6 +417,25 @@ takes effect on the next cycle, never retroactively.
 | Private voice room | 200 | §8 (Stage 2) |
 | Gift-a-color | 50 | Payer funds a friend's solid color |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
+
+**Curated role-icon catalog (currency sink).** Alongside bring-your-own icon
+uploads, an admin can stock a per-guild catalog of named role icons, each with its
+own weekly price, from the **Sinks** dashboard page — which also now **owns the flat
+perk prices** (moved off the Settings panel). When a catalog exists, `/bank shop`'s
+role-icon row becomes a picker of curated icons (Discord caps the select at 25) instead
+of a single flat-priced Rent button; choosing one rents or switches to it. It reuses the
+existing `role_icon` rental perk and the personal-role projector — **no new perk kind
+and no `econ_rentals.perk` CHECK change**: the rented catalog icon id is recorded on the
+rental (`catalog_icon_id`; NULL = a legacy/bring-your-own rental at the flat
+`price_role_icon`) and its image is projected as the role's `display_icon`. Billing
+snapshots the icon's price at rent time and re-reads the **current** catalog price at each
+renewal (like the flat perks), with a defensive fallback to the flat price if the row ever
+disappears. Disabling an icon (`enabled = 0`) hides it from new renters without touching
+current renters; a hard delete is blocked while any live rental points at the row, so a
+member always keeps the icon they paid for. Because the projector diffs the role icon by
+**presence only** (it can't read an uploaded asset's bytes back),
+`econ_personal_roles.projected_icon_path` records what was last projected, so a member
+*switching* from one icon to another forces the re-upload.
 
 **Personal roles:** one per member, auto-created **positioned above the booster
 cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented colour wins the

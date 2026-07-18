@@ -739,6 +739,34 @@ def test_transfer_roundtrip_moves_balance_and_ledgers_both_sides(db):
         assert json.loads(inc["meta"]) == {"from": USER}
 
 
+def test_transfer_memo_lands_on_both_ledger_sides(db):
+    import json
+
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+    with open_db(db) as conn:
+        transfer_currency(conn, GUILD, USER, OTHER, 30, memo="rent money")
+    with open_db(db) as conn:
+        out = get_ledger(conn, GUILD, USER, limit=1)[0]
+        assert json.loads(out["meta"]) == {"to": OTHER, "memo": "rent money"}
+        inc = get_ledger(conn, GUILD, OTHER, limit=1)[0]
+        assert json.loads(inc["meta"]) == {"from": USER, "memo": "rent money"}
+
+
+def test_transfer_without_memo_omits_the_key(db):
+    """No memo must leave meta exactly as it was before memos existed."""
+    import json
+
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+    with open_db(db) as conn:
+        transfer_currency(conn, GUILD, USER, OTHER, 30, memo=None)
+    with open_db(db) as conn:
+        assert json.loads(get_ledger(conn, GUILD, USER, limit=1)[0]["meta"]) == {
+            "to": OTHER
+        }
+
+
 def test_transfer_insufficient_is_zero_write(db):
     with open_db(db) as conn:
         apply_credit(conn, GUILD, USER, 10, "grant")

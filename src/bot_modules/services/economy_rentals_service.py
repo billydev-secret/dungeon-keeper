@@ -61,11 +61,15 @@ _PERKS = ("role_color", "role_name", "role_icon", "role_gradient", "gift_color")
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "
     "grace_since, cancel_at_period_end, suspended, suspended_since, "
-    "beneficiary_id, meta, created_at"
+    "beneficiary_id, catalog_icon_id, meta, created_at"
 )
 
 # Personal-role columns a caller may write via upsert_personal_role.
-_PERSONAL_ROLE_FIELDS = frozenset({"role_id", "name", "color", "color2", "icon_path"})
+# ``projected_icon_path`` is projector bookkeeping (what icon is currently on the
+# Discord role) — writable so the projector can record an icon switch it applied.
+_PERSONAL_ROLE_FIELDS = frozenset(
+    {"role_id", "name", "color", "color2", "icon_path", "projected_icon_path"}
+)
 
 
 @dataclass(frozen=True)
@@ -80,8 +84,36 @@ class BillingResult:
     beneficiary_id: int
 
 
-def _price_for(settings: EconSettings, perk: str) -> int:
-    """The current per-guild weekly price for a perk (settings.price_<perk>)."""
+def _catalog_icon_price(
+    conn: sqlite3.Connection, guild_id: int, icon_id: int
+) -> int | None:
+    """The current weekly price of a catalog icon, or None if the row is gone."""
+    row = conn.execute(
+        "SELECT price FROM econ_icon_catalog WHERE guild_id = ? AND id = ?",
+        (guild_id, icon_id),
+    ).fetchone()
+    return int(row["price"]) if row is not None else None
+
+
+def _price_for(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    perk: str,
+    catalog_icon_id: int | None,
+) -> int:
+    """The current weekly price for a rental.
+
+    A ``role_icon`` rental tied to a catalog icon bills that icon's CURRENT
+    price (re-read every renewal, so an admin price edit lands at the next
+    anniversary — spec §6/§9); if the icon row has vanished it falls back to the
+    flat ``settings.price_role_icon``. Every other rental bills the flat
+    ``settings.price_<perk>``.
+    """
+    if perk == "role_icon" and catalog_icon_id:
+        price = _catalog_icon_price(conn, guild_id, int(catalog_icon_id))
+        if price is not None:
+            return price
     return int(getattr(settings, f"price_{perk}"))
 
 
@@ -115,17 +147,21 @@ def rent_perk(
     perk: str,
     *,
     beneficiary_id: int | None = None,
+    catalog_icon_id: int | None = None,
     now: float | None = None,
 ) -> sqlite3.Row:
     """Rent a perk: charge the first week upfront and open a live rental row.
 
-    The price is snapshotted from ``settings`` at rent time (renewals re-read
-    the then-current price). ``beneficiary_id`` defaults to ``user_id`` (the
-    friend for gift_color) and is always stored non-NULL so the live-rental
-    unique index fires. Raises ValueError: unknown ``perk``; "already rented"
-    when a live rental for this (perk, beneficiary) exists (IntegrityError on
-    the partial unique index); "insufficient" when the upfront debit fails
-    (guarded UPDATE → zero writes, and the whole insert rolls back with it).
+    The price is snapshotted at rent time (renewals re-read the then-current
+    price). ``catalog_icon_id`` ties a ``role_icon`` rental to a curated catalog
+    icon, whose per-icon price is billed instead of the flat
+    ``settings.price_role_icon`` (NULL = a bring-your-own icon at the flat
+    price). ``beneficiary_id`` defaults to ``user_id`` (the friend for
+    gift_color) and is always stored non-NULL so the live-rental unique index
+    fires. Raises ValueError: unknown ``perk``; "already rented" when a live
+    rental for this (perk, beneficiary) exists (IntegrityError on the partial
+    unique index); "insufficient" when the upfront debit fails (guarded UPDATE →
+    zero writes, and the whole insert rolls back with it).
     """
     if perk not in _PERKS:
         # Validate BEFORE the insert so the perk CHECK can never masquerade as
@@ -133,7 +169,7 @@ def rent_perk(
         raise ValueError(f"unknown perk: {perk!r}")
     now = time.time() if now is None else now
     beneficiary = user_id if beneficiary_id is None else beneficiary_id
-    price = _price_for(settings, perk)
+    price = _price_for(conn, settings, guild_id, perk, catalog_icon_id)
     next_bill_at = now + WEEK_SECONDS
 
     try:
@@ -142,10 +178,13 @@ def rent_perk(
             INSERT INTO econ_rentals
                 (guild_id, user_id, perk, state, price, started_at,
                  next_bill_at, cancel_at_period_end, suspended,
-                 beneficiary_id, created_at)
-            VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 0, ?, ?)
+                 beneficiary_id, catalog_icon_id, created_at)
+            VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 0, ?, ?, ?)
             """,
-            (guild_id, user_id, perk, price, now, next_bill_at, beneficiary, now),
+            (
+                guild_id, user_id, perk, price, now, next_bill_at, beneficiary,
+                catalog_icon_id, now,
+            ),
         )
     except sqlite3.IntegrityError as exc:
         # Only idx_econ_rentals_live can fire — perk/state CHECKs are guarded
@@ -273,6 +312,41 @@ def list_member_rentals(
     ).fetchall()
 
 
+def get_live_role_icon_rental(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    """The member's live (active|grace) ``role_icon`` rental, or None.
+
+    Self-perk, so the renter is the beneficiary — used by the catalog flow to
+    decide between renting a new icon and switching an existing rental's icon.
+    """
+    return conn.execute(
+        f"""
+        SELECT {_RENTAL_COLS} FROM econ_rentals
+        WHERE guild_id = ? AND user_id = ? AND perk = 'role_icon'
+          AND state IN ('active', 'grace')
+        LIMIT 1
+        """,
+        (guild_id, user_id),
+    ).fetchone()
+
+
+def set_rental_catalog_icon(
+    conn: sqlite3.Connection, guild_id: int, rental_id: int, catalog_icon_id: int
+) -> None:
+    """Point a live rental at a different catalog icon (an in-week icon switch).
+
+    Only the icon tag changes here — no charge and no price snapshot update, so
+    the member finishes the week they already paid for and the newly chosen
+    icon's price takes effect at the next renewal (``bill_rental`` re-reads it),
+    matching how a mid-rental price change behaves.
+    """
+    conn.execute(
+        "UPDATE econ_rentals SET catalog_icon_id = ? WHERE guild_id = ? AND id = ?",
+        (catalog_icon_id, guild_id, rental_id),
+    )
+
+
 # ── billing ────────────────────────────────────────────────────────────
 
 
@@ -328,7 +402,9 @@ def bill_rental(
         return _result(BillingAction.REVOKE)
 
     # CHARGE (first attempt this period) or RETRY (in grace) both try the debit.
-    price = _price_for(settings, perk)
+    price = _price_for(
+        conn, settings, int(rental["guild_id"]), perk, rental["catalog_icon_id"]
+    )
     ok = apply_debit(
         conn, rental["guild_id"], user_id, price, "rental",
         actor_id=user_id, meta={"rental_id": rental_id, "perk": perk, "renewal": True},
@@ -427,7 +503,8 @@ def get_personal_role(
     """The member's desired personal-role state, or None if never configured."""
     return conn.execute(
         """
-        SELECT guild_id, user_id, role_id, name, color, color2, icon_path, updated_at
+        SELECT guild_id, user_id, role_id, name, color, color2, icon_path,
+               projected_icon_path, updated_at
         FROM econ_personal_roles WHERE guild_id = ? AND user_id = ?
         """,
         (guild_id, user_id),
@@ -454,6 +531,7 @@ def upsert_personal_role(
         "color": -1,
         "color2": -1,
         "icon_path": "",
+        "projected_icon_path": "",
     }
     if existing is not None:
         for k in merged:
@@ -462,19 +540,21 @@ def upsert_personal_role(
     conn.execute(
         """
         INSERT INTO econ_personal_roles
-            (guild_id, user_id, role_id, name, color, color2, icon_path, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (guild_id, user_id, role_id, name, color, color2, icon_path,
+             projected_icon_path, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
-            role_id    = excluded.role_id,
-            name       = excluded.name,
-            color      = excluded.color,
-            color2     = excluded.color2,
-            icon_path  = excluded.icon_path,
-            updated_at = excluded.updated_at
+            role_id             = excluded.role_id,
+            name                = excluded.name,
+            color               = excluded.color,
+            color2              = excluded.color2,
+            icon_path           = excluded.icon_path,
+            projected_icon_path = excluded.projected_icon_path,
+            updated_at          = excluded.updated_at
         """,
         (
             guild_id, user_id, merged["role_id"], merged["name"], merged["color"],
-            merged["color2"], merged["icon_path"], now,
+            merged["color2"], merged["icon_path"], merged["projected_icon_path"], now,
         ),
     )
 

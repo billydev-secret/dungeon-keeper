@@ -298,6 +298,8 @@ def transfer_currency(
     from_id: int,
     to_id: int,
     amount: int,
+    *,
+    memo: str | None = None,
 ) -> None:
     """Move ``amount`` between two wallets as one atomic debit + credit.
 
@@ -305,24 +307,31 @@ def transfer_currency(
     funds — the debit rides ``apply_debit``'s guarded UPDATE, so an
     insufficient balance fails with ZERO writes (no ledger row, no credit).
     Both sides are ledgered: ``transfer_out`` (meta ``{"to": to_id}``) and
-    ``transfer_in`` (meta ``{"from": from_id}``). Transfers do NOT mint — the
-    booster multiplier is intentionally never applied to the credit, so the
-    recipient gets exactly what the sender paid. Rides the caller's
+    ``transfer_in`` (meta ``{"from": from_id}``). An optional ``memo`` is
+    stored verbatim under a ``memo`` key on both rows; callers are responsible
+    for trimming/capping it and for escaping at render time. Transfers do NOT
+    mint — the booster multiplier is intentionally never applied to the credit,
+    so the recipient gets exactly what the sender paid. Rides the caller's
     connection/transaction as the commit boundary.
     """
     if amount < 1:
         raise ValueError("transfer amount must be >= 1")
     if from_id == to_id:
         raise ValueError("cannot transfer to yourself")
+    out_meta: dict = {"to": to_id}
+    in_meta: dict = {"from": from_id}
+    if memo:
+        out_meta["memo"] = memo
+        in_meta["memo"] = memo
     debited = apply_debit(
         conn, guild_id, from_id, amount, "transfer_out",
-        actor_id=from_id, meta={"to": to_id},
+        actor_id=from_id, meta=out_meta,
     )
     if not debited:
         raise ValueError("insufficient funds")
     apply_credit(
         conn, guild_id, to_id, amount, "transfer_in",
-        actor_id=from_id, meta={"from": from_id},
+        actor_id=from_id, meta=in_meta,
     )
 
 

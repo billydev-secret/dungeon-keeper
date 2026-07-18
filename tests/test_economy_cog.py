@@ -21,6 +21,7 @@ from bot_modules.services.economy_quests_service import (
 from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,
+    get_ledger,
     get_notify_muted,
     load_econ_settings,
     notify_member,
@@ -2073,3 +2074,142 @@ async def test_onboarding_dm_skipped_without_flagged_quests(ctx, db):
             (GUILD_ID,),
         ).fetchone()
     assert row["c"] == 0
+
+
+# ── pay memo ─────────────────────────────────────────────────────────
+
+
+def test_clean_memo_collapses_whitespace_and_caps_length():
+    from bot_modules.cogs.economy_cog import _MAX_MEMO_LEN, _clean_memo
+
+    assert _clean_memo("  rent   money  ") == "rent money"
+    # Newlines would break the one-line wallet/ledger renders.
+    assert _clean_memo("rent\nmoney") == "rent money"
+    assert _clean_memo(None) is None
+    assert _clean_memo("   ") is None
+    assert len(_clean_memo("x" * 500)) == _MAX_MEMO_LEN
+
+
+def test_memo_of_tolerates_missing_and_malformed_meta():
+    from bot_modules.cogs.economy_cog import _memo_of
+
+    assert _memo_of('{"to": 1, "memo": "hi"}') == "hi"
+    assert _memo_of('{"to": 1}') is None
+    assert _memo_of(None) is None
+    assert _memo_of("") is None
+    assert _memo_of("not json") is None
+    # A non-string memo must not crash the render.
+    assert _memo_of('{"memo": 5}') is None
+
+
+def test_fit_lines_keeps_newest_rows_under_the_field_cap():
+    from bot_modules.cogs.economy_cog import _fit_lines
+
+    short = ["a", "b", "c"]
+    assert _fit_lines(short) == "a\nb\nc"
+    # Ten max-length memo rows must not overrun the 1024-char embed field.
+    fat = [("x" * 200) for _ in range(10)]
+    out = _fit_lines(fat)
+    assert len(out) <= 1024
+    assert out.startswith("x")
+
+
+async def _pay(cog, interaction, member, amount, memo=None) -> None:
+    await cog.bank_pay.callback(cog, interaction, member, amount, memo)
+
+
+@pytest.mark.asyncio
+async def test_pay_memo_reaches_ledger_embed_and_dm(ctx, db):
+    _enable(db, transfers_enabled=True)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 50, "grant")
+
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Payer"))
+    recipient = _member(member_id=600, name="Payee")
+
+    with patch("bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()) as notify:
+        await _pay(cog, interaction, recipient, 20, "  rent   money ")
+
+    # Sender's confirmation embed carries the normalised memo.
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert embed.title == "Payment sent"
+    assert "rent money" in embed.description
+
+    # Recipient's DM carries it too.
+    assert "rent money" in notify.await_args.kwargs["content"]
+
+    # And both ledger sides persist it.
+    with open_db(db) as conn:
+        out = get_ledger(conn, GUILD_ID, 500, limit=1)[0]
+        inc = get_ledger(conn, GUILD_ID, 600, limit=1)[0]
+    import json
+
+    assert json.loads(out["meta"])["memo"] == "rent money"
+    assert json.loads(inc["meta"])["memo"] == "rent money"
+
+
+@pytest.mark.asyncio
+async def test_pay_without_memo_is_unchanged(ctx, db):
+    _enable(db, transfers_enabled=True)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 50, "grant")
+
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with patch("bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()) as notify:
+        await _pay(cog, interaction, _member(member_id=600), 20)
+
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert embed.title == "Payment sent"
+    # A memo would appear as its own trailing paragraph; the base line has none.
+    assert "\n\n" not in embed.description
+    assert '"' not in notify.await_args.kwargs["content"]
+    with open_db(db) as conn:
+        assert "memo" not in get_ledger(conn, GUILD_ID, 500, limit=1)[0]["meta"]
+
+
+@pytest.mark.asyncio
+async def test_pay_memo_cannot_ping_via_the_dm_path(ctx, db):
+    """The DM/bank-channel fallback sends raw content — @everyone must not ping."""
+    _enable(db, transfers_enabled=True)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 50, "grant")
+
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with patch("bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()) as notify:
+        await _pay(cog, interaction, _member(member_id=600), 20, "@everyone pay up")
+
+    assert "@everyone" not in notify.await_args.kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_pay_memo_survives_the_large_amount_confirm_gate(ctx, db):
+    _enable(db, transfers_enabled=True)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 5000, "grant")
+
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    recipient = _member(member_id=600)
+    await _pay(cog, interaction, recipient, 500, "big one")
+
+    # Over the threshold we get a confirm view, not a transfer.
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["embed"].title == "Confirm payment"
+    assert "big one" in kwargs["embed"].description
+    view = kwargs["view"]
+    assert view.memo == "big one"
+
+    # Confirming carries the memo through to the ledger.
+    confirm_button = next(c for c in view.children if c.label == "Confirm")
+    confirm_inter = _interaction(_member(member_id=500))
+    with patch("bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()):
+        await confirm_button.callback(confirm_inter)
+    with open_db(db) as conn:
+        import json
+
+        assert json.loads(get_ledger(conn, GUILD_ID, 500, limit=1)[0]["meta"])[
+            "memo"
+        ] == "big one"

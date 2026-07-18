@@ -181,6 +181,16 @@ async def apply_role_perks(
     )
     want_icon = "role_icon" in applied and icon_payload is not None
 
+    # Icon-switch detection. The reconcile diffs the role icon by PRESENCE only
+    # (an uploaded Asset's bytes can't be read back), so switching from one icon
+    # to another — both "have an icon" — would emit no edit. We remember the
+    # icon spec we last projected (``projected_icon_path``) and force the
+    # re-upload when the desired spec differs. ``want_projected`` is the spec we
+    # want on the role after this pass ('' when the icon isn't wanted).
+    stored_projected = str(desired["projected_icon_path"]) if desired else ""
+    want_projected = str(desired["icon_path"]) if (desired and want_icon) else ""
+    icon_changed = want_icon and want_projected != stored_projected
+
     role = guild.get_role(d_role_id) if d_role_id else None
 
     if role is None:
@@ -197,14 +207,31 @@ async def apply_role_perks(
             from bot_modules.core.db_utils import open_db
 
             with open_db(db_path) as conn:
-                upsert_personal_role(conn, guild_id, user_id, {"role_id": role.id})
+                upsert_personal_role(
+                    conn, guild_id, user_id,
+                    {"role_id": role.id, "projected_icon_path": want_projected},
+                )
 
         await asyncio.to_thread(_persist)
     else:
         if not await _reconcile_role(
-            role, target_name, target_color, target_secondary, want_icon, icon_payload
+            role, target_name, target_color, target_secondary,
+            want_icon, icon_payload, icon_changed,
         ):
             return False
+        # Record the icon we just projected so the next switch is detectable.
+        if want_projected != stored_projected:
+
+            def _persist_icon() -> None:
+                from bot_modules.core.db_utils import open_db
+
+                with open_db(db_path) as conn:
+                    upsert_personal_role(
+                        conn, guild_id, user_id,
+                        {"projected_icon_path": want_projected},
+                    )
+
+            await asyncio.to_thread(_persist_icon)
 
     # Make sure the member actually wears it.
     if role not in getattr(member, "roles", ()):
@@ -241,6 +268,7 @@ async def _reconcile_role(
     target_secondary: discord.Colour | None,
     want_icon: bool,
     icon_payload: bytes | str | None,
+    icon_changed: bool,
 ) -> bool:
     """Edit only the attributes that differ — steady state costs zero edits."""
     edits: dict = {}
@@ -251,11 +279,13 @@ async def _reconcile_role(
     cur_secondary = getattr(role, "secondary_colour", None)
     if cur_secondary != target_secondary:
         edits["secondary_color"] = target_secondary
-    # Icon: presence-diff only (can't cheaply read an Asset's bytes back), so we
-    # set when the role has none, clear when it shouldn't, and assume unchanged
-    # when both present — never re-upload on a steady state.
+    # Icon: the role can't hand back an uploaded Asset's bytes, so we diff by
+    # presence PLUS the caller's ``icon_changed`` flag (desired spec differs from
+    # what we last projected). Upload when the role has no icon OR the member
+    # switched to a different one; clear when it shouldn't have one; otherwise
+    # leave it — a steady state never re-uploads.
     role_has_icon = getattr(role, "display_icon", None) is not None
-    if want_icon and not role_has_icon:
+    if want_icon and (not role_has_icon or icon_changed):
         edits["display_icon"] = icon_payload
     elif not want_icon and role_has_icon:
         edits["display_icon"] = None

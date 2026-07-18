@@ -283,6 +283,45 @@ async def test_apply_downgrade_clears_secondary_and_icon(db):
 
 
 @pytest.mark.asyncio
+async def test_apply_switches_icon_when_desired_changes(db):
+    """A different desired icon re-uploads even though the role already has one.
+
+    Regression guard: the reconcile diffs the icon by presence only, so without
+    the projected-icon tracking a catalog switch (both states "have an icon")
+    would emit no edit and keep the stale icon.
+    """
+    _add_rental(db, "role_icon")
+    _set_desired(db, role_id=999, icon_path="/icons/b", projected_icon_path="/icons/a")
+    existing = _role(999, name="Ziggy", icon=MagicMock())  # already wears an icon
+    guild = _guild(
+        roles=[existing], member=_member(roles=[existing]), features=("ROLE_ICONS",)
+    )
+
+    await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
+
+    edits = existing.edit.await_args.kwargs
+    assert edits["display_icon"] == "/icons/b"  # a non-file spec projects as-is
+    with open_db(db) as conn:
+        row = get_personal_role(conn, GUILD_ID, USER_ID)
+    assert row["projected_icon_path"] == "/icons/b"  # advanced for the next switch
+
+
+@pytest.mark.asyncio
+async def test_apply_does_not_reupload_unchanged_icon(db):
+    """Same desired icon already projected ⇒ steady state, no re-upload."""
+    _add_rental(db, "role_icon")
+    _set_desired(db, role_id=999, icon_path="/icons/a", projected_icon_path="/icons/a")
+    existing = _role(999, name="Ziggy", icon=MagicMock())
+    guild = _guild(
+        roles=[existing], member=_member(roles=[existing]), features=("ROLE_ICONS",)
+    )
+
+    await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
+
+    existing.edit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_apply_is_noop_when_role_already_matches(db):
     _add_rental(db, "role_color")
     _set_desired(db, color=0x123456, role_id=999)

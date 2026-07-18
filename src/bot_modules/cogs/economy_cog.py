@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import re
 import time
@@ -62,11 +63,18 @@ from bot_modules.services.economy_quests_service import (
     list_trigger_quests,
     mark_onboarding_dm,
 )
+from bot_modules.services.economy_icon_catalog_service import (
+    catalog_price_range,
+    get_catalog_icon,
+    list_catalog,
+)
 from bot_modules.services.economy_rentals_service import (
     cancel_all_for_member,
     entitlements,
+    get_live_role_icon_rental,
     list_member_rentals,
     rent_perk,
+    set_rental_catalog_icon,
     upsert_personal_role,
 )
 from bot_modules.services.economy_service import (
@@ -100,6 +108,11 @@ _QOTD_CARD_FILENAME = "qotd.png"
 # Transfers above this need an explicit confirm step (spec §5, "over 100").
 _PAY_CONFIRM_THRESHOLD = 100
 _MAX_ROLE_NAME_LEN = 32
+_MAX_MEMO_LEN = 100
+# Memos are shortened further in the one-line wallet render, and the joined
+# field is bounded — Discord rejects an embed field over 1024 chars.
+_WALLET_MEMO_LEN = 40
+_EMBED_FIELD_LIMIT = 1024
 _MAX_ICON_BYTES = 256 * 1024
 
 # Human labels for the rentable perks (shop rows, wallet field, DMs).
@@ -278,6 +291,55 @@ def _can_grant(user: discord.Member, settings: EconSettings) -> bool:
     return can_manage_economy(user, settings)
 
 
+def _clean_memo(memo: str | None) -> str | None:
+    """Collapse a pay memo to a single trimmed line, or None if it's empty.
+
+    Newlines would break the one-line-per-row wallet and ledger renders, so
+    they collapse to spaces. The Range on the command caps length client-side;
+    the truncation here is the server-side guard.
+    """
+    if not memo:
+        return None
+    cleaned = " ".join(memo.split())
+    if not cleaned:
+        return None
+    return cleaned[:_MAX_MEMO_LEN]
+
+
+def _ellipsis(text: str, limit: int = _WALLET_MEMO_LEN) -> str:
+    """Shorten a memo for the cramped one-line wallet render."""
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _fit_lines(lines: list[str], limit: int = _EMBED_FIELD_LIMIT) -> str:
+    """Join as many leading lines as fit an embed field.
+
+    Memos make each activity row variable-length, so ten of them can overrun
+    the 1024-char field cap and make Discord reject the whole wallet embed.
+    Dropping the oldest rows keeps the newest visible rather than 400-ing.
+    """
+    out: list[str] = []
+    used = 0
+    for line in lines:
+        cost = len(line) + (1 if out else 0)
+        if used + cost > limit:
+            break
+        out.append(line)
+        used += cost
+    return "\n".join(out)
+
+
+def _memo_of(row_meta: str | None) -> str | None:
+    """Pull the memo out of a ledger row's meta JSON, tolerating junk."""
+    if not row_meta:
+        return None
+    try:
+        memo = json.loads(row_meta).get("memo")
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return memo if isinstance(memo, str) and memo else None
+
+
 class _PayConfirmView(discord.ui.View):
     """Ephemeral Confirm/Cancel gate for a transfer over the threshold."""
 
@@ -289,6 +351,7 @@ class _PayConfirmView(discord.ui.View):
         sender: discord.Member,
         recipient: discord.Member,
         amount: int,
+        memo: str | None = None,
     ) -> None:
         super().__init__(timeout=60)
         self.cog = cog
@@ -297,6 +360,7 @@ class _PayConfirmView(discord.ui.View):
         self.sender = sender
         self.recipient = recipient
         self.amount = amount
+        self.memo = memo
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.sender.id:
@@ -313,7 +377,7 @@ class _PayConfirmView(discord.ui.View):
         self.stop()
         await self.cog.finalize_pay(
             interaction, self.settings, self.guild, self.sender, self.recipient,
-            self.amount, via_confirm=True,
+            self.amount, memo=self.memo, via_confirm=True,
         )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
@@ -406,6 +470,70 @@ _CUSTOMISE_LABELS = {
 }
 
 
+# Discord caps a select at 25 options; a larger catalog shows its first 25
+# (by sort order) and tells the member the list was trimmed.
+_ICON_SELECT_LIMIT = 25
+
+
+class _IconCatalogSelect(discord.ui.Select):
+    """A picker of curated role icons; choosing one rents or switches to it."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        icons: list[dict],
+    ) -> None:
+        options = [
+            discord.SelectOption(
+                label=str(icon["name"])[:100],
+                value=str(icon["id"]),
+                description=(
+                    f"{settings.currency_emoji} {int(icon['price']):,} / week"
+                )[:100],
+            )
+            for icon in icons[:_ICON_SELECT_LIMIT]
+        ]
+        super().__init__(
+            placeholder="Choose a role icon…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        self.cog = cog
+        self.guild = guild
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.cog.pick_catalog_icon(
+            interaction, self.guild, int(self.values[0])
+        )
+
+
+class _IconCatalogView(discord.ui.View):
+    """Ephemeral catalog picker, scoped to the member who opened the shop."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        icons: list[dict],
+    ) -> None:
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.add_item(_IconCatalogSelect(cog, settings, guild, icons))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "Open your own shop with /bank shop.", ephemeral=True
+            )
+            return False
+        return True
+
+
 class _ShopView(discord.ui.View):
     """One button per self-perk: Rent when unowned, a customise modal when owned.
 
@@ -422,6 +550,7 @@ class _ShopView(discord.ui.View):
         user_id: int,
         gated: set[str],
         owned: set[str],
+        has_catalog: bool = False,
     ) -> None:
         super().__init__(timeout=120)
         self.cog = cog
@@ -429,6 +558,23 @@ class _ShopView(discord.ui.View):
         self.guild = guild
         self.user_id = user_id
         for perk in _SELF_PERKS:
+            if perk == "role_icon" and has_catalog:
+                # A curated catalog replaces the rent/customise buttons with a
+                # single picker — renting and restyling both happen by choosing
+                # an icon (each carries its own price).
+                button = discord.ui.Button(
+                    label="Change icon" if perk in owned else "Browse icons",
+                    style=(
+                        discord.ButtonStyle.success
+                        if perk in owned
+                        else discord.ButtonStyle.primary
+                    ),
+                    disabled=perk in gated,
+                    custom_id="econ_shop_icons",
+                )
+                button.callback = self._make_icons_callback()
+                self.add_item(button)
+                continue
             if perk in owned:
                 button = discord.ui.Button(
                     label=_CUSTOMISE_LABELS[perk],
@@ -473,6 +619,12 @@ class _ShopView(discord.ui.View):
     def _make_cfg_callback(self, perk: str):
         async def _cb(interaction: discord.Interaction) -> None:
             await self.cog.open_customise_modal(interaction, perk)
+
+        return _cb
+
+    def _make_icons_callback(self):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.open_icon_catalog(interaction, self.settings, self.guild)
 
         return _cb
 
@@ -616,6 +768,11 @@ class ShopRentButton(
                 "That perk isn't available right now.", ephemeral=True
             )
             return
+        if self.perk == "role_icon" and await asyncio.to_thread(
+            cog._has_catalog, guild.id
+        ):
+            await cog.open_icon_catalog(interaction, settings, guild)
+            return
         await _rent_perk_flow(interaction, cog, settings, guild, self.perk)
 
 
@@ -626,11 +783,15 @@ def _build_shop_embed(
     *,
     panel: bool = False,
     owned: set[str] | frozenset[str] = frozenset(),
+    icon_price_range: tuple[int, int] | None = None,
 ) -> discord.Embed:
     """The shop listing, shared by /bank shop and the channel panel.
 
     ``owned`` marks the viewer's rented rows — only meaningful for the
     ephemeral per-member view; the channel panel is member-agnostic.
+    ``icon_price_range`` is the (min, max) weekly price across the guild's
+    curated icon catalog; when set, the role-icon row shows that range and
+    points at the catalog instead of a single flat price.
     """
     description = "Weekly rentals — billed every 7 days, cancel any time."
     if panel:
@@ -641,17 +802,22 @@ def _build_shop_embed(
         title="🛍️ Perk shop", description=description, colour=accent
     )
     for perk in _SELF_PERKS:
-        price = _perk_price(settings, perk)
         note = ""
         if perk in gated:
             note = " · _requires a server feature not enabled here_"
         elif perk in owned:
             note = " · ✅ rented"
-        embed.add_field(
-            name=_PERK_LABELS[perk],
-            value=f"{settings.currency_emoji} **{price:,}** / week{note}",
-            inline=False,
-        )
+        if perk == "role_icon" and icon_price_range is not None:
+            lo, hi = icon_price_range
+            price_str = f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
+            value = (
+                f"{settings.currency_emoji} **{price_str}** / week · "
+                f"pick from the catalog{note}"
+            )
+        else:
+            price = _perk_price(settings, perk)
+            value = f"{settings.currency_emoji} **{price:,}** / week{note}"
+        embed.add_field(name=_PERK_LABELS[perk], value=value, inline=False)
     gift_price = _perk_price(settings, "gift_color")
     embed.add_field(
         name=_PERK_LABELS["gift_color"],
@@ -664,10 +830,27 @@ def _build_shop_embed(
     return embed
 
 
-def _shop_panel_view(settings: EconSettings, gated: set[str]) -> discord.ui.View:
-    """A never-expiring view of ShopRentButtons, priced at post time."""
+def _shop_panel_view(
+    settings: EconSettings,
+    gated: set[str],
+    *,
+    has_catalog: bool = False,
+) -> discord.ui.View:
+    """A never-expiring view of ShopRentButtons, priced at post time.
+
+    With a curated icon catalog, the role-icon button becomes a catalog opener
+    (its click routes to the picker); its custom_id is unchanged so existing
+    panels keep working across a restart.
+    """
     view = discord.ui.View(timeout=None)
     for perk in _SELF_PERKS:
+        if perk == "role_icon" and has_catalog:
+            view.add_item(
+                ShopRentButton(
+                    perk, label="Browse role icons", disabled=perk in gated
+                )
+            )
+            continue
         price = _perk_price(settings, perk)
         view.add_item(
             ShopRentButton(
@@ -752,11 +935,17 @@ class EconomyCog(commands.Cog):
                 amount = int(row["amount"])
                 sign = "+" if amount >= 0 else "-"
                 ts = int(row["created_at"])
-                lines.append(
+                line = (
                     f"{sign}{abs(amount):,} {settings.currency_emoji} · "
                     f"{row['kind']} · <t:{ts}:R>"
                 )
-            embed.add_field(name="Recent activity", value="\n".join(lines), inline=False)
+                memo = _memo_of(row["meta"])
+                if memo:
+                    line += f" — *{discord.utils.escape_markdown(_ellipsis(memo))}*"
+                lines.append(line)
+            embed.add_field(
+                name="Recent activity", value=_fit_lines(lines), inline=False
+            )
         else:
             embed.add_field(
                 name="Recent activity", value="_No activity yet._", inline=False
@@ -889,14 +1078,26 @@ class EconomyCog(commands.Cog):
     # ── transfers ────────────────────────────────────────────────────────
 
     @bank.command(name="pay", description="Send currency to another member.")
-    @app_commands.describe(member="Who to pay", amount="How much (whole number)")
+    @app_commands.describe(
+        member="Who to pay",
+        amount="How much (whole number)",
+        memo="Optional note — what's it for? (shown to them)",
+    )
     async def bank_pay(
-        self, interaction: discord.Interaction, member: discord.Member, amount: int
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        amount: int,
+        memo: app_commands.Range[str, None, _MAX_MEMO_LEN] | None = None,
     ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
         sender = interaction.user
         assert isinstance(sender, discord.Member)
+
+        # Normalise once, here — every downstream site (ledger meta, embeds,
+        # DM) takes the cleaned value and escapes only at render.
+        memo = _clean_memo(memo)
 
         settings = await asyncio.to_thread(self._load_settings, guild.id)
         if not settings.enabled:
@@ -925,22 +1126,24 @@ class EconomyCog(commands.Cog):
 
         if amount > _PAY_CONFIRM_THRESHOLD:
             accent = await resolve_accent_color(self.ctx.db_path, guild)
-            confirm = discord.Embed(
-                title="Confirm payment",
-                description=(
-                    f"Send {settings.currency_emoji} **{amount:,}** "
-                    f"{_unit(settings, amount)} to {member.mention}?"
-                ),
-                colour=accent,
+            desc = (
+                f"Send {settings.currency_emoji} **{amount:,}** "
+                f"{_unit(settings, amount)} to {member.mention}?"
             )
-            view = _PayConfirmView(self, settings, guild, sender, member, amount)
+            if memo:
+                desc += f"\n\n*{discord.utils.escape_markdown(memo)}*"
+            confirm = discord.Embed(
+                title="Confirm payment", description=desc, colour=accent
+            )
+            view = _PayConfirmView(self, settings, guild, sender, member, amount, memo)
             await interaction.response.send_message(
                 embed=confirm, view=view, ephemeral=True
             )
             return
 
         await self.finalize_pay(
-            interaction, settings, guild, sender, member, amount, via_confirm=False
+            interaction, settings, guild, sender, member, amount,
+            memo=memo, via_confirm=False,
         )
 
     async def finalize_pay(
@@ -952,13 +1155,16 @@ class EconomyCog(commands.Cog):
         recipient: discord.Member,
         amount: int,
         *,
+        memo: str | None = None,
         via_confirm: bool,
     ) -> None:
         """Execute the transfer and report — shared by the direct and confirm paths."""
 
         def _tx() -> int:
             with self.ctx.open_db() as conn:
-                transfer_currency(conn, guild.id, sender.id, recipient.id, amount)
+                transfer_currency(
+                    conn, guild.id, sender.id, recipient.id, amount, memo=memo
+                )
                 return get_balance(conn, guild.id, sender.id)
 
         try:
@@ -976,23 +1182,28 @@ class EconomyCog(commands.Cog):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = discord.Embed(
-            title="Payment sent",
-            description=(
-                f"{settings.currency_emoji} **{amount:,}** {_unit(settings, amount)} "
-                f"→ {recipient.mention}"
-            ),
-            colour=accent,
+        safe_memo = discord.utils.escape_markdown(memo) if memo else None
+        desc = (
+            f"{settings.currency_emoji} **{amount:,}** {_unit(settings, amount)} "
+            f"→ {recipient.mention}"
         )
+        if safe_memo:
+            desc += f"\n\n*{safe_memo}*"
+        embed = discord.Embed(title="Payment sent", description=desc, colour=accent)
         embed.set_footer(text=f"Your balance: {new_balance:,}")
         await self._reply_embed(interaction, embed, via_confirm=via_confirm)
 
+        # notify_member sends `content` with no allowed_mentions, and its
+        # fallback posts into the public bank channel — so a memo has to be
+        # mention-escaped here or it could ping the server.
+        note = (
+            f"{sender.display_name} sent you {settings.currency_emoji} "
+            f"{amount:,} {_unit(settings, amount)}."
+        )
+        if safe_memo:
+            note += f' — "{discord.utils.escape_mentions(safe_memo)}"'
         await notify_member(
-            self.bot, self.ctx.db_path, guild.id, recipient.id,
-            content=(
-                f"{sender.display_name} sent you {settings.currency_emoji} "
-                f"{amount:,} {_unit(settings, amount)}."
-            ),
+            self.bot, self.ctx.db_path, guild.id, recipient.id, content=note,
         )
 
     # ── shop ─────────────────────────────────────────────────────────────
@@ -1015,9 +1226,13 @@ class EconomyCog(commands.Cog):
             if not await feature_gate_ok(self.bot, guild.id, perk):
                 gated.add(perk)
 
+        icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
+        has_catalog = icon_range is not None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = _build_shop_embed(settings, gated, accent, owned=owned)
-        view = _ShopView(self, settings, guild, user_id, gated, owned)
+        embed = _build_shop_embed(
+            settings, gated, accent, owned=owned, icon_price_range=icon_range
+        )
+        view = _ShopView(self, settings, guild, user_id, gated, owned, has_catalog)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     async def do_rent(
@@ -1104,6 +1319,130 @@ class EconomyCog(commands.Cog):
         self, interaction: discord.Interaction, perk: str
     ) -> None:
         await interaction.response.send_modal(_CFG_MODALS[perk](self))
+
+    async def open_icon_catalog(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+    ) -> None:
+        """Show the curated icon picker (rent a new icon or switch the rented one)."""
+        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
+            await interaction.response.send_message(
+                "This server doesn't support role icons right now.", ephemeral=True
+            )
+            return
+        icons = await asyncio.to_thread(self._load_catalog, guild.id)
+        if not icons:
+            await interaction.response.send_message(
+                "No rentable icons are set up here yet.", ephemeral=True
+            )
+            return
+        note = ""
+        if len(icons) > _ICON_SELECT_LIMIT:
+            note = f"\n_Showing the first {_ICON_SELECT_LIMIT} icons._"
+        view = _IconCatalogView(self, settings, guild, interaction.user.id, icons)
+        await interaction.response.send_message(
+            f"Pick a role icon to rent — each is billed weekly:{note}",
+            view=view,
+            ephemeral=True,
+        )
+
+    async def pick_catalog_icon(
+        self, interaction: discord.Interaction, guild: discord.Guild, icon_id: int
+    ) -> None:
+        """Rent the chosen catalog icon, or switch a live rental to it.
+
+        A fresh rental charges the icon's price upfront; switching an existing
+        rental only re-tags it (no charge) so the newly chosen icon's price
+        takes effect at the next weekly renewal.
+        """
+        user_id = interaction.user.id
+
+        def _load() -> tuple[EconSettings, dict | None, int | None]:
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
+                row = get_catalog_icon(conn, guild.id, icon_id)
+                icon = (
+                    {
+                        "name": row["name"],
+                        "price": int(row["price"]),
+                        "image_path": str(row["image_path"]),
+                    }
+                    if row is not None and int(row["enabled"])
+                    else None
+                )
+                existing = get_live_role_icon_rental(conn, guild.id, user_id)
+                existing_id = int(existing["id"]) if existing is not None else None
+            return settings, icon, existing_id
+
+        settings, icon, existing_id = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if icon is None:
+            await interaction.response.send_message(
+                "That icon isn't available anymore — open the shop again.",
+                ephemeral=True,
+            )
+            return
+        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
+            await interaction.response.send_message(
+                "This server doesn't support role icons right now.", ephemeral=True
+            )
+            return
+
+        if existing_id is None:
+            # New rental: rent_perk + icon set ride ONE transaction, so a failed
+            # upfront debit rolls the whole thing back (the ValueError must
+            # propagate out of the `with` block — never caught inside it).
+            def _rent() -> None:
+                with self.ctx.open_db() as conn:
+                    rent_perk(
+                        conn, settings, guild.id, user_id, "role_icon",
+                        catalog_icon_id=icon_id, now=time.time(),
+                    )
+                    upsert_personal_role(
+                        conn, guild.id, user_id, {"icon_path": icon["image_path"]}
+                    )
+
+            try:
+                await asyncio.to_thread(_rent)
+            except ValueError as exc:
+                msg = str(exc)
+                if "insufficient" in msg:
+                    bal = await asyncio.to_thread(self._balance, guild.id, user_id)
+                    text = (
+                        f"You need {settings.currency_emoji} {icon['price']:,} but "
+                        f"only have {bal:,}."
+                    )
+                elif "already rented" in msg:
+                    text = "You're already renting a role icon."
+                else:
+                    text = "That icon isn't available."
+                await interaction.response.send_message(text, ephemeral=True)
+                return
+            verb = "Rented"
+        else:
+            def _switch() -> None:
+                with self.ctx.open_db() as conn:
+                    set_rental_catalog_icon(conn, guild.id, existing_id, icon_id)
+                    upsert_personal_role(
+                        conn, guild.id, user_id, {"icon_path": icon["image_path"]}
+                    )
+
+            await asyncio.to_thread(_switch)
+            verb = "Switched to"
+
+        ok = await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        tail = (
+            "" if ok else " (I couldn't update your role right now — try again shortly.)"
+        )
+        await interaction.response.send_message(
+            f"{verb} the **{icon['name']}** icon "
+            f"({settings.currency_emoji} {icon['price']:,}/week).{tail}",
+            ephemeral=True,
+        )
 
     async def set_role_name(self, interaction: discord.Interaction, text: str) -> None:
         assert interaction.guild is not None
@@ -1233,6 +1572,12 @@ class EconomyCog(commands.Cog):
                 "This server doesn't support role icons right now.", ephemeral=True
             )
             return
+        if await asyncio.to_thread(self._has_catalog, guild.id):
+            await interaction.response.send_message(
+                "This server uses a curated icon catalog — pick one from /bank shop.",
+                ephemeral=True,
+            )
+            return
         emoji = _resolve_guild_emoji(guild, raw)
         if emoji is None:
             await interaction.response.send_message(
@@ -1296,6 +1641,12 @@ class EconomyCog(commands.Cog):
         if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
             await interaction.response.send_message(
                 "This server doesn't support role icons right now.", ephemeral=True
+            )
+            return
+        if await asyncio.to_thread(self._has_catalog, guild.id):
+            await interaction.response.send_message(
+                "This server uses a curated icon catalog — pick one from /bank shop.",
+                ephemeral=True,
             )
             return
         if image.size > _MAX_ICON_BYTES:
@@ -1398,6 +1749,23 @@ class EconomyCog(commands.Cog):
     ) -> None:
         with self.ctx.open_db() as conn:
             upsert_personal_role(conn, guild_id, user_id, values)
+
+    def _load_catalog(self, guild_id: int) -> list[dict]:
+        """Enabled catalog icons a member may rent, as plain dicts for the view."""
+        with self.ctx.open_db() as conn:
+            return [
+                {"id": int(r["id"]), "name": r["name"], "price": int(r["price"])}
+                for r in list_catalog(conn, guild_id, enabled_only=True)
+            ]
+
+    def _icon_price_range(self, guild_id: int) -> tuple[int, int] | None:
+        """(min, max) enabled-icon price, or None when no catalog is configured."""
+        with self.ctx.open_db() as conn:
+            return catalog_price_range(conn, guild_id)
+
+    def _has_catalog(self, guild_id: int) -> bool:
+        """Whether the guild has at least one enabled catalog icon."""
+        return self._icon_price_range(guild_id) is not None
 
     @bank.command(name="quests", description="View and claim the server's active quests.")
     async def bank_quests(self, interaction: discord.Interaction) -> None:
@@ -2452,9 +2820,13 @@ class EconomyCog(commands.Cog):
             if not await feature_gate_ok(self.bot, guild.id, perk):
                 gated.add(perk)
 
+        icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
+        has_catalog = icon_range is not None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = _build_shop_embed(settings, gated, accent, panel=True)
-        view = _shop_panel_view(settings, gated)
+        embed = _build_shop_embed(
+            settings, gated, accent, panel=True, icon_price_range=icon_range
+        )
+        view = _shop_panel_view(settings, gated, has_catalog=has_catalog)
 
         # Same channel and the old panel is still there → edit in place (the
         # view is re-sent too, so re-pricing refreshes the button labels).

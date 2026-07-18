@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import io
 from dataclasses import asdict
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.economy.metrics import pricing_hints
 from bot_modules.economy.quests import POOL_CAP
+from bot_modules.services.economy_icon_catalog_service import (
+    add_catalog_icon,
+    delete_catalog_icon,
+    get_catalog_icon,
+    icon_catalog_path,
+    icon_in_use,
+    list_catalog,
+    set_catalog_icon_image,
+    update_catalog_icon,
+)
 from bot_modules.services.economy_metrics_service import (
     get_weekly_metrics,
     latest_median_income,
@@ -128,6 +141,211 @@ async def update_economy_config(
                 # Defensive: extra="forbid" already blocks unknown keys, but a
                 # bad key must never surface as a 500.
                 raise HTTPException(422, str(exc)) from exc
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── rentable icon catalog ───────────────────────────────────────────────
+#
+# Admin-curated role icons members rent from the perk shop (a currency sink).
+# Each icon carries its own weekly price; the rental engine bills that price via
+# ``econ_rentals.catalog_icon_id``. Images are normalized to a small PNG and
+# stored under ``<db-parent>/econ_icon_catalog/<guild_id>/<id>.png``.
+
+# Discord caps a role icon at 256KB; mirror that on the stored, re-encoded PNG.
+_MAX_ICON_STORE_BYTES = 256 * 1024
+# Generous cap on the raw upload before we re-encode (the PNG is what's limited).
+_MAX_ICON_UPLOAD_BYTES = 8 * 1024 * 1024
+# Role icons render tiny — downscale to keep files well under the 256KB cap.
+_ICON_MAX_DIM = 128
+
+
+class IconCatalogPatch(BaseModel):
+    """Partial update of a catalog icon's metadata; unknown keys rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    price: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0)
+
+
+def _icon_dict(conn, guild_id: int, row) -> dict:
+    """Serialise a catalog row for the dashboard, tagging live-rental usage."""
+    icon_id = int(row["id"])
+    return {
+        "id": icon_id,
+        "name": row["name"],
+        "price": int(row["price"]),
+        "enabled": bool(row["enabled"]),
+        "sort_order": int(row["sort_order"]),
+        "in_use": icon_in_use(conn, guild_id, icon_id),
+    }
+
+
+def _normalize_icon(content: bytes) -> bytes:
+    """Re-encode an upload to a small RGBA PNG, or raise HTTP 400/413.
+
+    Downscales to ``_ICON_MAX_DIM`` and rejects a result over Discord's 256KB
+    role-icon limit — so what the dashboard stores is always what Discord will
+    accept as a ``display_icon``.
+    """
+    if not content:
+        raise HTTPException(400, "Empty file.")
+
+    from PIL import Image, UnidentifiedImageError  # noqa: PLC0415
+
+    try:
+        with Image.open(io.BytesIO(content)) as im:
+            im.load()
+            img = im.convert("RGBA")
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(400, "Unsupported or corrupt image.") from exc
+
+    img.thumbnail((_ICON_MAX_DIM, _ICON_MAX_DIM), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    data = buf.getvalue()
+    if len(data) > _MAX_ICON_STORE_BYTES:
+        raise HTTPException(
+            400,
+            "That image is too detailed — Discord caps role icons at 256KB. "
+            "Try a simpler image.",
+        )
+    return data
+
+
+@router.get("/economy/icon-catalog")
+async def list_icon_catalog(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Every catalog icon (enabled and disabled), with a live-rental usage flag."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [_icon_dict(conn, guild_id, r) for r in list_catalog(conn, guild_id)]
+
+    return await run_query(_q)
+
+
+@router.get("/economy/icon-catalog/{icon_id}/image")
+async def get_icon_catalog_image(
+    icon_id: int,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Serve a catalog icon's PNG for dashboard preview (admin, guild-scoped)."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _load() -> str:
+        with ctx.open_db() as conn:
+            row = get_catalog_icon(conn, guild_id, icon_id)
+            return str(row["image_path"]) if row is not None else ""
+
+    image_path = await run_query(_load)
+    if not image_path or not Path(image_path).is_file():
+        raise HTTPException(404, "No image for this icon.")
+    return FileResponse(image_path, media_type="image/png")
+
+
+@router.post("/economy/icon-catalog")
+async def create_icon_catalog(
+    request: Request,
+    name: str = Form(...),
+    price: int = Form(...),
+    image: UploadFile = File(...),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Add a catalog icon: normalise the image, store it, insert the row."""
+    name = name.strip()
+    if not name or len(name) > 64:
+        raise HTTPException(400, "Name must be 1–64 characters.")
+    if price < 0:
+        raise HTTPException(400, "Price can't be negative.")
+    content = await image.read(_MAX_ICON_UPLOAD_BYTES + 1)
+    if len(content) > _MAX_ICON_UPLOAD_BYTES:
+        raise HTTPException(413, "Image must be 8 MB or smaller.")
+    png = _normalize_icon(content)
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            icon_id = add_catalog_icon(conn, guild_id, name=name, price=price)
+            path = icon_catalog_path(ctx.db_path, guild_id, icon_id)
+            # Written inside the transaction so a disk failure rolls the row back.
+            path.write_bytes(png)
+            set_catalog_icon_image(conn, guild_id, icon_id, str(path))
+            row = get_catalog_icon(conn, guild_id, icon_id)
+            return _icon_dict(conn, guild_id, row)
+
+    return await run_query(_q)
+
+
+@router.patch("/economy/icon-catalog/{icon_id}")
+async def patch_icon_catalog(
+    icon_id: int,
+    request: Request,
+    body: IconCatalogPatch,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Rename / re-price / enable-disable / reorder a catalog icon.
+
+    A price change is not charged immediately — existing renters pick it up at
+    their next weekly renewal (the billing engine re-reads the current price).
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if get_catalog_icon(conn, guild_id, icon_id) is None:
+                raise HTTPException(404, "Icon not found.")
+            row = update_catalog_icon(
+                conn, guild_id, icon_id,
+                name=body.name, price=body.price,
+                enabled=body.enabled, sort_order=body.sort_order,
+            )
+            return _icon_dict(conn, guild_id, row)
+
+    return await run_query(_q)
+
+
+@router.delete("/economy/icon-catalog/{icon_id}")
+async def remove_icon_catalog(
+    icon_id: int,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Hard-delete a catalog icon — blocked (409) while members are renting it.
+
+    An in-use icon must be disabled, not deleted, so current renters keep the
+    icon they paid for.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = get_catalog_icon(conn, guild_id, icon_id)
+            if row is None:
+                raise HTTPException(404, "Icon not found.")
+            if icon_in_use(conn, guild_id, icon_id):
+                raise HTTPException(
+                    409,
+                    "Members are renting this icon — disable it instead of deleting.",
+                )
+            image_path = str(row["image_path"])
+            delete_catalog_icon(conn, guild_id, icon_id)
+        if image_path:
+            Path(image_path).unlink(missing_ok=True)
         return {"ok": True}
 
     return await run_query(_q)

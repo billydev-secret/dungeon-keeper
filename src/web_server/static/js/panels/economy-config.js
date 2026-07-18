@@ -8,62 +8,29 @@ import {
   mountRolePicker,
 } from "../config-helpers.js";
 
-// Numeric fields grouped by section. Each entry: [key, label, {min, step, hint}].
-// Faucet rates are edited on the Income Sources page (manager-visible,
-// admin-editable) — this page keeps the wiring, branding, and prices.
-const PRICE_FIELDS = [
-  ["price_role_color", "Role colour", { min: 0 }],
-  ["price_role_name", "Role name", { min: 0 }],
-  ["price_role_icon", "Role icon", { min: 0 }],
-  ["price_role_gradient", "Role gradient", { min: 0 }],
-  ["price_text_room", "Text room", { min: 0, hint: "Used by a later stage." }],
-  ["price_voice_room", "Voice room", { min: 0, hint: "Used by a later stage." }],
-  ["price_gift_color", "Gift colour", { min: 0, hint: "Used by a later stage." }],
-];
-
-function numField(key, label, cfg, { min = 0, step = 1, hint } = {}, pricing = null) {
-  const hintHtml = hint ? `<div class="field-hint">${hint}</div>` : "";
-  // Advisory pricing suggestion, appended as its own muted node so the
-  // existing "later stage" hint is preserved. Only price_* fields carry hints.
-  const suggested = pricing && pricing.hints ? pricing.hints[key] : null;
-  const median = pricing ? Math.round(pricing.median || 0) : 0;
-  const suggest = suggested != null
-    ? `<div class="field-hint" data-suggest="${key}">suggested ≈ ${suggested} (from median weekly income ${median})</div>`
-    : "";
-  return `
-    <div class="field">
-      <label>${label}</label>
-      <input type="number" name="${key}" value="${cfg[key]}" min="${min}" step="${step}" style="max-width:140px;" />
-      ${hintHtml}
-      ${suggest}
-    </div>`;
-}
+// Faucet rates are edited on the Income Sources page and perk-shop prices on the
+// Sinks page — this page keeps the wiring and branding.
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading economy config…</div></div>`;
 
   (async () => {
-    const [cfg, channels, roles, metrics] = await Promise.all([
+    const [cfg, channels, roles] = await Promise.all([
       api("/api/economy/config"),
       loadChannels(),
       loadRoles(),
-      api("/api/economy/metrics").catch(() => null),
     ]);
-    // Pricing hints are advisory: only render when the first rollup exists
-    // (hints is {} otherwise). median feeds the "from median weekly income" note.
-    const pricing = metrics && metrics.hints && Object.keys(metrics.hints).length
-      ? { hints: metrics.hints, median: metrics.median_income }
-      : null;
-    render(container, cfg, channels, roles, pricing);
+    render(container, cfg, channels, roles);
   })();
 }
 
-function render(container, cfg, channels, roles, pricing) {
+function render(container, cfg, channels, roles) {
   container.innerHTML = `
     <div class="panel">
       <header>
         <h2>Economy Settings</h2>
-        <div class="subtitle">Wiring, branding, and perk prices — faucet rates live on
+        <div class="subtitle">Wiring and branding — perk-shop prices live on
+          <a href="#/economy-sinks">Sinks</a>, faucet rates on
           <a href="#/economy-income-sources">Income Sources</a></div>
       </header>
 
@@ -124,11 +91,6 @@ function render(container, cfg, channels, roles, pricing) {
           <input type="text" name="currency_icon_url" value="${cfg.currency_icon_url}" maxlength="512" />
         </div>
 
-        <div class="section-label">Perk prices</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, cfg, o, pricing)).join("")}
-        </div>
-
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
           <button type="submit" class="btn btn-primary">Save</button>
           <span data-status></span>
@@ -155,10 +117,7 @@ function render(container, cfg, channels, roles, pricing) {
     String(cfg.game_role_id),
   );
 
-  const numKeys = [
-    "booster_multiplier",
-    ...PRICE_FIELDS.map(([k]) => k),
-  ];
+  const numKeys = ["booster_multiplier"];
   const floatKeys = new Set(["booster_multiplier"]);
   const strKeys = [
     "currency_name",
