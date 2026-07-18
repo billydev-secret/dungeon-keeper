@@ -16,6 +16,7 @@ from bot_modules.core.xp_system import (
     AwardResult,
     XpSettings,
     is_channel_xp_eligible,
+    role_grant_due,
 )
 
 if TYPE_CHECKING:
@@ -228,29 +229,41 @@ async def maybe_log_level_5(
 
 async def maybe_log_level_ups(
     member: discord.Member,
-    old_level: int,
+    announced_level: int,
     new_level: int,
     total_xp: float,
     level_up_log_channel_id: int,
     level_5_log_channel_id: int,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
-) -> None:
-    """Log level-up announcements for all levels between old and new."""
+) -> int:
+    """Announce every level the member has reached but not yet been told about.
+
+    Starts from ``announced_level``, not from this award's starting level, so
+    levels won through a silent path (a quest payout credits XP with no
+    Discord handle in scope) are delivered here on the member's next ordinary
+    award rather than lost.
+
+    Returns the highest level now considered announced, for the caller to
+    persist. A guild with no level-up channel returns ``new_level``: there is
+    nothing to deliver, and holding a backlog would dump every member's whole
+    history into the channel the day one is configured. A failed send returns
+    the last level that did land, so the rest retry on the next award.
+    """
     if level_up_log_channel_id <= 0:
         log.debug(
             "Skipping level-up announcements for %s: level-up log channel is not configured.",
             format_user_for_log(member),
         )
-        return
+        return new_level
 
-    if new_level <= old_level:
+    if new_level <= announced_level:
         log.debug(
-            "Skipping level-up announcements for %s: no level change (%s -> %s).",
+            "Skipping level-up announcements for %s: nothing new to announce (announced=%s current=%s).",
             format_user_for_log(member),
-            old_level,
+            announced_level,
             new_level,
         )
-        return
+        return announced_level
 
     channel = get_guild_channel_or_thread(member.guild, level_up_log_channel_id)
     if channel is None:
@@ -258,10 +271,11 @@ async def maybe_log_level_ups(
             "Level-up log channel %s was not found.",
             level_up_log_channel_id,
         )
-        return
+        return new_level
 
+    delivered = announced_level
     skip_special_level = level_up_log_channel_id == level_5_log_channel_id
-    for level in range(old_level + 1, new_level + 1):
+    for level in range(announced_level + 1, new_level + 1):
         if skip_special_level and level == settings.role_grant_level:
             log.debug(
                 "Skipping level %s in general level-up channel "
@@ -269,6 +283,8 @@ async def maybe_log_level_ups(
                 level,
                 settings.role_grant_level,
             )
+            # Counts as delivered: maybe_log_level_5 posts this one.
+            delivered = level
             continue
 
         embed = discord.Embed(
@@ -282,6 +298,7 @@ async def maybe_log_level_ups(
 
         try:
             await channel.send(embed=embed)
+            delivered = level
             log.debug(
                 "Sent level-up announcement for %s at level %s to channel %s.",
                 format_user_for_log(member),
@@ -293,34 +310,42 @@ async def maybe_log_level_ups(
                 "Missing permission to send level-up announcements in channel %s.",
                 level_up_log_channel_id,
             )
-            return
+            return delivered
         except discord.HTTPException:
             log.exception(
                 "Discord API error while sending level-up announcement in channel %s for %s.",
                 level_up_log_channel_id,
                 format_user_for_log(member),
             )
-            return
+            return delivered
+
+    return delivered
 
 
 async def handle_level_progress(
     member: discord.Member,
     award: AwardResult,
     source: str,
+    *,
     level_5_role_id: int,
     level_up_log_channel_id: int,
     level_5_log_channel_id: int,
+    db_path: Path,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
-    db_path: Path | None = None,
 ) -> None:
-    """Handle role grants and announcements when a member levels up."""
+    """Handle role grants and announcements when a member levels up.
+
+    ``db_path`` is required: announcing without recording the mark would
+    replay the same levels on every subsequent award.
+    """
     log.debug(
-        "Level progress check (source=%s) for %s: old_level=%s new_level=%s total_xp=%.2f role_grant_due=%s "
-        "(role_id=%s levelup_log_channel=%s level5_log_channel=%s).",
+        "Level progress check (source=%s) for %s: old_level=%s new_level=%s announced_level=%s "
+        "total_xp=%.2f role_grant_due=%s (role_id=%s levelup_log_channel=%s level5_log_channel=%s).",
         source,
         format_user_for_log(member),
         award.old_level,
         award.new_level,
+        award.announced_level,
         award.total_xp,
         award.role_grant_due,
         level_5_role_id,
@@ -333,17 +358,30 @@ async def handle_level_progress(
             member, award.new_level, level_5_role_id, settings, db_path
         )
 
-    if award.new_level > award.old_level:
-        await maybe_log_level_ups(
+    if award.new_level > award.announced_level:
+        delivered = await maybe_log_level_ups(
             member,
-            award.old_level,
+            award.announced_level,
             award.new_level,
             award.total_xp,
             level_up_log_channel_id,
             level_5_log_channel_id,
             settings,
         )
-        if award.role_grant_due:
+        if delivered > award.announced_level:
+            from bot_modules.core.db_utils import open_db
+            from bot_modules.core.xp_system import mark_level_announced
+
+            with open_db(db_path) as conn:
+                mark_level_announced(conn, member.guild.id, member.id, delivered)
+
+        # Gate the promotion post on what was actually delivered, not on
+        # award.role_grant_due: that flag is measured from announced_level, so
+        # if the general channel send fails at the threshold level the mark
+        # never advances and the flag stays true, re-posting the promotion on
+        # every subsequent award. Keyed to `delivered`, the two channels retry
+        # together and each level is posted once.
+        if role_grant_due(award.announced_level, delivered, settings):
             log.info(
                 "Level %s trigger fired for %s from source=%s (old_level=%s new_level=%s total_xp=%.2f).",
                 settings.role_grant_level,

@@ -1208,6 +1208,48 @@ def test_quest_xp_reward_pays_alongside_coins(db):
             _make(conn, reward_xp=-5)
 
 
+def test_quest_level_up_is_announced_on_next_ordinary_award(db):
+    """A level won by quest XP is still owed an announcement afterwards.
+
+    Quest payouts credit XP from a sync DB context with no Discord handle, so
+    nothing can announce at the time. The award path must not treat that level
+    as already announced, or the level-up is lost for good: the next ordinary
+    award derives its own start level from the already-credited total and so
+    sees no change of its own.
+    """
+    from bot_modules.core.xp_system import apply_xp_award, level_for_xp
+
+    with open_db(db) as conn:
+        # 50 XP clears level 2 (15.6) but not level 3 (62.4).
+        qid = _make(conn, reward=10, reward_xp=50)
+        claim_quest(
+            conn, SETTINGS, GUILD, qid, USER, period="2026-07-13", booster=False
+        )
+
+        row = conn.execute(
+            "SELECT total_xp, level, announced_level FROM member_xp "
+            "WHERE guild_id = ? AND user_id = ?",
+            (GUILD, USER),
+        ).fetchone()
+        assert level_for_xp(row["total_xp"]) == 2, "quest XP should clear level 2"
+        assert row["level"] == 2
+        # The quest had no way to announce, so the member has not been told.
+        assert row["announced_level"] == 1
+
+        # Next ordinary award: no level change of its own, but the level 2 the
+        # quest won is still pending and must surface here.
+        award = apply_xp_award(
+            conn, GUILD, USER, 0.5, event_source="text", event_timestamp=time.time()
+        )
+        assert award.old_level == 2
+        assert award.new_level == 2
+        assert award.announced_level == 1
+        assert award.new_level > award.announced_level, (
+            "level 2 was won by quest XP and never announced -- "
+            "handle_level_progress must still announce it"
+        )
+
+
 def test_quest_xp_paid_on_signoff_approval_not_filing(db):
     with open_db(db) as conn:
         qid = _make(conn, reward=10, reward_xp=25, signoff=1)

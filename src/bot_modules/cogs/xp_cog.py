@@ -334,6 +334,8 @@ class XpCog(commands.Cog):
             level_5_role_id=cfg.level_5_role_id,
             level_up_log_channel_id=cfg.level_up_log_channel_id,
             level_5_log_channel_id=cfg.level_5_log_channel_id,
+            settings=xp_settings,
+            db_path=ctx.db_path,
         )
 
         await interaction.response.send_message(

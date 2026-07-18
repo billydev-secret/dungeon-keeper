@@ -284,6 +284,7 @@ def main() -> None:
             level_up_log_channel_id=cfg.level_up_log_channel_id,
             level_5_log_channel_id=cfg.level_5_log_channel_id,
             settings=cfg.xp_settings,
+            db_path=db_path,
         )
 
     bot.startup_task_factories.append(

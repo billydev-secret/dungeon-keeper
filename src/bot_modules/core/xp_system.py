@@ -152,6 +152,7 @@ class MessageXpBreakdown:
 class MemberXpState:
     total_xp: float
     level: int
+    announced_level: int
     last_message_at: float | None
     last_message_norm: str | None
 
@@ -162,6 +163,12 @@ class AwardResult:
     total_xp: float
     old_level: int
     new_level: int
+    # Highest level already announced to the member. Awards never move this --
+    # only a successful announcement does (see ``mark_level_announced``). A
+    # level won silently (quest payouts credit XP from a sync DB context with
+    # no Discord handle) stays pending here and is announced on the member's
+    # next ordinary award.
+    announced_level: int
     role_grant_due: bool
 
 
@@ -355,7 +362,12 @@ def level_for_xp(total_xp: float, settings: XpSettings = DEFAULT_XP_SETTINGS) ->
 def role_grant_due(
     previous_level: int, new_level: int, settings: XpSettings = DEFAULT_XP_SETTINGS
 ) -> bool:
-    """Return True if this level-up crosses the role-grant threshold for the first time."""
+    """Return True if this level-up crosses the role-grant threshold for the first time.
+
+    ``previous_level`` is the last level the member was *told* about, not
+    necessarily the level this award started from -- ``apply_xp_award`` passes
+    announced_level so a threshold crossed on a silent path still fires here.
+    """
     return previous_level < settings.role_grant_level <= new_level
 
 
@@ -367,6 +379,7 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
             user_id INTEGER NOT NULL,
             total_xp REAL NOT NULL DEFAULT 0,
             level INTEGER NOT NULL DEFAULT 1,
+            announced_level INTEGER NOT NULL DEFAULT 1,
             last_message_at REAL,
             last_message_norm TEXT,
             PRIMARY KEY (guild_id, user_id)
@@ -521,7 +534,7 @@ def get_member_xp_state(
 ) -> MemberXpState:
     row = conn.execute(
         """
-        SELECT total_xp, last_message_at, last_message_norm
+        SELECT total_xp, announced_level, last_message_at, last_message_norm
         FROM member_xp
         WHERE guild_id = ? AND user_id = ?
         """,
@@ -529,13 +542,18 @@ def get_member_xp_state(
     ).fetchone()
     if not row:
         return MemberXpState(
-            total_xp=0.0, level=1, last_message_at=None, last_message_norm=None
+            total_xp=0.0,
+            level=1,
+            announced_level=1,
+            last_message_at=None,
+            last_message_norm=None,
         )
 
     total_xp = float(row["total_xp"])
     return MemberXpState(
         total_xp=total_xp,
         level=level_for_xp(total_xp, settings),
+        announced_level=int(row["announced_level"]),
         last_message_at=row["last_message_at"],
         last_message_norm=row["last_message_norm"],
     )
@@ -618,7 +636,29 @@ def apply_xp_award(
         total_xp=new_total_xp,
         old_level=old_level,
         new_level=new_level,
-        role_grant_due=role_grant_due(old_level, new_level, settings),
+        announced_level=state.announced_level,
+        # Measured from what the member has actually been told, not from this
+        # award's starting level: a level won silently still owes its
+        # announcement, and this is the only trigger that would deliver it.
+        role_grant_due=role_grant_due(state.announced_level, new_level, settings),
+    )
+
+
+def mark_level_announced(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, level: int
+) -> None:
+    """Record that ``level`` has been announced to a member.
+
+    Only ever moves forward, so a late award racing an announcement cannot
+    rewind the mark and replay levels the member has already seen.
+    """
+    conn.execute(
+        """
+        UPDATE member_xp
+        SET announced_level = MAX(announced_level, ?)
+        WHERE guild_id = ? AND user_id = ?
+        """,
+        (level, guild_id, user_id),
     )
 
 
