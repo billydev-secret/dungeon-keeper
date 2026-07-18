@@ -36,6 +36,7 @@ public quests, that's what the stats page should have."
 | Tracker surfaces | Statistics page live section + richer pinned leaderboard embed |
 | Completion ticker | **Anonymous aggregates only** (no member names) |
 | Add-ons in scope | All four: weekly flip announcement, daily free reroll, clear-the-board set bonus, weekly 2× spotlight |
+| Personal targets (follow-up ask) | **Dynamic per member**: counted targets derive from the member's own trailing activity, clamped to the quest's band; Gaussian draw stays as the no-history fallback. Reward stays flat (effort-equity, not output-pay). |
 
 ## Stage 1 — new trigger kinds
 
@@ -67,6 +68,17 @@ spec table row (§4.5), tests. Pattern to copy: the `whisper`/`quote` additions.
 | `level_up` | member reaches a new level | XP award path (`cogs/xp_cog.py` / level service) | `level_up:<level>` (event kind: once per level) |
 | `ama_answer` | hot-seat answers a question in their AMA | `cogs/games_ama_cog.py` answer path | `ama_answer:<game_id>:<q_idx>` |
 
+**Kind activity ledger (feeds all dynamic sizing).** New table
+`econ_kind_activity(guild_id, user_id, kind, local_day, count)` (PK on the
+4-tuple), incremented inside `fire_trigger_quests`/`fire_trigger_inline` for
+**every** occurrence — before/regardless of the personal-board filter, so it
+records what members actually do, not just what paid. Pruned to a trailing
+~10 weeks by the daily roll. This one table powers both personal dynamic
+targets (per-user sums) and community auto-sizing (guild sums) — see
+*Dynamic targets* below. Where cheap, backfill from `xp_events` for the kinds
+it already mirrors (message_sent, reply_sent, reaction_given, voice_session,
+qotd_reply) so those start warm.
+
 Rejected (documented so we don't relitigate): `reaction_received`
 (collusion-farmable; `starboard` covers the threshold version), `qa_verdict`
 (already paid via `qa_reward` — double ledger), emoji stealer
@@ -97,8 +109,9 @@ last round.
 - **Tiers:** 40/70/100% crossings stamp per-tier; each crossing pays flat to
   30d-active members via the `econ_community_payouts` exactly-once pattern with
   tier in the key. Resolution pays the top 3–5 contributors a small bonus.
-- **Auto-sizing:** on activation, target = scaled sum of the last 4 weeks of
-  that kind's guild activity (aim: typical week ≈ 70–80% of target). No manual
+- **Auto-sizing:** on activation, target = scaled guild-wide sum of the last
+  4 full weeks of that kind's activity from `econ_kind_activity` (aim: typical
+  week ≈ 70–80% of target, i.e. target ≈ weekly median ÷ 0.75). No manual
   override (user choice: fully automatic).
 - **Scheduling:** economy loop ISO-week roll alternates on-week/off-week
   (`econ_day_marks`-style state). On-week roll activates the next community
@@ -136,6 +149,32 @@ last round.
 - **Weekly 2× spotlight:** one featured kind per week (rotating), quest payouts
   on that kind double; shown in flip announcement, embed, and `/quests`.
 
+## Dynamic targets (user follow-up 2026-07-18)
+
+Requirements scale to whoever they're issued to — the member for personal
+quests, the guild for community quests. Both read `econ_kind_activity`.
+
+**Personal (counted daily/weekly/monthly quests).** `effective_target` gains
+an activity-aware path: a member's target for a period =
+`clamp(round(median of their last 4 completed periods of that kind × 1.15),
+target_min, target_max)` — a ~15% stretch over their own normal pace. Rules:
+
+- Computed once per (user, quest, period) at first touch and **stored**
+  (extend `econ_quest_progress` with the resolved target) so it never moves
+  mid-period; `/quests` shows it like any target.
+- **Fallback:** fewer than 2 periods of history for that kind → the existing
+  deterministic Gaussian band draw. The band's `[min, max]` also stays as the
+  hard clamp, so authors still control the sane range and sandbagging can't
+  push a target below `target_min` (going quiet floors you at the band min,
+  it never zeroes the quest).
+- Fixed `target_count` quests (band unset) stay fixed — dynamic sizing is a
+  band feature.
+- **Reward stays flat.** Difficulty personalizes so *effort* is comparable;
+  paying more for higher output would just re-reward the already-active.
+
+**Community.** Covered in Stage 3 auto-sizing (guild-wide sums, same table,
+same trailing-4-weeks window).
+
 ## Order & risks
 
 Stages land 1→5; each is independently shippable. Risks: bump attribution
@@ -144,4 +183,8 @@ payload in prod logs before promising per-member credit); `voice_room_host`
 needs once-per-room-lifetime state (in-memory like Risky Rolls is fine —
 restart forgiveness acceptable); reroll must not break counted-progress
 (reroll blocked once progress > 0 on the slot); migration numbering — check
-existing max prefix before adding (two 077s/078s exist already).
+existing max prefix before adding (two 077s/078s exist already); dynamic
+personal targets are cold until `econ_kind_activity` accrues ~2 periods per
+kind (Gaussian fallback covers the gap; xp_events backfill warms the five
+mirrored kinds); mild sandbagging is possible by going quiet but is floored
+at `target_min` and self-defeating (less activity = less income anyway).
