@@ -462,6 +462,10 @@ class _StubGuildConfig:
         xp_settings: Any = DEFAULT_XP_SETTINGS,
         message_storage_level: str = "none",
         auto_role_ids: Any = None,
+        greeting_watch_enabled: bool = False,
+        greeting_watch_channel_ids: Any = None,
+        greeting_watch_notify_user_id: int = 0,
+        greeting_watch_window_minutes: int = 10,
     ):
         self.welcome_channel_id = welcome_channel_id
         self.welcome_message = welcome_message
@@ -492,6 +496,14 @@ class _StubGuildConfig:
         self.auto_role_ids = (
             frozenset() if auto_role_ids is None else frozenset(auto_role_ids)
         )
+        self.greeting_watch_enabled = greeting_watch_enabled
+        self.greeting_watch_channel_ids = (
+            frozenset()
+            if greeting_watch_channel_ids is None
+            else frozenset(greeting_watch_channel_ids)
+        )
+        self.greeting_watch_notify_user_id = greeting_watch_notify_user_id
+        self.greeting_watch_window_minutes = greeting_watch_window_minutes
 
     @property
     def retains_content(self) -> bool:

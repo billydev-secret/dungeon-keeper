@@ -312,6 +312,11 @@ class GuildConfig:
     mod_channel_id: int
     mod_role_ids: frozenset[int]
     admin_role_ids: frozenset[int]
+    # greeting watch — flag unanswered "good morning"/"hello" in watched chats
+    greeting_watch_enabled: bool
+    greeting_watch_channel_ids: frozenset[int]
+    greeting_watch_notify_user_id: int
+    greeting_watch_window_minutes: int
     # message archival / spoiler enforcement
     spoiler_required_channels: frozenset[int]
     bypass_role_ids: frozenset[int]
@@ -387,6 +392,16 @@ class GuildConfig:
             mod_channel_id=_int("mod_channel_id"),
             mod_role_ids=_parse_id_csv(_val("mod_role_ids")),
             admin_role_ids=_parse_id_csv(_val("admin_role_ids")),
+            greeting_watch_enabled=parse_bool(
+                _val("greeting_watch_enabled", "false")
+            ),
+            greeting_watch_channel_ids=_parse_id_csv(
+                _val("greeting_watch_channel_ids")
+            ),
+            greeting_watch_notify_user_id=_int("greeting_watch_notify_user_id"),
+            greeting_watch_window_minutes=_int(
+                "greeting_watch_window_minutes", 10
+            ),
             spoiler_required_channels=_ids("spoiler_required_channels"),
             bypass_role_ids=_ids("bypass_role_ids"),
             recorded_bot_user_ids=_ids("recorded_bot_user_ids"),

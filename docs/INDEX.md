@@ -31,6 +31,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
 | [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`, 18 games) |
+| [greeting_watch_spec.md](greeting_watch_spec.md) | Greeting Watch: DMs a member when a "good morning"/"hello" goes unanswered in a watched channel (dashboard-configured, no commands) |
 | [guess_spec.md](guess_spec.md) | Guess image game (`/guess submit\|round\|delete\|optin\|confess\|leaderboard\|prompt`) |
 | [hidden_channels_spec.md](hidden_channels_spec.md) | Hidden Channels (`/hidden hide\|restore\|list`) |
 | [inactive_spec.md](inactive_spec.md) | Inactive member management (`/inactive mark\|release\|panel\|sweep\|config`) |

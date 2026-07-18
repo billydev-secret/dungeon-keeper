@@ -20,6 +20,7 @@ from bot_modules.services.auto_delete_service import (
     track_auto_delete_message,
 )
 from bot_modules.services.discord_scan import collect_messageable_channels
+from bot_modules.services.greeting_watch_service import is_greeting, record_greeting
 from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from bot_modules.services.message_store import (
@@ -660,6 +661,30 @@ class EventsCog(commands.Cog):
                     )
 
         await asyncio.to_thread(_persist_member_message)
+
+        # Greeting watch: if this is a "good morning"/"hello" in a watched
+        # channel, stamp it so the background loop can DM the notify user when
+        # nobody replies to or mentions the greeter in time. Content is judged
+        # here in-memory — the default "none" storage level drops it before it
+        # reaches the DB, so it can't be matched after the fact.
+        if (
+            cfg.greeting_watch_enabled
+            and message.channel.id in cfg.greeting_watch_channel_ids
+            and is_greeting(message.content)
+        ):
+
+            def _record_greeting():
+                with self.ctx.open_db() as conn:
+                    record_greeting(
+                        conn,
+                        guild_id=guild_id,
+                        message_id=message.id,
+                        channel_id=message.channel.id,
+                        author_id=message.author.id,
+                        created_ts=int(message_ts),
+                    )
+
+            await asyncio.to_thread(_record_greeting)
 
         result = await award_message_xp(
             message,

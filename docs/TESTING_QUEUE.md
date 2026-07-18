@@ -9,6 +9,32 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Greeting Watch — DM when a "good morning"/"hello" goes unanswered  (0b10f4e)
+
+New feature: greetings in watched channel(s) that get no reply/@mention within a
+window make the bot DM a chosen member. Configured at **Config → Greeting Watch**
+(admin-only); no Discord command surface. Detection runs live in `on_message`
+(content is judged in-memory — storage level "none" drops it); a 60s loop
+(`greeting_watch_loop`) decides the verdict off `user_interactions_log`. Migration
+078 adds the `greeting_watch` table. No message content is stored.
+
+- [ ] Config → Greeting Watch: enable, pick your main chat channel(s), set
+      **Notify this member** to yourself, window = **1 min** (for testing) →
+      Save → reload → settings persist.
+- [ ] Have an alt post "good morning" in a watched channel and **leave it
+      alone** → ~1–2 min later you get a **DM** naming them, the channel, and a
+      working **jump link**.
+- [ ] Post another greeting and this time **reply to it** (or @mention the
+      greeter) within the window → **no DM** (counts as acknowledged).
+- [ ] Post a non-greeting sentence ("does anyone know when the store opens") →
+      **no DM** (not detected as a greeting).
+- [ ] Same person greets twice in a row before the window closes → at most
+      **one** DM (per-author dedup).
+- [ ] Turn the feature **off** while a greeting is mid-window → no DM fires for
+      it (retired as skipped).
+- [ ] Confirm the notify DM still arrives after a **bot restart** with a
+      greeting left pending across the restart (row is persisted, not in-memory).
+
 ### Photo Challenge — ping role is now a dropdown, not a pasted ID  (5af3480)
 
 The Photo Challenge panel's **Ping role on post** field was a free-text box you

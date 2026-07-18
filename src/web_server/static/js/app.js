@@ -118,6 +118,7 @@ const SECTIONS = [
       { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
       { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
       { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true },
+      { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true },
       { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js", adminOnly: true },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },

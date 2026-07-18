@@ -444,6 +444,24 @@ def _policy_section(conn, guild_id: int) -> dict:
     }
 
 
+def _greeting_watch_section(conn, guild_id: int) -> dict:
+    # Read the same keys the ingest hook (GuildConfig) and the monitor loop act
+    # on, so the panel never disagrees with what actually fires. channel_ids is
+    # a CSV of watched-channel ids (same shape as mod_role_ids).
+    return {
+        "enabled": _bool_val(conn, "greeting_watch_enabled", guild_id=guild_id),
+        "channel_ids": _str_val(
+            conn, "greeting_watch_channel_ids", guild_id=guild_id
+        ),
+        "notify_user_id": str(
+            _int_val(conn, "greeting_watch_notify_user_id", guild_id=guild_id)
+        ),
+        "window_minutes": _int_val(
+            conn, "greeting_watch_window_minutes", 10, guild_id=guild_id
+        ),
+    }
+
+
 def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
     # Read these the same way the monitor does (get_config_value with the
     # default legacy fallback) so the panel never disagrees with what the
@@ -849,6 +867,7 @@ async def get_config(
                 "risky": _risky_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
                 "rules_watch": _rules_watch_section(conn, guild_id, ctx.db_path),
+                "greeting_watch": _greeting_watch_section(conn, guild_id),
                 "auto_react": _auto_react_section(conn, guild_id),
                 "bump_tracker": _bump_tracker_section(conn, guild_id),
                 "pen_pals": _pen_pals_section(conn, guild_id),
@@ -1490,6 +1509,60 @@ async def update_rules_watch(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+class GreetingWatchConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    channel_ids: str | None = None
+    notify_user_id: str | None = None
+    window_minutes: int | None = None
+
+
+@router.put("/config/greeting-watch")
+async def update_greeting_watch(
+    request: Request,
+    body: GreetingWatchConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Configure Greeting Watch — which channels to watch, who to DM, how long
+    to wait before flagging a greeting as unanswered."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.enabled is not None:
+                set_config_value(
+                    conn,
+                    "greeting_watch_enabled",
+                    "1" if body.enabled else "0",
+                    guild_id,
+                )
+            if body.channel_ids is not None:
+                set_config_value(
+                    conn, "greeting_watch_channel_ids", body.channel_ids, guild_id
+                )
+            if body.notify_user_id is not None:
+                set_config_value(
+                    conn,
+                    "greeting_watch_notify_user_id",
+                    body.notify_user_id,
+                    guild_id,
+                )
+            if body.window_minutes is not None:
+                set_config_value(
+                    conn,
+                    "greeting_watch_window_minutes",
+                    str(body.window_minutes),
+                    guild_id,
+                )
+        return {"ok": True}
+
+    result = await run_query(_q)
+    # The ingest hook reads these off the cached GuildConfig snapshot; drop it so
+    # the next message picks up the change without a restart.
+    ctx.invalidate_guild_config(guild_id)
+    return result
 
 
 class RoleGrantUpdate(BaseModel):
