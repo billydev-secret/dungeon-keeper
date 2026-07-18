@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Photo Challenge — ping role is now a dropdown, not a pasted ID  (2daf8e9)
+### Photo Challenge — ping role is now a dropdown, not a pasted ID  (5af3480)
 
 The Photo Challenge panel's **Ping role on post** field was a free-text box you
 pasted a numeric role ID into; it's now a proper role `<select>` populated from
