@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy — streak/milestone DMs respect the opt-in game role  (pending)
+### Economy — streak/milestone DMs respect the opt-in game role  (bb4fa1e)
 
 Bug fix: recurring streak/milestone/grace/reset DMs (§3.1) were reaching every
 earner, even members who never took the opt-in **economy game role**
