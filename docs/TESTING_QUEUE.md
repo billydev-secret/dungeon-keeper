@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Rules Watch enable/disable/set-channel moved to the web dashboard  (commit TBD)
+### Rules Watch enable/disable/set-channel moved to the web dashboard  (1eb0fba)
 
 `/rules-watch enable`, `/rules-watch disable`, and `/rules-watch set-channel` are removed —
 they duplicated the existing `config-rules-watch.js` dashboard panel, which already wrote the
@@ -22,7 +22,7 @@ unaffected.
       panel → save, then post a message that should trip a signal — it still gets flagged into
       the queue and (if immediate-tier) alerts to the configured channel.
 
-### `/inactive config` removed, settings moved to a new Inactive Sweep panel  (commit TBD)
+### `/inactive config` removed, settings moved to a new Inactive Sweep panel  (1eb0fba)
 
 The `/inactive config` command (threshold_days/auto/cap) is deleted — the same three keys are
 now set from a new **Inactive Sweep** panel on the web dashboard (Config section). `/inactive
@@ -34,7 +34,7 @@ mark|release|panel|sweep` are unaffected.
 - [ ] With auto-sweep enabled and an inactive channel configured (`/inactive panel`), confirm
       `/inactive sweep` (dry run) reflects a changed threshold/cap from the panel.
 
-### Six duel/group games get web config panels (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato Group, Chicken, Musical Chairs)  (commit TBD)
+### Six duel/group games get web config panels (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato Group, Chicken, Musical Chairs)  (1eb0fba)
 
 Each game's `config` slash command was already dead code (stripped from the Discord command
 tree in `setup()` before this change), so there was previously no way to change these settings
