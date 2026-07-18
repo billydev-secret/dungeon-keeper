@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Chat Revive: session-gap lull model replaces the 4-min trigger  (pending-hash)
+### Chat Revive: session-gap lull model replaces the 4-min trigger  (4545fd4)
 
 Rhythm mode now fires on the silence *between conversations*, not between
 messages. Each 2-hour band is segmented into conversations (a >10-min gap ends
