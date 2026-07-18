@@ -16,7 +16,6 @@ import discord
 from discord import app_commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
@@ -378,87 +377,10 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
         await interaction.response.send_message(embed=embed)
 
-    @hotpotatogroup.command(name="config", description="Configure Hot Potato group (mods only)")
-    @app_commands.describe(
-        cooldown_hours="Hours before a player can join another game (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        min_fuse="Minimum fuse seconds per round (default 20)",
-        max_fuse="Maximum fuse seconds per round (default 60)",
-        min_hold="Seconds a holder must wait before passing (default 2)",
-        min_players="Minimum players to start (default 2)",
-        max_players="Maximum players in a lobby (default 10)",
-    )
-    async def hpg_config(
-        self,
-        interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        min_fuse: float | None = None,
-        max_fuse: float | None = None,
-        min_hold: float | None = None,
-        min_players: int | None = None,
-        max_players: int | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure this game.", ephemeral=True
-            )
-            return
-
-        shared_updates: dict = {}
-        game_updates: dict = {}
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if min_fuse is not None:
-            game_updates["min_fuse"] = max(5.0, min_fuse)
-        if max_fuse is not None:
-            game_updates["max_fuse"] = max(10.0, max_fuse)
-        if min_hold is not None:
-            game_updates["min_hold"] = max(0.0, min_hold)
-        if min_players is not None:
-            game_updates["min_players"] = max(2, min_players)
-        if max_players is not None:
-            game_updates["max_players"] = max(2, max_players)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await hpgdb.get_config(self.db, interaction.guild.id)
-            accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-            embed = discord.Embed(title="🔧 Hot Potato (group) Config", color=accent)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(
-                self.db, interaction.guild.id, self.GAME_KEY, **shared_updates
-            )
-        if game_updates:
-            await hpgdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
 async def setup(bot: Bot) -> None:
     cog = HotPotatoGroupGameCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats", "config"):
+    for name in ("stats",):
         cog.hotpotatogroup.remove_command(name)
     bot.tree.remove_command("hotpotatogroup")
     games.add_command(cog.hotpotatogroup)

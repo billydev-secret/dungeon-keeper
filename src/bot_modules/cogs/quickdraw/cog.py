@@ -607,83 +607,10 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             "Your nickname has been restored early.", ephemeral=True
         )
 
-    @quickdraw.command(name="config", description="Configure Quickdraw (mods only)")
-    @app_commands.describe(
-        cooldown_hours="Hours before the same pair can play again (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        allow_early_revert="Allow losers to request early nick revert: 0=no, 1=yes",
-        min_delay="Minimum seconds before draw signal (default 3.0)",
-        max_delay="Maximum seconds before draw signal (default 8.0)",
-        draw_window="Seconds to fire after draw signal before void (default 5.0)",
-    )
-    async def quickdraw_config(
-        self,
-        interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        allow_early_revert: int | None = None,
-        min_delay: float | None = None,
-        max_delay: float | None = None,
-        draw_window: float | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure Quickdraw.",
-                ephemeral=True,
-            )
-            return
-
-        shared_updates: dict = {}
-        game_updates: dict = {}
-
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if allow_early_revert is not None:
-            shared_updates["allow_early_revert"] = 1 if allow_early_revert else 0
-        if min_delay is not None:
-            game_updates["min_delay"] = max(0.5, min_delay)
-        if max_delay is not None:
-            game_updates["max_delay"] = max(1.0, max_delay)
-        if draw_window is not None:
-            game_updates["draw_window"] = max(1.0, draw_window)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await qdb.get_config(self.db, interaction.guild.id)
-            accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-            embed = discord.Embed(title="🔧 Quickdraw Config", color=accent)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(self.db, interaction.guild.id, self.GAME_KEY, **shared_updates)
-        if game_updates:
-            await qdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
 async def setup(bot: Bot) -> None:
     cog = QuickdrawDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "revert", "stats", "config"):
+    for name in ("cancel", "revert", "stats"):
         cog.quickdraw.remove_command(name)
     bot.tree.remove_command("quickdraw")
     games.add_command(cog.quickdraw)

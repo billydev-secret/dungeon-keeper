@@ -12,7 +12,9 @@ All are subcommands of the `/inactive` group.
 | `/inactive release user:<member> [reason]` | Slash | Mod (default perm: Moderate Members) | Restore snapshotted roles and remove `@Inactive` |
 | `/inactive panel channel:<text channel>` | Slash | Admin (default perm: Manage Guild) | Set the inactive channel, create/wire the `@Inactive` role, post the info + "Open Ticket" panel |
 | `/inactive sweep [apply:<bool>]` | Slash | Admin (default perm: Manage Guild) | Preview (default, dry run) or execute an inactivity sweep |
-| `/inactive config [threshold_days] [auto] [cap]` | Slash | Admin (default perm: Manage Guild) | View or change sweep settings; always echoes current values |
+
+Sweep settings (threshold/auto/cap — previously `/inactive config`) are configured from the
+web dashboard's Inactive Sweep panel — see [Configuration](#configuration).
 
 Runtime checks re-verify mod/admin status via the bot's own role config (`_is_mod` / `_is_admin`), independent of Discord default permissions. `mark` and `sweep` refuse to run until `/inactive panel` has set an inactive channel.
 
@@ -34,7 +36,7 @@ A member's last-seen is `max(last message timestamp from processed_messages, joi
 Default is a **dry run**: lists up to 20 candidates with idle days plus an overflow note, and instructs re-running with `apply: true`. With `apply: true` each candidate goes through the full mark flow (reason "Inactivity sweep") and the moved count is reported.
 
 ### Automatic sweep
-A background loop starts with the bot and wakes every **6 hours**. It acts only on the home guild, and only when `/inactive config auto:true` has been set **and** an inactive channel is configured. It uses the same candidate selection and cap, marks with actor `guild.me` and `source="auto"`, and logs the moved count.
+A background loop starts with the bot and wakes every **6 hours**. It acts only on the home guild, and only when the web dashboard's Inactive Sweep panel has "Enable automatic sweep" checked **and** an inactive channel is configured. It uses the same candidate selection and cap, marks with actor `guild.me` and `source="auto"`, and logs the moved count.
 
 ### Release (`/inactive release`)
 Restores whichever snapshotted roles still exist (deleted roles are counted and reported), then removes `@Inactive` — in that order, so a partial failure never strands the member with neither. Marks the DB row `reactivated`, writes an `inactive_reactivate` audit entry, DMs the member, and posts a "Member Reactivated" embed to the log channel. Any ticket the member opened is deliberately left for a moderator to close.
@@ -44,7 +46,10 @@ Persists the channel choice, ensures the `@Inactive` role exists and can see the
 
 ## Configuration
 
-Per-guild keys in the config table, set via `/inactive panel` and `/inactive config`:
+Per-guild keys in the config table. `inactive_channel_id`/`inactive_role_id` are set via
+`/inactive panel`; the sweep-tuning keys are set from the web dashboard's **Inactive Sweep**
+panel (`config-inactive.js` / `PUT /api/config/inactive`) — the `/inactive config` command
+that used to set them was removed.
 
 | Key | Default | Meaning |
 |---|---|---|

@@ -9,6 +9,51 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Rules Watch enable/disable/set-channel moved to the web dashboard  (commit TBD)
+
+`/rules-watch enable`, `/rules-watch disable`, and `/rules-watch set-channel` are removed —
+they duplicated the existing `config-rules-watch.js` dashboard panel, which already wrote the
+same `rules_watch_enabled`/`rules_watch_channel_id` keys. `digest`, `stats`, and `label` are
+unaffected.
+
+- [ ] Restart the bot → `/rules-watch` in Discord no longer offers `enable`, `disable`, or
+      `set-channel` as autocomplete options; `digest`/`stats`/`label` still do.
+- [ ] Toggle "Enable monitoring" and set an alert channel on the dashboard's Rules Watch config
+      panel → save, then post a message that should trip a signal — it still gets flagged into
+      the queue and (if immediate-tier) alerts to the configured channel.
+
+### `/inactive config` removed, settings moved to a new Inactive Sweep panel  (commit TBD)
+
+The `/inactive config` command (threshold_days/auto/cap) is deleted — the same three keys are
+now set from a new **Inactive Sweep** panel on the web dashboard (Config section). `/inactive
+mark|release|panel|sweep` are unaffected.
+
+- [ ] Restart the bot → `/inactive` in Discord no longer offers `config`.
+- [ ] Open the dashboard's Inactive Sweep panel → it shows the current threshold/cap/auto-sweep
+      values (defaults 30/25/off on a guild that's never set them) and saves changes.
+- [ ] With auto-sweep enabled and an inactive channel configured (`/inactive panel`), confirm
+      `/inactive sweep` (dry run) reflects a changed threshold/cap from the panel.
+
+### Six duel/group games get web config panels (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato Group, Chicken, Musical Chairs)  (commit TBD)
+
+Each game's `config` slash command was already dead code (stripped from the Discord command
+tree in `setup()` before this change), so there was previously no way to change these settings
+short of a direct SQLite edit. New dashboard panels (Games nav section, one "Config" heading
+per game) now cover the same settings, plus `channel_allowlist`/`max_nick_length`/
+`max_stakes_length` for the five games that never had a way to set them (they were always
+enforced by the shared duel base classes). This is additive — no Discord command was removed
+for these six games, only dead Python methods.
+
+- [ ] For each of the 6 games' Config panels on the dashboard: open it on a guild with no
+      existing config row → confirm the documented defaults render (e.g. Chicken:
+      cooldown 48h, climb 25s, 2–8 players), change a value, save, and reload → the change
+      persists.
+- [ ] Pick one game (e.g. Pressure Cooker) → set `channel_allowlist` to a single test channel
+      on the panel → confirm `/games pressure challenge` is refused in a different channel and
+      allowed in the allowlisted one.
+- [ ] Lower a game's `cooldown_hours` to 0 on the panel → confirm the same pair can immediately
+      rematch in Discord.
+
 ### Risky Rolls roster shows names instead of `<@id>` numbers  (184934d)
 
 The roll list — and the result / reroll fields — in the Risky Rolls embed now

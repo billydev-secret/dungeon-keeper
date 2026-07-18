@@ -260,6 +260,10 @@ CREATE TABLE duel_config (           -- per-guild, per-game config
 ```
 
 Group games add per-user cooldowns and per-game config knobs on top of this shared base.
+`channel_allowlist`, `max_nick_length`, and `max_stakes_length` are enforced generically for
+all six games in `duels/base_duel.py` / `base_game.py`, and are configurable per game from
+the web dashboard's Games nav section (one "Config" panel per game) — see §8.
+`nick_denylist` remains unexposed anywhere; it's a future feature.
 
 **Per-game state tables** (one migration each)
 
@@ -313,11 +317,10 @@ Slugs: `pressure`, `quickdraw`, `hotpotato`, `hotpotatogroup`, `chicken`, `music
 | `challenge <user> [stakes]` | Anyone | Challenge a target (accept/decline). |
 | `cancel` | Challenger | Cancel your pending challenge in this channel. |
 | `stats [user]` | Anyone | W/L (and flavor stats) for a user. |
-| `config […]` | Manage Server | View/update per-game config (knobs below). |
 | `revert` | Loser | **Pressure Cooker & Quickdraw only** — request early revert of your active sentence (requires `allow_early_revert`). |
 
-Hot Potato (duel) exposes `challenge` / `cancel` / `stats` / `config` — **no `revert`
-command**, even though it carries an `allow_early_revert` config knob.
+Hot Potato (duel) exposes `challenge` / `cancel` / `stats` — **no `revert` command**, even
+though it carries an `allow_early_revert` config knob.
 
 **Group games** (`/games hotpotatogroup`, `/games chicken`, `/games musicalchairs`)
 
@@ -325,21 +328,29 @@ command**, even though it carries an `allow_early_revert` config knob.
 |---|---|---|
 | `start [stakes]` | Anyone | Open a join lobby. |
 | `stats [user]` | Anyone | W/L (and flavor stats) for a user. |
-| `config […]` | Manage Server | View/update per-game config (knobs below). |
 
 Group games have **no `cancel` slash command** — the host cancels via the `🚫` button on the
 lobby. None expose `revert`.
 
-**`config` arguments by game** (all optional; passing none shows the current config)
+**Per-game config — web dashboard only.** Every game previously shipped a `config […]`
+subcommand, but each cog's `setup()` stripped it from the command tree before registering
+under `/games` (`cog.<group>.remove_command("config")`), so none of them were ever actually
+reachable in Discord — the only way to change these settings was a direct SQLite edit. Those
+dead methods were deleted; settings now live on the web dashboard's **Games** nav section,
+one "Config" panel per game (`config-games-<slug>.js` / `PUT /api/config/games-<slug>`):
 
-| Game | `config` knobs |
+| Game | Panel fields |
 |---|---|
 | Pressure Cooker | `cooldown_hours`, `sentence_hours`, `allow_early_revert`, `channel_allowlist`, `max_nick_length`, `max_stakes_length` |
-| Quickdraw | `cooldown_hours`, `sentence_hours`, `allow_early_revert`, `min_delay`, `max_delay`, `draw_window` |
-| Hot Potato (duel) | `cooldown_hours`, `sentence_hours`, `allow_early_revert`, `min_timer`, `max_timer` |
-| Hot Potato (group) | `cooldown_hours`, `sentence_hours`, `min_fuse`, `max_fuse`, `min_hold`, `min_players`, `max_players` |
-| Chicken | `cooldown_hours`, `sentence_hours`, `climb_duration`, `min_players`, `max_players` |
-| Musical Chairs | `cooldown_hours`, `sentence_hours`, `min_music`, `max_music`, `scramble_window`, `false_start_elim`, `min_players`, `max_players` |
+| Quickdraw | same shared fields, plus `min_delay`, `max_delay`, `draw_window` |
+| Hot Potato (duel) | same shared fields, plus `min_timer`, `max_timer` |
+| Hot Potato (group) | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `min_fuse`, `max_fuse`, `min_hold`, `min_players`, `max_players` |
+| Chicken | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `climb_duration`, `min_players`, `max_players` |
+| Musical Chairs | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `min_music`, `max_music`, `scramble_window`, `false_start_elim`, `min_players`, `max_players` |
+
+`channel_allowlist`/`max_nick_length`/`max_stakes_length` are now exposed for all six games,
+not just Pressure Cooker as the old (dead) commands had it — they were always enforced
+generically in the shared base classes, so this closes a real gap rather than adding scope.
 
 **In-embed controls** (built): `✅ Accept` / `❌ Decline` (duel challenge); `✋ Join` /
 `🚪 Leave` / `▶️ Start` / `🚫 Cancel` (lobby); the game's own button(s) (`💨 PUMP`,

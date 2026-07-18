@@ -207,6 +207,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/games hotpotatogroup start` — Hot Potato group free-for-all
 - `/games musicalchairs start` — Musical Chairs, 3+ players
 - `/games chicken start` — Chicken, duel or group
+- *Per-game settings (cooldowns, timers, player counts, channel restrictions) are managed from the web dashboard's Games nav section — one Config panel per game.*
 
 **Content & Engagement**
 - `/whisper send @user <message>` — Send an anonymous whisper (recipient gets three guesses); also `optin`, `optout`, `sent`, `forget-me`

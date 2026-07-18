@@ -1,6 +1,6 @@
 # Pressure Cooker — Feature Spec
 
-A 1-v-1 stakes-pumping duel. Two players take turns clicking a single **Pump** button; each press adds a random 1–15 to a shared gauge. Whoever pushes the gauge past 100 loses, and the winner gets a modal to impose a custom nickname on the loser for 24 hours (default). The feature is Discord-only by design — no dashboard surface. Not part of the games system; see [[games-system-spec]].
+A 1-v-1 stakes-pumping duel. Two players take turns clicking a single **Pump** button; each press adds a random 1–15 to a shared gauge. Whoever pushes the gauge past 100 loses, and the winner gets a modal to impose a custom nickname on the loser for 24 hours (default). Gameplay is Discord-only; per-guild settings are configured from the web dashboard's Games nav section (Pressure Cooker → Config). Not part of the games system; see [[games-system-spec]].
 
 ## Commands
 
@@ -10,7 +10,9 @@ A 1-v-1 stakes-pumping duel. Two players take turns clicking a single **Pump** b
 | `/pressure cancel` | Slash | Challenger only | Cancel your most-recent pending challenge in this channel |
 | `/pressure stats user:[member]` | Slash | Everyone | Show wins, losses, total games, and highest winning gauge |
 | `/pressure revert` | Slash | Loser only | Restore your original nickname early (only when allowed by config) |
-| `/pressure config [keys...]` | Slash | Manage Server | Update or display per-guild config; no keys prints the current row |
+
+Per-guild config (was `/pressure config`) now lives on the web dashboard — see
+[Configuration](#configuration).
 
 ## Behavior
 
@@ -83,7 +85,7 @@ After a restart, the Pump button on active games and the Name the loser button o
 
 **User needs:**
 - `/pressure challenge`, `/cancel`, `/stats`, `/revert`: no Discord-side gate (server-only). Stakes and revert are subject to per-guild config.
-- `/pressure config`: Manage Server.
+- Per-guild config (web dashboard): admin.
 - **Accept** / **Decline** buttons: only the challenged member can press.
 - **Name the loser** button: winner only.
 
@@ -111,7 +113,7 @@ After a restart, the Pump button on active games and the Name the loser button o
 ## Non-goals
 
 - **No team or >2 player variant.** Hard-coded to two players.
-- **No dashboard.** Configuration is slash-only.
+- **No dashboard for gameplay.** Challenges, stats, and reverts stay Discord-only; only per-guild config lives on the web dashboard.
 - **No XP integration.** Outcomes don't feed any other system.
 - **No history browser.** `/pressure stats` aggregates only — there's no per-game playback even though every roll is recorded.
 - **No spectator influence.** Outsiders cannot bet, vote, or otherwise affect a game.
@@ -120,7 +122,9 @@ After a restart, the Pump button on active games and the Name the loser button o
 
 ## Configuration
 
-Per-guild row, all editable via `/pressure config`.
+Per-guild row, editable from the web dashboard's Games nav section (Pressure Cooker →
+Config). Previously `/pressure config`, an admin-only slash command that was removed —
+see [[dk-pvp-games-suite-spec]] §8.
 
 | Key | Default | Range | Purpose |
 |---|---|---|---|

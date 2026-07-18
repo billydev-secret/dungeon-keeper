@@ -1,4 +1,8 @@
-"""Rules Watch — slash commands for enable/disable, config, digest, and manual labeling."""
+"""Rules Watch — slash commands for digest, stats, and manual labeling.
+
+Enable/disable and the alert channel are configured on the web dashboard
+(``config-rules-watch.js`` / ``PUT /api/config/rules-watch``).
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_config_value, set_config_value
+from bot_modules.core.db_utils import get_config_value
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -136,69 +140,6 @@ class RulesWatchCog(commands.Cog):
             self.bot.tree.remove_command(
                 _REPORT_CTX_MENU_NAME, type=discord.AppCommandType.message
             )
-
-    # ------------------------------------------------------------------
-    # Enable / disable
-    # ------------------------------------------------------------------
-
-    @rules_watch.command(name="enable", description="Start passive monitoring of all public channels.")
-    async def rw_enable(self, interaction: discord.Interaction) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id or 0
-
-        def _do_enable():
-            with self.ctx.open_db() as conn:
-                set_config_value(conn, "rules_watch_enabled", "1", guild_id)
-
-        await asyncio.to_thread(_do_enable)
-        await interaction.response.send_message(
-            "✅ Rules Watch enabled. The monitor will start screening public messages.\n"
-            "Use `/rules-watch set-channel` to configure where immediate alerts go.",
-            ephemeral=True,
-        )
-
-    @rules_watch.command(name="disable", description="Stop passive monitoring.")
-    async def rw_disable(self, interaction: discord.Interaction) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id or 0
-
-        def _do_disable():
-            with self.ctx.open_db() as conn:
-                set_config_value(conn, "rules_watch_enabled", "0", guild_id)
-
-        await asyncio.to_thread(_do_disable)
-        await interaction.response.send_message("Rules Watch disabled.", ephemeral=True)
-
-    # ------------------------------------------------------------------
-    # Alert channel
-    # ------------------------------------------------------------------
-
-    @rules_watch.command(
-        name="set-channel",
-        description="Set the channel where immediate alerts are posted.",
-    )
-    @app_commands.describe(channel="Channel for immediate alert embeds.")
-    async def rw_set_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id or 0
-        channel_id = channel.id
-
-        def _do_set_channel():
-            with self.ctx.open_db() as conn:
-                set_config_value(conn, "rules_watch_channel_id", str(channel_id), guild_id)
-
-        await asyncio.to_thread(_do_set_channel)
-        await interaction.response.send_message(
-            f"Immediate alerts will be posted to {channel.mention}.", ephemeral=True
-        )
 
     # ------------------------------------------------------------------
     # Digest

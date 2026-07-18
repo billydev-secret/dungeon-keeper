@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
-import json
 import logging
 import random
 
@@ -309,80 +308,10 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
             "Your nickname has been restored early.", ephemeral=True
         )
 
-    @pressure.command(name="config", description="Configure Pressure Cooker (mods only)")
-    @app_commands.describe(
-        cooldown_hours="Hours before the same pair can play again (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        allow_early_revert="Allow losers to request early nick revert: 0=no, 1=yes",
-        channel_allowlist="JSON array of allowed channel IDs, or '[]' for all channels",
-        max_nick_length="Maximum nickname character count (default 32)",
-        max_stakes_length="Maximum stakes text character count (default 200)",
-    )
-    async def pressure_config(
-        self,
-        interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        allow_early_revert: int | None = None,
-        channel_allowlist: str | None = None,
-        max_nick_length: int | None = None,
-        max_stakes_length: int | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure Pressure Cooker.",
-                ephemeral=True,
-            )
-            return
-
-        updates: dict = {}
-        if cooldown_hours is not None:
-            updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            updates["sentence_hours"] = max(1, sentence_hours)
-        if allow_early_revert is not None:
-            updates["allow_early_revert"] = 1 if allow_early_revert else 0
-        if channel_allowlist is not None:
-            try:
-                json.loads(channel_allowlist)
-                updates["channel_allowlist"] = channel_allowlist
-            except json.JSONDecodeError:
-                await interaction.response.send_message(
-                    "channel_allowlist must be a valid JSON array, e.g. `[123456789, 987654321]`",
-                    ephemeral=True,
-                )
-                return
-        if max_nick_length is not None:
-            updates["max_nick_length"] = max(1, min(32, max_nick_length))
-        if max_stakes_length is not None:
-            updates["max_stakes_length"] = max(1, min(2000, max_stakes_length))
-
-        if not updates:
-            cfg = await pdb.get_config(self.db, interaction.guild.id)
-            accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-            embed = discord.Embed(title="🔧 Pressure Cooker Config", color=accent)
-            for k, v in cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        await pdb.upsert_config(self.db, interaction.guild.id, **updates)
-        lines = [f"**{k}** → `{v}`" for k, v in updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
 async def setup(bot: Bot) -> None:
     cog = PressureCookerDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "revert", "stats", "config"):
+    for name in ("cancel", "revert", "stats"):
         cog.pressure.remove_command(name)
     bot.tree.remove_command("pressure")
     games.add_command(cog.pressure)

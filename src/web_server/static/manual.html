@@ -498,7 +498,7 @@
         <tr><td><strong><a href="#ai-tools">AI Moderation</a></strong></td><td>AI-assisted member reviews, channel scans, and free-form questions about message history.</td></tr>
         <tr><td><strong><a href="#rules-watch">Rules Watch</a></strong></td><td>Passive AI monitor that screens public messages for rule violations and feeds a tiered alert queue for mod review.</td></tr>
         <tr><td><strong><a href="#setup">Setup &amp; Permissions</a></strong></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
-        <tr><td><strong><a href="#server-ops">Server Upkeep</a></strong></td><td>Auto-delete schedules, inactivity pruning, auto-threading, bump reminders, gender tagging, hidden channels.</td></tr>
+        <tr><td><strong><a href="#server-ops">Server Upkeep</a></strong></td><td>Auto-delete schedules, inactivity pruning, a shared inactive-member holding channel, auto-threading, bump reminders, gender tagging, hidden channels.</td></tr>
         <tr><td><strong><a href="#greeting-watch">Greeting Watch</a></strong></td><td>DMs a greeter when a member's "good morning" in a watched channel goes unanswered. Dashboard-configured, no commands.</td></tr>
         <tr><td><strong><a href="#chat-revive">Chat Revive ("Ember")</a></strong></td><td>Rhythm-aware lull detector that revives a quiet channel with a question card and an opt-in ping role. Dashboard-managed, no commands.</td></tr>
         <tr><td><strong><a href="#network-analytics">Network Analytics</a></strong></td><td>Connection graphs, interaction heatmaps, invite trees — dashboard panels.</td></tr>
@@ -550,7 +550,7 @@
     </table>
 
     <h3 id="games-duels">Duels &amp; Group Games</h3>
-    <p>Real-time button games built on the same framework — duels are 1-v-1 challenges, group games run an open lobby then eliminate players each round. All <span class="perm perm-all">Everyone</span>; each also has mod-only <code>config</code> and public <code>stats</code> subcommands.</p>
+    <p>Real-time button games built on the same framework — duels are 1-v-1 challenges, group games run an open lobby then eliminate players each round. All <span class="perm perm-all">Everyone</span>.</p>
     <table>
       <thead><tr><th>Command</th><th>Game &amp; flow</th></tr></thead>
       <tbody>
@@ -562,6 +562,14 @@
         <tr><td><code>/games chicken start</code></td><td><strong>Chicken</strong> — a meter climbs toward a crash; bail in time to survive, cut it closest for style points</td></tr>
       </tbody>
     </table>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>Each game's cooldowns, nickname/sentence duration, timers, player counts, and channel restrictions are set from the dashboard's <strong>Games</strong> nav section — one Config panel per game (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato (Group), Chicken, Musical Chairs).</p>
+      </div>
+    </div>
 
     <h3 id="games-risky">Risky Rolls</h3>
 
@@ -1463,22 +1471,15 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Requires the AI service, off by default</strong>
-        <p>Rules Watch uses the same local AI model as the <a href="#ai-tools">AI Moderation Tools</a> and does nothing until you run <code>/rules-watch enable</code>. Review and label queued events on the dashboard's <a href="/#/rules-watch">Rules Watch</a> panel.</p>
+        <p>Rules Watch uses the same local AI model as the <a href="#ai-tools">AI Moderation Tools</a> and does nothing until you turn it on from the web dashboard. Configure and review queued events on the dashboard's <a href="/#/rules-watch">Rules Watch</a> panel.</p>
       </div>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/rules-watch enable &nbsp;&nbsp; /rules-watch disable &nbsp;&nbsp; /rules-watch status</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
-      <span class="cmd-desc">Turn passive monitoring of public channels on or off, or check whether it's currently active.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/rules-watch set-channel channel:#mod-alerts</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
-      <span class="cmd-desc">Choose the channel where immediate-tier alerts are posted. Each alert includes the flagged message, the matched rule, and Confirm / False-positive buttons (they keep working across bot restarts).</span>
-      <div class="cmd-params">
-        <strong>channel</strong> — the text channel to receive immediate-tier alert embeds.
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>The Rules Watch config panel toggles monitoring on/off and sets which channel receives immediate-tier alerts (each alert includes the flagged message, the matched rule, and Confirm / False-positive buttons that keep working across bot restarts). The retired <code>/rules-watch enable</code>, <code>/rules-watch disable</code>, and <code>/rules-watch set-channel</code> commands are no longer needed.</p>
       </div>
     </div>
 
@@ -1575,6 +1576,41 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/">web dashboard</a></strong>
         <p>The Inactivity Prune panel surfaces the configured role, day threshold, exemptions, and an at-a-glance preview of who would be pruned next run. The retired <code>/inactivity_prune</code> slash group is no longer registered; the daily scheduler keeps running.</p>
+      </div>
+    </div>
+
+    <h3 id="inactive">Inactive Members</h3>
+    <p>A softer sibling of the jail system for idle members: instead of a per-user cell, everyone held inactive shares one channel. Roles are snapshotted and stripped, the member gets an <code>@Inactive</code> role that can only see that channel, and a persistent panel there lets them open a ticket to be reactivated. Members enter manually or via a sweep; the only way out is <code>/inactive release</code>.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/inactive panel channel:#inactive</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">One-time setup: sets the shared inactive channel, creates/wires the <code>@Inactive</code> role, and posts the info panel with an "Open Ticket" button. Required before <code>mark</code> or <code>sweep</code> will run.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/inactive mark user:@member [reason]</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Moderate Members</span></span>
+      <span class="cmd-desc">Snapshot and strip the member's roles, apply <code>@Inactive</code>, and move them to the inactive channel. Never a bot, never yourself, never an admin — only admins may move a moderator.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/inactive release user:@member [reason]</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Moderate Members</span></span>
+      <span class="cmd-desc">Restore whichever snapshotted roles still exist and remove <code>@Inactive</code>.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/inactive sweep [apply:true|false]</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">Defaults to a dry run: lists members idle past the threshold without touching anyone. Pass <code>apply:true</code> to actually move each listed candidate through the mark flow.</span>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>The Inactive Sweep panel sets the idle-day threshold, the per-run cap, and whether the sweep also runs automatically every 6 hours. The retired <code>/inactive config</code> command is no longer needed.</p>
       </div>
     </div>
 
@@ -1682,6 +1718,8 @@
         <tr><td><strong><a href="/#/config-moderation">Moderation</a></strong></td><td>Jail category, ticket category, policy channels, warning thresholds</td></tr>
         <tr><td><strong><a href="/#/config-policy-tickets">Policy Tickets</a></strong></td><td>Mod-team voting channel and rules engine</td></tr>
         <tr><td><strong><a href="/#/config-prune">Inactivity Prune</a></strong></td><td>Inactivity pruning threshold, exemptions, and next-run preview</td></tr>
+        <tr><td><strong><a href="/#/config-inactive">Inactive Sweep</a></strong></td><td>Idle-day threshold, per-run cap, and automatic-sweep toggle for the shared <a href="#inactive">Inactive Members</a> channel</td></tr>
+        <tr><td><strong><a href="/#/config-rules-watch">Rules Watch</a></strong></td><td>Enable/disable passive monitoring and set the immediate-alert channel</td></tr>
         <tr><td><strong><a href="/#/config-spoiler">Spoiler Guard</a></strong></td><td>Channels requiring image spoiler tags, roles exempt from spoiler enforcement</td></tr>
         <tr><td><strong><a href="/#/config-auto-role">Auto-Role</a></strong></td><td>Roles applied automatically on join</td></tr>
         <tr><td><strong><a href="/#/config-auto-delete">Auto-Delete</a></strong></td><td>Per-channel age + schedule rules</td></tr>
@@ -1693,6 +1731,7 @@
         <tr><td><strong><a href="/#/config-confessions">Confessions</a></strong></td><td>Channel, mod-log channel, panic mode</td></tr>
         <tr><td><strong><a href="/#/config-dms">DM Permissions</a></strong></td><td>Request panel channel, audit channel</td></tr>
         <tr><td><strong><a href="/#/config-whisper">Whisper</a></strong> / <a href="/#/config-guess">Guess</a> / <a href="/#/config-risky-rolls">Risky Rolls</a></td><td>Channels and opt-in roles for each game feature</td></tr>
+        <tr><td><strong>Games — Duels &amp; Group</strong> (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato (Group), Chicken, Musical Chairs)</td><td>Per-game Config panel: cooldowns, nickname/sentence duration, timers, player counts, channel restrictions</td></tr>
         <tr><td><strong><a href="/#/config-wellness">Wellness</a></strong></td><td>Server defaults, wellness role + private channel, crisis-resource URL</td></tr>
         <tr><td><strong><a href="/#/config-ai">AI (Local LLM)</a></strong></td><td>Local AI model selection and settings (bot-wide, primary server only)</td></tr>
         <tr><td><strong><a href="/#/gender-admin">Gender Tagging</a></strong></td><td>Member gender classification for analytics breakdowns</td></tr>
