@@ -772,6 +772,66 @@ def test_build_embed_footer_describes_auto_close():
     assert "120" in embed.footer.text
 
 
+# ── formatters.build_embed name resolution ──────────────────────────
+
+
+@pytest.fixture
+def clear_name_cache():
+    """The display-name cache is a module global; isolate each test."""
+    saved = dict(state.display_names)
+    state.display_names.clear()
+    yield state.display_names
+    state.display_names.clear()
+    state.display_names.update(saved)
+
+
+class _FakeMember:
+    def __init__(self, display_name: str):
+        self.display_name = display_name
+
+
+class _FakeGuild:
+    def __init__(self, members: dict[int, _FakeMember]):
+        self._members = members
+
+    def get_member(self, uid: int):
+        return self._members.get(uid)
+
+
+def test_build_embed_roster_shows_cached_name_as_text(clear_name_cache):
+    clear_name_cache[1] = "Billy"
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {1: 51}
+    val = _embed_field_map(build_embed(s))["Rolls (1)"]
+    assert "Billy" in val
+    assert "<@1>" not in val
+
+
+def test_build_embed_roster_falls_back_to_mention_when_unknown(clear_name_cache):
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {999: 51}
+    val = _embed_field_map(build_embed(s))["Rolls (1)"]
+    # No cache entry and no guild — a raw mention is the last resort.
+    assert "<@999>" in val
+
+
+def test_build_embed_backfills_name_from_guild_and_caches(clear_name_cache):
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {7: 51}
+    guild = _FakeGuild({7: _FakeMember("Raptor")})
+    val = _embed_field_map(build_embed(s, guild))["Rolls (1)"]
+    assert "Raptor" in val
+    assert clear_name_cache[7] == "Raptor"  # backfilled into the cache
+
+
+def test_build_embed_escapes_markdown_in_display_name(clear_name_cache):
+    clear_name_cache[1] = "**boss**"
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {1: 51}
+    val = _embed_field_map(build_embed(s))["Rolls (1)"]
+    assert r"\*\*boss\*\*" in val
+
+
 # ── formatters.build_question_reply_content ─────────────────────────
 
 

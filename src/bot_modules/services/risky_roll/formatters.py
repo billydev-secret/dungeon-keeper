@@ -1,21 +1,57 @@
 import logging
+from collections.abc import Callable
 
 import discord
 
+from . import state as app_state
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
 log = logging.getLogger(__name__)
+
+# A NameFn turns a user id into embed-ready text: a cached display name (escaped)
+# or, for a user we can't resolve, a raw <@id> mention as a last resort.
+NameFn = Callable[[int], str]
+
+
+def _mention(uid: int) -> str:
+    return f"<@{uid}>"
+
+
+def make_name_resolver(guild: "discord.Guild | None") -> NameFn:
+    """Return a resolver that prints cached display names as plain text.
+
+    Names are cached at roll time; on a cache miss we backfill from the guild's
+    member cache (sync, no network) so a round restored after a restart still
+    shows names for members who are still present. Only a genuinely unknown
+    user — typically someone who has left — falls back to a <@id> mention.
+    """
+    def resolve(uid: int) -> str:
+        name = app_state.display_names.get(uid)
+        if name is None and guild is not None:
+            member = guild.get_member(uid)
+            if member is not None:
+                name = member.display_name
+                app_state.display_names[uid] = name
+        if name is None:
+            return _mention(uid)
+        return discord.utils.escape_markdown(name)
+
+    return resolve
 
 
 def format_user_mentions(user_ids: set[int]) -> str:
     return " ".join(f"<@{uid}>" for uid in sorted(user_ids))
 
 
-def format_lowest_rolloff_note(tied_user_ids: set[int], selected_user_id: int | None) -> str:
+def format_lowest_rolloff_note(
+    tied_user_ids: set[int],
+    selected_user_id: int | None,
+    name_fn: NameFn = _mention,
+) -> str:
     if selected_user_id is None or len(tied_user_ids) < 2:
         return ""
-    tied_mentions = ", ".join(f"<@{uid}>" for uid in sorted(tied_user_ids))
-    return f"{tied_mentions} → <@{selected_user_id}>"
+    tied = ", ".join(name_fn(uid) for uid in sorted(tied_user_ids))
+    return f"{tied} → {name_fn(selected_user_id)}"
 
 
 def _roll_prefix(user_id: int, roll: int, state: RiskyRollState) -> str:
@@ -81,17 +117,21 @@ def build_pending_question_summary(state: PendingQuestionState, question_text: s
     return f"<@{state.winner_id}> rolled 69 and asked:\n> {question_text}"
 
 
-def _add_reroll_field(embed: discord.Embed, state: RiskyRollState, *, show_all_in_message: bool) -> None:
-    reroll_text = f"Tied: {state.reroll_mentions()}"
-    pending_mentions = state.pending_reroll_mentions()
-    if pending_mentions:
-        reroll_text += f"\nWaiting on: {pending_mentions}"
+def _add_reroll_field(
+    embed: discord.Embed, state: RiskyRollState, *, show_all_in_message: bool, name_fn: NameFn
+) -> None:
+    tied = ", ".join(name_fn(uid) for uid in sorted(state.reroll_user_ids))
+    reroll_text = f"Tied: {tied}"
+    pending = [uid for uid in sorted(state.reroll_user_ids) if uid not in state.rolls]
+    if pending:
+        reroll_text += "\nWaiting on: " + ", ".join(name_fn(uid) for uid in pending)
     elif show_all_in_message:
         reroll_text += "\nAll rerolls in — close the round."
     embed.add_field(name="⚔️ Reroll", value=reroll_text, inline=False)
 
 
-def build_embed(state: RiskyRollState) -> discord.Embed:
+def build_embed(state: RiskyRollState, guild: "discord.Guild | None" = None) -> discord.Embed:
+    name = make_name_resolver(guild)
     if state.is_open:
         color = discord.Color(0xFF9800) if state.reroll_user_ids else discord.Color(0xDC3545)
     elif state.highest_user is not None and state.lowest_user is None:
@@ -120,48 +160,48 @@ def build_embed(state: RiskyRollState) -> discord.Embed:
     if not state.rolls:
         embed.add_field(name="Rolls (0)", value="No rolls yet.", inline=False)
         if state.reroll_user_ids:
-            _add_reroll_field(embed, state, show_all_in_message=False)
+            _add_reroll_field(embed, state, show_all_in_message=False, name_fn=name)
         return embed
 
     sorted_rolls = sorted(state.rolls.items(), key=lambda item: item[1], reverse=True)
     lines = [
-        f"{_roll_prefix(uid, roll, state)} **{roll}** — <@{uid}>"
+        f"{_roll_prefix(uid, roll, state)} **{roll}** — {name(uid)}"
         for uid, roll in sorted_rolls
     ]
     embed.add_field(name=f"Rolls ({len(state.rolls)})", value="\n".join(lines), inline=False)
 
     if state.reroll_user_ids:
-        _add_reroll_field(embed, state, show_all_in_message=True)
+        _add_reroll_field(embed, state, show_all_in_message=True, name_fn=name)
 
     if not state.is_open and state.highest_user:
-        high_mention = f"<@{state.highest_user}>"
+        high_mention = name(state.highest_user)
         if state.lowest_user is None:
             result = f"**Asks:** {high_mention}\n**Answers:** the room"
-            highest_rolloff_note = format_lowest_rolloff_note(state.highest_tie_user_ids, state.highest_user)
+            highest_rolloff_note = format_lowest_rolloff_note(state.highest_tie_user_ids, state.highest_user, name)
             if highest_rolloff_note:
                 result += f"\n{highest_rolloff_note}"
         else:
-            low_mention = f"<@{state.lowest_user}>"
+            low_mention = name(state.lowest_user)
             winner_rolled_100 = state.rolls.get(state.highest_user) == 100
             loser_rolled_1 = state.rolls.get(state.lowest_user) == 1
 
             if winner_rolled_100 and state.second_lowest_user is not None:
-                result = f"**Asks:** {high_mention} ⭐\n**Answers:** {low_mention} and <@{state.second_lowest_user}>"
+                result = f"**Asks:** {high_mention} ⭐\n**Answers:** {low_mention} and {name(state.second_lowest_user)}"
             elif loser_rolled_1 and state.second_highest_user is not None:
-                result = f"**Asks:** {high_mention} and <@{state.second_highest_user}>\n**Answers:** {low_mention} ☠️"
+                result = f"**Asks:** {high_mention} and {name(state.second_highest_user)}\n**Answers:** {low_mention} ☠️"
             else:
                 result = f"**Asks:** {high_mention}\n**Answers:** {low_mention}"
 
-            highest_rolloff_note = format_lowest_rolloff_note(state.highest_tie_user_ids, state.highest_user)
+            highest_rolloff_note = format_lowest_rolloff_note(state.highest_tie_user_ids, state.highest_user, name)
             if highest_rolloff_note:
                 result += f"\n{highest_rolloff_note}"
-            lowest_rolloff_note = format_lowest_rolloff_note(state.lowest_tie_user_ids, state.lowest_user)
+            lowest_rolloff_note = format_lowest_rolloff_note(state.lowest_tie_user_ids, state.lowest_user, name)
             if lowest_rolloff_note:
                 result += f"\n{lowest_rolloff_note}"
-            second_lowest_note = format_lowest_rolloff_note(state.second_lowest_tie_user_ids, state.second_lowest_user)
+            second_lowest_note = format_lowest_rolloff_note(state.second_lowest_tie_user_ids, state.second_lowest_user, name)
             if second_lowest_note:
                 result += f"\n{second_lowest_note}"
-            second_highest_note = format_lowest_rolloff_note(state.second_highest_tie_user_ids, state.second_highest_user)
+            second_highest_note = format_lowest_rolloff_note(state.second_highest_tie_user_ids, state.second_highest_user, name)
             if second_highest_note:
                 result += f"\n{second_highest_note}"
 

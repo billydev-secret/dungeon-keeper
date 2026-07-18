@@ -224,7 +224,7 @@ class RiskyRollCog(commands.Cog):
             try:
                 await interaction.response.send_message(
                     content=content,
-                    embed=build_embed(state),
+                    embed=build_embed(state, interaction.guild),
                     view=view,
                     allowed_mentions=allowed_mentions,
                 )
@@ -254,7 +254,7 @@ class RiskyRollCog(commands.Cog):
                         try:
                             await message.edit(
                                 content="Risky Rolls could not finish setup. Start a new round.",
-                                embed=build_embed(state),
+                                embed=build_embed(state, interaction.guild),
                                 view=failed_view,
                                 allowed_mentions=discord.AllowedMentions.none(),
                             )
@@ -320,7 +320,7 @@ class RiskyRollCog(commands.Cog):
             view = RiskyRollView(state.game_id)
             try:
                 msg = await channel.send(
-                    embed=build_embed(state),
+                    embed=build_embed(state, channel.guild),
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )

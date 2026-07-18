@@ -9,6 +9,27 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Risky Rolls roster shows names instead of `<@id>` numbers  (<pending>)
+
+The roll list — and the result / reroll fields — in the Risky Rolls embed now
+print cached **display names as plain text** instead of `<@id>` mentions, which
+some viewers' clients couldn't resolve (mainly members who'd left). A name is
+cached when a player rolls and backfilled from the guild member cache on a miss.
+The winner/loser question prompts still ping via message **content** — only the
+embed display changed, so nothing that used to notify stopped notifying.
+
+- [ ] Start a round and have several people **Roll** → the roster shows each
+      player's display name as text, no `<@…>` numbers — check on a phone/second
+      account that hasn't loaded the member list.
+- [ ] Close the round → the **Result** ("Asks" / "Answers") and any tie-rolloff
+      lines show names too, not numbers.
+- [ ] The loser still gets **pinged** — the question prompt is a separate
+      message (content), not the embed.
+- [ ] Force a highest tie → the ⚔️ **Reroll** field ("Tied" / "Waiting on")
+      shows names, and the "still waiting for … to reroll" nudge still pings.
+- [ ] Restart the bot mid-round → the restored roster still shows names for
+      players who are still in the server.
+
 ### Economy — remove the join-time onboarding DM  (5a9e439)
 
 The onboarding "starter path" DM (sent to every new member on join, listing the
@@ -61,7 +82,6 @@ intentionally *not* gated.
       you **do** get the streak DM.
 - [ ] Confirm quest-completion cards still DM role-holders only (unchanged) and
       rental billing DMs still reach renters regardless of the game role.
-
 ### Greeting Watch — DM when a "good morning"/"hello" goes unanswered  (8dc4a8c)
 
 New feature: greetings in watched channel(s) that get no reply/@mention within a
