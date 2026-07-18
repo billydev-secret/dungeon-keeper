@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy — remove the join-time onboarding DM  (pending)
+### Economy — remove the join-time onboarding DM  (5a9e439)
 
 The onboarding "starter path" DM (sent to every new member on join, listing the
 `onboarding`-flagged quests) is deleted — same opt-in concern as the streak DMs:
