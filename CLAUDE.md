@@ -32,6 +32,14 @@ SQLite-backed. Tests in `tests/`.
   unbuilt features; when a spec and the code disagree, the code wins.
 - Behavior change ⇒ update the matching spec (and its INDEX.md classification
   if it changed flavor) **in the same commit**.
+- UI/UX change (new/changed slash command, dashboard panel, embed copy,
+  button/modal flow) ⇒ also update the **user-facing website docs** in the
+  same commit: `src/web_server/static/manual.html` (the guide rendered in
+  the dashboard's own Help panel — routed via
+  `static/js/panels/help-sections.js`/`help.js`), plus README.md's
+  slash-command reference. This is a different surface from `docs/` (dev
+  specs) and drifts independently — don't let it lag while `docs/` stays
+  current.
 
 ## Workflow
 
