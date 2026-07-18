@@ -9,6 +9,53 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### XP — level-ups won on silent award paths now get announced  (b6ca6bf)
+
+`member_xp.announced_level` (migration 075) now tracks what's actually been
+announced, separately from `level`. A level won with no Discord handle in scope
+(quest XP payouts) used to be dropped instead of announced; it's now owed and
+delivered on the member's next ordinary award. Silent paths (backfill, recompute,
+the migration seed) catch the column up so a deploy doesn't replay level history.
+
+**Worth knowing while testing:** the actual embed post is the only thing that
+can't be exercised offline — the owed/seed bookkeeping is fully unit-tested. The
+migration already applied on prod; the seed's whole job is that the **first award
+after restart announces nothing** for existing members.
+
+- [ ] Restart → first messages from active members post **no** backlog of
+      level-up embeds (the seed held).
+- [ ] Claim a quest whose XP crosses a level (e.g. a fresh/low member) → **no**
+      embed yet; then send an ordinary message → the crossed level-up embed posts
+      now (owed level delivered).
+- [ ] A normal level-up (message XP crossing a level with a handle in scope)
+      still announces immediately as before — no regression.
+
+### Economy — curated role-icon catalog (Sinks page) + pay memo  (9ddc456)
+
+New **Sinks** dashboard page owns the flat perk prices (moved off Settings) and a
+per-guild catalog of named role icons, each weekly-priced (migration
+077_economy_icon_catalog). Renting one reuses the `role_icon` perk + personal-role
+projector. `/bank pay` gains an optional memo shown in both ledgers.
+
+**Worth knowing while testing:** everything touching Discord's role `display_icon`
+is the live-only risk — upload, switch, and the presence-only re-upload guard
+(`projected_icon_path`). Needs a guild with `ROLE_ICONS`. Billing/guard logic is
+unit-tested.
+
+- [ ] Sinks page: add two catalog icons with different weekly prices; confirm the
+      flat perk prices also live here now (gone from Settings).
+- [ ] `/bank shop` role-icon row shows a **picker** (not a flat Rent button) when
+      a catalog exists → rent one → the icon appears on your personal role.
+- [ ] **Switch** to the other catalog icon → the role icon actually changes on
+      Discord (the presence-only re-upload guard fires).
+- [ ] Disable an icon → it vanishes for new renters, current renter keeps it; try
+      to delete an icon that's rented → blocked.
+- [ ] Edit a catalog icon's price → the rental reprices at the **next**
+      anniversary, not immediately.
+- [ ] `/bank pay @member amount memo:"lunch"` → the memo shows in the recipient's
+      wallet ledger and in the dashboard bank-manager ledger's Memo column
+      (escaped, single line).
+
 ### Quote renderer — bounded Twemoji fetch + fail-soft body  (e86352d)
 
 Hardening only, no visible change in normal operation. pilmoji's emoji fetch
