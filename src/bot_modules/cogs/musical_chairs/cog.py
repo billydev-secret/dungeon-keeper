@@ -379,7 +379,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
     def build_game_view(self, game_id: int) -> SitView:
         # SIT routes through _on_sit (not _handle_group_button) because Musical Chairs'
-        # button has phase-dependent behaviour (false-start vs seat-claim) and can
+        # button has phase-dependent behavior (false-start vs seat-claim) and can
         # eliminate multiple players at once on round close.
         return SitView(game_id, self._on_sit)
 

@@ -19,7 +19,7 @@ from bot_modules.games_traditional.logic import (
     summarize_asked_by_category,
 )
 
-_RESULTS_GREY = 0x808080
+_RESULTS_GRAY = 0x808080
 
 # Per-category card styling: (emoji, accent color). Truths are cool-toned
 # and inquisitive; dares are warm-toned and bold; the NSFW variants get
@@ -38,15 +38,15 @@ def build_tod_embed(
     payload: dict[str, Any],
     closed: bool = False,
     names: dict[str, str] | None = None,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the main lobby embed shown alongside the host/player buttons."""
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     title = f"{GAME_ICONS['traditional']} TRUTH OR DARE"
     if closed:
         title += " — GAME OVER"
-    embed = discord.Embed(title=title, color=colour)
+    embed = discord.Embed(title=title, color=color)
     embed.add_field(name="Host", value=host_name, inline=True)
 
     participants: list = payload.get("participants", [])
@@ -80,7 +80,7 @@ def _footer_text(single_choice: bool) -> str:
 
 def build_recap_embed(
     payload: dict[str, Any],
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the game-over recap embed.
 
@@ -88,8 +88,8 @@ def build_recap_embed(
     category — categories with zero questions are skipped to keep the
     embed compact.
     """
-    if colour is None:
-        colour = discord.Colour(_RESULTS_GREY)
+    if color is None:
+        color = discord.Color(_RESULTS_GRAY)
     participants: list = payload.get("participants", [])
     asked: dict[str, str] = payload.get("asked", {})
     total_q = len(asked)
@@ -97,7 +97,7 @@ def build_recap_embed(
 
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE — GAME OVER",
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
     embed.add_field(name="Participants", value=str(len(participants)), inline=True)
@@ -113,7 +113,7 @@ def build_recap_embed(
 
 def build_lobby_embed(
     host_name: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
     single_choice: bool = False,
 ) -> discord.Embed:
     """Build the initial lobby embed shown when ``/traditional`` is invoked.
@@ -122,8 +122,8 @@ def build_lobby_embed(
     the hard-coded zero counts (no payload required yet). When
     ``single_choice`` is on, the prompt and footer say so up front.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     description = (
         "Pick the one category you're up for below to join!"
         if single_choice
@@ -132,7 +132,7 @@ def build_lobby_embed(
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE",
         description=description,
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Participants", value="0", inline=True)

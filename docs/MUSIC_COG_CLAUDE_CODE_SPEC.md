@@ -20,7 +20,7 @@ A music playback cog for shared listening in voice channels. Supports YouTube tr
 
 The now-playing card is a persistent message with five buttons: **Pause/Resume**, **Skip**, **Stop**, **Shuffle**, and **Loop** (cycles off → track → queue). Buttons require the clicker to be in the same voice channel as the bot.
 
-## Behaviour
+## Behavior
 
 ### `/play`
 
@@ -50,7 +50,7 @@ Without 24/7, the bot disconnects after 60 s alone in the channel and after the 
 
 ### Spotify URL handling
 
-Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are recognised. Playlists cap at 500 tracks per submission. Tracks that can't be matched on YouTube (no ISRC, no clear search match) are skipped with a warning, not a hard failure.
+Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are recognized. Playlists cap at 500 tracks per submission. Tracks that can't be matched on YouTube (no ISRC, no clear search match) are skipped with a warning, not a hard failure.
 
 ## Permissions
 
@@ -87,7 +87,7 @@ Track, playlist, and album URLs from `open.spotify.com` and `spotify:` URIs are 
 - Whether 24/7 is on.
 - An optional Spotify playlist URL for autoplay-on-idle.
 
-No per-guild config beyond that — all other behaviour (cooldowns, queue caps, the now-playing card's appearance) is fixed by code.
+No per-guild config beyond that — all other behavior (cooldowns, queue caps, the now-playing card's appearance) is fixed by code.
 
 ## Stored data
 

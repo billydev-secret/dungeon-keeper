@@ -2,7 +2,7 @@
 
 Thin cog over ``bot_modules.services.economy_service``: it loads per-guild
 ``econ_`` settings on each interaction (cheap KV reads, no cache for stage 0),
-resolves the branded currency naming, and renders the accent-coloured embeds.
+resolves the branded currency naming, and renders the accent-colored embeds.
 See docs/economy_spec.md for the feature design.
 """
 
@@ -34,7 +34,7 @@ from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
     find_color_clash,
-    parse_hex_colour,
+    parse_hex_color,
     revoke_role_perks,
 )
 from bot_modules.economy.quest_views import (
@@ -115,11 +115,11 @@ _MAX_ICON_BYTES = 256 * 1024
 
 # Human labels for the rentable perks (shop rows, wallet field, DMs).
 _PERK_LABELS = {
-    "role_color": "Custom role colour",
+    "role_color": "Custom role color",
     "role_name": "Custom role name",
     "role_icon": "Role icon",
     "role_gradient": "Gradient role",
-    "gift_color": "Gift-a-colour",
+    "gift_color": "Gift-a-color",
 }
 # The perks a member rents for themselves, in shop display order.
 _SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
@@ -404,9 +404,9 @@ class _RoleNameModal(discord.ui.Modal, title="Custom role name"):
         await self.cog.set_role_name(interaction, str(self.text.value))
 
 
-class _RoleColorModal(discord.ui.Modal, title="Custom role colour"):
+class _RoleColorModal(discord.ui.Modal, title="Custom role color"):
     hex_value = discord.ui.TextInput(
-        label="Hex colour", min_length=3, max_length=9, placeholder="#7B2FF7"
+        label="Hex color", min_length=3, max_length=9, placeholder="#7B2FF7"
     )
 
     def __init__(self, cog: EconomyCog) -> None:
@@ -419,10 +419,10 @@ class _RoleColorModal(discord.ui.Modal, title="Custom role colour"):
 
 class _RoleGradientModal(discord.ui.Modal, title="Gradient role"):
     hex1 = discord.ui.TextInput(
-        label="First hex colour", min_length=3, max_length=9, placeholder="#7B2FF7"
+        label="First hex color", min_length=3, max_length=9, placeholder="#7B2FF7"
     )
     hex2 = discord.ui.TextInput(
-        label="Second hex colour", min_length=3, max_length=9, placeholder="#2FF7B2"
+        label="Second hex color", min_length=3, max_length=9, placeholder="#2FF7B2"
     )
 
     def __init__(self, cog: EconomyCog) -> None:
@@ -451,7 +451,7 @@ class _RoleIconModal(discord.ui.Modal, title="Role icon"):
         await self.cog.set_role_icon_emoji(interaction, str(self.emoji.value))
 
 
-# Which modal customises which perk; gift_color shares the colour modal.
+# Which modal customises which perk; gift_color shares the color modal.
 _CFG_MODALS = {
     "role_name": _RoleNameModal,
     "role_color": _RoleColorModal,
@@ -461,7 +461,7 @@ _CFG_MODALS = {
 
 # Short button labels for the customise flows (the perk label is on the row).
 _CUSTOMISE_LABELS = {
-    "role_color": "Set colour",
+    "role_color": "Set color",
     "role_name": "Set name",
     "role_gradient": "Set gradient",
     "role_icon": "Set icon",
@@ -536,7 +536,7 @@ class _ShopView(discord.ui.View):
     """One button per self-perk: Rent when unowned, a customise modal when owned.
 
     Feature-gated rows are disabled either way. A member holding only a
-    *gifted* colour gets an extra "Set gifted colour" button, since the
+    *gifted* color gets an extra "Set gifted color" button, since the
     role_color row still shows Rent for them.
     """
 
@@ -593,7 +593,7 @@ class _ShopView(discord.ui.View):
             self.add_item(button)
         if "gift_color" in owned and "role_color" not in owned:
             button = discord.ui.Button(
-                label="Set gifted colour",
+                label="Set gifted color",
                 style=discord.ButtonStyle.success,
                 custom_id="econ_shop_cfg:gift_color",
             )
@@ -777,7 +777,7 @@ class ShopRentButton(
 def _build_shop_embed(
     settings: EconSettings,
     gated: set[str],
-    accent: discord.Colour | None,
+    accent: discord.Color | None,
     *,
     panel: bool = False,
     owned: set[str] | frozenset[str] = frozenset(),
@@ -797,7 +797,7 @@ def _build_shop_embed(
     else:
         description += " Green buttons customise what you've already rented."
     embed = discord.Embed(
-        title="🛍️ Perk shop", description=description, colour=accent
+        title="🛍️ Perk shop", description=description, color=accent
     )
     for perk in _SELF_PERKS:
         note = ""
@@ -821,7 +821,7 @@ def _build_shop_embed(
         name=_PERK_LABELS["gift_color"],
         value=(
             f"{settings.currency_emoji} **{gift_price:,}** / week · "
-            "gift a friend a colour with /bank gift"
+            "gift a friend a color with /bank gift"
         ),
         inline=False,
     )
@@ -930,7 +930,7 @@ class EconomyCog(commands.Cog):
             description=(
                 f"{settings.currency_emoji} **{balance:,}** {_unit(settings, balance)}"
             ),
-            colour=accent,
+            color=accent,
         )
         if settings.currency_icon_url:
             embed.set_thumbnail(url=settings.currency_icon_url)
@@ -1034,7 +1034,7 @@ class EconomyCog(commands.Cog):
                 f"{settings.currency_emoji} **{credited:,}** {_unit(settings, credited)} "
                 f"→ {member.mention}"
             ),
-            colour=accent,
+            color=accent,
         )
         if booster and credited != amount:
             embed.add_field(
@@ -1077,7 +1077,7 @@ class EconomyCog(commands.Cog):
                 if muted
                 else "You'll get economy DMs again — milestones, streak saves, and more."
             ),
-            colour=accent,
+            color=accent,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1139,7 +1139,7 @@ class EconomyCog(commands.Cog):
             if memo:
                 desc += f"\n\n*{discord.utils.escape_markdown(memo)}*"
             confirm = discord.Embed(
-                title="Confirm payment", description=desc, colour=accent
+                title="Confirm payment", description=desc, color=accent
             )
             view = _PayConfirmView(self, settings, guild, sender, member, amount, memo)
             await interaction.response.send_message(
@@ -1195,7 +1195,7 @@ class EconomyCog(commands.Cog):
         )
         if safe_memo:
             desc += f"\n\n*{safe_memo}*"
-        embed = discord.Embed(title="Payment sent", description=desc, colour=accent)
+        embed = discord.Embed(title="Payment sent", description=desc, color=accent)
         embed.set_footer(text=f"Your balance: {new_balance:,}")
         await self._reply_embed(interaction, embed, via_confirm=via_confirm)
 
@@ -1253,8 +1253,8 @@ class EconomyCog(commands.Cog):
 
     # ── gift ─────────────────────────────────────────────────────────────
 
-    @bank.command(name="gift", description="Gift a friend a custom colour.")
-    @app_commands.describe(member="Who to gift a colour to")
+    @bank.command(name="gift", description="Gift a friend a custom color.")
+    @app_commands.describe(member="Who to gift a color to")
     async def bank_gift(
         self, interaction: discord.Interaction, member: discord.Member
     ) -> None:
@@ -1269,12 +1269,12 @@ class EconomyCog(commands.Cog):
             return
         if member.bot:
             await interaction.response.send_message(
-                "Bots can't wear a colour.", ephemeral=True
+                "Bots can't wear a color.", ephemeral=True
             )
             return
         if member.id == gifter.id:
             await interaction.response.send_message(
-                "Rent your own colour with /bank shop.", ephemeral=True
+                "Rent your own color with /bank shop.", ephemeral=True
             )
             return
 
@@ -1296,7 +1296,7 @@ class EconomyCog(commands.Cog):
                     f"{_perk_price(settings, 'gift_color'):,} but only have {bal:,}."
                 )
             elif "already rented" in msg:
-                text = "You're already gifting them a colour."
+                text = "You're already gifting them a color."
             else:
                 text = "That gift isn't available."
             await interaction.response.send_message(text, ephemeral=True)
@@ -1306,12 +1306,12 @@ class EconomyCog(commands.Cog):
         await notify_member(
             self.bot, self.ctx.db_path, guild.id, member.id,
             content=(
-                f"{gifter.display_name} gifted you a custom colour! "
+                f"{gifter.display_name} gifted you a custom color! "
                 "Pick one from /bank shop."
             ),
         )
         await interaction.response.send_message(
-            f"Gifted a custom colour to {member.mention}. They can set it from "
+            f"Gifted a custom color to {member.mention}. They can set it from "
             "`/bank shop`.",
             ephemeral=True,
         )
@@ -1492,20 +1492,20 @@ class EconomyCog(commands.Cog):
             return
         if "role_color" not in ent and "gift_color" not in ent:
             await interaction.response.send_message(
-                "Rent the **Custom role colour** perk or get one gifted (/bank shop).",
+                "Rent the **Custom role color** perk or get one gifted (/bank shop).",
                 ephemeral=True,
             )
             return
-        value = parse_hex_colour(hex)
+        value = parse_hex_color(hex)
         if value is None:
             await interaction.response.send_message(
-                "Give a colour as a hex code like `#7B2FF7`.", ephemeral=True
+                "Give a color as a hex code like `#7B2FF7`.", ephemeral=True
             )
             return
         clash = find_color_clash(guild, value)
         if clash is not None:
             await interaction.response.send_message(
-                f"That colour is too close to **{clash.name}** — pick another.",
+                f"That color is too close to **{clash.name}** — pick another.",
                 ephemeral=True,
             )
             return
@@ -1513,7 +1513,7 @@ class EconomyCog(commands.Cog):
             self._upsert_role, guild.id, user_id, {"color": value}
         )
         await self._apply_and_confirm(
-            interaction, guild.id, user_id, f"Your role colour is now `#{value:06X}`."
+            interaction, guild.id, user_id, f"Your role color is now `#{value:06X}`."
         )
 
     async def set_role_gradient(
@@ -1536,16 +1536,16 @@ class EconomyCog(commands.Cog):
                 "This server doesn't support gradient roles right now.", ephemeral=True
             )
             return
-        v1, v2 = parse_hex_colour(hex1), parse_hex_colour(hex2)
+        v1, v2 = parse_hex_color(hex1), parse_hex_color(hex2)
         if v1 is None or v2 is None:
             await interaction.response.send_message(
-                "Give both colours as hex codes like `#7B2FF7`.", ephemeral=True
+                "Give both colors as hex codes like `#7B2FF7`.", ephemeral=True
             )
             return
         clash = find_color_clash(guild, v1) or find_color_clash(guild, v2)
         if clash is not None:
             await interaction.response.send_message(
-                f"That colour is too close to **{clash.name}** — pick another.",
+                f"That color is too close to **{clash.name}** — pick another.",
                 ephemeral=True,
             )
             return
@@ -1689,7 +1689,7 @@ class EconomyCog(commands.Cog):
         rows = await asyncio.to_thread(_cancel)
         # Re-project every distinct beneficiary whose entitlements just changed —
         # the leaver themselves (self-perks / received gifts) AND any friend whose
-        # gifted colour the leaver was funding.
+        # gifted color the leaver was funding.
         affected = {int(r["beneficiary_id"]) for r in rows}
         affected.add(member.id)
         for beneficiary_id in affected:
@@ -1786,7 +1786,7 @@ class EconomyCog(commands.Cog):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = discord.Embed(title=f"{settings.currency_emoji} Quests", colour=accent)
+        embed = discord.Embed(title=f"{settings.currency_emoji} Quests", color=accent)
 
         if not quests_state:
             embed.description = "_No active quests right now — check back soon!_"
@@ -2074,7 +2074,7 @@ class EconomyCog(commands.Cog):
                     f"{settings.currency_emoji} {paid:,} {_unit(settings, paid)} "
                     f"added to their wallet{xp_note}."
                 ),
-                colour=accent,
+                color=accent,
             )
             reaction, note = "✅", embed
         else:
@@ -2090,7 +2090,7 @@ class EconomyCog(commands.Cog):
                     f"{member.mention} triggered **{title}** — "
                     "sent for manager sign-off."
                 ),
-                colour=accent,
+                color=accent,
             )
             reaction, note = "📝", embed
 
@@ -2499,7 +2499,7 @@ class EconomyCog(commands.Cog):
                 embed = discord.Embed(
                     title="📣 Question of the Day",
                     description=question,
-                    colour=accent,
+                    color=accent,
                 )
                 message = await channel.send(
                     content=content, embed=embed, allowed_mentions=mentions
@@ -2559,7 +2559,7 @@ class EconomyCog(commands.Cog):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = build_guide_embed(settings, colour=accent)
+        embed = build_guide_embed(settings, color=accent)
 
         # Same channel and the old panel is still there → edit in place, so a
         # refresh after re-branding/re-pricing doesn't hop the panel to the
@@ -2604,7 +2604,7 @@ class EconomyCog(commands.Cog):
         guild: discord.Guild,
         target: discord.TextChannel,
         settings: EconSettings,
-        accent: discord.Colour | None,
+        accent: discord.Color | None,
         *,
         old_channel_id: int,
         old_message_id: int,
@@ -2627,13 +2627,13 @@ class EconomyCog(commands.Cog):
 
             try:
                 message = await target.send(
-                    embed=build_guide_embed(settings, colour=accent)
+                    embed=build_guide_embed(settings, color=accent)
                 )
             except discord.Forbidden:
                 return None
 
             # Record the new id *before* the DB-save await so the gateway event
-            # for our own repost is recognised (and skipped) by the sticky
+            # for our own repost is recognized (and skipped) by the sticky
             # listener rather than triggering yet another repost.
             self._guide_ref[guild.id] = (
                 time.monotonic() + _GUIDE_STICKY_CACHE_TTL,
@@ -2814,7 +2814,7 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_leaderboard_embed(
-            settings, data, _name, now_ts=now_ts, colour=accent
+            settings, data, _name, now_ts=now_ts, color=accent
         )
 
         # Same channel and the old panel is still there → edit in place.

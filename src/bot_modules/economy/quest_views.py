@@ -85,7 +85,7 @@ def _reward_text(settings: EconSettings, reward: int) -> str:
 
 
 def render_signoff_card_embed(
-    accent: discord.Colour,
+    accent: discord.Color,
     settings: EconSettings,
     *,
     claimant_mention: str,
@@ -100,15 +100,15 @@ def render_signoff_card_embed(
     """Build the bank-channel sign-off card for a claim in the given state.
 
     Reused for the initial ``pending`` post and for the resolved/refresh edit,
-    so the card always mirrors the claim's true state. Colour is semantic on
+    so the card always mirrors the claim's true state. Color is semantic on
     resolution (green approved, red denied) and accent while pending.
     """
     if state == "paid":
-        embed = discord.Embed(title="Quest approved", colour=discord.Colour.green())
+        embed = discord.Embed(title="Quest approved", color=discord.Color.green())
     elif state in ("denied", "expired"):
-        embed = discord.Embed(title="Quest denied", colour=discord.Colour.red())
+        embed = discord.Embed(title="Quest denied", color=discord.Color.red())
     else:
-        embed = discord.Embed(title="Quest sign-off requested", colour=accent)
+        embed = discord.Embed(title="Quest sign-off requested", color=accent)
 
     embed.add_field(name="Member", value=claimant_mention, inline=True)
     embed.add_field(name="Quest", value=quest_title, inline=True)
@@ -422,7 +422,7 @@ async def _handle_resolution(
 
 async def _refresh_resolved_card(
     card: discord.Message | None,
-    accent: discord.Colour,
+    accent: discord.Color,
     settings: EconSettings,
     claim,
     quest,
@@ -469,7 +469,7 @@ async def _dm_resolution(
                 f"Your claim for **{title}** was approved — "
                 f"{_reward_text(settings, paid)} added to your wallet."
             ),
-            colour=discord.Colour.green(),
+            color=discord.Color.green(),
         )
     else:
         embed = discord.Embed(
@@ -477,7 +477,7 @@ async def _dm_resolution(
             description=(
                 f"Your claim for **{title}** was denied. You can try again."
             ),
-            colour=discord.Colour.red(),
+            color=discord.Color.red(),
         )
         if deny_reason:
             embed.add_field(name="Reason", value=deny_reason, inline=False)
@@ -495,7 +495,7 @@ async def post_signoff_card(
     ctx: AppContext,
     guild: discord.Guild,
     settings: EconSettings,
-    accent: discord.Colour,
+    accent: discord.Color,
     claim_id: int,
     claimant: discord.Member,
 ) -> None:
@@ -646,7 +646,7 @@ class QuestClaimSelect(discord.ui.Select):
                     f"**{meta['title']}** — {_reward_text(settings, paid)} "
                     "added to your wallet."
                 ),
-                colour=accent,
+                color=accent,
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return

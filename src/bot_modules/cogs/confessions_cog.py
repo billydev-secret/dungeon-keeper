@@ -161,7 +161,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             return
 
         accent = await resolve_accent_color(self.cog.ctx.db_path, interaction.guild)
-        confession_embed = build_confession_embed(content, colour=accent)
+        confession_embed = build_confession_embed(content, color=accent)
 
         if isinstance(dest_channel, discord.ForumChannel):
             tag_kwargs: dict = {}

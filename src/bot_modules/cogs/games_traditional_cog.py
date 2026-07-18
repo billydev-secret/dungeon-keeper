@@ -123,8 +123,8 @@ class TraditionalHostView(discord.ui.View):
         host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
         names = self._resolve_names(guild, payload)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_tod_embed(host_name, payload, names=names, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_tod_embed(host_name, payload, names=names, color=color)
         if hasattr(self, '_message') and self._message:
             try:
                 await self._message.edit(embed=embed, view=self)
@@ -290,8 +290,8 @@ class TraditionalHostView(discord.ui.View):
         total_q = len(asked)
 
         guild = (interaction.guild if interaction else None) or getattr(channel, "guild", None)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_recap_embed(payload, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_recap_embed(payload, color=color)
 
         self.stop()
         disable_all_items(self)
@@ -366,8 +366,8 @@ class TraditionalCog(commands.Cog):
         )
 
         guild = getattr(channel, "guild", None)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_lobby_embed(host_name, colour=colour, single_choice=single_choice)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, color=color, single_choice=single_choice)
 
         log.info("Game %s (traditional) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         host_view = TraditionalHostView(game_id, host_id, self.db, self.bot)

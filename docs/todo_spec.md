@@ -14,7 +14,7 @@ Shared per-guild todo list. Two Discord entry points (a slash command and a mess
 
 Both Discord entry points are open to every member; mod gating happens on the web side only.
 
-## Behaviour
+## Behavior
 
 ### `/todo`
 
@@ -60,7 +60,7 @@ The dashboard shows pending and completed lists for the active guild. Names are 
 
 ## Configuration
 
-None. Behaviour is fixed; the only per-guild scoping is on guild id.
+None. Behavior is fixed; the only per-guild scoping is on guild id.
 
 ## Stored data
 

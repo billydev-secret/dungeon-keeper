@@ -306,7 +306,7 @@ def _detect_communities(
         for nid in order:
             if not adj[nid]:
                 continue
-            # Weighted vote from neighbours
+            # Weighted vote from neighbors
             votes: dict[int, int] = {}
             for nb, w in adj[nid]:
                 votes[label[nb]] = votes.get(label[nb], 0) + w
@@ -323,7 +323,7 @@ def _detect_communities(
     return {nid: remap[label[nid]] for nid in node_ids}
 
 
-# Community colour palette — distinct, muted colours that sit well on dark bg.
+# Community color palette — distinct, muted colors that sit well on dark bg.
 _COMMUNITY_COLORS = [
     "#5865f2",  # blurple
     "#57f287",  # green
@@ -352,7 +352,7 @@ def _radial_layout(
 ) -> dict[int, tuple[float, float]]:
     """Lay out nodes in concentric rings around *focus_id*.
 
-    Ring 0 = focus user (centre).
+    Ring 0 = focus user (center).
     Ring 1 = direct connections, spread evenly.
     Ring 2+ = connections of connections, etc.
 
@@ -394,7 +394,7 @@ def _radial_layout(
     if max_ring == 0:
         return pos
 
-    # For rings beyond 0, sort nodes by their strongest inner-ring neighbour's
+    # For rings beyond 0, sort nodes by their strongest inner-ring neighbor's
     # angle so related nodes sit near each other.
     inner_angle: dict[int, float] = {focus_id: 0.0}
 
@@ -902,13 +902,13 @@ def _place_labels(
     font_sizes: dict[int, int],
 ) -> dict[int, tuple[float, float]]:
     """
-    Return {nid: (label_cx, label_cy)} — bounding-box centres for node labels.
+    Return {nid: (label_cx, label_cy)} — bounding-box centers for node labels.
 
     Render text with ha="center", va="center" at these coordinates.
 
     Algorithm (greedy, hubs-first):
       For each node try 12 angular directions × 3 radii (36 candidates).
-      Pick the candidate that points most away from connected neighbours
+      Pick the candidate that points most away from connected neighbors
       while not overlapping any already-placed label bounding box.
     """
     neighbors: dict[int, list[int]] = {nid: [] for nid in node_ids}
@@ -954,7 +954,7 @@ def _place_labels(
             for da, db in _DIRS:
                 cx, cy = x + da * pad, y + db * pad
 
-                # Prefer directions pointing away from connected neighbours.
+                # Prefer directions pointing away from connected neighbors.
                 dir_score = (
                     sum(
                         -(da * (pos_n[nb][0] - x) + db * (pos_n[nb][1] - y))
@@ -1030,16 +1030,16 @@ def _community_clustered_layout(
             [(comm_nodes[c], comm_layouts[c])], spread=spread
         )
 
-    # Place community centres on a circle (or line for 2)
-    comm_centre: dict[int, tuple[float, float]] = {}
+    # Place community centers on a circle (or line for 2)
+    comm_center: dict[int, tuple[float, float]] = {}
     if n_comms == 2:
-        comm_centre[sorted_comms[0]] = (-0.70, 0.0)
-        comm_centre[sorted_comms[1]] = (0.70, 0.0)
+        comm_center[sorted_comms[0]] = (-0.70, 0.0)
+        comm_center[sorted_comms[1]] = (0.70, 0.0)
     else:
         for i, c in enumerate(sorted_comms):
             angle = 2 * math.pi * i / n_comms - math.pi / 2
             r = 0.85
-            comm_centre[c] = (r * math.cos(angle), r * math.sin(angle))
+            comm_center[c] = (r * math.cos(angle), r * math.sin(angle))
 
     # Determine per-community radius based on relative node count
     total_nodes = len(node_ids)
@@ -1049,12 +1049,12 @@ def _community_clustered_layout(
         comm_radius[c] = max(0.20, 0.65 * math.sqrt(frac))
 
     # Compose final positions: normalise each community's internal layout
-    # to fit within its radius, then offset to its centre
+    # to fit within its radius, then offset to its center
     pos: dict[int, tuple[float, float]] = {}
     for c in sorted_comms:
         layout = comm_layouts[c]
         nodes = comm_nodes[c]
-        cx, cy = comm_centre[c]
+        cx, cy = comm_center[c]
         radius = comm_radius[c]
 
         if len(nodes) == 1:
@@ -1094,9 +1094,9 @@ def render_connection_web(
     """
     Render the user interaction network as PNG bytes.
 
-    - Server-wide view (no focus): community-clustered layout with colour-
+    - Server-wide view (no focus): community-clustered layout with color-
       coded clusters.
-    - Focused-member view: radial ego layout with the focus user at centre
+    - Focused-member view: radial ego layout with the focus user at center
       and connections in concentric rings.
     """
     if not edges:
@@ -1213,10 +1213,10 @@ def render_connection_web(
         for nid in node_ids:
             nx, ny = pos_n[nid]
             r = node_r[nid]
-            # Project node centre onto the edge line: t = dot(node-u, v-u) / |v-u|²
+            # Project node center onto the edge line: t = dot(node-u, v-u) / |v-u|²
             ex, ey = nx - xu, ny - yu
             t_proj = (ex * dx + ey * dy) / (d * d)
-            # Perpendicular distance from node centre to the line
+            # Perpendicular distance from node center to the line
             closest_x = xu + dx * t_proj - nx
             closest_y = yu + dy * t_proj - ny
             perp = math.sqrt(closest_x * closest_x + closest_y * closest_y)
@@ -1280,7 +1280,7 @@ def render_connection_web(
                 zorder=3,
             )
 
-    # Determine node colour
+    # Determine node color
     def _node_color(nid: int) -> str:
         if nid == focus_user_id:
             return _NODE_FOCUS
@@ -1395,7 +1395,7 @@ def render_interaction_heatmap(
 ) -> bytes:
     """Render an adjacency-matrix heatmap as PNG bytes.
 
-    Users are ordered by total interaction volume.  Colour intensity maps to
+    Users are ordered by total interaction volume.  Color intensity maps to
     interaction weight.
     """
     if not edges:
@@ -1433,7 +1433,7 @@ def render_interaction_heatmap(
     from matplotlib.colors import LinearSegmentedColormap
 
     data = np.array(matrix, dtype=float)
-    # Custom colourmap: dark bg -> blurple
+    # Custom colormap: dark bg -> blurple
     cmap = LinearSegmentedColormap.from_list(
         "discord", [_BG, "#3a3d8f", _NODE, "#eb459e"], N=256
     )

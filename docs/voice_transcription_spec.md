@@ -8,7 +8,7 @@ Automatically transcribes Discord voice messages (voice notes) posted in text ch
 
 None. The feature is a pure `on_message` listener — all configuration lives in the web dashboard (Config → Voice Transcription).
 
-## Behaviour
+## Behavior
 
 ### Trigger
 A message qualifies for transcription when **all** of the following hold:

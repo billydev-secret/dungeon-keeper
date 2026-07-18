@@ -24,7 +24,7 @@ def _stub_accent_color(monkeypatch):
     mocked guilds here can't satisfy — stub it at the use-site namespace."""
     monkeypatch.setattr(
         "web_server.routes.voice_master.resolve_accent_color",
-        AsyncMock(return_value=discord.Colour.default()),
+        AsyncMock(return_value=discord.Color.default()),
     )
 
 

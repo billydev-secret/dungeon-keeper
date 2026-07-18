@@ -247,7 +247,7 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         return
 
     # 2. Re-check the game is still enabled (scheduler bypasses the slash guards).
-    #    Display variants (e.g. ffa_banner) honour their base game's toggle.
+    #    Display variants (e.g. ffa_banner) honor their base game's toggle.
     enable_type: str = SCHEDULE_BASE_GAME_TYPE.get(game_type) or str(game_type)
     if not await check_game_enabled(games_db, enable_type, guild_id):
         await _advance_or_finish(games_db, row, now, "skipped_disabled", offset, recur_days)

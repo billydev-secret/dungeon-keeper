@@ -12,11 +12,11 @@ One-shot `/setup` wizard that walks a server admin through the six core configur
 
 Guild-only. The runtime check (`ctx.is_admin`) passes for members with the Discord **Administrator** permission or any configured `admin_role_ids` role — so admins configured by a previous run can re-run it.
 
-## Behaviour
+## Behavior
 
 ### Delivery: DM first, channel fallback
 
-The command ACKs immediately (ephemeral defer), then tries to **DM the invoking admin** the wizard. If the DM fails (DMs closed, or any HTTP error), it falls back to an **ephemeral in-channel** wizard instead, prefixed with "⚠️ I couldn't DM you — your DMs may be closed. Let's do it here instead." On DM success the channel just shows "📬 Check your DMs — I've sent the setup questions there." Both wizards use the guild's branding accent colour and share one source of truth for step wording (`jail/logic.py:_SETUP_STEPS`).
+The command ACKs immediately (ephemeral defer), then tries to **DM the invoking admin** the wizard. If the DM fails (DMs closed, or any HTTP error), it falls back to an **ephemeral in-channel** wizard instead, prefixed with "⚠️ I couldn't DM you — your DMs may be closed. Let's do it here instead." On DM success the channel just shows "📬 Check your DMs — I've sent the setup questions there." Both wizards use the guild's branding accent color and share one source of truth for step wording (`jail/logic.py:_SETUP_STEPS`).
 
 ### The six steps
 

@@ -159,7 +159,7 @@ def qa_card_channel(conn: sqlite3.Connection | None) -> str:
     """The channel cards post to: the dashboard's qa_channel_id when set.
 
     The knob lives in the config KV (written by the stage-3 panel) and must
-    be honoured here or it's a dead setting. Falls back to the hardcoded
+    be honored here or it's a dead setting. Falls back to the hardcoded
     #testing-queue id when unset, zero, unreadable, or pre-077 — the same
     degraded installs that fall back to plain text.
     """
@@ -320,7 +320,7 @@ def heading_level(block: str) -> int:
 def split_entries(text: str) -> list[str]:
     """Split a doc into blocks at each ``##``/``###`` heading.
 
-    The queue is organised as ``## Pending`` + one ``###`` per change, while the
+    The queue is organized as ``## Pending`` + one ``###`` per change, while the
     role checklists use ``##`` per section -- splitting on both keeps a section
     or entry whole and gives every block a heading of its own.
     """
@@ -639,7 +639,7 @@ def main() -> None:
         # pending test entries, and — since the checklists were regrouped into
         # per-feature ``###`` blocks — each checklist feature too. A doc with
         # no ``###`` headings simply posts as plain text, one message per
-        # ``##`` section (which is also the pre-077 degraded behaviour).
+        # ``##`` section (which is also the pre-077 degraded behavior).
         pending = {entry_key(b) for b in pending_entries(text)}
         conn = qa_connect() if pending else None
         # The dashboard's channel knob applies to the queue only; a checklist's

@@ -140,14 +140,14 @@ class BaseDuel(BaseGame):
         challenger: discord.Member,
         target: discord.Member,
         stakes: str | None,
-        colour: "discord.Colour | None" = None,
+        color: "discord.Color | None" = None,
     ) -> discord.Embed:
-        if colour is None:
-            colour = discord.Colour(COLOR_GOLD)
+        if color is None:
+            color = discord.Color(COLOR_GOLD)
         stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
         embed = discord.Embed(
             title=f"⚔️ {self.GAME_DISPLAY_NAME.upper()} CHALLENGE",
-            color=colour,
+            color=color,
         )
         embed.add_field(
             name="Challenge",

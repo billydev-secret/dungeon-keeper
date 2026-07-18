@@ -138,7 +138,7 @@ def build_reply_report_audit_embed(
 
 
 def build_send_feed_embed(
-    target_id: int, colour: "discord.Colour | None" = None
+    target_id: int, color: "discord.Color | None" = None
 ) -> discord.Embed:
     """The public feed announcement posted when a Whisper is sent.
 
@@ -148,17 +148,17 @@ def build_send_feed_embed(
     since the recipient is already notified by the DM that carries the actual
     message. The feed post is posted with no content ping at all.
     """
-    if colour is None:
-        colour = discord.Color.blurple()
+    if color is None:
+        color = discord.Color.blurple()
     return discord.Embed(
         title="\U0001f4ec Someone sent a Whisper",
         description=f"Someone sent <@{target_id}> an anonymous message.",
-        color=colour,
+        color=color,
     )
 
 
 def build_share_feed_embed(
-    whisper: Whisper, colour: "discord.Colour | None" = None
+    whisper: Whisper, color: "discord.Color | None" = None
 ) -> discord.Embed:
     """The public "a fresh whisper was shared" feed post, as a styled embed.
 
@@ -168,8 +168,8 @@ def build_share_feed_embed(
     quote while still preventing anonymous content from injecting headers,
     blockquotes, links, or other formatting into the public feed.
     """
-    if colour is None:
-        colour = discord.Color.blurple()
+    if color is None:
+        color = discord.Color.blurple()
     safe = discord.utils.escape_markdown(whisper.message)
     embed = discord.Embed(
         title="\U0001f4ec A fresh Whisper was shared",
@@ -177,7 +177,7 @@ def build_share_feed_embed(
             f"Someone sent <@{whisper.target_id}> an anonymous message!\n\n"
             f"“{safe}”"
         ),
-        color=colour,
+        color=color,
     )
     return embed
 
@@ -195,7 +195,7 @@ def build_inbox_embed(
     selected: Whisper | None,
     mode: str,
     now: float | None = None,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the embed shown above the whisper-inbox dropdown view.
 
@@ -205,11 +205,11 @@ def build_inbox_embed(
       - selected populated: header (with sender/target depending on mode),
         codefenced body, and a status-aware footer.
     """
-    if colour is None:
-        colour = discord.Color.blurple()
+    if color is None:
+        color = discord.Color.blurple()
     embed = discord.Embed(
         title=f"{_inbox_title(mode)} ({len(whispers)})",
-        color=colour,
+        color=color,
     )
     if not whispers:
         embed.description = (

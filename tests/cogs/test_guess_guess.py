@@ -24,7 +24,7 @@ def _stub_accent_color(monkeypatch):
 
     monkeypatch.setattr(
         "bot_modules.cogs.guess_cog.resolve_accent_color",
-        AsyncMock(return_value=discord.Colour.default()),
+        AsyncMock(return_value=discord.Color.default()),
     )
 
 GUESS_ROLE_ID = 7001

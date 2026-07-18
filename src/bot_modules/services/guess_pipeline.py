@@ -233,7 +233,7 @@ def zoom_crop_box(
     *,
     min_px: int = 200,
 ) -> BoundingBox:
-    """Zoom *box* by *factor* around its centre, respecting min_px and image bounds.
+    """Zoom *box* by *factor* around its center, respecting min_px and image bounds.
 
     factor < 1 zooms in (smaller box); factor > 1 zooms out (larger box).
     """
@@ -341,7 +341,7 @@ def run_reroll(
 ) -> bytes:
     """Generate a reroll crop that minimises overlap with *existing_crops*.
 
-    Picks from 5 randomly-offset centre crops the one with the lowest maximum
+    Picks from 5 randomly-offset center crops the one with the lowest maximum
     IoU against all existing crops, then renders and returns it.
     """
     from PIL import Image  # type: ignore[import-untyped]  # noqa: PLC0415

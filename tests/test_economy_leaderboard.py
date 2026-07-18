@@ -120,7 +120,7 @@ def test_embed_ranks_earners_with_names_and_branding():
     )
     embed = build_leaderboard_embed(
         settings, data, _names({1: "Alice", 2: "Bob"}), now_ts=NOW,
-        colour=discord.Colour(0x123456),
+        color=discord.Color(0x123456),
     )
 
     assert "Gems" in (embed.title or "")
@@ -128,7 +128,7 @@ def test_embed_ranks_earners_with_names_and_branding():
     top = fields[f"Top earners (last {ROLLING_DAYS} days)"]
     assert top.index("Alice") < top.index("Bob")
     assert "🥇" in top and "🥈" in top and "💎 120" in top
-    assert embed.colour == discord.Colour(0x123456)
+    assert embed.color == discord.Color(0x123456)
     assert embed.footer.text == "Updates hourly"
     assert embed.timestamp is not None
 
@@ -206,11 +206,11 @@ def _patch_accents():
     with (
         patch(
             "bot_modules.cogs.economy_cog.resolve_accent_color",
-            new=AsyncMock(return_value=discord.Colour(0x123456)),
+            new=AsyncMock(return_value=discord.Color(0x123456)),
         ),
         patch(
             "bot_modules.services.economy_loop.resolve_accent_color",
-            new=AsyncMock(return_value=discord.Colour(0x123456)),
+            new=AsyncMock(return_value=discord.Color(0x123456)),
         ),
     ):
         yield

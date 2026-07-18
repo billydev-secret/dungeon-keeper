@@ -1,7 +1,7 @@
 # Testing Queue
 
 Changes that pass pytest + the fake-driven smoke checks but still need a
-**live-server** pass before we fully trust them (Discord API behaviour that
+**live-server** pass before we fully trust them (Discord API behavior that
 can't be exercised offline). Move an item to the bottom "Done" section once
 it's been verified in the dev guild, with a date.
 
@@ -132,7 +132,7 @@ Setup panel, and still requires an **active `photo_react` quest** in Economy →
 Quests with the income source enabled — without one, posts pay nothing (by
 design). "Picture This" is **weekly**, so it pays once *per week* per qualifying
 member, not per day; make a daily `photo_react` quest to see the once-per-day cap.
-The distinct-reactor count and auto-react are pure Discord-API behaviour that
+The distinct-reactor count and auto-react are pure Discord-API behavior that
 can't be exercised offline — hence this live pass.
 
 - [ ] On **Photo Challenge → Setup**: **Reactions to earn** shows 5 and
@@ -179,7 +179,7 @@ falls back to **(none)** in the dropdown.
 The All/Immediate/Digest/Logged tabs are a tier filter. It worked while
 **Unlabeled only** was checked, but unchecking it routed through
 `get_all_events`, which ignored `tier` entirely — so every tab showed the same
-unfiltered list. `get_all_events` now honours `tier` (mirroring
+unfiltered list. `get_all_events` now honors `tier` (mirroring
 `get_pending_events`) and the route passes it through.
 
 **Worth knowing while testing:** the underlying SQL is trivial and there's no
@@ -250,7 +250,7 @@ tofu-emoji instead of failing it (the attribution/header already did this).
 fail-soft paths are covered, and there's no way to manufacture a CDN outage on
 the live server. Nothing to verify by hand; listed for traceability only.
 
-- [ ] (Optional) Post a normal quote with an emoji → still renders in colour as
+- [ ] (Optional) Post a normal quote with an emoji → still renders in color as
       before. No regression is the only thing to confirm.
 
 ### PvP games — "Nickname Applied" showed the new name twice  (0fc2016)
@@ -277,7 +277,7 @@ is a string), so this live check is just a spot-confirm.
 `/voice knock` used to post "X is asking to join Y's locked room" into the
 control channel, where everyone could read it. It now **DMs the owner** the
 Accept/Deny buttons. If the owner's DMs are closed it **falls back** to the
-control channel (unchanged behaviour), so a knock is never silently dropped.
+control channel (unchanged behavior), so a knock is never silently dropped.
 
 **Worth knowing while testing:** the buttons had to be reworked to resolve the
 guild/channel/requester from the bot cache instead of `interaction.guild`,
@@ -406,7 +406,7 @@ before.
 The `/delete_me` prompt now also discloses that the server keeps its own copy of
 the messages for moderation. That retention isn't new — it's what
 `keep_messages=True` has always done — but it was previously only mentioned in
-the summary *after* the member had already confirmed. Behaviour is unchanged;
+the summary *after* the member had already confirmed. Behavior is unchanged;
 only the copy is.
 
 **Worth knowing while testing:** media is classified **during the scan**, from
@@ -437,7 +437,7 @@ Names written in Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮�
 row of **tofu boxes** — not just the emoji, the *whole name*: no bundled TTF
 carries U+1D4xx. `author_name` is now NFKC-folded on entry, and the attribution
 line + no-pfp header draw through pilmoji like the body already did, so a
-Unicode emoji in a name renders in colour.
+Unicode emoji in a name renders in color.
 
 **Worth knowing while testing:** a plain ASCII name is byte-for-byte the same
 card as before (verified by pixel-diff), so nothing should *look* different for
@@ -452,7 +452,7 @@ card, so an all-tofu name in the wild now means *network*, not fonts.
 - [ ] Quote someone with an ordinary name → card looks exactly as it did.
 - [ ] A name that's *only* emoji still renders (attribution isn't blank).
 - [ ] QOTD banner (no-pfp header path, `author_name="Question of the Day"`) is
-      unchanged and still centred — this path was touched too.
+      unchanged and still centered — this path was touched too.
 - [ ] A long stylised name still doesn't slide behind the left gold frame —
       width is now measured through pilmoji, so re-check the clamp.
 
@@ -498,7 +498,7 @@ before. The reward stays on Income Sources; this page only owns the ping.
 **Discord gotcha worth checking first:** `allowed_mentions(roles=True)` only
 whitelists the mention — Discord still won't notify anyone unless the role is
 **mentionable** in its role settings, or the bot has "Mention @everyone, @here,
-and All Roles". If the ping renders as grey inert text, that's the cause, not the
+and All Roles". If the ping renders as gray inert text, that's the cause, not the
 code.
 
 - [ ] Economy → QOTD page loads for an admin; the ping-role picker shows
@@ -622,7 +622,7 @@ over and over. It still re-sticks under member activity.
 ### Economy — bank guide Spending points at the shop  (this commit)
 
 The `/bank post-guide` panel's **Spending** field no longer lists per-perk
-prices inline; it names the perks (colour/name/gradient/icon) and defers the
+prices inline; it names the perks (color/name/gradient/icon) and defers the
 numbers to the shop ("Prices and renewal terms are shown in the shop").
 
 - [ ] Re-run `/bank post-guide` and read the **Spending** field: the `/bank
@@ -835,7 +835,7 @@ create an active daily/weekly quest for each kind first (quest editor).
 
 Role-perk customisation moved out of slash commands into `/bank shop`'s
 ephemeral panel: rented rows show a green customise button that opens a modal
-(name / colour / gradient / icon), a fresh rental's confirmation carries the
+(name / color / gradient / icon), a fresh rental's confirmation carries the
 same button, and `/bank role name|color|gradient` are **removed**. Icon emojis
 are now **this server's custom emojis only** (the bot stores the emoji's
 image); `/bank role icon` survives image-upload-only. Live pass:
@@ -843,19 +843,19 @@ image); `/bank role icon` survives image-upload-only. Live pass:
 - [ ] After restart the command picker shows `/bank role icon` (image param
       required) and **no** `/bank role name|color|gradient` — global command
       sync may take a few minutes.
-- [ ] `/bank shop` with nothing rented → all Rent buttons; rent a colour →
-      confirmation shows a **Set colour** button that opens the hex modal and
-      the colour applies; reopening `/bank shop` shows that row as ✅ rented
-      with a green **Set colour** button.
-- [ ] Bad hex / blocklisted name / clashing colour typed into a modal → the
+- [ ] `/bank shop` with nothing rented → all Rent buttons; rent a color →
+      confirmation shows a **Set color** button that opens the hex modal and
+      the color applies; reopening `/bank shop` shows that row as ✅ rented
+      with a green **Set color** button.
+- [ ] Bad hex / blocklisted name / clashing color typed into a modal → the
       usual friendly ephemeral errors.
 - [ ] Rent the icon perk → confirmation notes `/bank role icon` for images.
       Icon modal: a typed `:server_emoji:` works and the role shows the emoji
       image; a pasted emoji (`<:name:id>`) works; a unicode emoji ✨ and a
       foreign server's emoji are refused; an animated emoji is refused.
 - [ ] `/bank role icon` with an uploaded PNG still sets the icon.
-- [ ] `/bank gift` a colour to someone with no rentals → their `/bank shop`
-      shows **Set gifted colour** (plus a Rent colour button), and their DM
+- [ ] `/bank gift` a color to someone with no rentals → their `/bank shop`
+      shows **Set gifted color** (plus a Rent color button), and their DM
       points at /bank shop.
 - [ ] `/bank post-guide` panel's Spending section reads "style it right from
       the shop's customise buttons".
@@ -1422,7 +1422,7 @@ anniversaries, single-charge catch-up after downtime, 36h grace, suspension
 freezes the clock) and `econ_personal_roles`; `/bank pay|shop|gift`; the
 `/bank role name|color|gradient|icon` subgroup with an idempotent personal-role
 projector (position above the "#### Cosmetics" band on create, `ENHANCED_ROLE_COLORS`
-/`ROLE_ICONS` gates, ΔE ≥ 25 staff-colour guard, Voice Master name blocklist);
+/`ROLE_ICONS` gates, ΔE ≥ 25 staff-color guard, Voice Master name blocklist);
 `transfer_currency` (no booster on `transfer_in`); a rental-billing pass in the
 economy loop (feature-gate sweep → billing → post-commit effects, transition-only
 DMs); dashboard Rentals table + force-cancel; and `on_member_remove` rental cleanup.
@@ -1442,12 +1442,12 @@ dashboard + scheduler surfaces need a live pass:
 - [ ] Disable transfers in config → `/bank pay` is refused with a branded notice.
 - [ ] `/bank shop` shows branded prices; icon/gradient rows reflect the server's
       role features (gated when the guild lacks them).
-- [ ] Rent a **colour**, then set it via the shop's colour modal → the personal
-      role appears **above** the booster swatch band and shows the colour.
-- [ ] Try a **staff-adjacent** colour → the ΔE refusal **names** the staff role it
+- [ ] Rent a **color**, then set it via the shop's color modal → the personal
+      role appears **above** the booster swatch band and shows the color.
+- [ ] Try a **staff-adjacent** color → the ΔE refusal **names** the staff role it
       clashes with.
-- [ ] Rent a **gradient** → the gradient renders and **supersedes** the solid colour.
-- [ ] `/bank gift @friend` a colour → the friend gets the DM + role and the payer
+- [ ] Rent a **gradient** → the gradient renders and **supersedes** the solid color.
+- [ ] `/bank gift @friend` a color → the friend gets the DM + role and the payer
       sees the gift rental in `/bank wallet`.
 - [ ] A **blocklisted** role name is refused by the shop's name modal.
 - [ ] Let a rental hit its anniversary with an **empty wallet** → grace DM, then
@@ -1466,7 +1466,7 @@ dashboard + scheduler surfaces need a live pass:
 New per-channel "only delete messages with attachments" toggle on the
 dashboard config page. Queue-time filtering (the sweep is queue-driven), plus
 a matching guard in the startup history scan. Unit + route tests cover the
-logic; the Discord-side delete behaviour needs a live pass:
+logic; the Discord-side delete behavior needs a live pass:
 
 - [ ] On a test channel, add an auto-delete rule with **media-only ON**, post
       a text message and an image, wait for the sweep → only the image is
@@ -1523,7 +1523,7 @@ live pass:
 category buttons act like radio buttons: a player's second pick swaps out the
 first (`toggle_pref(..., single_choice=True)`). Also exposed as a scheduler
 option and stored in the game payload so it survives a bot restart. Logic +
-embed unit tests cover it; the Discord-button behaviour needs a live pass:
+embed unit tests cover it; the Discord-button behavior needs a live pass:
 
 - [ ] `/games play traditional single_choice:true` → lobby says "Pick the one
       category you're up for" and the footer reads "One category each".
@@ -1644,15 +1644,15 @@ the next button click.
 - [ ] The **QA Tracker** page appears under **Dev** for an admin and is
       absent (nav and API both) for a mod-only account.
 - [ ] The board lists the live cards from `#testing-queue` with the correct
-      status chips (colours matching the embeds); clicking a row expands its
+      status chips (colors matching the embeds); clicking a row expands its
       verdicts, and "Open in Discord" jumps to the card.
-- [ ] Config saves (change the crew role) and the cog honours the new role on
+- [ ] Config saves (change the crew role) and the cog honors the new role on
       the next button click **without a restart**.
 - [ ] Void a paid verdict → toast reports the clawed amount, the tester's
       `/bank` balance drops, and the Discord card re-renders (status/tally
       update, buttons stay).
 - [ ] Archive a test → the card's verdict buttons disappear and the embed
-      dims to the archived grey.
+      dims to the archived gray.
 - [ ] Top testers shows the verdict counts and coins earned for everyone
       who's clicked so far.
 

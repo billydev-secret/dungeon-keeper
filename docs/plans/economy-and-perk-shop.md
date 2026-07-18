@@ -147,7 +147,7 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
   Personal-role hierarchy position is set **on create only** — above the "#### Cosmetics"
   booster band; a reconcile never re-hoists a manually moved role. (5) Uploaded role
   icons are stored under the db-parent dir at `econ_role_icons/` (sibling of the SQLite
-  file). (6) Guards: **ΔE ≥ 25** vs staff colours (refusal names the clashing role) and
+  file). (6) Guards: **ΔE ≥ 25** vs staff colors (refusal names the clashing role) and
   the **Voice Master name blocklist** (shared table). (7) Dashboard **grace-cancel
   de-projects the role best-effort** post-commit (the loop only walks live rentals) —
   `role_updated` reports whether it ran; an active cancel just sets

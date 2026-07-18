@@ -49,10 +49,10 @@ def ctx(db):
 
 @pytest.fixture(autouse=True)
 def _patch_accent():
-    """resolve_accent_color reads the guild avatar — stub it to a fixed colour."""
+    """resolve_accent_color reads the guild avatar — stub it to a fixed color."""
     with patch(
         "bot_modules.cogs.economy_cog.resolve_accent_color",
-        new=AsyncMock(return_value=discord.Colour(0x123456)),
+        new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
         yield
 
@@ -868,7 +868,7 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
 
     view = kwargs["view"]
     assert isinstance(view, _ShopView)
-    # Gradient + icon buttons disabled; colour + name enabled.
+    # Gradient + icon buttons disabled; color + name enabled.
     buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
     disabled = {
         str(b.custom_id).split(":")[1] for b in buttons if b.disabled
@@ -947,8 +947,8 @@ async def test_shop_customise_button_opens_modal(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_shop_gift_recipient_gets_colour_customise(ctx, db):
-    """A gifted colour (no own rental) adds a Set gifted colour button."""
+async def test_shop_gift_recipient_gets_color_customise(ctx, db):
+    """A gifted color (no own rental) adds a Set gifted color button."""
     _enable(db)
     _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)
     cog = _make_cog(ctx)
@@ -959,7 +959,7 @@ async def test_shop_gift_recipient_gets_colour_customise(ctx, db):
 
     view = interaction.response.send_message.await_args.kwargs["view"]
     ids = {str(b.custom_id) for b in view.children if isinstance(b, discord.ui.Button)}
-    # Colour customise via the gift, while the role_color row still offers Rent.
+    # Color customise via the gift, while the role_color row still offers Rent.
     assert "econ_shop_cfg:gift_color" in ids
     assert "econ_shop_rent:role_color" in ids
 
@@ -1296,7 +1296,7 @@ async def test_role_color_bad_hex(ctx, db):
     cog = _make_cog(ctx)
     interaction = _role_interaction(_member(member_id=500))
     with _patch_projection():
-        await _role_color(cog, interaction, "not-a-colour")
+        await _role_color(cog, interaction, "not-a-color")
     assert "hex" in interaction.response.send_message.await_args.args[0].lower()
 
 
@@ -1307,7 +1307,7 @@ async def test_role_color_delta_e_clash(ctx, db):
     staff = MagicMock()
     staff.id = 77
     staff.name = "Admins"
-    staff.colour = discord.Colour(0xFF0000)
+    staff.color = discord.Color(0xFF0000)
     staff.permissions = discord.Permissions(administrator=True)
     cog = _make_cog(ctx)
     interaction = _role_interaction(_member(member_id=500), roles=[staff])
@@ -1549,7 +1549,7 @@ async def test_wallet_shows_active_rentals(ctx, db):
 
     embed = interaction.response.send_message.await_args.kwargs["embed"]
     rentals_field = next(f for f in embed.fields if f.name == "Active rentals")
-    assert "Custom role colour" in rentals_field.value
+    assert "Custom role color" in rentals_field.value
     assert "gift received" in rentals_field.value
 
 
@@ -1570,7 +1570,7 @@ def _leaving_member(member_id) -> MagicMock:
 @pytest.mark.asyncio
 async def test_member_remove_cancels_and_reprojects_all(ctx, db):
     _enable(db)
-    # Leaver 500 rents a colour AND gifts a colour to friend 900.
+    # Leaver 500 rents a color AND gifts a color to friend 900.
     _add_rental(db, "role_color", user_id=500)
     _add_rental(db, "gift_color", user_id=500, beneficiary_id=900)
     cog = _make_cog(ctx)

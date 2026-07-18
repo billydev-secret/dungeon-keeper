@@ -35,7 +35,7 @@ Default canvas **900×500**.
    Gaussian-blurred (radius 18), desaturated, blended with the theme's overlay
    color, and given a radial vignette. In avatar modes the face is pushed left
    (`offset_x`) so it doesn't sit under the text column; in `none` mode it stays
-   centred. A gold corner gradient is layered toward the bottom-right.
+   centered. A gold corner gradient is layered toward the bottom-right.
 2. **Text** — the quote is wrapped, emoji-measured, and drawn with a soft
    gaussian drop shadow. Long text is truncated to `QUOTE_MAX_CHARS` (280).
 3. **Avatar** (non-`none` modes) — the *unblurred* avatar is drawn on the left
@@ -47,17 +47,17 @@ Default canvas **900×500**.
 **`pfp_shape`:**
 - `"circle"` (default) — circular avatar crop with the double ring.
 - `"square"` — rounded-square crop (shows the whole avatar uncropped).
-- `"none"` — no avatar box. The prompt is **centre-aligned** across the card and
-  `author_name` becomes a centred **header** above it. This is the "banner" /
+- `"none"` — no avatar box. The prompt is **center-aligned** across the card and
+  `author_name` becomes a centered **header** above it. This is the "banner" /
   announcement look every non-`quote` caller uses. (Avatar modes keep the body
   **left-aligned** in the right-hand column — only banner/announcement bodies are
-  centred. Body lines are clamped left of the floral corner so centring never
+  centered. Body lines are clamped left of the floral corner so centering never
   runs text under the flowers.)
 
 ### `render_quote(...)` — legacy solid-bg card
 
 Older, simpler path used only by `guess_cog`. Solid dark background, accent bars
-top and bottom, centred text, optional footer. Returns **JPEG bytes**. No
+top and bottom, centered text, optional footer. Returns **JPEG bytes**. No
 themes, avatars, or borders. Kept for the confession-guess spoiler cards.
 
 ## Themes
@@ -138,7 +138,7 @@ Unlike bundled frames, a custom frame **drives its own layout**: rather than a
 fixed text column, `analyze_border_opening` reads the frame's transparency and
 returns the see-through opening as per-row `[left, right]` spans plus a fitted
 avatar disc. `render_quote_card` then flows the avatar + auto-shrunk quote text
-inside that opening. Upload **rejects** a frame whose centre has no usable
+inside that opening. Upload **rejects** a frame whose center has no usable
 opening (probed at 900×500), so rendering always has a valid hole to fit into.
 Openings are cached by `(path, mtime, size)`.
 
@@ -155,7 +155,7 @@ optional dependency; without it, text still renders (custom emoji still
 composite; Unicode emoji fall back to the font).
 
 The quote body, the attribution line, and the no-pfp header all draw through
-pilmoji, so a Unicode emoji renders in colour wherever it appears — including
+pilmoji, so a Unicode emoji renders in color wherever it appears — including
 inside a member's display name.
 
 Twemoji is fetched over HTTP the first time each glyph is drawn. Two safeguards

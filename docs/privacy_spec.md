@@ -33,7 +33,7 @@ The two partial modes partition a member's messages exactly: every message is in
 
 Selection happens **during the scan** (`find_user_messages(predicate=...)`): the scan returns only `(message_id, channel_id)`, so a mode that selects on message content has to decide while the `discord.Message` is still in hand. A message the predicate rejects is never collected and therefore never deleted.
 
-## Behaviour
+## Behavior
 
 ### Confirmation
 Both commands open an ephemeral confirm view with a danger button and **Cancel**. The view checks that the clicker is the original invoker, times out silently after **60 seconds**, and disables itself on click. Until the user confirms, nothing is touched.
@@ -108,7 +108,7 @@ Messages that couldn't be deleted (no access): **M**
 
 ## Configuration
 
-Privacy has no per-guild configuration. The behavioural constants — 60-second confirm timeout, the 14-day cutoff between bulk and one-at-a-time delete, the throttle cadences — mirror Discord's own constraints and are not exposed.
+Privacy has no per-guild configuration. The behavioral constants — 60-second confirm timeout, the 14-day cutoff between bulk and one-at-a-time delete, the throttle cadences — mirror Discord's own constraints and are not exposed.
 
 The only per-call switches are which command was run (which determines whether the `messages` archive is purged or kept) and whether the channel walker tries to surface unjoined private archived threads (on for privacy, off for the [[events-spec]] backfill caller).
 

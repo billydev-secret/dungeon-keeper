@@ -414,9 +414,9 @@ def test_build_lobby_embed_shows_host_name():
 
 
 def test_build_question_embed_includes_category_label_and_question():
-    embed = build_question_embed("sfw_truth", "What's your favourite color?", "Alice")
+    embed = build_question_embed("sfw_truth", "What's your favorite color?", "Alice")
     assert "SFW TRUTH" in embed.title
-    assert "What's your favourite color?" in embed.description
+    assert "What's your favorite color?" in embed.description
     assert embed.author.name == "For Alice"
 
 

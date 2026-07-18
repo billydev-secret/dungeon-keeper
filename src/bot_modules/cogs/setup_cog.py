@@ -41,7 +41,7 @@ class SetupCog(commands.Cog):
             return
 
         # ACK immediately: opening a DM in a fresh server is two round-trips
-        # (create channel + send) on top of the accent-colour DB read, which
+        # (create channel + send) on top of the accent-color DB read, which
         # can blow the 3s interaction deadline on the constrained prod box. If
         # the token expired *and* DMs were closed, both the DM and the fallback
         # below would fail on a dead token and setup would silently do nothing.
@@ -53,12 +53,12 @@ class SetupCog(commands.Cog):
         # questions there. Falls back to the in-channel wizard if their DMs are
         # closed (a common setting), so setup is never a dead end.
         # discord.Forbidden is an HTTPException subclass, so this catches both.
-        dm_embed, dm_view = _setup_dm_view(ctx, guild, colour=accent)
+        dm_embed, dm_view = _setup_dm_view(ctx, guild, color=accent)
         try:
             await interaction.user.send(embed=dm_embed, view=dm_view)
         except discord.HTTPException:
             dm_view.stop()
-            embed, view = _setup_view(ctx, 1, colour=accent)
+            embed, view = _setup_view(ctx, 1, color=accent)
             await interaction.followup.send(
                 "⚠️ I couldn't DM you — your DMs may be closed. "
                 "Let's do it here instead.",

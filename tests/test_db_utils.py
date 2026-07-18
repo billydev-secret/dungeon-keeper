@@ -92,7 +92,7 @@ def test_init_config_db_is_idempotent(config_db):
         assert get_config_value(conn, "test", "missing") == "val"
 
 
-# ── legacy-fallback behaviour ─────────────────────────────────────────
+# ── legacy-fallback behavior ─────────────────────────────────────────
 # guild_id=0 stores legacy (single-guild) config. Non-zero guild reads
 # normally fall back to it, but per-guild callers can opt out so an
 # unconfigured non-home guild gets real defaults instead of inheriting

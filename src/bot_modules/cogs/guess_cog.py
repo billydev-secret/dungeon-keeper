@@ -300,13 +300,13 @@ def _do_audit(
 # ── Embed helpers ─────────────────────────────────────────────────────────────
 
 def _game_embed(
-    round_id: int, colour: "discord.Colour | None" = None
+    round_id: int, color: "discord.Color | None" = None
 ) -> discord.Embed:
-    if colour is None:
-        colour = discord.Color.from_rgb(80, 20, 100)
+    if color is None:
+        color = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
         title=f"Round #{round_id}",
-        color=colour,
+        color=color,
     )
 
 
@@ -988,7 +988,7 @@ class CropEditorView(discord.ui.View):
         accent = await resolve_accent_color(db_path, interaction.guild)
         game_msg = await guess_channel.send(
             content=None,
-            embed=_game_embed(round_id, colour=accent),
+            embed=_game_embed(round_id, color=accent),
             file=crop_file,
             view=game_view,
         )
@@ -1248,9 +1248,9 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
         )
 
 
-def _prompt_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
-    if colour is None:
-        colour = discord.Color.from_rgb(80, 20, 100)
+def _prompt_embed(color: "discord.Color | None" = None) -> discord.Embed:
+    if color is None:
+        color = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
         title="🎭 Guess",
         description=(
@@ -1258,7 +1258,7 @@ def _prompt_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
             "Click below to play.\n\n"
             "📎 To upload a photo directly, use `/guess submit`."
         ),
-        color=colour,
+        color=color,
     )
 
 
@@ -1318,7 +1318,7 @@ async def _repost_prompt(
     accent = await resolve_accent_color(db_path, channel.guild)
     try:
         new_msg = await channel.send(
-            embed=_prompt_embed(colour=accent), view=GuessPromptView(bot)
+            embed=_prompt_embed(color=accent), view=GuessPromptView(bot)
         )
     except discord.HTTPException:
         log.exception("guess: failed to post channel prompt in guild %d", guild_id)
@@ -1419,7 +1419,7 @@ class ConfessionPreviewView(discord.ui.View):
         accent = await resolve_accent_color(db_path, interaction.guild)
         game_msg = await guess_channel.send(
             content=None,
-            embed=_game_embed(round_id, colour=accent),
+            embed=_game_embed(round_id, color=accent),
             file=card_file,
             view=game_view,
         )

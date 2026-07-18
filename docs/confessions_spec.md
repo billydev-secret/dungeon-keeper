@@ -1,6 +1,6 @@
 # Confessions — Feature Spec
 
-Anonymous confession box with a persistent **Confess** launcher button at the bottom of a configured channel. Submitters open a modal; the bot reposts the text into a destination channel (or a forum thread) and seeds it with an anonymous-reply button bar. Replies are themselves anonymous — each replier gets a stable name + colour per thread, or a fresh "someone new" identity on demand. Every confession and reply is mirrored to a moderator log channel.
+Anonymous confession box with a persistent **Confess** launcher button at the bottom of a configured channel. Submitters open a modal; the bot reposts the text into a destination channel (or a forum thread) and seeds it with an anonymous-reply button bar. Replies are themselves anonymous — each replier gets a stable name + color per thread, or a fresh "someone new" identity on demand. Every confession and reply is mirrored to a moderator log channel.
 
 ## Commands
 
@@ -18,7 +18,7 @@ Anonymous confession box with a persistent **Confess** launcher button at the bo
 
 Bot-side perms required in the destination channel: **Send Messages**, **Embed Links** (for the log embed), **Create Public Threads** (text-channel destination — the bot creates a thread for the reply bar) or **Send Messages in Threads** (forum destination). All modals reject DMs implicitly.
 
-## Behaviour
+## Behavior
 
 ### Submitting a confession
 
@@ -36,7 +36,7 @@ On success the bot posts the body to the destination channel. For a forum destin
 
 ### Reply identity model
 
-Each confession thread maintains two shuffled pools: a **name pool** of 660 entries (20 adjectives × 33 animals — e.g. "Brave Aardvark") and a **colour pool** of 22 unicode circles. Both pools are popped without replacement; when a pool is exhausted, it reshuffles and a cycle counter advances. Persistent and ephemeral replies share the same pools — once a colour or name has been handed out in a cycle, neither path hands it out again until the pool refills.
+Each confession thread maintains two shuffled pools: a **name pool** of 660 entries (20 adjectives × 33 animals — e.g. "Brave Aardvark") and a **color pool** of 22 unicode circles. Both pools are popped without replacement; when a pool is exhausted, it reshuffles and a cycle counter advances. Persistent and ephemeral replies share the same pools — once a color or name has been handed out in a cycle, neither path hands it out again until the pool refills.
 
 - **🎭 Reply Anonymously** (persistent) — the user ' s identity for this thread is stored and stable across every reply they make in it. Older threads predating the pool system lazy-backfill from the original hash-based mapping so the identity stays visually consistent.
 - **🎲 Reply as Someone New** (ephemeral) — a fresh name and circle are popped from the pools just for this reply. Nothing is stored against the user; subsequent ephemeral replies give different identities.
@@ -88,7 +88,7 @@ Stale-interaction races (Discord internal-defer collisions) silently no-op — t
 
 - **No anonymous DMs to the bot.** Every entry point requires a guild context.
 - **No author edit or delete.** Once posted, only mods can remove a confession via Discord directly; the bot offers no command for that.
-- **No separate identities for replies-to-replies.** Replying to a reply inherits the root thread ' s identity pool, so the same person keeps the same name and colour throughout.
+- **No separate identities for replies-to-replies.** Replying to a reply inherits the root thread ' s identity pool, so the same person keeps the same name and color throughout.
 - **No backfill for deleted spawned threads.** If the thread was deleted manually, the reply button still works but posts as a direct Discord reply in the destination channel.
 - **No web-side authoring.** The dashboard configures the feature; submission is Discord-only.
 - **No per-channel destination override.** One destination channel per guild.
@@ -112,6 +112,6 @@ Per-guild settings, editable from the dashboard:
 
 ## Stored data
 
-Per-guild: a config row (settings + block list), the per-user rate-limit row (last-confess and last-reply timestamps plus the UTC-day key and counter), thread metadata for every bot-posted message (root or reply, with the real author id kept internal and the spawned Discord thread id), persistent identity assignments keyed by (guild, root message, user), and the shuffled identity pools (name and colour) keyed by (guild, root message). Thread metadata is auto-purged after seven days. No DM data is ever stored.
+Per-guild: a config row (settings + block list), the per-user rate-limit row (last-confess and last-reply timestamps plus the UTC-day key and counter), thread metadata for every bot-posted message (root or reply, with the real author id kept internal and the spawned Discord thread id), persistent identity assignments keyed by (guild, root message, user), and the shuffled identity pools (name and color) keyed by (guild, root message). Thread metadata is auto-purged after seven days. No DM data is ever stored.
 
 Ephemeral identity replies pop the shared pools but never write an assignment row, by design — that ' s what makes them ephemeral. Launcher state lives in memory as per-guild locks; pool state lives in the database so identities survive bot restarts.

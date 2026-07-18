@@ -57,23 +57,23 @@ _TRIGGER_ROLE_NAME = "makeitaquote"
 # of THEMES (that dict is the bundled presets); the cog resolves it per-guild via
 # ``_resolve_brand_theme``.
 _BRAND_THEME_KEY = "__brand__"
-_BRAND_THEME_LABEL = "Server Colour (auto)"
+_BRAND_THEME_LABEL = "Server Color (auto)"
 
 
 async def _resolve_brand_theme(
     bot: "Bot", guild: discord.Guild | None
 ) -> QuoteTheme:
-    """Default quote theme: colour-graded to the guild's brand accent.
+    """Default quote theme: color-graded to the guild's brand accent.
 
     Routes through the shared ``resolve_accent_color`` so a quote card matches
     whatever an embed's accent bar would be for the guild (custom hex, else a
-    colour drawn from the bot avatar). Falls back to the bundled golden_meadow
+    color drawn from the bot avatar). Falls back to the bundled golden_meadow
     when there's no guild — quote paths are guild-only, so this is belt-and-suspenders.
     """
     if guild is None:
         return THEMES["golden_meadow"]
-    colour = await resolve_accent_color(bot.ctx.db_path, guild)
-    return theme_from_accent((colour.r, colour.g, colour.b))
+    color = await resolve_accent_color(bot.ctx.db_path, guild)
+    return theme_from_accent((color.r, color.g, color.b))
 
 
 def _normalize_role_name(name: str) -> str:
@@ -475,7 +475,7 @@ class QuoteCog(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(
         text="The quote to put on the banner.",
-        theme="Colour grading for the card (default: Golden Meadow).",
+        theme="Color grading for the card (default: Golden Meadow).",
         font="Typeface for the quote (default: Times).",
         title="Optional heading shown above the quote.",
     )
@@ -530,7 +530,7 @@ class QuoteCog(commands.Cog):
         )
 
         # Background image: guild icon first, then the invoker's avatar. The card
-        # colour-grades whatever it gets, so both look fine — the icon just keeps
+        # color-grades whatever it gets, so both look fine — the icon just keeps
         # the banner on-brand.
         avatar_bytes: bytes | None = None
         if guild.icon is not None:

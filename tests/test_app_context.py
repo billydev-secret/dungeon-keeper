@@ -313,7 +313,7 @@ async def test_setup_hook_handles_forbidden_during_debug_guild_sync(tmp_path):
     bot.tree.sync = AsyncMock(side_effect=forbidden)
 
     async def fake_sync_if_changed(tree, _db_path, *, guild):
-        # Mirror real behaviour: call tree.sync, propagate Forbidden upward.
+        # Mirror real behavior: call tree.sync, propagate Forbidden upward.
         if guild is None:
             await tree.sync()
         else:

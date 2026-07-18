@@ -13,7 +13,7 @@ This spec describes the **`/docs` Discord command cog** — not the repo's `docs
 
 The group is guild-only with `default_permissions=Manage Guild`, and every command additionally passes through the bot's own `ctx.is_mod` check. All replies are ephemeral. `doc_key` autocompletes from the guild's docs (matches key or title, max 25).
 
-## Behaviour
+## Behavior
 
 ### Rendering (markdown → embeds)
 
@@ -25,7 +25,7 @@ The group is guild-only with `default_permissions=Manage Guild`, and every comma
 - A section longer than 4096 chars splits on paragraph boundaries into continuation embeds — never inside a fenced code block; oversized single blocks hard-split on line breaks.
 - One embed per message (sidesteps the 6000-char aggregate limit). An empty doc renders one placeholder embed (`*(This document is empty.)*`).
 
-Embed colour: the doc's `accent` hex if set, otherwise the guild's branding accent (`resolve_accent_color`).
+Embed color: the doc's `accent` hex if set, otherwise the guild's branding accent (`resolve_accent_color`).
 
 ### Posting and sync reconciliation
 

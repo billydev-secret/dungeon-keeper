@@ -433,7 +433,7 @@ class WhisperShareButton(
                         log.warning("Failed to delete original announcement on share")
                 try:
                     new_msg = await feed_channel.send(
-                        embed=build_share_feed_embed(whisper, colour=accent),
+                        embed=build_share_feed_embed(whisper, color=accent),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     await asyncio.to_thread(
@@ -1372,7 +1372,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
             log.warning("Failed to delete original announcement on share")
     try:
         new_msg = await feed_channel.send(
-            embed=build_share_feed_embed(whisper, colour=accent),
+            embed=build_share_feed_embed(whisper, color=accent),
             allowed_mentions=discord.AllowedMentions.none(),
         )
         await asyncio.to_thread(
@@ -1431,7 +1431,7 @@ class WhisperInboxSelectView(discord.ui.View):
         *,
         invoker_id: int,
         mode: str = "received",
-        accent: "discord.Colour | None" = None,
+        accent: "discord.Color | None" = None,
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
@@ -1472,7 +1472,7 @@ class WhisperInboxSelectView(discord.ui.View):
             whispers=self._all,
             selected=self._selected(),
             mode=self._mode,
-            colour=self._accent,
+            color=self._accent,
         )
 
     # ── view building ──────────────────────────────────────────────────────
@@ -2412,7 +2412,7 @@ class WhisperCog(commands.Cog):
             # once, without firing a redundant channel notification.
             accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
             feed_msg = await feed_channel.send(
-                embed=build_send_feed_embed(target.id, colour=accent),
+                embed=build_send_feed_embed(target.id, color=accent),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))

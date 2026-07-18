@@ -13,7 +13,7 @@ Internal owner-only commands, an admin-only Bot Identity panel on the dashboard,
 
 The command-tree sync gate is invoked automatically — once on bot startup, again from `/reload_cog`. It has no member-facing surface.
 
-## Behaviour
+## Behavior
 
 ### `/reload_cog`
 

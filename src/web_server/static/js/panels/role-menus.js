@@ -11,7 +11,7 @@ const MODES = [
   ["binding", "Binding", "First choice is permanent — one pick, ever."],
 ];
 const BUTTON_COLORS = [
-  ["secondary", "Grey"], ["primary", "Blurple"], ["success", "Green"], ["danger", "Red"],
+  ["secondary", "Gray"], ["primary", "Blurple"], ["success", "Green"], ["danger", "Red"],
 ];
 const MAX_OPTIONS = 25;
 
@@ -246,7 +246,7 @@ export function mount(container) {
           <input class="doc-ed-title" data-title type="text" maxlength="256"
                  placeholder="Menu title" value="${esc(menu.title)}" />
           <input class="doc-ed-accent" data-accent type="text" maxlength="7"
-                 placeholder="#hex" value="${esc(menu.accent)}" title="Accent colour (blank = server branding)" />
+                 placeholder="#hex" value="${esc(menu.accent)}" title="Accent color (blank = server branding)" />
         </div>
         <div class="doc-ed-grid">
           <div class="doc-ed-col">

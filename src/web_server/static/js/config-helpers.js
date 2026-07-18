@@ -102,7 +102,7 @@ export function mountMultiPicker(slotEl, options, values, opts = {}) {
 
 // Typed conveniences — build the option list and the right empty sentinel.
 // Single-pickers default to emptyValue "0" (the unset id config uses) so
-// getValue() returns "0" when cleared, matching the old <select> behaviour.
+// getValue() returns "0" when cleared, matching the old <select> behavior.
 export function mountChannelPicker(slotEl, channels, value, opts = {}) {
   return mountPicker(slotEl, toChannelOptions(channels), value,
     { emptyValue: "0", emptyLabel: "(disabled)", ...opts });

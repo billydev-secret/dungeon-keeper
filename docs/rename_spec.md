@@ -10,7 +10,7 @@ Moderator command to change (or reset) another member's server nickname. A thin 
 
 The command is hidden by default from members without **Manage Nicknames** (Discord default-permissions), and additionally runs the bot's own moderator check: the invoker must have **Manage Server** or **Administrator**, or hold a configured mod role (`is_mod`).
 
-## Behaviour
+## Behavior
 
 - `new_name` is stripped of surrounding whitespace; a blank or omitted value resets the nickname (sets it to `None`).
 - Nicknames longer than 32 characters (Discord's cap) are rejected before any API call.

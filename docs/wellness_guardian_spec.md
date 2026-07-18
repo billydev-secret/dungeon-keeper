@@ -273,7 +273,7 @@ A user can apply a template and customize it, or build a fully custom recurring 
 - Session summary micro-notifications
 - `/wellness insights` baseline retrospective
 - Admin per-user lock / override with transparency DMs
-- Behavioural pattern detection (escalating sessions, late-night displacement)
+- Behavioral pattern detection (escalating sessions, late-night displacement)
 
 ### Configuration (original design reference)
 

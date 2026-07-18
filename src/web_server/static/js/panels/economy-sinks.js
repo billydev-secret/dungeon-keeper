@@ -5,7 +5,7 @@ import { showStatus } from "../config-helpers.js";
 // everything a member can spend on lives in one place. Faucet rates stay on the
 // Income Sources page. Each entry: [key, label, {min, hint}].
 const PRICE_FIELDS = [
-  ["price_role_color", "Role colour", {}],
+  ["price_role_color", "Role color", {}],
   ["price_role_name", "Role name", {}],
   ["price_role_icon", "Role icon (custom upload)", {
     hint: "Flat price when a member uploads their own icon. Curated catalog icons below are priced individually.",
@@ -13,7 +13,7 @@ const PRICE_FIELDS = [
   ["price_role_gradient", "Role gradient", {}],
   ["price_text_room", "Text room", { hint: "Used by a later stage." }],
   ["price_voice_room", "Voice room", { hint: "Used by a later stage." }],
-  ["price_gift_color", "Gift colour", {}],
+  ["price_gift_color", "Gift color", {}],
 ];
 
 function numField(key, label, { hint } = {}, pricing) {

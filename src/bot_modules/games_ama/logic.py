@@ -68,7 +68,7 @@ def utcnow_iso(now: datetime | None = None) -> str:
 def parse_iso_ts(value: Any) -> datetime | None:
     """Parse a stored ISO-8601 string back into a UTC ``datetime``.
 
-    Tolerates ``None``/empty input (returns ``None``) and unrecognised
+    Tolerates ``None``/empty input (returns ``None``) and unrecognized
     strings (also ``None``). Naive datetimes are coerced to UTC so the
     return value is always timezone-aware.
     """

@@ -10,7 +10,7 @@ Four distinct embed shapes are exposed:
   click Join/Leave before the host starts the game.
 * :func:`build_round_embed` — the active round embed (and its
   ``closed=True`` variant, which only changes the title suffix and
-  colour). The cog reuses the same builder when editing the message
+  color). The cog reuses the same builder when editing the message
   after the round resolves.
 * :func:`build_closed_embed` — a thin reskin of the round embed for
   the "host stopped the game mid-round" path.
@@ -69,7 +69,7 @@ def build_round_embed(
     """Build the active-round (or finished-round) vote embed.
 
     When ``closed=True`` the title gains a ``— ROUND OVER`` suffix
-    and the colour shifts from "playing" blue to "results" green.
+    and the color shifts from "playing" blue to "results" green.
     All other fields render identically — the cog reuses this builder
     when editing the message after the round resolves.
     """
@@ -103,14 +103,14 @@ def build_closed_embed(
     """Build the "host stopped the game" embed.
 
     Thin reskin of :func:`build_round_embed`: the title flips to
-    ``— CLOSED`` and the colour shifts to the recap dark gold so the
+    ``— CLOSED`` and the color shifts to the recap dark gold so the
     closed state is visually distinct from a regular round-over.
     """
     embed = build_round_embed(
         prompt=prompt, round_num=round_num, vote_count=vote_count, closed=True
     )
     embed.title = f"{GAME_ICONS['mlt']} MOST LIKELY TO — CLOSED"
-    embed.colour = discord.Colour(PHASE_RECAP)
+    embed.color = discord.Color(PHASE_RECAP)
     return embed
 
 

@@ -38,7 +38,7 @@ def build_wyr_embed(
     """Build the main WYR round embed.
 
     ``closed`` flips the title suffix to ``— ROUND OVER`` and switches
-    the colour to the green results phase; ``revealed`` appends voter
+    the color to the green results phase; ``revealed`` appends voter
     mentions under each option's bar. Both flags can combine.
 
     ``host_name`` is currently accepted but not rendered — kept in the
@@ -87,7 +87,7 @@ def build_closed_embed(
 
     Starts from :func:`build_wyr_embed` with ``closed=True`` (so the
     bars and labels match the round-over state), then rewrites the title
-    suffix to ``— CLOSED`` and switches the colour to the dark-gold
+    suffix to ``— CLOSED`` and switches the color to the dark-gold
     recap phase. Centralized so the cog doesn't need to mutate Embed
     fields directly.
     """
@@ -103,5 +103,5 @@ def build_closed_embed(
         revealed=revealed,
     )
     embed.title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER — CLOSED"
-    embed.colour = discord.Colour(PHASE_RECAP)
+    embed.color = discord.Color(PHASE_RECAP)
     return embed

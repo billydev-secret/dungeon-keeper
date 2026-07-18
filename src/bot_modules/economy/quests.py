@@ -306,7 +306,7 @@ def effective_target(
     """A counted quest's target for one member+period.
 
     With a band (``0 < target_min < target_max``) the target is drawn from a
-    Gaussian centred on the band, clamped to ``[min, max]`` — deterministic on
+    Gaussian centered on the band, clamped to ``[min, max]`` — deterministic on
     ``(user, quest, period)`` so it's stable all period and varies run to run.
     Without a band it's the fixed ``target_count``. Never below 1.
     """

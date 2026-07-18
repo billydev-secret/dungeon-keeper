@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from bot_modules.economy.quests import reward_band
 
-# The three quest flavours the library understands, with the shape the model
+# The three quest flavors the library understands, with the shape the model
 # should aim for. Community quests are a whole-server goal, so they also carry
 # a suggested target count.
 _QTYPE_BRIEF: dict[str, str] = {

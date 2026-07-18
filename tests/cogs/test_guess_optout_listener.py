@@ -114,7 +114,7 @@ async def test_member_update_noop_when_role_still_held():
     flag_mock.assert_not_called()
 
 
-# ── _guess_callback honours answer_optout ────────────────────────────────────
+# ── _guess_callback honors answer_optout ────────────────────────────────────
 
 def _make_round(*, answer_optout: bool = False) -> GuessRound:
     return GuessRound(

@@ -99,7 +99,7 @@ def apply_vote(
     """Toggle ``uid``'s vote on the appropriate list.
 
     Mutates ``same_votes`` and ``nope_votes`` in place. ``vote_kind`` is
-    ``"same"`` or ``"nope"``. Behaviour mirrors the cog's button
+    ``"same"`` or ``"nope"``. Behavior mirrors the cog's button
     callbacks:
 
     * If the user is on the opposite list, they're moved off it

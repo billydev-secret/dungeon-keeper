@@ -30,7 +30,7 @@ Self-service roles are table stakes for any community server: color roles, prono
 
 A member sees a DK embed in a channel — title, description, optional thumbnail and accent color, matching the existing docs-page look. Below it, either:
 
-- **Buttons** — up to 25 labeled buttons, each optionally with an emoji and one of four colors (grey, blurple, green, red). One tap toggles or grants the role depending on the menu's rules.
+- **Buttons** — up to 25 labeled buttons, each optionally with an emoji and one of four colors (gray, blurple, green, red). One tap toggles or grants the role depending on the menu's rules.
 - **A dropdown** — one select menu with up to 25 options, each with a label, optional emoji, and optional short description. The member opens it, checks/unchecks what they want, and their roles update to match their selection.
 
 Every interaction gets an **immediate private (ephemeral) response**: "✅ You now have @Night Owl," "✅ Updated your colors: +Oxblood, −Forest," "❌ This menu requires the @Verified role." No public noise, no silent failures, no "is the bot broken?" tickets.

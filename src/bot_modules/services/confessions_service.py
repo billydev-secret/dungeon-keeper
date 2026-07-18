@@ -168,7 +168,7 @@ def get_ephemeral_anon_identity(db_path: Path, guild_id: int, root_message_id: i
     return name_idx, emoji_idx
 
 
-def build_confession_embed(content: str, *, colour: "discord.Colour") -> "discord.Embed":
+def build_confession_embed(content: str, *, color: "discord.Color") -> "discord.Embed":
     """Build the public embed for a posted confession.
 
     Titled a plain ``Anonymous Confession`` (no sequential number). The
@@ -179,7 +179,7 @@ def build_confession_embed(content: str, *, colour: "discord.Colour") -> "discor
     safe = defang_everyone_here(content)
     if len(safe) > MAX_EMBED_DESCRIPTION_LENGTH:
         safe = safe[:MAX_EMBED_DESCRIPTION_LENGTH - 1].rstrip() + "…"
-    return discord.Embed(title="Anonymous Confession", description=safe, colour=colour)
+    return discord.Embed(title="Anonymous Confession", description=safe, color=color)
 
 
 def build_anon_reply(

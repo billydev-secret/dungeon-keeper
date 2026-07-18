@@ -133,7 +133,7 @@ Check items off as you go. If something behaves differently than described, note
 ### Games Commands
 
 - [ ] **`/recap`** — After a couple of games, run it within 30 minutes; confirm highlights render.
-- [ ] **`/games help`** — Confirm the full game catalogue embed renders.
+- [ ] **`/games help`** — Confirm the full game catalog embed renders.
 - [ ] **`/games support`** — Confirm the support-server invite posts.
 - [ ] **`/games end` (as host)** — Confirm the confirm-popup then archive. As a non-host, non-mod, confirm it's rejected.
 - [ ] **`/games join` / `/games leave` (self)** — Join/leave a roster-based game yourself; on an open-submission game like FFA, confirm "nothing to join."

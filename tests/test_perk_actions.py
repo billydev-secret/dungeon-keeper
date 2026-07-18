@@ -1,4 +1,4 @@
-"""Projector + colour-guard tests for economy/perk_actions (Stage 3, Agent C).
+"""Projector + color-guard tests for economy/perk_actions (Stage 3, Agent C).
 
 Covers the ΔE staff-collision maths, hex parsing, feature gating, and the
 personal-role projection matrix (solid / gradient-supersedes / name-default /
@@ -17,7 +17,7 @@ from bot_modules.economy.perk_actions import (
     delta_e_cie76,
     feature_gate_ok,
     find_color_clash,
-    parse_hex_colour,
+    parse_hex_color,
     revoke_role_perks,
 )
 from bot_modules.core.db_utils import open_db
@@ -67,9 +67,9 @@ def _role(
     r = MagicMock()
     r.id = rid
     r.name = name
-    r.colour = discord.Colour(color)
+    r.color = discord.Color(color)
     r.position = position
-    r.secondary_colour = secondary
+    r.secondary_color = secondary
     r.display_icon = icon
     r.permissions = perms if perms is not None else discord.Permissions.none()
     r.edit = AsyncMock()
@@ -110,16 +110,16 @@ def _bot(guild):
     return b
 
 
-# ── colour maths ─────────────────────────────────────────────────────────────
+# ── color maths ─────────────────────────────────────────────────────────────
 
 
-def test_parse_hex_colour_variants():
-    assert parse_hex_colour("#7B2FF7") == 0x7B2FF7
-    assert parse_hex_colour("7b2ff7") == 0x7B2FF7
-    assert parse_hex_colour("  #FFFFFF ") == 0xFFFFFF
-    assert parse_hex_colour("nope") is None
-    assert parse_hex_colour("#FFF") is None  # 3-digit shorthand not accepted
-    assert parse_hex_colour("#GGGGGG") is None
+def test_parse_hex_color_variants():
+    assert parse_hex_color("#7B2FF7") == 0x7B2FF7
+    assert parse_hex_color("7b2ff7") == 0x7B2FF7
+    assert parse_hex_color("  #FFFFFF ") == 0xFFFFFF
+    assert parse_hex_color("nope") is None
+    assert parse_hex_color("#FFF") is None  # 3-digit shorthand not accepted
+    assert parse_hex_color("#GGGGGG") is None
 
 
 def test_delta_e_identity_is_zero():
@@ -131,7 +131,7 @@ def test_delta_e_black_white_is_large():
     assert delta_e_cie76((0, 0, 0), (255, 255, 255)) > 90
 
 
-def test_find_color_clash_flags_near_staff_colour():
+def test_find_color_clash_flags_near_staff_color():
     admin = _role(
         1, name="Admins", color=0xFF0000,
         perms=discord.Permissions(administrator=True),
@@ -142,13 +142,13 @@ def test_find_color_clash_flags_near_staff_colour():
     assert find_color_clash(guild, 0x0000FF) is None
 
 
-def test_find_color_clash_ignores_non_staff_and_default_colour():
-    plain = _role(1, name="Member", color=0xFF0000)  # colourful but not staff
-    colourless_staff = _role(
+def test_find_color_clash_ignores_non_staff_and_default_color():
+    plain = _role(1, name="Member", color=0xFF0000)  # colorful but not staff
+    colorless_staff = _role(
         2, name="Mods", color=0x000000,
         perms=discord.Permissions(manage_guild=True),
     )
-    guild = _guild(roles=[plain, colourless_staff])
+    guild = _guild(roles=[plain, colorless_staff])
     assert find_color_clash(guild, 0xFF0000) is None
 
 
@@ -170,7 +170,7 @@ async def test_feature_gate_ok_matrix():
 
 
 @pytest.mark.asyncio
-async def test_apply_creates_solid_colour_role(db):
+async def test_apply_creates_solid_color_role(db):
     _add_rental(db, "role_color")
     _set_desired(db, color=0x7B2FF7)
     new_role = _role(999, position=5)
@@ -182,7 +182,7 @@ async def test_apply_creates_solid_colour_role(db):
 
     assert ok is True
     kwargs = guild.create_role.await_args.kwargs
-    assert kwargs["colour"] == discord.Colour(0x7B2FF7)
+    assert kwargs["color"] == discord.Color(0x7B2FF7)
     assert "secondary_color" not in kwargs  # solid, not gradient
     member.add_roles.assert_awaited_once()
     # role_id persisted for the next projection.
@@ -202,8 +202,8 @@ async def test_apply_gradient_supersedes_solid(db):
     await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
 
     kwargs = guild.create_role.await_args.kwargs
-    assert kwargs["colour"] == discord.Colour(0x111111)
-    assert kwargs["secondary_color"] == discord.Colour(0x222222)
+    assert kwargs["color"] == discord.Color(0x111111)
+    assert kwargs["secondary_color"] == discord.Color(0x222222)
 
 
 @pytest.mark.asyncio
@@ -217,12 +217,12 @@ async def test_apply_gradient_without_feature_falls_back_to_solid(db):
     await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
 
     kwargs = guild.create_role.await_args.kwargs
-    assert kwargs["colour"] == discord.Colour(0x111111)
+    assert kwargs["color"] == discord.Color(0x111111)
     assert "secondary_color" not in kwargs
 
 
 @pytest.mark.asyncio
-async def test_apply_name_and_colour(db):
+async def test_apply_name_and_color(db):
     _add_rental(db, "role_name")
     _add_rental(db, "role_color")
     _set_desired(db, name="Stardust", color=0x00FF00)
@@ -233,12 +233,12 @@ async def test_apply_name_and_colour(db):
 
     kwargs = guild.create_role.await_args.kwargs
     assert kwargs["name"] == "Stardust"
-    assert kwargs["colour"] == discord.Colour(0x00FF00)
+    assert kwargs["color"] == discord.Color(0x00FF00)
 
 
 @pytest.mark.asyncio
 async def test_apply_name_defaults_to_display_name_without_name_perk(db):
-    _add_rental(db, "role_color")  # colour only, no role_name
+    _add_rental(db, "role_color")  # color only, no role_name
     _set_desired(db, name="ShouldBeIgnored", color=0x00FF00)
     guild = _guild(member=_member(display_name="Ziggy"))
     guild.create_role.return_value = _role(999)
@@ -265,12 +265,12 @@ async def test_apply_positions_above_cosmetics_anchor(db):
 
 @pytest.mark.asyncio
 async def test_apply_downgrade_clears_secondary_and_icon(db):
-    """Gradient+icon lapse to colour-only ⇒ the role's extras are cleared."""
-    _add_rental(db, "role_color")  # only colour remains entitled
+    """Gradient+icon lapse to color-only ⇒ the role's extras are cleared."""
+    _add_rental(db, "role_color")  # only color remains entitled
     _set_desired(db, color=0x123456)
     existing = _role(
         999, name="Ziggy", color=0x123456, position=11,
-        secondary=discord.Colour(0x999999), icon=MagicMock(),
+        secondary=discord.Color(0x999999), icon=MagicMock(),
     )
     _set_desired(db, role_id=999)
     guild = _guild(roles=[existing], member=_member(roles=[existing]))
@@ -372,7 +372,7 @@ async def test_revoke_deletes_role_and_row_when_no_entitlements(db):
 
 @pytest.mark.asyncio
 async def test_revoke_reprojects_when_entitlements_remain(db):
-    _add_rental(db, "role_color")  # colour survives a gradient lapse
+    _add_rental(db, "role_color")  # color survives a gradient lapse
     _set_desired(db, color=0x123456, role_id=999)
     existing = _role(999, name="Ziggy", color=0x123456, position=11)
     guild = _guild(roles=[existing], member=_member(roles=[existing]))

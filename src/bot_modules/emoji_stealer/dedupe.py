@@ -5,23 +5,23 @@ Two independent tiers, both pure and testable without Discord:
   - ``sha256_hex`` — exact byte match. Zero false positives: identical bytes
     are unquestionably the same image. Fires when a source CDN emoji is
     re-stolen into a guild that already holds a byte-identical copy.
-  - ``perceptual_hash`` (colour dHash) + ``hamming`` — fuzzy "looks the same"
+  - ``perceptual_hash`` (color dHash) + ``hamming`` — fuzzy "looks the same"
     match that survives Discord's re-encoding, our GIF compression, and
-    resizing, yet still distinguishes same-shape-different-colour emoji.
+    resizing, yet still distinguishes same-shape-different-color emoji.
 
 Needs Pillow (already a dependency via ``compress.py``).
 
 Design notes for the perceptual hash — both learned the hard way by measuring
 distances on realistic transparent emoji:
 
-  - **Keep colour.** A grayscale dHash collapses a red heart and a pink heart
-    (and two differently-coloured squares) to the *same* silhouette, so it
+  - **Keep color.** A grayscale dHash collapses a red heart and a pink heart
+    (and two differently-colored squares) to the *same* silhouette, so it
     reports hamming 0 for plainly-different emoji. We hash each RGB channel
     separately instead, tripling the bit width to 192.
   - **Composite the alpha away.** Custom emoji are a small subject on a
     transparent field; ``convert`` alone composites transparency onto black,
     so every emoji shares a huge uniform background that dominates the hash.
-    We flatten onto neutral grey first so the subject, not the background,
+    We flatten onto neutral gray first so the subject, not the background,
     drives the bits.
 
 On realistic emoji this gives clean separation: a re-encoded/resized copy of
@@ -40,7 +40,7 @@ from PIL import Image
 # Per-channel dHash grid: an N×(N+1) thumbnail yields N×N horizontal
 # comparisons per channel, so the hash is 3·N·N = 192 bits at N=8.
 _HASH_GRID = 8
-# Neutral grey the transparent emoji is flattened onto before hashing.
+# Neutral gray the transparent emoji is flattened onto before hashing.
 _HASH_BG = (128, 128, 128, 255)
 
 # Hamming distance at or below this counts as "very similar". Measured on
@@ -56,13 +56,13 @@ def sha256_hex(data: bytes) -> str:
 
 
 def perceptual_hash(data: bytes) -> int | None:
-    """192-bit colour difference hash of an image, or None if it won't decode.
+    """192-bit color difference hash of an image, or None if it won't decode.
 
-    Flattens the (first, for animated) frame onto neutral grey to defuse the
+    Flattens the (first, for animated) frame onto neutral gray to defuse the
     transparent background, resizes to ``(_HASH_GRID+1)×_HASH_GRID``, and emits
     one bit per horizontally-adjacent pixel pair (left brighter → 1) for each of
     the R, G and B channels. Re-encoding/resizing barely moves the hash; a
-    different image — or the same shape in a different colour — moves it a lot.
+    different image — or the same shape in a different color — moves it a lot.
     """
     try:
         img = Image.open(io.BytesIO(data))

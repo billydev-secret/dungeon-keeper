@@ -830,12 +830,12 @@ class EventsCog(commands.Cog):
         settings: EconSettings,
         outcome: LoginOutcome,
         prior_streak: int,
-        accent: discord.Colour,
+        accent: discord.Color,
     ) -> discord.Embed:
         """Branded streak-update embed covering every triggered login event."""
         embed = discord.Embed(
             title=f"{settings.currency_emoji} Daily streak",
-            colour=accent,
+            color=accent,
         )
         if outcome.milestone > 0:
             unit = settings.currency_name if outcome.milestone == 1 else settings.currency_plural

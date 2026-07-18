@@ -10,7 +10,7 @@ Per-channel "delete messages older than X, sweep every Y" rules configured from 
 
 There are no slash commands or context menus. Members never see the configuration surface.
 
-## Behaviour
+## Behavior
 
 ### Setting a rule
 

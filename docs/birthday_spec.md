@@ -10,7 +10,7 @@ Self-service per-guild birthday tracker. Members set their own birthday (month +
 | `/birthday remove` | Slash | Everyone (server only) | Remove your own birthday |
 | Birthday panel | Web (dashboard) | Admin | Configure the announcement channel and message template; preview the next 90 days of upcoming birthdays |
 
-## Behaviour
+## Behavior
 
 ### Setting / removing a birthday
 

@@ -57,7 +57,7 @@ class GamesConfigCog(commands.Cog):
                     row["channel_id"], game_id, channel=channel,
                 )
         await force_end_active_game(self.bot, self.db, game_id)
-        # Grey out the live game message's buttons if we can find it.
+        # Gray out the live game message's buttons if we can find it.
         if channel and row["message_id"]:
             try:
                 msg = await channel.fetch_message(row["message_id"])
@@ -188,8 +188,8 @@ class GamesConfigCog(commands.Cog):
         from bot_modules.games.utils.game_manager import get_active_game
         row = await get_active_game(self.db, interaction.channel_id)
         guild = interaction.guild
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_game_status_embed(row, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_game_status_embed(row, color=color)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @config_group.command(name="game-end", description="Force-close the active game in this channel.")

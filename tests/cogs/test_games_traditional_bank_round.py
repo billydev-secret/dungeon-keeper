@@ -84,7 +84,7 @@ class FakeGuild:
     def __init__(self, members):
         self.id = 77
         self.icon = None
-        self.me = None  # branding falls back to the default accent colour
+        self.me = None  # branding falls back to the default accent color
         self._members = {m.id: m for m in members}
 
     def get_member(self, uid):

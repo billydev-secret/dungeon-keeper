@@ -60,7 +60,7 @@ from bot_modules.games_price.logic import (
         ("$1.2m", 1_200_000),
     ],
 )
-def test_parse_price_recognises_common_forms(raw: str, expected: int) -> None:
+def test_parse_price_recognizes_common_forms(raw: str, expected: int) -> None:
     assert parse_price(raw) == expected
 
 
@@ -120,11 +120,11 @@ def test_format_price(amount: int, expected: str) -> None:
 # ── price_label ──────────────────────────────────────────────────────
 
 
-def test_price_label_zero_gets_free_flavour() -> None:
+def test_price_label_zero_gets_free_flavor() -> None:
     assert price_label(0) == "$0 (free?!)"
 
 
-def test_price_label_huge_gets_refuse_flavour() -> None:
+def test_price_label_huge_gets_refuse_flavor() -> None:
     assert price_label(999_000_000).endswith("(absolutely not)")
     assert price_label(MAX_PRICE).endswith("(absolutely not)")
 
@@ -459,7 +459,7 @@ def test_build_reveal_embed_renders_ladder_lines() -> None:
     assert "Carol" in ladder_text
 
 
-def test_build_reveal_embed_zero_amount_shows_free_flavour() -> None:
+def test_build_reveal_embed_zero_amount_shows_free_flavor() -> None:
     embed = build_reveal_embed("Host", "scen", 1, 1, [("Alice", 0)])
     by_name = {f.name: f.value for f in embed.fields}
     text = by_name["💵 Price Ladder"]
@@ -467,7 +467,7 @@ def test_build_reveal_embed_zero_amount_shows_free_flavour() -> None:
     assert "free?!" in text
 
 
-def test_build_reveal_embed_huge_amount_shows_refuse_flavour() -> None:
+def test_build_reveal_embed_huge_amount_shows_refuse_flavor() -> None:
     embed = build_reveal_embed("Host", "scen", 1, 1, [("Alice", 999_000_000)])
     by_name = {f.name: f.value for f in embed.fields}
     text = by_name["💵 Price Ladder"]

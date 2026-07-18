@@ -6,7 +6,7 @@ same dicts verbatim over raw REST, so this module must import neither
 discord nor sqlite3. Callers hand in plain dicts (``dict(row)`` a
 sqlite3.Row first).
 
-Status colours are semantic (pass/fail/blocked) — explicitly exempt from
+Status colors are semantic (pass/fail/blocked) — explicitly exempt from
 the ``resolve_accent_color`` branding convention.
 """
 
@@ -20,12 +20,12 @@ from typing import Any
 # Discord's hard cap on an embed description.
 DESCRIPTION_LIMIT = 4096
 
-STATUS_COLOURS = {
-    "pending": 0x95A5A6,   # grey
+STATUS_COLORS = {
+    "pending": 0x95A5A6,   # gray
     "passed": 0x2ECC71,    # green
     "failed": 0xE74C3C,    # red
     "blocked": 0xE67E22,   # amber
-    "archived": 0x7F8C8D,  # dark grey
+    "archived": 0x7F8C8D,  # dark gray
 }
 
 VERDICT_EMOJI = {"pass": "✅", "fail": "❌", "blocked": "🚧"}
@@ -79,7 +79,7 @@ def build_card_embed(
     embed: dict = {
         "title": str(test.get("title") or ""),
         "description": _normalise_body(str(test.get("body_md") or "")),
-        "color": STATUS_COLOURS.get(status, STATUS_COLOURS["pending"]),
+        "color": STATUS_COLORS.get(status, STATUS_COLORS["pending"]),
         "fields": [
             {
                 "name": "Verdicts",

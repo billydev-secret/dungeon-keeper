@@ -369,7 +369,7 @@ def _bot_identity_section(guild) -> dict:
 
 def _branding_section(conn, guild_id: int) -> dict:
     cfg = get_branding_conn(conn, guild_id)
-    accent_hex = f"#{cfg.accent_hex:06X}" if cfg.has_custom_colour() else ""
+    accent_hex = f"#{cfg.accent_hex:06X}" if cfg.has_custom_color() else ""
     return {
         "accent_mode": cfg.normalized_mode(),
         "accent_hex": accent_hex,
@@ -3129,7 +3129,7 @@ async def update_bot_identity(
     }
 
 
-# ── Branding (embed accent colour) ────────────────────────────────────
+# ── Branding (embed accent color) ────────────────────────────────────
 
 
 class BrandingConfigUpdate(BaseModel):
@@ -3137,11 +3137,11 @@ class BrandingConfigUpdate(BaseModel):
     accent_hex: str | None = None
 
 
-def _parse_hex_colour(raw: str) -> int:
+def _parse_hex_color(raw: str) -> int:
     """Parse a ``#RRGGBB`` (or ``RRGGBB``) string to an int, raising ValueError."""
     s = raw.strip().lstrip("#")
     if len(s) != 6:
-        raise ValueError("expected 6-digit hex colour")
+        raise ValueError("expected 6-digit hex color")
     return int(s, 16)
 
 
@@ -3166,9 +3166,9 @@ async def update_branding(
         raw = (body.accent_hex or "").strip()
         if raw:
             try:
-                new_hex = _parse_hex_colour(raw)
+                new_hex = _parse_hex_color(raw)
             except ValueError:
-                raise HTTPException(400, "accent_hex must be a #RRGGBB colour")
+                raise HTTPException(400, "accent_hex must be a #RRGGBB color")
 
     def _q():
         with ctx.open_db() as conn:
@@ -3181,7 +3181,7 @@ async def update_branding(
         return {
             "ok": True,
             "accent_mode": cfg.normalized_mode(),
-            "accent_hex": f"#{cfg.accent_hex:06X}" if cfg.has_custom_colour() else "",
+            "accent_hex": f"#{cfg.accent_hex:06X}" if cfg.has_custom_color() else "",
         }
 
     result = await run_query(_q)

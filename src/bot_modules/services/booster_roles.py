@@ -388,7 +388,7 @@ def _parse_swatch_filename(filename: str) -> tuple[str, str, str] | None:
 def _hex_sort_key(hex1: str, hex2: str) -> int:
     """Return an integer sort key: hue of hex1 primary, hue of hex2 secondary.
 
-    Uses HSV hue (0-359) so colours order by visual gradient.
+    Uses HSV hue (0-359) so colors order by visual gradient.
     """
     import colorsys
 

@@ -29,10 +29,10 @@ OTHER_CHANNEL_ID = 222
 
 
 def test_guide_embed_defaults_cover_earning_and_spending():
-    embed = build_guide_embed(EconSettings(), colour=discord.Colour(0x123456))
+    embed = build_guide_embed(EconSettings(), color=discord.Color(0x123456))
 
     assert "Coins — how it works" in (embed.title or "")
-    assert embed.colour == discord.Colour(0x123456)
+    assert embed.color == discord.Color(0x123456)
     fields = {f.name: f.value or "" for f in embed.fields}
     earning = fields["Earning"]
     assert "🪙 5" in earning and "🪙 15" in earning  # login bases
@@ -41,7 +41,7 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert "/bank quests" in earning
     spending = fields["Spending"]
     assert "/bank shop" in spending
-    assert "colour, name, gradient, icon" in spending  # perks named, not priced
+    assert "color, name, gradient, icon" in spending  # perks named, not priced
     assert "shown in the shop" in spending  # specifics deferred to the shop page
     assert "/bank pay" in spending
     assert embed.footer.text and "grace" in embed.footer.text
@@ -173,7 +173,7 @@ def ctx(db):
 def _patch_accent():
     with patch(
         "bot_modules.cogs.economy_cog.resolve_accent_color",
-        new=AsyncMock(return_value=discord.Colour(0x123456)),
+        new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
         yield
 

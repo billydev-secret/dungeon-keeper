@@ -11,8 +11,8 @@ import {
   mountRolePicker, mountChannelPicker,
 } from "../config-helpers.js";
 
-// Semantic status colours — mirror the Discord card (cards.py STATUS_COLOURS).
-const STATUS_COLOURS = {
+// Semantic status colors — mirror the Discord card (cards.py STATUS_COLORS).
+const STATUS_COLORS = {
   pending:  "#95A5A6",
   passed:   "#2ECC71",
   failed:   "#E74C3C",
@@ -23,7 +23,7 @@ const STATUS_COLOURS = {
 const VERDICT_EMOJI = { pass: "✅", fail: "❌", blocked: "🚧" };
 
 function statusChip(status) {
-  const c = STATUS_COLOURS[status] || STATUS_COLOURS.pending;
+  const c = STATUS_COLORS[status] || STATUS_COLORS.pending;
   return `<span class="t-chip" style="background:${c}22;color:${c}">${esc(status)}</span>`;
 }
 

@@ -711,9 +711,9 @@ def test_build_main_embed_progress_field_empty_payload_zero_bar():
 
 
 def test_build_question_embed_includes_text():
-    embed = build_question_embed("What is your favourite colour?")
+    embed = build_question_embed("What is your favorite color?")
     assert embed.description is not None
-    assert "What is your favourite colour?" in embed.description
+    assert "What is your favorite color?" in embed.description
     assert embed.title is not None
     assert "QUESTION" in embed.title
 
@@ -843,7 +843,7 @@ async def test_do_close_pays_askers_and_hot_seats(monkeypatch, sync_db_path):
 # ── normalize_format ─────────────────────────────────────────────────
 
 
-def test_normalize_format_recognises_panel():
+def test_normalize_format_recognizes_panel():
     assert normalize_format(AMA_FORMAT_PANEL) == AMA_FORMAT_PANEL
 
 

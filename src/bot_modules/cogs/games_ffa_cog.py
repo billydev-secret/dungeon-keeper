@@ -53,11 +53,11 @@ _THEME_FOR_LABEL = {"TRUTH": "midnight", "DARE": "rose"}
 # Embed accent mirrors the card themes: TRUTH cool, DARE hot. These are
 # semantic (truth vs dare), so they stay hardcoded rather than using the
 # per-guild branding accent.
-_EMBED_COLOUR_FOR_LABEL = {
-    "TRUTH": discord.Colour(0x5B8DEF),  # cool blue
-    "DARE": discord.Colour(0xE85A9B),   # hot rose
+_EMBED_COLOR_FOR_LABEL = {
+    "TRUTH": discord.Color(0x5B8DEF),  # cool blue
+    "DARE": discord.Color(0xE85A9B),   # hot rose
 }
-_DEFAULT_EMBED_COLOUR = discord.Colour(0xE85A9B)
+_DEFAULT_EMBED_COLOR = discord.Color(0xE85A9B)
 
 MAX_EMBED_DESCRIPTION = 4096
 
@@ -100,7 +100,7 @@ async def _resolve_card_image(guild: discord.Guild | None, bot, host_id: int) ->
 
 
 def build_ffa_embed(
-    text: str, label: str, *, colour: discord.Colour, reply_count: int = 0
+    text: str, label: str, *, color: discord.Color, reply_count: int = 0
 ) -> discord.Embed:
     """Embed for the non-threaded FFA mode.
 
@@ -114,7 +114,7 @@ def build_ffa_embed(
     embed = discord.Embed(
         title=f"{GAME_ICONS['ffa']} {label}",
         description=quoted,
-        colour=colour,
+        color=color,
     )
     if reply_count > 0:
         noun = "reply" if reply_count == 1 else "replies"
@@ -239,7 +239,7 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 entry = _find_prompt_entry(payload, root_id)
                 count = int(entry.get("reply_count", 0)) if entry else 0
                 embed = build_ffa_embed(
-                    view.text, view.label, colour=view.colour, reply_count=count,
+                    view.text, view.label, color=view.color, reply_count=count,
                 )
                 await view._game_msg.edit(embed=embed)
         except Exception:
@@ -268,14 +268,14 @@ class FFAEmbedView(discord.ui.View):
     """
 
     def __init__(self, game_id: str, host_id: int, text: str, label: str,
-                 colour: discord.Colour, db, bot, kind: str = "random",
+                 color: discord.Color, db, bot, kind: str = "random",
                  tags: list[str] | None = None):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
         self.text = text
         self.label = label
-        self.colour = colour
+        self.color = color
         self.db = db
         self.bot = bot
         # Immutable launch filter — replayed by the Next button to re-roll from
@@ -369,7 +369,7 @@ class FFAEmbedView(discord.ui.View):
             return
 
         label, text = picked
-        colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+        color = _EMBED_COLOR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOR)
 
         # Post the next prompt as a NEW message and leave every earlier prompt
         # fully interactive — its Reply / New Alias buttons keep working, and its
@@ -380,7 +380,7 @@ class FFAEmbedView(discord.ui.View):
         # Next never repeats a prompt across the whole game. The DB anchor stays
         # on the launch message so recovery can walk the whole `prompts` list.
         # Send first: if it fails, nothing about the existing prompts changes.
-        embed = build_ffa_embed(text, label, colour=colour, reply_count=0)
+        embed = build_ffa_embed(text, label, color=color, reply_count=0)
         channel = self._game_msg.channel if self._game_msg else interaction.channel
         if channel is None or isinstance(
             channel, (discord.ForumChannel, discord.CategoryChannel)
@@ -390,7 +390,7 @@ class FFAEmbedView(discord.ui.View):
             )
             return
         new_view = FFAEmbedView(
-            self.game_id, self.host_id, text, label, colour, self.db, self.bot,
+            self.game_id, self.host_id, text, label, color, self.db, self.bot,
             kind=self.kind, tags=self.tags,
         )
         try:
@@ -555,7 +555,7 @@ class FFACog(commands.Cog):
             log.info("ffa embed launch: no prompt for kind=%s tags=%s in channel %s", kind, tags, channel.id)
             return None
         label, text = picked
-        colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+        color = _EMBED_COLOR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOR)
 
         game_id = await create_game(
             self.db,
@@ -576,8 +576,8 @@ class FFACog(commands.Cog):
                 "prompts": [],
             },
         )
-        embed = build_ffa_embed(text, label, colour=colour, reply_count=0)
-        view = FFAEmbedView(game_id, host_id, text, label, colour, self.db, self.bot, kind=kind, tags=tags)
+        embed = build_ffa_embed(text, label, color=color, reply_count=0)
+        view = FFAEmbedView(game_id, host_id, text, label, color, self.db, self.bot, kind=kind, tags=tags)
         self.bot.active_views[game_id] = view
 
         try:
@@ -721,9 +721,9 @@ class FFACog(commands.Cog):
                     continue
             label = entry.get("label") or "TRUTH"
             text = entry.get("prompt", "") or ""
-            colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+            color = _EMBED_COLOR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOR)
             view = FFAEmbedView(
-                game_id, host_id, text, label, colour, self.db, self.bot,
+                game_id, host_id, text, label, color, self.db, self.bot,
                 kind=kind, tags=tags,
             )
             view._game_msg = msg

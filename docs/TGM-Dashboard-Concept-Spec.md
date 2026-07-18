@@ -1,6 +1,6 @@
 # TGM Community Health Dashboard — Concept Spec
 
-A concept doc for a 12-tile community-health dashboard. The Golden Meadow is an adult (21+) Discord community centred on genuine connection and consent-forward culture; NSFW content exists but is secondary to the social fabric. This dashboard monitors community health across six research-backed dimensions, surfaces actionable insights for admins and moderators, and gives members motivating (not competitive) stats.
+A concept doc for a 12-tile community-health dashboard. The Golden Meadow is an adult (21+) Discord community centered on genuine connection and consent-forward culture; NSFW content exists but is secondary to the social fabric. This dashboard monitors community health across six research-backed dimensions, surfaces actionable insights for admins and moderators, and gives members motivating (not competitive) stats.
 
 The core principle: every metric must answer "what should I do next?" If a number can't be tied to a specific intervention when it moves outside healthy range, it doesn't belong on the dashboard. Total member count and all-time message count are explicitly excluded as vanity metrics.
 
@@ -33,7 +33,7 @@ The composite score is built from six weighted dimensions. Activity and engageme
 
 ## Dashboard structure
 
-The dashboard has 12 tiles organised into four categories. Each tile has two views: a compact tile for the main grid (answers "do I need to worry?" in 2 seconds) and a full-page deep dive (answers "what exactly is happening and what should I do?").
+The dashboard has 12 tiles organized into four categories. Each tile has two views: a compact tile for the main grid (answers "do I need to worry?" in 2 seconds) and a full-page deep dive (answers "what exactly is happening and what should I do?").
 
 Above the grid sits a **live status bar** showing right-now data — current online count, active users (1h), active channels (1h), in voice now, recent joins. (Concept only — not yet rendered as a header component.)
 
@@ -65,7 +65,7 @@ Three user tiers see different views: admins see everything, moderators see oper
 
 **What healthy looks like.** A clear daily cycle with evening peaks and overnight troughs. What matters is whether the pattern is consistent week-to-week (stable) or erratic (depending on a handful of individuals). Dead hours below 1 msg/hr are expected overnight, concerning during evenings.
 
-**Tile view.** Compact 7×24 mini heatmap with continuous colour scale; peak slot called out ("Sat 9–11pm"); quietest slot and dead-hours-per-week count.
+**Tile view.** Compact 7×24 mini heatmap with continuous color scale; peak slot called out ("Sat 9–11pm"); quietest slot and dead-hours-per-week count.
 
 **Full-page view.** Full heatmap with per-cell hover; weekday vs weekend hourly volume chart with voice occupancy overlaid; per-channel mini heatmaps (each channel's own rhythm); mod-coverage analysis ranking time windows where activity exceeds mod presence; event impact analysis with the optimal-new-event-slot recommendation.
 
@@ -97,7 +97,7 @@ Three user tiers see different views: admins see everything, moderators see oper
 
 **What healthy looks like.** 0.50–0.70 for a Discord community. A "fat middle" — many moderate contributors — is what you want; a barbell (lots of lurkers + a few power users + nothing between) is unhealthy.
 
-**Tile view.** Gini value with colour badge (green < 0.70, amber 0.70–0.85, red > 0.85); 30-day sparkline; top-5% contribution share bar.
+**Tile view.** Gini value with color badge (green < 0.70, amber 0.70–0.85, red > 0.85); 30-day sparkline; top-5% contribution share bar.
 
 **Full-page view.** Lorenz curve (the visualisation of the Gini); 90-day trend with green / amber / red zone shading; per-channel Gini bars (event channels usually best, niche channels often high); participation tiers (lurker / light / moderate / active / power); Palma ratio (top-10% share / bottom-40% share); a weighted Gini that counts reactions (at reduced weight) and voice minutes alongside messages; an XP-distribution Gini comparing how well the XP formula rewards diverse contribution types vs raw message volume.
 
@@ -117,9 +117,9 @@ The existing "conversation starters" metric is especially powerful here. A start
 
 **What healthy looks like.** Clustering coefficient 0.25–0.55. Average path length under 3.0 (small-world). Reciprocity above 0.35. At least 6 bridge users with no single one holding more than 25% of total betweenness.
 
-**Tile view.** Clustering coefficient with health badge; mini sociogram (small force-directed preview with cluster colours and highlighted bridges); network density, bridge user count, and isolate count.
+**Tile view.** Clustering coefficient with health badge; mini sociogram (small force-directed preview with cluster colors and highlighted bridges); network density, bridge user count, and isolate count.
 
-**Full-page view.** Interactive force-directed network (node size = degree, colour = cluster, edge opacity = frequency, bridges highlighted); 90-day clustering / reciprocity / density trend; betweenness centrality ranking with bus-factor risk callouts; detected clusters with cross-cluster interaction matrix; **SFW/NSFW bridge health** section showing what percentage of members are active in both spaces and whether that's growing or shrinking.
+**Full-page view.** Interactive force-directed network (node size = degree, color = cluster, edge opacity = frequency, bridges highlighted); 90-day clustering / reciprocity / density trend; betweenness centrality ranking with bus-factor risk callouts; detected clusters with cross-cluster interaction matrix; **SFW/NSFW bridge health** section showing what percentage of members are active in both spaces and whether that's growing or shrinking.
 
 **Tooltips.** Clustering coefficient, network density, average path length, reciprocity, betweenness centrality, bridge user, bus factor, isolates, cross-cluster interaction, small-world quotient, conversation-starter bridging, out-degree vs in-degree.
 
@@ -167,7 +167,7 @@ The existing "conversation starters" metric is especially powerful here. A start
 
 **Tile view.** D7 retention for the most recent cohort with badge; mini retention decay curve; D30 retention and cohort size cards.
 
-**Full-page view.** Family of retention curves (each weekly cohort a line, recent in strong colours, older faded); colour-coded retention heatmap table; channel-correlated retention (which channels newcomers engage with first vs long-term retention).
+**Full-page view.** Family of retention curves (each weekly cohort a line, recent in strong colors, older faded); color-coded retention heatmap table; channel-correlated retention (which channels newcomers engage with first vs long-term retention).
 
 **Tooltips.** D7 retention, D30 retention, retention curve, cohort.
 
@@ -213,7 +213,7 @@ The existing "conversation starters" metric is especially powerful here. A start
 
 **What healthy looks like.** Zero active incidents most of the time. Average detection time under 60 seconds. Average resolution time under 5 minutes. False positive rate under 20%.
 
-**Tile view.** Active-incident count with status badge (green clear / red active); 7-day incident timeline with resolved-incident dots coloured by type; four alert-category indicators (velocity spikes, report clusters, raid attempts, sentiment storms).
+**Tile view.** Active-incident count with status badge (green clear / red active); 7-day incident timeline with resolved-incident dots colored by type; four alert-category indicators (velocity spikes, report clusters, raid attempts, sentiment storms).
 
 **Full-page view.** Real-time velocity monitor (6-hour rolling window of msg/5min with dynamic 2-sigma alert threshold); incident log table over 30 days; six anomaly detection signal definitions as cards (velocity spike, new-account clustering, report clustering, sentiment storm, thread-depth anomaly, plus one more); post-incident narrative cards; detection-performance metrics (true / false positives, missed, precision over 90 days); incident timing pattern card.
 
@@ -229,9 +229,9 @@ The existing "conversation starters" metric is especially powerful here. A start
 
 **What healthy looks like.** 0–39 = Critical (immediate intervention). 40–59 = Needs work. 60–79 = Good. 80–100 = Excellent.
 
-**Tile view.** Half-circle gauge with the 0–100 score, colour-coded badge, and 30-day sparkline; six dimension mini-bars showing individual scores.
+**Tile view.** Half-circle gauge with the 0–100 score, color-coded badge, and 30-day sparkline; six dimension mini-bars showing individual scores.
 
-**Full-page view.** A **flower chart** is the centrepiece — six petals, petal length proportional to dimension score, current snapshot overlaid on a faded 30-day-ago ghost so improvement direction is visible. (A flower chart is used instead of a radar chart because radar charts distort perception — top dimensions look more important than bottom ones, and enclosed area doesn't scale linearly with the underlying values.) 90-day dimension trend (composite line thick, six dimension lines thin behind); full dimension breakdown with sub-metric score bars, weights, 30-day deltas; period comparison table (now / 30d / 90d / per dimension); **recommendations** ranked by estimated composite-score impact.
+**Full-page view.** A **flower chart** is the centerpiece — six petals, petal length proportional to dimension score, current snapshot overlaid on a faded 30-day-ago ghost so improvement direction is visible. (A flower chart is used instead of a radar chart because radar charts distort perception — top dimensions look more important than bottom ones, and enclosed area doesn't scale linearly with the underlying values.) 90-day dimension trend (composite line thick, six dimension lines thin behind); full dimension breakdown with sub-metric score bars, weights, 30-day deltas; period comparison table (now / 30d / 90d / per dimension); **recommendations** ranked by estimated composite-score impact.
 
 **Tooltips.** Community health score, dimension score, flower chart, score interpretation, estimated impact.
 

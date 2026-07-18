@@ -58,7 +58,7 @@ def test_is_greeting_positive(text):
         "   ",
         "history channel is cool",  # starts with "hi"-ish but not a greeting
         "gaming tonight?",  # not "gm"
-        "morningstar is my favourite weapon",  # "morning" prefix, but a sentence
+        "morningstar is my favorite weapon",  # "morning" prefix, but a sentence
         "does anyone know when the store opens",
         "himalayan salt lamps are great",  # "hi" prefix only
         "I said good morning earlier",  # greeting not at the start

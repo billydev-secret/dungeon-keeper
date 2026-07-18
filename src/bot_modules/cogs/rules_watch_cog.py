@@ -257,9 +257,9 @@ class RulesWatchCog(commands.Cog):
         accent = (
             await resolve_accent_color(self.ctx.db_path, guild)
             if guild is not None
-            else discord.Colour.blurple()
+            else discord.Color.blurple()
         )
-        embed = discord.Embed(title="Rules Watch — Stats", colour=accent)
+        embed = discord.Embed(title="Rules Watch — Stats", color=accent)
         embed.add_field(
             name="Events",
             value=f"Total: {stats['total']} | Labeled: {stats['labeled']} | "

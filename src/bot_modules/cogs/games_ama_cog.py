@@ -158,8 +158,8 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
 
         if self.mode == "unfiltered":
-            colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
-            embed = build_question_embed(self.question.value, colour=colour)
+            color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+            embed = build_question_embed(self.question.value, color=color)
             target_member = interaction.guild.get_member(self.target_id) if interaction.guild else None
             question_view = QuestionView(self.game_id, self.target_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
             question_msg = await self.channel.send(
@@ -240,12 +240,12 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted reply modal in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
-        colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
         answered_embed = build_answered_embed(
             self.question_text,
             self.reply.value,
             interaction.user.display_name,
-            colour=colour,
+            color=color,
         )
         await interaction.response.edit_message(embed=answered_embed, view=None)
 
@@ -254,7 +254,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
             asker = interaction.guild.get_member(self.asker_id) if interaction.guild else None
             channel = interaction.channel
             if asker and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
-                dm_embed = build_asker_dm_embed(channel.mention, colour=colour)
+                dm_embed = build_asker_dm_embed(channel.mention, color=color)
                 await asker.send(embed=dm_embed)
         except discord.Forbidden:
             pass  # DMs disabled
@@ -297,8 +297,8 @@ class ScreenedQuestionView(discord.ui.View):
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
-        colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
-        embed = build_question_embed(self.question_text, colour=colour)
+        color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
+        embed = build_question_embed(self.question_text, color=color)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
         question_msg = await self.channel.send(
@@ -428,7 +428,7 @@ class AMAView(discord.ui.View):
 
     async def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
         guild = self._game_msg.guild if self._game_msg else None
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
 
         def _name_resolver(uid: int) -> str:
             m = guild.get_member(uid) if guild else None
@@ -441,7 +441,7 @@ class AMAView(discord.ui.View):
                 panel=list(self.panel),
                 name_resolver=_name_resolver,
                 payload=payload,
-                colour=colour,
+                color=color,
             )
 
         return build_main_embed(
@@ -452,7 +452,7 @@ class AMAView(discord.ui.View):
             queue=list(self.queue),
             name_resolver=_name_resolver,
             payload=payload,
-            colour=colour,
+            color=color,
         )
 
     async def refresh_status(self, channel):
@@ -769,8 +769,8 @@ class AMAView(discord.ui.View):
         total_q = stats["total_q"]
         unique_askers = stats["unique_askers"]
 
-        colour = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
-        embed = build_recap_embed(self.mode, stats, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
+        embed = build_recap_embed(self.mode, stats, color=color)
 
         self.stop()
         disable_all_items(self)
@@ -1277,11 +1277,11 @@ class AMACog(commands.Cog):
         )
 
         launch_guild = getattr(channel, "guild", None)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, launch_guild) if launch_guild else None
+        color = await resolve_accent_color(self.bot.ctx.db_path, launch_guild) if launch_guild else None
         if game_format == AMA_FORMAT_PANEL:
-            embed = build_panel_embed(host_name, mode, [], str, colour=colour)
+            embed = build_panel_embed(host_name, mode, [], str, color=color)
         else:
-            embed = build_lobby_embed(host_name, mode, colour=colour)
+            embed = build_lobby_embed(host_name, mode, color=color)
 
         log.info("Game %s (ama) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         view = AMAView(game_id, host_id, mode, self.db, self.bot, game_format=game_format)

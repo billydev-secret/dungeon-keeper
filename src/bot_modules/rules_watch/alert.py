@@ -17,11 +17,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.rules_watch")
 
-# Embed colour per tier
-_COLOUR = {
-    "immediate": discord.Colour.red(),
-    "digest": discord.Colour.orange(),
-    "logged": discord.Colour.light_grey(),
+# Embed color per tier
+_COLOR = {
+    "immediate": discord.Color.red(),
+    "digest": discord.Color.orange(),
+    "logged": discord.Color.light_gray(),
 }
 
 
@@ -49,7 +49,7 @@ def _build_embed(
 
     embed = discord.Embed(
         title=f"🚨 Rules Watch — {rule_label} ({conf_pct} confidence)",
-        colour=_COLOUR.get(priority.tier, discord.Colour.greyple()),
+        color=_COLOR.get(priority.tier, discord.Color.greyple()),
     )
     embed.add_field(
         name="Message",
@@ -144,7 +144,7 @@ class LabelView(discord.ui.View):
 async def _disable_view(
     msg: discord.Message | None, view: discord.ui.View
 ) -> None:
-    """Grey out all buttons after labeling."""
+    """Gray out all buttons after labeling."""
     if msg is None:
         return
     disable_all_items(view)
@@ -207,7 +207,7 @@ def build_digest_embed(
     """Build a summary embed for /rules-watch digest."""
     embed = discord.Embed(
         title=f"📋 Rules Watch Digest — {len(events)} pending",
-        colour=discord.Colour.orange(),
+        color=discord.Color.orange(),
         description="Events below have not yet been labeled. Use the web dashboard or "
                     "`/rules-watch label` to review.",
     )

@@ -1,7 +1,7 @@
 """Pure rental-billing logic — no discord, no database (spec §6).
 
 The weekly billing state machine's decision function plus the perk-entitlement
-and colour-mode derivations. Everything is deterministic on its inputs so the
+and color-mode derivations. Everything is deterministic on its inputs so the
 billing matrix (state × due × grace-age × cancel × suspended) stays fully
 table-testable.
 
@@ -21,7 +21,7 @@ from enum import Enum
 WEEK_SECONDS = 7 * 86400
 GRACE_SECONDS = 36 * 3600
 
-# Perks whose entitlement grants a solid custom colour (the beneficiary's).
+# Perks whose entitlement grants a solid custom color (the beneficiary's).
 _SOLID_COLOR_PERKS = frozenset({"role_color", "gift_color"})
 
 
@@ -94,10 +94,10 @@ def entitled_perks(rentals: Iterable[Mapping[str, object] | object]) -> set[str]
 
 
 def effective_color_mode(perks: set[str]) -> str:
-    """Resolve the member's colour mode from their entitled perks (spec §6).
+    """Resolve the member's color mode from their entitled perks (spec §6).
 
     Gradient supersedes solid: 'gradient' when role_gradient is entitled,
-    else 'solid' when a solid-colour perk (role_color or gift_color
+    else 'solid' when a solid-color perk (role_color or gift_color
     beneficiary) is entitled, else 'none'.
     """
     if "role_gradient" in perks:

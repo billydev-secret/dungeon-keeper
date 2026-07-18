@@ -643,11 +643,11 @@ async def set_member_dm_mode(
 # ---------------------------------------------------------------------------
 
 def build_panel_embed(
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
     role_names: Optional[dict[str, str]] = None,
 ) -> discord.Embed:
-    if colour is None:
-        colour = discord.Color.blurple()
+    if color is None:
+        color = discord.Color.blurple()
     names = {**DM_MODE_ROLE_NAMES, **(role_names or {})}
     embed = discord.Embed(
         title="📬 DM Request System",
@@ -655,7 +655,7 @@ def build_panel_embed(
             "Want to reach out to someone privately? Use the button below to send them a request first.\n\n"
             "Requests are delivered straight to their DMs — nothing gets posted publicly here."
         ),
-        color=colour,
+        color=color,
     )
     embed.add_field(
         name="👤 DM Status Roles",
@@ -703,22 +703,22 @@ async def post_audit_event(
     guild: discord.Guild,
     audit_channel_id: Optional[int],
     message: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> None:
     if not audit_channel_id:
         return
     channel = guild.get_channel(audit_channel_id)
     if not isinstance(channel, discord.TextChannel):
         return
-    if colour is None:
-        colour = discord.Color.blurple()
+    if color is None:
+        color = discord.Color.blurple()
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S UTC"
     )
     embed = discord.Embed(
         title="📜 DM Permission Audit",
         description=message,
-        color=colour,
+        color=color,
     )
     embed.set_footer(text=timestamp)
     try:

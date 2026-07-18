@@ -400,7 +400,7 @@ def test_build_round_embed_has_footer_with_round_number():
 def test_build_round_embed_active_vs_closed_color_differs():
     active = build_round_embed("x", round_num=1, vote_count=0, closed=False)
     closed = build_round_embed("x", round_num=1, vote_count=0, closed=True)
-    assert active.colour != closed.colour
+    assert active.color != closed.color
 
 
 # ── build_closed_embed ───────────────────────────────────────────────
@@ -415,7 +415,7 @@ def test_build_closed_embed_title_says_closed():
 def test_build_closed_embed_color_differs_from_round_over():
     closed = build_closed_embed("x", round_num=1, vote_count=0)
     round_over = build_round_embed("x", round_num=1, vote_count=0, closed=True)
-    assert closed.colour != round_over.colour
+    assert closed.color != round_over.color
 
 
 def test_build_closed_embed_preserves_prompt_and_round():

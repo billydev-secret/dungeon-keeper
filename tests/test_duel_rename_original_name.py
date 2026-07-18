@@ -129,7 +129,7 @@ def test_falls_back_to_live_name_without_original(module, cls, make_game):
 
 class _FlippingLoser:
     """A member whose ``display_name`` becomes the new nick once ``edit`` runs —
-    exactly the live-Discord behaviour that made the render read the new name
+    exactly the live-Discord behavior that made the render read the new name
     on both sides. If the base handler captured the name *after* the edit, the
     spy below would see the new nick instead of the old.
     """

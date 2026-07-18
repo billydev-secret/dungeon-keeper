@@ -29,7 +29,7 @@ All member commands live under the `/voice` group. Owner commands act on **the c
 
 `/voice-admin` is a separate top-level group with `default_permissions=administrator`; `post-panel` additionally re-checks admin at runtime (Discord Administrator permission or the bot's configured admin roles). It is the group's only command — all other admin configuration lives in the web dashboard (see Configuration).
 
-## Behaviour
+## Behavior
 
 ### The Hub
 
@@ -73,7 +73,7 @@ Any change to their active channel writes through to the profile automatically (
 
 ### Trust list and blocklist
 
-Inviting and kicking each come in two flavours:
+Inviting and kicking each come in two flavors:
 
 - **One-off invite / one-off kick** — applies only to the current channel. Default.
 - **Trusted invite / permanent block** — applies to the current channel **and** writes to the member's saved trust list / blocklist, so every future channel they own auto-applies it.
@@ -123,7 +123,7 @@ Discord limits each channel to 2 name edits per 10 minutes. The bot tracks a two
 
 ### Saveable-fields whitelist
 
-The admin-controlled `voice_master_saveable_fields` config (see Configuration) is a comma-separated list of field names. A field's auto-save behaviour only fires if its name is present in the list. Removing a token turns off auto-save for that one field while leaving the others on. There's also a global kill switch (`voice_master_disable_saves`) that disables every auto-save (and makes every member's hub-join apply pure defaults). With saves disabled or the relevant field removed, `trusted add` / `blocked add` refuse with "Saving the trust list/blocklist is disabled by an admin on this server."
+The admin-controlled `voice_master_saveable_fields` config (see Configuration) is a comma-separated list of field names. A field's auto-save behavior only fires if its name is present in the list. Removing a token turns off auto-save for that one field while leaving the others on. There's also a global kill switch (`voice_master_disable_saves`) that disables every auto-save (and makes every member's hub-join apply pure defaults). With saves disabled or the relevant field removed, `trusted add` / `blocked add` refuse with "Saving the trust list/blocklist is disabled by an admin on this server."
 
 ### Category fallback
 

@@ -83,7 +83,7 @@ def test_opening_none_for_opaque_frame(tmp_path):
 
 
 def test_opening_none_when_center_covered(tmp_path):
-    # Transparent only in the corners; the card centre is opaque → no opening.
+    # Transparent only in the corners; the card center is opaque → no opening.
     im = Image.new("RGBA", (W, H), (10, 20, 30, 255))
     d = ImageDraw.Draw(im)
     d.rectangle([0, 0, 60, 60], fill=(0, 0, 0, 0))
@@ -117,7 +117,7 @@ def test_opening_no_pfp_when_left_too_narrow(tmp_path):
     style = _save_border(tmp_path, "narrow-oval", im)
     op = analyze_border_opening(style, W, H)
     assert op is not None
-    assert op.pfp is None  # degrades to centred layout
+    assert op.pfp is None  # degrades to centered layout
 
 
 def test_opening_cached_by_path_mtime(tmp_path):
@@ -150,7 +150,7 @@ def test_render_mask_border_center_visible_and_deterministic(tmp_path):
 
     out = Image.open(io.BytesIO(png1)).convert("RGBA")
     assert out.size == (W, H)
-    # Centre is opaque content, not the blue frame colour and not transparent.
+    # Center is opaque content, not the blue frame color and not transparent.
     px = out.getpixel((W // 2, H // 2))
     assert px[3] == 255
     assert not (px[0] < 80 and 90 < px[1] < 160 and 170 < px[2] < 230)

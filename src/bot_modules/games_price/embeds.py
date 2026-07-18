@@ -126,9 +126,9 @@ def build_reveal_embed(
     lines: list[str] = []
     for name, amount in ladder:
         label = price_label(amount)
-        # price_label embeds the flavour text already; for the ladder we
+        # price_label embeds the flavor text already; for the ladder we
         # want a fixed-width left column, so format the price without the
-        # flavour and tack the flavour suffix on after the name.
+        # flavor and tack the flavor suffix on after the name.
         base_price = format_price(amount)
         suffix = label[len(base_price):]
         lines.append(

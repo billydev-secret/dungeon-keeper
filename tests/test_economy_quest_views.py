@@ -58,7 +58,7 @@ def ctx(db):
 def _patch_accent():
     with patch(
         "bot_modules.economy.quest_views.resolve_accent_color",
-        new=AsyncMock(return_value=discord.Colour(0x123456)),
+        new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
         yield
 
@@ -293,7 +293,7 @@ async def test_approve_pays_dms_and_edits_card(ctx, db):
     assert state["resolver_id"] == 999
     card.edit.assert_awaited_once()
     edited = card.edit.await_args.kwargs["embed"]
-    assert edited.colour == discord.Colour.green()
+    assert edited.color == discord.Color.green()
     assert card.edit.await_args.kwargs["view"] is None
     notify.assert_awaited_once()
     interaction.response.send_message.assert_awaited()  # ephemeral ack
@@ -348,7 +348,7 @@ async def test_deny_modal_stores_reason_dms_and_allows_reclaim(ctx, db):
     assert row["state"] == "denied"
     assert row["deny_reason"] == "not enough proof"
     card.edit.assert_awaited_once()
-    assert card.edit.await_args.kwargs["embed"].colour == discord.Colour.red()
+    assert card.edit.await_args.kwargs["embed"].color == discord.Color.red()
     notify.assert_awaited_once()
     assert notify.await_args is not None
     dm_embed = notify.await_args.kwargs["embed"]

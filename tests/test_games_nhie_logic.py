@@ -404,7 +404,7 @@ def test_build_closed_embed_title_says_closed():
 
 
 def test_build_closed_embed_uses_recap_color():
-    """Closed flips to the recap colour (dark gold), distinct from the
+    """Closed flips to the recap color (dark gold), distinct from the
     round-over green."""
     closed = build_closed_embed(
         statement="x", guilty=[], innocent=[], round_num=1
@@ -412,7 +412,7 @@ def test_build_closed_embed_uses_recap_color():
     round_over = build_round_embed(
         statement="x", guilty=[], innocent=[], round_num=1, closed=True
     )
-    assert closed.colour != round_over.colour
+    assert closed.color != round_over.color
 
 
 # ── build_recap_embed ────────────────────────────────────────────────

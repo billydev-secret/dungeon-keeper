@@ -46,7 +46,7 @@ MOD_JAIL    = 0xE74C3C   # bright red — locked-in enforcement
 MOD_TICKET  = 0x3498DB   # blue — open question / conversation
 MOD_POLICY  = 0x9B59B6   # purple — formal policy
 MOD_SUCCESS = 0x2ECC71   # green — resolved / approved
-MOD_INFO    = 0x95A5A6   # grey — informational
+MOD_INFO    = 0x95A5A6   # gray — informational
 MOD_WARNING = 0xF1C40F   # yellow — pending warning
 
 

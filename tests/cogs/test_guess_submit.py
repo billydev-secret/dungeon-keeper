@@ -22,7 +22,7 @@ def _stub_accent_color(monkeypatch):
     mocked guilds here can't satisfy — stub it at the use-site namespace."""
     monkeypatch.setattr(
         "bot_modules.cogs.guess_cog.resolve_accent_color",
-        AsyncMock(return_value=discord.Colour.default()),
+        AsyncMock(return_value=discord.Color.default()),
     )
 
 
@@ -165,7 +165,7 @@ async def test_submit_rejects_small_dimensions():
 
 @pytest.mark.asyncio
 async def test_submit_shows_editor_when_no_pipeline_candidates():
-    """No detections → still show the crop editor (centre-crop default, Auto disabled)."""
+    """No detections → still show the crop editor (center-crop default, Auto disabled)."""
     import io as _io
     from PIL import Image
     from bot_modules.services.guess_models import PipelineResult

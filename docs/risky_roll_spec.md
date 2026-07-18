@@ -16,7 +16,7 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 | **Reply** button | Persistent | Allowed replier | Open the reply modal; first valid reply locks the question |
 | Risky panel | Web (dashboard) | Admin | Configure the ping role and the min-game-time floor |
 
-## Behaviour
+## Behavior
 
 ### Starting a round
 

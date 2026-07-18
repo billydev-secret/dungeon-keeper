@@ -15,7 +15,7 @@ A leveling system for Discord activity. Four independent sources push positive X
 
 The dashboard exposes the leaderboard and a time-to-level histogram (any level 2–100), plus an admin config panel for the XP coefficients and the role/channel ids. See [[reporting-spec]] for the dashboard wrapper.
 
-## Behaviour
+## Behavior
 
 ### Sources
 

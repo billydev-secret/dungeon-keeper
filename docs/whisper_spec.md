@@ -19,7 +19,7 @@ An anonymous-message-with-guessing game. Members opt in to a per-guild role, the
 
 There is no one-shot `/whisper <target> <message>` — send is always picker + compose modal so the bot can pre-validate role membership.
 
-## Behaviour
+## Behavior
 
 ### Persistent launcher
 A single launcher message sits at the bottom of the feed channel. Any non-bot message in that channel bumps it: the previous launcher is deleted and a fresh one is posted. Concurrent bumps coalesce so a busy channel produces at most one delete-and-repost cycle at a time. Launcher buttons keep working across bot restarts.

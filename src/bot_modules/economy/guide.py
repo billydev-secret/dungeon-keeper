@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def build_guide_embed(
-    settings: EconSettings, *, colour: discord.Colour | None = None
+    settings: EconSettings, *, color: discord.Color | None = None
 ) -> discord.Embed:
     """The member-facing how-to embed, templated on the guild's branding."""
     emoji = settings.currency_emoji
@@ -32,7 +32,7 @@ def build_guide_embed(
             "role perks and gifts. Check your balance and recent activity any "
             "time with `/bank wallet` (only you see it)."
         ),
-        colour=colour,
+        color=color,
     )
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
@@ -78,11 +78,11 @@ def build_guide_embed(
 
     spend_lines = [
         (
-            "`/bank shop` — rent perks for your own personal role (colour, "
+            "`/bank shop` — rent perks for your own personal role (color, "
             "name, gradient, icon), then style it from the shop's customise "
             "buttons. Prices and renewal terms are shown in the shop."
         ),
-        "`/bank gift` — treat a friend to a custom role colour, on your tab.",
+        "`/bank gift` — treat a friend to a custom role color, on your tab.",
     ]
     if settings.transfers_enabled:
         spend_lines.append(

@@ -260,7 +260,7 @@ async def post_howto(
     hub_id = await run_query(_load_hub)
     hub_mention = f"<#{hub_id}>" if hub_id else None
     accent = await resolve_accent_color(ctx.db_path, guild)
-    embed = build_howto_embed(hub_mention=hub_mention, colour=accent)
+    embed = build_howto_embed(hub_mention=hub_mention, color=accent)
     try:
         msg = await channel.send(embed=embed)
     except (discord.Forbidden, discord.HTTPException) as e:

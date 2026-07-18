@@ -84,9 +84,9 @@ game-win 20), `qa_daily_cap` (default **4** paid verdicts/day), `qa_enabled`.
 
 Precedence: any un-voided **fail** ⇒ `failed` (red) · else any **blocked** ⇒
 `blocked` (amber) · else any **pass** ⇒ `passed` (green, stamped
-`verified_by/at` from the first passer) · else `pending` (grey). `archived` is
+`verified_by/at` from the first passer) · else `pending` (gray). `archived` is
 admin-only (dashboard) and terminal. Red/green here is semantic — the
-`resolve_accent_color` convention explicitly keeps status colours.
+`resolve_accent_color` convention explicitly keeps status colors.
 
 ## Economy integration
 
@@ -110,7 +110,7 @@ admin-only (dashboard) and terminal. Red/green here is semantic — the
 **Card** — one embed per test entry, posted by the post-commit hook:
 title = entry heading; description = the authored checklist body (rendered as
 plain `•` lines — the boxes are now the buttons' job); footer = short sha +
-subject; colour = status. Fields show the verdict tally and
+subject; color = status. Fields show the verdict tally and
 "✅ Verified by @name · <t:…:R>" once passed.
 
 **Buttons** — three `discord.ui.DynamicItem[Button]` classes (the
@@ -127,7 +127,7 @@ items dispatch purely on `custom_id`. Handler flow:
    fresh insert only, if under the daily cap; commit.
 4. Fail/blocked notes post into the card's thread (created lazily on first
    note) so failure detail lives with the test.
-5. Re-render the embed (status colour, tally, verified-by) and confirm
+5. Re-render the embed (status color, tally, verified-by) and confirm
    ephemerally ("Recorded — +15 🪙" / "Recorded — daily cap reached, no pay").
 
 **Poster/hook** (`scripts/post_testing_docs.py`): for each new queue entry the
@@ -160,7 +160,7 @@ flag of its own. Backend `require_perms({"admin"})`; UI copied from
   via the bot? No — the route edits the DB and pokes the card through the
   existing bot/web shared-DB seam: the cog re-renders on next interaction,
   and the route also PATCHes the message via REST so the card updates
-  immediately). Archive a test (buttons removed, colour dimmed).
+  immediately). Archive a test (buttons removed, color dimmed).
 - **Config**: role picker, channel picker, reward amount, daily cap, enable
   toggle (`config-helpers.js` pickers; unenforced settings are forbidden by
   the working agreement, so every knob here is read by the cog/service).

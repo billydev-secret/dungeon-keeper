@@ -244,10 +244,10 @@ def test_build_closed_embed_title_says_closed():
     assert "ROUND OVER" not in embed.title  # CLOSED overrides the ROUND-OVER suffix
 
 
-def test_build_closed_embed_uses_recap_colour():
+def test_build_closed_embed_uses_recap_color():
     embed = build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1)
-    assert embed.colour is not None
-    assert embed.colour.value == PHASE_RECAP
+    assert embed.color is not None
+    assert embed.color.value == PHASE_RECAP
 
 
 def test_build_closed_embed_preserves_vote_counts():

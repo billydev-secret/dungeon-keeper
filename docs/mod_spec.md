@@ -9,7 +9,7 @@ General moderation and help commands (`ModCog`, `src/bot_modules/cogs/mod_cog.py
 | `/help` | Slash | None | Browse all commands, organized by category, in an ephemeral embed |
 | `/purge count:<1–1000> after:<HH:MM>` | Slash | Moderate Members (default perms) **and** `ctx.is_mod` | Bulk-delete messages in the current channel by count and/or time |
 
-## Behaviour
+## Behavior
 
 ### `/help`
 Ephemeral embed with a section dropdown. Pages are a **hand-curated** list (not auto-generated), shown conditionally by the invoker's permissions:
@@ -22,7 +22,7 @@ Ephemeral embed with a section dropdown. Pages are a **hand-curated** list (not 
 
 A **Browse by Module** button opens a second, auto-generated pager: one page per loaded cog, listing its registered app commands (groups flattened to `/group sub [subsub]`), sorted alphabetically. Bodies over 4000 chars are truncated with an ellipsis.
 
-Embeds use the guild accent colour (`resolve_accent_color`) when invoked in a guild; per-section decorative colours are the DM fallback. Both views time out after 120 s (controls disabled); only the invoker can interact — others' clicks are silently ignored.
+Embeds use the guild accent color (`resolve_accent_color`) when invoked in a guild; per-section decorative colors are the DM fallback. Both views time out after 120 s (controls disabled); only the invoker can interact — others' clicks are silently ignored.
 
 Because the curated pages are hand-maintained, they can drift from the real command set; the module browser is always accurate.
 

@@ -1,6 +1,6 @@
 import { api } from "../api.js";
 
-/* ── colour helpers ──────────────────────────────────────────────────── */
+/* ── color helpers ──────────────────────────────────────────────────── */
 
 const STOPS = [
   [0.00, [47, 49, 54]],   // #2f3136  (dark bg)
@@ -178,7 +178,7 @@ export function mount(container, initialParams) {
       }
     }
 
-    // colour bar
+    // color bar
     const barX = labelW + gridPx + BAR_GAP;
     const barH = gridPx;
     for (let py = 0; py < barH; py++) {

@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 CARD_FILENAME = "photo.png"
 
 # Header drawn on the card. Plain text — the card header is rendered by PIL
-# with Inter, which has no colour-emoji glyphs (the 📸 lives in GAME_ICONS and
+# with Inter, which has no color-emoji glyphs (the 📸 lives in GAME_ICONS and
 # Discord message text only).
 LABEL = "PHOTO CHALLENGE"
 

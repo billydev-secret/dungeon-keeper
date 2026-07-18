@@ -24,7 +24,7 @@ from bot_modules.games_help.logic import (
 )
 
 
-def build_help_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
+def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
     """Build the ``/games-help`` embed.
 
     Iterates ``GAME_ICONS`` (the canonical game registry) so any game
@@ -34,12 +34,12 @@ def build_help_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
     than crashing — but the alignment test in
     ``tests/test_games_help_logic.py`` ensures they're always present.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title="🌸 Community Games",
         description="All available game modes. Start one with `/games play <game>` (or the command shown).",
-        color=colour,
+        color=color,
     )
 
     for key in GAME_ICONS:
@@ -63,17 +63,17 @@ def build_help_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
     return embed
 
 
-def build_support_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
+def build_support_embed(color: "discord.Color | None" = None) -> discord.Embed:
     """Build the ``/games-support`` invite embed."""
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title="🛟 Support Server",
         description=(
             f"Need help, want to report a bug, or share feedback?\n"
             f"Join us here: {SUPPORT_INVITE_URL}"
         ),
-        color=colour,
+        color=color,
     )
     embed.set_footer(text="Community Games • /games support")
     return embed

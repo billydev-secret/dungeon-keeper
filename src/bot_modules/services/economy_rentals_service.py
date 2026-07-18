@@ -254,7 +254,7 @@ def cancel_all_for_member(
     """Immediately cancel every live rental touching a member (leave/ban).
 
     Cancels rentals the member OWNS *and* rentals where they are the
-    beneficiary (a gifted colour lapses when the recipient leaves; the giver's
+    beneficiary (a gifted color lapses when the recipient leaves; the giver's
     gift rental is cancelled when the giver leaves). Returns the affected rows
     (post-update) so the caller can re-project / clean up Discord roles.
     """
@@ -484,7 +484,7 @@ def set_rental_suspended(
 def entitlements(conn: sqlite3.Connection, guild_id: int, user_id: int) -> set[str]:
     """Perks the member is currently entitled to AS BENEFICIARY.
 
-    Beneficiary-based so a gifted colour counts for the friend, not the payer.
+    Beneficiary-based so a gifted color counts for the friend, not the payer.
     Live states (active|grace) grant the perk — see ``rentals.entitled_perks``.
     """
     rows = conn.execute(

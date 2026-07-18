@@ -24,7 +24,7 @@ There is no `/guess optout` and no `/guess stats` command — neither exists in 
 
 Bot perms required: **Send Messages**, **Embed Links**, **Attach Files**, **Read Message History** in the guess channel; **Manage Roles** to grant the consent role on `/guess optin`. The bot never removes the role itself — see "Consent and opt-in" below.
 
-## Behaviour
+## Behavior
 
 ### Consent and opt-in
 

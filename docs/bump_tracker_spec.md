@@ -11,7 +11,7 @@ Reminds a role when server-listing-site "bump" cooldowns (Disboard-style) expire
 
 The `name` argument autocompletes against the guild's configured sites (case-insensitive substring match, max 25 choices).
 
-## Behaviour
+## Behavior
 
 ### Background loop
 A startup task ticks every 60 seconds. For each guild with the feature enabled and a channel configured:
@@ -20,7 +20,7 @@ A startup task ticks every 60 seconds. For each guild with the feature enabled a
 - The widget embed is refreshed after a ping, and otherwise at most every 5 minutes.
 
 ### Widget
-An embed titled "Bump Tracker" listing each site as either `✅ Ready to bump!` or `⏰ Xh Ym remaining`, with the footer "Use /bump log <site> after bumping to reset the timer." Colour follows the guild accent (blurple fallback). When nothing new was posted to the channel the widget is edited in place (avoids the unread indicator); after a ping or auto-detected bump the old widget is deleted and re-sent so it stays at the bottom of the channel. The new message ID is persisted.
+An embed titled "Bump Tracker" listing each site as either `✅ Ready to bump!` or `⏰ Xh Ym remaining`, with the footer "Use /bump log <site> after bumping to reset the timer." Color follows the guild accent (blurple fallback). When nothing new was posted to the channel the widget is edited in place (avoids the unread indicator); after a ping or auto-detected bump the old widget is deleted and re-sent so it stays at the bottom of the channel. The new message ID is persisted.
 
 A site with no logged bump counts as ready.
 

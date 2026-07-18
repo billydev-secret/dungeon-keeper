@@ -415,7 +415,7 @@ render time) in the wallet ledger and the dashboard bank-manager ledger.
 
 ## 6. Sinks (The Perk Shop)
 
-**Shipped (Stage 3):** the role-customization perks (solid colour, name, icon,
+**Shipped (Stage 3):** the role-customization perks (solid color, name, icon,
 gradient) and **gift-a-color** are live — browsed, rented **and customised** in
 `/bank shop`'s ephemeral panel (§7). Private rooms stay **Stage 6** and the
 spotlight slot stays **v2** — both still design-only below.
@@ -456,12 +456,12 @@ member always keeps the icon they paid for. Because the projector diffs the role
 *switching* from one icon to another forces the re-upload.
 
 **Personal roles:** one per member, auto-created **positioned above the booster
-cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented colour wins the
-display-colour contest — the position is set **on create only** (a reconcile never
+cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented color wins the
+display-color contest — the position is set **on create only** (a reconcile never
 re-hoists a manually moved role). The projector is idempotent: it reconciles the role
-to the member's current entitlements (name / colour / gradient / icon) and downgrades
+to the member's current entitlements (name / color / gradient / icon) and downgrades
 cleanly when a component lapses. Guards: a **ΔE ≥ 25 collision check against staff role
-colours** (a too-close colour is refused, the message naming the staff role it clashes
+colors** (a too-close color is refused, the message naming the staff role it clashes
 with), and role **names run through the Voice Master name blocklist** (the shared
 matcher/table). Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
 (`ENHANCED_ROLE_COLORS`) in `guild.features`. The role is deleted when the member's last
@@ -494,11 +494,11 @@ the member owns and gift rentals where they are the beneficiary.
   - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — one ephemeral
     panel that both browses and configures: unrented rows carry a **Rent** button,
     rented rows a green **customise** button opening the matching modal (name /
-    colour hex / gradient hexes / server-emoji icon), with icon/gradient rows
+    color hex / gradient hexes / server-emoji icon), with icon/gradient rows
     reflecting the server's role features and rented rows marked ✅. A fresh rental's
     confirmation carries the same customise button, and a member holding only a
-    *gifted* colour gets a "Set gifted colour" button. **`/bank gift @member
-    <perk>`** — pay to rent a friend a solid colour (eager role creation on the
+    *gifted* color gets a "Set gifted color" button. **`/bank gift @member
+    <perk>`** — pay to rent a friend a solid color (eager role creation on the
     recipient).
   - Each modal setter applies the matching rented component to the member's personal
     role (§6), re-checking entitlements on submit, subject to the blocklist / ΔE /

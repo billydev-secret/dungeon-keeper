@@ -1215,7 +1215,7 @@ class _PanelSelect(
     """One grouped dropdown of channel actions.
 
     Each option's value is an action key; selecting it dispatches to the
-    same handler the buttons used (``_ON_CLICKS``), so behaviour is identical
+    same handler the buttons used (``_ON_CLICKS``), so behavior is identical
     — only the presentation changed. The menu is reset to its placeholder
     afterwards so it always reads as a fresh prompt.
     """
@@ -1771,7 +1771,7 @@ class _ClaimButton(
 async def post_claim_prompt(
     channel: discord.VoiceChannel,
     *,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Message | None:
     """Post the claim prompt + button into a channel's side chat.
 
@@ -1783,7 +1783,7 @@ async def post_claim_prompt(
     try:
         return await channel.send(
             embed=build_claim_prompt_embed(
-                channel_name=channel.name, colour=colour
+                channel_name=channel.name, color=color
             ),
             view=view,
         )
@@ -1802,10 +1802,10 @@ PANEL_DYNAMIC_ITEM_CLASSES = (_PanelSelect, _ClaimButton)
 
 
 def build_panel_embed(
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Thin wrapper around the pure embed builder; kept for cog import paths."""
-    return _build_panel_embed(colour=colour)
+    return _build_panel_embed(color=color)
 
 
 def build_panel_view() -> discord.ui.View:
@@ -1952,7 +1952,7 @@ async def post_knock_request(
         owner_mention=owner.mention,
         channel_name=channel.name,
         guild_name=channel.guild.name,
-        colour=accent,
+        color=accent,
     )
 
     def _make_view() -> _KnockResponseView:
@@ -1992,7 +1992,7 @@ async def post_panel(
 ) -> discord.Message:
     """Post (or repost) the persistent panel into the given text channel."""
     accent = await resolve_accent_color(ctx.db_path, channel.guild)
-    embed = build_panel_embed(colour=accent)
+    embed = build_panel_embed(color=accent)
     view = build_panel_view()
     msg = await channel.send(embed=embed, view=view)
     _panel_guild_id = channel.guild.id
@@ -2012,17 +2012,17 @@ async def post_panel(
 
 
 def build_inline_panel_embed(
-    owner: discord.Member, colour: "discord.Colour | None" = None
+    owner: discord.Member, color: "discord.Color | None" = None
 ) -> discord.Embed:
     """Owner-greeting embed for the panel posted into the new channel's chat."""
-    return _build_inline_panel_embed(owner_mention=owner.mention, colour=colour)
+    return _build_inline_panel_embed(owner_mention=owner.mention, color=color)
 
 
 async def post_inline_panel(
     channel: discord.VoiceChannel,
     owner: discord.Member,
     *,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Message | None:
     """Post the control panel into a voice channel's text chat.
 
@@ -2031,7 +2031,7 @@ async def post_inline_panel(
     central control channel. Returns ``None`` if the bot lacks permission to
     post; caller should treat that as non-fatal.
     """
-    embed = build_inline_panel_embed(owner, colour=colour)
+    embed = build_inline_panel_embed(owner, color=color)
     view = build_panel_view()
     try:
         return await channel.send(embed=embed, view=view)

@@ -12,7 +12,7 @@ Admin tool to hide a channel from everyone and later restore it exactly as it wa
 
 The command group is guild-only with `default_permissions=Administrator`, and every command also passes the bot's own admin check. All require the **bot** to have Manage Channels and Manage Roles. Hideable channel types: text, voice, stage, forum — categories are excluded (hiding one would orphan its children). All responses are ephemeral.
 
-## Behaviour
+## Behavior
 
 ### `/hidden hide`
 Rejects a channel that already has an active hold ("already hidden"). Otherwise it records the channel's parent category id (NULL if top-level), position, and full overwrite map, then finds or creates the **Hidden Channels** category (created with `@everyone` denied View Channel, bot allowed) and edits the channel into it with overwrites replaced by `{@everyone: deny view, bot: allow view}`. The snapshot is persisted only after the Discord edit succeeds. Audit-log reason names the invoking admin.

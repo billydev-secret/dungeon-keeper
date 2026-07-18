@@ -341,7 +341,7 @@ export function mount(container, initialParams) {
   // ── Community detection (weighted label propagation) ──────────────────
 
   let communityOf = {};   // node index → community id
-  let commCentres = {};   // community id → {x, y}
+  let commCenters = {};   // community id → {x, y}
 
   function detectCommunities() {
     // Build weighted adjacency by node index
@@ -433,7 +433,7 @@ export function mount(container, initialParams) {
       }
       temp *= 0.95;
     }
-    // Normalize into the cluster radius and offset to centre
+    // Normalize into the cluster radius and offset to center
     let maxR = 0;
     const mcx = indices.reduce((s, i) => s + pos[i].x, 0) / n;
     const mcy = indices.reduce((s, i) => s + pos[i].y, 0) / n;
@@ -464,19 +464,19 @@ export function mount(container, initialParams) {
     const sorted = Object.keys(groups).map(Number).sort((a, b) => groups[b].length - groups[a].length);
     const nComms = sorted.length;
 
-    // Place community centres on a circle
-    commCentres = {};
+    // Place community centers on a circle
+    commCenters = {};
     if (nComms === 1) {
-      commCentres[sorted[0]] = { x: cx, y: cy };
+      commCenters[sorted[0]] = { x: cx, y: cy };
     } else if (nComms === 2) {
       const off = Math.min(W, H) * 0.30 * spreadMult;
-      commCentres[sorted[0]] = { x: cx - off, y: cy };
-      commCentres[sorted[1]] = { x: cx + off, y: cy };
+      commCenters[sorted[0]] = { x: cx - off, y: cy };
+      commCenters[sorted[1]] = { x: cx + off, y: cy };
     } else {
       const r = Math.min(W, H) * 0.32 * spreadMult;
       sorted.forEach((c, i) => {
         const angle = (i / nComms) * Math.PI * 2 - Math.PI / 2;
-        commCentres[c] = { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r };
+        commCenters[c] = { x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r };
       });
     }
 
@@ -487,7 +487,7 @@ export function mount(container, initialParams) {
       const commR = Math.max(40, Math.min(W, H) * 0.28 * Math.sqrt(frac) * spreadMult);
       const idxSet = new Set(groups[c]);
       const subEdges = edges.filter((e) => idxSet.has(e.source) && idxSet.has(e.target));
-      miniForceLayout(groups[c], subEdges, commCentres[c].x, commCentres[c].y, commR);
+      miniForceLayout(groups[c], subEdges, commCenters[c].x, commCenters[c].y, commR);
     }
   }
 
@@ -498,7 +498,7 @@ export function mount(container, initialParams) {
   const DAMPING   = 0.85;
   const GRAVITY   = 0.02;
 
-  const COMM_GRAVITY = 0.08;  // pull toward community centre
+  const COMM_GRAVITY = 0.08;  // pull toward community center
 
   function tick() {
     if (currentLayout !== "force" && currentLayout !== "community") return;
@@ -544,9 +544,9 @@ export function mount(container, initialParams) {
         fy += (dy / dist) * force;
       }
 
-      // Gravity: global center for force, community centre for community
+      // Gravity: global center for force, community center for community
       if (isCommunity) {
-        const cc = commCentres[communityOf[i]];
+        const cc = commCenters[communityOf[i]];
         if (cc) {
           fx += (cc.x - ni.x) * COMM_GRAVITY;
           fy += (cc.y - ni.y) * COMM_GRAVITY;

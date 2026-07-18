@@ -40,10 +40,10 @@ def _get_cog_commands(cog: commands.Cog) -> list[tuple[str, str]]:
 
 
 def _build_cog_pages(
-    bot: "Bot", colour: "discord.Colour | None" = None
+    bot: "Bot", color: "discord.Color | None" = None
 ) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
-    page_colour = colour if colour is not None else discord.Color.greyple()
+    page_color = color if color is not None else discord.Color.greyple()
     for cog in sorted(bot.cogs.values(), key=lambda c: c.qualified_name.lower()):
         cmds = _get_cog_commands(cog)
         if not cmds:
@@ -56,7 +56,7 @@ def _build_cog_pages(
             discord.Embed(
                 title=f"📦  {display}",
                 description=body,
-                color=page_colour,
+                color=page_color,
             )
         )
     return pages
@@ -87,7 +87,7 @@ def _page(name: str, body: str) -> discord.Embed:
 def _build_help_pages(
     ctx: AppContext,
     interaction: discord.Interaction,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
 
@@ -292,12 +292,12 @@ def _build_help_pages(
         )
     )
 
-    # Collapse the decorative per-section colours to the shared guild accent
+    # Collapse the decorative per-section colors to the shared guild accent
     # when one is available; the per-section palette in ``_page`` stays as the
     # fallback for contexts without a resolvable guild (e.g. DMs).
-    if colour is not None:
+    if color is not None:
         for page in pages:
-            page.colour = colour
+            page.color = color
 
     return pages
 
@@ -376,12 +376,12 @@ class HelpView(discord.ui.View):
         pages: list[discord.Embed],
         invoker_id: int,
         bot: "Bot",
-        colour: "discord.Colour | None" = None,
+        color: "discord.Color | None" = None,
     ):
         super().__init__(timeout=120)
         self.bot = bot
         self.invoker_id = invoker_id
-        self._accent = colour
+        self._accent = color
         self.select = HelpSelect(pages, invoker_id)
         self.add_item(self.select)
 
@@ -422,7 +422,7 @@ class ModCog(commands.Cog):
             accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
         pages = _build_help_pages(self.ctx, interaction, accent)
         view = HelpView(
-            pages, invoker_id=interaction.user.id, bot=self.bot, colour=accent
+            pages, invoker_id=interaction.user.id, bot=self.bot, color=accent
         )
         await interaction.response.send_message(
             embed=view.current_embed(), view=view, ephemeral=True

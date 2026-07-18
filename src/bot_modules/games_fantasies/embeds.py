@@ -15,33 +15,33 @@ from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games.utils.live_bar import build_bar
 from bot_modules.games_fantasies.logic import compute_recap_summary
 
-# Recap embed uses a neutral grey (matches the cog's old hard-coded
+# Recap embed uses a neutral gray (matches the cog's old hard-coded
 # ``color=0x808080``); kept here so tests don't reach into the cog.
 RECAP_COLOR = 0x808080
 
 
-def build_lobby_embed(host_name: str, colour: "discord.Colour | None" = None) -> discord.Embed:
+def build_lobby_embed(host_name: str, color: "discord.Color | None" = None) -> discord.Embed:
     """Build the lobby embed shown when ``/fantasies`` is invoked."""
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['fantasies']} FANTASIES & DEALBREAKERS",
         description="Submit anonymously each round, then vote!",
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.set_footer(text=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers")
     return embed
 
 
-def build_round_submit_embed(round_num: int, colour: "discord.Colour | None" = None) -> discord.Embed:
+def build_round_submit_embed(round_num: int, color: "discord.Color | None" = None) -> discord.Embed:
     """Build the embed shown above the submit-entry button each round."""
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     return discord.Embed(
         title=f"{GAME_ICONS['fantasies']} ROUND {round_num}",
         description="Submit your fantasy or dealbreaker anonymously!",
-        color=colour,
+        color=color,
     )
 
 
@@ -54,7 +54,7 @@ def build_vote_embed(
     nope_votes: list[int],
     total_entries: int = 0,
     closed: bool = False,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the per-entry voting embed shown alongside the vote buttons.
 
@@ -63,8 +63,8 @@ def build_vote_embed(
     the title suffix to ``— VOTE CLOSED`` so the message can be edited
     in place when the round ends.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     total = len(same_votes) + len(nope_votes)
     bar_s, pct_s = build_bar(len(same_votes), total)
     bar_n, pct_n = build_bar(len(nope_votes), total)
@@ -72,7 +72,7 @@ def build_vote_embed(
     title = f"{GAME_ICONS['fantasies']} {category} #{entry_num}"
     if closed:
         title += " — VOTE CLOSED"
-    embed = discord.Embed(title=title, color=colour)
+    embed = discord.Embed(title=title, color=color)
     embed.add_field(
         name="Entry",
         value=discord.utils.escape_markdown(entry_text),
@@ -96,22 +96,22 @@ def build_vote_embed(
     return embed
 
 
-def build_recap_embed(results: list[dict[str, Any]], colour: "discord.Colour | None" = None) -> discord.Embed | None:
+def build_recap_embed(results: list[dict[str, Any]], color: "discord.Color | None" = None) -> discord.Embed | None:
     """Build the final recap embed for Fantasies & Dealbreakers.
 
     Returns ``None`` when ``results`` is empty so the cog can skip
     sending an empty embed — matching the old early-return in
     ``_post_recap``.
     """
-    if colour is None:
-        colour = discord.Colour(RECAP_COLOR)
+    if color is None:
+        color = discord.Color(RECAP_COLOR)
     summary = compute_recap_summary(results)
     if summary is None:
         return None
 
     embed = discord.Embed(
         title=f"{GAME_ICONS['fantasies']} FANTASIES & DEALBREAKERS — RESULTS",
-        color=colour,
+        color=color,
     )
 
     most_shared = summary["most_shared"]

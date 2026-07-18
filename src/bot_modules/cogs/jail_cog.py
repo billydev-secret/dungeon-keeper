@@ -460,7 +460,7 @@ class JailCog(commands.Cog):
             return
 
         accent = await resolve_accent_color(ctx.db_path, guild)
-        embed = build_ticket_panel_embed(colour=accent)
+        embed = build_ticket_panel_embed(color=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
         msg = await channel.send(embed=embed, view=view)
@@ -556,7 +556,7 @@ class JailCog(commands.Cog):
             ticket_id=ticket_id,
             description=desc_text,
             opener_mention=user.mention,
-            colour=accent,
+            color=accent,
         )
         view = discord.ui.View(timeout=None)
         view.add_item(TicketCloseButton(ticket_id))
@@ -1122,7 +1122,7 @@ class JailCog(commands.Cog):
                 title=policy["title"],
                 moderator_mention=member.mention,
                 reason=reason_text,
-                colour=accent,
+                color=accent,
             )
             await interaction.response.send_message(embed=close_embed)
 
@@ -1714,7 +1714,7 @@ class JailCog(commands.Cog):
             top_channels=top_channels,
             msgs_30d_total=sum(msg_counts),
             ts_formatter=_ts_str,
-            colour=accent,
+            color=accent,
         )
 
         await interaction.followup.send(

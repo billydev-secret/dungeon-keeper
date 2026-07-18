@@ -16,7 +16,7 @@ All are subcommands of the `/inactive` group.
 
 Runtime checks re-verify mod/admin status via the bot's own role config (`_is_mod` / `_is_admin`), independent of Discord default permissions. `mark` and `sweep` refuse to run until `/inactive panel` has set an inactive channel.
 
-## Behaviour
+## Behavior
 
 ### Marking (`/inactive mark`, sweep)
 Both routes go through `apply_inactive`. Preconditions (same policy as jail): never a bot, never yourself, never an admin, only admins may move a moderator, and never someone already held inactive. On success:

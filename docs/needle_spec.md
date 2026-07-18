@@ -11,7 +11,7 @@ Automatically spawns a thread from each new message in designated text channels 
 
 Both work only inside a thread. The welcome-message buttons duplicate these commands with the same permission check (Edit title opens a modal). Channel and global configuration has **no slash commands** — it lives entirely in the web dashboard.
 
-## Behaviour
+## Behavior
 
 ### Thread creation
 On every new message in a configured text channel (system messages, the bot's own messages, and — unless *include bots* is on — other bots are skipped), Needle creates a thread on the message with a 24-hour auto-archive duration and the configured slowmode. The thread name comes from the channel's title style:

@@ -6,11 +6,11 @@ Three concerns live entirely here and have no dedicated spec elsewhere: the **pe
 
 ## Commands
 
-No slash commands. The surface is gateway listeners. The behavioural map for each listener is in Behaviour; cross-links point at the spec that owns the dispatched work.
+No slash commands. The surface is gateway listeners. The behavioral map for each listener is in Behavior; cross-links point at the spec that owns the dispatched work.
 
 The bot needs **View Channels** + **Read Message History** in every text channel it should listen to. Welcome / leave / greeter posts require **Send Messages** + **Embed Links** in their configured channels; missing perms are best-effort warnings DMed to the guild owner.
 
-## Behaviour
+## Behavior
 
 ### On ready
 
@@ -78,7 +78,7 @@ All other gateway-listener failures are silent to users by design — backfill s
 - **No edit tracking.** Edits are not listened to; the archive row reflects original content only.
 - **No DM archival.** Any DM-context event short-circuits.
 - **No re-pull of already-archived messages on backfill.** The backfill resumes from the newest already-archived message per channel.
-- **No per-guild listener toggle.** Every listener fires for every guild; per-guild behaviour is selected by the consumer service.
+- **No per-guild listener toggle.** Every listener fires for every guild; per-guild behavior is selected by the consumer service.
 
 ## Configuration
 

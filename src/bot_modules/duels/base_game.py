@@ -3,8 +3,8 @@
 `BaseDuel` (the fixed 2-player special case) and the N-player group games both
 subclass this. Everything here is roster-count-agnostic: lifecycle, the background
 expiry/auto-revert sweep, the nickname-stake flow (one winner names one loser), rate
-limiting, and the abstract DB/game hooks. Pairwise-specific behaviour (the single
-opponent accept/decline challenge) lives in `BaseDuel`; lobby/elimination behaviour for
+limiting, and the abstract DB/game hooks. Pairwise-specific behavior (the single
+opponent accept/decline challenge) lives in `BaseDuel`; lobby/elimination behavior for
 N>2 is added by `lobby.py` helpers and the group cogs.
 """
 from __future__ import annotations

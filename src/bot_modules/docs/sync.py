@@ -49,7 +49,7 @@ class SyncResult:
     pin_detail: str = ""
 
 
-def specs_to_embeds(specs: list[EmbedSpec], color: discord.Colour) -> list[discord.Embed]:
+def specs_to_embeds(specs: list[EmbedSpec], color: discord.Color) -> list[discord.Embed]:
     embeds: list[discord.Embed] = []
     for spec in specs:
         # Headings live inside the description as ``#`` markdown (bigger than the
@@ -63,11 +63,11 @@ def specs_to_embeds(specs: list[EmbedSpec], color: discord.Colour) -> list[disco
 
 async def _resolve_color(
     ctx: "AppContext", guild: discord.Guild, doc_row: dict
-) -> discord.Colour:
+) -> discord.Color:
     accent = (doc_row.get("accent") or "").strip().lstrip("#")
     if accent:
         try:
-            return discord.Colour(int(accent, 16))
+            return discord.Color(int(accent, 16))
         except ValueError:
             pass
     return await resolve_accent_color(ctx.db_path, guild)

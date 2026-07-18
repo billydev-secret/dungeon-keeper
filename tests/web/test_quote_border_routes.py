@@ -86,7 +86,7 @@ def test_quote_border_rejects_jpeg(authed_client, fake_ctx):
 
 
 def _corners_only_png() -> bytes:
-    # Transparent only in the corners → centre covered → no usable opening.
+    # Transparent only in the corners → center covered → no usable opening.
     img = Image.new("RGBA", (240, 160), (10, 20, 30, 255))
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, 30, 30], fill=(0, 0, 0, 0))

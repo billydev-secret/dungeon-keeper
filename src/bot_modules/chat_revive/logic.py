@@ -195,7 +195,7 @@ def decide(g: GateInputs) -> Verdict:
     """Run the full gate chain; the first blocking protection wins.
 
     Ordering follows the spec's protections table: cheap config gates first,
-    then frequency protections, then the rhythm judgement itself.
+    then frequency protections, then the rhythm judgment itself.
     """
     if not g.guild_enabled:
         return Verdict(False, "Chat Revive is not enabled for this server.")

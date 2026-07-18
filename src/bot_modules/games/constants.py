@@ -13,7 +13,7 @@ PHASE_RECAP    = 0xB8860B   # dark gold  — final recap / game over
 CLAPBACK_COLOR = 0xFF4500       # Orange-red (main game)
 CLAPBACK_VOTE_COLOR = 0x5865F2  # Blurple (voting phase)
 CLAPBACK_WIN_COLOR = 0xFFD700   # Gold (winner / CLAPBACK moments)
-CLAPBACK_TIE_COLOR = 0x99AAB5   # Grey (ties)
+CLAPBACK_TIE_COLOR = 0x99AAB5   # Gray (ties)
 
 GAME_ICONS = {
     'ffa': '🎭',
@@ -199,7 +199,7 @@ SCHEDULE_OPTION_SCHEMA = {
 HOW_TO_PLAY = {
     'ffa': (
         "🎭 **Truth or Dare**\n"
-        "The host drops a Truth or Dare prompt in two flavours:\n\n"
+        "The host drops a Truth or Dare prompt in two flavors:\n\n"
         "• **/games play ffa** — posts an embed with anonymous reply buttons; "
         "replies land back in the channel and a live counter tracks them:\n"
         "   • **🎭 Reply Anonymously** — same anon nickname the whole time\n"

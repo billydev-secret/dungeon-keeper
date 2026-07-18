@@ -11,7 +11,7 @@ Add a custom emoji to one of DungeonKeeper's servers, either by right-clicking a
 
 Both require the **bot** to have Manage Expressions in the destination server.
 
-## Behaviour
+## Behavior
 
 ### Right-click → "Steal Emoji"
 Parses every custom emoji from the clicked message — both those written in its text and those added to it as reactions — deduplicating repeats (an emoji that appears in both is offered once, at its in-text position). Unicode reactions are skipped; only custom emoji are stealable. With exactly one emoji and one eligible server, uploads immediately. Otherwise opens a picker (emoji selector + server selector + **Steal** / **Steal All** / **Cancel**) that times out after two minutes and only accepts input from the invoker.
@@ -44,7 +44,7 @@ Animated GIFs over Discord's 256 KB emoji ceiling are downscaled (96 → 64 → 
 
 ## Configuration
 
-None. Behaviour is gated by Discord's **Manage Expressions** permission on the destination server.
+None. Behavior is gated by Discord's **Manage Expressions** permission on the destination server.
 
 ## Stored data
 

@@ -140,7 +140,7 @@ def build_leaderboard_embed(
     resolve_name: Callable[[int], str],
     *,
     now_ts: float,
-    colour: discord.Colour | None = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """The member-facing leaderboard embed, templated on the guild's branding."""
     emoji = settings.currency_emoji
@@ -152,7 +152,7 @@ def build_leaderboard_embed(
             "Who's earning, what's running, and what there is to do — "
             "refreshed every hour."
         ),
-        colour=colour,
+        color=color,
     )
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)

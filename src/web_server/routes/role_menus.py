@@ -275,7 +275,7 @@ def _validate_update(body: MenuUpdateBody) -> list[dict]:
         if len(opt.description) > menus_db.OPTION_DESC_MAX_LEN:
             raise HTTPException(status_code=400, detail="A choice description is too long.")
         if opt.button_color not in menus_db.BUTTON_COLORS:
-            raise HTTPException(status_code=400, detail="Unknown button colour.")
+            raise HTTPException(status_code=400, detail="Unknown button color.")
         options.append(
             {
                 "role_id": role_id,

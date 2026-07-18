@@ -119,7 +119,7 @@ class FakeInteraction:
 @pytest.fixture
 def stub_branding(monkeypatch):
     async def _accent(_db_path, _guild):
-        return discord.Colour(0x5865F2)
+        return discord.Color(0x5865F2)
 
     async def _audit(*_args, **_kwargs):
         return None

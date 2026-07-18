@@ -87,7 +87,7 @@ class SessionCog(commands.Cog):
         highlights = build_highlights(game_histories, name_lookup)
 
         guild = interaction.guild
-        colour = (
+        color = (
             await resolve_accent_color(self.bot.ctx.db_path, guild)
             if guild
             else None
@@ -97,7 +97,7 @@ class SessionCog(commands.Cog):
             player_ids=player_ids,
             duration_str=duration_str,
             highlights=highlights,
-            colour=colour,
+            color=color,
         )
         await interaction.followup.send(embed=embed)
 

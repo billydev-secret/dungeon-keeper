@@ -285,8 +285,8 @@ def test_void_rerenders_card_through_bot(authed_client, fake_ctx):
     channel.fetch_message.assert_awaited_once_with(999)
     channel.message.edit.assert_awaited_once()
     kwargs = channel.message.edit.await_args.kwargs
-    # Only pass remained and it's voided → back to pending grey.
-    assert kwargs["embed"].colour.value == 0x95A5A6
+    # Only pass remained and it's voided → back to pending gray.
+    assert kwargs["embed"].color.value == 0x95A5A6
     assert "view" not in kwargs  # buttons untouched on a void
 
 
@@ -315,7 +315,7 @@ def test_archive_strips_card_components(authed_client, fake_ctx):
     assert body["card_updated"] is True
     kwargs = channel.message.edit.await_args.kwargs
     assert kwargs["view"] is None  # components removed
-    assert kwargs["embed"].colour.value == 0x7F8C8D  # archived dark grey
+    assert kwargs["embed"].color.value == 0x7F8C8D  # archived dark gray
 
 
 def test_card_failure_never_rolls_back(authed_client, fake_ctx):

@@ -275,14 +275,14 @@ class ClapbackJoinView(discord.ui.View):
         host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
 
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_name=host_name,
             config=self.config,
             players=players,
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=self.config.get("start_epoch"),
-            colour=colour,
+            color=color,
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -626,14 +626,14 @@ class ClapbackCog(commands.Cog):
         )
         log.info("Game %s (clapback) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_name=host_name,
             config=config,
             players=[],
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=config.get("start_epoch"),
-            colour=colour,
+            color=color,
         )
 
         view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config)
@@ -778,7 +778,7 @@ class ClapbackCog(commands.Cog):
         deadline = now_plus(timer_secs)
 
         submit_guild = getattr(channel, "guild", None)
-        colour = (
+        color = (
             await resolve_accent_color(self.bot.ctx.db_path, submit_guild)
             if submit_guild
             else None
@@ -790,7 +790,7 @@ class ClapbackCog(commands.Cog):
             deadline_str=format_deadline(deadline),
             answers_in=0,
             total_players=len(players),
-            colour=colour,
+            color=color,
         )
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
@@ -1002,8 +1002,8 @@ class ClapbackCog(commands.Cog):
         self, game_id, channel, payload, round_num, total_rounds, host_id, bye_player,
     ):
         guild = getattr(channel, "guild", None)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=False, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=False, color=color)
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
         msg = await channel.send(embed=embed, view=view)
@@ -1027,8 +1027,8 @@ class ClapbackCog(commands.Cog):
 
     async def _post_scoreboard(self, channel, payload, round_num, total_rounds, bye_player, final=False):
         guild = getattr(channel, "guild", None)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=final, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=final, color=color)
         await channel.send(embed=embed)
 
     # ── Final recap ──────────────────────────────────────────────────────

@@ -7,7 +7,7 @@ import pytest
 
 from bot_modules.qa.cards import (
     DESCRIPTION_LIMIT,
-    STATUS_COLOURS,
+    STATUS_COLORS,
     build_card_components,
     build_card_embed,
 )
@@ -39,11 +39,11 @@ def _verdict(verdict: str, *, user_id: int = 1, voided: bool = False) -> dict:
     }
 
 
-# ── colours ───────────────────────────────────────────────────────────────────
+# ── colors ───────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    ("status", "colour"),
+    ("status", "color"),
     [
         ("pending", 0x95A5A6),
         ("passed", 0x2ECC71),
@@ -52,16 +52,16 @@ def _verdict(verdict: str, *, user_id: int = 1, voided: bool = False) -> dict:
         ("archived", 0x7F8C8D),
     ],
 )
-def test_colour_per_status(status, colour):
+def test_color_per_status(status, color):
     verified = {"verified_by": 42, "verified_at": None} if status == "passed" else {}
     embed = build_card_embed(_test_row(status=status, **verified), [])
-    assert embed["color"] == colour
-    assert STATUS_COLOURS[status] == colour
+    assert embed["color"] == color
+    assert STATUS_COLORS[status] == color
 
 
-def test_unknown_status_falls_back_to_pending_grey():
+def test_unknown_status_falls_back_to_pending_gray():
     embed = build_card_embed(_test_row(status="???"), [])
-    assert embed["color"] == STATUS_COLOURS["pending"]
+    assert embed["color"] == STATUS_COLORS["pending"]
 
 
 # ── body normalisation + truncation ──────────────────────────────────────────

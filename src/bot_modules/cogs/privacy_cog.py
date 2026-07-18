@@ -224,7 +224,7 @@ async def _delete_discord_messages(
     return deleted, failed, replaced
 
 
-# Progress card colours: in-flight vs. finished.
+# Progress card colors: in-flight vs. finished.
 _PROGRESS_COLOR = discord.Color.blurple()
 _DONE_COLOR = discord.Color.green()
 

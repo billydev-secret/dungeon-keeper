@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 async def help_command(interaction: discord.Interaction):
     log.info("%s used /games help in #%s", interaction.user.display_name, channel_name(interaction.channel))
     guild = interaction.guild
-    colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, guild) if guild else None
-    embed = build_help_embed(colour=colour)
+    color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, guild) if guild else None
+    embed = build_help_embed(color=color)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -27,8 +27,8 @@ async def help_command(interaction: discord.Interaction):
 async def support_command(interaction: discord.Interaction):
     log.info("%s used /games support in #%s", interaction.user.display_name, channel_name(interaction.channel))
     guild = interaction.guild
-    colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, guild) if guild else None
-    embed = build_support_embed(colour=colour)
+    color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, guild) if guild else None
+    embed = build_support_embed(color=color)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

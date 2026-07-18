@@ -6,7 +6,7 @@ Automatically adds a configured set of emoji reactions to image posts in specifi
 
 None. The feature has no slash commands or context menus — it is a pure `on_message` listener, configured out-of-band (see Configuration).
 
-## Behaviour
+## Behavior
 
 The listener fires on every message and bails early unless all of the following hold:
 

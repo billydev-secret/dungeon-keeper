@@ -86,7 +86,7 @@ _DISCORD_EMOJI_RE = _re.compile(r'<a?:[^:]+:(\d+)>')
 def _draw_text_layers(
     bg, draw, layers, text: str, *, font, stroke_width: int = 0
 ) -> None:
-    """Draw ``text`` once per ``(xy, fill, stroke_fill)`` layer, emoji in colour.
+    """Draw ``text`` once per ``(xy, fill, stroke_fill)`` layer, emoji in color.
 
     Callers pass a shadow layer then a foreground layer. pilmoji fetches emoji
     over HTTP, so a network blip would otherwise take out the whole card: on any
@@ -132,7 +132,7 @@ class QuoteTheme:
     # Color-grading: golden overlay blended over the desaturated pfp
     overlay_color: tuple[int, int, int]  # RGB
     overlay_alpha: float                 # 0.0–1.0 blend strength
-    desaturate: float                    # 0.0=grey, 1.0=full color; applied before overlay
+    desaturate: float                    # 0.0=gray, 1.0=full color; applied before overlay
     # Text colors
     text_color: tuple[int, int, int]
     attribution_color: tuple[int, int, int]
@@ -171,16 +171,16 @@ THEMES: dict[str, QuoteTheme] = {
 }
 
 def theme_from_accent(
-    accent_rgb: tuple[int, int, int], *, name: str = "Server Colour"
+    accent_rgb: tuple[int, int, int], *, name: str = "Server Color"
 ) -> QuoteTheme:
-    """Build a QuoteTheme whose colour grading follows a guild's brand accent.
+    """Build a QuoteTheme whose color grading follows a guild's brand accent.
 
     ``accent_rgb`` is the guild accent (from ``resolve_accent_color``). The
     overlay takes the accent directly; body text and the attribution line are
     derived as a near-white and a lighter saturated tint of the *same hue*, so a
-    pink, teal, or red brand colour each yields a coherent, readable card — the
+    pink, teal, or red brand color each yields a coherent, readable card — the
     same cream-body / brighter-name split the hand-tuned ``golden_meadow`` theme
-    uses. The non-colour knobs (overlay alpha, desaturation, vignette) mirror
+    uses. The non-color knobs (overlay alpha, desaturation, vignette) mirror
     ``golden_meadow`` so accent-derived cards sit alongside it consistently.
     """
     r, g, b = (max(0, min(255, int(c))) for c in accent_rgb)
@@ -385,7 +385,7 @@ def dominant_border_color(border_style: BorderStyle) -> tuple[int, int, int]:
     sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-9), 0.0)
     weight = sat * value
 
-    # Accumulate weight into 24-wide colour buckets and take the heaviest.
+    # Accumulate weight into 24-wide color buckets and take the heaviest.
     quant = (rgb // 24).astype(np.int64) * 24
     codes = quant[:, 0] * 65536 + quant[:, 1] * 256 + quant[:, 2]
     uniq, inverse = np.unique(codes, return_inverse=True)
@@ -393,7 +393,7 @@ def dominant_border_color(border_style: BorderStyle) -> tuple[int, int, int]:
     np.add.at(totals, inverse, weight)
     best = int(uniq[int(totals.argmax())])
 
-    # Unpack the winning code and snap to the centre of its 24-wide cell.
+    # Unpack the winning code and snap to the center of its 24-wide cell.
     color = (
         min(255, (best // 65536) + 12),
         min(255, (best // 256) % 256 + 12),
@@ -409,7 +409,7 @@ def dominant_border_color(border_style: BorderStyle) -> tuple[int, int, int]:
 # own transparency and fit the avatar + quote inside the hole it leaves. The
 # geometry here is pure (numpy over the alpha channel); the actual text flow that
 # consumes it lives inside render_quote_card so it can reuse the emoji-aware
-# measurer. Results are cached by (path, mtime, size) since a frame is analysed
+# measurer. Results are cached by (path, mtime, size) since a frame is analyzed
 # once and rendered many times.
 
 
@@ -418,9 +418,9 @@ class BorderOpening:
     """The transparent hole in a frame, as per-row [left, right] spans.
 
     ``left``/``right`` are x-edges valid for rows in ``[top, bot]`` (the vertical
-    band where the card centre column is see-through). ``pfp`` is a fitted
+    band where the card center column is see-through). ``pfp`` is a fitted
     ``(cx, cy, r)`` avatar disc on the left, or None when no disc fits with room
-    left for text (the card then falls back to centred, avatar-as-background).
+    left for text (the card then falls back to centered, avatar-as-background).
     """
     left: "list[int]"
     right: "list[int]"
@@ -509,7 +509,7 @@ def analyze_border_opening(
 ) -> BorderOpening | None:
     """Detect a frame's usable opening + a fitted avatar disc, or None.
 
-    None means there's no see-through region around the card centre big enough to
+    None means there's no see-through region around the card center big enough to
     hold a quote — the upload path rejects such frames so rendering always has a
     valid opening to fit into.
     """
@@ -536,7 +536,7 @@ def _compute_border_opening(
     cx, cyc = width // 2, height // 2
     col = passable[:, cx]
     if not col[cyc]:
-        return None  # centre covered — no usable opening
+        return None  # center covered — no usable opening
 
     top = cyc
     while top - 1 >= 0 and col[top - 1]:
@@ -766,7 +766,7 @@ def render_quote_card(
     ``pfp_shape`` controls the foreground avatar: ``"circle"`` (default — circular
     crop with a double ring), ``"square"`` (rounded-square that shows the whole
     avatar without clipping its corners), or ``"none"`` (no avatar box at all —
-    the prompt is centred across the card and ``author_name`` becomes a centred
+    the prompt is centered across the card and ``author_name`` becomes a centered
     header above it).
 
     ``font_style`` sets the quote-body typeface; ``header_font_style`` sets the
@@ -783,13 +783,13 @@ def render_quote_card(
     author_name = normalize_display_name(author_name)
 
     # Blurred background — when there's a left-side pfp, push the face left so it
-    # doesn't sit under the text column; with no pfp keep the image centred.
+    # doesn't sit under the text column; with no pfp keep the image centered.
     _no_pfp = pfp_shape == "none"
 
     # Uploaded frames drive their own layout: read the transparent opening and fit
     # the avatar + text inside it. A frame with no usable opening (rejected at
     # upload) falls back to the standard layout; one with no room for a disc
-    # renders centred (avatar as background, author as a header).
+    # renders centered (avatar as background, author as a header).
     _mask = border_style is not None and border_style.mask_fit
     _mask_opening = (
         analyze_border_opening(border_style, width, height)
@@ -858,7 +858,7 @@ def render_quote_card(
     _quoted_text = f"“{text}”"
     _full_measure = _make_emoji_measure(_base_m, line_h)
 
-    # No-pfp mode turns the label into a centred header above the prompt. Give it
+    # No-pfp mode turns the label into a centered header above the prompt. Give it
     # a dedicated font that's larger than the body; a light stroke (there's no bold
     # TTF in assets/) plus the drop shadow keeps it legible without reading as a
     # heavy, cartoonish title — the size alone carries the "header" role.
@@ -966,15 +966,15 @@ def render_quote_card(
             lo = _m_left(y)
             if not _no_pfp:
                 return lo  # quote-with-avatar: keep the left-aligned column
-            hi = _m_right(y)  # banner over a custom frame: centre in the opening
+            hi = _m_right(y)  # banner over a custom frame: center in the opening
             return lo + max(0, (hi - lo - _full_measure(s)) // 2)
     elif _no_pfp:
         # Left-justified body: keep ~one character of buffer off the left frame.
         left_margin += max(1, _full_measure("n"))
         # The brand's flowers fill the bottom-right corner. Carve a matching
         # exclusion so the usable right edge drops toward the bottom; each line is
-        # centred within the remaining [left_margin, right_limit] band, so the
-        # prompt reads centred yet flows around the floral corner.
+        # centered within the remaining [left_margin, right_limit] band, so the
+        # prompt reads centered yet flows around the floral corner.
         _ex_apex_y = height * 0.24          # above this the full width is free
         _ex_reach_y = height * 0.62         # at/below this the carve is maxed out
         _ex_left_top = width * 0.95         # flowers' left edge above the corner
@@ -1018,7 +1018,7 @@ def render_quote_card(
                 top = int((height - blk) * 0.40)  # no header: bias the prompt up
             return top + _header_block, top
 
-        # One re-flow: lay out at a nominal top, re-centre, then flow at the final
+        # One re-flow: lay out at a nominal top, re-center, then flow at the final
         # start (usable width depends on absolute y).
         lines = _flow(int(height * 0.26))
         text_y_start, _content_top = _layout(lines)
@@ -1026,8 +1026,8 @@ def render_quote_card(
         text_y_start, _content_top = _layout(lines)
 
         def _line_x(s: str, y: int) -> int:
-            # Centred: announcement banners read centred. Start from the true card
-            # centre, then shove left only if the line would otherwise reach into
+            # Centered: announcement banners read centered. Start from the true card
+            # center, then shove left only if the line would otherwise reach into
             # the floral corner (wrapping via _avail_w already bounds the width).
             lw = _full_measure(s)
             x = (width - lw) // 2
@@ -1088,13 +1088,13 @@ def render_quote_card(
     draw = ImageDraw.Draw(bg)
 
     if _no_pfp:
-        # No avatar box — draw the label as a centred header above the prompt,
-        # tinted with the border's dominant colour so the title echoes the frame.
+        # No avatar box — draw the label as a centered header above the prompt,
+        # tinted with the border's dominant color so the title echoes the frame.
         if _header_text:
             _hdr_color = dominant_border_color(border_style or BORDERS["golden_poppy"])
             if _HAS_PILMOJI:
                 # getsize takes no stroke_width; add it back so an emoji-bearing
-                # header centres on the same width pilmoji actually draws.
+                # header centers on the same width pilmoji actually draws.
                 _hw = _emoji_getsize(_header_text, font=header_font)[0]  # type: ignore[misc]
                 _hw += _header_stroke * 2
             else:
@@ -1152,7 +1152,7 @@ def render_quote_card(
             draw.ellipse(_outer, outline=(255, 248, 220), width=_rt)
             draw.ellipse(_inner, outline=theme.attribution_color, width=3)
 
-        # Author name centred below pfp
+        # Author name centered below pfp
         if author_name:
             attr_text = f"— {author_name}"
             if _HAS_PILMOJI:
@@ -1163,7 +1163,7 @@ def render_quote_card(
                 attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
                 attr_w = attr_bbox[2] - attr_bbox[0]
                 attr_h = attr_bbox[3] - attr_bbox[1]
-            # Centre under the (left-shifted) pfp, but never let a long name slide
+            # Center under the (left-shifted) pfp, but never let a long name slide
             # behind the left gold frame.
             ax = max(left_margin, pfp_cx - attr_w // 2)
             ay = pfp_cy + pfp_r + int(height * 0.04)

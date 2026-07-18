@@ -71,12 +71,12 @@ class MFKView(discord.ui.View):
 
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         names = resolve_names(interaction.guild, payload.get("participants", []))
-        colour = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
+        color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
         embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
             labels=self.labels,
-            colour=colour,
+            color=color,
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(
@@ -117,8 +117,8 @@ class MFKView(discord.ui.View):
                 target_names.append(m.display_name if m else str(uid))
             player_assignments.append((player_str, target_names))
 
-        colour = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
-        embed = build_assignments_embed(player_assignments, labels=self.labels, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
+        embed = build_assignments_embed(player_assignments, labels=self.labels, color=color)
 
         self.stop()
         disable_all_items(self)
@@ -208,8 +208,8 @@ class MFKCog(commands.Cog):
 
         log.info("Game %s (mfk) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         guild = getattr(channel, "guild", None)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_lobby_embed(host_name, [], labels=labels, colour=colour)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, [], labels=labels, color=color)
         view = MFKView(game_id, host_id, self.db, self.bot, labels=labels)
         self.bot.active_views[game_id] = view
 

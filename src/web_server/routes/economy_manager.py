@@ -601,14 +601,14 @@ async def _update_card_and_dm(
                 message = await channel.fetch_message(int(message_id))
                 embed = message.embeds[0] if message.embeds else discord.Embed()
                 if approve:
-                    embed.colour = discord.Colour.green()
+                    embed.color = discord.Color.green()
                     embed.add_field(
                         name="Approved",
                         value=f"Paid {resolution.paid:,} {unit}.",
                         inline=False,
                     )
                 else:
-                    embed.colour = discord.Colour.red()
+                    embed.color = discord.Color.red()
                     embed.add_field(
                         name="Denied",
                         value=resolution.deny_reason or "—",

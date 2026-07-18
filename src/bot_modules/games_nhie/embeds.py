@@ -7,7 +7,7 @@ with no network and no mocks of the Bot/Guild API.
 Three distinct embed shapes are exposed:
 
 * :func:`build_round_embed` — the active round and the "ROUND OVER"
-  state share a builder; only the title suffix and colour differ
+  state share a builder; only the title suffix and color differ
   (driven by the ``closed`` flag).
 * :func:`build_closed_embed` — the "CLOSED" state when a host stops a
   game mid-round (a thin reskin of the round embed).
@@ -49,7 +49,7 @@ def build_round_embed(
     """Build the main round embed (active OR finished round).
 
     When ``closed=True`` the title gains a "ROUND OVER" suffix and the
-    colour shifts from "playing" blue to "results" green. All other
+    color shifts from "playing" blue to "results" green. All other
     fields render identically — the cog re-uses this same embed when
     editing the message after the round resolves.
 
@@ -128,7 +128,7 @@ def build_closed_embed(
     """Build the "host stopped the game" embed.
 
     This is a thin reskin of :func:`build_round_embed` with a
-    "CLOSED" title and the recap colour. The cog edits the live
+    "CLOSED" title and the recap color. The cog edits the live
     message with this embed when the close-confirmation flow fires.
     """
     embed = build_round_embed(
@@ -143,7 +143,7 @@ def build_closed_embed(
         max_lives=max_lives,
     )
     embed.title = f"{GAME_ICONS['nhie']} NEVER HAVE I EVER — CLOSED"
-    embed.colour = discord.Colour(PHASE_RECAP)
+    embed.color = discord.Color(PHASE_RECAP)
     return embed
 
 

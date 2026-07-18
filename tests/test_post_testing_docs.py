@@ -390,7 +390,7 @@ def set_configured_channel(db: Path, channel_id: str) -> None:
     conn.close()
 
 
-def test_post_commit_honours_configured_card_channel(mod, monkeypatch, qa_db) -> None:
+def test_post_commit_honors_configured_card_channel(mod, monkeypatch, qa_db) -> None:
     """The dashboard's qa_channel_id must be enforced, not a dead setting."""
     set_configured_channel(qa_db, "555000555000555549")
     calls, _ = wire(mod, monkeypatch, qa_db)

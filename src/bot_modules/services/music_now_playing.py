@@ -59,10 +59,10 @@ def build_embed(
     requester: discord.abc.User | discord.Member | None,
     *,
     paused: bool = False,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
-    if colour is None:
-        colour = discord.Colour(EMBED_COLOR)
+    if color is None:
+        color = discord.Color(EMBED_COLOR)
     title = getattr(track, "title", "Unknown title")
     author = getattr(track, "author", None) or getattr(track, "artist", "Unknown")
     uri = getattr(track, "uri", None)
@@ -71,7 +71,7 @@ def build_embed(
 
     embed = discord.Embed(
         title=title if not uri else f"[{title}]({uri})",
-        color=colour,
+        color=color,
     )
     embed.set_author(name=str(author))
     if artwork:

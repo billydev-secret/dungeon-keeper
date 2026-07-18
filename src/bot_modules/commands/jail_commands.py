@@ -447,13 +447,13 @@ class _SetupDMView(discord.ui.View):
         guild: discord.Guild,
         step: int = 1,
         *,
-        colour: "discord.Colour | None" = None,
+        color: "discord.Color | None" = None,
     ) -> None:
         super().__init__(timeout=600)
         self.ctx = ctx
         self.guild = guild
         self.step = step
-        self.colour = colour
+        self.color = color
         self.page = 0
         self.selected: list[int] = []
         self._build()
@@ -479,7 +479,7 @@ class _SetupDMView(discord.ui.View):
         meta = setup_step_meta(self.step)
         if meta is None:
             return self._guild_footer(build_setup_complete_embed())
-        embed = build_setup_step_embed(meta, colour=self.colour)
+        embed = build_setup_step_embed(meta, color=self.color)
         if self.selected:
             embed.add_field(
                 name="Selected", value=self._render_selected(meta["select_kind"]),
@@ -606,10 +606,10 @@ def _setup_dm_view(
     ctx: AppContext,
     guild: discord.Guild,
     *,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> tuple[discord.Embed, "_SetupDMView"]:
     """Build the first-step embed + View for the DM-delivered ``/setup`` wizard."""
-    view = _SetupDMView(ctx, guild, 1, colour=colour)
+    view = _SetupDMView(ctx, guild, 1, color=color)
     return view._embed(), view
 
 
@@ -617,7 +617,7 @@ def _setup_view(
     ctx: AppContext,
     step: int,
     *,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> tuple[discord.Embed, discord.ui.View]:
     """Return the embed + view for a given setup step.
 
@@ -627,7 +627,7 @@ def _setup_view(
     pick the right ``discord.ui.Select`` subclass, wire up the Next button,
     and return the rendered embed/view pair.
 
-    ``colour`` is the resolved per-guild accent, threaded from the async
+    ``color`` is the resolved per-guild accent, threaded from the async
     ``/setup`` entry point (this function is sync, so it can't resolve it
     itself). Left ``None`` for tests, falling back to the builder default.
     """
@@ -640,7 +640,7 @@ def _setup_view(
     view.add_item(select_cls(meta["config_key"], ctx, placeholder=meta["placeholder"]))
 
     async def next_step(interaction: discord.Interaction):
-        e, v = _setup_view(ctx, step + 1, colour=colour)
+        e, v = _setup_view(ctx, step + 1, color=color)
         await interaction.response.edit_message(embed=e, view=v)
 
     btn: discord.ui.Button = discord.ui.Button(
@@ -648,7 +648,7 @@ def _setup_view(
     )  # type: ignore[assignment]
     btn.callback = next_step  # type: ignore[method-assign]
     view.add_item(btn)
-    return build_setup_step_embed(meta, colour=colour), view
+    return build_setup_step_embed(meta, color=color), view
 
 
 # Kept for backwards compatibility with anything that imported the constant

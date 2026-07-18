@@ -90,7 +90,7 @@ def build_leave_embed(
             member_bio_link=member_bio_link,
             server_guide_mention=server_guide_mention,
         ),
-        color=discord.Color.dark_grey(),
+        color=discord.Color.dark_gray(),
     )
     embed.set_author(
         name=f"{member.display_name} left", icon_url=member.display_avatar.url

@@ -14,7 +14,7 @@ from bot_modules.cogs.qa_cog import (
     _QAPassButton,
 )
 from bot_modules.core.db_utils import open_db
-from bot_modules.qa.cards import STATUS_COLOURS
+from bot_modules.qa.cards import STATUS_COLORS
 from bot_modules.services.economy_service import get_balance
 from bot_modules.services.qa_service import (
     archive_test,
@@ -183,7 +183,7 @@ async def test_pass_records_pays_and_edits_card(ctx, db):
 
     inter.message.edit.assert_awaited_once()
     embed = inter.message.edit.await_args.kwargs["embed"]
-    assert embed.colour.value == STATUS_COLOURS["passed"]
+    assert embed.color.value == STATUS_COLORS["passed"]
     assert "• check the thing" in embed.description
     # Components untouched — the edit carries only the embed.
     assert "view" not in inter.message.edit.await_args.kwargs
@@ -284,7 +284,7 @@ async def test_fail_submit_records_and_posts_note_to_thread(ctx, db):
 
     # Card re-rendered red.
     card.edit.assert_awaited_once()
-    assert card.edit.await_args.kwargs["embed"].colour.value == STATUS_COLOURS["failed"]
+    assert card.edit.await_args.kwargs["embed"].color.value == STATUS_COLORS["failed"]
 
 
 @pytest.mark.asyncio
@@ -305,7 +305,7 @@ async def test_blocked_submit_without_note_skips_thread(ctx, db):
     click.message.create_thread.assert_not_awaited()
     click.message.edit.assert_awaited_once()  # still re-rendered (amber)
     embed = click.message.edit.await_args.kwargs["embed"]
-    assert embed.colour.value == STATUS_COLOURS["blocked"]
+    assert embed.color.value == STATUS_COLORS["blocked"]
 
 
 @pytest.mark.asyncio

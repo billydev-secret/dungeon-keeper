@@ -22,7 +22,7 @@ NameResolver = Callable[[int], str]
 
 def build_lobby_embed(
     host_name: str, visibility: str, max_sentences: int,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the ``/story`` join-lobby embed.
 
@@ -30,12 +30,12 @@ def build_lobby_embed(
     place by editing field index 0. Host + mode summary fields are
     static for the life of the lobby.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['story']} STORY BUILDER",
         description="Join to contribute to the story!",
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Writers (0)", value="—", inline=False)
     embed.add_field(name="Host", value=host_name, inline=True)
@@ -54,7 +54,7 @@ def build_turn_embed(
     current_player_id: int,
     turn_order: list[int],
     name_resolver: NameResolver,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the per-turn "story in progress" embed.
 
@@ -64,11 +64,11 @@ def build_turn_embed(
     rendered names go through ``discord.utils.escape_markdown`` so a
     writer whose nick contains markdown can't break the embed.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['story']} STORY IN PROGRESS",
-        color=colour,
+        color=color,
     )
     current_name = name_resolver(current_player_id)
     embed.add_field(
@@ -96,7 +96,7 @@ def build_turn_embed(
 
 def build_complete_story_embed(
     story_text: str, player_count: int, sentence_count: int,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the full-story reveal embed.
 
@@ -105,11 +105,11 @@ def build_complete_story_embed(
     "Community Original" footer-field summarises the participant
     and sentence counts.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['story']} THE COMPLETE STORY",
-        color=colour,
+        color=color,
     )
     embed.description = f"*{story_text}*"
     embed.add_field(
@@ -122,7 +122,7 @@ def build_complete_story_embed(
 
 def build_attribution_embed(
     chunks: list[list[str]],
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the "Who Wrote What" attribution embed.
 
@@ -133,11 +133,11 @@ def build_attribution_embed(
     ``(pt. N)`` suffix so readers can follow long stories spilled
     across fields.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['story']} WHO WROTE WHAT",
-        color=colour,
+        color=color,
     )
     for i, chunk in enumerate(chunks, start=1):
         name = "Sentences" if len(chunks) == 1 else f"Sentences (pt. {i})"

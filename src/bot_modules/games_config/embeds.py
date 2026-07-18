@@ -52,21 +52,21 @@ def build_channel_disallowed_embed(channel_mention: str) -> discord.Embed:
 def build_channel_list_embed(
     rows: Sequence[Sequence[Any]],
     resolver: ChannelResolver,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed shown for ``/games list-channels``."""
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     return discord.Embed(
         title="Game Channels",
         description=format_allowed_channels(rows, resolver),
-        color=colour,
+        color=color,
     )
 
 
 def build_game_status_embed(
     row: Any,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed shown for ``/games game-status``.
 
@@ -75,12 +75,12 @@ def build_game_status_embed(
     branches — the title carries the state.
     """
     title, description = describe_active_game(row)
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     return discord.Embed(
         title=title,
         description=description,
-        color=colour,
+        color=color,
     )
 
 

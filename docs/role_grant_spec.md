@@ -12,7 +12,7 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
 
-## Behaviour
+## Behavior
 
 Permission first: mods always pass; anyone else must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks then run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the bot has Manage Roles, and the role sits below the bot's top role.
 
@@ -56,7 +56,7 @@ Each grant role has:
 | `log_channel_id` | Optional audit-log channel (0 = off) |
 | `announce_channel_id` | Optional announcement channel (0 = off) |
 | `grant_message` | Announcement template (empty = no announcement) |
-| `required_role_id` | Prerequisite role (settable, currently unenforced — see Behaviour) |
+| `required_role_id` | Prerequisite role (settable, currently unenforced — see Behavior) |
 
 Plus an allowlist of `(entity_type, entity_id)` entries — individual users and/or roles — per grant.
 

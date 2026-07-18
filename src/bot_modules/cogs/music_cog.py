@@ -444,7 +444,7 @@ class MusicCog(commands.Cog):
             page=normalized_page,
             total_pages=total_pages,
             loop_mode_value=queue.loop_mode.value,
-            colour=accent,
+            color=accent,
         )
         await interaction.response.send_message(embed=embed)
 
@@ -509,7 +509,7 @@ class MusicCog(commands.Cog):
         )
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_embed(
-            queue.current, queue, requester, paused=player.paused, colour=accent
+            queue.current, queue, requester, paused=player.paused, color=accent
         )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
@@ -649,7 +649,7 @@ class MusicCog(commands.Cog):
                 format_247_status_line(mention, bool(s.autoplay_playlist_url))
             )
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = build_247_status_embed(lines, colour=accent)
+        embed = build_247_status_embed(lines, color=accent)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -787,7 +787,7 @@ class MusicCog(commands.Cog):
         requester = guild.get_member(requester_id) if requester_id else None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_embed(
-            track, queue, requester, paused=player.paused, colour=accent
+            track, queue, requester, paused=player.paused, color=accent
         )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
@@ -1026,7 +1026,7 @@ class MusicCog(commands.Cog):
             queue,
             guild.get_member(queue.requester_for(queue.current) or 0),
             paused=new_paused,
-            colour=accent,
+            color=accent,
         ) if queue.current else None
         if embed is not None:
             await interaction.response.edit_message(embed=embed, view=view)
@@ -1098,7 +1098,7 @@ class MusicCog(commands.Cog):
             queue,
             guild.get_member(queue.requester_for(queue.current) or 0),
             paused=paused,
-            colour=accent,
+            color=accent,
         ) if queue.current else None
         if embed is not None:
             await interaction.response.edit_message(embed=embed, view=view)

@@ -10,13 +10,13 @@ Reporting is the analytics backbone of the dashboard. Four small services — in
 | `/quality_leave remove member:<m>` | Slash | Mod | Clear an active leave row |
 | `/quality_leave list` | Slash | Mod (ephemeral) | Show the active leave roster with remaining days |
 | `/invite` | Slash | Everyone | Returns the bot ' OAuth install URL. Unrelated to invite attribution |
-| Dashboard report tiles | Web | Admin | Read-only analytics surfaces — see Behaviour |
-| Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behaviour |
+| Dashboard report tiles | Web | Admin | Read-only analytics surfaces — see Behavior |
+| Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behavior |
 | Cache clear | Web | Admin | Drop every cached report payload for the active guild |
 
 The bot needs **Manage Server** to read invite codes for attribution. When missing, invite attribution silently degrades to "no inviter detected" — no other report is blocked.
 
-## Behaviour
+## Behavior
 
 ### Dashboard report tiles
 

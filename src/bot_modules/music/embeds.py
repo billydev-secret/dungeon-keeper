@@ -27,7 +27,7 @@ def build_queue_embed(
     page: int,
     total_pages: int,
     loop_mode_value: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the embed for ``/queue``.
 
@@ -37,7 +37,7 @@ def build_queue_embed(
     rendering of a track line.
 
     * ``current_summary`` -- None when nothing is playing (field is
-      skipped, matching the cog's existing behaviour of only adding the
+      skipped, matching the cog's existing behavior of only adding the
       field when ``queue.current is not None``).
     * ``item_summaries`` -- the current page's upcoming tracks. Empty
       list renders ``(empty)`` so the embed never has no fields.
@@ -45,9 +45,9 @@ def build_queue_embed(
       ``item_summaries`` within the full queue (for the ``` 1.``` line
       numbering).
     """
-    if colour is None:
-        colour = discord.Colour(_EMBED_COLOR)
-    embed = discord.Embed(title="Music queue", color=colour)
+    if color is None:
+        color = discord.Color(_EMBED_COLOR)
+    embed = discord.Embed(title="Music queue", color=color)
 
     if current_summary is not None:
         embed.add_field(name="Now playing", value=current_summary, inline=False)
@@ -70,7 +70,7 @@ def build_queue_embed(
 
 
 def build_247_status_embed(
-    lines: Sequence[str], colour: "discord.Colour | None" = None
+    lines: Sequence[str], color: "discord.Color | None" = None
 ) -> discord.Embed:
     """Build the embed for ``/247_status``.
 
@@ -79,10 +79,10 @@ def build_247_status_embed(
     sequences are still rendered (the caller decides whether to short
     out on no entries with a plain message instead).
     """
-    if colour is None:
-        colour = discord.Colour(_EMBED_COLOR)
+    if color is None:
+        color = discord.Color(_EMBED_COLOR)
     return discord.Embed(
         title="24/7 channels",
         description="\n".join(lines) if lines else "(none)",
-        color=colour,
+        color=color,
     )

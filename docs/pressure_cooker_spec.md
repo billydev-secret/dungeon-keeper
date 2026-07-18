@@ -12,7 +12,7 @@ A 1-v-1 stakes-pumping duel. Two players take turns clicking a single **Pump** b
 | `/pressure revert` | Slash | Loser only | Restore your original nickname early (only when allowed by config) |
 | `/pressure config [keys...]` | Slash | Manage Server | Update or display per-guild config; no keys prints the current row |
 
-## Behaviour
+## Behavior
 
 ### Opening a challenge
 
@@ -21,7 +21,7 @@ A 1-v-1 stakes-pumping duel. Two players take turns clicking a single **Pump** b
 - Server-only. Self-challenges and bot targets are rejected.
 - The current channel must be in the per-guild channel allowlist (if the allowlist is non-empty).
 - Per-challenger rate limit: max 3 challenges per hour. Older challenges fall out of the window.
-- Bot permission preflight: the bot must have **Manage Nicknames**, and the bot's top role must sit above both players' top roles. The server owner is a recognised exception (Discord doesn't let bots rename the owner) — preflight skips the role check for owners and the loss is recorded without an enforced rename.
+- Bot permission preflight: the bot must have **Manage Nicknames**, and the bot's top role must sit above both players' top roles. The server owner is a recognized exception (Discord doesn't let bots rename the owner) — preflight skips the role check for owners and the loss is recorded without an enforced rename.
 - Neither player may currently be serving an active nickname sentence from a prior game.
 - No non-terminal game already exists between this pair in either direction.
 - Pair cooldown check (canonicalised both directions): if cooldown is still running, the challenger sees the remaining hours/minutes.

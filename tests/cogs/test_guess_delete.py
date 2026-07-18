@@ -27,7 +27,7 @@ def _stub_accent_color(monkeypatch):
 
     monkeypatch.setattr(
         "bot_modules.cogs.guess_cog.resolve_accent_color",
-        AsyncMock(return_value=discord.Colour.default()),
+        AsyncMock(return_value=discord.Color.default()),
     )
 
 
@@ -169,7 +169,7 @@ async def test_delete_unlinks_original_file_when_present(tmp_path: Path):
     assert not orig_file.exists()
 
 
-# ── _on_post NSFW behaviour ──────────────────────────────────────────────────
+# ── _on_post NSFW behavior ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_post_proceeds_in_non_nsfw_channel():

@@ -1,8 +1,8 @@
-"""Per-guild branding config — the embed accent colour.
+"""Per-guild branding config — the embed accent color.
 
 Bot identity (per-guild nickname + avatar) is handled directly against
 Discord by the web route ``POST /config/bot-identity`` and lives on the
-Discord member, not here. This table only stores the accent-colour
+Discord member, not here. This table only stores the accent-color
 preference used by the shared resolver in ``bot_modules.core.branding``.
 """
 
@@ -21,7 +21,7 @@ ACCENT_MODE_AVATAR = "avatar"
 ACCENT_MODE_CUSTOM = "custom"
 _VALID_MODES = frozenset({ACCENT_MODE_AVATAR, ACCENT_MODE_CUSTOM})
 
-# accent_hex sentinel meaning "no custom colour set".
+# accent_hex sentinel meaning "no custom color set".
 ACCENT_HEX_UNSET = -1
 
 
@@ -34,7 +34,7 @@ class BrandingConfig:
     def normalized_mode(self) -> str:
         return self.accent_mode if self.accent_mode in _VALID_MODES else ACCENT_MODE_AVATAR
 
-    def has_custom_colour(self) -> bool:
+    def has_custom_color(self) -> bool:
         return 0 <= self.accent_hex <= 0xFFFFFF
 
 

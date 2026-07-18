@@ -27,7 +27,7 @@ def _png(color: tuple[int, int, int], size: int = 64) -> bytes:
 
 
 def _emoji(shape: str, color: tuple[int, int, int, int], size: int = 128) -> bytes:
-    """A small coloured shape on a TRANSPARENT background — what a real custom
+    """A small colored shape on a TRANSPARENT background — what a real custom
     emoji actually is, and the input that broke a naive grayscale dHash."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -99,7 +99,7 @@ def test_perceptual_hash_stable_for_same_image():
 
 def test_perceptual_hash_survives_reencode_and_resize():
     """The whole point: a re-encoded, resized copy of the same emoji lands
-    within the duplicate threshold — i.e. a re-steal is recognised."""
+    within the duplicate threshold — i.e. a re-steal is recognized."""
     original = _emoji("circle", (255, 0, 0, 255))
     reencoded = _reencode(original, size=40)
     h1 = perceptual_hash(original)
@@ -108,9 +108,9 @@ def test_perceptual_hash_survives_reencode_and_resize():
     assert hamming(h1, h2) <= DUPE_THRESHOLD
 
 
-def test_perceptual_hash_distinguishes_same_shape_different_colour():
+def test_perceptual_hash_distinguishes_same_shape_different_color():
     """The bug that killed the grayscale version: two identically-shaped emoji
-    in different colours must NOT collide — colour has to survive into the
+    in different colors must NOT collide — color has to survive into the
     hash, so they land outside the duplicate threshold."""
     red = perceptual_hash(_emoji("square", (255, 0, 0, 255)))
     blue = perceptual_hash(_emoji("square", (0, 90, 255, 255)))

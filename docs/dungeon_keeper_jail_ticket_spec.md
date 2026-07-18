@@ -69,7 +69,7 @@ neither adds admin roles nor pings them. The bridge to fix this exists
 deferred. Until then, drive close/reopen/escalate from **Discord** if you need
 the channel-side effects.
 
-## Behaviour
+## Behavior
 
 ### First-run setup
 

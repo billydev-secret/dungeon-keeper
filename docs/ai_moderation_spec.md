@@ -33,7 +33,7 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 
 ---
 
-## Behaviour
+## Behavior
 
 ### `/ai review`
 Loads the target's last N days of activity from the local message archive. For each channel where the target posted, a window of messages is fetched and each line is tagged:

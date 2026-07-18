@@ -738,7 +738,7 @@ def query_dropoff_profiles(
 
     If *target_user_id* is given, returns a single-element list with that user's
     profile regardless of whether they had a dropoff (useful for the detail view).
-    Candidate selection honours *channel_id*; enrichment queries are server-wide.
+    Candidate selection honors *channel_id*; enrichment queries are server-wide.
     """
     now_ts = int(datetime.now(timezone.utc).timestamp())
     mid = now_ts - int(period_seconds)
@@ -1685,7 +1685,7 @@ def render_session_burst_chart(
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
-    # Pre-session bars (muted colour)
+    # Pre-session bars (muted color)
     ax.bar(
         x_pre,
         mean_pre,
@@ -2313,7 +2313,7 @@ _GENDER_COLORS = {
     "male": "#5865f2",  # blurple
     "female": "#eb459e",  # pink
     "nonbinary": "#57f287",  # green
-    "unknown": "#72767d",  # grey
+    "unknown": "#72767d",  # gray
 }
 
 _GENDER_ORDER = ["male", "female", "nonbinary", "unknown"]

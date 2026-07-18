@@ -72,7 +72,7 @@ def test_iso_week_bounds_year_rollover_2020_w53():
     assert end - start == 7 * 86400
 
 
-def test_iso_week_bounds_honours_offset():
+def test_iso_week_bounds_honors_offset():
     # A negative offset pushes the local-midnight boundaries later in UTC.
     s0, _ = metrics.iso_week_bounds(WEEK, 0.0)
     s7, _ = metrics.iso_week_bounds(WEEK, -7.0)

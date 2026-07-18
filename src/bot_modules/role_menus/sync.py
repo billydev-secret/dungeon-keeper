@@ -46,10 +46,10 @@ async def build_embed(
     ctx: "AppContext", guild: discord.Guild, menu: dict
 ) -> discord.Embed:
     accent = (menu.get("accent") or "").strip().lstrip("#")
-    color: discord.Colour | None = None
+    color: discord.Color | None = None
     if accent:
         try:
-            color = discord.Colour(int(accent, 16))
+            color = discord.Color(int(accent, 16))
         except ValueError:
             color = None
     if color is None:

@@ -37,7 +37,7 @@ def build_lobby_embed(
     players: list[int],
     name_resolver: NameResolver,
     start_at: int | None = None,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the lobby embed shown while waiting for joiners.
 
@@ -46,8 +46,8 @@ def build_lobby_embed(
     suffix when the list overflows). Used by both the initial /clapback
     send and the live ``_update_embed`` edit in the join view.
     """
-    if colour is None:
-        colour = discord.Colour(CLAPBACK_COLOR)
+    if color is None:
+        color = discord.Color(CLAPBACK_COLOR)
     embed = discord.Embed(
         title=f"{ICON} CLAPBACK",
         description=(
@@ -55,7 +55,7 @@ def build_lobby_embed(
             "Join the battle of wits! Write the funniest answer\n"
             "to each prompt, then vote head-to-head."
         ),
-        color=colour,
+        color=color,
     )
 
     if start_at:
@@ -90,7 +90,7 @@ def build_submit_embed(
     deadline_str: str,
     answers_in: int,
     total_players: int,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the per-round submission prompt embed.
 
@@ -98,12 +98,12 @@ def build_submit_embed(
     ``format_deadline(now_plus(timer))``) — kept as a string here so
     the builder stays free of timer / datetime imports.
     """
-    if colour is None:
-        colour = discord.Colour(CLAPBACK_COLOR)
+    if color is None:
+        color = discord.Color(CLAPBACK_COLOR)
     embed = discord.Embed(
         title=f"{ICON} CLAPBACK — Round {round_num}/{total_rounds}",
         description=f'**"{prompt}"**',
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Timer", value=deadline_str, inline=True)
     embed.add_field(
@@ -283,7 +283,7 @@ def build_scoreboard_embed(
     total_rounds: int,
     bye_player: int | None,
     final: bool = False,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the between-round (or final) scoreboard embed.
 
@@ -292,8 +292,8 @@ def build_scoreboard_embed(
     from the cog signature for parity — the pre-extraction
     implementation didn't actually branch on it, so we don't either.
     """
-    if colour is None:
-        colour = discord.Colour(CLAPBACK_COLOR)
+    if color is None:
+        color = discord.Color(CLAPBACK_COLOR)
     scores = payload.get("scores", {})
     sorted_scores = sort_scores(scores)
 
@@ -311,7 +311,7 @@ def build_scoreboard_embed(
         else "Final round complete!"
     )
 
-    embed = discord.Embed(title=title, color=colour)
+    embed = discord.Embed(title=title, color=color)
     embed.add_field(
         name="📊 Scoreboard",
         value="\n".join(lines) or "No scores yet",

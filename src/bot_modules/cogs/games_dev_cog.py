@@ -140,7 +140,7 @@ class GamesDevCog(commands.Cog):
                     config = payload.get("config", {})
                     guild = interaction.guild
                     host_member = guild.get_member(row["host_id"]) if guild else None
-                    colour = (
+                    color = (
                         await resolve_accent_color(self.bot.ctx.db_path, guild)
                         if guild
                         else None
@@ -151,7 +151,7 @@ class GamesDevCog(commands.Cog):
                         players=players,
                         name_resolver=lambda uid: resolve_name(guild, uid),
                         start_at=config.get("start_epoch"),
-                        colour=colour,
+                        color=color,
                     )
                     channel = interaction.channel
                     # A channel hosting an active game is always sendable.

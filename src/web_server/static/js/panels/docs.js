@@ -147,7 +147,7 @@ export function mount(container) {
                  placeholder="Document title" value="${esc(doc.title)}" />
           <span class="doc-key-badge">${esc(doc.doc_key)}</span>
           <input class="doc-ed-accent" data-accent type="text" maxlength="7"
-                 placeholder="#hex" value="${esc(doc.accent)}" title="Accent colour (blank = server branding)" />
+                 placeholder="#hex" value="${esc(doc.accent)}" title="Accent color (blank = server branding)" />
         </div>
         <div class="doc-ed-grid">
           <div class="doc-ed-col">

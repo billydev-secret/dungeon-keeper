@@ -416,5 +416,5 @@ def test_image_only_on_first_embed_of_overflow_section():
 
 def test_specs_to_embeds_sets_image():
     specs = render_doc("Doc", "![p](https://cdn/p.png)\n\nhi")
-    embeds = docs_sync.specs_to_embeds(specs, discord.Colour(0x123456))
+    embeds = docs_sync.specs_to_embeds(specs, discord.Color(0x123456))
     assert embeds[0].image.url == "https://cdn/p.png"

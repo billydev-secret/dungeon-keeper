@@ -16,7 +16,7 @@ Members opt in to a pairing pool. On a schedule (the weekly auto-round) or when 
 | Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, auto-round schedule |
 | Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
 
-## Behaviour
+## Behavior
 
 ### Pool and pairing
 

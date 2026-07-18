@@ -1,7 +1,7 @@
-"""Shared image → representative-colour helpers.
+"""Shared image → representative-color helpers.
 
 Used by the branding accent resolver (and anything else that wants to
-derive a colour from an avatar/logo). Kept dependency-light: Pillow is
+derive a color from an avatar/logo). Kept dependency-light: Pillow is
 imported lazily so importing this module never fails when Pillow is
 absent — callers get ``None`` and substitute a default.
 """
@@ -14,24 +14,24 @@ from typing import Optional
 
 import discord
 
-# Saturation floor below which a colour bucket is treated as gray when
+# Saturation floor below which a color bucket is treated as gray when
 # picking a vivid highlight (see ``dominant_highlight_color``).
 _MIN_VIVID_SAT = 0.20
 
 
-def dominant_highlight_color(image_bytes: bytes) -> Optional[discord.Colour]:
-    """Extract a vivid "highlight" colour from an image.
+def dominant_highlight_color(image_bytes: bytes) -> Optional[discord.Color]:
+    """Extract a vivid "highlight" color from an image.
 
     Opaque pixels are grouped into a coarse RGB grid and each bucket is
-    scored by ``count * saturation**2`` so a saturated brand colour wins
+    scored by ``count * saturation**2`` so a saturated brand color wins
     over a large but dull/gray background. When the image is essentially
     grayscale (no bucket clears ``_MIN_VIVID_SAT``) we fall back to the
-    most common opaque colour so the result stays stable instead of
+    most common opaque color so the result stays stable instead of
     latching onto an arbitrary edge pixel.
 
     Returns ``None`` when Pillow is unavailable, the image can't be
     decoded, or there are no opaque pixels — callers should substitute a
-    sensible default (e.g. the guild's role colour).
+    sensible default (e.g. the guild's role color).
     """
     try:
         from PIL import Image
@@ -81,4 +81,4 @@ def dominant_highlight_color(image_bytes: bytes) -> Optional[discord.Colour]:
     chosen = best_vivid or best_common
     if chosen is None:
         return None
-    return discord.Colour.from_rgb(*chosen)
+    return discord.Color.from_rgb(*chosen)

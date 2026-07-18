@@ -1,6 +1,6 @@
 // Searchable, mobile-friendly select widgets shared across the dashboard.
 //
-// Two flavours, both driven by a text input + filtered dropdown (no native
+// Two flavors, both driven by a text input + filtered dropdown (no native
 // <select>, which is clumsy for multi-pick and long lists on touch devices):
 //   - filterSelect:      single value, clears to an "empty" sentinel
 //   - multiFilterSelect: many values, rendered as removable chips

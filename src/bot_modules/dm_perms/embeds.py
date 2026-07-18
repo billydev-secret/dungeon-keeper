@@ -148,18 +148,18 @@ def build_request_dm_embed(
     request_timeout_label: str,
     type_label: str,
     reason: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed delivered to the target's DMs — this is the actual request prompt."""
-    if colour is None:
-        colour = discord.Colour(DM_PRIMARY)
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
         title="📨 Someone wants to connect with you",
         description=(
             f"A member of **{guild_name}** would like to connect.\n\n"
             f"This request expires in {request_timeout_label}."
         ),
-        color=colour,
+        color=color,
     )
     embed.set_author(name=requester_display_name, icon_url=requester_avatar_url)
     embed.set_footer(
@@ -177,11 +177,11 @@ def build_request_sent_embed(
     request_timeout_label: str,
     type_label: str,
     reason: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed DM'd back to the requester confirming delivery of their request."""
-    if colour is None:
-        colour = discord.Colour(DM_PRIMARY)
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
         title="📨 Request sent!",
         description=(
@@ -190,7 +190,7 @@ def build_request_sent_embed(
             f"You'll get a DM when they respond. "
             f"The request expires in {request_timeout_label}."
         ),
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
@@ -243,15 +243,15 @@ def build_revoked_embed(
 
 def build_dm_help_embed(
     guild_icon_url: Optional[str],
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed shown by ``/dm_help`` — a static overview of the DM-perm system."""
-    if colour is None:
-        colour = discord.Colour(DM_PRIMARY)
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
         title="📬 DM Request System",
         description="Control how users may request DM access with you.",
-        color=colour,
+        color=color,
     )
     if guild_icon_url:
         embed.set_thumbnail(url=guild_icon_url)
@@ -287,7 +287,7 @@ def build_dm_help_embed(
 
 def build_mode_updated_embed(
     mode: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed confirming a member's DM mode change.
 
@@ -295,10 +295,10 @@ def build_mode_updated_embed(
     casing it keeps the visual consistent with the role names without
     requiring a separate label table.
     """
-    if colour is None:
-        colour = discord.Colour(DM_PRIMARY)
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     return discord.Embed(
         title="DM preference updated",
         description=f"You're now set to **{mode.upper()}**.",
-        color=colour,
+        color=color,
     )

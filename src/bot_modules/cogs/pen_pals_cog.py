@@ -345,11 +345,11 @@ async def _post_intro(
     user2: discord.Member,
     expiry_at: float,
     question: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> None:
-    if colour is None:
-        colour = discord.Color.blurple()
-    embed = discord.Embed(title="🖊️ Pen Pals", color=colour)
+    if color is None:
+        color = discord.Color.blurple()
+    embed = discord.Embed(title="🖊️ Pen Pals", color=color)
     embed.add_field(
         name="Matched with",
         value=f"{user1.mention} × {user2.mention}",
@@ -465,7 +465,7 @@ async def _do_pair(
     expiry_at = now + _SESSION_SECS
     accent = await resolve_accent_color(db_path, guild)
     try:
-        await _post_intro(channel, user1, user2, expiry_at, question, colour=accent)
+        await _post_intro(channel, user1, user2, expiry_at, question, color=accent)
     except discord.HTTPException as exc:
         log.error("pen_pals: failed to post intro in channel %d: %s", channel.id, exc)
 
@@ -645,10 +645,10 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
 
 
 def _build_panel_embed(
-    pool_size: int, colour: "discord.Colour | None" = None
+    pool_size: int, color: "discord.Color | None" = None
 ) -> discord.Embed:
-    if colour is None:
-        colour = discord.Color.from_str("#5865F2")
+    if color is None:
+        color = discord.Color.from_str("#5865F2")
     embed = discord.Embed(
         title="🖊️ Pen Pals",
         description=(
@@ -656,7 +656,7 @@ def _build_panel_embed(
             "A private channel opens for just the two of you, "
             "with a conversation starter already waiting."
         ),
-        color=colour,
+        color=color,
     )
     label = f"{pool_size} member{'s' if pool_size != 1 else ''} waiting" if pool_size else "No one waiting yet"
     embed.add_field(name="Pool", value=label, inline=True)
@@ -715,7 +715,7 @@ async def _refresh_panel_locked(
 
     guild = bot.get_guild(guild_id)
     accent = await resolve_accent_color(db_path, guild) if guild else None
-    embed = _build_panel_embed(pool_size, colour=accent)
+    embed = _build_panel_embed(pool_size, color=accent)
     view = _build_panel_view()
 
     if not repost and panel_message_id:

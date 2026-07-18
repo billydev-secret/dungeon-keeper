@@ -27,7 +27,7 @@ NameResolver = Callable[[int], str]
 def build_lobby_embed(
     host_name: str,
     mode: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the initial ``/ama`` lobby embed (no hot seat yet).
 
@@ -35,12 +35,12 @@ def build_lobby_embed(
     hot-seat slot. Once a volunteer takes the seat the cog edits the
     message to the richer :func:`build_main_embed` output.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
         description="Who's taking the hot seat?",
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Hot Seat", value="—", inline=True)
@@ -57,7 +57,7 @@ def build_main_embed(
     queue: list[int],
     name_resolver: NameResolver,
     payload: dict[str, Any] | None = None,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the live game embed (hot seat + queue + progress bar).
 
@@ -67,8 +67,8 @@ def build_main_embed(
     progress bar field is appended; tests can omit it to exercise the
     "no progress yet" branch.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     if hot_seat_name is None:
         desc = "Who's taking the hot seat?"
         hot_seat_str = "—"
@@ -83,7 +83,7 @@ def build_main_embed(
     embed = discord.Embed(
         title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
         description=desc,
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Hot Seat", value=hot_seat_str, inline=True)
@@ -147,7 +147,7 @@ def build_panel_embed(
     panel: list[int],
     name_resolver: NameResolver,
     payload: dict[str, Any] | None = None,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the live embed for an open-panel AMA.
 
@@ -158,8 +158,8 @@ def build_panel_embed(
     roster is capped so a large panel can't blow past Discord's 1024-char
     field limit.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     if panel:
         desc = "Ask **anyone on the panel** anything — questions are anonymous."
     else:
@@ -168,7 +168,7 @@ def build_panel_embed(
     embed = discord.Embed(
         title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
         description=desc,
-        color=colour,
+        color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Mode", value=mode, inline=True)
@@ -200,7 +200,7 @@ def build_panel_embed(
 
 def build_question_embed(
     question_text: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the per-question embed posted to the channel.
 
@@ -208,12 +208,12 @@ def build_question_embed(
     path so both produce the same look. The question text is
     markdown-escaped here so callers don't need to remember.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     return discord.Embed(
         title=f"{GAME_ICONS['ama']} QUESTION",
         description=f'"{discord.utils.escape_markdown(question_text)}"',
-        color=colour,
+        color=color,
     )
 
 
@@ -221,7 +221,7 @@ def build_answered_embed(
     question_text: str,
     answer_text: str,
     answerer_display_name: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the in-place edit shown once the hot seat replies.
 
@@ -229,14 +229,14 @@ def build_answered_embed(
     answerer's display name is footered so the post stays anonymous on
     the asker's side.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     q_escaped = discord.utils.escape_markdown(question_text)
     a_escaped = discord.utils.escape_markdown(answer_text)
     embed = discord.Embed(
         title=f"{GAME_ICONS['ama']} QUESTION + ANSWER",
         description=f'**Q:** "{q_escaped}"\n\n**A:** "{a_escaped}"',
-        color=colour,
+        color=color,
     )
     embed.set_footer(text=f"— {answerer_display_name}")
     return embed
@@ -244,27 +244,27 @@ def build_answered_embed(
 
 def build_asker_dm_embed(
     channel_mention: str,
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the DM the asker receives when their question gets a reply.
 
-    Keeps the channel-mention text consistent so the embed colour and
+    Keeps the channel-mention text consistent so the embed color and
     wording don't drift between branches.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     return discord.Embed(
         description=(
             f"🔔 Your anonymous question in **{channel_mention}** got a reply!"
         ),
-        color=colour,
+        color=color,
     )
 
 
 def build_recap_embed(
     mode: str,
     stats: dict[str, int],
-    colour: "discord.Colour | None" = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the game-over recap embed from a precomputed ``stats`` dict.
 
@@ -273,8 +273,8 @@ def build_recap_embed(
     the keys ``total_q``, ``total_answered``, ``total_passed``,
     ``rotations`` and ``unique_askers``.
     """
-    if colour is None:
-        colour = discord.Colour(BRAND_COLOR)
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     total_q = stats.get("total_q", 0)
     total_answered = stats.get("total_answered", 0)
     total_passed = stats.get("total_passed", 0)
@@ -284,7 +284,7 @@ def build_recap_embed(
     embed = discord.Embed(
         title=f"{GAME_ICONS['ama']} ANONYMOUS AMA — GAME OVER",
         description="Thanks for playing! Here's how the session went:",
-        color=colour,
+        color=color,
     )
     bar, pct = build_bar(total_answered, total_q) if total_q else ("░" * 14, "0%")
     embed.add_field(

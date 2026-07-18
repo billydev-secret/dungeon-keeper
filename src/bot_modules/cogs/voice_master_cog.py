@@ -255,7 +255,7 @@ class VoiceMasterCog(commands.Cog):
                 continue
             remaining = cfg.owner_grace_s - (now - row.owner_left_at)
             if remaining <= 0:
-                await post_claim_prompt(ch, colour=accent)
+                await post_claim_prompt(ch, color=accent)
             else:
                 self._schedule_claim_prompt(ch, int(remaining))
 
@@ -593,7 +593,7 @@ class VoiceMasterCog(commands.Cog):
         if row is None or row.owner_left_at is None:
             return  # owner returned (cancel raced) — nothing to claim
         accent = await resolve_accent_color(self.ctx.db_path, live.guild)
-        await post_claim_prompt(live, colour=accent)
+        await post_claim_prompt(live, color=accent)
 
     async def _delete_after_grace(
         self, channel: discord.VoiceChannel, grace_s: int
@@ -835,7 +835,7 @@ class VoiceMasterCog(commands.Cog):
             # (perms missing, channel deleted out from under us, etc.).
             if cfg.post_inline_panel:
                 accent = await resolve_accent_color(self.ctx.db_path, guild)
-                await post_inline_panel(channel, member, colour=accent)
+                await post_inline_panel(channel, member, color=accent)
 
             # DM the owner about anything we had to skip.
             notes_text = build_hub_join_notes(
@@ -1417,7 +1417,7 @@ class VoiceMasterCog(commands.Cog):
             access_state=profile_access_state(profile),
             trusted_count=len(trusted),
             blocked_count=len(blocked),
-            colour=accent,
+            color=accent,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

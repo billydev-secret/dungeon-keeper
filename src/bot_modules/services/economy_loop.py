@@ -102,7 +102,7 @@ from bot_modules.services.economy_service import (
 from bot_modules.services.message_store import get_known_users_bulk
 
 # The two perks whose billing is gated on a guild feature (role icon / gradient
-# role colours). Only these are swept each tick — the sweep asks Discord whether
+# role colors). Only these are swept each tick — the sweep asks Discord whether
 # the feature still exists, so it is kept to the perks that can actually lose it.
 _FEATURE_GATED_PERKS = ("role_icon", "role_gradient")
 
@@ -460,7 +460,7 @@ async def _dispatch_rental_effects(
                 if res.beneficiary_id != res.user_id:
                     await _safe_dm(
                         bot, db_path, guild_id, res.beneficiary_id,
-                        "The custom colour gifted to you has lapsed.",
+                        "The custom color gifted to you has lapsed.",
                     )
         # charge / retry / none → silent (no DM, no re-projection).
 
@@ -505,7 +505,7 @@ async def run_guild_leaderboard(
 
     accent = await resolve_accent_color(db_path, guild)
     embed = build_leaderboard_embed(
-        settings, data, _name, now_ts=now_ts, colour=accent
+        settings, data, _name, now_ts=now_ts, color=accent
     )
     try:
         message = await channel.fetch_message(settings.leaderboard_message_id)

@@ -40,7 +40,7 @@ That is **18 `/games play` commands** (Anonymous AMA's two axes are one command)
 | Command | Permission | Purpose |
 |---|---|---|
 | `/recap` | Everyone | Highlights from the current channel's last 30 minutes of games |
-| `/games help` | Everyone | Catalogue embed built from the game name/icon/description registry |
+| `/games help` | Everyone | Catalog embed built from the game name/icon/description registry |
 | `/games support` | Everyone | Static support-server invite |
 | `/games end` | Host or Mod/Admin | End the active game in this channel (confirm popup). AMA additionally tears down its per-question views |
 | `/games join [user]` · `/games leave [user]` | Self, or Host/Mod/Game-Host to move others | Add/remove yourself (or, with elevation, someone else) in a running game that has a roster. Open-submission games reply that there's nothing to join |
@@ -68,7 +68,7 @@ These settings are **live and enforced** but are configured from the web dashboa
 
 The dashboard mirrors the config surfaces above and adds full LegitLibs template authoring, question-bank import/export, and AI-prompt editing. Banks also share a **global pool** — bank rows stored under the reserved `global` game type, which gameplay never selects. Every bank manager has a per-question *Pool* button (copy to the pool; duplicate texts are skipped, and Traditional's category tags are translated to the generic `nsfw` tag or dropped) and a pool browser that imports selected pool questions into that game's bank (duplicates skipped; Traditional requires choosing the category the imports are filed under, other games carry the pool tags over). Two permission tiers gate it: `mod` (Administrator / Manage Server) for config writes, and a Game Host tier (Administrator OR the configured editor role) for content authoring (bank, templates, AI generate, history, stats). AI-prompt config is re-loaded per request so dashboard edits take effect mid-game without a restart.
 
-## Behaviour
+## Behavior
 
 Every interactive game follows the same skeleton: preflight (channel allowlisted? game enabled for this guild?), insert a "live game" row keyed by channel id, post the embed + view, and on close archive the game's final payload into a history table and free the live-game slot. Each channel can host at most one live game at a time. A 24-hour sweep closes orphaned games that nobody closed; closing copies the payload into the history archive and frees the slot. (Photo Challenge is fire-and-forget — it records a history row for stats but keeps no interactive state, since people just reply in the channel.)
 
@@ -103,7 +103,7 @@ AMA carries a per-question lifecycle (pending → answered / passed / rejected /
 
 ### Meta surfaces
 
-`/recap` reads the current channel's session window — the past 30 minutes of finished games — and renders highlights based on each game's final payload: most divisive WYR question, guiltiest NHIE player, best TTL liar, hottest hot take, and so on. `/games help` shows the full catalogue from the game name/icon/description registry. `/games support` posts a static support-server invite.
+`/recap` reads the current channel's session window — the past 30 minutes of finished games — and renders highlights based on each game's final payload: most divisive WYR question, guiltiest NHIE player, best TTL liar, hottest hot take, and so on. `/games help` shows the full catalog from the game name/icon/description registry. `/games support` posts a static support-server invite.
 
 ### Close & archive
 

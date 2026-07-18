@@ -1,4 +1,4 @@
-"""Personal-role projector + colour helpers (Stage 3, Agent C).
+"""Personal-role projector + color helpers (Stage 3, Agent C).
 
 The frozen async signatures the billing loop (Agent B) and cog (Agent C) code
 against, now with the real Discord projection behind them:
@@ -7,7 +7,7 @@ against, now with the real Discord projection behind them:
                          to their entitlements + desired ``econ_personal_roles``
                          state. Full reconcile, not additive: an attribute the
                          member is no longer entitled to is *cleared*, not left
-                         stale (a lapsed gradient drops ``secondary_colour``, a
+                         stale (a lapsed gradient drops ``secondary_color``, a
                          lapsed icon drops ``display_icon``). Idempotent — only
                          edits when the projection actually differs, so a steady
                          state costs zero role edits (the 2-edits/10-min budget).
@@ -22,8 +22,8 @@ against, now with the real Discord projection behind them:
                          roles), so this is a plain ``in guild.features`` check —
                          no attempt-and-catch needed.
 
-Also home to the pure colour maths the cog's ΔE staff-collision guard uses
-(``delta_e_cie76`` / ``find_color_clash``) and ``parse_hex_colour`` — kept here
+Also home to the pure color maths the cog's ΔE staff-collision guard uses
+(``delta_e_cie76`` / ``find_color_clash``) and ``parse_hex_color`` — kept here
 so the projector and its guard live together and stay unit-testable without
 Discord.
 
@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy.perk_actions")
 
 # The named hierarchy anchor booster_roles.sync_swatches also positions against;
-# personal roles sit just above it so a rented colour wins the display contest.
+# personal roles sit just above it so a rented color wins the display contest.
 _COSMETICS_ANCHOR = "#### Cosmetics"
 
 # Perk → the guild feature it needs (perks not listed are always available).
@@ -66,8 +66,8 @@ _FEATURE_FOR_PERK = {
     "role_gradient": "ENHANCED_ROLE_COLORS",
 }
 
-# ΔE (CIE76) below this ⇒ "too close" to a staff colour. Empirically ~25 is the
-# threshold where two role colours read as the same hue in the member list.
+# ΔE (CIE76) below this ⇒ "too close" to a staff color. Empirically ~25 is the
+# threshold where two role colors read as the same hue in the member list.
 STAFF_CLASH_THRESHOLD = 25.0
 
 
@@ -173,11 +173,11 @@ async def apply_role_perks(
     else:
         target_name = member.display_name
     if mode in ("solid", "gradient") and d_color != -1:
-        target_color = discord.Colour(d_color)
+        target_color = discord.Color(d_color)
     else:
-        target_color = discord.Colour.default()
+        target_color = discord.Color.default()
     target_secondary = (
-        discord.Colour(d_color2) if mode == "gradient" and d_color2 != -1 else None
+        discord.Color(d_color2) if mode == "gradient" and d_color2 != -1 else None
     )
     want_icon = "role_icon" in applied and icon_payload is not None
 
@@ -245,11 +245,11 @@ async def apply_role_perks(
 async def _create_role(
     guild: discord.Guild,
     name: str,
-    color: discord.Colour,
-    secondary: discord.Colour | None,
+    color: discord.Color,
+    secondary: discord.Color | None,
     icon_payload: bytes | str | None,
 ) -> discord.Role | None:
-    kwargs: dict = {"name": name, "colour": color, "reason": "Economy personal role"}
+    kwargs: dict = {"name": name, "color": color, "reason": "Economy personal role"}
     if secondary is not None:
         kwargs["secondary_color"] = secondary
     if icon_payload is not None:
@@ -264,8 +264,8 @@ async def _create_role(
 async def _reconcile_role(
     role: discord.Role,
     target_name: str,
-    target_color: discord.Colour,
-    target_secondary: discord.Colour | None,
+    target_color: discord.Color,
+    target_secondary: discord.Color | None,
     want_icon: bool,
     icon_payload: bytes | str | None,
     icon_changed: bool,
@@ -274,9 +274,9 @@ async def _reconcile_role(
     edits: dict = {}
     if role.name != target_name:
         edits["name"] = target_name
-    if role.colour != target_color:
-        edits["colour"] = target_color
-    cur_secondary = getattr(role, "secondary_colour", None)
+    if role.color != target_color:
+        edits["color"] = target_color
+    cur_secondary = getattr(role, "secondary_color", None)
     if cur_secondary != target_secondary:
         edits["secondary_color"] = target_secondary
     # Icon: the role can't hand back an uploaded Asset's bytes, so we diff by
@@ -302,7 +302,7 @@ async def _reconcile_role(
 async def _position_personal_role(guild: discord.Guild, role: discord.Role) -> None:
     """Position the role just above the cosmetics band, under the bot's top role.
 
-    Above ``#### Cosmetics`` (so a rented colour outranks a booster swatch) but
+    Above ``#### Cosmetics`` (so a rented color outranks a booster swatch) but
     never above ``guild.me``'s top role, which Discord would reject.
     """
     me = guild.me
@@ -360,7 +360,7 @@ async def revoke_role_perks(
     raw_ent, desired = await asyncio.to_thread(_read)
 
     if raw_ent:
-        # Still entitled to something (e.g. gradient lapsed but colour remains) —
+        # Still entitled to something (e.g. gradient lapsed but color remains) —
         # re-project so the downgrade actually lands.
         await apply_role_perks(bot, db_path, guild_id, user_id)
         return
@@ -383,10 +383,10 @@ async def revoke_role_perks(
     await asyncio.to_thread(_drop)
 
 
-# ── colour maths — ΔE staff-collision guard ────────────────────────────
+# ── color maths — ΔE staff-collision guard ────────────────────────────
 
 
-def parse_hex_colour(text: str) -> int | None:
+def parse_hex_color(text: str) -> int | None:
     """Parse ``#RRGGBB`` / ``RRGGBB`` → 0xRRGGBB int, or None if malformed."""
     s = text.strip().lstrip("#")
     if len(s) != 6:
@@ -424,7 +424,7 @@ def _rgb_to_lab(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
 
 
 def delta_e_cie76(rgb1: tuple[int, int, int], rgb2: tuple[int, int, int]) -> float:
-    """CIE76 colour difference (Euclidean distance in L*a*b*)."""
+    """CIE76 color difference (Euclidean distance in L*a*b*)."""
     l1, a1, b1 = _rgb_to_lab(rgb1)
     l2, a2, b2 = _rgb_to_lab(rgb2)
     return ((l1 - l2) ** 2 + (a1 - a2) ** 2 + (b1 - b2) ** 2) ** 0.5
@@ -444,16 +444,16 @@ def find_color_clash(
     *,
     threshold: float = STAFF_CLASH_THRESHOLD,
 ) -> discord.Role | None:
-    """The first staff role whose colour is within ΔE ``threshold``, or None.
+    """The first staff role whose color is within ΔE ``threshold``, or None.
 
-    Staff = roles with a moderation permission AND a non-default colour; a member
+    Staff = roles with a moderation permission AND a non-default color; a member
     picking a near-identical hue could impersonate them in the member list, so
-    the colour is rejected and this names the clashing role.
+    the color is rejected and this names the clashing role.
     """
     target = _int_to_rgb(color_value)
     for role in getattr(guild, "roles", ()):
-        value = role.colour.value
-        if value == 0:  # default/no colour — nothing to clash with
+        value = role.color.value
+        if value == 0:  # default/no color — nothing to clash with
             continue
         if not _is_staff_role(role):
             continue
