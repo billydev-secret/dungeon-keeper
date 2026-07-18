@@ -28,7 +28,7 @@ COLD_START_DAYS = 14.0
 # fires far too eagerly on chatty channels (a busy evening's median inter-
 # message gap is ~1min, and 4x that is a 4-minute hair-trigger).
 SESSION_GAP_SECONDS = 600.0  # a silence longer than this ends a conversation
-INTERSESSION_QUANTILE = 0.90  # fire past the 90th-pct between-conversation lull
+INTERSESSION_QUANTILE = 0.85  # fire past the 85th-pct between-conversation lull
 MIN_LULL_SECONDS = 900.0  # absolute floor; never revive a still-warm channel
 MIN_BAND_SESSIONS = 8  # fewer sampled conversation gaps -> use the whole-day profile
 

@@ -99,8 +99,10 @@ Details of the moment:
   60 days of `processed_messages` (human messages only). Within each band the
   message stream is segmented into conversations — a silence longer than
   `SESSION_GAP_SECONDS` (10 min) ends one — and the band's fire threshold is a
-  high quantile (`INTERSESSION_QUANTILE`, p90) of the *between-conversation*
-  gaps, floored by `MIN_LULL_SECONDS` (15 min). Auto-fire needs silence ≥
+  high quantile (`INTERSESSION_QUANTILE`, p85) of the *between-conversation*
+  gaps, floored by `MIN_LULL_SECONDS` (15 min). On the busiest channels p85
+  lands the auto-fire cadence at ~1.3/day with a typical ~40-min lull.
+  Auto-fire needs silence ≥
   `threshold × patience` for the current band **and** the band to be normally
   alive (≥ 20% of the channel's busiest band, min 5 msgs/day). Bands with
   < 8 sampled conversation gaps fall back to the whole-day profile.

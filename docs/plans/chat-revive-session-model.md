@@ -29,9 +29,16 @@ value); the fire threshold is *learned* per band, not hand-picked.
 
 Locked parameters (`chat_revive/logic.py`):
 - `SESSION_GAP_SECONDS = 600` (10 min) — conversation boundary
-- `INTERSESSION_QUANTILE = 0.90` — fire past the 90th-pct between-conversation gap
+- `INTERSESSION_QUANTILE = 0.85` — fire past the 85th-pct between-conversation gap
 - `MIN_LULL_SECONDS = 900` (15 min) — absolute floor; never revive a warm channel
 - `MIN_BAND_SESSIONS = 8` — fewer sampled conversation gaps → whole-day profile
+
+**Quantile tuning (post-merge):** shipped at p90 (~0.9/day, ~50-min typical
+lull), then loosened to **p85** on request for a slightly more liberal cadence.
+Gated simulation across four channels: p85 → busiest and 2nd-busiest both
+~1.3/day at a ~40-min typical lull (earliest fire still ~30 min); p80 overshot
+to 1.4–1.6/day and pulled the typical lull to ~31 min (too twitchy). p85 lands
+the target 0.9–1.3/day. Sweep: scratchpad `quantile_sweep.py`.
 
 ## Stage 0 — calibration spike (done)
 
