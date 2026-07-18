@@ -24,7 +24,7 @@ economy DM fires now; members find quests via `/quests`. The quest editor's
       path" checkbox, and the quest table shows no 🧭 badge. Create/edit a quest
       → still saves fine.
 
-### Bios — trigger button copy is dashboard-configurable  (pending)
+### Bios — trigger button copy is dashboard-configurable  (388acb8)
 
 New: the persistent "Create / Update Bio" button's embed **title and body** are
 now editable at **Config → Bios → Config** (keys `bios_trigger_title` /
