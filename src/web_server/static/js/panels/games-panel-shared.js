@@ -1,5 +1,5 @@
 ﻿import { api, apiPost, esc } from "../api.js";
-import { apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { apiPut, apiDelete, showStatus, loadRoles, roleSelect } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 
@@ -33,6 +33,12 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         '<input type="text" data-opt="' + esc(opt.key) + '"' + (opt.placeholder ? ' placeholder="' + esc(opt.placeholder) + '"' : "") + ' style="width:240px;" /></label>' +
         (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
     }
+    if (opt.type === "role") {
+      // Options are filled in loadConfig() once the role list has loaded.
+      return '<div class="field"><label>' + esc(opt.label) +
+        '<select data-opt="' + esc(opt.key) + '" style="width:240px;"></select></label>' +
+        (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
+    }
     return '<div class="field"><label>' + esc(opt.label) +
       '<input type="number" data-opt="' + esc(opt.key) + '" min="' + (opt.min ?? 0) + '" max="' + (opt.max ?? 9999) + '" style="width:120px;" /></label>' +
       (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
@@ -61,11 +67,21 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const data = await api("/api/games/config/games/" + encodeURIComponent(gameType));
       ctrl("enabled").checked = data.enabled !== false;
       const opts = data.options || {};
+      // Fill any role <select> with the guild's roles before assigning values.
+      if (optSchema.some(o => o.type === "role")) {
+        const roles = await loadRoles();
+        for (const opt of optSchema) {
+          if (opt.type !== "role") continue;
+          const el = container.querySelector('[data-opt="' + opt.key + '"]');
+          if (el) el.innerHTML = roleSelect(roles, null, { allowNone: true });
+        }
+      }
       for (const opt of optSchema) {
         const el = container.querySelector('[data-opt="' + opt.key + '"]');
         if (!el) continue;
         const val = Object.prototype.hasOwnProperty.call(opts, opt.key) ? opts[opt.key] : opt.default;
         if (opt.type === "bool") el.checked = val !== false && val !== 0;
+        else if (opt.type === "role") el.value = String(val || "0");
         else el.value = val ?? "";
       }
     } catch (err) {
@@ -82,6 +98,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         if (!el) continue;
         if (opt.type === "bool") options[opt.key] = el.checked;
         else if (opt.type === "text") options[opt.key] = el.value.trim();
+        else if (opt.type === "role") options[opt.key] = el.value === "0" ? "" : el.value;
         else options[opt.key] = parseInt(el.value, 10) || 0;
       }
       try {

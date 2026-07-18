@@ -9,6 +9,28 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Photo Challenge — ping role is now a dropdown, not a pasted ID  (2daf8e9)
+
+The Photo Challenge panel's **Ping role on post** field was a free-text box you
+pasted a numeric role ID into; it's now a proper role `<select>` populated from
+the guild's roles (same picker the Scheduling panel already uses). Implemented
+as a new `role` option type on the shared `mountGamePanel` component, so any
+game panel can use it. Stored value is unchanged (role-ID string, blank = no
+ping), so existing configs load into the dropdown as their current selection.
+
+**Worth knowing while testing:** dashboard-only, no Discord surface for the
+config itself — but confirm the ping actually fires so the round-trip through
+the new picker is real. A previously-pasted ID that no longer matches any role
+falls back to **(none)** in the dropdown.
+
+- [ ] Open Photo Challenge config → **Ping role on post** is a dropdown of
+      roles (with **(none)** first), not a text box. Any previously-set role is
+      pre-selected.
+- [ ] Pick a role → Save → reload the panel → the same role is still selected.
+- [ ] Post a photo challenge (manual `/games play photo`) in an allowed
+      channel → the card **pings that role once**.
+- [ ] Set it back to **(none)** → Save → next challenge posts **un-pinged**.
+
 ### Rules Watch — tier tabs now filter with "Unlabeled only" off  (100c724)
 
 The All/Immediate/Digest/Logged tabs are a tier filter. It worked while
