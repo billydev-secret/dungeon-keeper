@@ -9,6 +9,24 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — streak/milestone DMs respect the opt-in game role  (pending)
+
+Bug fix: recurring streak/milestone/grace/reset DMs (§3.1) were reaching every
+earner, even members who never took the opt-in **economy game role**
+(`game_role_id`). They now flow through `notify_member(..., require_game_role=True)`,
+so only role-holders are DMed; everyone else keeps earning silently. Only
+applies when a game role is configured (Config → Economy); with no role set the
+behavior is unchanged (everyone notified). Transactional rental-billing DMs are
+intentionally *not* gated.
+
+- [ ] With a **game role configured** and yourself **without** it: earn a
+      milestone/streak event (e.g. hit a 7-day streak) → **no DM**, but the
+      payout still lands (check `/bank` wallet balance/streak).
+- [ ] **Add** the game role to yourself, earn the next streak/milestone event →
+      you **do** get the streak DM.
+- [ ] Confirm quest-completion cards still DM role-holders only (unchanged) and
+      rental billing DMs still reach renters regardless of the game role.
+
 ### Greeting Watch — DM when a "good morning"/"hello" goes unanswered  (8dc4a8c)
 
 New feature: greetings in watched channel(s) that get no reply/@mention within a

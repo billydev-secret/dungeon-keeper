@@ -812,8 +812,17 @@ class EventsCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, message.guild)
         embed = self._econ_login_embed(settings, outcome, prior_streak, accent)
+        # Streak/milestone/grace notices are recurring engagement — only DM
+        # players who took the opt-in economy role. Payout stays silent for
+        # everyone else (matches the quest-card path and the game_role_id
+        # design intent).
         await notify_member(
-            self.bot, self.ctx.db_path, guild_id, user_id, embed=embed
+            self.bot,
+            self.ctx.db_path,
+            guild_id,
+            user_id,
+            embed=embed,
+            require_game_role=True,
         )
 
     @staticmethod

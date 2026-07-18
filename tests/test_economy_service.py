@@ -636,9 +636,10 @@ def _fake_guild(*, member=None, channel=None):
     return guild
 
 
-def _fake_member(*, premium=None):
+def _fake_member(*, premium=None, role_ids=()):
     member = MagicMock(spec=discord.Member)
     member.premium_since = premium
+    member.roles = [MagicMock(id=rid) for rid in role_ids]
     return member
 
 
@@ -713,6 +714,48 @@ async def test_notify_member_member_gone_uses_bank_channel(db):
     bot = _fake_bot(guild=_fake_guild(member=None, channel=channel))
     assert await notify_member(bot, db, GUILD, USER, content="hi") is True
     channel.send.assert_awaited_once()
+
+
+async def test_notify_member_require_role_delivers_to_role_holder(db):
+    """With a game role set, an opted-in member still gets the DM."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"game_role_id": 777})
+    member = _fake_member(role_ids=(777,))
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    delivered = await notify_member(
+        bot, db, GUILD, USER, content="hi", require_game_role=True
+    )
+    assert delivered is True
+    member.send.assert_awaited_once_with(content="hi")
+
+
+async def test_notify_member_require_role_drops_non_holder_silently(db):
+    """A member without the opt-in role is dropped silently (no DM, no bank
+    fallback) — counts as handled, mirroring a mute."""
+    with open_db(db) as conn:
+        save_econ_settings(
+            conn, GUILD, {"game_role_id": 777, "bank_channel_id": 555}
+        )
+    member = _fake_member(role_ids=(111,))
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    delivered = await notify_member(
+        bot, db, GUILD, USER, content="hi", require_game_role=True
+    )
+    assert delivered is True
+    member.send.assert_not_called()
+    channel.send.assert_not_called()
+
+
+async def test_notify_member_require_role_inert_when_no_role_configured(db):
+    """With no game role configured the gate is inert — everyone is delivered."""
+    member = _fake_member(role_ids=())
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    delivered = await notify_member(
+        bot, db, GUILD, USER, content="hi", require_game_role=True
+    )
+    assert delivered is True
+    member.send.assert_awaited_once_with(content="hi")
 
 
 # ── transfers ─────────────────────────────────────────────────────────

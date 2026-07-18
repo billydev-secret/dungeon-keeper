@@ -655,12 +655,20 @@ async def notify_member(
     *,
     embed: discord.Embed | None = None,
     content: str | None = None,
+    require_game_role: bool = False,
 ) -> bool:
     """DM an economy notification, falling back to the bank channel.
 
     A muted member (econ_notify_prefs) is silently dropped and counts as
     delivered. Returns False only when both the DM and the bank-channel
     fallback fail.
+
+    ``require_game_role`` gates the notice on the opt-in economy role: when a
+    ``game_role_id`` is configured, a member without it is dropped silently
+    (returns True, like a mute) so recurring engagement notices — streaks,
+    milestones — only reach players who opted in. With no role configured the
+    gate is inert. Leave it False for transactional notices (e.g. rental
+    billing) that target a member by their prior spend, not by opt-in.
     """
     import discord  # local import to keep this module import-light for tests
 
@@ -677,14 +685,21 @@ async def notify_member(
     if muted:
         return True
 
+    guild = bot.get_guild(guild_id)
+    member = guild.get_member(user_id) if guild else None
+
+    if require_game_role and settings.game_role_id:
+        if member is None or not any(
+            r.id == settings.game_role_id for r in member.roles
+        ):
+            return True
+
     kwargs: dict = {}
     if content:
         kwargs["content"] = content
     if embed:
         kwargs["embed"] = embed
 
-    guild = bot.get_guild(guild_id)
-    member = guild.get_member(user_id) if guild else None
     if member is not None:
         try:
             await member.send(**kwargs)
