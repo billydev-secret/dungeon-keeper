@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Greeting Watch — DM when a "good morning"/"hello" goes unanswered  (0b10f4e)
+### Greeting Watch — DM when a "good morning"/"hello" goes unanswered  (8dc4a8c)
 
 New feature: greetings in watched channel(s) that get no reply/@mention within a
 window make the bot DM a chosen member. Configured at **Config → Greeting Watch**
