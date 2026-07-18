@@ -192,7 +192,7 @@ function channelRow(c) {
       <td><input data-c="ping_enabled" type="checkbox" ${c.ping_enabled ? "checked" : ""}></td>
       <td><select data-c="role_id_override" style="width:120px">${roleOptions(c.role_id_override)}</select></td>
       <td><input data-c="rest_hours" type="number" min="1" max="72" step="0.5" value="${c.rest_hours}" style="width:60px"></td>
-      <td><input data-c="fire_multiplier" type="number" min="2" max="10" step="0.5" value="${c.fire_multiplier}" style="width:60px"></td>
+      <td><input data-c="fire_multiplier" type="number" min="0.5" max="3" step="0.5" value="${c.fire_multiplier}" title="Patience: multiplies this channel's learned lull threshold (1.0 = its own p90 quiet gap; higher waits longer)" style="width:60px"></td>
       <td style="white-space:nowrap;">
         <button class="btn small" data-act="save">Save</button>
         <button class="btn small" data-act="check">Check</button>
@@ -210,7 +210,7 @@ function renderChannels(container, rows) {
     <table class="data-table">
       <thead><tr>
         <th>Channel</th><th>On</th><th>Categories</th><th>Ping</th>
-        <th>Role override</th><th>Rest (h)</th><th>Sensitivity ×</th><th></th>
+        <th>Role override</th><th>Rest (h)</th><th>Patience ×</th><th></th>
       </tr></thead>
       <tbody>
         ${rows.map(channelRow).join("") || `<tr><td colspan="8" class="empty">No channels invited yet.</td></tr>`}

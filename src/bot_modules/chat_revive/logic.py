@@ -18,8 +18,19 @@ BANDS_PER_DAY = 24 // BAND_HOURS
 DAY_BAND = -1  # whole-day fallback profile for sparse bands
 
 PROFILE_WINDOW_DAYS = 60
-MIN_BAND_GAPS = 30  # fewer sampled gaps than this -> use the whole-day profile
 COLD_START_DAYS = 14.0
+
+# Session-gap ("conversation") model. Segment a band's message stream into
+# conversations at a SESSION_GAP_SECONDS silence, then fire when the current
+# silence exceeds a high quantile of the *between-conversation* gaps. This
+# measures "a conversation ended and didn't restart", not "a message wasn't
+# followed quickly" — the latter is dominated by tiny intra-burst gaps and so
+# fires far too eagerly on chatty channels (a busy evening's median inter-
+# message gap is ~1min, and 4x that is a 4-minute hair-trigger).
+SESSION_GAP_SECONDS = 600.0  # a silence longer than this ends a conversation
+INTERSESSION_QUANTILE = 0.90  # fire past the 90th-pct between-conversation lull
+MIN_LULL_SECONDS = 900.0  # absolute floor; never revive a still-warm channel
+MIN_BAND_SESSIONS = 8  # fewer sampled conversation gaps -> use the whole-day profile
 
 FALLBACK_SILENCE_SECONDS = 6 * 3600.0
 FALLBACK_START_HOUR = 10
@@ -75,10 +86,27 @@ def _percentile(sorted_values: list[float], q: float) -> float:
 @dataclass(frozen=True)
 class BandProfile:
     band: int
-    median_gap: float
-    p90_gap: float
+    fire_threshold: float  # silence (s) that marks an unusual lull for this band
+    sessions_per_day: float  # between-conversation gaps seen per calendar day
     msgs_per_day: float
-    gap_count: int
+    session_count: int  # number of between-conversation gaps the threshold used
+
+
+def _session_threshold(gaps: list[float]) -> tuple[float, int]:
+    """Fire threshold + sample size from a band's consecutive-message gaps.
+
+    Intra-conversation gaps (``<= SESSION_GAP_SECONDS``) are discarded — what
+    marks a lull is how long the channel stays quiet *between* conversations,
+    not the seconds between replies inside one. The threshold is the high
+    quantile of those between-conversation gaps, floored by ``MIN_LULL_SECONDS``
+    so a still-warm channel is never revived. Returns ``(MIN_LULL_SECONDS, 0)``
+    when the band has no between-conversation gaps yet.
+    """
+    inter = sorted(g for g in gaps if g > SESSION_GAP_SECONDS)
+    if not inter:
+        return MIN_LULL_SECONDS, 0
+    threshold = max(_percentile(inter, INTERSESSION_QUANTILE), MIN_LULL_SECONDS)
+    return threshold, len(inter)
 
 
 def compute_band_profiles(
@@ -91,9 +119,11 @@ def compute_band_profiles(
     """Learn a channel's rhythm from ascending message timestamps.
 
     Each gap between consecutive messages is attributed to the band the gap
-    *starts* in (the band whose lull it is). Returns one profile per band that
-    saw any messages, plus a DAY_BAND profile over everything — the fallback
-    for bands with too few sampled gaps to trust.
+    *starts* in (the band whose lull it is), then segmented into conversations:
+    a band's fire threshold is a high quantile of its between-conversation gaps
+    (see ``_session_threshold``). Returns one profile per band that saw any
+    messages, plus a DAY_BAND profile over everything — the fallback for bands
+    with too few sampled conversation gaps to trust.
     """
     cutoff = now_ts - window_days * 86400.0
     ts = [t for t in timestamps if t >= cutoff]
@@ -115,21 +145,21 @@ def compute_band_profiles(
 
     profiles: dict[int, BandProfile] = {}
     for band, count in band_counts.items():
-        gaps = sorted(band_gaps.get(band, []))
+        threshold, sessions = _session_threshold(band_gaps.get(band, []))
         profiles[band] = BandProfile(
             band=band,
-            median_gap=_percentile(gaps, 0.5),
-            p90_gap=_percentile(gaps, 0.9),
+            fire_threshold=threshold,
+            sessions_per_day=sessions / observed_days,
             msgs_per_day=count / observed_days,
-            gap_count=len(gaps),
+            session_count=sessions,
         )
-    all_gaps.sort()
+    threshold, sessions = _session_threshold(all_gaps)
     profiles[DAY_BAND] = BandProfile(
         band=DAY_BAND,
-        median_gap=_percentile(all_gaps, 0.5),
-        p90_gap=_percentile(all_gaps, 0.9),
+        fire_threshold=threshold,
+        sessions_per_day=sessions / observed_days,
         msgs_per_day=len(ts) / observed_days,
-        gap_count=len(all_gaps),
+        session_count=sessions,
     )
     return profiles
 
@@ -272,9 +302,9 @@ def decide(g: GateInputs) -> Verdict:
 
     band = band_of(g.now_ts, g.offset_hours)
     prof = g.profiles.get(band)
-    if prof is None or prof.gap_count < MIN_BAND_GAPS:
+    if prof is None or prof.session_count < MIN_BAND_SESSIONS:
         prof = g.profiles.get(DAY_BAND)
-    if prof is None or prof.gap_count == 0:
+    if prof is None or prof.session_count == 0:
         return Verdict(
             False,
             "Not enough activity history to judge a lull here.",
@@ -299,7 +329,7 @@ def decide(g: GateInputs) -> Verdict:
             silence_s=silence,
         )
 
-    threshold = max(g.fire_multiplier * prof.median_gap, prof.p90_gap)
+    threshold = prof.fire_threshold * g.fire_multiplier
     if silence < threshold:
         return Verdict(
             False,
@@ -312,9 +342,9 @@ def decide(g: GateInputs) -> Verdict:
         )
     return Verdict(
         True,
-        f"Unusual lull: quiet for {_fmt_duration(silence)} vs a normal "
-        f"{_fmt_duration(prof.median_gap)} gap ({band_label(prof.band)}, "
-        f"threshold {_fmt_duration(threshold)}).",
+        f"Unusual lull: quiet for {_fmt_duration(silence)} — past the "
+        f"{_fmt_duration(threshold)} that marks a real lull between "
+        f"conversations here ({band_label(prof.band)}).",
         mode="rhythm",
         band=band,
         silence_s=silence,

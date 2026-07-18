@@ -9,6 +9,30 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Chat Revive: session-gap lull model replaces the 4-min trigger  (pending-hash)
+
+Rhythm mode now fires on the silence *between conversations*, not between
+messages. Each 2-hour band is segmented into conversations (a >10-min gap ends
+one) and fires at the p90 of its between-conversation gaps × a per-channel
+**Patience ×** dial (default 1.0). On the main guild's busiest channel this
+turns the evening trigger from ~4 min → ~38 min (calibrated on 60 days of real
+history). Migration 080 drops+recreates the `revive_channel_rhythm` cache and
+resets every channel's `fire_multiplier` to 1.0; the cache repopulates within
+one 6 h TTL per channel after restart.
+
+- [ ] Restart the bot → boots clean; migration 080 applies without error
+      (check logs for "Applied migration: 080_chat_revive_session_model.sql").
+- [ ] Dashboard → Moderation → Chat Revive: the channel table header reads
+      **Patience ×**; existing channels show **1.0**; the input accepts
+      0.5–3.0 and rejects out-of-range.
+- [ ] `Check` on the busy channel that mis-fired: the explanation now quotes a
+      lull threshold in the tens of minutes (not ~4 min), and refuses while the
+      channel is still warm.
+- [ ] Save a channel with Patience 2.0 → `Check` shows its threshold roughly
+      double; save back to 1.0.
+- [ ] Auto-fire soak: watch logs — a revive should only land after a genuinely
+      long quiet in a normally-lively band, not minutes after the last message.
+
 ### Risky Rolls roster shows names instead of `<@id>` numbers  (184934d)
 
 The roll list — and the result / reroll fields — in the Risky Rolls embed now

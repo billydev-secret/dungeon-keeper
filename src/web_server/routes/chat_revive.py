@@ -75,7 +75,9 @@ class ChannelBody(BaseModel):
     ping_enabled: bool = False
     role_id_override: int | None = None
     rest_hours: float = Field(8.0, ge=1.0, le=72.0)
-    fire_multiplier: float = Field(4.0, ge=2.0, le=10.0)
+    # Patience: multiplies the learned between-conversation lull threshold.
+    # 1.0 = fire at the channel's own p90 lull; >1 waits longer, <1 sooner.
+    fire_multiplier: float = Field(1.0, ge=0.5, le=3.0)
 
 
 class QuestionBody(BaseModel):

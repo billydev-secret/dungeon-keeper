@@ -39,7 +39,7 @@ Details of the moment:
 
 **Fires when all of these are true:**
 
-- The current silence is genuinely unusual for this channel at this time of day — several times longer than a normal gap, and longer than almost any lull this channel typically sees in this time band.
+- The current silence is genuinely unusual for this channel at this time of day — longer than the gap that normally sits *between conversations* here, not just between two messages. (A busy channel where people trade replies every minute has to go quiet for tens of minutes, not four, before a conversation counts as over.)
 - The channel is normally alive right now. If this hour is typically dead for this channel, nothing happens.
 - Humans have spoken since the last revive here.
 - All the frequency protections below are clear.
@@ -95,11 +95,20 @@ Details of the moment:
 
 ## Implementation notes (v1, as built)
 
-- **Rhythm model:** 2-hour local bands; per-band median and p90 message gap
-  learned from the last 60 days of `processed_messages` (human messages only).
-  Auto-fire needs silence ≥ max(4× median, p90) for the current band **and**
-  the band to be normally alive (≥ 20% of the channel's busiest band, min
-  5 msgs/day). Bands with < 30 sampled gaps fall back to the whole-day profile.
+- **Rhythm model (session-gap):** 2-hour local bands learned from the last
+  60 days of `processed_messages` (human messages only). Within each band the
+  message stream is segmented into conversations — a silence longer than
+  `SESSION_GAP_SECONDS` (10 min) ends one — and the band's fire threshold is a
+  high quantile (`INTERSESSION_QUANTILE`, p90) of the *between-conversation*
+  gaps, floored by `MIN_LULL_SECONDS` (15 min). Auto-fire needs silence ≥
+  `threshold × patience` for the current band **and** the band to be normally
+  alive (≥ 20% of the channel's busiest band, min 5 msgs/day). Bands with
+  < 8 sampled conversation gaps fall back to the whole-day profile.
+  *Why not inter-message gaps:* chat is bursty, so the median inter-message gap
+  is seconds and a small multiple of it fired within a few minutes on lively
+  channels. Modeling the silence *between* conversations, not *between*
+  messages, is what "a real lull" actually means. The **Patience ×** dial
+  (per channel, default 1.0, range 0.5–3.0) multiplies the learned threshold.
 - **Cold start:** < 14 days of channel history → fallback mode (fixed 6 h
   silence, fires 10:00–22:00 local only).
 - **Success metric:** ≥ 3 human messages from ≥ 2 distinct people within

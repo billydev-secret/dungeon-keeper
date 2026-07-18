@@ -93,24 +93,28 @@ _mid = iter(range(1, 1_000_000))
 
 
 def _seed_lively_history(conn, *, days: int = 29, last_gap: float = 3000.0) -> float:
-    """An evening channel (18:00-22:00 every 10m) whose last message was
-    ``last_gap`` seconds before NOW. Returns the last human timestamp."""
+    """A bursty evening channel: a 3-message burst (60s apart) every 30 minutes,
+    18:00-21:59 daily, for ``days`` days. Between-burst gaps are ~28m, so band 9
+    learns a ~1680s between-conversation lull threshold (vs. the old model's
+    ~4-min inter-message trigger). A trailing message is then added ``last_gap``
+    seconds before NOW, so the last human message is exactly that far back and
+    the ``last_gap`` (3000s) silence clears the ~1680s threshold. Returns the
+    last human timestamp."""
+
+    def _ins(ts: float, author_id: int) -> None:
+        conn.execute(
+            "INSERT INTO processed_messages (guild_id, message_id, channel_id,"
+            " user_id, created_at, processed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (GID, next(_mid), CID, author_id, ts, ts),
+        )
+
     for day in range(1, days + 1):
-        for m in range(24):
-            ts = _ts(day, 18) + m * 600
-            if ts >= NOW - last_gap:
-                continue
-            conn.execute(
-                "INSERT INTO processed_messages (guild_id, message_id, channel_id,"
-                " user_id, created_at, processed_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (GID, next(_mid), CID, 1 + m % 5, ts, ts),
-            )
-    row = conn.execute(
-        "SELECT MAX(created_at) AS ts FROM processed_messages "
-        "WHERE guild_id = ? AND channel_id = ?",
-        (GID, CID),
-    ).fetchone()
-    return row["ts"]
+        for hour in (18, 19, 20, 21):
+            for half in (0, 30):
+                for i in range(3):
+                    _ins(_ts(day, hour, half) + i * 60, 1 + i % 5)
+    _ins(NOW - last_gap, 1)
+    return NOW - last_gap
 
 
 def _enable(conn, **channel_overrides) -> ChannelConfig:

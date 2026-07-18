@@ -73,7 +73,7 @@ class ChannelConfig:
     ping_enabled: bool = False
     role_id_override: int | None = None
     rest_hours: float = 8.0
-    fire_multiplier: float = 4.0
+    fire_multiplier: float = 1.0  # patience: multiplies the learned lull threshold
 
 
 def get_guild_config(conn: sqlite3.Connection, guild_id: int) -> GuildConfig:
@@ -613,8 +613,8 @@ def refresh_rhythm(
     conn.executemany(
         """
         INSERT INTO revive_channel_rhythm
-            (guild_id, channel_id, band, median_gap, p90_gap,
-             msgs_per_day, gap_count, computed_at)
+            (guild_id, channel_id, band, fire_threshold, sessions_per_day,
+             msgs_per_day, session_count, computed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
@@ -622,10 +622,10 @@ def refresh_rhythm(
                 guild_id,
                 channel_id,
                 p.band,
-                p.median_gap,
-                p.p90_gap,
+                p.fire_threshold,
+                p.sessions_per_day,
                 p.msgs_per_day,
-                p.gap_count,
+                p.session_count,
                 now_ts,
             )
             for p in profiles.values()
@@ -647,10 +647,10 @@ def load_rhythm(
     profiles = {
         row["band"]: BandProfile(
             band=row["band"],
-            median_gap=row["median_gap"],
-            p90_gap=row["p90_gap"],
+            fire_threshold=row["fire_threshold"],
+            sessions_per_day=row["sessions_per_day"],
             msgs_per_day=row["msgs_per_day"],
-            gap_count=row["gap_count"],
+            session_count=row["session_count"],
         )
         for row in rows
     }
@@ -830,7 +830,7 @@ def evaluate(
         human_spoke_since_revive=human_spoke,
         last_human_ts=act.last_human_ts,
         history_days=act.history_days,
-        fire_multiplier=channel_cfg.fire_multiplier if channel_cfg else 4.0,
+        fire_multiplier=channel_cfg.fire_multiplier if channel_cfg else 1.0,
         profiles=profiles,
     )
     return Evaluation(

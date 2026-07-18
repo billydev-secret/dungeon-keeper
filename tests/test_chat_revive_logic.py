@@ -79,28 +79,39 @@ def test_profiles_band_attribution_and_day_fallback():
     profiles = compute_band_profiles(stamps, now_ts=_ts(29, 21), offset_hours=0)
     nine = profiles[9]
     # Both gaps start inside band 9 (the 18:15->20:05 lull belongs to band 9).
-    assert nine.gap_count == 2
-    assert nine.median_gap == 600.0
-    assert nine.p90_gap == 6600.0
-    assert profiles[10].gap_count == 0
+    # The 600s gap is intra-conversation and discarded; only the 6600s gap is a
+    # between-conversation lull, so it alone sets the threshold.
+    assert nine.session_count == 1
+    assert nine.fire_threshold == 6600.0
+    assert profiles[10].session_count == 0  # band 10's only msg has no gap after
+    assert profiles[10].fire_threshold == 900.0  # floor when no sessions sampled
     day = profiles[DAY_BAND]
-    assert day.gap_count == 2
+    assert day.session_count == 1
+    assert day.fire_threshold == 6600.0
     assert day.msgs_per_day == 3.0  # observed window clamps to one day
 
 
 def _evening_channel(days: int = 30) -> list[float]:
-    """A channel that chats every 10 minutes, 18:00-22:00, daily."""
+    """Active 18:00-21:59 daily: a 3-message burst (60s apart) every 30 min.
+
+    Within-burst gaps are 60s (intra-conversation); between-burst gaps are
+    ~28 min. So band 9's only between-conversation (>10 min) gaps are the four
+    ~1680s ones each evening (18:02->18:30, 18:32->19:00, 19:02->19:30,
+    19:32->20:00), which set its ~1680s fire threshold.
+    """
     stamps: list[float] = []
     for day in range(1, days + 1):
-        base = _ts(day, 18)
-        stamps.extend(base + m * 600 for m in range(24))  # 18:00..21:50
+        for hour in (18, 19, 20, 21):
+            for half in (0, 30):
+                base = _ts(day, hour, half)
+                stamps.extend(base + i * 60 for i in range(3))
     return stamps
 
 
 def test_profiles_evening_channel_rates():
     now = _ts(30, 22)
     profiles = compute_band_profiles(_evening_channel(), now_ts=now, offset_hours=0)
-    assert profiles[9].median_gap == 600.0
+    assert profiles[9].fire_threshold == 1680.0
     assert profiles[9].msgs_per_day > 10
     assert 1 not in profiles  # 02:00-04:00 never saw a message
 
@@ -130,7 +141,7 @@ def gates(**overrides) -> GateInputs:
         human_spoke_since_revive=True,
         last_human_ts=NOW - 3000,
         history_days=29.0,
-        fire_multiplier=4.0,
+        fire_multiplier=1.0,
         profiles=PROFILES,
     )
     base.update(overrides)
@@ -142,8 +153,8 @@ def test_fires_on_genuine_evening_lull():
     assert v.fire
     assert v.mode == "rhythm"
     assert v.band == 9
-    # threshold = max(4 * 600s median, p90) = 2400s; 3000s of silence beats it
-    assert v.threshold_s == 2400.0
+    # threshold = 1680s between-conversation lull x 1.0 patience; 3000s beats it
+    assert v.threshold_s == 1680.0
 
 
 def test_refuses_below_threshold():
@@ -218,13 +229,18 @@ def test_gate_normally_quiet_band():
 
 def test_sparse_band_falls_back_to_day_profile():
     sparse = {
-        9: BandProfile(band=9, median_gap=60, p90_gap=100, msgs_per_day=50, gap_count=3),
+        9: BandProfile(
+            band=9, fire_threshold=1000, sessions_per_day=1, msgs_per_day=50,
+            session_count=3,
+        ),
         DAY_BAND: BandProfile(
-            band=DAY_BAND, median_gap=500, p90_gap=900, msgs_per_day=60, gap_count=200
+            band=DAY_BAND, fire_threshold=2000, sessions_per_day=5,
+            msgs_per_day=60, session_count=200,
         ),
     }
     v = decide(gates(profiles=sparse, last_human_ts=NOW - 2100))
-    # Day profile: threshold = max(4*500, 900) = 2000 -> 2100s fires.
+    # Band 9 sampled only 3 conversation gaps (< MIN_BAND_SESSIONS) -> day
+    # profile: threshold 2000 x 1.0 patience -> 2100s of silence fires.
     assert v.fire
     assert v.threshold_s == 2000.0
 
