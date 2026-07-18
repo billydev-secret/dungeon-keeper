@@ -93,6 +93,29 @@ async def test_recurring_free_channel_launches_and_advances(sync_db_path):
     assert after["next_run_at"] > NOW  # advanced to a future slot
 
 
+async def test_photo_still_fires_after_leaving_schedulable(sync_db_path):
+    # 'photo' was pulled from SCHEDULABLE_GAME_TYPES (it's the standalone Photo
+    # Challenge feature now), but its rows — created via /api/photo-challenge —
+    # must still run on this shared, game-type-agnostic loop. Guards this exact
+    # reuse contract against a future "clean up the constant" regression.
+    db = GamesDb(sync_db_path)
+    launched = []
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        launched.append({"channel": channel.id, "game": "photo"})
+        return "photo-gid"
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"photo": fake_launch})
+    row = await _insert(db, game_type="photo", recurrence="daily")
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert len(launched) == 1 and launched[0]["channel"] == CHAN
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "launched"
+    assert after["next_run_at"] > NOW
+
+
 async def test_recurring_busy_channel_skips_and_advances(sync_db_path):
     db = GamesDb(sync_db_path)
     launched = []

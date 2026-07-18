@@ -303,6 +303,12 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         scheduled_games_routes.router, prefix="/api/games/schedule", tags=["games"]
     )
 
+    from web_server.routes import photo_challenge as photo_challenge_routes
+
+    app.include_router(
+        photo_challenge_routes.router, prefix="/api/photo-challenge", tags=["photo-challenge"]
+    )
+
     # ── Quotes ──────────────────────────────────────────────────────────
     from web_server.routes import quotes as quotes_routes
 

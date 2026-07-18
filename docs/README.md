@@ -35,7 +35,7 @@ Discord moderation, community, voice, and analytics bot.
 - **Music** — YouTube and Spotify playback via Lavalink with a persistent now-playing card and queue: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot parked in a channel and auto-queues from a playlist when idle.
 
 ### Party games
-An 18-game social suite that shares session windows, anonymous audit logging, per-guild
+A 17-game social suite that shares session windows, anonymous audit logging, per-guild
 enable/disable, channel allowlists, and an AI question-bank fallback.
 - **Free For All** — A host poses a question and everyone answers, in chat or through a name-hiding popup modal. Lurk anonymously or jump in as yourself.
 - **Truth or Dare Card** — The banner variant of Free For All: just drops the prompt card in the channel for open chat, no reply buttons.

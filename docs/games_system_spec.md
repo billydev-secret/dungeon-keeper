@@ -16,7 +16,7 @@ All party games launch with `/games play <slug>`. Params below are the actual sl
 |---|---|---|---|
 | Anonymous Truth or Dare | `/games play ffa kind:[truth\|dare\|random] tags:[csv] prompt:[str]` | Everyone | Drops a T-or-D prompt; players reply anonymously via modal, posted by the bot |
 | Truth or Dare Card | `/games play ffa_banner kind:[truth\|dare\|random] tags:[csv] prompt:[str]` | Everyone | Card-only variant of FFA — just posts a prompt card for open chat, no interactive state |
-| Photo Challenge | `/games play photo tags:[csv] prompt:[str]` | Everyone | Posts a photo-prompt card; members reply with their shots. Feeds the economy photo-reply quest |
+| Photo Challenge | *(no command — standalone)* | — | **Moved out of the games menu + shared scheduler.** Now a standalone dashboard feature (**Photo Challenge** nav → Setup & Schedule): one dedicated channel, its own recurring schedule, a ping role, an enabled toggle. Auto-posts a photo-prompt card on schedule; members reply with their shots. Prompts come from the shared bank (`game_type='photo'`); still feeds the economy photo-reply quest. Config/schedule via `/api/photo-challenge` |
 | Truth or Dare | `/games play traditional single_choice:[bool]` | Everyone | SFW/NSFW Truth & Dare opt-in pools; `single_choice:true` makes each player pick exactly one category (radio-style) |
 | Spin the Compliment | `/games play compliment` | Everyone | Derangement-paired giver → receiver |
 | Marry, Fornicate, Kiss | `/games play mfk options:[csv]` | Everyone | `options:` overrides the three default labels |

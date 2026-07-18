@@ -35,6 +35,34 @@ window make the bot DM a chosen member. Configured at **Config → Greeting Watc
 - [ ] Confirm the notify DM still arrives after a **bot restart** with a
       greeting left pending across the restart (row is persisted, not in-memory).
 
+### Photo Challenge is now a standalone scheduled feature  (04bab23)
+
+Photo Challenge left the Games menu and the shared Game Scheduling panel. The
+`/games play photo` slash command is gone. It's now its own top-level dashboard
+section (**Photo Challenge → Setup & Schedule**) with a dedicated channel it
+always posts in, its own recurring schedule, a ping role, and an enabled toggle.
+Under the hood it still rides the shared scheduler loop (schedule rows in
+`games_scheduled`, `game_type='photo'`) and the shared prompt bank, and it still
+feeds the economy photo-reply quest — those contracts are unchanged. Needs a
+bot + dashboard restart to pick up (new route + JS + cog change).
+
+- [ ] `/games play photo` no longer exists (autocomplete shows nothing); Photo
+      Challenge is gone from the **Games** nav and from the **Game Scheduling**
+      game dropdown + list.
+- [ ] Dashboard → **Photo Challenge → Setup & Schedule**: set the channel to a
+      real channel (e.g. `1528057071235371088`), pick a ping role, tick Enabled,
+      **Save setup** → reload → values persist.
+- [ ] Add a **daily** schedule a minute out (or use **Run now**) → a challenge
+      card posts **to the configured channel** (not wherever you were), pinging
+      the role once.
+- [ ] Reply to the card with a photo → the economy **photo-reply** quest still
+      pays out (econ contract intact).
+- [ ] Change the channel in setup → existing schedule follows the new channel
+      (next post lands there).
+- [ ] Turn **Enabled** off → next scheduled slot is skipped (no card).
+- [ ] **Prompt Bank** on the panel (and **Prompts & AI**) still add/edit photo
+      prompts; a scheduled post with no custom prompt pulls a random one.
+
 ### Photo Challenge — ping role is now a dropdown, not a pasted ID  (5af3480)
 
 The Photo Challenge panel's **Ping role on post** field was a free-text box you

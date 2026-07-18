@@ -8,18 +8,13 @@ if TYPE_CHECKING:
 
 import discord
 from discord.ext import commands
-from discord import app_commands
 from bot_modules.games.utils.game_manager import (
-    finish_launch_response,
-    check_allowed_channel,
     create_game,
     get_game_options,
     update_session,
     end_game,
-    channel_name,
 )
 from bot_modules.services.economy_quests_service import record_photo_card
-from bot_modules.games.command_groups import play
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 
@@ -68,74 +63,6 @@ class PhotoCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(
-        name="photo",
-        description="Drop a Photo Challenge card in the channel!",
-    )
-    @app_commands.describe(
-        tags="Comma-separated tags to filter the prompt bank",
-        prompt="Write your own challenge instead of pulling one from the bank (optional)",
-    )
-    async def photo(
-        self,
-        interaction: discord.Interaction,
-        tags: str = "",
-        prompt: str | None = None,
-    ):
-        await self.start_photo(interaction, tags, prompt)
-
-    async def start_photo(
-        self,
-        interaction: discord.Interaction,
-        tags: str = "",
-        prompt: str | None = None,
-    ):
-        log.info(
-            "%s used /games play photo in #%s",
-            interaction.user.display_name,
-            channel_name(interaction.channel),
-        )
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-
-        custom = (prompt or "").strip()
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        # When no custom prompt is given, pull one from the curated bank now so we
-        # can give a friendly notice (instead of a generic error) if it's empty.
-        text = custom
-        if not text:
-            text = await get_photo_prompt(
-                self.db, tags=tag_list or None,
-                allow_nsfw=channel_allows_nsfw(interaction.channel),
-            )
-            if not text:
-                msg = (
-                    f"📸 No photo challenges match tags: {', '.join(tag_list)}."
-                    if tag_list
-                    else "📸 No photo challenges are in the bank yet — an editor can add some "
-                    "from the **Games Studio** in the web dashboard."
-                )
-                await interaction.response.send_message(msg, ephemeral=True)
-                return
-
-        await interaction.response.defer()
-        game_id = await self.launch(
-            channel=interaction.channel,
-            host_id=interaction.user.id,
-            host_name=interaction.user.display_name,
-            guild_id=interaction.guild_id or 0,
-            options={"tags": tag_list, "prompt": text},
-        )
-        await finish_launch_response(
-            interaction, game_id,
-            perms_hint="I couldn't start the game here. Please grant me **View Channel**, "
-            "**Send Messages**, and **Attach Files**.",
-        )
-
     async def launch(
         self,
         *,
@@ -145,7 +72,7 @@ class PhotoCog(commands.Cog):
         guild_id: int,
         options: dict,
     ) -> str | None:
-        """Interaction-free launch (slash command + scheduler). Returns game_id, or None.
+        """Interaction-free launch (driven by the Photo Challenge scheduler). Returns game_id, or None.
 
         Returns None when the bank is empty (and no custom prompt was given) so the
         scheduler simply skips the run instead of posting an empty card.
@@ -183,7 +110,7 @@ class PhotoCog(commands.Cog):
             return None
 
         # Post the card (bare image — members reply with their photos). A
-        # configured ping role (Games Studio → Photo Challenge) rides along.
+        # configured ping role (Photo Challenge dashboard) rides along.
         content = None
         allowed = discord.utils.MISSING
         options = await get_game_options(self.db, "photo", guild_id)
@@ -245,8 +172,9 @@ class PhotoCog(commands.Cog):
 
 
 async def setup(bot: "Bot"):
+    # No slash command — Photo Challenge is scheduled-only, driven from its own
+    # dashboard feature. The launcher stays registered so the shared scheduler
+    # loop can fire the standalone photo schedules.
     cog = PhotoCog(bot)
     await bot.add_cog(cog)
-    bot.tree.remove_command("photo")
-    play.add_command(cog.photo, override=True)
     bot.game_launchers["photo"] = cog.launch

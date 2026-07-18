@@ -210,10 +210,6 @@ const SECTIONS = [
         { id: "games-ama",        label: "Questions",  module: "./panels/games-ama.js" },
         { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
       ]},
-      { heading: "Photo Challenge", items: [
-        { id: "games-photo",        label: "Questions",  module: "./panels/games-photo.js" },
-        { id: "games-photo-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "photo" },
-      ]},
       { heading: "FFA / Truth or Dare", items: [
         { id: "games-ffa", label: "Questions", module: "./panels/games-ffa.js" },
       ]},
@@ -234,6 +230,15 @@ const SECTIONS = [
         { id: "games-pen-pals",   label: "Questions",  module: "./panels/games-pen-pals.js" },
         { id: "games-pen-pals-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "pen_pals" },
       ]},
+    ],
+  },
+  {
+    // Standalone feature — pulled out of the Games menu/scheduler. Same
+    // game-host/admin gating as Games (endpoints use require_game_host).
+    id: "photo-challenge", label: "Photo Challenge", perms: ["admin"], gameHostRole: true,
+    items: [
+      { id: "photo-challenge",        label: "Setup & Schedule", module: "./panels/photo-challenge.js" },
+      { id: "photo-challenge-studio", label: "Prompts & AI",     module: "./panels/games-studio.js", gt: "photo" },
     ],
   },
   HELP_NAV_SECTION,

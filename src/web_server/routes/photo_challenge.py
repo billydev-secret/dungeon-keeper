@@ -1,4 +1,15 @@
-"""Scheduled games endpoints — create/list/edit schedules that auto-launch games."""
+"""Photo Challenge — standalone dashboard feature (config + own schedule).
+
+Photo Challenge left the shared games menu/scheduler: it has one dedicated
+channel it posts in, its own recurring schedule, a ping role, and an enabled
+toggle. Under the hood it reuses the game-type-agnostic scheduler runtime —
+schedule rows live in ``games_scheduled`` with ``game_type='photo'`` and are
+fired by ``scheduled_games_loop`` — but they're created here (channel forced
+from config) and hidden from the shared scheduler UI. Config (channel_id,
+ping_role_id, enabled) rides in ``games_game_config`` under game_type='photo',
+which is also where the scheduler's enable-gate and the cog's launch() read it,
+so no new table is needed.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.games.constants import (
-    GAME_ICONS,
-    GAME_NAMES,
-    SCHEDULABLE_GAME_TYPES,
-    SCHEDULE_OPTION_SCHEMA,
-)
+from bot_modules.games.constants import GAME_ICONS, GAME_NAMES
 from bot_modules.services.scheduled_games_service import (
     GIVEUP_GRACE_SECONDS,
     VALID_RECURRENCE,
@@ -30,23 +36,26 @@ from bot_modules.services.scheduled_games_service import (
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, run_query
 
-log = logging.getLogger("dungeonkeeper.games.schedule")
+log = logging.getLogger("dungeonkeeper.photo_challenge")
 
 router = APIRouter()
+
+GAME_TYPE = "photo"
 
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
+class ConfigBody(BaseModel):
+    channel_id: str = ""          # "" clears the dedicated channel
+    ping_role_id: str = ""        # "" / "0" = no ping
+    enabled: bool = True
+
+
 class ScheduleBody(BaseModel):
-    channel_id: str
-    game_type: str
-    options: dict = {}
-    recurrence: str                       # once | daily | weekly
-    time: str                             # "HH:MM" in guild-local time
-    recur_days: Optional[list[int]] = None  # weekly: weekday ints (Mon=0..Sun=6)
-    start_date: Optional[str] = None      # once: "YYYY-MM-DD" (guild-local)
-    announce: bool = False
-    announce_role_id: Optional[str] = None
+    recurrence: str                          # once | daily | weekly
+    time: str                                # "HH:MM" in guild-local time
+    recur_days: Optional[list[int]] = None   # weekly: weekday ints (Mon=0..Sun=6)
+    start_date: Optional[str] = None         # once: "YYYY-MM-DD" (guild-local)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -63,19 +72,11 @@ def _parse_time_of_day(raw: str) -> int:
     return minutes
 
 
-def _validate(body: ScheduleBody) -> tuple[int, int, str | None]:
-    """Validate body shape; return (channel_id, time_of_day_min, recur_days_json)."""
-    if body.game_type not in SCHEDULABLE_GAME_TYPES:
-        raise HTTPException(status_code=400, detail=f"Not schedulable: {body.game_type}")
+def _validate_schedule(body: ScheduleBody) -> tuple[int, str | None]:
+    """Validate schedule body; return (time_of_day_min, recur_days_json)."""
     if body.recurrence not in VALID_RECURRENCE:
         raise HTTPException(status_code=400, detail=f"Invalid recurrence: {body.recurrence}")
-    try:
-        channel_id = int(body.channel_id)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="channel_id must be numeric")
-
     tod = _parse_time_of_day(body.time)
-
     recur_days_json: str | None = None
     if body.recurrence == "weekly":
         days = sorted({int(d) for d in (body.recur_days or []) if 0 <= int(d) <= 6})
@@ -84,43 +85,109 @@ def _validate(body: ScheduleBody) -> tuple[int, int, str | None]:
         recur_days_json = json.dumps(days)
     if body.recurrence == "once" and not body.start_date:
         raise HTTPException(status_code=400, detail="once needs a start_date")
-
-    return channel_id, tod, recur_days_json
-
-
-def _channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
-    """True if the live bot can see this channel in the active guild (best-effort)."""
-    bot = getattr(ctx, "bot", None)
-    if bot is None:
-        return True  # bot not attached (e.g. tests) — skip the guard
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        return True
-    return guild.get_channel(channel_id) is not None
+    return tod, recur_days_json
 
 
-# ── Endpoints ────────────────────────────────────────────────────────────────
-
-@router.get("/options")
-async def schedule_options(
-    _: AuthenticatedUser = Depends(require_game_host),
-):
-    """Schedulable game types + per-game option schema for the UI."""
+def _read_config(conn, guild_id: int) -> dict:
+    row = conn.execute(
+        "SELECT enabled, options FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+        (guild_id, GAME_TYPE),
+    ).fetchone()
+    if not row:
+        return {"enabled": True, "channel_id": "", "ping_role_id": ""}
+    opts = json.loads(row[1] or "{}")
     return {
-        "games": [
-            {
-                "type": g,
-                "name": GAME_NAMES.get(g, g),
-                "icon": GAME_ICONS.get(g, "🎮"),
-                "fields": SCHEDULE_OPTION_SCHEMA.get(g, []),
-            }
-            for g in SCHEDULABLE_GAME_TYPES
-        ],
+        "enabled": bool(row[0]),
+        "channel_id": str(opts.get("channel_id") or ""),
+        "ping_role_id": str(opts.get("ping_role_id") or ""),
     }
 
 
-@router.get("")
-async def list_schedules(
+def _configured_channel_id(conn, guild_id: int) -> int:
+    """The dedicated channel int, or 400 if none is set yet."""
+    ch = _read_config(conn, guild_id)["channel_id"]
+    if not ch.isdigit() or int(ch) <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Set a Photo Challenge channel before creating a schedule.",
+        )
+    return int(ch)
+
+
+# ── Config endpoints ─────────────────────────────────────────────────────────
+
+@router.get("/config")
+async def get_config(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return _read_config(conn, guild_id)
+
+    return await run_query(_q)
+
+
+@router.put("/config")
+async def set_config(
+    request: Request,
+    body: ConfigBody,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    channel_raw = (body.channel_id or "").strip()
+    if channel_raw and not channel_raw.isdigit():
+        raise HTTPException(status_code=400, detail="channel_id must be numeric")
+    role_raw = (body.ping_role_id or "").strip()
+    if role_raw in ("", "0"):
+        role_raw = ""
+    elif not role_raw.isdigit():
+        raise HTTPException(status_code=400, detail="ping_role_id must be numeric")
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT options FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+                (guild_id, GAME_TYPE),
+            ).fetchone()
+            opts = json.loads(row[0] or "{}") if row else {}
+            opts["channel_id"] = channel_raw
+            opts["ping_role_id"] = role_raw
+            enabled = int(body.enabled)
+            if row is not None:
+                conn.execute(
+                    "UPDATE games_game_config SET enabled = ?, options = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE guild_id = ? AND game_type = ?",
+                    (enabled, json.dumps(opts), guild_id, GAME_TYPE),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO games_game_config (guild_id, game_type, enabled, options) "
+                    "VALUES (?, ?, ?, ?)",
+                    (guild_id, GAME_TYPE, enabled, json.dumps(opts)),
+                )
+            # Keep existing photo schedules pointed at the (possibly new) channel.
+            if channel_raw:
+                conn.execute(
+                    "UPDATE games_scheduled SET channel_id = ? "
+                    "WHERE guild_id = ? AND game_type = ?",
+                    (int(channel_raw), guild_id, GAME_TYPE),
+                )
+            conn.commit()
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Schedule endpoints ───────────────────────────────────────────────────────
+
+@router.get("/schedule")
+async def list_schedule(
     request: Request,
     _: AuthenticatedUser = Depends(require_game_host),
 ):
@@ -133,25 +200,18 @@ async def list_schedules(
         out = []
         for r in rows:
             d = dict(r)
-            # Skip rows for game types that have left the shared games menu
-            # (e.g. 'photo' — now the standalone Photo Challenge feature, which
-            # owns its own schedule UI). Their rows still run on the shared loop.
-            if d["game_type"] not in SCHEDULABLE_GAME_TYPES:
+            if d["game_type"] != GAME_TYPE:
                 continue
-            d["game_name"] = GAME_NAMES.get(d["game_type"], d["game_type"])
-            d["game_icon"] = GAME_ICONS.get(d["game_type"], "🎮")
+            d["game_name"] = GAME_NAMES.get(GAME_TYPE, GAME_TYPE)
+            d["game_icon"] = GAME_ICONS.get(GAME_TYPE, "📸")
             d["recur_days"] = json.loads(d["recur_days"]) if d.get("recur_days") else None
-            try:
-                d["options"] = json.loads(d.get("options") or "{}")
-            except (ValueError, TypeError):
-                d["options"] = {}
             out.append(d)
         return out
 
     return await run_query(_q)
 
 
-@router.post("")
+@router.post("/schedule")
 async def create_schedule(
     request: Request,
     body: ScheduleBody,
@@ -159,15 +219,12 @@ async def create_schedule(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    channel_id, tod, recur_days_json = _validate(body)
-
-    if not _channel_in_guild(ctx, guild_id, channel_id):
-        raise HTTPException(status_code=400, detail="Channel is not in this server")
-
+    tod, recur_days_json = _validate_schedule(body)
     now = time.time()
 
     def _q():
         with ctx.open_db() as conn:
+            channel_id = _configured_channel_id(conn, guild_id)
             offset = get_tz_offset_hours(conn, guild_id)
             next_run_at = compute_next_run(
                 now_utc=now, offset_hours=offset, recurrence=body.recurrence,
@@ -185,8 +242,8 @@ async def create_schedule(
                 conn,
                 guild_id=guild_id,
                 channel_id=channel_id,
-                game_type=body.game_type,
-                options=json.dumps(body.options or {}),
+                game_type=GAME_TYPE,
+                options="{}",
                 created_by=int(user.user_id),
                 created_at=now,
                 time_of_day=tod,
@@ -195,15 +252,15 @@ async def create_schedule(
                 start_date=body.start_date,
                 next_run_at=next_run_at,
                 giveup_at=giveup_at,
-                announce=1 if body.announce else 0,
-                announce_role_id=int(body.announce_role_id) if body.announce_role_id else None,
+                announce=0,
+                announce_role_id=None,
             )
         return {"ok": True, "id": sched_id, "next_run_at": next_run_at}
 
     return await run_query(_q)
 
 
-@router.put("/{sched_id}")
+@router.put("/schedule/{sched_id}")
 async def update_schedule(
     sched_id: int,
     request: Request,
@@ -212,17 +269,15 @@ async def update_schedule(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    channel_id, tod, recur_days_json = _validate(body)
-
-    if not _channel_in_guild(ctx, guild_id, channel_id):
-        raise HTTPException(status_code=400, detail="Channel is not in this server")
-
+    tod, recur_days_json = _validate_schedule(body)
     now = time.time()
 
     def _q():
         with ctx.open_db() as conn:
-            if get_scheduled(conn, sched_id, guild_id) is None:
+            existing = get_scheduled(conn, sched_id, guild_id)
+            if existing is None or existing["game_type"] != GAME_TYPE:
                 raise HTTPException(status_code=404, detail="Schedule not found")
+            channel_id = _configured_channel_id(conn, guild_id)
             offset = get_tz_offset_hours(conn, guild_id)
             next_run_at = compute_next_run(
                 now_utc=now, offset_hours=offset, recurrence=body.recurrence,
@@ -238,16 +293,12 @@ async def update_schedule(
 
             update_scheduled(conn, sched_id, guild_id, {
                 "channel_id": channel_id,
-                "game_type": body.game_type,
-                "options": json.dumps(body.options or {}),
                 "time_of_day": tod,
                 "recurrence": body.recurrence,
                 "recur_days": recur_days_json,
                 "start_date": body.start_date,
                 "next_run_at": next_run_at,
                 "giveup_at": giveup_at,
-                "announce": 1 if body.announce else 0,
-                "announce_role_id": int(body.announce_role_id) if body.announce_role_id else None,
                 "status": "active",
             })
         return {"ok": True, "next_run_at": next_run_at}
@@ -255,7 +306,7 @@ async def update_schedule(
     return await run_query(_q)
 
 
-@router.delete("/{sched_id}")
+@router.delete("/schedule/{sched_id}")
 async def delete_schedule(
     sched_id: int,
     request: Request,
@@ -266,7 +317,8 @@ async def delete_schedule(
 
     def _q():
         with ctx.open_db() as conn:
-            if get_scheduled(conn, sched_id, guild_id) is None:
+            row = get_scheduled(conn, sched_id, guild_id)
+            if row is None or row["game_type"] != GAME_TYPE:
                 raise HTTPException(status_code=404, detail="Schedule not found")
             delete_scheduled(conn, sched_id, guild_id)
         return {"ok": True}
@@ -274,7 +326,7 @@ async def delete_schedule(
     return await run_query(_q)
 
 
-@router.post("/{sched_id}/pause")
+@router.post("/schedule/{sched_id}/pause")
 async def pause_schedule(
     sched_id: int,
     request: Request,
@@ -285,7 +337,8 @@ async def pause_schedule(
 
     def _q():
         with ctx.open_db() as conn:
-            if get_scheduled(conn, sched_id, guild_id) is None:
+            row = get_scheduled(conn, sched_id, guild_id)
+            if row is None or row["game_type"] != GAME_TYPE:
                 raise HTTPException(status_code=404, detail="Schedule not found")
             update_scheduled(conn, sched_id, guild_id, {"status": "paused"})
         return {"ok": True}
@@ -293,7 +346,7 @@ async def pause_schedule(
     return await run_query(_q)
 
 
-@router.post("/{sched_id}/resume")
+@router.post("/schedule/{sched_id}/resume")
 async def resume_schedule(
     sched_id: int,
     request: Request,
@@ -306,7 +359,7 @@ async def resume_schedule(
     def _q():
         with ctx.open_db() as conn:
             row = get_scheduled(conn, sched_id, guild_id)
-            if row is None:
+            if row is None or row["game_type"] != GAME_TYPE:
                 raise HTTPException(status_code=404, detail="Schedule not found")
             offset = get_tz_offset_hours(conn, guild_id)
             next_run_at = compute_next_run(
@@ -316,7 +369,6 @@ async def resume_schedule(
                 start_date=row["start_date"], after=now,
             )
             if next_run_at is None:
-                # A one-time schedule whose slot has passed can't be resumed.
                 raise HTTPException(status_code=400, detail="Nothing left to run; delete it instead")
             update_scheduled(conn, sched_id, guild_id,
                              {"status": "active", "next_run_at": next_run_at})
@@ -325,7 +377,7 @@ async def resume_schedule(
     return await run_query(_q)
 
 
-@router.post("/{sched_id}/run-now")
+@router.post("/schedule/{sched_id}/run-now")
 async def run_now(
     sched_id: int,
     request: Request,
@@ -338,7 +390,8 @@ async def run_now(
 
     def _q():
         with ctx.open_db() as conn:
-            if get_scheduled(conn, sched_id, guild_id) is None:
+            row = get_scheduled(conn, sched_id, guild_id)
+            if row is None or row["game_type"] != GAME_TYPE:
                 raise HTTPException(status_code=404, detail="Schedule not found")
             update_scheduled(conn, sched_id, guild_id,
                              {"status": "active", "next_run_at": now})

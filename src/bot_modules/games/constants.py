@@ -18,7 +18,9 @@ CLAPBACK_TIE_COLOR = 0x99AAB5   # Grey (ties)
 GAME_ICONS = {
     'ffa': '🎭',
     'ffa_banner': '🃏',
-    'photo': '📸',
+    # 'photo' is intentionally absent — Photo Challenge left the games menu and
+    # the /games help list (it's scheduled-only now). GAME_NAMES keeps its
+    # display name for logs/scheduler lookups.
     'traditional': '🎲',
     'compliment': '💛',
     'mfk': '💍',
@@ -70,8 +72,13 @@ GAME_NAMES = {
 # challenge/opponent flow. Adding a game here REQUIRES registering a launcher
 # in its cog setup() (see bot.game_launchers); the startup coverage check warns
 # on drift.
+# NOTE: 'photo' is intentionally NOT here — Photo Challenge is its own
+# standalone dashboard feature (/api/photo-challenge, own channel + schedule),
+# not part of the shared games menu/scheduler. Its schedule rows still ride
+# the games_scheduled table + this loop (game-type-agnostic), but they're
+# created via the dedicated routes and hidden from the shared scheduler UI.
 SCHEDULABLE_GAME_TYPES = [
-    'ffa', 'ffa_banner', 'photo', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
+    'ffa', 'ffa_banner', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
     'hottakes', 'story', 'ama', 'fantasies', 'price', 'rushmore', 'clapback',
     'legitlibs', 'risky_roll',
 ]
@@ -106,9 +113,6 @@ SCHEDULE_OPTION_SCHEMA = {
                      {'value': 'truth', 'label': 'Truth'},
                      {'value': 'dare', 'label': 'Dare'}]},
         {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
-    ],
-    'photo': [
-        {'name': 'prompt', 'label': 'Custom challenge (optional)', 'type': 'str', 'default': ''},
     ],
     'traditional': [
         {'name': 'single_choice', 'label': 'One category per player (radio-style)',
