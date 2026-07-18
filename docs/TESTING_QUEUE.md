@@ -35,7 +35,7 @@ window make the bot DM a chosen member. Configured at **Config → Greeting Watc
 - [ ] Confirm the notify DM still arrives after a **bot restart** with a
       greeting left pending across the restart (row is persisted, not in-memory).
 
-### Photo Challenge is now a standalone scheduled feature  (04bab23)
+### Photo Challenge is now a standalone scheduled feature  (88c5125)
 
 Photo Challenge left the Games menu and the shared Game Scheduling panel. The
 `/games play photo` slash command is gone. It's now its own top-level dashboard
