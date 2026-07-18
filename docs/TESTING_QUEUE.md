@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Rules Watch — tier tabs now filter with "Unlabeled only" off  (aff827b)
+### Rules Watch — tier tabs now filter with "Unlabeled only" off  (100c724)
 
 The All/Immediate/Digest/Logged tabs are a tier filter. It worked while
 **Unlabeled only** was checked, but unchecking it routed through
