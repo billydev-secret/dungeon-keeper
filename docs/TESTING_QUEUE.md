@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Risky Rolls roster shows names instead of `<@id>` numbers  (<pending>)
+### Risky Rolls roster shows names instead of `<@id>` numbers  (184934d)
 
 The roll list — and the result / reroll fields — in the Risky Rolls embed now
 print cached **display names as plain text** instead of `<@id>` mentions, which
