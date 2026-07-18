@@ -56,7 +56,7 @@ async def list_events(
                 )
             else:
                 rows = service.get_all_events(
-                    conn, guild_id, limit=limit, offset=offset
+                    conn, guild_id, tier=tier, limit=limit, offset=offset
                 )
             return [_row_to_dict(r) for r in rows]
 

@@ -207,10 +207,23 @@ def get_all_events(
     conn: sqlite3.Connection,
     guild_id: int,
     *,
+    tier: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
     """Return all events (labeled and unlabeled), newest first."""
+    if tier:
+        return conn.execute(
+            """
+            SELECT e.*, l.is_violation, l.corrected_rule, l.labeled_by, l.labeled_at
+            FROM rules_events e
+            LEFT JOIN rules_labels l ON l.event_id = e.id
+            WHERE e.guild_id = ? AND e.priority_tier = ?
+            ORDER BY e.detected_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (guild_id, tier, limit, offset),
+        ).fetchall()
     return conn.execute(
         """
         SELECT e.*, l.is_violation, l.corrected_rule, l.labeled_by, l.labeled_at

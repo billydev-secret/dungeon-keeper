@@ -9,6 +9,24 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Rules Watch — tier tabs now filter with "Unlabeled only" off  (aff827b)
+
+The All/Immediate/Digest/Logged tabs are a tier filter. It worked while
+**Unlabeled only** was checked, but unchecking it routed through
+`get_all_events`, which ignored `tier` entirely — so every tab showed the same
+unfiltered list. `get_all_events` now honours `tier` (mirroring
+`get_pending_events`) and the route passes it through.
+
+**Worth knowing while testing:** the underlying SQL is trivial and there's no
+Discord surface — this is a dashboard-only check. Fully exercisable from a
+browser; live pass is just to confirm the deployed static JS + route agree.
+
+- [ ] Open Rules Watch → **uncheck "Unlabeled only"** → click each of All /
+      Immediate / Digest / Logged. Each tier tab now shows a **distinct** list
+      (Immediate has the most; Logged is a short list, not a copy of All).
+- [ ] Re-check "Unlabeled only" → filtering still works; Logged shows **empty**
+      (no unlabeled logged events) rather than a copy of another tab.
+
 ### XP — level-ups won on silent award paths now get announced  (b6ca6bf)
 
 `member_xp.announced_level` (migration 075) now tracks what's actually been
