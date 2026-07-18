@@ -22,18 +22,22 @@ export const HELP_GROUPS = [
   // mirroring the manual's section order. (Items alphabetize within a group
   // in the sidebar, so only group membership/order matters here.)
   { heading: "Games & Social", items: [
-    { page: "help-games",       anchor: "games",       label: "Games Night" },
-    { page: "help-guess",       anchor: "guess",       label: "Guess Who" },
-    { page: "help-whisper",     anchor: "whisper",     label: "Whisper" },
-    { page: "help-confessions", anchor: "confessions", label: "Confessions" },
-    { page: "help-pen-pals",    anchor: "pen-pals",    label: "Pen Pals" },
+    { page: "help-games",       anchor: "games",           label: "Games Night" },
+    { page: "help-guess",       anchor: "guess",           label: "Guess Who" },
+    { page: "help-photo",       anchor: "photo-challenge", label: "Photo Challenge" },
+    { page: "help-whisper",     anchor: "whisper",         label: "Whisper" },
+    { page: "help-confessions", anchor: "confessions",     label: "Confessions" },
+    { page: "help-pen-pals",    anchor: "pen-pals",        label: "Pen Pals" },
   ]},
   { heading: "Member Tools", items: [
-    { page: "help-community", anchor: "community",    label: "Community & XP" },
-    { page: "help-wellness",  anchor: "wellness",     label: "Wellness" },
-    { page: "help-dms",       anchor: "dm-perms",     label: "DM Permissions" },
-    { page: "help-self",      anchor: "self-service", label: "Member Self-Service" },
-    { page: "help-privacy",   anchor: "privacy",      label: "Data Erasure" },
+    { page: "help-community", anchor: "community",     label: "Community & XP" },
+    { page: "help-economy",   anchor: "economy",       label: "Economy & Perk Shop" },
+    { page: "help-bios",      anchor: "bios",          label: "Bios" },
+    { page: "help-emoji",     anchor: "emoji-stealer", label: "Emoji Stealer" },
+    { page: "help-wellness",  anchor: "wellness",      label: "Wellness" },
+    { page: "help-dms",       anchor: "dm-perms",      label: "DM Permissions" },
+    { page: "help-self",      anchor: "self-service",  label: "Member Self-Service" },
+    { page: "help-privacy",   anchor: "privacy",       label: "Data Erasure" },
   ]},
   { heading: "Voice & Music", items: [
     { page: "help-voice", anchor: "voice",     label: "Voice Channels" },
@@ -50,10 +54,13 @@ export const HELP_GROUPS = [
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
   ]},
   { heading: "Server Admin", items: [
-    { page: "help-setup",   anchor: "setup",             label: "Setup & Permissions" },
-    { page: "help-config",  anchor: "config",            label: "Configuration" },
-    { page: "help-cleanup", anchor: "server-ops",        label: "Server Upkeep" },
-    { page: "help-network", anchor: "network-analytics", label: "Network Analytics" },
+    { page: "help-setup",          anchor: "setup",             label: "Setup & Permissions" },
+    { page: "help-config",         anchor: "config",            label: "Configuration" },
+    { page: "help-cleanup",        anchor: "server-ops",        label: "Server Upkeep" },
+    { page: "help-chat-revive",    anchor: "chat-revive",       label: "Chat Revive" },
+    { page: "help-greeting-watch", anchor: "greeting-watch",    label: "Greeting Watch" },
+    { page: "help-hidden",         anchor: "hidden-channels",   label: "Hidden Channels" },
+    { page: "help-network",        anchor: "network-analytics", label: "Network Analytics" },
   ]},
 ];
 
@@ -62,6 +69,7 @@ export const HELP_GROUPS = [
 export const HELP_EXTRA_PAGES = [
   { page: "help-quickref", anchor: "quickref",    label: "Quick Reference" },
   { page: "help-owner",    anchor: "owner-tools", label: "Developer / Owner Tools" },
+  { page: "help-qa",       anchor: "qa-tracker",  label: "QA Tracker" },
 ];
 
 export const HELP_PAGES = [

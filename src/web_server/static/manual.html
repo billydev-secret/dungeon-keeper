@@ -477,26 +477,33 @@
     <table class="qr-table">
       <thead><tr><th>Feature</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><strong><a href="#games">Games Night</a></strong></td><td>17 party games (WYR, NHIE, Truth-or-Dare, AMA, Story Builder…), 1-v-1 duels (Hot Potato, Quickdraw, Pressure Cooker), group elimination games (Musical Chairs, Chicken), and Risky Rolls. Photo Challenge is now its own scheduled feature.</td></tr>
+        <tr><td><strong><a href="#games">Games Night</a></strong></td><td>17 party games (WYR, NHIE, Truth-or-Dare, AMA, Story Builder…), 1-v-1 duels (Hot Potato, Quickdraw, Pressure Cooker), group elimination games (Musical Chairs, Chicken), and Risky Rolls. <a href="#photo-challenge">Photo Challenge</a> is now its own scheduled feature.</td></tr>
+        <tr><td><strong><a href="#photo-challenge">Photo Challenge</a></strong></td><td>Scheduled photo-prompt cards in a dedicated channel; member photos earn economy currency once they draw enough reactions.</td></tr>
         <tr><td><strong><a href="#guess">Guess Who Image Game</a></strong></td><td>NSFW image-guessing game with cropped previews, a searchable member picker for guessing, leaderboards, and anonymous text confessions.</td></tr>
         <tr><td><strong><a href="#whisper">Whisper</a></strong></td><td>Anonymous member↔member DM game with reply / share / report inbox.</td></tr>
         <tr><td><strong><a href="#confessions">Confessions</a></strong></td><td>Anonymous member submissions with mod-only emoji identifiers.</td></tr>
         <tr><td><strong><a href="#pen-pals">Pen Pals</a></strong></td><td>Opt-in pool that pairs members into private 2-person channels with a conversation starter; channels retire after ~72 hours.</td></tr>
         <tr><td><strong><a href="#community">Community &amp; XP</a></strong></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). Leave-of-absence system. Starboard.</td></tr>
+        <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, XP conversion, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, gradient) and gifts.</td></tr>
         <tr><td><strong><a href="#voice">Voice Channels</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
         <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels. 24/7 mode with autoplay.</td></tr>
         <tr><td><strong><a href="#wellness">Wellness</a></strong></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong><a href="#dm-perms">DM Permissions</a></strong></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
-        <tr><td><strong><a href="#self-service">Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, todo list, bios, birthday registration, data self-erasure.</td></tr>
+        <tr><td><strong><a href="#self-service">Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, todo list, birthday registration, data self-erasure.</td></tr>
+        <tr><td><strong><a href="#bios">Member Bios</a></strong></td><td>Wizard-driven member profiles: a private step-by-step channel walks you through admin-authored fields plus icebreaker questions, then posts a styled bio embed.</td></tr>
+        <tr><td><strong><a href="#emoji-stealer">Emoji Stealer</a></strong></td><td>Right-click a message (or paste an image URL) to add its custom emoji to a server you manage.</td></tr>
         <tr><td><strong><a href="#moderation">Moderation Core</a></strong></td><td>Jail, warnings, purge, mod profile, right-click context menus.</td></tr>
         <tr><td><strong><a href="#tickets">Tickets, Policies &amp; Warnings</a></strong></td><td>Private member↔mod ticket channels with transcripts; mod-team policy proposals with voting buttons; per-member warnings with revoke history.</td></tr>
         <tr><td><strong><a href="#analytics">Analytics &amp; Watch</a></strong></td><td>Silent watch list (forwards a member's messages to your DMs). All engagement reports — message volume, drop-off, burst ranking, chilling effect, sentiment, retention — live on the dashboard.</td></tr>
         <tr><td><strong><a href="#ai-tools">AI Moderation</a></strong></td><td>AI-assisted member reviews, channel scans, and free-form questions about message history.</td></tr>
         <tr><td><strong><a href="#rules-watch">Rules Watch</a></strong></td><td>Passive AI monitor that screens public messages for rule violations and feeds a tiered alert queue for mod review.</td></tr>
         <tr><td><strong><a href="#setup">Setup &amp; Permissions</a></strong></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
-        <tr><td><strong><a href="#server-ops">Server Upkeep</a></strong></td><td>Auto-delete schedules, inactivity pruning, auto-threading, bump reminders, gender tagging.</td></tr>
+        <tr><td><strong><a href="#server-ops">Server Upkeep</a></strong></td><td>Auto-delete schedules, inactivity pruning, auto-threading, bump reminders, gender tagging, hidden channels.</td></tr>
+        <tr><td><strong><a href="#greeting-watch">Greeting Watch</a></strong></td><td>DMs a greeter when a member's "good morning" in a watched channel goes unanswered. Dashboard-configured, no commands.</td></tr>
+        <tr><td><strong><a href="#chat-revive">Chat Revive ("Ember")</a></strong></td><td>Rhythm-aware lull detector that revives a quiet channel with a question card and an opt-in ping role. Dashboard-managed, no commands.</td></tr>
         <tr><td><strong><a href="#network-analytics">Network Analytics</a></strong></td><td>Connection graphs, interaction heatmaps, invite trees — dashboard panels.</td></tr>
         <tr><td><strong><a href="#config">Configuration</a></strong></td><td>Web dashboard panels covering every persistent setting.</td></tr>
+        <tr><td><strong><a href="#qa-tracker">QA Tracker</a></strong></td><td>Volunteer testing crew: Pass / Fail / Blocked verdict cards on new bot changes, paid in economy currency, with admin void and oversight.</td></tr>
         <tr><td><strong><a href="#owner-tools">Developer / Owner</a></strong></td><td>Module hot-reload, Spotify authorization. Bot-owner only.</td></tr>
 
       </tbody>
@@ -595,9 +602,31 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         4. GUESS WHO IMAGE GAME
+         4. PHOTO CHALLENGE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="guess" class="section-break"><span class="section-num">4</span> Guess Who Image Game</h2>
+    <h2 id="photo-challenge" class="section-break"><span class="section-num">4</span> Photo Challenge</h2>
+    <p>A standalone scheduled photo feature (it used to live in the Games suite). On its configured schedule the bot posts a photo-prompt card to a dedicated Photo Challenge channel, optionally pinging a role. Members answer by posting their photos in that same channel — no commands involved.</p>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Reactions are the reward</strong>
+        <p>When the <a href="#economy">Economy</a> is running with an active photo quest, a member's image post in the Photo Challenge channel pays out currency once it draws enough distinct reactions from other members (default 5 — your own reactions and the bot's don't count). The bot can seed a configured auto-react emoji on each photo so others can one-tap pile on. Payouts are capped at once per member per day, no matter how many photos cross the threshold.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/#/photo-challenge">web dashboard</a></strong>
+        <p>Admins (or the game-host role) set the channel, ping role, recurring schedule, enabled toggle, reactions-to-earn threshold, and auto-react emoji on the <strong>Photo Challenge → Setup &amp; Schedule</strong> panel. The prompt bank and AI prompt studio live under <strong>Photo Challenge → Prompts &amp; AI</strong>. The old <code>/games play photo</code> command is retired.</p>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         5. GUESS WHO IMAGE GAME
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="guess" class="section-break"><span class="section-num">5</span> Guess Who Image Game</h2>
     <p>NSFW image-guessing game. Submit a cropped picture; opted-in members try to identify whose body it is by picking a name from a searchable member list. The full image is revealed (spoilered) on the first correct guess. Includes leaderboards, anonymous text confessions tied into the same channel, and a persistent submit/help prompt at the bottom of the configured channel.</p>
 
     <div class="cmd-block">
@@ -643,9 +672,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         5. WHISPER
+         6. WHISPER
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="whisper" class="section-break"><span class="section-num">5</span> Whisper Anonymous Messages</h2>
+    <h2 id="whisper" class="section-break"><span class="section-num">6</span> Whisper Anonymous Messages</h2>
     <p>Anonymous message-guessing game. Send a secret message to an opted-in member via DM; they can try to guess who sent it, share it to the server feed, hide it for later, or reply anonymously.</p>
 
     <div class="cmd-block">
@@ -691,9 +720,9 @@
       </div>
     </div>
 <!-- ══════════════════════════════════════════════════════════
-         6. CONFESSIONS
+         7. CONFESSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="confessions" class="section-break"><span class="section-num">6</span> Confessions</h2>
+    <h2 id="confessions" class="section-break"><span class="section-num">7</span> Confessions</h2>
 
     <h3 id="confess">Anonymous Confessions</h3>
     <p>The confessions system lets members post anonymously to a configured channel. Each confessor is assigned a colored emoji (e.g. 🔴🟢🔵) so mods can identify repeat posters without exposing identity to other members.</p>
@@ -713,7 +742,7 @@
     </div>
 
     
-    <h2 id="pen-pals" class="section-break"><span class="section-num">7</span> Pen Pals</h2>
+    <h2 id="pen-pals" class="section-break"><span class="section-num">8</span> Pen Pals</h2>
     <p>Pen Pals quietly matches members into private one-on-one conversations. Members join a pool; when a pair is matched the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after about 72 hours.</p>
 
     <div class="cmd-block">
@@ -759,9 +788,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         8. COMMUNITY & XP
+         9. COMMUNITY & XP
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="community" class="section-break"><span class="section-num">8</span> Community &amp; XP</h2>
+    <h2 id="community" class="section-break"><span class="section-num">9</span> Community &amp; XP</h2>
 
     <h3 id="xp">XP System</h3>
     <p>Members earn XP by posting messages, replying, reacting to images, and spending time in voice channels. XP level-ups automatically grant configured roles and post announcements.</p>
@@ -819,9 +848,69 @@
     <p>When a message receives enough star reactions, it's reposted to the starboard channel as a highlight. The channel, threshold, emoji, and exclusion list are configured in the <a href="/#/config-starboard">Starboard panel</a> on the web dashboard.</p>
 
     <!-- ══════════════════════════════════════════════════════════
-         9. VOICE CHANNELS
+         10. ECONOMY & PERK SHOP
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="voice" class="section-break"><span class="section-num">9</span> Voice Channel System</h2>
+    <h2 id="economy" class="section-break"><span class="section-num">10</span> Economy &amp; Perk Shop</h2>
+    <p>A per-server currency (branded per guild — name, emoji, and wallet name are all configurable) earned by being active and spent on weekly-renewing perks. There's no grinding loop of earn commands: currency flows from the activity you're already doing — chatting, hanging out in voice, playing games, answering the question of the day. The economy is off until an admin enables it and sets a bank channel.</p>
+
+    <h3 id="economy-earning">Earning</h3>
+    <ul>
+      <li><strong>Daily login</strong> — your first counted message or qualifying voice session of the day pays a small login reward (voice pays more than text). Consecutive days build a streak bonus, one missed day per week is silently forgiven, and streak milestones (day 7, 30, 100…) pay extra.</li>
+      <li><strong>Daily activity conversion</strong> — the XP you earn each day (see <a href="#xp">XP System</a>) converts into currency at local midnight, automatically and silently.</li>
+      <li><strong>Quests</strong> — daily / weekly / monthly quests drawn onto your personal board, plus server-wide community goals and event quests. Many complete automatically when you do the thing (send a trigger phrase, play a game, post a photo, set a bio…); others you claim from <code>/bank quests</code>, and some need a staff sign-off before paying.</li>
+      <li><strong>Games &amp; QOTD</strong> — playing a party game or duel pays participation (winning pays more), and answering the question of the day in its channel pays once per QOTD.</li>
+      <li><strong>Server boosters</strong> earn 1.5× on everything the server pays out (transfers between members are never multiplied).</li>
+    </ul>
+
+    <h3 id="economy-cmds">Wallet &amp; Member Commands</h3>
+    <p>All <span class="perm perm-all">Everyone</span>.</p>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/bank wallet</code></td><td>Your balance, recent ledger activity, and active rentals</td></tr>
+        <tr><td><code>/bank quests</code></td><td>View your quest board with progress meters, and claim claimable quests</td></tr>
+        <tr><td><code>/bank shop</code></td><td>Browse the perk shop in an ephemeral panel — rent perks, and customize rented ones via the panel's modals</td></tr>
+        <tr><td><code>/bank pay member: amount:</code></td><td>Send currency to another member (optional memo; large transfers ask for confirmation)</td></tr>
+        <tr><td><code>/bank gift member:</code></td><td>Pay to rent a friend a custom role color</td></tr>
+        <tr><td><code>/bank role icon image:</code></td><td>Upload an image (max 256&nbsp;KB) for your rented role icon — the one customization that can't ride a modal</td></tr>
+        <tr><td><code>/bank mute</code></td><td>Toggle the economy's DM notifications for yourself</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="economy-shop">The Perk Shop</h3>
+    <p>Perks are <em>weekly rentals</em>, not one-time purchases — each renews automatically on its personal anniversary, billing your wallet at the server's current price. The shop's headline perks are personal-role cosmetics: a custom role <strong>color</strong>, custom role <strong>name</strong>, role <strong>icon</strong> (bring your own image or emoji, or pick from a server-curated icon catalog with per-icon prices), and a <strong>gradient</strong> color where the server supports it. Rent a perk and the bot maintains a personal role for you; customize it from the buttons inside <code>/bank shop</code>.</p>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>If a renewal can't be paid</strong>
+        <p>You get a grace window (with a DM) to top up before the perk lapses. A lapsed perk is simply re-rentable later — nothing is lost except the cosmetic while it's down.</p>
+      </div>
+    </div>
+
+    <h3 id="economy-admin">For Staff &amp; Admins</h3>
+    <p>Staff commands are gated on the configured economy manager role or admin:</p>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/bank grant member: amount: reason:</code></td><td>Award currency to a member (audit-tagged in the ledger)</td></tr>
+        <tr><td><code>/qotd post question:</code></td><td>Post today's question of the day as a banner card — replies in that channel earn currency until end of day</td></tr>
+        <tr><td><code>/bank post-guide [channel]</code></td><td>Post (or refresh) the sticky "how the economy works" panel, templated with your branding and live rates</td></tr>
+        <tr><td><code>/bank post-shop [channel]</code></td><td>Post a persistent shop panel with rent buttons any member can click</td></tr>
+        <tr><td><code>/bank post-leaderboard [channel]</code></td><td>Post an auto-updating panel: top earners, community-goal progress, and the active quest board</td></tr>
+      </tbody>
+    </table>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Everything else lives in the dashboard's Economy section</strong>
+        <p>Branding and wiring (<a href="/#/economy-config">Settings</a>, admin-only), quest authoring with AI idea generation (<a href="/#/economy-quests">Quests</a>), the pending sign-off queue (<a href="/#/economy-claims">Claims</a>), community goals / grants / rentals / ledger audit (<a href="/#/economy-bank-manager">Operations</a>), per-trigger enable switches and faucet rates (<a href="/#/economy-income-sources">Income Sources</a>), perk prices and the curated role-icon catalog (<a href="/#/economy-sinks">Sinks</a>, admin-only), the <a href="/#/economy-qotd">QOTD</a> ping role, and <a href="/#/economy-stats">Statistics</a>. The section is visible to admins and holders of the economy manager role.</p>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         11. VOICE CHANNELS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="voice" class="section-break"><span class="section-num">11</span> Voice Channel System</h2>
     <p>Members join a configured <em>hub</em> voice channel to automatically get their own personal voice channel. They have full control over their channel; mods and admins have override tools.</p>
 
     <h3 id="voice-user">Member / Channel Owner Commands</h3>
@@ -854,9 +943,9 @@
     </table>
 
     <!-- ══════════════════════════════════════════════════════════
-         10. MUSIC
+         12. MUSIC
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="music" class="section-break"><span class="section-num">10</span> Music</h2>
+    <h2 id="music" class="section-break"><span class="section-num">12</span> Music</h2>
     <p>Music playback in voice channels. Most commands require you to be in the bot's voice channel; <code>/play</code> joins your channel automatically. Spotify URLs require a one-time <code>/spotify_authorize</code> by the bot owner.</p>
 
     <h3 id="music-cmds">Music Commands</h3>
@@ -895,9 +984,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         11. WELLNESS
+         13. WELLNESS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="wellness" class="section-break"><span class="section-num">11</span> Wellness System</h2>
+    <h2 id="wellness" class="section-break"><span class="section-num">13</span> Wellness System</h2>
     <p>The wellness system helps members maintain healthy Discord habits. Members opt in for themselves; admins can also create caps, blackouts, and exemptions on a member's behalf.</p>
 
     <h3 id="wellness-member">Member Commands</h3>
@@ -951,9 +1040,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         12. DM PERMISSIONS
+         14. DM PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="dm-perms" class="section-break"><span class="section-num">12</span> DM Permissions</h2>
+    <h2 id="dm-perms" class="section-break"><span class="section-num">14</span> DM Permissions</h2>
     <p>Members declare a DM "mode" via Discord roles (<em>Open</em>, <em>Ask</em>, or <em>Closed</em>). The bot enforces requests through a button panel and modal, automatically deduping conflicting role assignments.</p>
 
     <h3 id="dm-perms-cmds">DM Commands</h3>
@@ -989,9 +1078,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         13. MEMBER SELF-SERVICE
+         15. MEMBER SELF-SERVICE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="self-service" class="section-break"><span class="section-num">13</span> Member Self-Service</h2>
+    <h2 id="self-service" class="section-break"><span class="section-num">15</span> Member Self-Service</h2>
     <p>Commands intended for the average member. Mods may also use them — they aren't restricted.</p>
 
     <h3 id="self-service-cmds">Personal Commands</h3>
@@ -1003,10 +1092,37 @@
         <tr><td><code>/support</code></td><td>Ephemeral link to the support Discord server</td></tr>
         <tr><td><code>/invite</code></td><td>Generate a Discord OAuth invite link for adding the bot to another server</td></tr>
         <tr><td><code>/todo task:&lt;text&gt;</code></td><td>Add a task to the server's shared todo list. <strong>task</strong> — up to 500 characters.</td></tr>
-        <tr><td><code>/bio</code></td><td>Create or update your member bio via a modal.</td></tr>
+        <tr><td><code>/bio</code></td><td>Create or update your member bio — see <a href="#bios">Member Bios</a> below.</td></tr>
         <tr><td><code>/birthday set</code> / <code>remove</code></td><td>Register your birthday (month + day) for daily announcements, or remove it.</td></tr>
       </tbody>
     </table>
+
+    <h3 id="bios">Member Bios</h3>
+    <p>A wizard-driven profile system. Trigger it with <code>/bio</code> or by clicking the persistent <strong>Create / Update Bio</strong> button pinned in the bios channel (the button's title and message are set by your admins). The bot opens a private, single-use channel visible only to you and walks you through the server's profile fields one step at a time, then a few randomly drawn icebreaker questions. Every step has <strong>Skip</strong> (for optional fields), <strong>Back</strong>, and <strong>Cancel</strong> buttons, and each icebreaker offers a 🎲 <strong>Re-roll</strong> for a different question. On completion your bio posts to the bios channel as a styled embed and the wizard channel disappears.</p>
+    <ul>
+      <li><strong>Updating</strong> — run the same trigger again; each step pre-fills your existing answer so you can keep it or replace it. Your posted bio is edited in place.</li>
+      <li><strong>Leaving the server</strong> removes your bio message and all stored answers automatically.</li>
+    </ul>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/#/config-bios">web dashboard</a></strong>
+        <p>The Bios panel is where admins define the whole experience: the profile field set (labels, types, required/optional, order, hints, which field is the headline), the icebreaker question pool, wiring (bios channel, wizard category, questions per bio, embed color, timeouts), and the trigger button's title and message copy — re-post the button after editing the copy to refresh the live message.</p>
+      </div>
+    </div>
+
+    <h3 id="emoji-stealer">Emoji Stealer</h3>
+    <p>Grab a custom emoji you've seen — in a message's text or its reactions — and add it to a server you help run. Right-click a message → <strong>Apps → Steal Emoji</strong>, or use the slash command with a direct image URL. When several emojis (or several eligible servers) are in play, a picker lets you choose — including <strong>Steal All</strong>. Oversized animated GIFs are downscaled automatically to fit Discord's emoji size limit. See also the <a href="#context-menus">context-menu overview</a>.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/steal_emoji url:&lt;url&gt; name:&lt;name&gt;</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Upload an emoji from any HTTPS image URL. The <strong>bot</strong> needs Manage Expressions in the destination server.</span>
+      <div class="cmd-params">
+        <strong>url</strong> — direct image link (must start with <code>https://</code>).<br>
+        <strong>name</strong> — at least 2 characters: letters, numbers, underscores.
+      </div>
+    </div>
 
     <h3 id="privacy">Data Erasure (GDPR-style)</h3>
 
@@ -1023,9 +1139,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         14. MODERATION CORE
+         16. MODERATION CORE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="moderation" class="section-break"><span class="section-num">14</span> Moderation Core</h2>
+    <h2 id="moderation" class="section-break"><span class="section-num">16</span> Moderation Core</h2>
 
     <h3 id="jail">Jail &amp; Release</h3>
     <p>The jail system moves a member to a private channel, strips all their roles, and logs everything. Jail transcripts are saved automatically for later review.</p>
@@ -1128,9 +1244,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         15. TICKETS, POLICIES & WARNINGS
+         17. TICKETS, POLICIES & WARNINGS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="tickets" class="section-break"><span class="section-num">15</span> Tickets, Policies &amp; Warnings</h2>
+    <h2 id="tickets" class="section-break"><span class="section-num">17</span> Tickets, Policies &amp; Warnings</h2>
     <p>The escalation toolkit. Tickets create private channels between the member and the mod team (everything logged). Policies let mods propose and vote on rules. Warnings build a paper trail per member.</p>
 
     <div class="callout callout-warn">
@@ -1258,9 +1374,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         16. ANALYTICS & WATCH
+         18. ANALYTICS & WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="analytics" class="section-break"><span class="section-num">16</span> Analytics &amp; Watch List</h2>
+    <h2 id="analytics" class="section-break"><span class="section-num">18</span> Analytics &amp; Watch List</h2>
 
     <div class="callout callout-tip">
       <span class="callout-icon">💡</span>
@@ -1296,9 +1412,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         17. AI MODERATION TOOLS
+         19. AI MODERATION TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="ai-tools" class="section-break"><span class="section-num">17</span> AI Moderation Tools</h2>
+    <h2 id="ai-tools" class="section-break"><span class="section-num">19</span> AI Moderation Tools</h2>
     <p>AI-assisted investigation tools. The bot runs a local AI model (no messages leave your server) to summarize messages, flag rule violations, and answer free-form questions about a member or channel's recent history. All <code>/ai</code> commands reply privately — only the invoking admin sees the result. For always-on monitoring instead of on-demand questions, see <a href="#rules-watch">Rules Watch</a>.</p>
 
     <div class="callout callout-info">
@@ -1338,9 +1454,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         18. RULES WATCH
+         20. RULES WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="rules-watch" class="section-break"><span class="section-num">18</span> Rules Watch</h2>
+    <h2 id="rules-watch" class="section-break"><span class="section-num">20</span> Rules Watch</h2>
     <p>A passive AI moderation monitor. Once enabled, Rules Watch screens every public message against your server rules and sorts anything suspicious into a tiered queue: <strong>immediate</strong> (an alert embed posted to your alert channel with Confirm / False-positive buttons), <strong>digest</strong> (queued for review in batches), and <strong>logged</strong> (recorded but not alerted). Labeling events as violations or false positives tunes the signal over time — the stats command shows your false-positive rate.</p>
 
     <div class="callout callout-info">
@@ -1391,7 +1507,7 @@
     <!-- ══════════════════════════════════════════════════════════
          (legacy section anchor preserved) SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">19</span> Setup &amp; Permissions</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">21</span> Setup &amp; Permissions</h2>
 
     <h3 id="permissions">Permission Levels</h3>
     <p>Most commands require one of these roles or Discord permissions:</p>
@@ -1435,10 +1551,10 @@
     </ol>
 
     <!-- ══════════════════════════════════════════════════════════
-         20. CLEANUP & TAGGING
+         22. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="server-ops" class="section-break"><span class="section-num">20</span> Server Upkeep</h2>
-    <p>Ongoing housekeeping: scheduled cleanup, automatic threading, listing-site bump reminders, and member tagging. The background schedulers run continuously; most configuration lives on the web dashboard.</p>
+    <h2 id="server-ops" class="section-break"><span class="section-num">22</span> Server Upkeep</h2>
+    <p>Ongoing housekeeping and community upkeep: scheduled cleanup, automatic threading, listing-site bump reminders, member tagging, unanswered-greeting alerts, lull-reviving questions, and channel hiding. The background schedulers run continuously; most configuration lives on the web dashboard.</p>
 
     <h3 id="auto-delete">Auto-Delete</h3>
     <p>Drop-in message cleanup. Schedule a channel to auto-delete posts older than a given age, on a recurring or one-shot basis. Pinned messages are never deleted.</p>
@@ -1495,10 +1611,41 @@
       <span class="cmd-desc">Record a manual bump, or check every site's cooldown at a glance.</span>
     </div>
 
+    <h3 id="greeting-watch">Greeting Watch</h3>
+    <p>Catches "good morning" / "hello" messages in your main chat that go unanswered, so nobody who says hi to the room falls through the cracks. When a short greeting in a watched channel isn't replied to or @mentioned within the configured window (default 10 minutes), the bot DMs a chosen member — a greeter or admin — with a jump link. Only IDs and timestamps are stored, never message text. There are no slash commands.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/#/config-greeting-watch">web dashboard</a></strong>
+        <p>The Greeting Watch panel has the enable toggle, the watched channel list, who gets the DM, and the unanswered-window length.</p>
+      </div>
+    </div>
+
+    <h3 id="chat-revive">Chat Revive ("Ember")</h3>
+    <p>Notices when a channel has gone unusually quiet <em>for that channel, at that time of day</em>, and gently restarts conversation by posting a question card from a curated bank — optionally tagging an opt-in chat-revive role. It's not a timer bot: it learns each channel's rhythm, never talks over an active room, never posts twice in a row, and strict frequency protections (per-channel rest period, guild daily budget, quiet hours, at most one ping per channel per day) keep it rare enough to feel like a treat. Spicier questions only ever surface in age-restricted channels. Members join or leave the ping role through the server's usual self-role flow; there are no slash commands.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/#/chat-revive">web dashboard</a></strong>
+        <p>The Chat Revive panel covers eligible channels and their question flavors, the ping role, quiet hours and budgets, the question bank (add, bulk-import, retire), a "would it fire right now?" explainer per channel, a manual Fire button, posting the opt-in button, and a scoreboard of which questions actually spark conversation.</p>
+      </div>
+    </div>
+
+    <h3 id="hidden-channels">Hidden Channels</h3>
+    <p>Hide a channel from everyone and later restore it exactly as it was. Hiding snapshots the channel's permission overwrites and placement, then parks it under a "Hidden Channels" category with <code>@everyone</code> denied View Channel (members with Administrator still see it — Discord always exempts them). Restoring moves it home and reinstates the original overwrites. Hides last until restored — there's no scheduled auto-restore.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/hidden hide channel: &nbsp;&nbsp; /hidden restore channel: &nbsp;&nbsp; /hidden list</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Hide a text / voice / stage / forum channel (categories can't be hidden), bring one back, or list what's currently hidden and who hid it. The bot needs Manage Channels and Manage Roles. No dashboard panel — these three commands are the entire interface.</span>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
-         21. NETWORK ANALYTICS
+         23. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="network-analytics" class="section-break"><span class="section-num">21</span> Network Analytics</h2>
+    <h2 id="network-analytics" class="section-break"><span class="section-num">23</span> Network Analytics</h2>
     <p>Interactive graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
 
     <div class="callout callout-info">
@@ -1510,9 +1657,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         22. CONFIGURATION REFERENCE
+         24. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">22</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">24</span> Configuration Reference</h2>
     <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
     <div class="callout callout-info">
@@ -1542,21 +1689,40 @@
         <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list</td></tr>
         <tr><td><strong><a href="/#/config-voice-master">Voice Master</a></strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
         <tr><td><strong><a href="/#/config-birthday">Birthdays</a></strong> / <a href="/#/birthday-calendar">Calendar</a></td><td>Announcement channel and time; browsable birthday calendar</td></tr>
-        <tr><td><strong><a href="/#/config-bios">Bios</a></strong></td><td>Member bio display settings</td></tr>
+        <tr><td><strong><a href="/#/config-bios">Bios</a></strong></td><td>Profile field set, icebreaker question pool, wiring (channel, wizard category, embed color), trigger-button copy</td></tr>
         <tr><td><strong><a href="/#/config-confessions">Confessions</a></strong></td><td>Channel, mod-log channel, panic mode</td></tr>
         <tr><td><strong><a href="/#/config-dms">DM Permissions</a></strong></td><td>Request panel channel, audit channel</td></tr>
         <tr><td><strong><a href="/#/config-whisper">Whisper</a></strong> / <a href="/#/config-guess">Guess</a> / <a href="/#/config-risky-rolls">Risky Rolls</a></td><td>Channels and opt-in roles for each game feature</td></tr>
         <tr><td><strong><a href="/#/config-wellness">Wellness</a></strong></td><td>Server defaults, wellness role + private channel, crisis-resource URL</td></tr>
         <tr><td><strong><a href="/#/config-ai">AI (Local LLM)</a></strong></td><td>Local AI model selection and settings (bot-wide, primary server only)</td></tr>
         <tr><td><strong><a href="/#/gender-admin">Gender Tagging</a></strong></td><td>Member gender classification for analytics breakdowns</td></tr>
+        <tr><td><strong><a href="/#/economy-config">Economy</a></strong></td><td>Branding, wiring, and rates (Settings) plus Quests, Claims, Operations, Income Sources, Sinks (perk prices + icon catalog), QOTD, and Statistics pages</td></tr>
+        <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, reactions-to-earn threshold, auto-react emoji; prompt bank under Prompts &amp; AI</td></tr>
+        <tr><td><strong><a href="/#/config-greeting-watch">Greeting Watch</a></strong></td><td>Watched channels, notify member, unanswered-window minutes</td></tr>
+        <tr><td><strong><a href="/#/chat-revive">Chat Revive</a></strong></td><td>Eligible channels, ping role, budgets and quiet hours, question bank, manual fire, scoreboard</td></tr>
+        <tr><td><strong><a href="/#/qa-tracker">QA Tracker</a></strong></td><td>QA-crew role, channel, reward and daily cap, verdict board with void / archive</td></tr>
         <tr><td><strong><a href="/#/admin-backfill">Backfill Jobs</a></strong></td><td>Historical interaction / member-event scans</td></tr>
       </tbody>
     </table>
 
     <!-- ══════════════════════════════════════════════════════════
-         23. DEVELOPER / OWNER TOOLS
+         25. QA TRACKER
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">23</span> Developer / Owner Tools</h2>
+    <h2 id="qa-tracker" class="section-break"><span class="section-num">25</span> QA Tracker</h2>
+    <p>A volunteer testing crew for the bot itself. Each new change lands as a <strong>QA card</strong> in the testing channel — an embed carrying the test checklist with <strong>Pass / Fail / Blocked</strong> buttons. Members holding the configured QA-crew role click a verdict (Fail requires a "what went wrong" note, which lands in the card's thread); the first Pass turns the card green as verified. Your first verdict on a test pays <a href="#economy">economy</a> currency instantly, up to a daily cap — re-clicking updates your verdict without re-paying. Until an admin configures the QA-crew role, the buttons are admins-only.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Admin oversight on the <a href="/#/qa-tracker">web dashboard</a></strong>
+        <p>The Dev-section <strong>QA Tracker</strong> panel (admin-only) has the status board with every test and its verdicts, a top-testers scoreboard, and the config knobs: QA-crew role, channel, reward amount, daily cap, and enable toggle. A bogus verdict can be <em>voided</em> there — the paid coins are clawed back and the card's status recomputes. Archiving retires a card.</p>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         26. DEVELOPER / OWNER TOOLS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="owner-tools" class="section-break"><span class="section-num">26</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">
@@ -1592,6 +1758,10 @@
         <tr><td><a href="#voice-user"><code>/voice lock</code> / <code>rename</code> / <code>limit</code></a></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
         <tr><td><a href="#music-cmds"><code>/play</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Music — YouTube / Spotify / search</td></tr>
         <tr><td><a href="#games"><code>/games play &lt;mode&gt;</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Start a party game (16 modes)</td></tr>
+        <tr><td><a href="#economy-cmds"><code>/bank wallet</code> / <code>pay</code> / <code>shop</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Economy — balance, transfers, and the perk shop</td></tr>
+        <tr><td><a href="#economy-cmds"><code>/bank quests</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>View your quest board and claim rewards</td></tr>
+        <tr><td><a href="#emoji-stealer"><code>/steal_emoji url: name:</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Add an emoji from an image URL (or right-click → Steal Emoji)</td></tr>
+        <tr><td><a href="#hidden-channels"><code>/hidden hide</code> / <code>restore</code> / <code>list</code></a></td><td><span class="perm perm-admin">Admin</span></td><td>Hide a channel from everyone, restore it exactly as it was</td></tr>
         <tr><td><a href="#confess"><code>/confess</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
         <tr><td><a href="#self-service-cmds"><code>/todo</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
         <tr><td><a href="#self-service-cmds"><code>/help</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
