@@ -94,7 +94,7 @@ def test_quest_period_event_raises():
 
 
 def test_occurrence_period_is_keyed_to_the_occurrence():
-    assert occurrence_period("photo_reply", "abc-123") == "photo_reply:abc-123"
+    assert occurrence_period("photo_react", "abc-123") == "photo_react:abc-123"
     assert occurrence_period("duel", "quickdraw:5") == "duel:quickdraw:5"
 
 
@@ -137,9 +137,9 @@ def test_can_activate(existing, qtype, expected):
 @pytest.mark.parametrize(
     "existing_kinds,kind,expected",
     [
-        ([], "photo_reply", True),
-        (["duel", "party_game"], "photo_reply", True),  # other kinds don't block
-        (["photo_reply"], "photo_reply", False),  # one active per kind
+        ([], "photo_react", True),
+        (["duel", "party_game"], "photo_react", True),  # other kinds don't block
+        (["photo_react"], "photo_react", False),  # one active per kind
     ],
 )
 def test_can_activate_event(existing_kinds, kind, expected):

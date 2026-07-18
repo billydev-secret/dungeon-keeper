@@ -30,17 +30,35 @@ def _insert_row(db_path, game_type):
 
 def test_config_default(open_client):
     data = open_client.get(f"{BASE}/config").json()
-    assert data == {"enabled": True, "channel_id": "", "ping_role_id": ""}
+    assert data == {
+        "enabled": True,
+        "channel_id": "",
+        "ping_role_id": "",
+        "react_threshold": 5,
+        "auto_react": "",
+    }
 
 
 def test_config_roundtrip(open_client):
     resp = open_client.put(
         f"{BASE}/config",
-        json={"channel_id": "555", "ping_role_id": "777", "enabled": False},
+        json={
+            "channel_id": "555",
+            "ping_role_id": "777",
+            "enabled": False,
+            "react_threshold": 3,
+            "auto_react": "📸",
+        },
     )
     assert resp.status_code == 200
     data = open_client.get(f"{BASE}/config").json()
-    assert data == {"enabled": False, "channel_id": "555", "ping_role_id": "777"}
+    assert data == {
+        "enabled": False,
+        "channel_id": "555",
+        "ping_role_id": "777",
+        "react_threshold": 3,
+        "auto_react": "📸",
+    }
 
 
 def test_config_clears_ping_role_with_zero(open_client):

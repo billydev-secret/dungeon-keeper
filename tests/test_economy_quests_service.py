@@ -39,7 +39,6 @@ from bot_modules.services.economy_quests_service import (
     expire_stale_claims,
     fire_trigger_inline,
     fire_trigger_quests,
-    get_photo_card,
     get_progress,
     get_quest,
     list_income_sources,
@@ -47,7 +46,6 @@ from bot_modules.services.economy_quests_service import (
     list_onboarding_quests,
     list_quests,
     mark_onboarding_dm,
-    record_photo_card,
     set_income_source,
     source_enabled,
     resolve_claim,
@@ -895,13 +893,13 @@ def test_trigger_kind_validation_matrix(db):
         daily = _make(conn, qtype="daily", trigger_kind="party_game")
         assert _get(conn, GUILD, daily)["trigger_kind"] == "party_game"
         # …and event quests always need one.
-        qid = _make(conn, qtype="event", trigger_kind="photo_reply")
-        assert _get(conn, GUILD, qid)["trigger_kind"] == "photo_reply"
+        qid = _make(conn, qtype="event", trigger_kind="photo_react")
+        assert _get(conn, GUILD, qid)["trigger_kind"] == "photo_react"
 
 
 def test_update_validates_trigger_config_pairing(db):
     with open_db(db) as conn:
-        qid = _make(conn, qtype="event", trigger_kind="photo_reply", active=False)
+        qid = _make(conn, qtype="event", trigger_kind="photo_react", active=False)
         # Retyping to daily keeps the kind (legal: daily auto-claim).
         update_quest(conn, GUILD, qid, {"qtype": "daily"})
         assert _get(conn, GUILD, qid)["qtype"] == "daily"
@@ -915,9 +913,9 @@ def test_update_validates_trigger_config_pairing(db):
 
 def test_event_slot_limit_is_per_trigger_kind(db):
     with open_db(db) as conn:
-        _make(conn, qtype="event", trigger_kind="photo_reply")
+        _make(conn, qtype="event", trigger_kind="photo_react")
         second = _make(
-            conn, qtype="event", trigger_kind="photo_reply", active=False
+            conn, qtype="event", trigger_kind="photo_react", active=False
         )
         with pytest.raises(SlotLimitError):
             set_quest_active(conn, GUILD, second, True)
@@ -929,22 +927,22 @@ def test_event_slot_limit_is_per_trigger_kind(db):
 
 def test_list_kind_triggered_quests_filters(db):
     with open_db(db) as conn:
-        assert list_kind_triggered_quests(conn, GUILD, "photo_reply") == []
-        _make(conn, qtype="event", trigger_kind="photo_reply", active=False)
-        assert list_kind_triggered_quests(conn, GUILD, "photo_reply") == []
-        event = _make(conn, qtype="event", trigger_kind="photo_reply")
-        daily = _make(conn, qtype="daily", trigger_kind="photo_reply")
+        assert list_kind_triggered_quests(conn, GUILD, "photo_react") == []
+        _make(conn, qtype="event", trigger_kind="photo_react", active=False)
+        assert list_kind_triggered_quests(conn, GUILD, "photo_react") == []
+        event = _make(conn, qtype="event", trigger_kind="photo_react")
+        daily = _make(conn, qtype="daily", trigger_kind="photo_react")
         _make(conn, qtype="event", trigger_kind="duel")  # other kind
-        rows = list_kind_triggered_quests(conn, GUILD, "photo_reply")
+        rows = list_kind_triggered_quests(conn, GUILD, "photo_react")
         assert sorted(int(r["id"]) for r in rows) == sorted([event, daily])
         # Other guilds don't leak.
-        assert list_kind_triggered_quests(conn, GUILD + 1, "photo_reply") == []
+        assert list_kind_triggered_quests(conn, GUILD + 1, "photo_react") == []
 
 
 def test_event_claim_dedupes_per_occurrence_not_per_day(db):
     with open_db(db) as conn:
-        qid = _make(conn, qtype="event", trigger_kind="photo_reply", reward=10)
-        period = occurrence_period("photo_reply", "card-1")
+        qid = _make(conn, qtype="event", trigger_kind="photo_react", reward=10)
+        period = occurrence_period("photo_react", "card-1")
         out = claim_quest(conn, SETTINGS, GUILD, qid, USER, period=period, booster=False)
         assert out.state == "paid" and out.paid == 10
         # Same occurrence again → collision, no double pay.
@@ -953,7 +951,7 @@ def test_event_claim_dedupes_per_occurrence_not_per_day(db):
         # A different occurrence pays again; another member independently.
         claim_quest(
             conn, SETTINGS, GUILD, qid, USER,
-            period=occurrence_period("photo_reply", "card-2"), booster=False,
+            period=occurrence_period("photo_react", "card-2"), booster=False,
         )
         claim_quest(conn, SETTINGS, GUILD, qid, OTHER, period=period, booster=False)
         assert get_balance(conn, GUILD, USER) == 20
@@ -1300,18 +1298,6 @@ def test_fire_trigger_inline_loads_settings_and_pays(db):
         assert fire_trigger_inline(
             conn, GUILD, "starboard", USER, occurrence="msg-1"
         ) == []
-
-
-def test_photo_card_registry_roundtrip(db):
-    with open_db(db) as conn:
-        record_photo_card(conn, GUILD, 111, 9100, "game-1", "prompt")
-        # Duplicate posts are ignored, not an error (INSERT OR IGNORE).
-        record_photo_card(conn, GUILD, 111, 9100, "game-other", "prompt")
-        row = get_photo_card(conn, GUILD, 9100)
-        assert row is not None and row["game_id"] == "game-1"
-        assert get_photo_card(conn, GUILD, 4242) is None
-        # Guild-scoped: another guild can't claim against our card.
-        assert get_photo_card(conn, GUILD + 1, 9100) is None
 
 
 # ── per-user board + gaussian target (spec §4.6) ──────────────────────

@@ -249,7 +249,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
-| `photo_reply` | member replies to a Photo Challenge card with an image | `EconomyCog._on_photo_reply` (announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_reply:<game_id>` |
+| `photo_react` | a member's image post in the configured Photo Challenge channel draws `react_threshold` distinct human reactions (default 5; the author and bots never count) | `EconomyCog._on_photo_react` (raw-reaction listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_react:<local_day>` (once/day by construction) |
 | `party_game` | party game completes with the member in the roster | `pay_game_rewards` via `game_manager.end_game` | `party_game:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
@@ -375,14 +375,24 @@ in code yet —, invite retention, counted quests, monthly cadence; confessions
 rejected for anonymity). JS labels shared with the quest form via
 `economy-sources-shared.js`.
 
-**Photo plumbing:** every posted card (manual `/games play photo` or the games
-scheduler — both go through `PhotoCog.launch`) is recorded in `econ_photo_cards`
-(message → game mapping; recorded even with no quest active, so a quest activated
-later still pays for old cards). The image check is content-type with a
-filename-extension fallback. The Photo Challenge Games-Studio panel has a
-**ping-role option** (`ping_role_id` in `games_game_config.options`) mentioned
-with every posted card — distinct from the per-schedule announce ping; don't set
-both.
+**Photo plumbing:** payout is reaction-gated on member posts, not replies to the
+card. `EconomyCog._on_photo_react` (a `on_raw_reaction_add` listener) fires when
+an image post in the configured photo channel has drawn `react_threshold`
+distinct non-bot reactors other than the author. The expensive reactor fetch is
+guarded: a TTL-cached channel check, a DB eligibility pre-check (economy on,
+`photo_react` source on, ≥1 active `photo_react` quest), a raw-total prune, and a
+per-process `_photo_paid` set that stops recounting a post once it has crossed.
+The occurrence key is the guild-local day, so a member earns at most once per day
+regardless of how many photos cross. The image check is content-type with a
+filename-extension fallback. The channel is the standalone Photo Challenge
+feature's dedicated channel — `channel_id` in `games_game_config.options` (game
+type `photo`), owned by the **Photo Challenge → Setup** panel (`/api/photo-
+challenge/config`); payouts and auto-react are dormant until it's set. This
+feature adds two options to that same panel/blob: **`react_threshold`** (distinct
+reactors, default 5) and **`auto_react`** (an emoji the bot seeds on each photo so
+members can one-tap pile on — the bot's own reaction never counts). *(The old
+reply model and its `econ_photo_cards` registry are retired; migration 079
+renames existing `photo_reply` quests and income-source rows to `photo_react`.)*
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered

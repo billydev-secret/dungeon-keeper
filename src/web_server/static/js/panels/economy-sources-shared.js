@@ -2,7 +2,7 @@
 // bot_modules/economy/quests.py. Used by the Quests authoring form and the
 // Income Sources page so the two never drift apart.
 export const KIND_LABELS = {
-  photo_reply: "📸 Reply to a Photo Challenge card with a photo",
+  photo_react: "📸 Post a photo in the challenge channel that earns reactions",
   party_game: "🎲 Finish a party game",
   duel: "⚔️ Finish a duel / PvP challenge",
   risky_roll: "🎰 Take a Risky Roll dare",

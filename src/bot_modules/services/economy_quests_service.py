@@ -684,42 +684,6 @@ def get_progress(
     return int(row["current"]) if row else 0
 
 
-# ── Photo Challenge card registry (event-quest trigger source) ────────
-
-
-def record_photo_card(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    channel_id: int,
-    message_id: int,
-    game_id: str,
-    prompt: str,
-) -> None:
-    """Remember a posted Photo Challenge card so reply payouts can find it.
-
-    Recorded whether or not an event quest is active — a quest activated
-    later still pays for replies to older cards (no time gate, by design).
-    """
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO econ_photo_cards
-            (message_id, guild_id, channel_id, game_id, prompt, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (message_id, guild_id, channel_id, game_id, prompt, time.time()),
-    )
-
-
-def get_photo_card(
-    conn: sqlite3.Connection, guild_id: int, message_id: int
-) -> sqlite3.Row | None:
-    """The card row for a replied-to message, if that message was a card."""
-    return conn.execute(
-        "SELECT * FROM econ_photo_cards WHERE message_id = ? AND guild_id = ?",
-        (message_id, guild_id),
-    ).fetchone()
-
-
 def _active_qtypes(
     conn: sqlite3.Connection, guild_id: int, *, exclude_id: int
 ) -> list[str]:

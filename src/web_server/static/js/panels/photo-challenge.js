@@ -69,6 +69,20 @@ export function mount(container) {
             <div class="field-hint">Mentioned with every card. Leave as (none) for no ping.</div>
           </div>
         </div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;">
+          <div class="field" style="flex:1;min-width:220px;">
+            <label>Reactions to earn
+              <input class="w-full" type="number" min="1" max="100" data-ctrl="react-threshold" />
+            </label>
+            <div class="field-hint">Distinct people (the author and bots never count) who must react to a photo before it pays. Needs an active <strong>photo_react</strong> quest in Economy → Quests.</div>
+          </div>
+          <div class="field" style="flex:1;min-width:220px;">
+            <label>Auto-react emoji
+              <input class="w-full" type="text" data-ctrl="auto-react" placeholder="📸" />
+            </label>
+            <div class="field-hint">The bot seeds this reaction on each photo so members can one-tap pile on. The bot's own react never counts. Blank = off.</div>
+          </div>
+        </div>
         <div class="field m-0">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
             <input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />
@@ -159,6 +173,8 @@ async function initConfig(root) {
   root.querySelector('[data-ctrl="channel"]').value = cfg.channel_id ? String(cfg.channel_id) : "0";
   root.querySelector('[data-ctrl="role"]').value = cfg.ping_role_id ? String(cfg.ping_role_id) : "0";
   root.querySelector('[data-ctrl="enabled"]').checked = cfg.enabled !== false;
+  root.querySelector('[data-ctrl="react-threshold"]').value = cfg.react_threshold ?? 5;
+  root.querySelector('[data-ctrl="auto-react"]').value = cfg.auto_react ?? "";
 
   root.querySelector('[data-action="save-config"]').addEventListener("click", async () => {
     const st = root.querySelector('[data-status="config"]');
@@ -169,6 +185,8 @@ async function initConfig(root) {
         channel_id: channel === "0" ? "" : channel,
         ping_role_id: role === "0" ? "" : role,
         enabled: root.querySelector('[data-ctrl="enabled"]').checked,
+        react_threshold: parseInt(root.querySelector('[data-ctrl="react-threshold"]').value, 10) || 5,
+        auto_react: root.querySelector('[data-ctrl="auto-react"]').value.trim(),
       });
       showStatus(st, true, "Saved");
     } catch (e) {

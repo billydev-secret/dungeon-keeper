@@ -42,9 +42,9 @@ Photo Challenge left the Games menu and the shared Game Scheduling panel. The
 section (**Photo Challenge → Setup & Schedule**) with a dedicated channel it
 always posts in, its own recurring schedule, a ping role, and an enabled toggle.
 Under the hood it still rides the shared scheduler loop (schedule rows in
-`games_scheduled`, `game_type='photo'`) and the shared prompt bank, and it still
-feeds the economy photo-reply quest — those contracts are unchanged. Needs a
-bot + dashboard restart to pick up (new route + JS + cog change).
+`games_scheduled`, `game_type='photo'`) and the shared prompt bank. Payout is now
+reaction-gated (see the next entry). Needs a bot + dashboard restart to pick up
+(new route + JS + cog change).
 
 - [ ] `/games play photo` no longer exists (autocomplete shows nothing); Photo
       Challenge is gone from the **Games** nav and from the **Game Scheduling**
@@ -55,13 +55,49 @@ bot + dashboard restart to pick up (new route + JS + cog change).
 - [ ] Add a **daily** schedule a minute out (or use **Run now**) → a challenge
       card posts **to the configured channel** (not wherever you were), pinging
       the role once.
-- [ ] Reply to the card with a photo → the economy **photo-reply** quest still
-      pays out (econ contract intact).
 - [ ] Change the channel in setup → existing schedule follows the new channel
       (next post lands there).
 - [ ] Turn **Enabled** off → next scheduled slot is skipped (no card).
 - [ ] **Prompt Bank** on the panel (and **Prompts & AI**) still add/edit photo
       prompts; a scheduled post with no custom prompt pulls a random one.
+
+### Photo Challenge — payout is reaction-gated on channel posts, not replies  (PENDING-HASH)
+
+The economy no longer pays for *replying* to a Photo Challenge card. Instead a
+member's **image post in the Photo Challenge channel** (the dedicated channel set
+under **Photo Challenge → Setup & Schedule**) pays when it earns
+**`react_threshold` distinct reactions** (default 5; the author's own react and
+bots never count), capped **once per guild-local day**. The trigger kind
+`photo_reply` was renamed to **`photo_react`** (migration 079 rewrites existing
+quests + income-source rows, so the live "Picture This" quest keeps working). The
+Photo Challenge **Setup** panel gained two options: **Reactions to earn**
+(default 5) and **Auto-react emoji** (the bot seeds this on each photo so members
+can one-tap pile on).
+
+**Worth knowing while testing:** payout is dormant until a channel is set on the
+Setup panel, and still requires an **active `photo_react` quest** in Economy →
+Quests with the income source enabled — without one, posts pay nothing (by
+design). "Picture This" is **weekly**, so it pays once *per week* per qualifying
+member, not per day; make a daily `photo_react` quest to see the once-per-day cap.
+The distinct-reactor count and auto-react are pure Discord-API behaviour that
+can't be exercised offline — hence this live pass.
+
+- [ ] On **Photo Challenge → Setup**: **Reactions to earn** shows 5 and
+      **Auto-react emoji** is a text box. Set an emoji (e.g. 📸), Save → reload →
+      both round-trip alongside the channel/ping/enabled fields.
+- [ ] Ensure an **active `photo_react` quest** exists (Economy → Quests) with a
+      currency reward and the `photo_react` income source enabled.
+- [ ] Post an image in the photo channel → the bot **auto-reacts** with the
+      configured emoji. Clear the emoji + Save → next post is **not** auto-reacted.
+- [ ] Get **4 different people** to react → **no payout**. The **5th distinct
+      person** reacting → the poster is paid once (✅ + reply/DM per `game_role`).
+      One person adding 5 different emoji does **not** qualify; the poster
+      reacting to their own photo does **not** count.
+- [ ] Post a **second** photo the same day that also hits 5 → **no second
+      payout** (once-per-day cap). Confirm a photo posted **outside** the
+      configured channel never pays.
+- [ ] For a **sign-off** `photo_react` quest, crossing the threshold posts a
+      manager sign-off card (📝) and pays only after approval.
 
 ### Photo Challenge — ping role is now a dropdown, not a pasted ID  (5af3480)
 

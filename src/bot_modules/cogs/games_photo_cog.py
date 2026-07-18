@@ -14,7 +14,6 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     end_game,
 )
-from bot_modules.services.economy_quests_service import record_photo_card
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 
@@ -147,28 +146,9 @@ class PhotoCog(commands.Cog):
         )
         log.info("Game %s (photo) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        # Register the card so the economy's photo-reply event quest can pay
-        # members who reply to it with a photo. Best-effort: the card is
-        # already posted, so a registry failure must not unwind the game.
-        if guild_id:
-            try:
-                await asyncio.to_thread(
-                    self._record_card, guild_id, channel.id, msg.id, game_id, text
-                )
-            except Exception:
-                log.exception(
-                    "photo launch: failed to record card %s for the economy", msg.id
-                )
-
         await update_session(self.db, channel.id, game_id, [host_id])
         await end_game(self.db, game_id)
         return game_id
-
-    def _record_card(
-        self, guild_id: int, channel_id: int, message_id: int, game_id: str, prompt: str
-    ) -> None:
-        with self.bot.ctx.open_db() as conn:
-            record_photo_card(conn, guild_id, channel_id, message_id, game_id, prompt)
 
 
 async def setup(bot: "Bot"):

@@ -1,6 +1,7 @@
 """Cog-level tests for /bank — wallet view, mod grant matrix, and /bank quests."""
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,6 @@ from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     create_quest,
-    record_photo_card,
     set_quest_active,
 )
 from bot_modules.services.economy_service import (
@@ -1875,123 +1875,220 @@ def test_board_size_zero_round_trips_through_settings(db):
     assert loaded.quest_board_monthly == 2  # untouched → default
 
 
-# ── photo-reply event quest ─────────────────────────────────────────────────
+# ── photo-react event quest ─────────────────────────────────────────────────
+
+PHOTO_CHANNEL_ID = 111
 
 
-def _mk_photo_card(db, *, message_id=9100, game_id="game-1", channel_id=111) -> None:
+def _set_photo_config(
+    db, *, channel_id=PHOTO_CHANNEL_ID, threshold=None, auto_react=None
+) -> None:
+    opts: dict[str, object] = {"channel_id": str(channel_id) if channel_id else ""}
+    if threshold is not None:
+        opts["react_threshold"] = threshold
+    if auto_react is not None:
+        opts["auto_react"] = auto_react
     with open_db(db) as conn:
-        record_photo_card(conn, GUILD_ID, channel_id, message_id, game_id, "prompt")
+        conn.execute(
+            "INSERT INTO games_game_config (guild_id, game_type, enabled, options)"
+            " VALUES (?, 'photo', 1, ?)"
+            " ON CONFLICT(guild_id, game_type) DO UPDATE SET options = excluded.options",
+            (GUILD_ID, json.dumps(opts)),
+        )
+        conn.commit()
 
 
-def _photo_reply(
+def _today_period(db) -> str:
+    with open_db(db) as conn:
+        offset = get_tz_offset_hours(conn, GUILD_ID)
+    return f"photo_react:{local_day_for(time.time(), offset)}"
+
+
+def _photo_msg(
     *,
     author,
-    ref_message_id: int | None = 9100,
+    reactor_ids: tuple[int, ...] = (),
+    bot_ids: tuple[int, ...] = (),
+    message_id: int = 9100,
+    channel_id: int = PHOTO_CHANNEL_ID,
     content_type: str | None = "image/png",
     filename: str = "pic.png",
     with_attachment: bool = True,
 ) -> MagicMock:
-    msg = _trigger_message(author=author, content="")
-    msg.reference = (
-        SimpleNamespace(message_id=ref_message_id)
-        if ref_message_id is not None
-        else None
-    )
+    reactors = [SimpleNamespace(id=uid, bot=uid in bot_ids) for uid in reactor_ids]
+
+    def _users():
+        async def gen():
+            for u in reactors:
+                yield u
+
+        return gen()
+
+    reaction = SimpleNamespace(count=len(reactors), users=_users)
+    msg = MagicMock(spec=discord.Message)
+    msg.id = message_id
+    msg.guild = FakeGuild(id=GUILD_ID)
+    msg.author = author
+    msg.channel = SimpleNamespace(id=channel_id)
     att = SimpleNamespace(content_type=content_type, filename=filename)
     msg.attachments = [att] if with_attachment else []
+    msg.reactions = [reaction]
+    msg.add_reaction = AsyncMock()
+    msg.reply = AsyncMock()
     return msg
 
 
+async def _fire_react(cog, msg, *, channel_id=PHOTO_CHANNEL_ID, reactor_id=601):
+    """Drive ``_on_photo_react`` with the bot wired to serve ``msg``."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=msg)
+    channel.guild = FakeGuild(id=GUILD_ID)
+    guild = MagicMock()
+    guild.get_member = MagicMock(return_value=msg.author)
+    cog.bot.get_channel = MagicMock(return_value=channel)
+    cog.bot.get_guild = MagicMock(return_value=guild)
+    payload = SimpleNamespace(
+        guild_id=GUILD_ID,
+        channel_id=channel_id,
+        message_id=msg.id,
+        user_id=reactor_id,
+        emoji="👍",
+    )
+    await cog._on_photo_react(payload)
+
+
 @pytest.mark.asyncio
-async def test_photo_reply_pays_once_per_card_across_cards(ctx, db):
+async def test_photo_react_pays_once_per_day(ctx, db):
     _enable(db)
-    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10, title="Snap it")
-    _mk_photo_card(db, message_id=9100, game_id="game-1")
-    _mk_photo_card(db, message_id=9200, game_id="game-2")
+    _set_photo_config(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_react", reward=10, title="Snap it")
     cog = _make_cog(ctx)
     member = _member(member_id=501)
 
-    msg = _photo_reply(author=member, ref_message_id=9100)
-    await cog._on_photo_reply(msg)
+    # Five distinct humans react → pays.
+    msg = _photo_msg(author=member, reactor_ids=(601, 602, 603, 604, 605))
+    await _fire_react(cog, msg)
     assert _balance(db, 501) == 10
     msg.add_reaction.assert_awaited_once_with("✅")
 
-    # Same card again: silent, nothing more (no time gate — the card is the key).
-    repeat = _photo_reply(author=member, ref_message_id=9100)
-    await cog._on_photo_reply(repeat)
+    # A later reaction on the same post is skipped (already paid this process).
+    await _fire_react(cog, msg)
     assert _balance(db, 501) == 10
-    repeat.reply.assert_not_awaited()
 
-    # A different card pays again.
-    other = _photo_reply(author=member, ref_message_id=9200)
-    await cog._on_photo_reply(other)
-    assert _balance(db, 501) == 20
-
-
-@pytest.mark.asyncio
-async def test_photo_reply_requires_reply_and_image(ctx, db):
-    _enable(db)
-    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10)
-    _mk_photo_card(db)
-    cog = _make_cog(ctx)
-    member = _member(member_id=501)
-
-    # Not a reply at all.
-    await cog._on_photo_reply(_photo_reply(author=member, ref_message_id=None))
-    # A reply without any attachment.
-    await cog._on_photo_reply(_photo_reply(author=member, with_attachment=False))
-    # A reply with a non-image attachment.
-    await cog._on_photo_reply(
-        _photo_reply(author=member, content_type="video/mp4", filename="clip.mp4")
+    # A brand-new photo the same day pays nothing more — the day is the key.
+    another = _photo_msg(
+        author=member, reactor_ids=(601, 602, 603, 604, 605), message_id=9200
     )
-    assert _balance(db, 501) == 0
-
-    # No content type but an image filename counts (some mobile uploads).
-    await cog._on_photo_reply(
-        _photo_reply(author=member, content_type=None, filename="IMG_1234.JPG")
-    )
+    await _fire_react(cog, another)
     assert _balance(db, 501) == 10
 
 
 @pytest.mark.asyncio
-async def test_photo_reply_ignores_non_cards_and_needs_active_quest(ctx, db):
+async def test_photo_react_below_threshold_excludes_author_and_bots(ctx, db):
     _enable(db)
+    _set_photo_config(db)  # default threshold 5
+    _mk_quest(db, qtype="event", trigger_kind="photo_react", reward=10)
     cog = _make_cog(ctx)
     member = _member(member_id=501)
 
-    # Card exists but no event quest is active.
-    _mk_photo_card(db, message_id=9100)
-    await cog._on_photo_reply(_photo_reply(author=member, ref_message_id=9100))
+    # Four humans plus the author's own react plus a bot = only four distinct
+    # eligible reactors → no payout.
+    msg = _photo_msg(
+        author=member,
+        reactor_ids=(601, 602, 603, 604, 501, 999),
+        bot_ids=(999,),
+    )
+    await _fire_react(cog, msg)
     assert _balance(db, 501) == 0
 
-    # Quest active but the reply targets a message that isn't a card.
-    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10)
-    await cog._on_photo_reply(_photo_reply(author=member, ref_message_id=4242))
-    assert _balance(db, 501) == 0
+    # The fifth distinct human tips it over.
+    msg2 = _photo_msg(
+        author=member,
+        reactor_ids=(601, 602, 603, 604, 605),
+        message_id=9300,
+    )
+    await _fire_react(cog, msg2)
+    assert _balance(db, 501) == 10
 
 
 @pytest.mark.asyncio
-async def test_photo_reply_noop_when_economy_disabled(ctx, db):
-    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10)
-    _mk_photo_card(db)
+async def test_photo_react_gated_by_channel_image_and_active_quest(ctx, db):
+    _enable(db)
+    _set_photo_config(db)
     cog = _make_cog(ctx)
-    msg = _photo_reply(author=_member(member_id=501))
-    await cog._on_photo_reply(msg)
+    member = _member(member_id=501)
+    reactors = (601, 602, 603, 604, 605)
+
+    # No active photo_react quest yet → the eligibility gate short-circuits.
+    await _fire_react(cog, _photo_msg(author=member, reactor_ids=reactors))
+    assert _balance(db, 501) == 0
+
+    _mk_quest(db, qtype="event", trigger_kind="photo_react", reward=10)
+    cog = _make_cog(ctx)  # fresh options/paid cache
+
+    # A reaction in some other channel is ignored (cheap channel gate).
+    await _fire_react(
+        cog,
+        _photo_msg(author=member, reactor_ids=reactors, channel_id=222, message_id=9400),
+        channel_id=222,
+    )
+    assert _balance(db, 501) == 0
+
+    # A non-image post in the channel is ignored.
+    await _fire_react(
+        cog,
+        _photo_msg(
+            author=member,
+            reactor_ids=reactors,
+            with_attachment=False,
+            message_id=9401,
+        ),
+    )
+    assert _balance(db, 501) == 0
+
+    # A real image post with enough reactors pays.
+    await _fire_react(
+        cog, _photo_msg(author=member, reactor_ids=reactors, message_id=9402)
+    )
+    assert _balance(db, 501) == 10
+
+
+@pytest.mark.asyncio
+async def test_photo_react_custom_threshold(ctx, db):
+    _enable(db)
+    _set_photo_config(db, threshold=3)
+    _mk_quest(db, qtype="event", trigger_kind="photo_react", reward=10)
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    await _fire_react(cog, _photo_msg(author=member, reactor_ids=(601, 602, 603)))
+    assert _balance(db, 501) == 10
+
+
+@pytest.mark.asyncio
+async def test_photo_react_noop_when_economy_disabled(ctx, db):
+    _set_photo_config(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_react", reward=10)
+    cog = _make_cog(ctx)  # economy left disabled
+    msg = _photo_msg(author=_member(member_id=501), reactor_ids=(601, 602, 603, 604, 605))
+    await _fire_react(cog, msg)
     assert _balance(db, 501) == 0
     msg.reply.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_photo_reply_signoff_files_pending_claim(ctx, db):
+async def test_photo_react_signoff_files_pending_claim(ctx, db):
     _enable(db)
-    qid = _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10, signoff=1)
-    _mk_photo_card(db)
+    qid = _mk_quest(
+        db, qtype="event", trigger_kind="photo_react", reward=10, signoff=1
+    )
+    _set_photo_config(db)
     cog = _make_cog(ctx)
-    msg = _photo_reply(author=_member(member_id=501))
+    msg = _photo_msg(author=_member(member_id=501), reactor_ids=(601, 602, 603, 604, 605))
     with patch(
         "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
     ) as card:
-        await cog._on_photo_reply(msg)
+        await _fire_react(cog, msg)
 
     assert _balance(db, 501) == 0  # sign-off gates the payout
     card.assert_awaited_once()
@@ -2003,15 +2100,47 @@ async def test_photo_reply_signoff_files_pending_claim(ctx, db):
             (qid,),
         ).fetchone()
     assert claim is not None and claim["state"] == "pending"
-    assert claim["period"] == "photo_reply:game-1"
+    assert claim["period"] == _today_period(db)
+
+
+@pytest.mark.asyncio
+async def test_photo_autoreact_seeds_configured_emoji(ctx, db):
+    _enable(db)
+    _set_photo_config(db, auto_react="📸")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    # Image post in the photo channel gets the seed reaction.
+    msg = _photo_msg(author=member)
+    await cog._on_photo_autoreact(msg)
+    msg.add_reaction.assert_awaited_once_with("📸")
+
+    # Non-image posts and posts in other channels are left alone.
+    non_image = _photo_msg(author=member, with_attachment=False, message_id=9500)
+    await cog._on_photo_autoreact(non_image)
+    non_image.add_reaction.assert_not_awaited()
+
+    elsewhere = _photo_msg(author=member, channel_id=222, message_id=9501)
+    await cog._on_photo_autoreact(elsewhere)
+    elsewhere.add_reaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_photo_autoreact_off_without_emoji(ctx, db):
+    _enable(db)
+    _set_photo_config(db)  # no auto_react configured
+    cog = _make_cog(ctx)
+    msg = _photo_msg(author=_member(member_id=501))
+    await cog._on_photo_autoreact(msg)
+    msg.add_reaction.assert_not_awaited()
 
 
 def test_event_quest_shown_as_auto_not_claimable(ctx, db):
     _enable(db)
-    _mk_quest(db, qtype="event", trigger_kind="photo_reply", title="Snap it")
+    _mk_quest(db, qtype="event", trigger_kind="photo_react", title="Snap it")
     cog = _make_cog(ctx)
     _settings, state = cog._load_quests_state(GUILD_ID, 501)
-    assert [q["state"] for q in state] == ["photo_reply"]
+    assert [q["state"] for q in state] == ["photo_react"]
 
 
 # ── onboarding path DM ──────────────────────────────────────────────────────
