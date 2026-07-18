@@ -61,7 +61,7 @@ reaction-gated (see the next entry). Needs a bot + dashboard restart to pick up
 - [ ] **Prompt Bank** on the panel (and **Prompts & AI**) still add/edit photo
       prompts; a scheduled post with no custom prompt pulls a random one.
 
-### Photo Challenge — payout is reaction-gated on channel posts, not replies  (PENDING-HASH)
+### Photo Challenge — payout is reaction-gated on channel posts, not replies  (23d6a60)
 
 The economy no longer pays for *replying* to a Photo Challenge card. Instead a
 member's **image post in the Photo Challenge channel** (the dedicated channel set
