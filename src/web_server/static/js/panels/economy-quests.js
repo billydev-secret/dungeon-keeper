@@ -182,10 +182,6 @@ function render(container, channels, cfg) {
             <input type="checkbox" name="signoff" /> Requires manager sign-off
             <span class="field-hint" style="margin:0;">(completion files a claim you approve on Operations instead of paying instantly)</span>
           </label>
-          <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
-            <input type="checkbox" name="onboarding" /> 🧭 Onboarding path
-            <span class="field-hint" style="margin:0;">(new members get this quest DMed to them when they join — best on event quests that pay once ever)</span>
-          </label>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary" data-submit-quest>Create quest</button>
             <button type="button" class="btn" data-cancel-edit style="display:none;">Cancel edit</button>
@@ -295,7 +291,7 @@ async function refreshQuests(container) {
     const status = `dk-quest-status-${q.id}`;
     return `
       <tr data-quest-row="${q.id}">
-        <td>${q.onboarding ? `<span title="Onboarding path — DMed to new members">🧭 </span>` : ""}${esc(q.title)}</td>
+        <td>${esc(q.title)}</td>
         <td>${esc(q.qtype)}</td>
         <td>${q.reward}${q.reward_xp > 0 ? ` <span class="field-hint" title="Bonus XP">+${q.reward_xp}xp</span>` : ""}</td>
         <td>${questVerification(q)}</td>
@@ -477,7 +473,6 @@ function wireAuthoring(container, channels) {
     rewardInput.value = q.reward ?? 0;
     form.querySelector("[name=reward_xp]").value = q.reward_xp ?? 0;
     form.querySelector("[name=signoff]").checked = !!q.signoff;
-    form.querySelector("[name=onboarding]").checked = !!q.onboarding;
     form.querySelector("[name=rotate_tag]").value = q.rotate_tag || "";
     form.querySelector("[name=starts_at]").value = fromEpoch(q.starts_at);
     form.querySelector("[name=ends_at]").value = fromEpoch(q.ends_at);
@@ -507,7 +502,6 @@ function wireAuthoring(container, channels) {
       reward: parseInt(rewardInput.value, 10) || 0,
       reward_xp: parseInt(form.querySelector("[name=reward_xp]").value, 10) || 0,
       signoff: form.querySelector("[name=signoff]").checked,
-      onboarding: form.querySelector("[name=onboarding]").checked,
       rotate_tag: form.querySelector("[name=rotate_tag]").value.trim(),
       starts_at: toEpoch(form.querySelector("[name=starts_at]").value),
       ends_at: toEpoch(form.querySelector("[name=ends_at]").value),

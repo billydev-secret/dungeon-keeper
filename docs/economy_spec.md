@@ -298,15 +298,16 @@ distort the level curve), ledgered as `xp_events` source `quest`. Level
 progression lands in the DB; any level-up announces on the member's next
 ordinary XP award.
 
-**Onboarding path:** quests flagged `onboarding` are DMed to each new member
-on join — a branded "starter path" embed listing title, coin + XP rewards, and
-each quest's auto-complete hint, capped at 10, with a `/quests` pointer. Sent
-once ever per member (`econ_onboarding_dms`, reserve-before-send so a crash
-loses one DM rather than double-DMing a rejoiner; nothing is reserved when no
-flagged quests exist, so a path added later still reaches earlier joiners on
-rejoin). Respects the economy notification mute + bank-channel fallback via
-`notify_member`. Works best as event quests that pay once ever (bio, first
-game, intro photo) — new members can finish them at their own pace.
+**Onboarding path (removed 2026-07-18):** an earlier build DMed each new member
+a "starter path" embed of the guild's `onboarding`-flagged quests on join. It
+was deleted — a join-time DM pushes the economy at members who never opted into
+the game role, contradicting the "role set = opt-in, members without it are
+paid silently" model (unlike a member who joins the server, a member who takes
+the role has opted in). No replacement fires on join; members discover the
+library through `/quests`. The `onboarding` column and `econ_onboarding_dms`
+table remain as inert dead schema (migration 071), no longer read or written,
+and the quest editor's onboarding toggle is gone. Don't reintroduce a join-time
+economy DM without a real opt-in signal.
 
 **Counted quests:** a trigger-kind quest on a daily/weekly/monthly cadence may
 set `target_count` > 1 ("send 20 messages this week"). Each distinct occurrence

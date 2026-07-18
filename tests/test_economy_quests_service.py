@@ -43,9 +43,7 @@ from bot_modules.services.economy_quests_service import (
     get_quest,
     list_income_sources,
     list_kind_triggered_quests,
-    list_onboarding_quests,
     list_quests,
-    mark_onboarding_dm,
     set_income_source,
     source_enabled,
     resolve_claim,
@@ -97,7 +95,6 @@ def _make(
     target_min=0,
     target_max=0,
     reward_xp=0,
-    onboarding=0,
     title="Quest",
 ):
     qid = create_quest(
@@ -121,7 +118,6 @@ def _make(
         target_min=target_min,
         target_max=target_max,
         reward_xp=reward_xp,
-        onboarding=onboarding,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -1265,20 +1261,6 @@ def test_quest_xp_paid_on_signoff_approval_not_filing(db):
         assert conn.execute(
             "SELECT COUNT(*) c FROM xp_events WHERE source = 'quest'"
         ).fetchone()["c"] == 1
-
-
-def test_onboarding_listing_and_dm_dedup(db):
-    with open_db(db) as conn:
-        flagged = _make(conn, qtype="event", trigger_kind="bio_set", onboarding=1)
-        _make(conn, qtype="daily")  # unflagged
-        _make(
-            conn, qtype="event", trigger_kind="pen_pal",
-            onboarding=1, active=False,  # inactive stays out of the DM
-        )
-        assert [int(r["id"]) for r in list_onboarding_quests(conn, GUILD)] == [flagged]
-        assert mark_onboarding_dm(conn, GUILD, USER) is True
-        assert mark_onboarding_dm(conn, GUILD, USER) is False  # rejoin: no re-DM
-        assert mark_onboarding_dm(conn, GUILD, OTHER) is True
 
 
 def test_fire_trigger_inline_loads_settings_and_pays(db):

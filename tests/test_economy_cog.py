@@ -2143,68 +2143,6 @@ def test_event_quest_shown_as_auto_not_claimable(ctx, db):
     assert [q["state"] for q in state] == ["photo_react"]
 
 
-# ── onboarding path DM ──────────────────────────────────────────────────────
-
-
-def _joining_member(member_id=501, is_bot=False) -> MagicMock:
-    m = _member(member_id=member_id, is_bot=is_bot)
-    m.guild = FakeGuild(id=GUILD_ID)
-    m.guild.name = "Test Guild"
-    return m
-
-
-@pytest.mark.asyncio
-async def test_onboarding_dm_lists_path_once(ctx, db):
-    _enable(db)
-    with open_db(db) as conn:
-        qid = create_quest(
-            conn, GUILD_ID, title="Introduce yourself", description="",
-            qtype="event", reward=20, signoff=0, criteria="",
-            starts_at=None, ends_at=None, rotate_tag="",
-            community_target=None, created_by=1,
-            trigger_kind="bio_set", reward_xp=100, onboarding=1,
-        )
-        set_quest_active(conn, GUILD_ID, qid, True)
-    cog = _make_cog(ctx)
-
-    with patch(
-        "bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()
-    ) as notify:
-        await cog._on_join_onboarding(_joining_member(501))
-        notify.assert_awaited_once()
-        embed = notify.await_args.kwargs["embed"]
-        assert "starter path" in embed.title
-        field = embed.fields[0]
-        assert field.name == "Introduce yourself"
-        assert "20" in field.value and "100" in field.value  # coins + XP
-
-        # A rejoin never re-DMs.
-        await cog._on_join_onboarding(_joining_member(501))
-        notify.assert_awaited_once()
-        # Bots never get the path.
-        await cog._on_join_onboarding(_joining_member(999, is_bot=True))
-        notify.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_onboarding_dm_skipped_without_flagged_quests(ctx, db):
-    _enable(db)
-    _mk_quest(db, qtype="daily", title="Unflagged")
-    cog = _make_cog(ctx)
-    with patch(
-        "bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()
-    ) as notify:
-        await cog._on_join_onboarding(_joining_member(501))
-        notify.assert_not_awaited()
-    # And nothing was reserved — a quest flagged later still DMs this member.
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) c FROM econ_onboarding_dms WHERE guild_id = ?",
-            (GUILD_ID,),
-        ).fetchone()
-    assert row["c"] == 0
-
-
 # ── pay memo ─────────────────────────────────────────────────────────
 
 

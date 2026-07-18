@@ -58,9 +58,7 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_inline,
     fire_trigger_quests,
     get_progress,
-    list_onboarding_quests,
     list_trigger_quests,
-    mark_onboarding_dm,
     source_enabled,
 )
 from bot_modules.services.economy_icon_catalog_service import (
@@ -2336,74 +2334,6 @@ class EconomyCog(commands.Cog):
             except discord.HTTPException:
                 log.debug("econ photo: reactor fetch failed", exc_info=True)
         return len(seen)
-
-    @commands.Cog.listener("on_member_join")
-    async def _on_join_onboarding(self, member: discord.Member) -> None:
-        """DM a new member the guild's onboarding quest path, once ever.
-
-        Skipped for bots, when the economy is off, when no active quest is
-        flagged onboarding, or when this member already got it (rejoins).
-        The DM respects the member's economy notification mute and falls
-        back to the bank channel like every other economy notice.
-        """
-        if member.bot:
-            return
-        guild = member.guild
-
-        def _prepare():
-            with self.ctx.open_db() as conn:
-                settings = load_econ_settings(conn, guild.id)
-                if not settings.enabled:
-                    return None
-                quests_rows = list_onboarding_quests(conn, guild.id)
-                if not quests_rows:
-                    return None
-                if not mark_onboarding_dm(conn, guild.id, member.id):
-                    return None
-                return settings, [dict(r) for r in quests_rows]
-
-        try:
-            prepared = await asyncio.to_thread(_prepare)
-        except Exception:
-            log.exception("onboarding DM prep failed in guild %s", guild.id)
-            return
-        if prepared is None:
-            return
-        settings, rows = prepared
-
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = discord.Embed(
-            title=f"🧭 Welcome to {guild.name} — your starter path",
-            description=(
-                "Complete these to earn your first "
-                f"{settings.currency_plural} and XP. Most finish on their "
-                "own as you explore — check progress any time with "
-                "**/quests**."
-            ),
-            colour=accent,
-        )
-        for row in rows[:10]:
-            reward_bits = []
-            coins = int(row["reward"])
-            if coins > 0:
-                reward_bits.append(
-                    f"{settings.currency_emoji} {coins:,} {_unit(settings, coins)}"
-                )
-            if int(row["reward_xp"]) > 0:
-                reward_bits.append(f"⭐ {int(row['reward_xp']):,} XP")
-            lines = [" · ".join(reward_bits) or "—"]
-            hint = _QUEST_STATE_LABEL.get(str(row["trigger_kind"] or ""), "")
-            if hint:
-                lines.append(hint)
-            elif row["description"]:
-                lines.append(str(row["description"]))
-            embed.add_field(
-                name=str(row["title"]), value="\n".join(lines), inline=False
-            )
-
-        await notify_member(
-            self.bot, self.ctx.db_path, guild.id, member.id, embed=embed
-        )
 
     @commands.Cog.listener("on_member_update")
     async def _on_boost_started(

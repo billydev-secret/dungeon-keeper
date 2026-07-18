@@ -9,6 +9,21 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — remove the join-time onboarding DM  (pending)
+
+The onboarding "starter path" DM (sent to every new member on join, listing the
+`onboarding`-flagged quests) is deleted — same opt-in concern as the streak DMs:
+it pushed the economy at members who never took the game role. No join-time
+economy DM fires now; members find quests via `/quests`. The quest editor's
+🧭 Onboarding-path toggle is removed. DB schema (`onboarding` column,
+`econ_onboarding_dms` table) is left inert.
+
+- [ ] Join the dev guild with an alt (economy enabled, a quest previously
+      flagged onboarding) → **no DM** arrives.
+- [ ] Config → Economy → Quests: the authoring form has **no** "🧭 Onboarding
+      path" checkbox, and the quest table shows no 🧭 badge. Create/edit a quest
+      → still saves fine.
+
 ### Economy — streak/milestone DMs respect the opt-in game role  (bb4fa1e)
 
 Bug fix: recurring streak/milestone/grace/reset DMs (§3.1) were reaching every

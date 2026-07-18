@@ -72,7 +72,6 @@ _UPDATABLE_FIELDS = frozenset(
         "target_min",
         "target_max",
         "reward_xp",
-        "onboarding",
     }
 )
 
@@ -121,7 +120,6 @@ def create_quest(
     target_min: int = 0,
     target_max: int = 0,
     reward_xp: int = 0,
-    onboarding: int = 0,
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
     if qtype not in ("daily", "weekly", "monthly", "community", "event"):
@@ -136,9 +134,8 @@ def create_quest(
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
              created_by, created_at, trigger_words, trigger_channel_id,
-             trigger_kind, target_count, target_min, target_max, reward_xp,
-             onboarding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             trigger_kind, target_count, target_min, target_max, reward_xp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -161,7 +158,6 @@ def create_quest(
             int(target_min),
             int(target_max),
             int(reward_xp),
-            1 if onboarding else 0,
         ),
     )
     return int(cur.lastrowid or 0)
@@ -636,38 +632,6 @@ def _bump_progress(
         (quest_id, user_id, period),
     ).fetchone()
     return row is not None and int(row["current"]) >= target
-
-
-def list_onboarding_quests(
-    conn: sqlite3.Connection, guild_id: int
-) -> list[sqlite3.Row]:
-    """The guild's active onboarding-path quests, in library order."""
-    return conn.execute(
-        """
-        SELECT * FROM econ_quests
-        WHERE guild_id = ? AND active = 1 AND onboarding = 1
-        ORDER BY id
-        """,
-        (guild_id,),
-    ).fetchall()
-
-
-def mark_onboarding_dm(
-    conn: sqlite3.Connection, guild_id: int, user_id: int
-) -> bool:
-    """Reserve the once-ever onboarding DM; False when already sent.
-
-    Reserve-before-send (the community-payout pattern): a crash after the
-    mark loses one DM rather than ever double-DMing a rejoiner.
-    """
-    cur = conn.execute(
-        """
-        INSERT OR IGNORE INTO econ_onboarding_dms (guild_id, user_id, sent_at)
-        VALUES (?, ?, ?)
-        """,
-        (guild_id, user_id, time.time()),
-    )
-    return (cur.rowcount or 0) > 0
 
 
 def get_progress(
