@@ -9,8 +9,9 @@ smaller — no per-user channels, transcripts, or policy machinery.
 Two ways in:
 
 * ``/inactive mark @user`` — manual, mirrors ``/jail``.
-* Automatic sweep — a background loop (opt-in via ``/inactive config auto:true``)
-  that moves members idle past a configurable threshold. The sweep is a
+* Automatic sweep — a background loop (opt-in via the web dashboard's
+  Inactive Sweep panel) that moves members idle past a configurable
+  threshold. The sweep is a
   destructive mass role-strip, so it never touches bots/mods/admins/the owner,
   is hard-capped per run, and ``/inactive sweep`` defaults to a dry-run preview.
 
@@ -370,54 +371,6 @@ class InactiveCog(commands.Cog):
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
-
-    # ── /inactive config ──────────────────────────────────────────────
-
-    @inactive.command(name="config", description="View or change inactive-sweep settings.")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(
-        threshold_days="Days of inactivity before a member is swept",
-        auto="Enable/disable the automatic background sweep",
-        cap="Max members moved in a single sweep run",
-    )
-    async def inactive_config(
-        self,
-        interaction: discord.Interaction,
-        threshold_days: app_commands.Range[int, 1, 3650] | None = None,
-        auto: bool | None = None,
-        cap: app_commands.Range[int, 1, 200] | None = None,
-    ) -> None:
-        ctx = self.ctx
-        guild = interaction.guild
-        member = interaction.user
-        if guild is None or not isinstance(member, discord.Member) or not _is_admin(member, ctx):
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        gid = guild.id
-
-        def _write() -> None:
-            with ctx.open_db() as conn:
-                if threshold_days is not None:
-                    set_config_value(conn, "inactive_threshold_days", str(int(threshold_days)), gid)
-                if auto is not None:
-                    set_config_value(conn, "inactive_auto_sweep", "1" if auto else "0", gid)
-                if cap is not None:
-                    set_config_value(conn, "inactive_sweep_cap", str(int(cap)), gid)
-
-        await asyncio.to_thread(_write)
-
-        cur_threshold = _threshold_days(ctx, gid)
-        cur_cap = _sweep_cap(ctx, gid)
-        cur_auto = _auto_enabled(ctx, gid)
-        await interaction.response.send_message(
-            "**Inactive-sweep settings**\n"
-            f"• Threshold: **{cur_threshold} days**\n"
-            f"• Auto-sweep: **{'on' if cur_auto else 'off'}**\n"
-            f"• Per-run cap: **{cur_cap}**",
-            ephemeral=True,
-        )
-
 
 def _set_config(ctx: AppContext, key: str, value: str, guild_id: int) -> None:
     with ctx.open_db() as conn:

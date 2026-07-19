@@ -137,24 +137,3 @@ async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
     )
 
 
-async def get_stats(db: GamesDb, guild_id: int, user_id: int) -> dict:
-    row = await db.fetchone(
-        """
-        SELECT
-          SUM(CASE WHEN winner_id = ?1 THEN 1 ELSE 0 END) AS wins,
-          SUM(CASE WHEN loser_id  = ?1 THEN 1 ELSE 0 END) AS losses,
-          COUNT(*)                                          AS total_games
-        FROM quickdraw_games
-        WHERE guild_id = ?2
-          AND (challenger_id = ?1 OR target_id = ?1)
-          AND state IN ('RESOLVED', 'NICKED', 'NO_NICK_SET', 'RESOLVED_NO_NICK', 'EXPIRED')
-        """,
-        (user_id, guild_id),
-    )
-    if not row:
-        return {"wins": 0, "losses": 0, "total_games": 0}
-    return {
-        "wins": row["wins"] or 0,
-        "losses": row["losses"] or 0,
-        "total_games": row["total_games"] or 0,
-    }

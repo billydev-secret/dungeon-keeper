@@ -194,6 +194,7 @@ no decomposition) for pilmoji to draw.
 
 ## Related
 
-- Live-test checklist: `docs/TESTING_QUEUE.md`.
+- Live-test checklist: the commit's own `Testing:` section (see CLAUDE.md),
+  posted as a QA Tracker card.
 - Tests: `tests/test_quote_border.py` (opening detection, mask-fit rendering,
   determinism), `tests/web/test_quote_border_routes.py` (upload/preview/delete).

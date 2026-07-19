@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-"""Post the testing checklists into their dev channels.
+"""Post QA cards for commits, and mirror the role testing checklists.
 
-``###`` blocks above "## Done" become interactive **QA cards**: one embed
-per block with Pass / Fail / Blocked buttons, backed by a ``qa_tests`` row
-in the production DB. That covers the queue's pending entries AND the role
-checklists' per-feature blocks — each checklist's cards post into its own
-dev channel, keyed with a per-doc prefix ("admin-tests: …") so same-named
-features can't collide. The stage-1 cog dispatches buttons purely on
-``custom_id``, so cards posted here over raw REST come alive after the
-next bot restart. Blocks without a ``###`` heading (doc intros, section
-headers, Done) still post as plain text, chunked at heading boundaries
-(oversized blocks re-split at line boundaries with a ``(cont.)`` heading).
+Two independent sources feed the same **QA card** renderer (one embed with
+Pass / Fail / Blocked buttons, backed by a ``qa_tests`` row in the
+production DB):
+
+1. **Per-commit cards** — the post-commit hook calls ``--commit <sha>``.
+   If that commit's message body has a ``Testing:`` section, its checklist
+   lines become one card titled with the commit subject. No section, no
+   card — most commits don't change live-testable behavior.
+2. **Role checklists** — ``###`` blocks in the admin/moderator/user
+   testing-checklist docs post as cards too (one per feature, keyed with a
+   per-doc prefix like "admin-tests: …" so same-named features can't
+   collide), via the ``--only`` full-dump path. Blocks without a ``###``
+   heading (doc intros, section headers) still post as plain text, chunked
+   at heading boundaries (oversized blocks re-split at line boundaries with
+   a ``(cont.)`` heading).
+
+The stage-1 cog dispatches buttons purely on ``custom_id``, so cards posted
+here over raw REST come alive after the next bot restart.
 
 Runs under the bare system python3 (the post-commit hook has no venv): only
 the stdlib plus ``bot_modules.qa.cards``, which is stdlib-pure by design.
-If the prod DB is unreachable or predates migration 077, queue entries
-degrade to the old plain-text messages, and every hook path still exits 0.
+If the prod DB is unreachable or predates migration 077, cards degrade to
+plain-text messages, and every hook path still exits 0.
 
-    python scripts/post_testing_docs.py --dry-run          # show the plan
-    python scripts/post_testing_docs.py --only testing-queue
+    python scripts/post_testing_docs.py --commit <sha> --dry-run   # one commit's card
+    python scripts/post_testing_docs.py --only admin-tests         # dump a checklist
     python scripts/post_testing_docs.py --purge --yes      # replace channel contents
 """
 
@@ -49,11 +57,15 @@ UA = "DiscordBot (https://github.com/local/dungeon-keeper, 1.0)"
 LIMIT = 1900
 
 DOCS = {
-    "testing-queue": ("docs/TESTING_QUEUE.md", "1527184897775763549"),
     "admin-tests": ("docs/testing/admin_testing_checklist.md", "1527185973065154711"),
     "moderator-tests": ("docs/testing/mod_testing_checklist.md", "1527186000772862112"),
     "user-tests": ("docs/testing/user_testing_checklist.md", "1527186042363449405"),
 }
+
+# Per-commit QA cards have no doc of their own, so their channel isn't in
+# DOCS — this is the fallback #testing-queue channel qa_card_channel() uses
+# absent a dashboard-configured override.
+DEFAULT_QA_CHANNEL = "1527184897775763549"
 
 
 def env_value(key: str) -> str | None:
@@ -163,7 +175,7 @@ def qa_card_channel(conn: sqlite3.Connection | None) -> str:
     #testing-queue id when unset, zero, unreadable, or pre-077 — the same
     degraded installs that fall back to plain text.
     """
-    default = DOCS["testing-queue"][1]
+    default = DEFAULT_QA_CHANNEL
     if conn is None:
         return default
     try:
@@ -437,61 +449,21 @@ def pending_entries(text: str) -> list[str]:
     return out
 
 
-def state_path() -> Path:
-    """Ledger of entry keys already sent, shared by every worktree.
+def testing_checklist(sha: str) -> str | None:
+    """The ``Testing:`` checklist block from a commit's message body.
 
-    Lives in the common git dir (not the tree) so it is never committed and so a
-    commit made in any worktree sees the same history.
+    ``None`` if the commit carries no such section (not every commit changes
+    live-testable behavior) or the section is present but empty.
     """
-    common = (git("rev-parse", "--git-common-dir") or ".git").strip()
-    return (REPO / common).resolve() / "testing_queue_posted.json"
-
-
-def load_state() -> set[str]:
-    p = state_path()
-    if not p.exists():
-        return set()
-    try:
-        return set(json.loads(p.read_text()))
-    except json.JSONDecodeError, OSError:
-        return set()
-
-
-def save_state(keys: set[str]) -> None:
-    state_path().write_text(json.dumps(sorted(keys), indent=0))
-
-
-def new_entries(sha: str) -> list[str]:
-    """Return queue entries that ``sha`` adds relative to its parent.
-
-    Entries are keyed by heading line rather than by body, so fixing a typo in an
-    existing entry doesn't re-post it. Headings repeat across the file (many read
-    "(this commit)"), so matching is count-aware: a heading already present once
-    stays matched once, and only genuinely extra occurrences count as new.
-    """
-    from collections import Counter
-
-    path = DOCS["testing-queue"][0]
-    after = git("show", f"{sha}:{path}")
-    if after is None:
-        return []  # file didn't exist at this commit
-    parent = git("rev-parse", "--verify", f"{sha}^")
-    before = git("show", f"{sha}^:{path}") if parent else None
-    if before is None:
-        return []  # root commit, or file newly added -- treat the dump as baseline
-
-    seen = Counter(entry_key(b) for b in split_entries(before))
-    already = load_state()
-    fresh: list[str] = []
-    for block in pending_entries(after):
-        key = entry_key(block)
-        if seen[key] > 0:
-            seen[key] -= 1
-        elif key not in already:
-            # Amend/rebase/cherry-pick all re-present the same addition against
-            # the same parent, so the diff alone would post it again.
-            fresh.append(block)
-    return fresh
+    body = git("log", "-1", "--format=%B", sha)
+    if body is None:
+        return None
+    lines = body.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().casefold() == "testing:":
+            checklist = "\n".join(lines[i + 1 :]).strip("\n")
+            return checklist or None
+    return None
 
 
 def stamp(sha: str) -> str:
@@ -518,30 +490,28 @@ def purge(channel: str, tok: str, me: str) -> int:
 
 
 def post_commit(sha: str, *, dry_run: bool) -> None:
-    """Post the entries a single commit adds. Used by the post-commit hook.
+    """Post the QA card for one commit's ``Testing:`` section, if it has one.
 
-    Each entry becomes one QA card: a qa_tests row in the prod DB, then the
-    embed + verdict buttons, then the message id written back. Any DB or
-    REST failure prints a warning and returns normally — the hook must
-    never break a commit — and the unsaved state ledger means the next
-    commit retries these entries.
+    Used by the post-commit hook. Any DB or REST failure prints a warning
+    and returns normally — the hook must never break a commit. No state
+    ledger is needed: ``insert_qa_test``'s ``ON CONFLICT DO NOTHING`` on
+    ``(guild_id, entry_key, commit_sha)`` already makes a hook re-run for
+    the same sha (a retried commit, a rebase replay) reuse the existing row
+    instead of duplicating it.
     """
-    entries = new_entries(sha)
-    if not entries:
+    checklist = testing_checklist(sha)
+    if not checklist:
         if dry_run:
-            print(f"{sha[:8]}: no new TESTING_QUEUE entries")
-        return
-
-    channel = DOCS["testing-queue"][1]
-
-    if dry_run:
-        print(f"{sha[:8]}: {len(entries)} new entry(s) -> {len(entries)} card(s)")
-        for entry in entries:
-            print(f"  - {heading_of(entry)[4:]}")
+            print(f"{sha[:8]}: no Testing: section")
         return
 
     short = (git("rev-parse", "--short", sha) or sha[:8]).strip()
-    subject = (git("log", "-1", "--format=%s", sha) or "").strip() or None
+    subject = (git("log", "-1", "--format=%s", sha) or "").strip() or "(no subject)"
+
+    if dry_run:
+        print(f"{sha[:8]}: Testing section -> 1 card")
+        print(f"  - {subject}")
+        return
 
     try:
         tok = token()
@@ -554,26 +524,28 @@ def post_commit(sha: str, *, dry_run: bool) -> None:
             )
             conn.close()
             conn = None
-        for entry in entries:
-            if conn is not None:
-                post_entry_card(conn, guild_id, channel, tok, entry, short, subject)
-            else:
-                # Degraded path (no DB / pre-077 schema): the old plain-text
-                # message(s) with the sha stamp, minus the retired ✅ reaction.
-                parts = pack(entry)
-                parts[-1] = f"{parts[-1]}\n{stamp(sha)}"
-                for part in parts:
-                    post_message(channel, part, tok)
-                    time.sleep(1.1)
         if conn is not None:
+            key = subject.casefold()
+            test_id = insert_qa_test(
+                conn, guild_id, key, subject, checklist, short, subject
+            )
+            mid = post_card(channel, tok, test_id, subject, checklist, short, subject)
+            if mid:
+                set_qa_test_message(conn, test_id, int(channel), int(mid))
             conn.close()
+        else:
+            # Degraded path (no DB / pre-077 schema): the old plain-text
+            # message(s) with the sha stamp.
+            parts = pack(f"### {subject}\n\n{checklist}")
+            parts[-1] = f"{parts[-1]}\n{stamp(sha)}"
+            for part in parts:
+                post_message(channel, part, tok)
+                time.sleep(1.1)
     except (Exception, SystemExit) as exc:  # containment: the hook exits 0
         print(f"post-commit: WARNING could not post, will retry next commit -- {exc}")
         return
 
-    save_state(load_state() | {entry_key(e) for e in entries})
-    for entry in entries:
-        print(f"post-commit: posted to #testing-queue -- {heading_of(entry)[4:]}")
+    print(f"post-commit: posted QA card -- {subject}")
 
 
 def main() -> None:
@@ -585,27 +557,11 @@ def main() -> None:
     )
     ap.add_argument("--yes", action="store_true", help="required to actually post")
     ap.add_argument(
-        "--commit", metavar="SHA", help="post only the entries this commit adds"
-    )
-    ap.add_argument(
-        "--seed-state",
-        action="store_true",
-        help="mark every entry currently in the queue as already posted (baseline)",
+        "--commit", metavar="SHA", help="post this commit's Testing: section, if any"
     )
     args = ap.parse_args()
 
     targets = args.only or list(DOCS)
-
-    if args.seed_state:
-        text = (REPO / DOCS["testing-queue"][0]).read_text()
-        keys = {
-            entry_key(b)
-            for b in split_entries(text)
-            if heading_of(b).startswith("### ")
-        }
-        save_state(keys)
-        print(f"seeded {len(keys)} entry key(s) as already posted -> {state_path()}")
-        return
 
     if args.commit:
         post_commit(args.commit, dry_run=args.dry_run)
@@ -635,17 +591,18 @@ def main() -> None:
     for name in targets:
         path, channel = DOCS[name]
         text = (REPO / path).read_text()
-        # Every ``###`` block above "## Done" becomes a QA card: the queue's
-        # pending test entries, and — since the checklists were regrouped into
-        # per-feature ``###`` blocks — each checklist feature too. A doc with
-        # no ``###`` headings simply posts as plain text, one message per
-        # ``##`` section (which is also the pre-077 degraded behavior).
+        # Every ``###`` block above "## Done" becomes a QA card — each
+        # checklist feature, since the checklists were regrouped into
+        # per-feature ``###`` blocks. A doc with no ``###`` headings simply
+        # posts as plain text, one message per ``##`` section (which is also
+        # the pre-077 degraded behavior).
         pending = {entry_key(b) for b in pending_entries(text)}
         conn = qa_connect() if pending else None
-        # The dashboard's channel knob applies to the queue only; a checklist's
-        # cards belong in that checklist's own dev channel.
-        card_channel = qa_card_channel(conn) if name == "testing-queue" else channel
-        key_prefix = "" if name == "testing-queue" else f"{name}: "
+        # A checklist's cards belong in that checklist's own dev channel, not
+        # the dashboard-configurable qa_channel_id (that only applies to
+        # per-commit cards from post_commit()).
+        card_channel = channel
+        key_prefix = f"{name}: "
         guild_id = channel_guild_id(card_channel, tok) if conn is not None else 0
         if conn is not None and not guild_id:
             conn.close()

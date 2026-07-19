@@ -208,24 +208,3 @@ async def test_upsert_config_idempotent(db):
     await qdb.upsert_config(db, GUILD, min_delay=2.0)
     cfg = await qdb.get_config(db, GUILD)
     assert cfg["min_delay"] == pytest.approx(2.0)
-
-
-# ── stats ─────────────────────────────────────────────────────────────────────
-
-async def test_get_stats_empty(db):
-    stats = await qdb.get_stats(db, GUILD, 99)
-    assert stats == {"wins": 0, "losses": 0, "total_games": 0}
-
-
-async def test_get_stats_counts_wins_losses(db):
-    # Game 1: user 1 wins
-    gid1 = await _create(db)
-    await qdb.set_game_state(db, gid1, "RESOLVED", winner_id=1, loser_id=2)
-    # Game 2: user 1 loses
-    gid2 = await _create(db, challenger_id=2, target_id=1)
-    await qdb.set_game_state(db, gid2, "RESOLVED", winner_id=2, loser_id=1)
-
-    stats = await qdb.get_stats(db, GUILD, 1)
-    assert stats["wins"] == 1
-    assert stats["losses"] == 1
-    assert stats["total_games"] == 2

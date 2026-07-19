@@ -204,45 +204,23 @@ async def test_upsert_config_idempotent(db):
 
 # ── style points ──────────────────────────────────────────────────────────────
 
-async def test_get_style_points_empty(db):
-    pts = await hpdb.get_style_points(db, GUILD, 99)
-    assert pts == 0
+
+async def _style_points(db, guild_id: int, user_id: int) -> int:
+    row = await db.fetchone(
+        "SELECT total_points FROM hot_potato_style WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    return row["total_points"] if row else 0
 
 
 async def test_add_style_points_accumulates(db):
     await hpdb.add_style_points(db, GUILD, 1, 15)
     await hpdb.add_style_points(db, GUILD, 1, 10)
-    pts = await hpdb.get_style_points(db, GUILD, 1)
-    assert pts == 25
+    assert await _style_points(db, GUILD, 1) == 25
 
 
 async def test_add_style_points_separate_users(db):
     await hpdb.add_style_points(db, GUILD, 1, 20)
     await hpdb.add_style_points(db, GUILD, 2, 5)
-    assert await hpdb.get_style_points(db, GUILD, 1) == 20
-    assert await hpdb.get_style_points(db, GUILD, 2) == 5
-
-
-# ── stats ─────────────────────────────────────────────────────────────────────
-
-async def test_get_stats_empty(db):
-    stats = await hpdb.get_stats(db, GUILD, 99)
-    assert stats == {"wins": 0, "losses": 0, "total_games": 0, "style_points": 0}
-
-
-async def test_get_stats_counts_wins_losses(db):
-    gid1 = await _create(db)
-    await hpdb.set_game_state(db, gid1, "RESOLVED", winner_id=1, loser_id=2)
-    gid2 = await _create(db, challenger_id=2, target_id=1)
-    await hpdb.set_game_state(db, gid2, "RESOLVED", winner_id=2, loser_id=1)
-
-    stats = await hpdb.get_stats(db, GUILD, 1)
-    assert stats["wins"] == 1
-    assert stats["losses"] == 1
-    assert stats["total_games"] == 2
-
-
-async def test_get_stats_includes_style_points(db):
-    await hpdb.add_style_points(db, GUILD, 1, 50)
-    stats = await hpdb.get_stats(db, GUILD, 1)
-    assert stats["style_points"] == 50
+    assert await _style_points(db, GUILD, 1) == 20
+    assert await _style_points(db, GUILD, 2) == 5

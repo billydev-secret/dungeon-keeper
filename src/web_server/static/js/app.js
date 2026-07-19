@@ -121,6 +121,7 @@ const SECTIONS = [
       { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true },
       { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js", adminOnly: true },
+      { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
       { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
       { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js" },
@@ -181,6 +182,24 @@ const SECTIONS = [
     groups: [
       { heading: "Risky Roller", items: [
         { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js", adminOnly: true },
+      ]},
+      { heading: "Pressure Cooker", items: [
+        { id: "config-games-pressure", label: "Config", module: "./panels/config-games-pressure.js", adminOnly: true },
+      ]},
+      { heading: "Quickdraw", items: [
+        { id: "config-games-quickdraw", label: "Config", module: "./panels/config-games-quickdraw.js", adminOnly: true },
+      ]},
+      { heading: "Hot Potato", items: [
+        { id: "config-games-hotpotato", label: "Config", module: "./panels/config-games-hotpotato.js", adminOnly: true },
+      ]},
+      { heading: "Hot Potato (Group)", items: [
+        { id: "config-games-hotpotatogroup", label: "Config", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
+      ]},
+      { heading: "Chicken", items: [
+        { id: "config-games-chicken", label: "Config", module: "./panels/config-games-chicken.js", adminOnly: true },
+      ]},
+      { heading: "Musical Chairs", items: [
+        { id: "config-games-musicalchairs", label: "Config", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
       ]},
       { heading: "Would You Rather", items: [
         { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },

@@ -72,15 +72,3 @@ async def test_config_defaults_and_upsert(db):
     assert cfg2["min_players"] == 5
     assert cfg2["scramble_window"] == pytest.approx(4.0)
     assert cfg2["max_music"] == pytest.approx(15.0)  # untouched
-
-
-async def test_stats_membership(db):
-    gid = await mcdb.create_lobby(db, GUILD, CH, HOST, None)
-    await mcdb.set_game_state(
-        db, gid, "RESOLVED",
-        roster=json.dumps([10, 20, 30]), winner_id=30, loser_id=20,
-    )
-    assert (await mcdb.get_stats(db, GUILD, 30))["wins"] == 1
-    assert (await mcdb.get_stats(db, GUILD, 20))["losses"] == 1
-    assert (await mcdb.get_stats(db, GUILD, 10))["total_games"] == 1
-    assert (await mcdb.get_stats(db, GUILD, 999))["total_games"] == 0

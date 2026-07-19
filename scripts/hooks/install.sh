@@ -16,4 +16,3 @@ cp "$top/scripts/hooks/post-commit" "$hooks/post-commit"
 chmod +x "$hooks/post-commit"
 
 echo "installed: $hooks/post-commit"
-echo "seed the baseline once with: python3 scripts/post_testing_docs.py --seed-state"

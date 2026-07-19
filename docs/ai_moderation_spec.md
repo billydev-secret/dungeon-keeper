@@ -17,13 +17,10 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 | `/watch add user:<member>` | Slash | Mod | Subscribe yourself to that member's posts |
 | `/watch remove user:<member>` | Slash | Mod | Unsubscribe yourself |
 | `/watch list` | Slash | Mod | Show everyone you're currently watching |
-| `/rules-watch enable` | Slash | Mod | Start passive monitoring of all public channels |
-| `/rules-watch disable` | Slash | Mod | Stop passive monitoring |
-| `/rules-watch set-channel #channel` | Slash | Mod | Set the channel where immediate alerts are posted |
 | `/rules-watch digest` | Slash | Mod | Post a summary of all unlabeled digest-tier events |
 | `/rules-watch stats` | Slash | Mod | Show event counts, false-positive rate, and signal firing rates |
 | `/rules-watch label <event_id> <verdict>` | Slash | Mod | Manually label a digest-tier event |
-| `/rules-watch status` | Slash | Mod | Show whether monitoring is active and the alert channel |
+| Rules Watch enable/disable + alert channel | Web | Admin | Toggle passive monitoring and set the immediate-alert channel (dashboard's Rules Watch config panel — replaced the retired `/rules-watch enable`/`disable`/`set-channel` commands) |
 | AI config (models / prompts / clear) | Web | Admin | Read or override the per-guild model and system prompt for each command |
 | AI prompt test | Web | Admin | Run the current prompt + model against arbitrary input |
 | Model status / source / reload | Web | Admin | Inspect or change the loaded model file |
@@ -68,7 +65,7 @@ The DM carries the message content, attachment URLs, an optional `⚠️ Rule co
 
 ### Rules Watch — passive monitor
 
-Enabled per guild with `/rules-watch enable`. Fires on every public guild message from a non-bot user in any text channel or thread.
+Enabled per guild from the web dashboard's Rules Watch config panel. Fires on every public guild message from a non-bot user in any text channel or thread.
 
 #### Pre-filter gate
 The LLM is only called when at least one cheap heuristic fires:
@@ -195,8 +192,8 @@ Per-guild keys an admin sets via the dashboard:
 - **Mod model / wellness model** — default model for moderation and wellness commands.
 - **Per-command model override** — review, scan, user query, channel query, watch check, rules watch guard. Empty falls through to the mod model default.
 - **Per-command system prompt** — same keys. Empty falls through to the hard-coded default.
-- **`rules_watch_enabled`** — whether the passive monitor is running (set via `/rules-watch enable/disable`).
-- **`rules_watch_channel_id`** — Discord channel ID where `immediate`-tier alerts are posted (set via `/rules-watch set-channel`).
+- **`rules_watch_enabled`** — whether the passive monitor is running (set via the web dashboard's Rules Watch config panel).
+- **`rules_watch_channel_id`** — Discord channel ID where `immediate`-tier alerts are posted (set via the same panel).
 
 Global-only (host-level, not per-guild):
 

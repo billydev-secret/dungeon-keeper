@@ -112,24 +112,3 @@ async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
     )
 
 
-async def get_stats(db: GamesDb, guild_id: int, user_id: int) -> dict:
-    """Wins/losses across resolved group games this player took part in."""
-    rows = await db.fetchall(
-        """
-        SELECT roster, winner_id, loser_id FROM hp_group_games
-        WHERE guild_id = ?
-          AND state IN ('RESOLVED', 'NICKED', 'NO_NICK_SET', 'RESOLVED_NO_NICK')
-        """,
-        (guild_id,),
-    )
-    wins = losses = total = 0
-    for r in rows:
-        roster = json.loads(r["roster"] or "[]")
-        if user_id not in roster:
-            continue
-        total += 1
-        if r["winner_id"] == user_id:
-            wins += 1
-        if r["loser_id"] == user_id:
-            losses += 1
-    return {"wins": wins, "losses": losses, "total_games": total}

@@ -34,7 +34,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [greeting_watch_spec.md](greeting_watch_spec.md) | Greeting Watch: DMs a member when a "good morning"/"hello" goes unanswered in a watched channel (dashboard-configured, no commands) |
 | [guess_spec.md](guess_spec.md) | Guess image game (`/guess submit\|round\|delete\|optin\|confess\|leaderboard\|prompt`) |
 | [hidden_channels_spec.md](hidden_channels_spec.md) | Hidden Channels (`/hidden hide\|restore\|list`) |
-| [inactive_spec.md](inactive_spec.md) | Inactive member management (`/inactive mark\|release\|panel\|sweep\|config`) |
+| [inactive_spec.md](inactive_spec.md) | Inactive member management (`/inactive mark\|release\|panel\|sweep`); sweep settings configured on the web dashboard |
 | [mod_spec.md](mod_spec.md) | Mod cog (`/help`, `/purge`) — distinct from tools_spec.md |
 | [needle_spec.md](needle_spec.md) | Needle auto-threading (`/close`, `/title`) |
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
