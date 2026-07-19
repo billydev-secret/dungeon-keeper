@@ -2039,3 +2039,187 @@ def test_active_day_weekly_counts_days(db):
             )
         assert get_progress(conn, qid, USER, "2026-W29") == 3
         assert get_balance(conn, GUILD, USER) == 50
+
+
+# ── one-time setup quests in the daily pool ───────────────────────────────
+# bio_set / birthday_set are daily-cadence quests (drawn into the random
+# board as a subtle welcome guide) but claim once-ever and hide once done.
+
+
+def _give_bio(conn, guild_id=GUILD, user_id=USER):
+    conn.execute(
+        "INSERT INTO bios (user_id, guild_id, message_id, channel_id) "
+        "VALUES (?, ?, 1, 1)",
+        (user_id, guild_id),
+    )
+
+
+def _give_birthday(conn, guild_id=GUILD, user_id=USER):
+    conn.execute(
+        "INSERT INTO member_birthdays "
+        "(guild_id, user_id, birth_month, birth_day, set_by, set_at) "
+        "VALUES (?, ?, 6, 15, ?, 0)",
+        (guild_id, user_id, user_id),
+    )
+
+
+def test_setup_daily_claims_once_ever_not_per_day(db):
+    # Bug-fix-first: a plain daily re-fires each period, so a bio quest keyed
+    # to the calendar day would let a member re-earn it by re-saving their bio
+    # every day. As a setup kind it claims on a constant once-ever period, so
+    # the second day pays nothing.
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "bio_set", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 10
+        # Re-save the same day and again the next day: no further pay ever.
+        for day in ("2026-07-12", "2026-07-13", "2026-08-01"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "bio_set", USER,
+                local_day=day, occurrence="set", booster=False,
+            )
+        assert get_balance(conn, GUILD, USER) == 10
+
+
+def test_setup_daily_pays_even_when_off_board(db):
+    # A once-ever action can't wait for a lucky daily roll: the setup quest
+    # pays the moment the member does it, regardless of the board draw. Force
+    # an empty board (daily size 0) — a normal daily wouldn't fire, the setup
+    # one still does.
+    off_board = EconSettings(
+        enabled=True, quest_board_daily=0,
+        quest_set_bonus_daily=0, quest_set_bonus_weekly=0,
+    )
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        _make(conn, qtype="daily", trigger_kind="duel", reward=7)
+        assert assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", off_board) == set()
+
+        # Normal daily: off board → no pay.
+        fire_trigger_quests(
+            conn, off_board, GUILD, "duel", USER,
+            local_day="2026-07-12", occurrence="d1", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 0
+
+        # Setup daily: pays despite the empty board.
+        fired = fire_trigger_quests(
+            conn, off_board, GUILD, "bio_set", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        assert [int(q["id"]) for q, _ in fired] == [setup]
+        # Paid the setup reward despite the empty board (exact amount left
+        # loose — two active kinds put the ⚡ spotlight doubler in play).
+        assert get_balance(conn, GUILD, USER) >= 10
+
+
+def test_setup_daily_drops_off_board_once_done(db):
+    # Only members who haven't done it see it. A bio quest is on the board
+    # while the member has no bio; giving them one drops it (no refill).
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        _give_bio(conn)
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        # A member who still hasn't done it keeps seeing it.
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER_2, "daily", "2026-07-12", SETTINGS
+        )
+
+
+def test_setup_daily_drops_off_board_after_claim(db):
+    # Backstop path: even if the bio row is later removed, a member who has
+    # already claimed the quest never sees it re-shown (its claim sits on the
+    # constant period and can't re-pay).
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "bio_set", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        conn.execute("DELETE FROM bios WHERE user_id = ?", (USER,))
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+
+
+def test_birthday_setup_daily_behaves_like_bio(db):
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="birthday_set", reward=12)
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "birthday_set", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 12
+        _give_birthday(conn)
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        # Re-firing never re-pays.
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "birthday_set", USER,
+            local_day="2026-08-01", occurrence="set", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 12
+
+
+def test_setup_daily_excluded_from_clear_the_board_bonus(db):
+    # A member shouldn't have to do their once-ever bio to earn the daily
+    # set bonus: with an uncompleted bio quest and one normal daily on the
+    # board, clearing the normal daily alone pays the bonus.
+    bonus_settings = EconSettings(
+        enabled=True, quest_set_bonus_daily=5, quest_set_bonus_weekly=0,
+    )
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        _make(conn, qtype="daily", trigger_kind="duel", reward=8)
+        # Board holds both (whole small pool); the bio quest is uncompleted.
+        fire_trigger_quests(
+            conn, bonus_settings, GUILD, "duel", USER,
+            local_day="2026-07-12", occurrence="d1", booster=False,
+        )
+        # The clear-the-board bonus paid off the single normal daily — proof
+        # the uncompleted bio quest was excluded from the set (otherwise the
+        # board wouldn't be clear). Asserted on the bonus ledger row rather
+        # than the balance, which the ⚡ spotlight doubler would otherwise skew.
+        bonus = conn.execute(
+            "SELECT amount FROM econ_ledger "
+            "WHERE guild_id = ? AND user_id = ? AND kind = 'quest_bonus'",
+            (GUILD, USER),
+        ).fetchone()
+        assert bonus is not None and int(bonus["amount"]) == 5
+
+
+def test_setup_daily_claim_does_not_crash_set_bonus(db):
+    # Claiming the setup quest itself (constant "<kind>:set" period) must not
+    # feed that non-calendar period into the set-bonus board math.
+    bonus_settings = EconSettings(
+        enabled=True, quest_set_bonus_daily=5, quest_set_bonus_weekly=0,
+    )
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        fired = fire_trigger_quests(
+            conn, bonus_settings, GUILD, "bio_set", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        assert len(fired) == 1
+        # Bio reward only — the setup claim never triggers a set bonus.
+        assert get_balance(conn, GUILD, USER) == 10
+
+
+def test_setup_kinds_are_registered_board_kinds(db):
+    from bot_modules.economy.quests import SETUP_QUEST_KINDS
+
+    for kind in SETUP_QUEST_KINDS:
+        assert kind in TRIGGER_KINDS, kind
+        assert kind in TRIGGER_KIND_INFO, kind

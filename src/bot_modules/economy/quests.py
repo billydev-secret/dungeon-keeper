@@ -33,6 +33,21 @@ MAX_ACTIVE_EVENT_PER_KIND = 1
 # counts". Conflating the two would make a disabled cadence pay everything.
 BOARD_CADENCES = frozenset({"daily", "weekly", "monthly"})
 
+# One-time member-setup trigger kinds. These fire once in a member's lifetime
+# (setting a bio, saving a birthday) but we still want them to *appear* in the
+# random daily board as a subtle welcome guide — a quest you're nudged to do
+# once and that then quietly drops off. So a board-cadence quest on one of
+# these kinds gets two special-cases in the service layer:
+#   • it is claimed on a constant once-ever period (occurrence "set"), not the
+#     calendar day, so re-saving a bio tomorrow can't re-earn it, and the
+#     completing action always pays even if the quest wasn't drawn that day;
+#   • it drops off a member's board once they've done the underlying thing
+#     (bio row / birthday row exists) or already claimed it — so only members
+#     who *haven't* done it ever see it.
+# Kept here (pure) as the single source of truth; the DB-facing completion
+# checks live in economy_quests_service.
+SETUP_QUEST_KINDS = frozenset({"bio_set", "birthday_set"})
+
 # Default quests each member draws from each cadence's pool per period, when
 # a guild hasn't tuned its own (EconSettings.quest_board_*). The repeat gap
 # for a member is ~floor(poolsize / N) periods, so a bigger pool (or a

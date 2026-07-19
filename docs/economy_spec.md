@@ -381,6 +381,36 @@ table remain as inert dead schema (migration 071), no longer read or written,
 and the quest editor's onboarding toggle is gone. Don't reintroduce a join-time
 economy DM without a real opt-in signal.
 
+**One-time setup quests (the welcome guide, 2026-07-18):** the sanctioned,
+pull-not-push successor to the onboarding path. The setup trigger kinds
+(`quests.SETUP_QUEST_KINDS` = `bio_set`, `birthday_set`) can be run as ordinary
+**daily** quests, so they're drawn into a member's random daily board like any
+other — a subtle "fill out your bio / set your birthday" nudge that a newcomer
+happens on while browsing `/quests`, never a DM. Two service-layer
+special-cases make a once-in-a-lifetime action fit a daily cadence:
+
+- **Claim once ever, not per day.** `fire_trigger_quests` claims a
+  board-cadence setup quest on the constant occurrence period
+  `"<kind>:set"` (not the calendar day) and *independently of the board draw*.
+  So the completing member always gets paid the moment they do it — a lifetime
+  action can't wait for a lucky daily roll — and re-saving a bio tomorrow
+  collides on the same claim key and pays nothing (a plain daily would re-earn
+  each period; this is the whole reason `bio_set`/`birthday_set` were
+  event-only before). The setup claim's `:`-keyed period also skips
+  `maybe_pay_set_bonus` (it isn't part of any day's board set).
+- **Hide once done.** `assigned_board_ids` drops a setup quest from a member's
+  board once they've done the underlying thing (a `bios` / `member_birthdays`
+  row exists) or already claimed it — **drop, no refill**, so a completed setup
+  slot just leaves the board one shorter rather than reshuffling the window and
+  stranding a counted quest's in-progress work. Net: only members who *haven't*
+  done it ever see it, and it silently vanishes the moment they do. Rerolls
+  won't swap a member into a setup quest they've completed, and setup quests
+  are excluded from the clear-the-board set-bonus requirement (a member
+  shouldn't have to do their once-ever bio to earn today's daily set bonus).
+
+Enabling it is pure data: create a daily quest on each kind (normal daily
+reward). The fire hooks (`bios/wizard`, `birthday_cog`) already exist.
+
 **Counted quests:** a trigger-kind quest on a daily/weekly/monthly cadence may
 set `target_count` > 1 ("send 20 messages this week"). Each distinct occurrence
 inserts an `econ_quest_progress_marks` row (the dedup — replays never

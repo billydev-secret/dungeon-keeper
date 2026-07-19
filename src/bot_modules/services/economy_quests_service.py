@@ -393,6 +393,96 @@ def board_sizes(settings: EconSettings) -> dict[str, int]:
     }
 
 
+def _setup_underlying_done(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, kind: str
+) -> bool:
+    """Whether the member has already done a one-time setup kind's real action.
+
+    A direct existence check against the owning feature's table — a bio row
+    means they filled one out, a birthday row means they set it. Kept as
+    inline SQL (rather than importing the bios/birthday modules) so quest
+    assignment stays self-contained; these are stable core tables.
+    """
+    if kind == "bio_set":
+        row = conn.execute(
+            "SELECT 1 FROM bios WHERE guild_id = ? AND user_id = ? LIMIT 1",
+            (guild_id, user_id),
+        ).fetchone()
+    elif kind == "birthday_set":
+        row = conn.execute(
+            "SELECT 1 FROM member_birthdays WHERE guild_id = ? AND user_id = ? "
+            "LIMIT 1",
+            (guild_id, user_id),
+        ).fetchone()
+    else:
+        return False
+    return row is not None
+
+
+def _setup_quest_done(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    quest_id: int,
+    kind: str,
+) -> bool:
+    """Whether a one-time setup quest should drop off ``user_id``'s board.
+
+    True once they've done the underlying thing (bio/birthday exists) OR
+    already claimed this quest — the latter a backstop for the odd member who
+    deletes their bio after claiming, so a paid-out setup quest never re-shows
+    as a dead nudge that can't re-pay (its claim sits on the constant period).
+    """
+    if _setup_underlying_done(conn, guild_id, user_id, kind):
+        return True
+    row = conn.execute(
+        "SELECT 1 FROM econ_quest_claims "
+        "WHERE quest_id = ? AND user_id = ? AND state = 'paid' LIMIT 1",
+        (quest_id, user_id),
+    ).fetchone()
+    return row is not None
+
+
+def _setup_kinds_by_id(
+    conn: sqlite3.Connection, guild_id: int, quest_ids: set[int]
+) -> dict[int, str]:
+    """Map the setup-kind quest ids among ``quest_ids`` to their trigger kind."""
+    if not quest_ids:
+        return {}
+    placeholders = ",".join("?" * len(quest_ids))
+    rows = conn.execute(
+        f"SELECT id, trigger_kind FROM econ_quests WHERE id IN ({placeholders})",
+        tuple(quest_ids),
+    ).fetchall()
+    return {
+        int(r["id"]): str(r["trigger_kind"])
+        for r in rows
+        if str(r["trigger_kind"] or "") in quests.SETUP_QUEST_KINDS
+    }
+
+
+def _drop_completed_setup(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, board: set[int]
+) -> set[int]:
+    """Remove one-time setup quests the member has already done from a board.
+
+    Deliberately does **not** refill the freed slot: pulling a new quest in
+    mid-period would shift the deterministic window and could strand a counted
+    quest's in-progress work. A completed setup quest simply leaves the board
+    one shorter for that member — rare (few setup quests, drawn occasionally)
+    and self-heals next period.
+    """
+    kinds = _setup_kinds_by_id(conn, guild_id, board)
+    if not kinds:
+        return board
+    done = {
+        qid
+        for qid, kind in kinds.items()
+        if _setup_quest_done(conn, guild_id, user_id, qid, kind)
+    }
+    return board - done
+
+
 def assigned_board_ids(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -406,7 +496,9 @@ def assigned_board_ids(
     A per-member subset of the cadence pool (the guild's configured
     ``board_size`` of them), stable within the period and spaced so repeats
     stay ~a week apart. Only daily/weekly/monthly have a board; other
-    cadences return an empty set, as does a cadence sized to 0.
+    cadences return an empty set, as does a cadence sized to 0. One-time setup
+    quests the member has already completed are dropped (see
+    ``_drop_completed_setup``), so only members who haven't done them see them.
     """
     sizes = board_sizes(settings) if settings is not None else None
     n = quests.board_size(qtype, sizes)
@@ -428,7 +520,7 @@ def assigned_board_ids(
         if frm in board and to in pool_set:
             board.discard(frm)
             board.add(to)
-    return board
+    return _drop_completed_setup(conn, guild_id, user_id, board)
 
 
 def reroll_board_slot(
@@ -475,7 +567,15 @@ def reroll_board_slot(
     idx = quests.period_index(qtype, local_day)
     pool = list_active_pool_ids(conn, guild_id, qtype)
     ordered = quests.assigned_quest_ids(pool, user_id, idx, len(pool))
-    candidates = [q for q in ordered if q not in board]
+    # Never swap a member INTO a one-time setup quest they've already done —
+    # it would drop straight back off their board (_drop_completed_setup) and
+    # waste the reroll on an invisible slot.
+    done_setup = {
+        qid
+        for qid, kind in _setup_kinds_by_id(conn, guild_id, set(ordered)).items()
+        if _setup_quest_done(conn, guild_id, user_id, qid, kind)
+    }
+    candidates = [q for q in ordered if q not in board and q not in done_setup]
     if not candidates:
         raise ValueError("The pool has nothing else to swap in.")
     old_kind = str(quest["trigger_kind"] or "")
@@ -586,8 +686,19 @@ def maybe_pay_set_bonus(
     }.get(qtype, 0)
     if bonus <= 0:
         return 0
+    # A one-time setup quest (bio/birthday) is a daily by cadence but claims on
+    # a constant occurrence period ("<kind>:set", not a calendar day). Such a
+    # claim isn't part of any day's board set, and feeding its period to the
+    # calendar math below would raise — so it never triggers a set bonus.
+    if ":" in period:
+        return 0
     day = local_day_for_period(qtype, period)
     board = assigned_board_ids(conn, guild_id, user_id, qtype, day, settings)
+    # One-time setup quests never gate the clear-the-board bonus: they claim on
+    # a constant period (not this calendar period), so their claim could never
+    # appear in the per-period ``paid`` set below, and a member shouldn't have
+    # to do their once-ever bio to earn today's daily set bonus.
+    board -= set(_setup_kinds_by_id(conn, guild_id, board))
     if not board:
         return 0
     paid = {
@@ -910,7 +1021,16 @@ def fire_trigger_quests(
         ):
             continue
         qtype = str(quest["qtype"])
-        if qtype == "event":
+        if trigger_kind in quests.SETUP_QUEST_KINDS and qtype in quests.BOARD_CADENCES:
+            # One-time setup quest living in a board pool (bio/birthday): claim
+            # once ever, keyed to a constant period, and independent of the
+            # board draw. A lifetime action can't wait for a lucky daily roll,
+            # so the completing member always gets paid even if it wasn't drawn
+            # today; and re-saving must not re-earn it — claim_quest's collision
+            # on this constant key makes the second save a silent no-op. (The
+            # board draw still controls *visibility* via _drop_completed_setup.)
+            period = quests.occurrence_period(trigger_kind, occurrence or "set")
+        elif qtype == "event":
             if occurrence is None:
                 continue
             period = quests.occurrence_period(trigger_kind, occurrence)

@@ -225,6 +225,7 @@ _QUEST_STATE_LABEL = {
     "invite": "📨 Completes automatically when someone you invited joins",
     "boost": "🚀 Completes automatically when you boost the server",
     "bio_set": "📇 Completes automatically when you set up your bio",
+    "birthday_set": "🎂 Completes automatically when you set your birthday",
     "media_post": "🖼️ Completes automatically when you post an image",
     "pen_pal": "💌 Completes automatically when you're matched with a Pen Pal",
     "message_sent": "💬 Completes automatically as you chat",
