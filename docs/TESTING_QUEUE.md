@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: 13 new quest trigger kinds + kind activity ledger  (stage 1, hash in Done note on merge)
+### Economy: 13 new quest trigger kinds + kind activity ledger  (f0a590c)
 
 Wire-up only — no seeded quests yet, so verify by creating a test quest per
 kind on the dashboard Quests page (event cadence pays every occurrence, best
