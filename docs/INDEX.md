@@ -18,6 +18,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 |---|---|
 | [README.md](README.md) | Feature overview + slash-command reference (recently corrected) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
+| [dev_remote_testing.md](dev_remote_testing.md) | Dispatching pytest to a faster machine over SSH (opt-in, falls back to local) |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
