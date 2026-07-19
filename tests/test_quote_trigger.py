@@ -104,11 +104,15 @@ async def test_triggers_on_reply_with_role_mention(stub_render, fire_spy, monkey
     msg.channel.send.assert_awaited_once()
     # Auto-star: the posted card gets the default starboard reaction.
     msg.channel.send.return_value.add_reaction.assert_awaited_once_with("⭐")
-    # Credits the quote creator (the invoker), keyed once per quoted message.
-    fire_spy.assert_awaited_once()
-    args, kwargs = fire_spy.await_args
-    assert args[2] == 555 and args[3] == "quote"
-    assert kwargs["occurrence"] == "123"
+    # Credits both sides, keyed once per quoted message: the invoker fires
+    # `quote`, the quoted author fires `quoted`.
+    assert fire_spy.await_count == 2
+    fired = [
+        (call.args[2], call.args[3], call.kwargs["occurrence"])
+        for call in fire_spy.await_args_list
+    ]
+    assert (555, "quote", "123") in fired
+    assert (777, "quoted", "123") in fired
 
 
 async def test_self_quote_does_not_credit(stub_render, fire_spy, monkeypatch):

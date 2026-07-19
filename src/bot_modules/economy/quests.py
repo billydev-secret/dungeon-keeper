@@ -69,6 +69,19 @@ TRIGGER_KINDS: dict[str, str] = {
     "ama_ask": "Ask a question in an AMA",
     "whisper": "Send an anonymous whisper",
     "quote": "Turn a message into a quote card",
+    "chat_revive": "Answer a Chat Revive prompt",
+    "bump": "Bump the server",
+    "voice_room_host": "Host a voice room that draws guests",
+    "pen_pal_complete": "See a Pen Pals session through to the end",
+    "whisper_guess": "Correctly guess who sent a whisper",
+    "guess_win": "Win a Guess Who round",
+    "quoted": "Have your message turned into a quote card",
+    "session_join": "Join a scheduled game session",
+    "voice_message": "Post a voice message",
+    "music_request": "Request a song",
+    "birthday_set": "Set your birthday",
+    "level_up": "Reach a new level",
+    "ama_answer": "Answer a question in your AMA",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -97,6 +110,19 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "ama_ask": "Asking a question in an AMA. Unfiltered questions fire on submit; screened questions fire only once the host approves (rejected ones never pay). Event cadence: once per question — use daily/weekly with a target count.",
     "whisper": "Sending an anonymous whisper to another member. Event cadence: once per whisper — use daily/weekly with a target count.",
     "quote": "Turning someone's message into a quote card with the make-it-a-quote role (the quoter who invokes it is credited). Event cadence: once per quoted message — mildly farmable, so use daily/weekly with a target count.",
+    "chat_revive": "Responding to a Chat Revive prompt while the lull window is open (the reply the revive service counts as an answer). Event cadence: once per prompt.",
+    "bump": "Bumping the server on a listing site (the member who ran the bump command is credited). Event cadence: once per bump — bump cooldowns are the natural rate limit.",
+    "voice_room_host": "Your Voice Master room reaching 2+ other members at once (bots and you excluded). Fires once per room lifetime, on the crossing. Event cadence: once per room.",
+    "pen_pal_complete": "A Pen Pals session you were in reaching its natural end — both members fire; sessions that end early don't. Event cadence: once per session.",
+    "whisper_guess": "Correctly guessing who sent you an anonymous whisper. Event cadence: once per whisper.",
+    "guess_win": "Winning a Guess Who round. Event cadence: once per round.",
+    "quoted": "Someone ELSE turning your message into a quote card (the quoted author is credited; self-quotes never fire). Event cadence: once per quoted message.",
+    "session_join": "Joining a scheduled game session. Event cadence: once per session.",
+    "voice_message": "Posting a voice message (the transcription listener is the detector). Event cadence: once per message — use daily/weekly with a target count.",
+    "music_request": "Requesting a song in the music player. Capped at once per guild-local day by construction, so raw queue spam never multi-pays.",
+    "birthday_set": "Saving your birthday. Event cadence: once ever — the bio_set pattern.",
+    "level_up": "Reaching a new XP level. Event cadence: once per level reached.",
+    "ama_answer": "Answering a question as the hot seat in your own AMA. Event cadence: once per question answered — use daily/weekly with a target count.",
 }
 
 

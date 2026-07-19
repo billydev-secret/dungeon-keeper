@@ -275,6 +275,16 @@ class MusicCog(commands.Cog):
             getattr(player, "connected", "?"),
             len(queue.tracks),
         )
+
+        # Quest hook: one successful /play per guild-local day counts — the
+        # day-keyed occurrence means a 30-track playlist and 30 separate
+        # requests look the same, so queue spam never multi-pays. Guarded.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, guild.id, requester_id, "music_request",
+            daily_occurrence=True,
+        )
         if not player.playing:
             await self._play_next(player, queue)
             await interaction.followup.send(summary)

@@ -1090,6 +1090,16 @@ async def _handle_guess_outcome(
     if outcome.correct:
         guild = interaction.guild or bot.get_guild(whisper.guild_id)
         await interaction.response.edit_message(content="You solved it!", view=None)
+
+        # Quest hook: solving the guessing game. Fires only after the
+        # race-consumed check, so a two-tab solve pays once. The solved feed
+        # post already names the target, so this leaks nothing new.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            bot, whisper.guild_id, interaction.user.id, "whisper_guess",
+            occurrence=str(whisper.id),
+        )
         cfg = await asyncio.to_thread(_load_config, bot.ctx.db_path, whisper.guild_id)
         if guild:
             feed_channel = guild.get_channel(cfg.channel_id)

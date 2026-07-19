@@ -144,6 +144,8 @@ class VoiceMasterCog(commands.Cog):
         self._claim_timers: dict[int, asyncio.Task] = {}
         # (guild_id, user_id) → pending self-disconnect task
         self._sleepkick_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        # channel_id → voice_room_host quest already fired this room lifetime
+        self._host_quest_fired: set[int] = set()
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -278,6 +280,7 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         _del_guild_id = channel.guild.id
         _del_channel_id = channel.id
+        self._host_quest_fired.discard(_del_channel_id)
 
         def _fetch_and_delete():
             with self.ctx.open_db() as conn:
@@ -528,11 +531,33 @@ class VoiceMasterCog(commands.Cog):
                 )
                 if owner_returned:
                     set_owner_left_at(conn, channel.id, None)
-                return owner_returned
+                return row, owner_returned
 
-        owner_returned = await asyncio.to_thread(_mark_joined)
-        if owner_returned is None:
+        marked = await asyncio.to_thread(_mark_joined)
+        if marked is None:
             return
+        row, owner_returned = marked
+
+        # Quest hook: the room became a real hangout — 2+ non-bot guests with
+        # the owner in the room. Once per room lifetime via the in-memory set
+        # (restarts forgive; the event occurrence key still blocks a re-pay
+        # of the same channel id). Guarded wrapper, never raises.
+        guests = [
+            m for m in channel.members if not m.bot and m.id != row.owner_id
+        ]
+        owner_present = any(m.id == row.owner_id for m in channel.members)
+        if (
+            len(guests) >= 2
+            and owner_present
+            and channel.id not in self._host_quest_fired
+        ):
+            self._host_quest_fired.add(channel.id)
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                self.bot, channel.guild.id, row.owner_id, "voice_room_host",
+                occurrence=str(channel.id),
+            )
         self._cancel_empty_timer(channel.id)
         # The owner coming back disarms a pending claim prompt; a random member
         # joining does not (the channel is still ownerless).

@@ -7,7 +7,7 @@ import calendar
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
@@ -329,6 +329,16 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
         await interaction.response.send_message(
             f"Your birthday has been set to **{calendar.month_name[m]} {d}**.",
             ephemeral=True,
+        )
+
+        # Quest hook: the bio_set pattern — occurrence "set" makes an event
+        # quest pay once ever; updates collide on the same key. Guarded,
+        # never raised into the modal flow.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            cast("Bot", interaction.client), gid, user_id, "birthday_set",
+            occurrence="set",
         )
 
 

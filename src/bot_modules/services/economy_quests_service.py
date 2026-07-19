@@ -449,6 +449,48 @@ def set_income_source(
     )
 
 
+def record_kind_activity(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    kind: str,
+    local_day: str,
+) -> None:
+    """Count one occurrence of a trigger kind for a member's guild-local day.
+
+    Fires for EVERY occurrence — before the income-source switch and the
+    personal-board filter — because ``econ_kind_activity`` measures what
+    members actually do, not what happened to pay. Dynamic target sizing
+    (personal trailing-period medians, community guild sums) reads it.
+    """
+    conn.execute(
+        """
+        INSERT INTO econ_kind_activity (guild_id, user_id, kind, local_day, count)
+        VALUES (?, ?, ?, ?, 1)
+        ON CONFLICT (guild_id, user_id, kind, local_day) DO UPDATE SET
+            count = count + 1
+        """,
+        (guild_id, user_id, kind, local_day),
+    )
+
+
+def prune_kind_activity(
+    conn: sqlite3.Connection, guild_id: int, today: str, *, keep_days: int = 70
+) -> None:
+    """Drop activity rows older than the trailing window (day-roll hygiene).
+
+    70 days ≈ 10 ISO weeks — enough for 4-week sizing windows with slack;
+    lexicographic compare works because local_day is zero-padded ISO.
+    """
+    from datetime import date, timedelta
+
+    cutoff = (date.fromisoformat(today) - timedelta(days=keep_days)).isoformat()
+    conn.execute(
+        "DELETE FROM econ_kind_activity WHERE guild_id = ? AND local_day < ?",
+        (guild_id, cutoff),
+    )
+
+
 def fire_trigger_inline(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -529,6 +571,7 @@ def fire_trigger_quests(
     context. Returns nothing when the source is disabled on the Income
     Sources page.
     """
+    record_kind_activity(conn, guild_id, user_id, trigger_kind, local_day)
     if not source_enabled(conn, guild_id, trigger_kind):
         return []
     out: list[tuple[sqlite3.Row, ClaimOutcome]] = []

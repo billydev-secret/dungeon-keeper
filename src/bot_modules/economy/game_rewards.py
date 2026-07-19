@@ -156,6 +156,7 @@ async def fire_member_trigger(
     trigger_kind: str,
     *,
     occurrence: str | None = None,
+    daily_occurrence: bool = False,
 ) -> None:
     """Fire a quest trigger for one member outside the game-faucet path.
 
@@ -163,6 +164,11 @@ async def fire_member_trigger(
     Roll dares, Guess Who rounds). Same guarantees as ``pay_game_rewards``:
     no-op when the economy is off or the member is a bot/unresolvable, and
     a failure is logged, never raised into the calling game flow.
+
+    ``daily_occurrence=True`` keys the occurrence to the guild-local day
+    (computed where the fire already derives it), making an event quest on
+    this kind pay at most once per day by construction — the
+    voice_session/photo_react pattern for call sites without tz plumbing.
     """
     try:
         guild = bot.get_guild(guild_id)
@@ -183,7 +189,8 @@ async def fire_member_trigger(
             return
         boosters = {member.id: member.premium_since is not None}
         await _fire_triggers(
-            bot, guild, settings, trigger_kind, [member.id], boosters, occurrence
+            bot, guild, settings, trigger_kind, [member.id], boosters, occurrence,
+            daily_occurrence=daily_occurrence,
         )
     except Exception:
         log.exception(
@@ -199,6 +206,8 @@ async def _fire_triggers(
     user_ids: Sequence[int],
     boosters: dict[int, bool],
     occurrence: str | None,
+    *,
+    daily_occurrence: bool = False,
 ) -> None:
     """Auto-claim active trigger-kind quests for members; silent by design.
 
@@ -214,6 +223,7 @@ async def _fire_triggers(
         with open_db(db_path) as conn:
             offset = get_tz_offset_hours(conn, guild.id)
             day = local_day_for(time.time(), offset)
+            occ = day if daily_occurrence else occurrence
             for uid in user_ids:
                 fired = fire_trigger_quests(
                     conn,
@@ -222,7 +232,7 @@ async def _fire_triggers(
                     trigger_kind,
                     uid,
                     local_day=day,
-                    occurrence=occurrence,
+                    occurrence=occ,
                     booster=boosters.get(uid, False),
                 )
                 results.extend((uid, outcome) for _quest, outcome in fired)

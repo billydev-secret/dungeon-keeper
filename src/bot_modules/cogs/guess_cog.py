@@ -586,6 +586,13 @@ class GuessSelectView(discord.ui.View):
                     view=self,
                 )
                 return
+            # The race is won: this member solved the round. guess_win is the
+            # stretch twin of the participation `guess` kind above.
+            await fire_member_trigger(
+                self.bot, round_row.guild_id, interaction.user.id,
+                "guess_win", occurrence=str(self.round_id),
+            )
+
             answer_mention = f"<@{round_row.answer_id}>"
             submitter_mention = f"<@{round_row.submitter_id}>"
             solved_emb = _solved_embed(

@@ -9,6 +9,37 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: 13 new quest trigger kinds + kind activity ledger  (stage 1, hash in Done note on merge)
+
+Wire-up only — no seeded quests yet, so verify by creating a test quest per
+kind on the dashboard Quests page (event cadence pays every occurrence, best
+for testing). The Income Sources page should list all 13 new kinds with
+their switches.
+
+- [ ] `chat_revive`: talk in a channel within 30 min after a revive prompt →
+      quest fires when the measure pass runs (up to ~35 min later, hourly loop)
+- [ ] `bump`: run Disboard `/bump` in the tracker channel → auto-detect fires
+      the quest for the invoker (check `bump_tracker_log.user_id` got set);
+      also `/bump log <site>` credits the mod who ran it
+- [ ] `voice_room_host`: create a Voice Master room, have 2 others join while
+      you're in it → fires once; more joins/leaves don't re-fire
+- [ ] `pen_pal_complete`: let a session run its full 24 h → both members fire
+      on the expiry sweep; an early-ended session pays nobody
+- [ ] `whisper_guess`: solve a whisper → fires; wrong guesses don't
+- [ ] `guess_win`: solve a Guess Who round → fires for the solver only
+- [ ] `quoted`: quote someone's message → the AUTHOR fires (quoter still
+      fires `quote`); self-quote fires neither
+- [ ] `session_join`: play 2 party games in one channel within 30 min → each
+      player fires once for the session, not per game
+- [ ] `voice_message`: post a voice note → fires even in a guild with
+      transcription disabled
+- [ ] `music_request`: `/play` twice same day → one fire
+- [ ] `birthday_set`: set birthday → fires once ever (re-set collides)
+- [ ] `level_up`: cross a level → fires when the level-up announcement lands
+- [ ] `ama_answer`: answer questions as hot seat → one fire per question
+- [ ] Ledger: after a few of the above, `econ_kind_activity` rows exist for
+      each kind (sqlite check) including for kinds with NO active quest
+
 ### Chat Revive: session-gap lull model replaces the 4-min trigger  (85ce0fb)
 
 Rhythm mode now fires on the silence *between conversations*, not between

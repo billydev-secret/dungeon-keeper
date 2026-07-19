@@ -30,6 +30,7 @@ from bot_modules.chat_revive.logic import (
 from bot_modules.chat_revive.starter_pack import STARTER_QUESTIONS
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_quests_service import fire_trigger_inline
 
 RHYTHM_MAX_AGE_SECONDS = 6 * 3600.0
 
@@ -554,6 +555,28 @@ def measure_due_events(conn: sqlite3.Connection, now_ts: float) -> int:
             "follow_authors = ?, success = ? WHERE id = ?",
             (now_ts, row["msgs"], row["authors"], int(success), ev["id"]),
         )
+
+        # Quest hook: everyone who talked in the follow window answered the
+        # prompt — individual credit doesn't hinge on the collective success
+        # bool. Inline firing (savepoint-guarded, never raises) because this
+        # runs conn-in-hand inside the measure transaction; measured_at
+        # NULL-check above keeps replays out.
+        authors = conn.execute(
+            "SELECT DISTINCT user_id FROM processed_messages "
+            "WHERE guild_id = ? AND channel_id = ? "
+            "AND created_at > ? AND created_at <= ?",
+            (
+                ev["guild_id"],
+                ev["channel_id"],
+                ev["created_at"],
+                ev["created_at"] + FOLLOW_WINDOW_SECONDS,
+            ),
+        ).fetchall()
+        for a in authors:
+            fire_trigger_inline(
+                conn, ev["guild_id"], "chat_revive", int(a["user_id"]),
+                occurrence=str(ev["id"]),
+            )
     return len(due)
 
 

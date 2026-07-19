@@ -279,6 +279,30 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `ama_ask` | member's AMA question becomes visible: on submit (unfiltered) or on host approval (screened; rejected never pays) | `games_ama_cog` `AskQuestionModal.on_submit` + `ScreenedQuestionView.approve` → `_fire_ama_ask_trigger` | `ama_ask:<game_id>:<q_idx>` |
 | `whisper` | member sends an anonymous whisper that is delivered | `whisper_cog.WhisperCog._send_impl` after the DM+feed post succeed | `whisper:<whisper_id>` |
 | `quote` | member turns a message into a quote card via the make-it-a-quote role (the invoker is credited, not the quoted author; self-quotes never fire) | `quote_cog._on_quote_trigger` after the card posts | `quote:<quoted_message_id>` — mildly farmable, pair with daily/weekly + target count |
+| `quoted` | someone ELSE quote-cards the member's message (the quoted author's passive twin of `quote`; self-quotes never fire) | `quote_cog._on_quote_trigger` beside the `quote` fire | `quoted:<quoted_message_id>` |
+| `chat_revive` | member talks in the 30-min follow window after a Chat Revive prompt (every distinct human author fires; individual credit doesn't hinge on the collective success bool) | `chat_revive_service.measure_due_events` via `fire_trigger_inline` (measured-at NULL check keeps replays out) | `chat_revive:<event_id>` |
+| `bump` | member bumps the server — `/bump log` (mod-gated) credits its invoker; an auto-detected listing-bot response credits `message.interaction_metadata.user` (migration 081 also stores the bumper on `bump_tracker_log`) | `bump_tracker_cog` both paths | `bump:<interaction_or_message_id>` — site cooldowns are the natural rate limit |
+| `voice_room_host` | member's Voice Master room reaches 2+ non-bot guests with the owner present (once per room lifetime, in-memory set; restarts forgive but the occurrence key still blocks a same-room re-pay) | `voice_master_cog._handle_joined_tracked` | `voice_room_host:<channel_id>` |
+| `pen_pal_complete` | a Pen Pals session reaches its natural 24 h expiry (both members fire; `early`/`channel_missing` closes never fire) | `pen_pals_cog` expiry sweep | `pen_pal_complete:<session_id>` |
+| `whisper_guess` | member correctly guesses a whisper's sender (fires after the race-consumed check, so a two-tab solve pays once) | `whisper_cog._handle_guess_outcome` | `whisper_guess:<whisper_id>` |
+| `guess_win` | member wins a Guess Who round (stretch twin of `guess`; fires only for the solve-race winner) | `guess_cog` solved path | `guess_win:<round_id>` |
+| `session_join` | member appears in a game-night session's roster (end_game now merges the real roster into `games_session_tracker`, which start-time calls only seeded with the host) | `game_manager._fire_session_join` | `session_join:<session_id>` — later games in the same session collide silently |
+| `voice_message` | member posts a voice message (fires before the transcription config gate — the quest is the post, not the transcript) | `voice_transcription_cog._on_message` | `voice_message:<message_id>` — use daily/weekly with a target count |
+| `music_request` | member's `/play` adds ≥1 track | `music_cog.play` via `daily_occurrence=True` | `music_request:<local_day>` (once/day by construction — a 30-track playlist and 30 requests look the same) |
+| `birthday_set` | member saves their birthday | `birthday_cog` modal submit | `birthday_set:set` (event = once ever, the `bio_set` pattern) |
+| `level_up` | member's level-up is announced (announce-time, not award-time, so quest-XP payouts can't recurse into another claim; a silently-won level fires when its announcement lands) | `xp_service.handle_level_progress` via `fire_trigger_inline`, one fire per delivered level | `level_up:<level>` |
+| `ama_answer` | hot-seat answers a question in their own AMA | `games_ama_cog` reply-modal submit | `ama_answer:<game_id>:<q_idx>` — use daily/weekly with a target count |
+
+**Kind activity ledger.** Every `fire_trigger_quests` call — before the
+income-source switch and the personal-board filter — bumps
+`econ_kind_activity` (migration 080: one row per guild/member/kind/local-day,
+pruned to a trailing 70 days on the economy loop's day roll). It measures
+what members actually *do*, not what happened to pay, and is the data source
+for dynamic target sizing on both surfaces (personal trailing-period medians
+and community guild-wide sums — plan
+`docs/plans/quest-variety-and-community-weeklies.md`). Historical warm-up for
+the xp_events-mirrored kinds is a stage-2 script job, not a migration
+(local-day bucketing needs per-guild tz offsets).
 
 `confession` quests reject `signoff=1` at creation/update: a sign-off claim
 posts a bank-channel card naming the claimant, timing-correlatable against the

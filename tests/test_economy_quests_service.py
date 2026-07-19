@@ -1028,6 +1028,97 @@ def list_income_sources_has(db, kind):
         return kind in list_income_sources(conn, GUILD)
 
 
+# Variety-round kinds (plan: quest-variety stage 1) — one entry per new
+# module hook; a kind missing here (or here without its hook) is dead code.
+VARIETY_KINDS = (
+    "chat_revive",
+    "bump",
+    "voice_room_host",
+    "pen_pal_complete",
+    "whisper_guess",
+    "guess_win",
+    "quoted",
+    "session_join",
+    "voice_message",
+    "music_request",
+    "birthday_set",
+    "level_up",
+    "ama_answer",
+)
+
+
+def test_variety_round_kinds_registered(db):
+    for kind in VARIETY_KINDS:
+        assert kind in TRIGGER_KINDS, kind
+        assert kind in TRIGGER_KIND_INFO, kind
+        assert list_income_sources_has(db, kind)
+
+
+@pytest.mark.parametrize("kind", VARIETY_KINDS)
+def test_variety_round_kinds_fire_and_pay(db, kind):
+    # Every new kind rides the standard machine: daily auto-claims the
+    # calendar period, event pays per occurrence, replays collide silently.
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", trigger_kind=kind, reward=7)
+        event = _make(conn, qtype="event", trigger_kind=kind, reward=3)
+        first = fire_trigger_quests(
+            conn, SETTINGS, GUILD, kind, USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        )
+        assert sorted(int(q["id"]) for q, _ in first) == sorted([daily, event])
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, kind, USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        ) == []
+        assert get_balance(conn, GUILD, USER) == 10
+
+
+# ── kind activity ledger (dynamic sizing source) ──────────────────────
+
+
+def _activity_count(conn, kind, day):
+    row = conn.execute(
+        "SELECT count FROM econ_kind_activity WHERE guild_id = ? AND "
+        "user_id = ? AND kind = ? AND local_day = ?",
+        (GUILD, USER, kind, day),
+    ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def test_kind_activity_records_every_occurrence(db):
+    # The ledger measures behavior, not payouts: it bumps with no matching
+    # quest, past the daily claim collision, and even when the income source
+    # is switched off — only the money paths respect those gates.
+    with open_db(db) as conn:
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "whisper", USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        )
+        assert _activity_count(conn, "whisper", "2026-07-14") == 1
+
+        set_income_source(conn, GUILD, "whisper", False)
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "whisper", USER,
+            local_day="2026-07-14", occurrence="b", booster=False,
+        )
+        assert _activity_count(conn, "whisper", "2026-07-14") == 2
+        assert get_balance(conn, GUILD, USER) == 0  # measured, never paid
+
+
+def test_kind_activity_prune_keeps_trailing_window(db):
+    from bot_modules.services.economy_quests_service import (
+        prune_kind_activity,
+        record_kind_activity,
+    )
+
+    with open_db(db) as conn:
+        record_kind_activity(conn, GUILD, USER, "whisper", "2026-01-01")
+        record_kind_activity(conn, GUILD, USER, "whisper", "2026-07-10")
+        prune_kind_activity(conn, GUILD, "2026-07-14")  # cutoff 2026-05-05
+        assert _activity_count(conn, "whisper", "2026-01-01") == 0
+        assert _activity_count(conn, "whisper", "2026-07-10") == 1
+
+
 @pytest.mark.parametrize("kind", ["confession", "ama_ask", "whisper", "quote"])
 def test_new_engagement_kinds_fire_and_pay(db, kind):
     # A quest on each new kind pays once per occurrence, like any other event

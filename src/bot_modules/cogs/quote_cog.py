@@ -727,6 +727,12 @@ class QuoteCog(commands.Cog):
                 self.bot, message.guild.id, message.author.id, "quote",
                 occurrence=str(target.id),
             )
+            # And the quoted author's side: being quote-worthy is the passive
+            # twin (fire_member_trigger drops bots/departed members itself).
+            await fire_member_trigger(
+                self.bot, message.guild.id, target.author.id, "quoted",
+                occurrence=str(target.id),
+            )
 
         # Seed the starboard reaction, matching the context-menu Post button.
         guild = message.guild

@@ -81,6 +81,7 @@ from bot_modules.services.economy_quests_service import (
     expire_stale_claims,
     get_quest,
     list_settleable_community_quests,
+    prune_kind_activity,
     rotate_pool,
     settle_community_quest,
 )
@@ -220,6 +221,7 @@ def run_guild_day_roll(
         )
 
     rotate_pool(conn, guild_id, "daily")
+    prune_kind_activity(conn, guild_id, today)
 
     # ── week roll: advance weekly pool + settle community quests ──
     # ``last_iso_week`` is NULL for pre-064 mark rows; treat that as a backfill

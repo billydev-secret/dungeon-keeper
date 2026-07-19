@@ -272,6 +272,33 @@ async def end_game(
 
     if bot is not None and player_ids:
         await _pay_party_rewards(bot, row, payload, player_ids)
+        await _fire_session_join(bot, db, row, player_ids)
+
+
+async def _fire_session_join(bot, db, row, player_ids: Sequence[int | str]) -> None:
+    """Merge the real roster into the channel's game-night session and fire
+    the session_join quest for every player, keyed on the session id — the
+    per-occurrence claim collision makes later games in the same session
+    no-ops, so "attend a game night" pays once per night. Never raises.
+
+    Start-time update_session calls only carry the host, so this end-of-game
+    merge is also what gives the recap a complete roster.
+    """
+    try:
+        ids = [int(p) for p in player_ids]
+        session_id = await update_session(db, row["channel_id"], row["game_id"], ids)
+        channel = bot.get_channel(row["channel_id"])
+        guild = getattr(channel, "guild", None)
+        if session_id is None or guild is None:
+            return
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        for pid in ids:
+            await fire_member_trigger(
+                bot, guild.id, pid, "session_join", occurrence=str(session_id)
+            )
+    except Exception:
+        log.exception("session_join trigger failed for %s", row["game_id"])
 
 
 async def _pay_party_rewards(bot, row, payload: dict | None, player_ids: Sequence[int | str]) -> None:
@@ -364,10 +391,11 @@ async def is_game_expired(db, game_id: str, max_seconds: int = 86400) -> bool:
 
 async def update_session(
     db, channel_id: int, game_id: str, player_ids: list[int]
-):
+) -> str:
     """
     Find an active session within 30 minutes in the channel.
     Append game_id and merge player IDs. Create new session if none found.
+    Returns the session_id the game landed in.
     """
     cutoff = datetime.utcnow() - timedelta(minutes=30)
     row = await db.fetchone(
@@ -395,6 +423,7 @@ async def update_session(
             """,
             (now, json.dumps(existing_games), json.dumps(merged_players), row["session_id"]),
         )
+        return str(row["session_id"])
     else:
         session_id = str(uuid.uuid4())
         await db.execute(
@@ -404,3 +433,4 @@ async def update_session(
             """,
             (session_id, channel_id, now, json.dumps([game_id]), json.dumps(player_ids)),
         )
+        return session_id

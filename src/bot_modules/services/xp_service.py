@@ -371,9 +371,22 @@ async def handle_level_progress(
         if delivered > award.announced_level:
             from bot_modules.core.db_utils import open_db
             from bot_modules.core.xp_system import mark_level_announced
+            from bot_modules.services.economy_quests_service import (
+                fire_trigger_inline,
+            )
 
             with open_db(db_path) as conn:
                 mark_level_announced(conn, member.guild.id, member.id, delivered)
+                # Quest hook: level_up fires per level actually announced —
+                # announce-time (not award-time) keeps it out of the quest-XP
+                # payout path, so a quest reward's own XP can't recurse into
+                # another quest claim mid-transaction. Occurrence = the level
+                # number: reaching level 7 pays once, ever.
+                for lvl in range(award.announced_level + 1, delivered + 1):
+                    fire_trigger_inline(
+                        conn, member.guild.id, "level_up", member.id,
+                        occurrence=str(lvl),
+                    )
 
         # Gate the promotion post on what was actually delivered, not on
         # award.role_grant_due: that flag is measured from announced_level, so

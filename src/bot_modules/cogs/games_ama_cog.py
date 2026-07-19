@@ -271,6 +271,17 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         )
         await update_game_payload(self.db, self.game_id, payload)
 
+        # Quest hook: answering as the hot seat — twin of ama_ask, keyed per
+        # question so a busy AMA counts each answer once. Guarded wrapper.
+        if interaction.guild is not None:
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                cast("Bot", interaction.client), interaction.guild.id,
+                interaction.user.id, "ama_answer",
+                occurrence=f"{self.game_id}:{self.question_idx}",
+            )
+
         # Update main game embed status bar
         if self.ama_view and hasattr(self.ama_view, "refresh_status"):
             await self.ama_view.refresh_status(interaction.channel)

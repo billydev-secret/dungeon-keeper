@@ -597,6 +597,16 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _close_session(conn, sid, "expired")
             await asyncio.to_thread(_close_exp)
             log.info("pen_pals: session %s expired", session_id)
+
+            # Quest hook: running the full 24h is "seeing it through" — both
+            # members fire; early-ended sessions never reach this path.
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            for uid in (user1_id, user2_id):
+                await fire_member_trigger(
+                    cast("Bot", bot), guild_id, uid, "pen_pal_complete",
+                    occurrence=str(session_id),
+                )
             continue
 
         # 1-hour close warning
