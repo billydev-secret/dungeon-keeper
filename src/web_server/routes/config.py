@@ -422,6 +422,8 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "channel_id": str(wc.channel_id),
         "role_id": str(wc.role_id),
         "log_channel_id": str(wc.log_channel_id),
+        "cooldown_seconds": wc.cooldown_seconds,
+        "hourly_cap_per_target": wc.hourly_cap_per_target,
     }
 
 
@@ -3548,6 +3550,8 @@ class WhisperConfigUpdate(BaseModel):
     channel_id: str | None = None
     role_id: str | None = None
     log_channel_id: str | None = None
+    cooldown_seconds: int | None = None
+    hourly_cap_per_target: int | None = None
 
 
 @router.put("/config/whisper")
@@ -3568,6 +3572,14 @@ async def update_whisper_config(
                 set_whisper_config_value(conn, guild_id, "whisper_role_id", body.role_id)
             if body.log_channel_id is not None:
                 set_whisper_config_value(conn, guild_id, "whisper_log_channel_id", body.log_channel_id)
+            if body.cooldown_seconds is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_cooldown_seconds", str(max(0, body.cooldown_seconds))
+                )
+            if body.hourly_cap_per_target is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_hourly_cap_per_target", str(max(1, body.hourly_cap_per_target))
+                )
         return {"ok": True}
 
     return await run_query(_q)
