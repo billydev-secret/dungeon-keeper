@@ -555,13 +555,23 @@ async def test_quests_listing_state_matrix(ctx, db):
 async def test_cog_load_registers_persistent_buttons(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
     from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
+    from bot_modules.economy.sponsor_views import (
+        SponsorApproveButton,
+        SponsorDenyButton,
+    )
 
     bot = MagicMock()
     cog = _make_cog(ctx)
     cog.bot = bot
     await cog.cog_load()
+    # Every persistent button must be re-registered here or its custom_id stops
+    # routing after a restart, leaving dead buttons on old messages.
     bot.add_dynamic_items.assert_called_once_with(
-        QuestApproveButton, QuestDenyButton, ShopRentButton
+        QuestApproveButton,
+        QuestDenyButton,
+        ShopRentButton,
+        SponsorApproveButton,
+        SponsorDenyButton,
     )
 
 

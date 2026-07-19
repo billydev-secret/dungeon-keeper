@@ -97,7 +97,7 @@ XP earned that local day converts to currency.
 ### 3.3 Quests — per §4. Daily 10–20 · weekly 25–75 · community flat payout.
 
 ### 3.4 Interaction Rewards
-- **QOTD (built, manual):** a moderator runs `/qotd post <question>` in the target
+- **QOTD (built, manual):** a moderator runs `/qotd post [question]` in the target
   channel. The bot renders the question as a banner card (`render_quote_card`, the same
   renderer `ffa_banner` uses) and posts it. Every member who posts a non-bot message in
   that channel from post time until end of the guild-local day earns **10**, once per
@@ -106,6 +106,37 @@ XP earned that local day converts to currency.
   role; unset (the default) posts silently. The mention only notifies if the role is
   mentionable or the bot holds "Mention @everyone, @here, and All Roles" — Discord
   renders it as inert text otherwise.
+- **Sponsor a QOTD (built, sink — migration 090):** a member runs
+  `/bank sponsor <question>`, paying `price_qotd_sponsor` (default 40) to put a
+  question in front of the server. **Charged at submit** — a free queue invites
+  spam — which makes decline and expiry *refund* paths (ledger kind
+  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it on a
+  persistent Approve/Decline card in the bank channel (DynamicItems
+  `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
+  dashboard queue (Economy → Sponsored QOTD, `require_economy_manager`, which
+  also **withdraws** an already-approved question back out of the post queue —
+  the service only *resolves* pending rows, so withdrawal is its own path);
+  declining opens a reason modal and the reason reaches the member by DM.
+  Resolving from the dashboard re-renders the bank-channel card and DMs the
+  sponsor with the same copy the card buttons use, best-effort: a Discord
+  failure leaves the API 200 with `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
+  from when the mod supplies **no** question text; the QOTD card is bylined
+  "sponsored by <name>" and `econ_qotd.sponsor_user_id` records them
+  (`posted_by` stays the mod who ran the command — different people, both
+  audit-relevant). One open submission per member (partial unique index), so
+  nobody can buy the whole queue.
+  - **Refunds are exactly-once**, guarded by a `refunded_at IS NULL` predicate
+    inside the same UPDATE that moves the state — not a caller-set flag — so a
+    double-click or a replay cannot pay twice.
+  - **The queue claim is atomic and happens before the send**
+    (`claim_next_approved`, `UPDATE … RETURNING`), so two mods racing
+    `/qotd post` take different questions rather than double-posting one; if
+    the send then fails, `release_claim` puts it back rather than eating a
+    member's paid slot.
+  - Pending submissions expire after `qotd_sponsor_expire_days` (default 14)
+    and refund, swept per-guild by the hourly loop. **Approved ones never
+    expire** — they're waiting on staff, and timing them out would punish the
+    member for staff latency. `price_qotd_sponsor = 0` disables the feature.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
   resolution point. Participation now covers **20 of 23 games**: the six duel games,

@@ -666,6 +666,62 @@ def test_run_claim_expiry_returns_notices_with_quest_title(db):
     assert notices[0].quest_title  # non-empty, drawn from the quest row
 
 
+# ── sponsored-QOTD expiry (run_sponsor_expiry) ─────────────────────────
+
+
+def _sponsor(db_path, user_id=USER, question="What is your favourite colour?"):
+    from bot_modules.services.economy_qotd_sponsor_service import submit_sponsor
+
+    with open_db(db_path) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, user_id, 200, "grant", actor_id=9001)
+        return submit_sponsor(conn, settings, GUILD, user_id, question).submission_id
+
+
+def test_run_sponsor_expiry_refunds_and_notices(db):
+    _enable(db, price_qotd_sponsor=40, qotd_sponsor_expire_days=14)
+    _sponsor(db)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 160
+        conn.execute(
+            "UPDATE econ_qotd_submissions SET created_at = ?",
+            (time.time() - 20 * 86400,),
+        )
+
+    with open_db(db) as conn:
+        notices = economy_loop.run_sponsor_expiry(conn, GUILD, time.time())
+
+    assert len(notices) == 1
+    assert notices[0].user_id == USER
+    assert notices[0].refund == 40
+    assert notices[0].unit  # non-empty, so the DM never reads "your 40  back"
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 200
+
+
+def test_run_sponsor_expiry_skips_approved_and_disabled_guilds(db):
+    from bot_modules.services.economy_qotd_sponsor_service import resolve_submission
+
+    _enable(db, price_qotd_sponsor=40, qotd_sponsor_expire_days=14)
+    sid = _sponsor(db)
+    with open_db(db) as conn:
+        # Approved questions wait on staff, not the member — they must not
+        # time out from under them however long the queue sits.
+        resolve_submission(conn, sid, approve=True, resolver_id=9001)
+        conn.execute(
+            "UPDATE econ_qotd_submissions SET created_at = ?",
+            (time.time() - 900 * 86400,),
+        )
+    with open_db(db) as conn:
+        assert economy_loop.run_sponsor_expiry(conn, GUILD, time.time()) == []
+        assert get_balance(conn, GUILD, USER) == 160
+
+    # A guild with the economy switched off is swept over entirely.
+    _enable(db, guild_id=GUILD + 1, enabled=False)
+    with open_db(db) as conn:
+        assert economy_loop.run_sponsor_expiry(conn, GUILD + 1, time.time()) == []
+
+
 # ── rental billing pass (run_guild_rentals) ────────────────────────────
 
 # Anchor rental time on a plain float so week arithmetic is exact and tz-free.

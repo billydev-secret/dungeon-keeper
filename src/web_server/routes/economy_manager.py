@@ -1,5 +1,5 @@
-"""Bank Manager endpoints — the quest library, claim sign-off, community
-goals, ledger audit, and manual grants.
+"""Bank Manager endpoints — the quest library, claim sign-off, the sponsored
+QOTD queue, community goals, ledger audit, and manual grants.
 
 Every route is gated by ``require_economy_manager`` (admins OR holders of the
 configured ``manager_role_id``). Paths mount under ``/api/economy`` alongside
@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.perk_actions import revoke_role_perks
 from bot_modules.services import economy_quests_service as quests_svc
+from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
 from bot_modules.services import economy_rentals_service as rentals_svc
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -122,6 +123,11 @@ class DenyBody(BaseModel):
     reason: str = Field(min_length=1, max_length=300)
 
 
+class WithdrawBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(default="", max_length=300)
+
+
 class ProgressBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     current: int = Field(ge=0)
@@ -178,6 +184,20 @@ def _claim_dict(row: sqlite3.Row) -> dict:
         "resolved_at": row["resolved_at"],
         "resolver_id": str(row["resolver_id"]) if row["resolver_id"] else None,
         "deny_reason": row["deny_reason"],
+    }
+
+
+def _submission_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "user_id": str(row["user_id"]),
+        "question": row["question"],
+        "state": row["state"],
+        "price": int(row["price"]),
+        "deny_reason": row["deny_reason"],
+        "created_at": row["created_at"],
+        "resolved_at": row["resolved_at"],
+        "resolver_id": str(row["resolver_id"]) if row["resolver_id"] else None,
     }
 
 
@@ -661,6 +681,203 @@ async def deny_claim(
         approve=False,
         resolver_id=user.user_id,
         deny_reason=body.reason,
+    )
+
+
+# ── sponsored QOTD submissions ────────────────────────────────────────
+
+
+@router.get("/economy/qotd-submissions")
+async def list_qotd_submissions(
+    request: Request,
+    state: str | None = None,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                _submission_dict(row)
+                for row in sponsor_svc.list_submissions(conn, guild_id, state=state)
+            ]
+
+    return {"submissions": await run_query(_q)}
+
+
+async def _resolve_submission_and_notify(
+    request: Request,
+    submission_id: int,
+    *,
+    approve: bool,
+    resolver_id: int,
+    reason: str,
+    withdraw: bool = False,
+) -> dict:
+    """Resolve (or withdraw) a submission, then best-effort edit its card + DM.
+
+    Same three phases as ``_resolve_and_notify``: read on a worker thread, the
+    resolving write on another, then the Discord side effects — which never
+    fail the request (200 with ``card_updated: false``).
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+
+    def _read():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM econ_qotd_submissions WHERE id = ? AND guild_id = ?",
+                (submission_id, guild_id),
+            ).fetchone()
+            return row, load_econ_settings(conn, guild_id)
+
+    row, settings = await run_query(_read)
+    if row is None:
+        raise HTTPException(404, "submission not found")
+
+    def _resolve():
+        with ctx.open_db() as conn:
+            try:
+                if withdraw:
+                    return sponsor_svc.withdraw_approved(
+                        conn, submission_id, resolver_id=resolver_id, reason=reason
+                    )
+                return sponsor_svc.resolve_submission(
+                    conn,
+                    submission_id,
+                    approve=approve,
+                    resolver_id=resolver_id,
+                    deny_reason=reason,
+                )
+            except ValueError as exc:
+                # Already resolved, or not in the state this action expects.
+                raise HTTPException(409, str(exc)) from exc
+
+    fresh = await run_query(_resolve)
+
+    card_updated = False
+    if bot is not None and bot.is_ready():
+        card_updated = await _update_sponsor_card_and_dm(
+            bot, ctx, guild_id, settings, fresh
+        )
+
+    return {
+        "ok": True,
+        "state": str(fresh["state"]),
+        "card_updated": card_updated,
+    }
+
+
+async def _update_sponsor_card_and_dm(bot, ctx, guild_id, settings, row) -> bool:
+    """Re-render the bank-channel review card for the row's new state, then DM.
+
+    The embed and the DM copy both come from ``sponsor_views`` so a submission
+    resolved here is indistinguishable from one resolved with the card buttons.
+    Returns True only if the card message was actually edited.
+    """
+    import discord
+
+    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.economy.sponsor_views import (
+        render_sponsor_card_embed,
+        sponsor_resolution_dm_text,
+    )
+
+    guild = bot.get_guild(int(guild_id))
+    # Accent only shows on a pending card, which this never renders — a missing
+    # guild is therefore not worth bailing on.
+    accent = (
+        await resolve_accent_color(ctx.db_path, guild)
+        if guild is not None
+        else discord.Color.default()
+    )
+
+    card_updated = False
+    channel_id = row["card_channel_id"]
+    message_id = row["card_message_id"]
+    if channel_id and message_id:
+        try:
+            channel = bot.get_channel(int(channel_id))
+            if isinstance(channel, discord.abc.Messageable):
+                message = await channel.fetch_message(int(message_id))
+                embed = render_sponsor_card_embed(
+                    accent,
+                    settings,
+                    sponsor_mention=f"<@{int(row['user_id'])}>",
+                    question=str(row["question"]),
+                    price=int(row["price"]),
+                    state=str(row["state"]),
+                    resolver_id=int(row["resolver_id"]) if row["resolver_id"] else None,
+                    deny_reason=str(row["deny_reason"] or ""),
+                )
+                await message.edit(embed=embed, view=None)
+                card_updated = True
+        except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+            _log.warning("qotd sponsor card edit failed", exc_info=True)
+
+    try:
+        await notify_member(
+            bot,
+            ctx.db_path,
+            guild_id,
+            int(row["user_id"]),
+            content=sponsor_resolution_dm_text(settings, row),
+        )
+    except Exception:  # noqa: BLE001 — notification must never fail the request
+        _log.warning("qotd sponsor DM failed", exc_info=True)
+
+    return card_updated
+
+
+@router.post("/economy/qotd-submissions/{submission_id}/approve")
+async def approve_qotd_submission(
+    request: Request,
+    submission_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    return await _resolve_submission_and_notify(
+        request, submission_id, approve=True, resolver_id=user.user_id, reason=""
+    )
+
+
+@router.post("/economy/qotd-submissions/{submission_id}/deny")
+async def deny_qotd_submission(
+    request: Request,
+    submission_id: int,
+    body: DenyBody,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    return await _resolve_submission_and_notify(
+        request,
+        submission_id,
+        approve=False,
+        resolver_id=user.user_id,
+        reason=body.reason,
+    )
+
+
+@router.post("/economy/qotd-submissions/{submission_id}/withdraw")
+async def withdraw_qotd_submission(
+    request: Request,
+    submission_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+    body: WithdrawBody | None = None,
+):
+    """Pull an already-approved question back out of the post queue (refunds).
+
+    Separate from ``/deny`` because the service only resolves *pending* rows;
+    an approved one is withdrawn. The reason is optional here — an approved
+    question is usually pulled for timing, not for content.
+    """
+    return await _resolve_submission_and_notify(
+        request,
+        submission_id,
+        approve=False,
+        resolver_id=user.user_id,
+        reason=body.reason if body else "",
+        withdraw=True,
     )
 
 
