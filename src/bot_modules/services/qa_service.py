@@ -242,6 +242,24 @@ def archive_test(conn: sqlite3.Connection, test_id: int) -> bool:
     return (cur.rowcount or 0) > 0
 
 
+def list_stale_passed(conn: sqlite3.Connection, cutoff_iso: str) -> list[sqlite3.Row]:
+    """Passed, posted cards verified at or before ``cutoff_iso``.
+
+    Feeds the sweep that auto-deletes long-verified cards from the channel
+    (``qa_cog.qa_archive_sweep_loop``) — guild-agnostic, like the other
+    startup-task polling loops (e.g. ``scheduled_games_service``).
+    """
+    return conn.execute(
+        """
+        SELECT * FROM qa_tests
+        WHERE status = 'passed' AND verified_at IS NOT NULL AND verified_at <= ?
+          AND channel_id IS NOT NULL AND message_id IS NOT NULL
+        ORDER BY id
+        """,
+        (cutoff_iso,),
+    ).fetchall()
+
+
 # ── verdicts: record (pay on fresh insert) + void (clawback) ─────────
 
 

@@ -18,6 +18,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -28,7 +29,9 @@ from bot_modules.economy.logic import local_day_for
 from bot_modules.qa.cards import VERDICT_EMOJI, build_card_embed
 from bot_modules.services.qa_service import (
     QASettings,
+    archive_test,
     get_test,
+    list_stale_passed,
     list_verdicts,
     load_qa_settings,
     record_verdict,
@@ -48,6 +51,11 @@ _ARCHIVED_MSG = "This test is archived — verdicts are closed."
 _GUILD_ONLY_MSG = "This only works in a server."
 
 _VERDICT_LABELS = {"fail": "Failed", "blocked": "Blocked"}
+
+# A passed card is decluttered from the channel once it's stayed verified this
+# long, and the sweep re-checks at this cadence. See qa_archive_sweep_loop.
+ARCHIVE_SWEEP_DELAY = timedelta(minutes=10)
+ARCHIVE_SWEEP_INTERVAL_SECONDS = 60
 
 
 def _can_vote(member: discord.Member, settings: QASettings) -> bool:
@@ -350,6 +358,65 @@ class _QABlockedButton(
         await _handle_click(interaction, self.test_id, "blocked")
 
 
+async def _sweep_stale_card(bot: Bot, db_path: Path, test: dict) -> None:
+    """Delete one long-verified card and mark its test archived.
+
+    Best-effort on the Discord side: a channel the bot can no longer see, or
+    a message someone already deleted by hand, still gets archived — there's
+    nothing left to clean up. A transient failure (rate limit, hiccup) is
+    logged and the row is left 'passed' so the next sweep retries it.
+    """
+    test_id = int(test["id"])
+    channel = bot.get_channel(int(test["channel_id"]))
+    if isinstance(channel, discord.abc.Messageable):
+        try:
+            message = await channel.fetch_message(int(test["message_id"]))
+            await message.delete()
+        except discord.NotFound:
+            pass
+        except discord.HTTPException as exc:
+            log.warning("qa: failed to delete stale card for test %s: %s", test_id, exc)
+            return
+
+    def _archive() -> None:
+        with open_db(db_path) as conn:
+            archive_test(conn, test_id)
+
+    await asyncio.to_thread(_archive)
+
+
+async def qa_archive_sweep_loop(bot: Bot) -> None:
+    """Delete cards that have sat verified for ``ARCHIVE_SWEEP_DELAY``.
+
+    Registered as a bot startup task; guild-agnostic, matching the
+    ``scheduled_games_loop`` polling pattern. Declutters the testing channel
+    without touching the audit trail — verdicts and payouts stay in the DB.
+    """
+    await bot.wait_until_ready()
+    db_path = bot.ctx.db_path
+
+    while not bot.is_closed():
+        try:
+            cutoff = (datetime.now(timezone.utc) - ARCHIVE_SWEEP_DELAY).isoformat()
+
+            def _load() -> list[dict]:
+                with open_db(db_path) as conn:
+                    return [dict(r) for r in list_stale_passed(conn, cutoff)]
+
+            for test in await asyncio.to_thread(_load):
+                try:
+                    await _sweep_stale_card(bot, db_path, test)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception("qa: sweep failed for test %s", test.get("id"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("qa_archive_sweep_loop iteration error")
+        await asyncio.sleep(ARCHIVE_SWEEP_INTERVAL_SECONDS)
+
+
 class QACog(commands.Cog):
     """No commands — just the dynamic-item registration for the card buttons."""
 
@@ -360,6 +427,7 @@ class QACog(commands.Cog):
 
     async def cog_load(self) -> None:
         self.bot.add_dynamic_items(_QAPassButton, _QAFailButton, _QABlockedButton)
+        self.bot.startup_task_factories.append(lambda: qa_archive_sweep_loop(self.bot))
 
 
 async def setup(bot: Bot) -> None:

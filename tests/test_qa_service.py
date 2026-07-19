@@ -23,6 +23,7 @@ from bot_modules.services.qa_service import (
     compute_status,
     create_test,
     get_test,
+    list_stale_passed,
     list_tests,
     list_verdicts,
     load_qa_settings,
@@ -222,6 +223,34 @@ def test_archive_test_and_terminal(db):
         # Archived is terminal: verdicts are rejected.
         with pytest.raises(ValueError, match="archived"):
             _record(conn, S, tid, USER, "pass")
+
+
+def test_list_stale_passed_filters_status_message_and_cutoff(db):
+    with open_db(db) as conn:
+        stale, fresh, unposted = _mk_test(conn, 1), _mk_test(conn, 2), _mk_test(conn, 3)
+        for tid in (stale, fresh, unposted):
+            _record(conn, S, tid, USER, "pass")
+        set_test_message(conn, stale, 10, 100)
+        set_test_message(conn, fresh, 10, 200)
+        # unposted stays without a channel/message — never swept even if old.
+
+        old_verified = "2000-01-01T00:00:00+00:00"
+        new_verified = "2999-01-01T00:00:00+00:00"
+        conn.execute(
+            "UPDATE qa_tests SET verified_at = ? WHERE id IN (?, ?)",
+            (old_verified, stale, unposted),
+        )
+        conn.execute(
+            "UPDATE qa_tests SET verified_at = ? WHERE id = ?", (new_verified, fresh)
+        )
+
+        cutoff = "2100-01-01T00:00:00+00:00"
+        rows = list_stale_passed(conn, cutoff)
+        assert [r["id"] for r in rows] == [stale]
+
+        # Archiving drops it out of the sweep (no longer 'passed').
+        archive_test(conn, stale)
+        assert list_stale_passed(conn, cutoff) == []
 
 
 # ── record_verdict: pay on fresh insert ───────────────────────────────
