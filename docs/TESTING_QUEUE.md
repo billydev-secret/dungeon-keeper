@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: 9 social quest kinds  (hash stamped on merge)
+### Economy: 9 social quest kinds  (69a92d8)
 
 Seeded via the same `scripts/seed_quest_variety.py` (re-run it — idempotent;
 the new quests carry BANDS, so targets are per-member dynamic). The
