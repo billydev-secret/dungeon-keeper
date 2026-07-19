@@ -77,6 +77,7 @@ class QuestLine:
     title: str
     reward: int
     reward_xp: int
+    spotlight: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,8 @@ class LeaderboardData:
     top_earners: list[tuple[int, int]]  # (user_id, amount), ranked
     community: list[CommunityGoal]
     quests: list[QuestLine]
+    spotlight_kind: str | None = None
+    spotlight_label: str = ""
 
 
 def collect_leaderboard_data(
@@ -106,6 +109,14 @@ def collect_leaderboard_data(
             (guild_id, cutoff, TOP_N),
         ).fetchall()
     ]
+
+    from bot_modules.core.db_utils import get_tz_offset_hours
+    from bot_modules.economy.logic import local_day_for
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    offset = get_tz_offset_hours(conn, guild_id)
+    week = quest_rules.iso_week_for(local_day_for(now_ts, offset))
+    spot = spotlight_kind(conn, guild_id, week)
 
     community: list[CommunityGoal] = []
     quests: list[QuestLine] = []
@@ -139,11 +150,20 @@ def collect_leaderboard_data(
                     title=row["title"],
                     reward=int(row["reward"]),
                     reward_xp=int(row["reward_xp"]),
+                    spotlight=bool(
+                        spot and str(row["trigger_kind"] or "") == spot
+                    ),
                 )
             )
     order = {q: i for i, q in enumerate(_QTYPE_LABELS)}
     quests.sort(key=lambda q: order[q.qtype])
-    return LeaderboardData(top_earners=earners, community=community, quests=quests)
+    return LeaderboardData(
+        top_earners=earners,
+        community=community,
+        quests=quests,
+        spotlight_kind=spot,
+        spotlight_label=quest_rules.TRIGGER_KINDS.get(spot, spot) if spot else "",
+    )
 
 
 def build_leaderboard_embed(
@@ -205,10 +225,17 @@ def build_leaderboard_embed(
 
     if data.quests:
         quest_lines = []
+        if data.spotlight_label:
+            quest_lines.append(
+                f"⚡ **Spotlight:** {data.spotlight_label} pays **double** "
+                f"this week!"
+            )
         for q in data.quests[:_MAX_QUEST_LINES]:
             xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
+            spot_tag = "⚡ " if q.spotlight else ""
             quest_lines.append(
-                f"`{_QTYPE_LABELS[q.qtype]}` **{q.title}** — {emoji} {q.reward:,}{xp}"
+                f"`{_QTYPE_LABELS[q.qtype]}` {spot_tag}**{q.title}** — "
+                f"{emoji} {q.reward:,}{xp}"
             )
         hidden = len(data.quests) - _MAX_QUEST_LINES
         if hidden > 0:

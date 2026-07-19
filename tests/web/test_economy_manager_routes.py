@@ -45,7 +45,17 @@ def _set_manager_role(fake_ctx, role_id: int = MANAGER_ROLE) -> None:
 
 def _enable_economy(fake_ctx) -> None:
     with open_db(fake_ctx.db_path) as conn:
-        save_econ_settings(conn, fake_ctx.guild_id, {"enabled": True})
+        # Set bonuses zeroed — one-quest boards would pay the
+        # clear-the-board bonus on approval and skew exact balances.
+        save_econ_settings(
+            conn,
+            fake_ctx.guild_id,
+            {
+                "enabled": True,
+                "quest_set_bonus_daily": 0,
+                "quest_set_bonus_weekly": 0,
+            },
+        )
 
 
 def _make_quest(client, **overrides) -> dict:

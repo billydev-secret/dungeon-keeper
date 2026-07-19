@@ -414,6 +414,39 @@ board), and `_load_quests_state` shows only the board on `/quests` + the wallet.
 Because assignment cadence equals the claim period, counted progress never
 fragments mid-period.
 
+**Board add-ons (stage 5 of the quest-variety plan, migration 084):**
+
+- **Daily free reroll** — one per member per guild-local day
+  (`econ_rerolls`), via a 🎲 select on `/bank quests`. Swaps one *untouched*
+  board quest (no claim, no counted progress this period) for the first
+  pool quest in the member's own shuffle order that isn't on their board,
+  **preferring a different trigger kind**. Persisted as an
+  `econ_board_overrides` row keyed by the draw's `period_idx` and applied
+  on top of the pure draw in `assigned_board_ids` (a same-period re-reroll
+  would update `to_quest_id` in place, so application never chains; the
+  override dies with the period). The reroll burns *after* validation —
+  a refused reroll costs nothing.
+- **Clear-the-board set bonus** — completing every quest on the personal
+  daily (or weekly) board in one period pays
+  `EconSettings.quest_set_bonus_daily` / `_weekly` (**default 0 = off** —
+  a silent default-on bonus surprises 1-quest boards; the main guild opts
+  in at 10/25 via the seed script, editable on Settings) as ledger kind
+  `quest_bonus`, no booster multiplier. Checked after every paid claim — instant and sign-off
+  approval both, against the CLAIM's period — with an `econ_set_bonus`
+  reservation row as the exactly-once guard.
+- **⚡ Weekly spotlight** — one featured trigger kind per ISO week pays
+  **double** on quest claims (`spotlight_kind`: deterministic sha256 over
+  (guild, week) across the distinct kinds with an active non-community
+  quest; `None` under 2 kinds — rotation needs something to rotate).
+  Applied in `_credit_reward` (meta `spotlight: true` on the ledger row);
+  surfaced on `/quests` (⚡ tags + banner), the leaderboard embed, the flip
+  announcement, and the live tracker. A sign-off approved after the week
+  flips pays at the approval week's rate — accepted drift.
+- **Flip announcement** — at the ISO-week roll the loop posts "this week's
+  quests are up" (+ the spotlight reveal) to the leaderboard panel's
+  channel, bank channel fallback (`_post_flip_announcement`; skipped when
+  neither is configured).
+
 **Dynamic target band:** a counted quest may carry a target *band*
 (`0 < target_min < target_max`) instead of a fixed `target_count`. Each
 member's target for a period then resolves **from their own pace**

@@ -40,6 +40,7 @@ from bot_modules.services.economy_quests_service import (
     claim_quest,
     deny_history,
     get_quest,
+    reroll_board_slot,
     resolve_claim,
     set_claim_card,
 )
@@ -664,8 +665,79 @@ class QuestClaimSelect(discord.ui.Select):
         )
 
 
+class QuestRerollSelect(discord.ui.Select):
+    """One-free-per-day board reroll: swap an untouched quest for a new one.
+
+    The service picks the replacement (member's own shuffle order, different
+    trigger kind preferred) and validates everything — this select just
+    surfaces the result; on success it confirms old → new and disables
+    itself (the reroll is spent for the day).
+    """
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        settings: EconSettings,
+        guild: discord.Guild,
+        rerollable: list[dict],
+        local_day: str,
+    ) -> None:
+        self.ctx = ctx
+        self.settings = settings
+        self.guild = guild
+        self.local_day = local_day
+        options = [
+            discord.SelectOption(
+                label=str(q["title"])[:100],
+                value=str(q["id"]),
+                description=str(q["qtype"])[:100],
+            )
+            for q in rerollable[:25]
+        ]
+        super().__init__(
+            placeholder="🎲 Reroll one untouched quest (1 free per day)…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        quest_id = int(self.values[0])
+        user_id = interaction.user.id
+        guild_id = self.guild.id
+
+        def _do_reroll():
+            with self.ctx.open_db() as conn:
+                old = get_quest(conn, guild_id, quest_id)
+                new = reroll_board_slot(
+                    conn, self.settings, guild_id, user_id, quest_id,
+                    self.local_day,
+                )
+                return old, new
+
+        try:
+            old, new = await asyncio.to_thread(_do_reroll)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+        self.disabled = True
+        try:
+            await interaction.edit_original_response(view=self.view)
+        except discord.HTTPException:
+            pass
+        old_title = str(old["title"]) if old else "that quest"
+        unit = _unit(self.settings, int(new["reward"]))
+        await interaction.followup.send(
+            f"🎲 Swapped **{old_title}** for **{new['title']}** "
+            f"({new['reward']} {unit} · {new['qtype']}). "
+            "Run `/bank quests` again to see your refreshed board.",
+            ephemeral=True,
+        )
+
+
 class QuestClaimView(discord.ui.View):
-    """Ephemeral view wrapping the claim select (only built when ≥1 claimable)."""
+    """Ephemeral view for /bank quests: claim select and/or reroll select."""
 
     def __init__(
         self,
@@ -673,6 +745,14 @@ class QuestClaimView(discord.ui.View):
         settings: EconSettings,
         guild: discord.Guild,
         claimable: list[dict],
+        *,
+        rerollable: list[dict] | None = None,
+        local_day: str = "",
     ) -> None:
         super().__init__(timeout=_CLAIM_VIEW_TIMEOUT)
-        self.add_item(QuestClaimSelect(ctx, settings, guild, claimable))
+        if claimable:
+            self.add_item(QuestClaimSelect(ctx, settings, guild, claimable))
+        if rerollable and local_day:
+            self.add_item(
+                QuestRerollSelect(ctx, settings, guild, rerollable, local_day)
+            )

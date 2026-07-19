@@ -84,6 +84,8 @@ from bot_modules.services.economy_quests_service import (
     expire_stale_claims,
     get_quest,
     list_active_community_kind_quests,
+    list_active_pool_ids,
+    spotlight_kind,
     list_settleable_community_quests,
     next_community_weekly,
     prune_kind_activity,
@@ -147,6 +149,14 @@ class CommunityBeat:
     text: str
 
 
+@dataclass(frozen=True)
+class DayRollResult:
+    """What a guild's day roll produced, for the post-commit effects."""
+
+    beats: tuple[CommunityBeat, ...] = ()
+    week_rolled: bool = False
+
+
 def _settle_completed_community(
     bot: discord.Client,
     conn: sqlite3.Connection,
@@ -176,7 +186,7 @@ def run_guild_day_roll(
     conn: sqlite3.Connection,
     guild_id: int,
     now_ts: float,
-) -> list[CommunityBeat]:
+) -> DayRollResult:
     """Detect and process a guild-local day (and ISO-week) roll.
 
     First sight of a guild just records both marks — nothing is converted,
@@ -190,7 +200,7 @@ def run_guild_day_roll(
     """
     settings = load_econ_settings(conn, guild_id)
     if not settings.enabled:
-        return []
+        return DayRollResult()
 
     offset = get_tz_offset_hours(conn, guild_id)
     today = logic.local_day_for(now_ts, offset)
@@ -208,12 +218,13 @@ def run_guild_day_roll(
             "(guild_id, last_local_day, last_iso_week) VALUES (?, ?, ?)",
             (guild_id, today, this_week),
         )
-        return []
+        return DayRollResult()
 
     last_day = row["last_local_day"]
     if last_day == today:
-        return []
+        return DayRollResult()
     beats: list[CommunityBeat] = []
+    week_rolled = False
 
     # ── day roll: convert the day that just ended, advance daily pool ──
     start, end = logic.local_day_bounds(last_day, offset)
@@ -249,6 +260,7 @@ def run_guild_day_roll(
     last_week = row["last_iso_week"]
     community_week = row["last_community_week"]
     if last_week is not None and last_week != this_week:
+        week_rolled = True
         rotate_pool(conn, guild_id, "weekly")
         _settle_completed_community(bot, conn, settings, guild_id)
         week_beats, community_week = _roll_community_weekly(
@@ -272,7 +284,7 @@ def run_guild_day_roll(
         "last_community_week = ? WHERE guild_id = ?",
         (today, this_week, community_week, guild_id),
     )
-    return beats
+    return DayRollResult(beats=tuple(beats), week_rolled=week_rolled)
 
 
 def _roll_community_weekly(
@@ -406,6 +418,44 @@ def _seconds_to_next_week_start(
     next_monday = day + timedelta(days=7 - day.weekday())
     start_ts, _end = logic.local_day_bounds(next_monday.isoformat(), offset)
     return max(0.0, start_ts - now_ts)
+
+
+async def _post_flip_announcement(
+    bot: discord.Client, db_path: Path, guild_id: int, now_ts: float
+) -> None:
+    """Post "this week's quests are up" at the ISO-week roll (stage 5).
+
+    Lands in the leaderboard panel's channel when one is posted, else the
+    bank channel; silently skips guilds with neither. Reveals the ⚡
+    spotlight kind — the week's featured activity paying double.
+    """
+
+    def _load():
+        with open_db(db_path) as conn:
+            settings = load_econ_settings(conn, guild_id)
+            offset = get_tz_offset_hours(conn, guild_id)
+            week = quests.iso_week_for(logic.local_day_for(now_ts, offset))
+            spot = spotlight_kind(conn, guild_id, week)
+            pool = len(list_active_pool_ids(conn, guild_id, "weekly"))
+            return settings, spot, pool
+
+    settings, spot, pool = await asyncio.to_thread(_load)
+    channel_id = settings.leaderboard_channel_id or settings.bank_channel_id
+    guild = bot.get_guild(guild_id)
+    channel = guild.get_channel(channel_id) if guild else None
+    if not isinstance(channel, discord.TextChannel):
+        return
+    lines = [
+        f"📋 **This week's quests are up!** {pool} weeklies in the pool — "
+        f"`/quests` shows yours.",
+    ]
+    if spot:
+        label = quests.TRIGGER_KINDS.get(spot, spot)
+        lines.append(f"⚡ **Spotlight:** {label} pays **double** all week.")
+    try:
+        await channel.send("\n".join(lines))
+    except discord.HTTPException:
+        log.warning("flip announcement failed to send in %s", channel_id)
 
 
 async def _send_community_beats(
@@ -771,13 +821,27 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
 
     for guild in list(bot.guilds):
         beats: list[CommunityBeat] = []
+        week_rolled = False
         try:
             with open_db(db_path) as conn:
-                beats.extend(run_guild_day_roll(bot, conn, guild.id, now_ts))
+                roll = run_guild_day_roll(bot, conn, guild.id, now_ts)
+                beats.extend(roll.beats)
+                week_rolled = roll.week_rolled
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("Economy loop: unhandled error for guild %s.", guild.id)
+
+        if week_rolled:
+            try:
+                await _post_flip_announcement(bot, db_path, guild.id, now_ts)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: flip announcement failed for guild %s.",
+                    guild.id,
+                )
 
         try:
             with open_db(db_path) as conn:

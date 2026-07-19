@@ -512,6 +512,9 @@ def compute_live(
         (guild_id, ws_ts),
     ).fetchone()["n"]
 
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    spot = spotlight_kind(conn, guild_id, quest_rules.iso_week_for(today))
     return {
         "community": community,
         "cadences": cadences,
@@ -520,4 +523,8 @@ def compute_live(
         "completions_week": int(paid_week),
         "seconds_to_day_roll": max(0, round(day_end - now)),
         "seconds_to_week_roll": max(0, round(week_end - now)),
+        "spotlight_kind": spot,
+        "spotlight_label": (
+            quest_rules.TRIGGER_KINDS.get(spot, spot) if spot else None
+        ),
     }

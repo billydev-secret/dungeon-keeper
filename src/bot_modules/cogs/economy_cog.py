@@ -47,6 +47,7 @@ from bot_modules.economy.quest_views import (
 from bot_modules.economy.quests import (
     compile_trigger_pattern,
     has_board,
+    iso_week_for,
     message_matches_trigger,
     parse_trigger_words,
     quest_period,
@@ -58,8 +59,10 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
     get_progress,
     list_trigger_quests,
+    reroll_available,
     resolve_member_target,
     source_enabled,
+    spotlight_kind,
 )
 from bot_modules.services.economy_icon_catalog_service import (
     catalog_price_range,
@@ -1778,7 +1781,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
 
-        settings, quests_state = await asyncio.to_thread(
+        settings, quests_state, board_meta = await asyncio.to_thread(
             self._load_quests_state, guild.id, interaction.user.id
         )
         if not settings.enabled:
@@ -1793,15 +1796,22 @@ class EconomyCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        if any(q.get("spotlight") for q in quests_state):
+            embed.description = (
+                "⚡ Spotlight quests pay **double** this week!"
+            )
         for q in quests_state:
             reward = int(q["reward"])
             unit = _unit(settings, reward)
-            header = f"{settings.currency_emoji} {q['title']}"
+            spot = "⚡ " if q.get("spotlight") else ""
+            header = f"{spot}{settings.currency_emoji} {q['title']}"
             reward_line = f"**{reward:,}** {unit} · {q['qtype']}"
             if q.get("reward_xp"):
                 reward_line = (
                     f"**{reward:,}** {unit} + ⭐ {q['reward_xp']:,} XP · {q['qtype']}"
                 )
+            if q.get("spotlight"):
+                reward_line = f"{reward_line} · ⚡×2 this week"
             lines = [reward_line]
             if q.get("description"):
                 lines.append(str(q["description"]))
@@ -1816,14 +1826,20 @@ class EconomyCog(commands.Cog):
             embed.add_field(name=header, value="\n".join(lines), inline=False)
 
         claimable = [q for q in quests_state if q["state"] == "claimable"]
+        rerollable = board_meta.get("rerollable") or []
+        show_reroll = bool(board_meta.get("reroll_ok") and rerollable)
         kwargs: dict = {"embed": embed, "ephemeral": True}
-        if claimable:
-            kwargs["view"] = QuestClaimView(self.ctx, settings, guild, claimable)
+        if claimable or show_reroll:
+            kwargs["view"] = QuestClaimView(
+                self.ctx, settings, guild, claimable,
+                rerollable=rerollable if show_reroll else None,
+                local_day=str(board_meta.get("local_day") or ""),
+            )
         await interaction.response.send_message(**kwargs)
 
     def _load_quests_state(
         self, guild_id: int, user_id: int
-    ) -> tuple[EconSettings, list[dict]]:
+    ) -> tuple[EconSettings, list[dict], dict]:
         """Load active quests with the caller's per-period claim state.
 
         Community quests carry their running total (no self-claim); daily/weekly
@@ -1832,7 +1848,7 @@ class EconomyCog(commands.Cog):
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
-                return settings, []
+                return settings, [], {}
             offset = get_tz_offset_hours(conn, guild_id)
             day = local_day_for(time.time(), offset)
             rows = conn.execute(
@@ -1845,6 +1861,7 @@ class EconomyCog(commands.Cog):
             ).fetchall()
             # daily/weekly/monthly quests are shown per member — only the ones
             # on this member's board for the period. Compute each cadence once.
+            spot = spotlight_kind(conn, guild_id, iso_week_for(day))
             boards: dict[str, set[int]] = {}
             out: list[dict] = []
             for row in rows:
@@ -1866,6 +1883,9 @@ class EconomyCog(commands.Cog):
                     "reward_xp": int(row["reward_xp"]),
                     "signoff": bool(row["signoff"]),
                     "criteria": row["criteria"],
+                    "spotlight": bool(
+                        spot and str(row["trigger_kind"] or "") == spot
+                    ),
                 }
                 if qtype == "community":
                     prog = conn.execute(
@@ -1919,7 +1939,20 @@ class EconomyCog(commands.Cog):
                     else:
                         entry["state"] = "pending"
                 out.append(entry)
-        return settings, out
+            # Reroll offer: board quests untouched this period (no claim, no
+            # counted progress) — one free swap per guild-local day.
+            meta = {
+                "local_day": day,
+                "reroll_ok": reroll_available(conn, guild_id, user_id, day),
+                "rerollable": [
+                    {"id": q["id"], "title": q["title"], "qtype": q["qtype"]}
+                    for q in out
+                    if q["qtype"] in ("daily", "weekly", "monthly")
+                    and q["state"] not in ("done", "pending")
+                    and not q.get("progress_current")
+                ],
+            }
+        return settings, out, meta
 
     # ── trigger-word quest verification (spec §4.4) ───────────────────────
 

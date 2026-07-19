@@ -68,7 +68,15 @@ USER_2 = 1002
 OTHER = 1002
 MANAGER = 9001
 
-SETTINGS = EconSettings(enabled=True, booster_multiplier=1.5)
+# Set bonuses zeroed: most tests here run one-quest boards, where any claim
+# instantly "clears the board" and the bonus would skew every exact-balance
+# assertion. The dedicated set-bonus tests opt in explicitly.
+SETTINGS = EconSettings(
+    enabled=True,
+    booster_multiplier=1.5,
+    quest_set_bonus_daily=0,
+    quest_set_bonus_weekly=0,
+)
 
 
 @pytest.fixture
@@ -1787,3 +1795,185 @@ def test_resolve_target_new_period_resizes(db):
             (int(quest["id"]), USER),
         ).fetchall()
         assert [r["period"] for r in rows] == ["2026-W29", "2026-W30"]
+
+
+# ── stage 5 add-ons: set bonus, spotlight, reroll ─────────────────────
+
+BONUS_SETTINGS = EconSettings(
+    enabled=True, booster_multiplier=1.5,
+    quest_set_bonus_daily=10, quest_set_bonus_weekly=25,
+)
+
+
+def test_set_bonus_pays_on_clearing_the_daily_board(db):
+    # Manual (kind-less) quests: no spotlight in play, pure bonus math.
+    with open_db(db) as conn:
+        a = _make(conn, qtype="daily", reward=5, title="A")
+        b = _make(conn, qtype="daily", reward=5, title="B")
+        day = "2026-07-14"
+        claim_quest(
+            conn, BONUS_SETTINGS, GUILD, a, USER, period=day, booster=False
+        )
+        assert get_balance(conn, GUILD, USER) == 5  # one down, no bonus yet
+        claim_quest(
+            conn, BONUS_SETTINGS, GUILD, b, USER, period=day, booster=False
+        )
+        # 5 + 5 + 10 clear-the-board bonus, exactly once.
+        assert get_balance(conn, GUILD, USER) == 20
+        bonus_rows = conn.execute(
+            "SELECT COUNT(*) AS n FROM econ_ledger WHERE guild_id = ? "
+            "AND user_id = ? AND kind = 'quest_bonus'",
+            (GUILD, USER),
+        ).fetchone()
+        assert int(bonus_rows["n"]) == 1
+        # A fresh period pays a fresh bonus.
+        for qid in (a, b):
+            claim_quest(
+                conn, BONUS_SETTINGS, GUILD, qid, USER,
+                period="2026-07-15", booster=False,
+            )
+        assert get_balance(conn, GUILD, USER) == 40
+
+
+def test_set_bonus_waits_for_signoff_approval(db):
+    with open_db(db) as conn:
+        a = _make(conn, qtype="daily", reward=5, title="A")
+        signoff = _make(conn, qtype="daily", reward=5, signoff=1, title="B")
+        day = "2026-07-14"
+        claim_quest(
+            conn, BONUS_SETTINGS, GUILD, a, USER, period=day, booster=False
+        )
+        outcome = claim_quest(
+            conn, BONUS_SETTINGS, GUILD, signoff, USER, period=day, booster=False
+        )
+        assert outcome.state == "pending"
+        assert get_balance(conn, GUILD, USER) == 5  # no bonus while pending
+        resolve_claim(
+            conn, BONUS_SETTINGS, outcome.claim_id,
+            approve=True, resolver_id=999, booster=False,
+        )
+        # Approval completes the set for the CLAIM's period → 5 + 5 + 10.
+        assert get_balance(conn, GUILD, USER) == 20
+
+
+def test_spotlight_needs_two_kinds_and_doubles_payout(db):
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="whisper", reward=10, title="A")
+        assert spotlight_kind(conn, GUILD, "2026-W29") is None  # 1 kind = off
+        _make(conn, qtype="daily", trigger_kind="quote", reward=10, title="B")
+        spot = spotlight_kind(conn, GUILD, "2026-W29")
+        assert spot in ("whisper", "quote")
+        assert spotlight_kind(conn, GUILD, "2026-W29") == spot  # stable
+        other = "quote" if spot == "whisper" else "whisper"
+        day = "2026-07-14"  # W29
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, spot, USER,
+            local_day=day, occurrence="s1", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 20  # ⚡ doubled
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, other, USER,
+            local_day=day, occurrence="o1", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 30  # normal rate
+        spotlit = conn.execute(
+            "SELECT meta FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+            "AND kind = 'quest' AND amount = 20",
+            (GUILD, USER),
+        ).fetchone()
+        assert spotlit is not None and '"spotlight": true' in str(spotlit["meta"])
+
+
+def _reroll_pool(conn, n_kinds=("whisper", "quote", "ama_ask", "confession")):
+    return [
+        _make(conn, qtype="daily", trigger_kind=k, reward=10, title=f"Q-{k}")
+        for k in n_kinds
+    ]
+
+
+def test_reroll_swaps_slot_and_respects_daily_limit(db):
+    from bot_modules.services.economy_quests_service import (
+        reroll_available,
+        reroll_board_slot,
+    )
+
+    with open_db(db) as conn:
+        _reroll_pool(conn)
+        day = "2026-07-14"
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        victim = sorted(board)[0]
+        old_kind = get_quest(conn, GUILD, victim)["trigger_kind"]
+        assert reroll_available(conn, GUILD, USER, day)
+        new_quest = reroll_board_slot(conn, SETTINGS, GUILD, USER, victim, day)
+        assert str(new_quest["trigger_kind"]) != str(old_kind)  # prefers new kind
+        after = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        assert victim not in after and int(new_quest["id"]) in after
+        assert len(after) == len(board)
+        # The fire path agrees: the swapped-out quest no longer pays…
+        fired = fire_trigger_quests(
+            conn, SETTINGS, GUILD, str(old_kind), USER,
+            local_day=day, occurrence="x", booster=False,
+        )
+        assert victim not in [int(q["id"]) for q, _ in fired]
+        # …and the free reroll is spent.
+        assert not reroll_available(conn, GUILD, USER, day)
+        with pytest.raises(ValueError, match="already used"):
+            reroll_board_slot(
+                conn, SETTINGS, GUILD, USER, sorted(after)[0], day
+            )
+
+
+def test_reroll_blocked_after_progress_and_off_board(db):
+    from bot_modules.services.economy_quests_service import reroll_board_slot
+
+    with open_db(db) as conn:
+        ids = _reroll_pool(conn)
+        day = "2026-07-14"
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        on_board = sorted(board)[0]
+        kind = str(get_quest(conn, GUILD, on_board)["trigger_kind"])
+        # Complete it, then try to reroll it away — refused, reroll unspent.
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, kind, USER,
+            local_day=day, occurrence="done", booster=False,
+        )
+        with pytest.raises(ValueError, match="progress"):
+            reroll_board_slot(conn, SETTINGS, GUILD, USER, on_board, day)
+        off_board = next(q for q in ids if q not in board)
+        with pytest.raises(ValueError, match="isn't on your board"):
+            reroll_board_slot(conn, SETTINGS, GUILD, USER, off_board, day)
+
+
+def test_reroll_override_expires_with_the_period(db):
+    from bot_modules.services.economy_quests_service import reroll_board_slot
+
+    with open_db(db) as conn:
+        _reroll_pool(conn)
+        day = "2026-07-14"
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        victim = sorted(board)[0]
+        reroll_board_slot(conn, SETTINGS, GUILD, USER, victim, day)
+        # Tomorrow's board is a fresh pure draw — the override is scoped to
+        # its period_idx and silently irrelevant.
+        tomorrow = assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-15", SETTINGS
+        )
+        pure = set(
+            quest_rules_assigned(conn, GUILD, USER, "daily", "2026-07-15")
+        )
+        assert tomorrow == pure
+
+
+def quest_rules_assigned(conn, guild_id, user_id, qtype, day):
+    from bot_modules.economy import quests as qr
+    from bot_modules.services.economy_quests_service import (
+        board_sizes,
+        list_active_pool_ids,
+    )
+
+    pool = list_active_pool_ids(conn, guild_id, qtype)
+    idx = qr.period_index(qtype, day)
+    n = qr.board_size(qtype, board_sizes(SETTINGS))
+    return qr.assigned_quest_ids(pool, user_id, idx, n)

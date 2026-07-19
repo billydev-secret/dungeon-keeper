@@ -64,7 +64,13 @@ def _make_cog(ctx):
 
 
 def _enable(db, **overrides) -> None:
-    values: dict[str, object] = {"enabled": True}
+    # Set bonuses zeroed — one-quest boards would pay the clear-the-board
+    # bonus on every claim and skew exact-balance assertions.
+    values: dict[str, object] = {
+        "enabled": True,
+        "quest_set_bonus_daily": 0,
+        "quest_set_bonus_weekly": 0,
+    }
     values.update(overrides)
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD_ID, values)
@@ -1810,7 +1816,7 @@ def test_trigger_quest_excluded_from_manual_claims(ctx, db):
     _enable(db)
     _mk_quest(db, title="Say GM", trigger_words="gm")
     cog = _make_cog(ctx)
-    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    _settings, state, _meta = cog._load_quests_state(GUILD_ID, 501)
     assert [q["state"] for q in state] == ["trigger"]
 
 
@@ -1823,7 +1829,7 @@ def test_board_size_limits_quests_shown(ctx, db):
     for i in range(6):
         _mk_quest(db, title=f"Daily {i}")
     cog = _make_cog(ctx)
-    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    _settings, state, _meta = cog._load_quests_state(GUILD_ID, 501)
     assert len(state) == 1
 
 
@@ -1834,7 +1840,7 @@ def test_board_size_zero_shows_no_quests(ctx, db):
     for i in range(6):
         _mk_quest(db, title=f"Daily {i}")
     cog = _make_cog(ctx)
-    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    _settings, state, _meta = cog._load_quests_state(GUILD_ID, 501)
     assert state == []
 
 
@@ -2139,7 +2145,7 @@ def test_event_quest_shown_as_auto_not_claimable(ctx, db):
     _enable(db)
     _mk_quest(db, qtype="event", trigger_kind="photo_react", title="Snap it")
     cog = _make_cog(ctx)
-    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    _settings, state, _meta = cog._load_quests_state(GUILD_ID, 501)
     assert [q["state"] for q in state] == ["photo_react"]
 
 

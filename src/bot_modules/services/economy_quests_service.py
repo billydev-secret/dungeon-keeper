@@ -19,6 +19,7 @@ Ledger kinds added here: ``quest`` (instant claim + approved sign-off) and
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -413,7 +414,210 @@ def assigned_board_ids(
         return set()
     pool = list_active_pool_ids(conn, guild_id, qtype)
     idx = quests.period_index(qtype, local_day)
-    return set(quests.assigned_quest_ids(pool, user_id, idx, n))
+    board = set(quests.assigned_quest_ids(pool, user_id, idx, n))
+    # Reroll overrides sit on top of the pure draw: from → to per slot, this
+    # period only. A replacement that has since left the active pool falls
+    # back to the pure slot rather than dropping the board below size.
+    pool_set = set(pool)
+    for row in conn.execute(
+        "SELECT from_quest_id, to_quest_id FROM econ_board_overrides "
+        "WHERE guild_id = ? AND user_id = ? AND qtype = ? AND period_idx = ?",
+        (guild_id, user_id, qtype, idx),
+    ):
+        frm, to = int(row["from_quest_id"]), int(row["to_quest_id"])
+        if frm in board and to in pool_set:
+            board.discard(frm)
+            board.add(to)
+    return board
+
+
+def reroll_board_slot(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    quest_id: int,
+    local_day: str,
+) -> sqlite3.Row:
+    """Swap one personal-board quest for a different pool quest (stage 5).
+
+    One free reroll per member per guild-local day, across all cadences.
+    The slot must be untouched this period (no claim, no counted progress).
+    The replacement is the first pool quest in the member's own shuffle
+    order that isn't on their board, preferring a **different trigger
+    kind** — the reroll exists for "this quest doesn't fit how I use the
+    server", so same-kind swaps are the last resort. Returns the new quest
+    row; ValueError with a member-facing message otherwise.
+    """
+    quest = get_quest(conn, guild_id, quest_id)
+    if quest is None or not quest["active"]:
+        raise ValueError("That quest is no longer active.")
+    qtype = str(quest["qtype"])
+    if qtype not in quests.BOARD_CADENCES:
+        raise ValueError("Only board quests (daily/weekly/monthly) reroll.")
+    board = assigned_board_ids(conn, guild_id, user_id, qtype, local_day, settings)
+    if quest_id not in board:
+        raise ValueError("That quest isn't on your board this period.")
+    period = quests.quest_period(qtype, local_day)
+    touched = conn.execute(
+        "SELECT 1 FROM econ_quest_claims WHERE quest_id = ? AND user_id = ? "
+        "AND period = ? AND state IN ('paid', 'pending') LIMIT 1",
+        (quest_id, user_id, period),
+    ).fetchone()
+    if touched is None and get_progress(conn, quest_id, user_id, period) > 0:
+        touched = True
+    if touched:
+        raise ValueError(
+            "You've already made progress on that quest this period — "
+            "rerolls only swap untouched quests."
+        )
+
+    idx = quests.period_index(qtype, local_day)
+    pool = list_active_pool_ids(conn, guild_id, qtype)
+    ordered = quests.assigned_quest_ids(pool, user_id, idx, len(pool))
+    candidates = [q for q in ordered if q not in board]
+    if not candidates:
+        raise ValueError("The pool has nothing else to swap in.")
+    old_kind = str(quest["trigger_kind"] or "")
+    different = [
+        q for q in candidates
+        if str((get_quest(conn, guild_id, q) or {})["trigger_kind"] or "")
+        != old_kind
+    ]
+    new_id = (different or candidates)[0]
+
+    # Burn the daily reroll LAST, so validation failures never consume it.
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO econ_rerolls (guild_id, user_id, local_day) "
+        "VALUES (?, ?, ?)",
+        (guild_id, user_id, local_day),
+    )
+    if (cur.rowcount or 0) == 0:
+        raise ValueError("You've already used today's free reroll.")
+
+    # If the outgoing quest was itself a replacement, update that override
+    # in place — application then never has to chain from→to→to.
+    updated = conn.execute(
+        "UPDATE econ_board_overrides SET to_quest_id = ? "
+        "WHERE guild_id = ? AND user_id = ? AND qtype = ? AND period_idx = ? "
+        "AND to_quest_id = ?",
+        (new_id, guild_id, user_id, qtype, idx, quest_id),
+    )
+    if (updated.rowcount or 0) == 0:
+        conn.execute(
+            "INSERT OR REPLACE INTO econ_board_overrides "
+            "(guild_id, user_id, qtype, period_idx, from_quest_id, to_quest_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (guild_id, user_id, qtype, idx, quest_id, new_id),
+        )
+    new_quest = get_quest(conn, guild_id, new_id)
+    assert new_quest is not None
+    return new_quest
+
+
+def reroll_available(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, local_day: str
+) -> bool:
+    """Whether the member still has today's free reroll."""
+    row = conn.execute(
+        "SELECT 1 FROM econ_rerolls WHERE guild_id = ? AND user_id = ? "
+        "AND local_day = ?",
+        (guild_id, user_id, local_day),
+    ).fetchone()
+    return row is None
+
+
+def spotlight_kind(
+    conn: sqlite3.Connection, guild_id: int, iso_week: str
+) -> str | None:
+    """This ISO week's ⚡ spotlight trigger kind — quest payouts double.
+
+    Deterministic on (guild, week) over the kinds with at least one active
+    quest, so every surface (claim credit, embed, /quests, live tracker)
+    agrees without stored state. None when fewer than 2 kinds are active —
+    a "rotating featured activity" is meaningless with nothing to rotate,
+    and it would otherwise be a permanent silent 2× on a tiny library.
+    """
+    kinds = sorted(
+        str(r["trigger_kind"])
+        for r in conn.execute(
+            "SELECT DISTINCT trigger_kind FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND trigger_kind != '' "
+            "AND qtype != 'community'",
+            (guild_id,),
+        )
+    )
+    if len(kinds) < 2:
+        return None
+    digest = hashlib.sha256(f"{guild_id}:{iso_week}".encode()).hexdigest()
+    return kinds[int(digest, 16) % len(kinds)]
+
+
+def local_day_for_period(qtype: str, period: str) -> str:
+    """A representative guild-local day inside a cadence period key."""
+    from datetime import date
+
+    if qtype == "daily":
+        return period
+    if qtype == "weekly":
+        year, week = period.split("-W")
+        return date.fromisocalendar(int(year), int(week), 1).isoformat()
+    return f"{period}-01"  # monthly
+
+
+def maybe_pay_set_bonus(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    qtype: str,
+    period: str,
+) -> int:
+    """Pay the clear-the-board bonus if this claim finished the set.
+
+    Called after any claim pays (instant or approved sign-off). The board is
+    resolved for the CLAIM's period — a sign-off approved days later still
+    completes that period's set. Exactly-once via the econ_set_bonus
+    reservation row; flat, no booster multiplier. Returns the amount paid.
+    """
+    bonus = {
+        "daily": settings.quest_set_bonus_daily,
+        "weekly": settings.quest_set_bonus_weekly,
+    }.get(qtype, 0)
+    if bonus <= 0:
+        return 0
+    day = local_day_for_period(qtype, period)
+    board = assigned_board_ids(conn, guild_id, user_id, qtype, day, settings)
+    if not board:
+        return 0
+    paid = {
+        int(r["quest_id"])
+        for r in conn.execute(
+            "SELECT DISTINCT quest_id FROM econ_quest_claims "
+            "WHERE user_id = ? AND period = ? AND state = 'paid' "
+            f"AND quest_id IN ({','.join('?' * len(board))})",
+            (user_id, period, *board),
+        )
+    }
+    if paid < board:
+        return 0
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO econ_set_bonus (guild_id, user_id, qtype, period) "
+        "VALUES (?, ?, ?, ?)",
+        (guild_id, user_id, qtype, period),
+    )
+    if (cur.rowcount or 0) == 0:
+        return 0
+    return apply_credit(
+        conn,
+        guild_id,
+        user_id,
+        bonus,
+        "quest_bonus",
+        meta={"qtype": qtype, "period": period},
+        booster=False,
+        multiplier=settings.booster_multiplier,
+    )
 
 
 def source_enabled(conn: sqlite3.Connection, guild_id: int, source: str) -> bool:
@@ -988,6 +1192,9 @@ def claim_quest(
         return ClaimOutcome(state="pending", claim_id=claim_id, paid=0)
 
     paid = _credit_reward(conn, settings, quest, user_id, booster=booster, claim_id=claim_id)
+    maybe_pay_set_bonus(
+        conn, settings, guild_id, user_id, str(quest["qtype"]), period
+    )
     return ClaimOutcome(state="paid", claim_id=claim_id, paid=paid)
 
 
@@ -1020,13 +1227,24 @@ def _credit_reward(
     reward = int(quest["reward"])
     if reward < 1:
         return 0
+    meta: dict[str, object] = {"quest_id": int(quest["id"]), "claim_id": claim_id}
+    kind = str(quest["trigger_kind"] or "")
+    if kind:
+        # ⚡ Weekly spotlight: this week's featured kind pays double. Checked
+        # at credit time, so a sign-off approved after the week flips pays at
+        # the approval week's rate — acceptable drift for an advisory boost.
+        offset = get_tz_offset_hours(conn, guild_id)
+        week = quests.iso_week_for(local_day_for(time.time(), offset))
+        if spotlight_kind(conn, guild_id, week) == kind:
+            reward *= 2
+            meta["spotlight"] = True
     return apply_credit(
         conn,
         guild_id,
         user_id,
         reward,
         "quest",
-        meta={"quest_id": int(quest["id"]), "claim_id": claim_id},
+        meta=meta,
         booster=booster,
         multiplier=settings.booster_multiplier,
     )
@@ -1104,6 +1322,10 @@ def resolve_claim(
     if quest is None:
         raise ValueError("quest not found")
     paid = _credit_reward(conn, settings, quest, user_id, booster=booster, claim_id=claim_id)
+    maybe_pay_set_bonus(
+        conn, settings, int(claim["guild_id"]), user_id,
+        str(quest["qtype"]), str(claim["period"]),
+    )
     return ClaimResolution(
         user_id=user_id, quest_id=quest_id, paid=paid, deny_reason=None
     )

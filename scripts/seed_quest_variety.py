@@ -40,6 +40,7 @@ from bot_modules.services.economy_quests_service import (  # noqa: E402
     create_quest,
     set_quest_active,
 )
+from bot_modules.services.economy_service import save_econ_settings  # noqa: E402
 
 MAIN_GUILD = 1469491362444480666
 BACKFILL_DAYS = 70
@@ -209,6 +210,13 @@ def main() -> int:
             return 1
         n = backfill(conn, time.time(), args.dry_run)
         created = seed(conn, args.guild, args.dry_run)
+        # Set bonuses default OFF globally; the main guild opts in here
+        # (stage-5 add-on, values from the plan's locked Q&A).
+        if not args.dry_run:
+            save_econ_settings(
+                conn, args.guild,
+                {"quest_set_bonus_daily": 10, "quest_set_bonus_weekly": 25},
+            )
 
     mode = "DRY RUN — would write" if args.dry_run else "wrote"
     print(f"backfill: {mode} {n} (guild,user,kind,day) rows")

@@ -65,6 +65,21 @@ function render(container, cfg, channels, roles) {
             their own voice — the bot posts nothing publicly. Leave empty to
             DM the server owner.</div>
         </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Daily set bonus</label>
+            <input type="number" name="quest_set_bonus_daily" min="0" step="1"
+              value="${cfg.quest_set_bonus_daily}" style="max-width:120px;" />
+          </div>
+          <div class="field">
+            <label>Weekly set bonus</label>
+            <input type="number" name="quest_set_bonus_weekly" min="0" step="1"
+              value="${cfg.quest_set_bonus_weekly}" style="max-width:120px;" />
+          </div>
+        </div>
+        <div class="field-hint" style="margin-top:-6px;">Extra coins for
+          completing EVERY quest on your personal board of that cadence in one
+          period. 0 turns the bonus off.</div>
         <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
           <input type="checkbox" name="transfers_enabled"${cfg.transfers_enabled ? " checked" : ""} />
           Member-to-member transfers enabled
@@ -127,7 +142,11 @@ function render(container, cfg, channels, roles) {
     String(cfg.game_role_id),
   );
 
-  const numKeys = ["booster_multiplier"];
+  const numKeys = [
+    "booster_multiplier",
+    "quest_set_bonus_daily",
+    "quest_set_bonus_weekly",
+  ];
   const floatKeys = new Set(["booster_multiplier"]);
   const strKeys = [
     "currency_name",

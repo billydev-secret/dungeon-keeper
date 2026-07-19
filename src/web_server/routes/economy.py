@@ -77,6 +77,9 @@ class EconomyConfigUpdate(BaseModel):
     # Community-weekly beat sheets DM this member (0 = guild owner). Sent as
     # a string from the panel so the snowflake survives JS number precision.
     community_host_user_id: int | None = Field(default=None, ge=0)
+    # Clear-the-board set bonuses (0 = off).
+    quest_set_bonus_daily: int | None = Field(default=None, ge=0)
+    quest_set_bonus_weekly: int | None = Field(default=None, ge=0)
     price_role_color: int | None = Field(default=None, ge=0)
     price_role_name: int | None = Field(default=None, ge=0)
     price_role_icon: int | None = Field(default=None, ge=0)

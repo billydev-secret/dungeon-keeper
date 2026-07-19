@@ -9,6 +9,27 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: board add-ons — reroll, set bonus, spotlight, flip post  (hash stamped on merge)
+
+- [ ] `/bank quests` shows the 🎲 reroll select when you have untouched
+      board quests and today's reroll unspent; picking one confirms
+      old → new, the new quest is on the board on re-open, and a second
+      attempt today is refused
+- [ ] Rerolling a quest you've progressed (or one off your board) is
+      refused WITHOUT burning the daily reroll
+- [ ] Complete every daily on your board → set bonus lands in the ledger
+      (`quest_bonus`; the seed script sets the main guild to 10 daily / 25
+      weekly — default is OFF elsewhere); only once per period; values
+      editable on Economy Settings (0 = off)
+- [ ] A sign-off daily approved later still completes that day's set and
+      pays the bonus at approval
+- [ ] ⚡ spotlight: `/quests` banners + tags one kind (needs ≥2 distinct
+      active kinds), its quest payouts double (ledger meta
+      `spotlight: true`), the leaderboard embed shows the ⚡ line, and the
+      Statistics live card names it
+- [ ] At the ISO-week roll the bot posts "this week's quests are up" (+
+      spotlight reveal) in the leaderboard panel's channel (bank fallback)
+
 ### Economy: dynamic personal targets on band quests  (f6328d1)
 
 Needs a counted quest with a target BAND (min/max, not fixed count) — the

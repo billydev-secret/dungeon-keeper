@@ -89,7 +89,14 @@ def db(tmp_path):
 
 
 def _enable(db_path, guild_id=GUILD, **overrides) -> None:
-    values: dict[str, object] = {"enabled": True, "xp_per_coin": 10.0}
+    # Set bonuses zeroed — single-quest boards would otherwise pay the
+    # clear-the-board bonus on every claim and skew exact balances.
+    values: dict[str, object] = {
+        "enabled": True,
+        "xp_per_coin": 10.0,
+        "quest_set_bonus_daily": 0,
+        "quest_set_bonus_weekly": 0,
+    }
     values.update(overrides)
     with open_db(db_path) as conn:
         save_econ_settings(conn, guild_id, values)
@@ -1026,7 +1033,7 @@ def _fire(db_path, kind, user_id, occ, day, guild_id=GUILD) -> None:
 
 def _roll_beats(bot, db_path, now_ts, guild_id=GUILD):
     with open_db(db_path) as conn:
-        return run_guild_day_roll(bot, conn, guild_id, now_ts)
+        return list(run_guild_day_roll(bot, conn, guild_id, now_ts).beats)
 
 
 def _community_state(db_path, qid):

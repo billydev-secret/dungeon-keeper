@@ -72,6 +72,14 @@ class EconSettings:
     # voice — the bot posts nothing publicly (2026-07-18 decision). 0 =
     # fall back to the guild owner.
     community_host_user_id: int = 0
+    # Clear-the-board set bonuses: paid once per period when a member
+    # completes EVERY quest on their personal board of that cadence
+    # (ledger kind quest_bonus, no booster multiplier). Default OFF — a
+    # silent default-on bonus surprises small boards (a 1-quest pool pays
+    # it on every claim); guilds opt in on the Settings page (the main
+    # guild is seeded 10/25 by scripts/seed_quest_variety.py).
+    quest_set_bonus_daily: int = 0
+    quest_set_bonus_weekly: int = 0
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75

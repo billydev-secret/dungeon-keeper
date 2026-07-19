@@ -170,6 +170,11 @@ async function refreshLive(container) {
       (${fmtDur(live.seconds_to_week_roll)}) if the library has one.</div>`);
   }
 
+  if (live.spotlight_label) {
+    bits.push(`<div class="field-hint" style="margin:4px 0;">⚡ <strong>Spotlight:</strong>
+      ${esc(live.spotlight_label)} pays double this week.</div>`);
+  }
+
   // Ticker aggregates + countdowns.
   bits.push(`
     <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin:8px 0;">

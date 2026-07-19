@@ -64,7 +64,13 @@ def _patch_accent():
 
 
 def _enable(db, **overrides) -> None:
-    values: dict[str, object] = {"enabled": True}
+    # Set bonuses zeroed — one-quest boards would pay the clear-the-board
+    # bonus on approval and skew exact-balance assertions.
+    values: dict[str, object] = {
+        "enabled": True,
+        "quest_set_bonus_daily": 0,
+        "quest_set_bonus_weekly": 0,
+    }
     values.update(overrides)
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD_ID, values)
