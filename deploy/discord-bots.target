@@ -1,0 +1,16 @@
+# A grouping target so you can start/stop/restart every bot at once:
+#
+#   sudo systemctl start  discord-bots.target
+#   sudo systemctl stop   discord-bots.target
+#   sudo systemctl restart discord-bots.target
+#
+# Each *.service is PartOf= this target, so stopping the target stops them all.
+# Enabling the target enables the bots at boot (via their WantedBy=).
+
+[Unit]
+Description=All Billybots Discord bots
+After=network-online.target
+Wants=network-online.target
+
+[Install]
+WantedBy=multi-user.target

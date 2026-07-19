@@ -11,14 +11,25 @@ from __future__ import annotations
 import io
 import logging
 import math
+import os
 import random as _random
 import re
 import sqlite3
 import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-import matplotlib
-import matplotlib.pyplot as plt
+# See the matching note in activity_graphs.py: ProtectHome=read-only makes
+# matplotlib's default config dir unwritable, so redirect it into the repo
+# before importing matplotlib. Both modules set it because either may be
+# imported first.
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    str(Path(__file__).resolve().parents[3] / ".cache" / "matplotlib"),
+)
+
+import matplotlib  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 
 matplotlib.use("Agg")
 

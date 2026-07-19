@@ -69,8 +69,6 @@ discord-py==2.7.1
     # via
     #   -r requirements.txt
     #   wavelink
-diskcache==5.6.3
-    # via llama-cpp-python
 distlib==0.4.3
     # via virtualenv
 distro==1.9.0
@@ -142,17 +140,13 @@ invoke==3.0.3
 itsdangerous==2.2.0
     # via -r requirements.txt
 jinja2==3.1.6
-    # via
-    #   -r requirements.txt
-    #   llama-cpp-python
+    # via -r requirements.txt
 jiter==0.16.0
     # via anthropic
 kiwisolver==1.5.0
     # via matplotlib
 librt==0.13.0 ; platform_python_implementation != 'PyPy'
     # via mypy
-llama-cpp-python==0.3.33
-    # via -r requirements.txt
 markupsafe==3.0.3
     # via jinja2
 matplotlib==3.11.0
@@ -180,7 +174,6 @@ numpy==2.5.1
     #   -r requirements.txt
     #   contourpy
     #   ctranslate2
-    #   llama-cpp-python
     #   matplotlib
     #   mediapipe
     #   nudenet
@@ -312,7 +305,6 @@ typing-extensions==4.16.0
     #   anthropic
     #   fastapi
     #   huggingface-hub
-    #   llama-cpp-python
     #   mypy
     #   pydantic
     #   pydantic-core
