@@ -679,7 +679,8 @@ the member owns and gift rentals where they are the beneficiary.
   lines, plus a full-board-bonus count; titles and counts only, never member
   names, per the 2026-07-18 ticker decision); and a blurb pointing members
   at `/quests` + `/bank wallet` for their own numbers. Sections stack
-  full-width; each body is a small table — fixed-width inline-code cells
+  full-width, each heading given breathing room by a zero-width blank
+  line ending the previous section's value (and the description); each body is a small table — fixed-width inline-code cells
   align the columns (pulse label | value, earner name | amount, quest
   cadence | description | payment, feed title | count | when) while
   emoji, bold, and live `<t:…:R>` timestamps stay outside the backticks,

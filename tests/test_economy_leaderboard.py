@@ -280,6 +280,12 @@ def test_embed_sections_stack_full_width():
         ("📰 Live feed — today", False),
         ("Your progress", False),
     ]
+    # Breathing room: the description and every field but the last end in a
+    # zero-width blank line, so each section heading has space above it.
+    assert (embed.description or "").endswith("\n\u200b")
+    for f in embed.fields[:-1]:
+        assert (f.value or "").endswith("\n\u200b"), f.name
+    assert not (embed.fields[-1].value or "").endswith("\u200b")
 
 
 def test_embed_quest_board_summarizes_per_cadence():
