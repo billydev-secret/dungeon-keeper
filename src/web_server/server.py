@@ -309,6 +309,13 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         photo_challenge_routes.router, prefix="/api/photo-challenge", tags=["photo-challenge"]
     )
 
+    # ── Announcements ───────────────────────────────────────────────────
+    from web_server.routes import announcements as announcements_routes
+
+    app.include_router(
+        announcements_routes.router, prefix="/api/announcements", tags=["announcements"]
+    )
+
     # ── Quotes ──────────────────────────────────────────────────────────
     from web_server.routes import quotes as quotes_routes
 

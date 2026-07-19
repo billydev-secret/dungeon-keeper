@@ -3617,3 +3617,30 @@ select option { background: var(--bg-input); color: var(--ink); }
 }
 .rm-publish { border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 4px; }
 
+
+/* ── Announcements panel (panels/announcements.js) ────────────────── */
+.ann-editor { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .ann-editor { grid-template-columns: 1fr; } }
+.ann-form { display: flex; flex-direction: column; gap: 10px; }
+.ann-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid var(--rule); border-radius: 6px; background: var(--bg-card);
+  margin-bottom: 8px;
+}
+.ann-row-main { flex: 1; min-width: 0; }
+.ann-row-title { font-weight: 600; color: var(--ink-bright); }
+.ann-row-sub { font-size: 12px; color: var(--ink-dim); margin-top: 2px; }
+.ann-row-acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ann-badge {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px;
+  border-radius: 9px; vertical-align: 1px;
+}
+.ann-badge-draft { background: var(--bg-rail); color: var(--ink-dim); }
+.ann-badge-scheduled { background: var(--gold); color: var(--bg-rail); }
+.ann-badge-sent { background: var(--green-soft); color: var(--green); }
+.ann-badge-error { background: #f23f431a; color: var(--red); }
+.ann-mention {
+  display: inline-block; font-size: 12px; font-weight: 500; padding: 0 4px;
+  border-radius: 3px; background: #5865f24d; color: #c9cdfb;
+}
+.ann-plain { font-size: 14px; color: var(--ink); margin-bottom: 8px; word-break: break-word; }

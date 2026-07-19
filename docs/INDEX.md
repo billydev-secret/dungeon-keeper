@@ -64,6 +64,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers | Notes |
 |---|---|---|
+| [announcements.md](announcements.md) | Announcements: dashboard-queued one-shot channel posts (embed + ping line, live preview, guild-local schedule, sent history) | Built 2026-07-19; awaiting live testing; plan in [plans/timed-announcements.md](plans/timed-announcements.md) |
 | [auto_delete_spec.md](auto_delete_spec.md) | Auto-delete message rules | |
 | [chat_revive_spec.md](chat_revive_spec.md) | Chat Revive ("Ember"): rhythm-aware lull questions | v1 built; dashboard-managed (no slash commands); plan in [plans/chat-revive.md](plans/chat-revive.md) |
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |

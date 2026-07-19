@@ -1671,6 +1671,17 @@
       </div>
     </div>
 
+    <h3 id="announcements">Announcements</h3>
+    <p>Queue server announcements on the dashboard, preview them, and set a post time — the bot posts them for you. Each announcement is a rich embed (title, markdown body, optional image, accent color that defaults to your server branding) plus an optional plain-text line shown above the embed. Mentions only ping from that plain-text line, and only when you explicitly pick them: no mentions, one role, or @everyone — nothing pings by accident. Times are <strong>server-local</strong> (the timezone offset from the Global config panel).</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Manage via the <a href="/#/announcements">web dashboard</a></strong>
+        <p>The Announcements panel (admin-only) has the queue, a live Discord-style preview while you type, and a Sent history. Save without a time to keep a <em>draft</em>; add a date and time to schedule it. <strong>Post now</strong> sends within a minute. Sent items keep an "Open in Discord" jump link and can be <em>cloned</em> back into a fresh draft. If the bot was offline at post time it still posts up to 2 hours late; past that the item is marked as missed instead of posting stale news — clone and reschedule it.</p>
+      </div>
+    </div>
+
     <h3 id="hidden-channels">Hidden Channels</h3>
     <p>Hide a channel from everyone and later restore it exactly as it was. Hiding snapshots the channel's permission overwrites and placement, then parks it under a "Hidden Channels" category with <code>@everyone</code> denied View Channel (members with Administrator still see it — Discord always exempts them). Restoring moves it home and reinstates the original overwrites. Hides last until restored — there's no scheduled auto-restore.</p>
 
@@ -1741,6 +1752,7 @@
         <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, reactions-to-earn threshold, auto-react emoji; prompt bank under Prompts &amp; AI</td></tr>
         <tr><td><strong><a href="/#/config-greeting-watch">Greeting Watch</a></strong></td><td>Watched channels, notify member, unanswered-window minutes</td></tr>
         <tr><td><strong><a href="/#/chat-revive">Chat Revive</a></strong></td><td>Eligible channels, ping role, budgets and quiet hours, question bank, manual fire, scoreboard</td></tr>
+        <tr><td><strong><a href="/#/announcements">Announcements</a></strong></td><td>Queue scheduled channel posts: embed + ping line, live preview, drafts, sent history</td></tr>
         <tr><td><strong><a href="/#/qa-tracker">QA Tracker</a></strong></td><td>QA-crew role, channel, reward and daily cap, verdict board with void / archive</td></tr>
         <tr><td><strong><a href="/#/admin-backfill">Backfill Jobs</a></strong></td><td>Historical interaction / member-event scans</td></tr>
       </tbody>
