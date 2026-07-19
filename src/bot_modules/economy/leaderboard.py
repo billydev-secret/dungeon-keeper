@@ -83,6 +83,18 @@ def _rel(ts: float) -> str:
     return f"<t:{int(ts)}:R>"
 
 
+def _pad(text: str, width: int) -> str:
+    """Clip + left-pad a table cell for a fixed-width inline-code column.
+
+    Sections align their columns by wrapping cells in backticks (monospace)
+    and padding to the column width — code blocks would align too, but they
+    swallow bold and `<t:…:R>` timestamps, which must stay live.
+    """
+    if len(text) > width:
+        text = text[: width - 1] + "…"
+    return text.ljust(width)
+
+
 @dataclass(frozen=True)
 class Pulse:
     """Today's guild-local totals — the panel's heartbeat line."""
@@ -319,26 +331,26 @@ def collect_leaderboard_data(
 
 
 def _pulse_lines(data: LeaderboardData, emoji: str, plural: str) -> str:
-    """The heartbeat field: today's totals + the two reset clocks."""
+    """The heartbeat field: label | value rows, columns tab-aligned."""
     p = data.pulse
+    rows: list[tuple[str, str, str]] = []  # (icon, label, rich value)
     if p.coins_today > 0:
-        head = (
-            f"{emoji} **{p.coins_today:,}** {plural} paid out · "
-            f"✅ **{p.quests_today}** quest"
-            f"{'s' if p.quests_today != 1 else ''} completed · "
-            f"👥 **{p.earners_today}** member"
-            f"{'s' if p.earners_today != 1 else ''} earning"
-        )
-    else:
-        head = "The day is young — nothing banked yet. Be the first!"
-    clocks = []
+        rows.append((emoji, "Paid out today", f"**{p.coins_today:,}** {plural}"))
+        rows.append(("✅", "Quests done", f"**{p.quests_today}**"))
+        rows.append(("👥", "Members earning", f"**{p.earners_today}**"))
     if data.day_roll_ts:
-        clocks.append(f"dailies reset {_rel(data.day_roll_ts)}")
+        rows.append(("🕛", "Dailies reset", _rel(data.day_roll_ts)))
     if data.week_roll_ts:
-        clocks.append(f"new weeklies {_rel(data.week_roll_ts)}")
-    if clocks:
-        return f"{head}\n🕛 {' · '.join(clocks)}"
-    return head
+        rows.append(("🕛", "New weeklies", _rel(data.week_roll_ts)))
+    lines = []
+    if p.coins_today <= 0:
+        lines.append("The day is young — nothing banked yet. Be the first!")
+    if rows:
+        width = max(len(label) for _, label, _ in rows)
+        lines.extend(
+            f"{icon} `{_pad(label, width)}` {value}" for icon, label, value in rows
+        )
+    return "\n".join(lines)
 
 
 def _community_block(g: CommunityGoal) -> str:
@@ -382,13 +394,18 @@ def _community_block(g: CommunityGoal) -> str:
 
 
 def _feed_lines(data: LeaderboardData) -> str:
-    """Today's anonymous completion feed — titles and counts, never names."""
-    lines = [
-        f"✅ **{f.title}** ×{f.count} · {_rel(f.last_ts)}"
-        if f.count > 1
-        else f"✅ **{f.title}** · {_rel(f.last_ts)}"
-        for f in data.feed
-    ]
+    """Today's anonymous completion feed — titles and counts, never names.
+
+    Title | count | when, with the title column tab-aligned (×1 is always
+    printed so the count column lines up too).
+    """
+    lines = []
+    if data.feed:
+        width = min(max(len(f.title) for f in data.feed), 20)
+        lines = [
+            f"✅ `{_pad(f.title, width)}` ×{f.count} · {_rel(f.last_ts)}"
+            for f in data.feed
+        ]
     if data.set_bonuses_today > 0:
         lines.append(
             f"🎁 Full-board bonus paid ×{data.set_bonuses_today} today"
@@ -420,33 +437,34 @@ def build_leaderboard_embed(
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
 
-    # The four content sections sit in a 2×2 grid: pulse | earners on the
-    # first row, quest board | live feed on the second. Discord flows up to
-    # three inline fields per row, so each pair carries a zero-width spacer
-    # to pin the two-column shape; mobile clients stack fields regardless.
+    # Each section's body is a small table: fixed-width inline-code cells
+    # align the columns (see _pad) while emoji, bold, and live timestamps
+    # stay outside the backticks where Discord still renders them.
     embed.add_field(
         name="📡 Today's pulse",
         value=_pulse_lines(data, emoji, plural),
-        inline=True,
+        inline=False,
     )
 
     if data.top_earners:
+        names = {uid: resolve_name(uid) for uid, _ in data.top_earners}
+        name_w = min(max(len(n) for n in names.values()), 16)
+        amount_w = max(len(f"{amt:,}") for _, amt in data.top_earners)
         earner_lines = []
         for i, (uid, amount) in enumerate(data.top_earners):
             today = data.today_by_user.get(uid, 0)
             delta = f" (+{today:,} today)" if today > 0 else ""
             earner_lines.append(
-                f"{_MEDALS[i]} **{resolve_name(uid)}** — "
-                f"{emoji} {amount:,}{delta}"
+                f"{_MEDALS[i]} `{_pad(names[uid], name_w)}` "
+                f"{emoji} `{f'{amount:,}'.rjust(amount_w)}`{delta}"
             )
     else:
         earner_lines = ["Nobody has earned yet this week — be the first!"]
     embed.add_field(
         name=f"Top earners (last {ROLLING_DAYS} days)",
         value="\n".join(earner_lines),
-        inline=True,
+        inline=False,
     )
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     if data.community:
         embed.add_field(
@@ -477,25 +495,22 @@ def build_leaderboard_embed(
             "monthly": settings.quest_board_monthly,
         }
         label_width = max(len(v) for v in _QTYPE_LABELS.values())
-        body: list[str] = []
+        # cadence | description | payment rows; the first two columns are
+        # fixed-width code cells so payments line up down the field.
+        rows: list[tuple[str, str, str]] = []
+        overflow = 0
         for qtype, qtype_label in _QTYPE_LABELS.items():
             pool = [q for q in data.quests if q.qtype == qtype]
             if not pool:
                 continue
-            label = qtype_label.ljust(label_width)
             if qtype == "event":
                 for q in pool[:_MAX_QUEST_LINES]:
                     xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
-                    spot_tag = "⚡ " if q.spotlight else ""
-                    body.append(
-                        f"`{label}` {spot_tag}**{q.title}** — "
-                        f"{emoji} {q.reward:,}{xp}"
+                    spot_tag = " ⚡" if q.spotlight else ""
+                    rows.append(
+                        (qtype_label, q.title, f"{emoji} {q.reward:,}{xp}{spot_tag}")
                     )
-                if len(pool) > _MAX_QUEST_LINES:
-                    body.append(
-                        f"…and {len(pool) - _MAX_QUEST_LINES} more on "
-                        "`/quests`."
-                    )
+                overflow = max(0, len(pool) - _MAX_QUEST_LINES)
                 continue
             n = min(sizes.get(qtype, 0), len(pool))
             if n <= 0:
@@ -505,10 +520,18 @@ def build_leaderboard_embed(
             reward = f"{emoji} {lo:,}" + (
                 f"–{hi:,}" if hi != lo else ""
             ) + " each"
-            body.append(
-                f"`{label}` **{n}** on your board, "
-                f"drawn from {len(pool)} — {reward}"
+            rows.append(
+                (qtype_label, f"{n} yours · pool {len(pool)}", reward)
             )
+        body: list[str] = []
+        if rows:
+            desc_width = min(max(len(desc) for _, desc, _ in rows), 24)
+            body = [
+                f"`{_pad(label, label_width)}` `{_pad(desc, desc_width)}` {pay}"
+                for label, desc, pay in rows
+            ]
+        if overflow:
+            body.append(f"…and {overflow} more on `/quests`.")
         if body:
             quest_lines.extend(body)
             quest_lines.append(
@@ -519,14 +542,13 @@ def build_leaderboard_embed(
             board = "No quests running right now — check back soon."
     else:
         board = "No quests running right now — check back soon."
-    embed.add_field(name="Quest board", value=board, inline=True)
+    embed.add_field(name="Quest board", value=board, inline=False)
 
     embed.add_field(
         name="📰 Live feed — today",
         value=_feed_lines(data),
-        inline=True,
+        inline=False,
     )
-    embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     embed.add_field(
         name="Your progress",

@@ -236,7 +236,7 @@ def test_embed_ranks_earners_with_names_and_branding():
     fields = {f.name: f.value or "" for f in embed.fields}
     top = fields[f"Top earners (last {ROLLING_DAYS} days)"]
     assert top.index("Alice") < top.index("Bob")
-    assert "🥇" in top and "🥈" in top and "💎 120" in top
+    assert "🥇" in top and "🥈" in top and "💎 `120`" in top
     assert embed.color == discord.Color(0x123456)
     assert embed.footer.text is not None and embed.footer.text.startswith("⚡ Live")
     assert embed.timestamp is not None
@@ -260,10 +260,9 @@ def test_embed_community_bar_and_states():
     assert "✅ paid out" in goals
 
 
-def test_embed_grid_layout():
-    # 2×2 grid: pulse | earners, then quest board | live feed — each row
-    # closed by a zero-width spacer so Discord's 3-per-row flow keeps two
-    # columns. Community goals and the blurb stay full-width.
+def test_embed_sections_stack_full_width():
+    # Sections stack as full-width fields; the tables live INSIDE each
+    # body (fixed-width code cells), not in Discord's inline-field flow.
     data = LeaderboardData(
         top_earners=[(1, 10)],
         community=[CommunityGoal("Goal", 1, 10, completed=False, settled=False)],
@@ -274,13 +273,11 @@ def test_embed_grid_layout():
     )
     layout = [(f.name, f.inline) for f in embed.fields]
     assert layout == [
-        ("📡 Today's pulse", True),
-        (f"Top earners (last {ROLLING_DAYS} days)", True),
-        ("\u200b", True),
+        ("📡 Today's pulse", False),
+        (f"Top earners (last {ROLLING_DAYS} days)", False),
         ("Community goals — everyone gets paid when we hit them", False),
-        ("Quest board", True),
-        ("📰 Live feed — today", True),
-        ("\u200b", True),
+        ("Quest board", False),
+        ("📰 Live feed — today", False),
         ("Your progress", False),
     ]
 
@@ -301,11 +298,9 @@ def test_embed_quest_board_summarizes_per_cadence():
     )
     board = next(f.value for f in embed.fields if f.name == "Quest board")
     assert board is not None
-    assert "`Daily  ` **3** on your board, drawn from 14" in board
-    assert "5–40 each" in board
+    assert "`Daily  ` `3 yours · pool 14` 🪙 5–40 each" in board
     # A pool smaller than the configured size clamps to the pool.
-    assert "`Weekly ` **1** on your board, drawn from 1" in board
-    assert "30 each" in board
+    assert "`Weekly ` `1 yours · pool 1 ` 🪙 30 each" in board
     # A cadence sized 0 is off for this guild — no line at all.
     assert "Monthly" not in board
     # No individual titles leak into the summary.
@@ -324,7 +319,7 @@ def test_embed_quest_board_lists_event_quests():
     )
     board = next(f.value for f in embed.fields if f.name == "Quest board")
     assert board is not None
-    assert "**Secret Santa** — " in board and "+⭐10xp" in board
+    assert "`Anytime` `Secret Santa    ` 🪙 25 +⭐10xp" in board
     assert "Chatter" not in board
 
 
@@ -608,18 +603,20 @@ def test_embed_pulse_deltas_feed_and_clocks():
     fields = _fields(embed)
 
     pulse = fields["📡 Today's pulse"]
-    assert "**70**" in pulse and "**3** quests" in pulse
-    assert "**2** members earning" in pulse
-    assert f"dailies reset <t:{int(NOW + 3600)}:R>" in pulse
-    assert f"new weeklies <t:{int(NOW + 7200)}:R>" in pulse
+    assert "`Paid out today " in pulse and "**70**" in pulse
+    assert "`Quests done" in pulse and "**3**" in pulse
+    assert "`Members earning`" in pulse and "**2**" in pulse
+    assert f"`Dailies reset  ` <t:{int(NOW + 3600)}:R>" in pulse
+    assert f"`New weeklies   ` <t:{int(NOW + 7200)}:R>" in pulse
 
     top = fields[f"Top earners (last {ROLLING_DAYS} days)"]
-    assert "**Alice** — 🪙 120 (+40 today)" in top
-    assert top.splitlines()[1].endswith("🪙 80")  # no suffix without earnings
+    # name and amount are fixed-width cells so the columns align
+    assert "🥇 `Alice` 🪙 `120` (+40 today)" in top
+    assert top.splitlines()[1] == "🥈 `Bob  ` 🪙 ` 80`"  # padded, no delta
 
     feed = fields["📰 Live feed — today"]
-    assert f"✅ **Say hi** ×3 · <t:{int(NOW - 60)}:R>" in feed
-    assert "**Bump us** · <t:" in feed and "Bump us** ×1" not in feed
+    assert f"✅ `Say hi ` ×3 · <t:{int(NOW - 60)}:R>" in feed
+    assert f"✅ `Bump us` ×1 · <t:{int(NOW - 600)}:R>" in feed
     assert "🎁 Full-board bonus paid ×1 today" in feed
 
 

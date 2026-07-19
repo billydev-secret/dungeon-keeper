@@ -678,11 +678,12 @@ the member owns and gift rentals where they are the beneficiary.
   aggregated per quest (title × count + latest relative timestamp, max 5
   lines, plus a full-board-bonus count; titles and counts only, never member
   names, per the 2026-07-18 ticker decision); and a blurb pointing members
-  at `/quests` + `/bank wallet` for their own numbers. Layout is a 2×2
-  grid on desktop — pulse | top earners, then quest board | live feed,
-  each row closed by a zero-width inline spacer — with community goals
-  and the self-service blurb full-width (bars need the room); mobile
-  clients stack all fields vertically, grid or not. Panel ids persist as
+  at `/quests` + `/bank wallet` for their own numbers. Sections stack
+  full-width; each body is a small table — fixed-width inline-code cells
+  align the columns (pulse label | value, earner name | amount, quest
+  cadence | description | payment, feed title | count | when) while
+  emoji, bold, and live `<t:…:R>` timestamps stay outside the backticks,
+  where Discord still renders them (code blocks would freeze both). Panel ids persist as
   `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` (guide-panel
   pattern: same-channel repost edits in place, another channel deletes +
   reposts). **Refresh is event-driven:** every economy credit
