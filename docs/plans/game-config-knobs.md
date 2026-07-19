@@ -1,6 +1,6 @@
 # Game config knobs
 
-**Status:** in progress · **Owner:** games/dashboard
+**Status:** done · **Owner:** games/dashboard
 
 ## Goal
 
