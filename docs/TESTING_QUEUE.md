@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: board add-ons — reroll, set bonus, spotlight, flip post  (hash stamped on merge)
+### Economy: board add-ons — reroll, set bonus, spotlight, flip post  (d8f18e4)
 
 - [ ] `/bank quests` shows the 🎲 reroll select when you have untouched
       board quests and today's reroll unspent; picking one confirms
