@@ -89,6 +89,20 @@ def changed_paths() -> list[str]:
     return sorted(set(tracked) | set(untracked))
 
 
+def new_paths() -> set[str]:
+    """Files that did not exist at HEAD: added-in-diff + untracked."""
+    added = _git("diff", "--name-only", "--diff-filter=A", "HEAD")
+    untracked = _git("ls-files", "--others", "--exclude-standard")
+    return set(added) | set(untracked)
+
+
+# New source at these layers must ship with a mapped test — an unmapped *new*
+# file here means untested logic entering the tree, which the scoped gate
+# blocks (existing-file drift is left to CI/nightly). Cogs/views/embeds are
+# intentionally excluded: they're glue, tested through the logic layer.
+REQUIRE_TEST_SUFFIXES = ("_logic.py", "_service.py")
+
+
 def _tokens_for(path: str) -> set[str]:
     """Feature tokens a source file maps onto, matched against test filenames."""
     parts = path.split("/")
@@ -192,6 +206,25 @@ def main() -> None:
             print("── scope: unmapped source (covered only by CI/nightly) " + "─" * 6)
             for f in unmapped:
                 print(f"   ? {f}")
+        # Hard-fail on NEW logic/service files with no mapped test: regression
+        # coverage must land in the same commit as the feature. Escape hatch:
+        # `git commit --no-verify` (for a genuine false positive — e.g. a new
+        # module exercised only through an existing test under another name).
+        new = new_paths()
+        missing = sorted(
+            f for f in unmapped if f in new and f.endswith(REQUIRE_TEST_SUFFIXES)
+        )
+        if missing:
+            print("── scope: NEW logic/service file(s) with no test " + "─" * 12, file=sys.stderr)
+            for f in missing:
+                print(f"   ✗ {f}", file=sys.stderr)
+            print(
+                "GATE FAILED: add a mapped test (e.g. tests/test_<feature>_logic.py) "
+                "covering the happy path and each guard, or bypass with "
+                "`git commit --no-verify` if covered elsewhere.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         if run_full:
             print("── scope: shared file changed → running FULL suite " + "─" * 10)
             run(py, "pytest", "-m", "pytest", *pytest_args)

@@ -52,6 +52,22 @@ SQLite-backed. Tests in `tests/`.
 - When touching a module with open findings in `docs/reviews/`, mention them
   and offer to fold fixes in — don't expand scope uninvited.
 
+## Regression tests (ship with the feature, not after)
+
+- **Every new feature and every bug fix lands with tests in the same commit.**
+  The unit under test is the logic/service layer — put behavior in
+  `*_logic.py` / `*_service.py` and test it there; cogs/views/embeds are glue,
+  exercised through the logic layer, not re-tested against Discord mocks.
+- **What to cover** (this is the standard, not a line %): the happy path; **every
+  guard/branch**, especially safety gates (NSFW `is_nsfw()`, opt-in, role gates)
+  — a passing test *is* the enforcement CLAUDE.md's safety rule demands; and for
+  a bug fix, **a test that fails before the fix** (write it first, watch it fail).
+- **Coverage target is on the patch, not the repo.** New `*_logic.py` /
+  `*_service.py` code should land ~80% of its new lines exercised. Don't chase
+  whole-repo line %; don't lower `fail_under` in pyproject.toml — raise it when a
+  feature adds headroom. The scoped gate below **hard-fails** if a *new*
+  `*_logic.py` / `*_service.py` file has no mapped test.
+
 ## Gates (before every commit)
 
 - The **pre-commit hook** runs `python scripts/gate.py --scoped` automatically
@@ -59,7 +75,10 @@ SQLite-backed. Tests in `tests/`.
   diff (git diff vs HEAD + untracked). Touching a broadly-shared file (`core/`,
   `models/`, `migrations/`, deps, any `conftest.py`, `gate.py`) falls back to
   the full suite, so those commits pause longer; changed source with no
-  matching test prints "unmapped (CI/nightly covers it)". `git commit
+  matching test prints "unmapped (CI/nightly covers it)". A **new**
+  `*_logic.py`/`*_service.py` file with no mapped test is a hard failure, not a
+  warning (add `tests/test_<feature>_logic.py`, or `--no-verify` if it's
+  genuinely covered by an existing test under another name). `git commit
   --no-verify` bypasses the hook.
 - `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
   single test). Full-suite green is required before a **push to origin**, but
