@@ -747,15 +747,17 @@ async def test_notify_member_require_role_drops_non_holder_silently(db):
     channel.send.assert_not_called()
 
 
-async def test_notify_member_require_role_inert_when_no_role_configured(db):
-    """With no game role configured the gate is inert — everyone is delivered."""
+async def test_notify_member_require_role_drops_all_when_no_role_configured(db):
+    """With no game role configured, nobody has opted in — dropped silently."""
     member = _fake_member(role_ids=())
-    bot = _fake_bot(guild=_fake_guild(member=member))
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
     delivered = await notify_member(
         bot, db, GUILD, USER, content="hi", require_game_role=True
     )
     assert delivered is True
-    member.send.assert_awaited_once_with(content="hi")
+    member.send.assert_not_called()
+    channel.send.assert_not_called()
 
 
 # ── transfers ─────────────────────────────────────────────────────────

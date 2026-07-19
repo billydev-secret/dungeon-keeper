@@ -676,11 +676,12 @@ async def notify_member(
     delivered. Returns False only when both the DM and the bank-channel
     fallback fail.
 
-    ``require_game_role`` gates the notice on the opt-in economy role: when a
-    ``game_role_id`` is configured, a member without it is dropped silently
-    (returns True, like a mute) so recurring engagement notices — streaks,
-    milestones — only reach players who opted in. With no role configured the
-    gate is inert. Leave it False for transactional notices (e.g. rental
+    ``require_game_role`` gates the notice on the opt-in economy role: a
+    member without it is dropped silently (returns True, like a mute) so
+    recurring engagement notices — streaks, milestones — only reach players
+    who opted in. With no ``game_role_id`` configured, nobody has opted in
+    yet, so the gate defaults to dropping everyone rather than notifying the
+    whole guild. Leave it False for transactional notices (e.g. rental
     billing) that target a member by their prior spend, not by opt-in.
     """
     import discord  # local import to keep this module import-light for tests
@@ -701,9 +702,11 @@ async def notify_member(
     guild = bot.get_guild(guild_id)
     member = guild.get_member(user_id) if guild else None
 
-    if require_game_role and settings.game_role_id:
-        if member is None or not any(
-            r.id == settings.game_role_id for r in member.roles
+    if require_game_role:
+        if (
+            not settings.game_role_id
+            or member is None
+            or not any(r.id == settings.game_role_id for r in member.roles)
         ):
             return True
 
