@@ -462,16 +462,24 @@ fragments mid-period.
 
 **Board add-ons (stage 5 of the quest-variety plan, migration 084):**
 
-- **Daily free reroll** — one per member per guild-local day
-  (`econ_rerolls`), via a 🎲 select on `/bank quests`. Swaps one *untouched*
+- **Board reroll** — one **free** per member per guild-local day
+  (`econ_rerolls`), then up to `EconSettings.quest_reroll_daily_cap`
+  (default 3) more at `price_quest_reroll` (default 10) each, ledger kind
+  `quest_reroll`, counted by `econ_rerolls.paid_count` (migration 089).
+  The cap is the point: unlimited paid rerolls turn a "this quest doesn't
+  fit how I use the server" escape hatch into a shopping trip for the
+  cheapest quests. Either setting at 0 disables the paid tier and leaves
+  the free reroll intact — the free one is never taken away. Offered via a
+  🎲 select on `/bank quests` that names the price. Swaps one *untouched*
   board quest (no claim, no counted progress this period) for the first
   pool quest in the member's own shuffle order that isn't on their board,
   **preferring a different trigger kind**. Persisted as an
   `econ_board_overrides` row keyed by the draw's `period_idx` and applied
   on top of the pure draw in `assigned_board_ids` (a same-period re-reroll
   would update `to_quest_id` in place, so application never chains; the
-  override dies with the period). The reroll burns *after* validation —
-  a refused reroll costs nothing.
+  override dies with the period). The reroll spends *after* validation —
+  a refused reroll costs neither the free allowance nor a coin, and a
+  failed debit leaves the board untouched.
 - **Clear-the-board set bonus** — completing every quest on the personal
   daily (or weekly) board in one period pays
   `EconSettings.quest_set_bonus_daily` / `_weekly` (**default 0 = off** —

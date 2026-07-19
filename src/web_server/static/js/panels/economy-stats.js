@@ -13,6 +13,7 @@ const PERK_LABELS = {
   price_gift_color: "Gift color",
   price_text_room: "Text room",
   price_voice_room: "Voice room",
+  price_quest_reroll: "Quest reroll",
 };
 
 const FAUCET_LABELS = {

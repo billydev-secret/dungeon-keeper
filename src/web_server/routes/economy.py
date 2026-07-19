@@ -90,6 +90,8 @@ class EconomyConfigUpdate(BaseModel):
     price_text_room: int | None = Field(default=None, ge=0)
     price_voice_room: int | None = Field(default=None, ge=0)
     price_gift_color: int | None = Field(default=None, ge=0)
+    price_quest_reroll: int | None = Field(default=None, ge=0)
+    quest_reroll_daily_cap: int | None = Field(default=None, ge=0)
 
 
 @router.get("/economy/config")

@@ -33,6 +33,8 @@ from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
+    apply_debit,
+    get_balance,
     load_econ_settings,
 )
 
@@ -530,16 +532,19 @@ def reroll_board_slot(
     user_id: int,
     quest_id: int,
     local_day: str,
-) -> sqlite3.Row:
+) -> tuple[sqlite3.Row, int]:
     """Swap one personal-board quest for a different pool quest (stage 5).
 
-    One free reroll per member per guild-local day, across all cadences.
-    The slot must be untouched this period (no claim, no counted progress).
-    The replacement is the first pool quest in the member's own shuffle
-    order that isn't on their board, preferring a **different trigger
-    kind** — the reroll exists for "this quest doesn't fit how I use the
-    server", so same-kind swaps are the last resort. Returns the new quest
-    row; ValueError with a member-facing message otherwise.
+    One free reroll per member per guild-local day, across all cadences,
+    then up to ``quest_reroll_daily_cap`` more at ``price_quest_reroll``
+    each. The slot must be untouched this period (no claim, no counted
+    progress). The replacement is the first pool quest in the member's own
+    shuffle order that isn't on their board, preferring a **different
+    trigger kind** — the reroll exists for "this quest doesn't fit how I use
+    the server", so same-kind swaps are the last resort.
+
+    Returns ``(new_quest_row, cost)`` where cost is 0 for the free reroll;
+    raises ValueError with a member-facing message otherwise.
     """
     quest = get_quest(conn, guild_id, quest_id)
     if quest is None or not quest["active"]:
@@ -586,14 +591,17 @@ def reroll_board_slot(
     ]
     new_id = (different or candidates)[0]
 
-    # Burn the daily reroll LAST, so validation failures never consume it.
+    # Spend the reroll LAST, so validation failures never consume the free
+    # allowance or charge the wallet. Free first: the row's existence is the
+    # "free one is gone" flag, so a successful INSERT *is* the free reroll.
+    cost = 0
     cur = conn.execute(
         "INSERT OR IGNORE INTO econ_rerolls (guild_id, user_id, local_day) "
         "VALUES (?, ?, ?)",
         (guild_id, user_id, local_day),
     )
     if (cur.rowcount or 0) == 0:
-        raise ValueError("You've already used today's free reroll.")
+        cost = _charge_paid_reroll(conn, settings, guild_id, user_id, local_day)
 
     # If the outgoing quest was itself a replacement, update that override
     # in place — application then never has to chain from→to→to.
@@ -612,7 +620,61 @@ def reroll_board_slot(
         )
     new_quest = get_quest(conn, guild_id, new_id)
     assert new_quest is not None
-    return new_quest
+    return new_quest, cost
+
+
+def _paid_rerolls_today(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, local_day: str
+) -> int:
+    row = conn.execute(
+        "SELECT paid_count FROM econ_rerolls WHERE guild_id = ? AND user_id = ? "
+        "AND local_day = ?",
+        (guild_id, user_id, local_day),
+    ).fetchone()
+    return int(row["paid_count"]) if row is not None else 0
+
+
+def _charge_paid_reroll(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    local_day: str,
+) -> int:
+    """Debit one paid reroll and count it, or raise a member-facing ValueError.
+
+    Only reached once the free reroll is gone. Every failure raises before any
+    write, so a capped-out or broke member loses nothing.
+    """
+    price = int(settings.price_quest_reroll)
+    cap = int(settings.quest_reroll_daily_cap)
+    if price < 1 or cap < 1:
+        raise ValueError("You've already used today's free reroll.")
+    used = _paid_rerolls_today(conn, guild_id, user_id, local_day)
+    if used >= cap:
+        raise ValueError(
+            f"You've used today's free reroll and all {cap} paid ones — "
+            "your board refreshes tomorrow."
+        )
+    unit = settings.currency_plural or "coins"
+    if not apply_debit(
+        conn,
+        guild_id,
+        user_id,
+        price,
+        "quest_reroll",
+        meta={"local_day": local_day},
+    ):
+        have = get_balance(conn, guild_id, user_id)
+        raise ValueError(
+            f"Another reroll costs {price} {unit} — you have {have}."
+        )
+    conn.execute(
+        "UPDATE econ_rerolls SET paid_count = paid_count + 1 "
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+        (guild_id, user_id, local_day),
+    )
+    return price
 
 
 def reroll_available(
@@ -625,6 +687,30 @@ def reroll_available(
         (guild_id, user_id, local_day),
     ).fetchone()
     return row is None
+
+
+def reroll_quote(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    local_day: str,
+) -> int | None:
+    """What the member's next reroll would cost: 0 free, >0 paid, None if none left.
+
+    Affordability is deliberately *not* checked here — the shop tells you the
+    price and lets you find out you're short, rather than hiding the option
+    and leaving you wondering where the reroll went.
+    """
+    if reroll_available(conn, guild_id, user_id, local_day):
+        return 0
+    price = int(settings.price_quest_reroll)
+    cap = int(settings.quest_reroll_daily_cap)
+    if price < 1 or cap < 1:
+        return None
+    if _paid_rerolls_today(conn, guild_id, user_id, local_day) >= cap:
+        return None
+    return price
 
 
 def spotlight_kind(

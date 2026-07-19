@@ -80,6 +80,13 @@ class EconSettings:
     # guild is seeded 10/25 by scripts/seed_quest_variety.py).
     quest_set_bonus_daily: int = 0
     quest_set_bonus_weekly: int = 0
+    # Paid board rerolls, bought after the one free reroll each guild-local
+    # day. The cap is the point: unlimited paid rerolls let a wealthy member
+    # cycle the board hunting for the cheapest quests, which turns a "this
+    # one doesn't fit how I use the server" escape hatch into a shopping
+    # trip. Either value at 0 disables paid rerolls (the free one stays).
+    price_quest_reroll: int = 10
+    quest_reroll_daily_cap: int = 3
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75

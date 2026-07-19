@@ -16,6 +16,19 @@ const PRICE_FIELDS = [
   ["price_gift_color", "Gift color", {}],
 ];
 
+// One-shot buys rather than weekly rentals — cheap enough to be an impulse,
+// which is the tier the rental ladder doesn't reach. Saved by the same form.
+const CONSUMABLE_FIELDS = [
+  ["price_quest_reroll", "Quest reroll", {
+    hint: "Charged per reroll after the free daily one. 0 disables paid rerolls (the free one stays).",
+  }],
+  ["quest_reroll_daily_cap", "Paid rerolls / day", {
+    hint: "How many paid rerolls a member can buy per day, on top of the free one. 0 disables paid rerolls.",
+  }],
+];
+
+const ALL_NUM_FIELDS = [...PRICE_FIELDS, ...CONSUMABLE_FIELDS];
+
 function numField(key, label, { hint } = {}, pricing) {
   const hintHtml = hint ? `<div class="field-hint">${esc(hint)}</div>` : "";
   const suggested = pricing && pricing.hints ? pricing.hints[key] : null;
@@ -96,6 +109,10 @@ function render(container, cfg, pricing, icons) {
         <div class="field-row" style="flex-wrap:wrap;">
           ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
+        <div class="section-label" style="margin-top:16px;">Consumables</div>
+        <div class="field-row" style="flex-wrap:wrap;">
+          ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+        </div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
           <button type="submit" class="btn btn-primary">Save prices</button>
           <span data-price-status></span>
@@ -147,13 +164,13 @@ function render(container, cfg, pricing, icons) {
 function wirePrices(container, cfg) {
   const form = container.querySelector("[data-price-form]");
   const status = form.querySelector("[data-price-status]");
-  for (const [key] of PRICE_FIELDS) {
+  for (const [key] of ALL_NUM_FIELDS) {
     form.querySelector(`[name=${key}]`).value = cfg[key];
   }
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const payload = {};
-    for (const [key] of PRICE_FIELDS) {
+    for (const [key] of ALL_NUM_FIELDS) {
       payload[key] = parseInt(form.querySelector(`[name=${key}]`).value, 10);
     }
     try {

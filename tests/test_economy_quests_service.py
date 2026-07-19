@@ -57,6 +57,7 @@ from bot_modules.services.economy_quests_service import (
 )
 from bot_modules.services.economy_service import (
     EconSettings,
+    apply_credit,
     get_balance,
     save_econ_settings,
 )
@@ -1906,7 +1907,10 @@ def test_reroll_swaps_slot_and_respects_daily_limit(db):
         victim = sorted(board)[0]
         old_kind = get_quest(conn, GUILD, victim)["trigger_kind"]
         assert reroll_available(conn, GUILD, USER, day)
-        new_quest = reroll_board_slot(conn, SETTINGS, GUILD, USER, victim, day)
+        new_quest, cost = reroll_board_slot(
+            conn, SETTINGS, GUILD, USER, victim, day
+        )
+        assert cost == 0  # the first one each day is free
         assert str(new_quest["trigger_kind"]) != str(old_kind)  # prefers new kind
         after = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
         assert victim not in after and int(new_quest["id"]) in after
@@ -1917,9 +1921,9 @@ def test_reroll_swaps_slot_and_respects_daily_limit(db):
             local_day=day, occurrence="x", booster=False,
         )
         assert victim not in [int(q["id"]) for q, _ in fired]
-        # …and the free reroll is spent.
+        # …and the free reroll is spent, so the next one wants paying for.
         assert not reroll_available(conn, GUILD, USER, day)
-        with pytest.raises(ValueError, match="already used"):
+        with pytest.raises(ValueError, match="costs 10"):
             reroll_board_slot(
                 conn, SETTINGS, GUILD, USER, sorted(after)[0], day
             )
@@ -1954,7 +1958,7 @@ def test_reroll_override_expires_with_the_period(db):
         day = "2026-07-14"
         board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
         victim = sorted(board)[0]
-        reroll_board_slot(conn, SETTINGS, GUILD, USER, victim, day)
+        reroll_board_slot(conn, SETTINGS, GUILD, USER, victim, day)[0]
         # Tomorrow's board is a fresh pure draw — the override is scoped to
         # its period_idx and silently irrelevant.
         tomorrow = assigned_board_ids(
@@ -1964,6 +1968,157 @@ def test_reroll_override_expires_with_the_period(db):
             quest_rules_assigned(conn, GUILD, USER, "daily", "2026-07-15")
         )
         assert tomorrow == pure
+
+
+def _fund(conn, amount, user_id=USER):
+    apply_credit(conn, GUILD, user_id, amount, "grant", actor_id=MANAGER)
+
+
+def test_paid_reroll_charges_after_the_free_one(db):
+    from bot_modules.services.economy_quests_service import (
+        reroll_board_slot,
+        reroll_quote,
+    )
+
+    with open_db(db) as conn:
+        _reroll_pool(conn, n_kinds=("whisper", "quote", "ama_ask", "confession",
+                                    "bump", "quoted"))
+        day = "2026-07-14"
+        _fund(conn, 100)
+        assert reroll_quote(conn, SETTINGS, GUILD, USER, day) == 0
+
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        _, cost = reroll_board_slot(conn, SETTINGS, GUILD, USER, sorted(board)[0], day)
+        assert cost == 0
+        assert get_balance(conn, GUILD, USER) == 100  # free one costs nothing
+
+        # Second reroll of the day is priced, and actually debits.
+        assert reroll_quote(conn, SETTINGS, GUILD, USER, day) == 10
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        _, cost = reroll_board_slot(conn, SETTINGS, GUILD, USER, sorted(board)[0], day)
+        assert cost == 10
+        assert get_balance(conn, GUILD, USER) == 90
+        row = conn.execute(
+            "SELECT paid_count FROM econ_rerolls WHERE guild_id = ? AND user_id = ? "
+            "AND local_day = ?",
+            (GUILD, USER, day),
+        ).fetchone()
+        assert int(row["paid_count"]) == 1
+        # It lands in the ledger under its own kind, so the register can label it.
+        kinds = [
+            r["kind"] for r in conn.execute(
+                "SELECT kind FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+                "AND amount < 0", (GUILD, USER),
+            )
+        ]
+        assert kinds == ["quest_reroll"]
+
+
+def test_paid_reroll_stops_at_the_daily_cap(db):
+    from dataclasses import replace
+
+    from bot_modules.services.economy_quests_service import (
+        reroll_board_slot,
+        reroll_quote,
+    )
+
+    settings = replace(SETTINGS, quest_reroll_daily_cap=1, price_quest_reroll=10)
+    with open_db(db) as conn:
+        _reroll_pool(conn, n_kinds=("whisper", "quote", "ama_ask", "confession",
+                                    "bump", "quoted"))
+        day = "2026-07-14"
+        _fund(conn, 100)
+        for _ in range(2):  # the free one, then the single paid one
+            board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+            reroll_board_slot(conn, settings, GUILD, USER, sorted(board)[0], day)
+        assert get_balance(conn, GUILD, USER) == 90
+
+        # Capped out: the option disappears and the call refuses, despite funds.
+        assert reroll_quote(conn, settings, GUILD, USER, day) is None
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+        with pytest.raises(ValueError, match="all 1 paid ones"):
+            reroll_board_slot(conn, settings, GUILD, USER, sorted(board)[0], day)
+        assert get_balance(conn, GUILD, USER) == 90  # nothing burned on refusal
+        assert assigned_board_ids(conn, GUILD, USER, "daily", day, settings) == board
+
+
+def test_paid_reroll_short_on_funds_changes_nothing(db):
+    from bot_modules.services.economy_quests_service import reroll_board_slot
+
+    with open_db(db) as conn:
+        _reroll_pool(conn, n_kinds=("whisper", "quote", "ama_ask", "confession"))
+        day = "2026-07-14"
+        _fund(conn, 4)  # less than the 10-coin price
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        reroll_board_slot(conn, SETTINGS, GUILD, USER, sorted(board)[0], day)
+        after_free = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+
+        with pytest.raises(ValueError, match="you have 4"):
+            reroll_board_slot(
+                conn, SETTINGS, GUILD, USER, sorted(after_free)[0], day
+            )
+        # No debit, no swap, no paid_count bump.
+        assert get_balance(conn, GUILD, USER) == 4
+        assert assigned_board_ids(
+            conn, GUILD, USER, "daily", day, SETTINGS
+        ) == after_free
+        row = conn.execute(
+            "SELECT paid_count FROM econ_rerolls WHERE guild_id = ? AND user_id = ? "
+            "AND local_day = ?", (GUILD, USER, day),
+        ).fetchone()
+        assert int(row["paid_count"]) == 0
+
+
+def test_paid_rerolls_disabled_by_zero_price_or_cap(db):
+    from dataclasses import replace
+
+    from bot_modules.services.economy_quests_service import (
+        reroll_board_slot,
+        reroll_quote,
+    )
+
+    for settings in (
+        replace(SETTINGS, price_quest_reroll=0),
+        replace(SETTINGS, quest_reroll_daily_cap=0),
+    ):
+        with open_db(db) as conn:
+            conn.execute("DELETE FROM econ_rerolls")
+            conn.execute("DELETE FROM econ_board_overrides")
+            _reroll_pool(conn, n_kinds=("whisper", "quote", "ama_ask", "confession"))
+            day = "2026-07-14"
+            _fund(conn, 500)
+            # The free reroll still works — disabling the paid tier never
+            # takes away what members already had.
+            board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+            _, cost = reroll_board_slot(
+                conn, settings, GUILD, USER, sorted(board)[0], day
+            )
+            assert cost == 0
+            assert reroll_quote(conn, settings, GUILD, USER, day) is None
+            board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+            with pytest.raises(ValueError, match="already used today's free"):
+                reroll_board_slot(conn, settings, GUILD, USER, sorted(board)[0], day)
+
+
+def test_reroll_validation_failure_never_charges(db):
+    from bot_modules.services.economy_quests_service import reroll_board_slot
+
+    with open_db(db) as conn:
+        ids = _reroll_pool(conn)
+        day = "2026-07-14"
+        _fund(conn, 100)
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        # Burn the free one so the next attempt would be a paid one…
+        reroll_board_slot(conn, SETTINGS, GUILD, USER, sorted(board)[0], day)
+        # …then fail validation. The debit sits behind validation, so this
+        # must not touch the wallet.
+        off_board = next(
+            q for q in ids
+            if q not in assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        )
+        with pytest.raises(ValueError, match="isn't on your board"):
+            reroll_board_slot(conn, SETTINGS, GUILD, USER, off_board, day)
+        assert get_balance(conn, GUILD, USER) == 100
 
 
 def quest_rules_assigned(conn, guild_id, user_id, qtype, day):

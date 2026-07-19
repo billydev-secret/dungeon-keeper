@@ -60,7 +60,7 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
     get_progress,
     list_trigger_quests,
-    reroll_available,
+    reroll_quote,
     resolve_member_target,
     source_enabled,
     spotlight_kind,
@@ -1968,6 +1968,7 @@ class EconomyCog(commands.Cog):
             "view": QuestClaimView(
                 self.ctx, settings, guild, claimable,
                 rerollable=rerollable if show_reroll else None,
+                reroll_cost=board_meta.get("reroll_cost"),
                 local_day=str(board_meta.get("local_day") or ""),
                 detailable=quests_state,
                 accent=accent,
@@ -2078,10 +2079,14 @@ class EconomyCog(commands.Cog):
                         entry["state"] = "pending"
                 out.append(entry)
             # Reroll offer: board quests untouched this period (no claim, no
-            # counted progress) — one free swap per guild-local day.
+            # counted progress). One free swap per guild-local day, then paid
+            # ones up to the daily cap — `reroll_cost` is 0/price/None, and
+            # None is the only state that hides the select.
+            cost = reroll_quote(conn, settings, guild_id, user_id, day)
             meta = {
                 "local_day": day,
-                "reroll_ok": reroll_available(conn, guild_id, user_id, day),
+                "reroll_cost": cost,
+                "reroll_ok": cost is not None,
                 "rerollable": [
                     {"id": q["id"], "title": q["title"], "qtype": q["qtype"]}
                     for q in out

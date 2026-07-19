@@ -47,6 +47,7 @@ PRICE_FIELDS: tuple[str, ...] = (
     "price_gift_color",
     "price_text_room",
     "price_voice_room",
+    "price_quest_reroll",
 )
 
 
