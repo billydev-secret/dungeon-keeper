@@ -134,6 +134,9 @@ function renderSettings(container, overview) {
       <label>Ping cooldown (minutes)
         <input data-f="ping_cooldown_minutes" type="number" min="0" max="1440" value="${cfg.ping_cooldown_minutes}">
       </label>
+      <label title="How long the learned per-channel lull-timing cache is trusted before recomputing from raw history.">Rhythm cache staleness (hours)
+        <input data-f="rhythm_max_age_hours" type="number" min="0.25" max="168" step="0.25" value="${(cfg.rhythm_max_age_seconds / 3600).toFixed(2)}">
+      </label>
       <label>Flourish line
         <select data-f="flourish_enabled"><option value="1" ${cfg.flourish_enabled ? "selected" : ""}>on ("stirring the coals…")</option><option value="0" ${cfg.flourish_enabled ? "" : "selected"}>off (bone-dry)</option></select>
       </label>
@@ -157,6 +160,7 @@ function renderSettings(container, overview) {
       guild_gap_minutes: Number(get("guild_gap_minutes")),
       ping_max_per_day: Number(get("ping_max_per_day")),
       ping_cooldown_minutes: Number(get("ping_cooldown_minutes")),
+      rhythm_max_age_seconds: Number(get("rhythm_max_age_hours")) * 3600,
       flourish_enabled: get("flourish_enabled") === "1",
     };
     const status = container.querySelector("[data-settings-status]");

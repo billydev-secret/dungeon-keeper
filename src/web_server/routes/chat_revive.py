@@ -67,6 +67,7 @@ class GuildConfigBody(BaseModel):
     flourish_enabled: bool = True
     ping_max_per_day: int = Field(3, ge=1, le=10)
     ping_cooldown_minutes: int = Field(60, ge=0, le=1440)
+    rhythm_max_age_seconds: float = Field(21600.0, ge=60.0, le=604800.0)
 
 
 class ChannelBody(BaseModel):
@@ -181,6 +182,7 @@ async def put_config(
                 flourish_enabled=body.flourish_enabled,
                 ping_max_per_day=body.ping_max_per_day,
                 ping_cooldown_minutes=body.ping_cooldown_minutes,
+                rhythm_max_age_seconds=body.rhythm_max_age_seconds,
             )
             save_guild_config(conn, cfg)
             seeded = seed_starter_pack(conn, guild_id, now) if body.enabled else 0
