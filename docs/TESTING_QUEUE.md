@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: dynamic personal targets on band quests  (hash stamped on merge)
+### Economy: dynamic personal targets on band quests  (f6328d1)
 
 Needs a counted quest with a target BAND (min/max, not fixed count) — the
 seeded library is all fixed targets, so band up one of the counted quests
