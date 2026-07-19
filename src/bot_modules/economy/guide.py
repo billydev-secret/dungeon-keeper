@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.economy.leaderboard import _pad
+
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
 
@@ -31,6 +33,7 @@ def build_guide_embed(
             f"Being active here earns you **{plural}**, which you can spend on "
             "role perks and gifts. Check your balance and recent activity any "
             "time with `/bank wallet` (only you see it)."
+            "\n\u200b"
         ),
         color=color,
     )
@@ -43,59 +46,62 @@ def build_guide_embed(
     # mention; this token is the only way to point at it.
     embed.add_field(
         name="Joining",
-        value="Opt in any time from <id:customize> to join the game economy.",
+        value=(
+            "Opt in any time from <id:customize> to join the game economy."
+            "\n\u200b"
+        ),
         inline=False,
     )
 
-    earn_lines = [
-        (
-            f"**Show up daily** — your first message of the day pays "
-            f"{emoji} {settings.login_text_base}, or {emoji} "
-            f"{settings.login_voice_base} if you hang out in voice for 5 "
-            f"minutes first. Streaks add +1 per day (up to "
-            f"+{settings.streak_bonus_cap}), with bonuses at day 7, 30 and 100."
-        ),
-        (
-            f"**Chat & hang out** — everyday activity earns XP, and each "
-            f"night your day's XP converts into {plural} automatically."
-        ),
-        (
-            "**Quests** — `/bank quests` shows the current daily, weekly and "
-            "community goals and lets you claim your rewards."
-        ),
-        (
-            f"**Games & QOTD** — playing server games pays "
-            f"{emoji} {settings.reward_game_participation}, winning "
-            f"{emoji} {settings.reward_game_win}, and answering the question "
-            f"of the day {emoji} {settings.reward_qotd}."
-        ),
+    # What pays what, one aligned row each (same table treatment as the
+    # leaderboard panel: fixed-width code cells, payment outside them). The
+    # streak/booster fine print collapses into the footer.
+    earn_rows = [
+        ("First message of the day", f"{emoji} {settings.login_text_base}"),
+        ("…after 5 min in voice", f"{emoji} {settings.login_voice_base}"),
+        ("Play a server game", f"{emoji} {settings.reward_game_participation}"),
+        ("Win it", f"{emoji} {settings.reward_game_win}"),
+        ("Answer the QOTD", f"{emoji} {settings.reward_qotd}"),
     ]
-    if settings.booster_multiplier > 1:
-        earn_lines.append(
-            f"**Boosters** earn ×{settings.booster_multiplier:g} on everything."
-        )
-    embed.add_field(name="Earning", value="\n".join(earn_lines), inline=False)
+    width = max(len(label) for label, _ in earn_rows)
+    earn_lines = [
+        f"`{_pad(label, width)}` {value}" for label, value in earn_rows
+    ]
+    earn_lines.append(
+        f"Chatting earns XP all day — each night it converts into {plural} "
+        "automatically. `/bank quests` adds daily and weekly goals on top."
+    )
+    embed.add_field(
+        name="Earning",
+        value="\n".join(earn_lines) + "\n\u200b",
+        inline=False,
+    )
 
-    spend_lines = [
-        (
-            "`/bank shop` — rent perks for your own personal role (color, "
-            "name, gradient, icon), then style it from the shop's customise "
-            "buttons. Prices and renewal terms are shown in the shop."
-        ),
-        "`/bank gift` — treat a friend to a custom role color, on your tab.",
+    spend_rows = [
+        ("/bank shop", "rent perks for your personal role — color, name, "
+                       "gradient, icon (prices in the shop)"),
+        ("/bank gift", "treat a friend to a role color, on your tab"),
     ]
     if settings.transfers_enabled:
-        spend_lines.append(
-            f"`/bank pay` — send your {plural} straight to another member."
-        )
+        spend_rows.append(("/bank pay", f"send {plural} straight to a member"))
+    width = max(len(cmd) for cmd, _ in spend_rows)
+    spend_lines = [
+        f"`{_pad(cmd, width)}` {text}" for cmd, text in spend_rows
+    ]
     embed.add_field(name="Spending", value="\n".join(spend_lines), inline=False)
 
-    embed.set_footer(
-        text=(
-            "Rentals renew weekly — if your balance can't cover a renewal you "
-            "get a short grace period before the perk lapses."
+    footer_bits = [
+        f"Streaks add +1/day (up to +{settings.streak_bonus_cap}), with "
+        "bonuses at day 7, 30 and 100.",
+    ]
+    if settings.booster_multiplier > 1:
+        footer_bits.append(
+            f"Boosters earn ×{settings.booster_multiplier:g} on everything."
         )
+    footer_bits.append(
+        "Rentals renew weekly — a short grace period covers a missed renewal."
     )
+    embed.set_footer(text=" ".join(footer_bits))
     return embed
 
 

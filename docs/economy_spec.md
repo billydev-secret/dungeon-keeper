@@ -161,7 +161,13 @@ tolerant JSON parser (fenced-array / leading-prose / title-only fallbacks) live 
 parity with the Games Studio is a parking-lot item).
 
 ### 4.2 Member Flow
-- `/bank quests` + wallet page: active quests, progress, claim state.
+- `/bank quests` + wallet page: active quests, progress, claim state. The
+  embed is one line per quest — title cell | status glyph (✅ done, ⏳
+  sign-off, 🔶 claim below, ▸ n/target, ☐ to do) | payment — grouped by
+  cadence (Daily/Weekly/Monthly/Anytime/Community goals). Descriptions and
+  the how-it-completes explainers (`quest_views.QUEST_STATE_LABEL`) moved
+  behind an ℹ️ details select (`QuestDetailSelect`, always attached when
+  quests exist) that answers with a one-quest ephemeral embed.
 - **Claims are period-keyed.** A daily's period is the guild-local day (`YYYY-MM-DD`),
   a weekly's is the ISO week (`YYYY-Www`), community is `once`. Partial-unique indexes on
   `(quest_id, user_id, period)` permit at most one `pending` and one `paid` row per
@@ -657,8 +663,10 @@ the member owns and gift rentals where they are the beneficiary.
 - **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
   single branded "how it works" embed (a **Joining** field pointing members at the
   onboarding Channels & Roles screen via the `<id:customize>` mention to grab the
-  economy-game role, then earning streams with live rates, shop prices, and a
-  command crib sheet — all templated from `EconSettings`) into a channel. Panel ids
+  economy-game role, then an **Earning** table — aligned what-pays-what rows in
+  the leaderboard's fixed-width-cell style — and a **Spending** command table,
+  with streak/booster/rental fine print collapsed into the footer — all
+  templated from `EconSettings`) into a channel. Panel ids
   persist as `econ_guide_channel_id` / `econ_guide_message_id` (Voice Master
   panel pattern): re-running in the same channel edits the panel in place (use after
   re-pricing/re-branding); pointing at another channel deletes the old panel and

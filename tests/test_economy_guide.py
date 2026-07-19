@@ -35,16 +35,18 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert embed.color == discord.Color(0x123456)
     fields = {f.name: f.value or "" for f in embed.fields}
     earning = fields["Earning"]
-    assert "🪙 5" in earning and "🪙 15" in earning  # login bases
-    assert "+10" in earning  # streak cap
-    assert "×1.5" in earning  # booster line
+    # what-pays-what rows are aligned: label cell, payment outside
+    assert "`First message of the day` 🪙 5" in earning
+    assert "🪙 15" in earning  # voice-first login base
     assert "/bank quests" in earning
     spending = fields["Spending"]
     assert "/bank shop" in spending
     assert "color, name, gradient, icon" in spending  # perks named, not priced
-    assert "shown in the shop" in spending  # specifics deferred to the shop page
+    assert "prices in the shop" in spending  # specifics deferred to the shop
     assert "/bank pay" in spending
-    assert embed.footer.text and "grace" in embed.footer.text
+    # fine print (streak cap, booster, rental grace) collapses to the footer
+    footer = embed.footer.text or ""
+    assert "+10" in footer and "×1.5" in footer and "grace" in footer
 
 
 def test_guide_embed_points_at_channels_and_roles_optin():
@@ -80,8 +82,7 @@ def test_guide_embed_hides_pay_when_transfers_disabled():
 
 def test_guide_embed_hides_booster_line_without_bonus():
     embed = build_guide_embed(EconSettings(booster_multiplier=1.0))
-    earning = {f.name: f.value or "" for f in embed.fields}["Earning"]
-    assert "Boosters" not in earning
+    assert "Boosters" not in (embed.footer.text or "")
 
 
 # ── sticky re-stick predicate ────────────────────────────────────────────────

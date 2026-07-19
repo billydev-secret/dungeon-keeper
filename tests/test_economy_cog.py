@@ -534,12 +534,19 @@ async def test_quests_listing_state_matrix(ctx, db):
 
     kwargs = interaction.response.send_message.await_args.kwargs
     embed = kwargs["embed"]
-    by_title = {f.name: f.value for f in embed.fields}
-    assert any("Say hi" in n and "Ready to claim" in v for n, v in by_title.items())
-    assert any("Weekly grind" in n and "Completed" in v for n, v in by_title.items())
-    assert any("Sign me off" in n and "sign-off" in v.lower() for n, v in by_title.items())
-    assert any("Team goal" in n and "40" in v and "100" in v for n, v in by_title.items())
-    # Exactly one claimable (the daily) → select view attached.
+    groups = {f.name: f.value or "" for f in embed.fields}
+    # One line per quest, grouped by cadence: title cell | status | payment.
+    daily_lines = groups["Daily"]
+    assert "`Say hi" in daily_lines and "🔶 claim below" in daily_lines
+    weekly_lines = groups["Weekly"]
+    assert "`Weekly grind" in weekly_lines and "✅ done" in weekly_lines
+    assert "`Sign me off" in weekly_lines and "⏳ sign-off" in weekly_lines
+    community = groups["Community goals"]
+    assert "`Team goal" in community and "▸ 40/100" in community
+    # The descriptions/explainers moved behind the details select — the
+    # list never carries them.
+    assert all("Do the thing" not in v for v in groups.values())
+    # View always attaches when quests exist (details select at minimum).
     assert "view" in kwargs
     assert daily  # referenced
 

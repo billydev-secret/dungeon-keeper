@@ -25,6 +25,7 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.guide import build_guide_embed, should_restick_guide
 from bot_modules.economy.leaderboard import (
+    _pad,
     build_leaderboard_embed,
     collect_leaderboard_data,
     progress_bar,
@@ -209,31 +210,42 @@ def _unit(settings: EconSettings, amount: int) -> str:
     return settings.currency_name if abs(amount) == 1 else settings.currency_plural
 
 
-_QUEST_STATE_LABEL = {
-    "claimable": "✅ Ready to claim",
-    "pending": "⏳ Awaiting sign-off",
-    "done": "☑️ Completed this period",
-    "trigger": "🗣️ Completes automatically when you say its trigger phrase",
-    "photo_react": "📸 Completes automatically when your Photo Challenge post earns enough reactions",
-    "party_game": "🎲 Completes automatically when you finish a party game",
-    "duel": "⚔️ Completes automatically when you finish a 1v1 duel",
-    "risky_roll": "🎰 Completes automatically when you take a Risky Roll dare",
-    "guess": "🕵️ Completes automatically when you play a Guess Who round",
-    "voice_session": "🎙️ Completes automatically when you're active in voice chat",
-    "qotd_reply": "📣 Completes automatically when you answer the Question of the Day",
-    "starboard": "⭐ Completes automatically when a message of yours hits the starboard",
-    "invite": "📨 Completes automatically when someone you invited joins",
-    "boost": "🚀 Completes automatically when you boost the server",
-    "bio_set": "📇 Completes automatically when you set up your bio",
-    "birthday_set": "🎂 Completes automatically when you set your birthday",
-    "media_post": "🖼️ Completes automatically when you post an image",
-    "pen_pal": "💌 Completes automatically when you're matched with a Pen Pal",
-    "message_sent": "💬 Completes automatically as you chat",
-    "reply_sent": "↩️ Completes automatically when you reply to people",
-    "reaction_given": "👍 Completes automatically when you react to people's messages",
-    "game_win": "🏆 Completes automatically when you win a party game",
-    "duel_win": "🥇 Completes automatically when you win a duel",
-}
+# Group order + headings for the /bank quests table. The long per-state
+# explainer text lives in quest_views.QUEST_STATE_LABEL, shown by the
+# details select — the list itself stays one line per quest.
+_QUEST_GROUPS = (
+    ("daily", "Daily"),
+    ("weekly", "Weekly"),
+    ("monthly", "Monthly"),
+    ("event", "Anytime"),
+    ("community", "Community goals"),
+)
+
+
+def _quest_line_status(q: dict) -> str:
+    """The status column: one short glyph phrase, or n/target progress."""
+    state = str(q.get("state") or "")
+    if state == "community":
+        return f"▸ {int(q['current']):,}/{int(q['target']):,}"
+    if state == "done":
+        return "✅ done"
+    if state == "pending":
+        return "⏳ sign-off"
+    if state == "claimable":
+        return "🔶 claim below"
+    if q.get("progress_target"):
+        return f"▸ {int(q['progress_current']):,}/{int(q['progress_target']):,}"
+    return "☐ to do"
+
+
+def _quest_line_reward(q: dict, settings: EconSettings) -> str:
+    """The payment column: coins, optional XP, optional spotlight bolt."""
+    reward = f"{settings.currency_emoji} {int(q['reward']):,}"
+    if q.get("reward_xp"):
+        reward += f" +⭐{int(q['reward_xp']):,}xp"
+    if q.get("spotlight"):
+        reward += " ⚡"
+    return reward
 
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
@@ -1797,45 +1809,50 @@ class EconomyCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
+        # One line per quest — title | status | payment, grouped by cadence.
+        # Descriptions and the how-it-completes explainers live behind the
+        # details select, so the list stays scannable.
+        desc_bits = []
         if any(q.get("spotlight") for q in quests_state):
-            embed.description = (
-                "⚡ Spotlight quests pay **double** this week!"
-            )
+            desc_bits.append("⚡ Spotlight quests pay **double** this week!")
+        desc_bits.append(
+            "Pick a quest from the menu below for its full story."
+        )
+        embed.description = "\n".join(desc_bits) + "\n\u200b"
+
+        groups: dict[str, list[dict]] = {}
         for q in quests_state:
-            reward = int(q["reward"])
-            unit = _unit(settings, reward)
-            spot = "⚡ " if q.get("spotlight") else ""
-            header = f"{spot}{settings.currency_emoji} {q['title']}"
-            reward_line = f"**{reward:,}** {unit} · {q['qtype']}"
-            if q.get("reward_xp"):
-                reward_line = (
-                    f"**{reward:,}** {unit} + ⭐ {q['reward_xp']:,} XP · {q['qtype']}"
-                )
-            if q.get("spotlight"):
-                reward_line = f"{reward_line} · ⚡×2 this week"
-            lines = [reward_line]
-            if q.get("description"):
-                lines.append(str(q["description"]))
-            if q["state"] == "community":
-                lines.append(_progress_bar(q["current"], q["target"]))
-            else:
-                lines.append(_QUEST_STATE_LABEL.get(q["state"], ""))
-                if q.get("progress_target") and q["state"] not in ("done", "pending"):
-                    lines.append(
-                        _progress_bar(q["progress_current"], q["progress_target"])
-                    )
-            embed.add_field(name=header, value="\n".join(lines), inline=False)
+            groups.setdefault(str(q["qtype"]), []).append(q)
+        width = min(max(len(str(q["title"])) for q in quests_state), 22)
+        sections = [
+            (heading, groups[qtype])
+            for qtype, heading in _QUEST_GROUPS
+            if groups.get(qtype)
+        ]
+        for i, (heading, batch) in enumerate(sections):
+            lines = [
+                f"`{_pad(str(q['title']), width)}` {_quest_line_status(q)} · "
+                f"{_quest_line_reward(q, settings)}"
+                for q in batch
+            ]
+            if i < len(sections) - 1:  # breathing room above the next heading
+                lines.append("\u200b")
+            embed.add_field(name=heading, value="\n".join(lines), inline=False)
 
         claimable = [q for q in quests_state if q["state"] == "claimable"]
         rerollable = board_meta.get("rerollable") or []
         show_reroll = bool(board_meta.get("reroll_ok") and rerollable)
-        kwargs: dict = {"embed": embed, "ephemeral": True}
-        if claimable or show_reroll:
-            kwargs["view"] = QuestClaimView(
+        kwargs: dict = {
+            "embed": embed,
+            "ephemeral": True,
+            "view": QuestClaimView(
                 self.ctx, settings, guild, claimable,
                 rerollable=rerollable if show_reroll else None,
                 local_day=str(board_meta.get("local_day") or ""),
-            )
+                detailable=quests_state,
+                accent=accent,
+            ),
+        }
         await interaction.response.send_message(**kwargs)
 
     def _load_quests_state(

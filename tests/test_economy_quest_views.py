@@ -17,6 +17,7 @@ from bot_modules.economy.quest_views import (
     QuestClaimView,
     QuestDenyButton,
     QuestDenyModal,
+    QuestDetailSelect,
     QuestSignoffView,
     can_manage_economy,
 )
@@ -172,6 +173,76 @@ async def test_custom_id_roundtrip():
         "econ_claim:approve:99",
         "econ_claim:deny:99",
     }
+
+
+# ── /bank quests details select ───────────────────────────────────────────────
+
+
+def _detail_quest(**over) -> dict:
+    q = {
+        "id": 7,
+        "title": "Good Vibes",
+        "qtype": "daily",
+        "reward": 12,
+        "reward_xp": 5,
+        "description": "Spread some reactions today.",
+        "state": "reaction_given",
+        "progress_current": 2,
+        "progress_target": 10,
+        "spotlight": False,
+    }
+    q.update(over)
+    return q
+
+
+@pytest.mark.asyncio
+async def test_detail_select_shows_full_story(ctx, db):
+    _enable(db)
+    view = QuestClaimView(
+        ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
+        [], detailable=[_detail_quest()],
+    )
+    select = view.children[0]
+    assert isinstance(select, QuestDetailSelect)
+    select._values = ["7"]  # type: ignore[attr-defined]
+    interaction = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    embed = kwargs["embed"]
+    assert "Good Vibes" in (embed.title or "")
+    body = embed.description or ""
+    assert "**12**" in body and "5 XP" in body  # reward line
+    assert "Spread some reactions today." in body  # full description
+    assert "react to people's messages" in body  # how-it-completes explainer
+    assert "2/10" in body  # progress bar
+
+
+@pytest.mark.asyncio
+async def test_detail_select_community_and_stale(ctx, db):
+    _enable(db)
+    goal = _detail_quest(
+        id=8, title="Team goal", qtype="community", state="community",
+        current=40, target=100, reward_xp=0,
+    )
+    view = QuestClaimView(
+        ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
+        [], detailable=[goal],
+    )
+    select = view.children[0]
+    select._values = ["8"]  # type: ignore[attr-defined]
+    interaction = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction)
+    body = interaction.response.send_message.await_args.kwargs["embed"].description
+    assert "40/100" in body  # community bar, no claim-state line
+
+    # A value that left the board (post-reroll stale view) fails soft.
+    select._values = ["999"]  # type: ignore[attr-defined]
+    interaction2 = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction2)
+    msg = interaction2.response.send_message.await_args.args[0]
+    assert "no longer on your board" in msg
 
 
 # ── /bank quests claim select ─────────────────────────────────────────────────

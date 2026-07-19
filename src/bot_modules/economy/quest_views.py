@@ -35,6 +35,7 @@ import discord
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.leaderboard import progress_bar
 from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
@@ -58,6 +59,35 @@ log = logging.getLogger("dungeonkeeper.economy")
 
 MANAGE_DENIED_MSG = "You don't have permission to review quest claims."
 _CLAIM_VIEW_TIMEOUT = 180  # seconds; the ephemeral claim select is short-lived.
+
+# Member-facing explainer per quest state / trigger kind — shown in the
+# per-quest detail view (the /bank quests list itself stays one line per
+# quest; this is where the long form lives).
+QUEST_STATE_LABEL = {
+    "claimable": "✅ Ready to claim",
+    "pending": "⏳ Awaiting sign-off",
+    "done": "☑️ Completed this period",
+    "trigger": "🗣️ Completes automatically when you say its trigger phrase",
+    "photo_react": "📸 Completes automatically when your Photo Challenge post earns enough reactions",
+    "party_game": "🎲 Completes automatically when you finish a party game",
+    "duel": "⚔️ Completes automatically when you finish a 1v1 duel",
+    "risky_roll": "🎰 Completes automatically when you take a Risky Roll dare",
+    "guess": "🕵️ Completes automatically when you play a Guess Who round",
+    "voice_session": "🎙️ Completes automatically when you're active in voice chat",
+    "qotd_reply": "📣 Completes automatically when you answer the Question of the Day",
+    "starboard": "⭐ Completes automatically when a message of yours hits the starboard",
+    "invite": "📨 Completes automatically when someone you invited joins",
+    "boost": "🚀 Completes automatically when you boost the server",
+    "bio_set": "📇 Completes automatically when you set up your bio",
+    "birthday_set": "🎂 Completes automatically when you set your birthday",
+    "media_post": "🖼️ Completes automatically when you post an image",
+    "pen_pal": "💌 Completes automatically when you're matched with a Pen Pal",
+    "message_sent": "💬 Completes automatically as you chat",
+    "reply_sent": "↩️ Completes automatically when you reply to people",
+    "reaction_given": "👍 Completes automatically when you react to people's messages",
+    "game_win": "🏆 Completes automatically when you win a party game",
+    "duel_win": "🥇 Completes automatically when you win a duel",
+}
 _DENY_REASON_MAX = 300
 
 
@@ -565,6 +595,80 @@ async def post_signoff_card(
 # ── /bank quests claim select ─────────────────────────────────────────────────
 
 
+class QuestDetailSelect(discord.ui.Select):
+    """Ephemeral select showing one quest's full story on demand.
+
+    The /bank quests list is deliberately terse (one line per quest); this
+    select carries the long form — description, how it completes, progress —
+    without the list paying for it up front.
+    """
+
+    def __init__(
+        self,
+        settings: EconSettings,
+        quests: list[dict],
+        *,
+        accent: discord.Color | None = None,
+    ) -> None:
+        self.settings = settings
+        self.accent = accent
+        self._quests = {str(q["id"]): q for q in quests[:25]}
+        options = [
+            discord.SelectOption(
+                label=str(q["title"])[:100],
+                value=str(q["id"]),
+                description=str(q["qtype"])[:100],
+            )
+            for q in quests[:25]
+        ]
+        super().__init__(
+            placeholder="ℹ️ Quest details…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        q = self._quests.get(self.values[0])
+        if q is None:  # stale view after a reroll — just re-run /bank quests
+            await interaction.response.send_message(
+                "That quest is no longer on your board — re-run "
+                "`/bank quests`.",
+                ephemeral=True,
+            )
+            return
+        settings = self.settings
+        reward = int(q["reward"])
+        reward_line = f"**{reward:,}** {_unit(settings, reward)}"
+        if q.get("reward_xp"):
+            reward_line += f" + ⭐ {int(q['reward_xp']):,} XP"
+        reward_line += f" · {q['qtype']}"
+        if q.get("spotlight"):
+            reward_line += " · ⚡×2 this week"
+        lines = [reward_line]
+        if q.get("description"):
+            lines.append(str(q["description"]))
+        state = str(q.get("state") or "")
+        if state == "community":
+            lines.append(progress_bar(int(q["current"]), int(q["target"])))
+        else:
+            label = QUEST_STATE_LABEL.get(state, "")
+            if label:
+                lines.append(label)
+            if q.get("progress_target") and state not in ("done", "pending"):
+                lines.append(
+                    progress_bar(
+                        int(q["progress_current"]), int(q["progress_target"])
+                    )
+                )
+        embed = discord.Embed(
+            title=f"{settings.currency_emoji} {q['title']}",
+            description="\n".join(lines),
+            color=self.accent,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 class QuestClaimSelect(discord.ui.Select):
     """Ephemeral select of the caller's currently-claimable quests."""
 
@@ -748,8 +852,12 @@ class QuestClaimView(discord.ui.View):
         *,
         rerollable: list[dict] | None = None,
         local_day: str = "",
+        detailable: list[dict] | None = None,
+        accent: discord.Color | None = None,
     ) -> None:
         super().__init__(timeout=_CLAIM_VIEW_TIMEOUT)
+        if detailable:
+            self.add_item(QuestDetailSelect(settings, detailable, accent=accent))
         if claimable:
             self.add_item(QuestClaimSelect(ctx, settings, guild, claimable))
         if rerollable and local_day:
