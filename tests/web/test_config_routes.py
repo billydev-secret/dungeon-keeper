@@ -669,6 +669,15 @@ def test_update_birthday_rejects_empty_message(authed_client):
     assert resp.status_code == 400
 
 
+def test_get_config_includes_risky_section_defaults(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    r = resp.json()["risky"]
+    assert r["ping_role_id"] == "0"
+    assert r["min_game_seconds"] == 0
+    assert r["max_games_per_channel"] == 10
+
+
 # ── /config/risky — in-memory state must be updated ──────────────────
 
 
@@ -678,15 +687,24 @@ def test_update_risky_persists_and_updates_in_memory_state(authed_client, fake_c
 
     rr_state.ping_roles.pop(fake_ctx.guild_id, None)
     rr_state.min_game_seconds.pop(fake_ctx.guild_id, None)
+    rr_state.max_games_per_channel.pop(fake_ctx.guild_id, None)
 
     resp = authed_client.put(
         "/api/config/risky",
-        json={"ping_role_id": "5555", "min_game_seconds": 90},
+        json={"ping_role_id": "5555", "min_game_seconds": 90, "max_games_per_channel": 4},
     )
     assert resp.status_code == 200
 
     assert rr_state.ping_roles[fake_ctx.guild_id] == 5555
     assert rr_state.min_game_seconds[fake_ctx.guild_id] == 90
+    assert rr_state.max_games_per_channel[fake_ctx.guild_id] == 4
+
+
+def test_update_risky_rejects_max_games_below_one(authed_client):
+    resp = authed_client.put(
+        "/api/config/risky", json={"max_games_per_channel": 0}
+    )
+    assert resp.status_code == 400
 
 
 def test_update_risky_zero_values_clear_in_memory_state(authed_client, fake_ctx):

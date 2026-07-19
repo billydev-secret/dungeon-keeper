@@ -135,6 +135,7 @@ from bot_modules.services.ollama_client import is_available as _ollama_is_availa
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
 _RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
+_RISKY_MAX_GAMES_KEY = "risky_max_games_per_channel"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
 _POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
 _POLICY_VOTE_TIMEOUT_DEFAULT = 72
@@ -433,9 +434,12 @@ def _whisper_section(conn, guild_id: int) -> dict:
 def _risky_section(conn, guild_id: int) -> dict:
     ping_role = get_config_value(conn, _RISKY_PING_KEY, "0", guild_id=guild_id)
     min_secs = get_config_value(conn, _RISKY_MIN_GAME_KEY, "0", guild_id=guild_id)
+    # Default "10" mirrors risky_roll.store.MAX_GAMES_PER_CHANNEL.
+    max_games = get_config_value(conn, _RISKY_MAX_GAMES_KEY, "10", guild_id=guild_id)
     return {
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
+        "max_games_per_channel": int(max_games),
     }
 
 
@@ -3296,6 +3300,7 @@ async def update_birthday(
 class RiskyConfigUpdate(BaseModel):
     ping_role_id: str | None = None
     min_game_seconds: int | None = None
+    max_games_per_channel: int | None = None
 
 
 @router.put("/config/risky")
@@ -3309,14 +3314,17 @@ async def update_risky(
 
     if body.min_game_seconds is not None and body.min_game_seconds < 0:
         raise HTTPException(400, "min_game_seconds cannot be negative")
+    if body.max_games_per_channel is not None and body.max_games_per_channel < 1:
+        raise HTTPException(400, "max_games_per_channel must be at least 1")
 
     new_ping_role: int | None = None
     clear_ping_role = False
     new_min_secs: int | None = None
     clear_min_secs = False
+    new_max_games: int | None = None
 
     def _q():
-        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs
+        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs, new_max_games
         with ctx.open_db() as conn:
             if body.ping_role_id is not None:
                 role_id = int(body.ping_role_id)
@@ -3340,6 +3348,9 @@ async def update_risky(
                 else:
                     set_config_value(conn, _RISKY_MIN_GAME_KEY, str(secs), guild_id)
                     new_min_secs = secs
+            if body.max_games_per_channel is not None:
+                set_config_value(conn, _RISKY_MAX_GAMES_KEY, str(body.max_games_per_channel), guild_id)
+                new_max_games = body.max_games_per_channel
         return {"ok": True}
 
     result = await run_query(_q)
@@ -3355,6 +3366,8 @@ async def update_risky(
         rr_state.min_game_seconds.pop(guild_id, None)
     elif new_min_secs is not None:
         rr_state.min_game_seconds[guild_id] = new_min_secs
+    if new_max_games is not None:
+        rr_state.max_games_per_channel[guild_id] = new_max_games
 
     return result
 

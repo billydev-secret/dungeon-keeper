@@ -980,6 +980,14 @@ async def test_store_min_game_time_round_trip(store: StateStore):
     assert await store.load_min_game_times() == {}
 
 
+async def test_store_max_games_per_channel_round_trip(store: StateStore):
+    await store.set_max_games_per_channel(guild_id=1, cap=3)
+    assert await store.load_max_games_per_channel() == {1: 3}
+    # Setting to None deletes the row
+    await store.set_max_games_per_channel(guild_id=1, cap=None)
+    assert await store.load_max_games_per_channel() == {}
+
+
 async def test_store_pending_question_round_trip(store: StateStore):
     pq = PendingQuestionState(
         channel_id=100, guild_id=1, winner_id=10,
@@ -1069,6 +1077,7 @@ async def test_store_delete_guild_data_clears_all_tables(store: StateStore):
     # Populate the guild
     await store.set_ping_role(guild_id=1, role_id=999)
     await store.set_min_game_time(guild_id=1, seconds=60)
+    await store.set_max_games_per_channel(guild_id=1, cap=3)
     rnd = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
     await store.save_round(rnd)
     pq = PendingQuestionState(
@@ -1090,6 +1099,7 @@ async def test_store_delete_guild_data_clears_all_tables(store: StateStore):
     assert rnd.game_id in deleted_game_ids
     assert await store.load_ping_roles() == {}
     assert await store.load_min_game_times() == {}
+    assert await store.load_max_games_per_channel() == {}
     assert await store.load_pending_questions() == []
     assert await store.load_posted_questions() == []
     # Other guild's data still present
