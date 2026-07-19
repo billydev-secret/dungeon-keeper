@@ -807,6 +807,13 @@ def prune_kind_activity(
         "DELETE FROM econ_kind_activity WHERE guild_id = ? AND local_day < ?",
         (guild_id, cutoff),
     )
+    # Same hygiene pass: conversation_starter's reply-count rows only need a
+    # couple of weeks — a message drawing its third reply later than that is
+    # conversation necromancy we're happy to miss.
+    conn.execute(
+        "DELETE FROM econ_msg_replies WHERE guild_id = ? AND created_at < ?",
+        (guild_id, time.time() - 14 * 86400),
+    )
 
 
 def fire_trigger_inline(

@@ -9,6 +9,32 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: 9 social quest kinds  (hash stamped on merge)
+
+Seeded via the same `scripts/seed_quest_variety.py` (re-run it — idempotent;
+the new quests carry BANDS, so targets are per-member dynamic). The
+distinct-entity mechanic to verify everywhere: repeats of the same
+entity must never advance the count.
+
+- [ ] `conversed`: reply to the same person twice + a second person → count
+      is 2, not 3 ("Social Butterfly")
+- [ ] `replied_to`: two different people replying to your message advance
+      "Magnetic"; the same person replying twice doesn't
+- [ ] `conversation_starter`: a message drawing replies from 3 distinct
+      members fires "Spark" for the AUTHOR exactly at the third; a 4th
+      reply does nothing; self-replies and bots don't count
+- [ ] `reacted_to_member`: reacting to 3 messages by ONE person counts 1
+- [ ] `channel_hop`: posts in a thread count as its parent channel
+- [ ] `active_day`: two messages same day = 1 day toward "Regular"
+- [ ] `voice_partner`: sit in VC with 2 others through an XP tick → count
+      2; a deafened member doesn't count
+- [ ] `thread_deep`: posting in a 20+-message thread fires once per thread
+      ("Deep Diver"), including for late joiners
+- [ ] `welcome`: replying to a member who joined <7d ago advances "Welcome
+      Wagon"; replying to an old member doesn't
+- [ ] Dynamic targets visible: a social member and a quiet member see
+      different targets on the banded social quests
+
 ### Economy: opt-in notify gate defaults to no contact when unconfigured  (19b5093)
 
 - [ ] On a guild with **no** economy Game role configured (e.g. TGM today),

@@ -235,6 +235,27 @@ async def process_voice_xp_tick(
                                 occurrence=local_day_for(now_ts, econ[1]),
                                 booster=member.premium_since is not None,
                             )
+                            # voice_partner: distinct co-present humans at an
+                            # earning tick (occurrence = the partner, so a
+                            # counted quest reads "share voice with N
+                            # different people"). Deafened partners are
+                            # skipped — parked, not hanging out.
+                            for other in channel.members:
+                                if other.bot or other.id == member.id:
+                                    continue
+                                voice = other.voice
+                                if voice is not None and (
+                                    voice.self_deaf or voice.deaf
+                                ):
+                                    continue
+                                fire_trigger_inline(
+                                    conn,
+                                    guild.id,
+                                    "voice_partner",
+                                    member.id,
+                                    occurrence=str(other.id),
+                                    booster=member.premium_since is not None,
+                                )
 
         for session in list_voice_sessions(conn):
             if (session.guild_id, session.user_id) not in active_members:

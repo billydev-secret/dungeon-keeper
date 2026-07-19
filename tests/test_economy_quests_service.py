@@ -1977,3 +1977,65 @@ def quest_rules_assigned(conn, guild_id, user_id, qtype, day):
     idx = qr.period_index(qtype, day)
     n = qr.board_size(qtype, board_sizes(SETTINGS))
     return qr.assigned_quest_ids(pool, user_id, idx, n)
+
+
+# ── social kinds (distinct-entity occurrences) ────────────────────────
+
+SOCIAL_KINDS = (
+    "conversed",
+    "replied_to",
+    "reacted_to_member",
+    "channel_hop",
+    "active_day",
+    "voice_partner",
+    "thread_deep",
+    "welcome",
+    "conversation_starter",
+)
+
+
+def test_social_kinds_registered(db):
+    for kind in SOCIAL_KINDS:
+        assert kind in TRIGGER_KINDS, kind
+        assert kind in TRIGGER_KIND_INFO, kind
+        assert list_income_sources_has(db, kind)
+
+
+def test_distinct_entity_counting_via_occurrences(db):
+    # The whole point of the social kinds: a counted quest whose occurrences
+    # are PARTNERS counts distinct people — repeat interactions with the
+    # same person never advance it.
+    with open_db(db) as conn:
+        qid = _make(
+            conn, qtype="weekly", trigger_kind="conversed", reward=45,
+            target_count=3,
+        )
+        day = "2026-07-14"
+        for partner in (777, 777, 777, 888):  # two DISTINCT partners
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "conversed", USER,
+                local_day=day, occurrence=str(partner), booster=False,
+            )
+        assert get_progress(conn, qid, USER, "2026-W29") == 2
+        assert get_balance(conn, GUILD, USER) == 0  # target 3 not reached
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "conversed", USER,
+            local_day=day, occurrence="999", booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 45  # third distinct person
+
+
+def test_active_day_weekly_counts_days(db):
+    with open_db(db) as conn:
+        qid = _make(
+            conn, qtype="weekly", trigger_kind="active_day", reward=50,
+            target_count=3,
+        )
+        # Two fires on the same day = one day; three distinct days pay.
+        for day in ("2026-07-13", "2026-07-13", "2026-07-14", "2026-07-15"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "active_day", USER,
+                local_day=day, occurrence=day, booster=False,
+            )
+        assert get_progress(conn, qid, USER, "2026-W29") == 3
+        assert get_balance(conn, GUILD, USER) == 50
