@@ -2901,7 +2901,7 @@ class EconomyCog(commands.Cog):
         await asyncio.to_thread(_save)
         await interaction.response.send_message(
             f"Posted the leaderboard panel in {target.mention} — it refreshes "
-            "hourly on its own.",
+            "itself live, within a couple of minutes of economy activity.",
             ephemeral=True,
         )
 

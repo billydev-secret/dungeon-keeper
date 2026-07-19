@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING
 
-from bot_modules.economy import logic
+from bot_modules.economy import live_signal, logic
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -254,6 +254,7 @@ def apply_credit(
             now,
         ),
     )
+    live_signal.mark_dirty(guild_id)
     return credited
 
 

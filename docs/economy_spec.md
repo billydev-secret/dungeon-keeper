@@ -656,20 +656,38 @@ the member owns and gift rentals where they are the beneficiary.
   channel deletes + reposts). Button labels bake prices at post time; re-run
   the command after re-pricing. Gifting stays command-only (`/bank gift`
   needs a target member, which a button can't carry).
-- **Leaderboard panel (shipped):** **`/bank post-leaderboard [channel]`** [mod]
-  posts a single auto-updating embed: top 5 earners over a rolling 7 days
-  (income = positive ledger sums excluding `transfer_in`, matching the
-  Statistics page), community-goal progress bars with completed/paid states,
-  the active quest board (daily/weekly/monthly/event, capped at 12 lines),
-  and a blurb pointing members at `/quests` + `/bank wallet` for their own
-  numbers. Panel ids persist as `econ_leaderboard_channel_id` /
-  `econ_leaderboard_message_id` (guide-panel pattern: same-channel repost
-  edits in place, another channel deletes + reposts). The **economy loop
-  refreshes it in place every hourly tick** (`run_guild_leaderboard`); a 404
-  on the stored message clears the ids, so deleting the panel message is how
-  staff retire it. Collector + builder in `economy/leaderboard.py` (pure —
-  Discord I/O stays in the cog/loop); ids are bot-managed and not
-  dashboard-editable.
+- **Leaderboard panel (shipped, live):** **`/bank post-leaderboard
+  [channel]`** [mod] posts a single live status embed — the economy's
+  centerpiece surface. Content, top to bottom: **today's pulse** (guild-local
+  coins paid / quests completed / distinct earners, plus dailies-reset and
+  new-weeklies clocks as Discord relative timestamps, which tick client-side
+  between edits); top 5 earners over a rolling 7 days (income = positive
+  ledger sums excluding `transfer_in`, matching the Statistics page) each
+  annotated **(+N today)**; community-goal progress bars — auto weeklies add
+  tier state with the next tier's threshold, a daily-bucket pace verdict
+  ("on pace"/"needs a push", same 90%-of-linear rule as `compute_live`),
+  contributor count, today's contribution delta (from `econ_kind_activity`;
+  omitted for channel-scoped goals the scope-blind activity ledger can't
+  measure), and a week-end deadline clock; the active quest board
+  (daily/weekly/monthly/event, capped at 12 lines, ⚡ spotlight line with an
+  "until" clock); an **anonymous live feed** — today's paid completions
+  aggregated per quest (title × count + latest relative timestamp, max 5
+  lines, plus a full-board-bonus count; titles and counts only, never member
+  names, per the 2026-07-18 ticker decision); and a blurb pointing members
+  at `/quests` + `/bank wallet` for their own numbers. Panel ids persist as
+  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` (guide-panel
+  pattern: same-channel repost edits in place, another channel deletes +
+  reposts). **Refresh is event-driven:** every economy credit
+  (`apply_credit`), community-counter bump, and dashboard progress edit
+  marks the guild dirty in `economy/live_signal.py` (process-local,
+  import-free), and `leaderboard_live_loop` (20 s poll) repaints a dirty
+  panel at most once per 120 s — so the panel moves within ~2 minutes of
+  the action while a busy hour stays ≤30 edits. The hourly economy-loop
+  pass (`run_guild_leaderboard`) remains the backstop for restarts and
+  quiet drift; a 404 on the stored message clears the ids, so deleting the
+  panel message is how staff retire it. Collector + builder in
+  `economy/leaderboard.py` (pure — Discord I/O stays in the cog/loops);
+  ids are bot-managed and not dashboard-editable.
 - **Manager surface (dashboard):** the **Economy** nav section, gated on
   `economy_manager_role_id` or admin (mirrors `games_editor_role` /
   `require_game_host`). Its pages: **Operations** (community progress +
@@ -746,9 +764,10 @@ note), per-quest **anonymous** completion counts for the current period of
 every active daily/weekly/monthly quest (+ counted-quest in-flight counts),
 event-quest totals (7d / ever), quests-done-today / this-week tickers, and
 day/week reset countdowns. Aggregates only, never member names (2026-07-18
-decision). The leaderboard embed's community bars also show a
-"🏁 tier N/3 secured" state mid-run for auto weeklies, refreshed on the
-same hourly tick that detects the crossing.
+decision). The leaderboard embed mirrors this live view in-channel — see
+the leaderboard panel bullet in §7 for its content and its event-driven
+refresh (a tier-crossing bump repaints the panel within ~2 minutes, not on
+the next hourly tick).
 
 **Statistics page (Economy section).** A live, on-demand tuning surface
 (`GET /api/economy/stats`, gated on `require_economy_manager` — manager
@@ -793,6 +812,14 @@ crash-restart), ticking hourly:
 | Guild-local day rolled | XP→currency conversion (only the most recent marked local day — no retroactive backlog after an outage, §12); streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
 | Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; (v2) spotlight expiry; (rooms stage) room archive/purge |
 | Guild-local ISO week rolled | Weekly quest activation; community settlement; metrics rollup; (v2) spotlight inventory reset |
+
+A second, lightweight startup task — `leaderboard_live_loop` — gives the
+leaderboard panel its near-real-time cadence: a 20 s poll over the
+process-local dirty-guild set (`economy/live_signal.py`, marked by
+`apply_credit` / community bumps / dashboard progress edits), repainting each
+dirty panel at most once per 120 s. Deliberately in-memory: a mark lost to a
+restart costs at most one hour, because the hourly tick refreshes every
+panel anyway (§7).
 
 Event-driven (no polling): login + reaction XP on existing `events_cog` listeners;
 voice login on the existing voice-XP tick; game payouts at `end_game`/duel resolution;
