@@ -21,6 +21,8 @@ def test_get_config_defaults(sync_db_path: Path):
     assert cfg.channel_id == 0
     assert cfg.log_channel_id == 0
     assert cfg.launcher_message_id == 0
+    assert cfg.cooldown_seconds == 30
+    assert cfg.hourly_cap_per_target == 5
 
 
 def test_set_and_get_config_value(sync_db_path: Path):
@@ -32,6 +34,15 @@ def test_set_and_get_config_value(sync_db_path: Path):
     assert cfg.channel_id == 12345
     assert cfg.role_id == 67890
     assert cfg.log_channel_id == 11111
+
+
+def test_set_and_get_rate_limit_config(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        set_whisper_config_value(conn, GUILD, "whisper_cooldown_seconds", "60")
+        set_whisper_config_value(conn, GUILD, "whisper_hourly_cap_per_target", "3")
+        cfg = get_whisper_config(conn, GUILD)
+    assert cfg.cooldown_seconds == 60
+    assert cfg.hourly_cap_per_target == 3
 
 
 def test_set_and_get_launcher_message_id(sync_db_path: Path):

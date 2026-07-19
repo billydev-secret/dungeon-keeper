@@ -2103,6 +2103,9 @@ class WhisperOptinConfirmView(discord.ui.View):
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
+# Fallbacks matching WhisperConfig's defaults; actual enforcement reads
+# cfg.cooldown_seconds / cfg.hourly_cap_per_target, configurable per-guild
+# from the dashboard's Whisper config panel.
 SEND_COOLDOWN_SECONDS = 30
 SEND_PER_TARGET_HOURLY_CAP = 5
 
@@ -2358,7 +2361,7 @@ class WhisperCog(commands.Cog):
         remaining = check_send_cooldown(
             self._last_send_at.get(interaction.user.id),
             now=now,
-            cooldown_seconds=SEND_COOLDOWN_SECONDS,
+            cooldown_seconds=cfg.cooldown_seconds,
         )
         if remaining is not None:
             await interaction.response.send_message(
@@ -2370,9 +2373,9 @@ class WhisperCog(commands.Cog):
         recent = prune_recent_target_sends(
             self._target_sends.get(rate_key, []), now=now,
         )
-        if len(recent) >= SEND_PER_TARGET_HOURLY_CAP:
+        if len(recent) >= cfg.hourly_cap_per_target:
             await interaction.response.send_message(
-                format_hourly_cap_message(SEND_PER_TARGET_HOURLY_CAP),
+                format_hourly_cap_message(cfg.hourly_cap_per_target),
                 ephemeral=True,
             )
             return

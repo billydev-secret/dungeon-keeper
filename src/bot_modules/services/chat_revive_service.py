@@ -63,6 +63,7 @@ class GuildConfig:
     flourish_enabled: bool = True
     ping_max_per_day: int = 3
     ping_cooldown_minutes: int = 60
+    rhythm_max_age_seconds: float = RHYTHM_MAX_AGE_SECONDS
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ def get_guild_config(conn: sqlite3.Connection, guild_id: int) -> GuildConfig:
         flourish_enabled=bool(row["flourish_enabled"]),
         ping_max_per_day=row["ping_max_per_day"],
         ping_cooldown_minutes=row["ping_cooldown_minutes"],
+        rhythm_max_age_seconds=row["rhythm_max_age_seconds"],
     )
 
 
@@ -103,8 +105,8 @@ def save_guild_config(conn: sqlite3.Connection, cfg: GuildConfig) -> None:
         INSERT INTO revive_guild_config
             (guild_id, enabled, role_id, quiet_start, quiet_end,
              daily_budget, guild_gap_minutes, flourish_enabled,
-             ping_max_per_day, ping_cooldown_minutes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ping_max_per_day, ping_cooldown_minutes, rhythm_max_age_seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET
             enabled=excluded.enabled, role_id=excluded.role_id,
             quiet_start=excluded.quiet_start, quiet_end=excluded.quiet_end,
@@ -112,7 +114,8 @@ def save_guild_config(conn: sqlite3.Connection, cfg: GuildConfig) -> None:
             guild_gap_minutes=excluded.guild_gap_minutes,
             flourish_enabled=excluded.flourish_enabled,
             ping_max_per_day=excluded.ping_max_per_day,
-            ping_cooldown_minutes=excluded.ping_cooldown_minutes
+            ping_cooldown_minutes=excluded.ping_cooldown_minutes,
+            rhythm_max_age_seconds=excluded.rhythm_max_age_seconds
         """,
         (
             cfg.guild_id,
@@ -125,6 +128,7 @@ def save_guild_config(conn: sqlite3.Connection, cfg: GuildConfig) -> None:
             int(cfg.flourish_enabled),
             cfg.ping_max_per_day,
             cfg.ping_cooldown_minutes,
+            cfg.rhythm_max_age_seconds,
         ),
     )
 
@@ -826,7 +830,8 @@ def evaluate(
         conn, guild_id, channel_id, now_ts=now_ts, offset_hours=offset
     )
     profiles = get_rhythm(
-        conn, guild_id, channel_id, now_ts=now_ts, offset_hours=offset
+        conn, guild_id, channel_id, now_ts=now_ts, offset_hours=offset,
+        max_age_seconds=guild_cfg.rhythm_max_age_seconds,
     )
     human_spoke = (
         freq.last_channel_revive_ts is None

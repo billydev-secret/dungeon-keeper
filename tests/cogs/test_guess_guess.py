@@ -71,6 +71,7 @@ def _make_select_view(
     game_message=None,
     round_id: int = ROUND_ID,
     cooldown_seconds: int = 0,
+    max_guesses_per_round: int = 5,
 ):
     from bot_modules.cogs.guess_cog import GuessSelectView
 
@@ -87,6 +88,7 @@ def _make_select_view(
     return GuessSelectView(
         bot, round_id, guess_members, game_message,  # type: ignore[arg-type]
         cooldown_seconds=cooldown_seconds,
+        max_guesses_per_round=max_guesses_per_round,
     )
 
 
@@ -294,6 +296,27 @@ async def test_guess_cap_allows_under_limit():
         await view._on_select(interaction)
 
     insert_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_guess_cap_uses_configured_value_not_hardcoded_default():
+    """A guild with a lower configured per-round cap blocks before the
+    hardcoded default of 5 — proving the view's max_guesses_per_round,
+    not the module constant, drives enforcement."""
+    view = _make_select_view(cooldown_seconds=0, max_guesses_per_round=2)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    insert_mock = MagicMock()
+    with patch("bot_modules.cogs.guess_cog._do_count_user_guesses", return_value=2), \
+         patch("bot_modules.cogs.guess_cog._do_insert_guess", insert_mock), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    insert_mock.assert_not_called()
+    msg = interaction.edit_original_response.call_args.kwargs.get("content", "")
+    assert "cap: 2" in msg
 
 
 @pytest.mark.asyncio

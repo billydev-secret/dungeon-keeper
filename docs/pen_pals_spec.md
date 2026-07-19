@@ -1,6 +1,6 @@
 # Pen Pals — Feature Spec
 
-Members opt in to a pairing pool. On a schedule (the weekly auto-round) or when an admin runs a round, the bot pairs the waiting members into private two-person text channels, posts a conversation-starter from the question bank into each, and tears them down 24 hours later. A member is only re-matched once they've had no pen pal for a month. The goal is low-stakes 1-on-1 connection inside the server.
+Members opt in to a pairing pool. On a schedule (the weekly auto-round) or when an admin runs a round, the bot pairs the waiting members into private two-person text channels, posts a conversation-starter from the question bank into each, and tears them down after a configurable session length (default 24 hours). A member is only re-matched once they've had no pen pal for a configurable cooldown (default a month). The goal is low-stakes 1-on-1 connection inside the server. Session length, match cooldown, question-swap cap, close-warning window, and question-suppress window are all configured on the dashboard's Pen Pals → Pairing Mechanics panel.
 
 ## Commands
 
@@ -50,7 +50,7 @@ Footer: Admins can see this channel.
 
 The expiry timestamp uses Discord's absolute + relative format so both users see it in their local time.
 
-**24-hour countdown.** A background task checks active sessions every 5 minutes. When `now ≥ expiry_at`, the channel is deleted. A warning is posted 1 hour before deletion: "⏰ This pen pal channel closes in 1 hour." Deletion only removes the channel — no transcript is produced.
+**Session countdown (default 24 hours, configurable).** A background task checks active sessions every 5 minutes. When `now ≥ expiry_at`, the channel is deleted. A warning is posted when the configured close-warning window remains (default 1 hour): "⏰ This pen pal channel closes in 1 hour." Deletion only removes the channel — no transcript is produced.
 
 **Early close.** `/penpals end` in the active channel prompts the invoker for a 15-second confirm. Either member can initiate; the channel is deleted on confirmation. The other member receives a DM: "Your pen pal session in **{server}** was ended early."
 
@@ -68,7 +68,7 @@ Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, u
 > {question}
 ```
 
-In practice a 24-hour session shows only the opening question: the first follow-up would land exactly as the channel closes, and the background task suppresses any auto-question with fewer than 2 hours left. Members who want a fresh prompt sooner use the manual swap.
+In practice a default-length (24-hour) session shows only the opening question: the first follow-up would land exactly as the channel closes, and the background task suppresses any auto-question if less than the configured question-suppress window remains (default 2 hours). Members who want a fresh prompt sooner use the manual swap.
 
 **Manual swap.** `/penpals new-question` posts a question immediately out of cycle, visibly delineating the conversation:
 
@@ -78,11 +78,11 @@ In practice a 24-hour session shows only the opening question: the first follow-
 > {question}
 ```
 
-A manual swap does not reset the 12-hour auto-cadence clock. After all 3 swaps are used the command is blocked: "You've used all 3 question swaps for this session."
+A manual swap does not reset the 12-hour auto-cadence clock. After the configured swap cap is used (default 3) the command is blocked: "You've used all N question swaps for this session."
 
 ### Match cooldown
 
-A member is only eligible for a new pairing once they've had **no pen pal for a month** (`_MATCH_COOLDOWN_SECS`, 30 days from the `started_at` of their most recent session — active or closed). Members still inside the cooldown are skipped by the round and left untouched in the pool; they become eligible automatically once a month has passed. Because joining never pairs on the spot, the round is the only pairing path, so the cooldown can't be bypassed. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown.
+A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month, from the `started_at` of their most recent session — active or closed). Members still inside the cooldown are skipped by the round and left untouched in the pool; they become eligible automatically once the cooldown has passed. Because joining never pairs on the spot, the round is the only pairing path, so the cooldown can't be bypassed. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown.
 
 ### No-repeat pairing
 
@@ -129,6 +129,14 @@ Per-guild keys set via the dashboard:
 - **Log channel** — where the bot posts auto-round summaries and pair confirmations. Optional.
 - **Auto-round schedule** — day-of-week + UTC time for automatic pool draining. Optional; disabled by default.
 - **Enabled** — per-guild on/off switch. Default off.
+
+**Pairing Mechanics** (separate dashboard section):
+
+- **Session length** — how long a matched channel stays open. Default 24 hours.
+- **Re-match cooldown** — how long a member must go without a pen pal before they're eligible again. Default 30 days.
+- **Max question swaps** — how many times a pair can swap the conversation-starter per session. Default 3.
+- **Close-warning window** — how much session time must remain to post the "closing soon" notice. Default 1 hour.
+- **Question-suppress window** — skip posting a new auto-question if less than this much session time remains. Default 2 hours.
 
 ## Stored data
 

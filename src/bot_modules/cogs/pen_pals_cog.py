@@ -68,6 +68,27 @@ def _set_config(
     )
 
 
+def _set_timers(
+    conn,
+    guild_id: int,
+    *,
+    session_seconds: int,
+    match_cooldown_seconds: int,
+    max_question_swaps: int,
+    warn_seconds: int,
+    question_suppress_seconds: int,
+) -> None:
+    conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
+    conn.execute(
+        """UPDATE pen_pals_config
+           SET session_seconds=?, match_cooldown_seconds=?, max_question_swaps=?,
+               warn_seconds=?, question_suppress_seconds=?
+           WHERE guild_id=?""",
+        (session_seconds, match_cooldown_seconds, max_question_swaps,
+         warn_seconds, question_suppress_seconds, guild_id),
+    )
+
+
 def _set_panel_message_id(conn, guild_id: int, message_id: int) -> None:
     conn.execute(
         "UPDATE pen_pals_config SET panel_message_id=? WHERE guild_id=?",
@@ -129,8 +150,9 @@ def _get_all_active_sessions(conn) -> list:
 def _create_session(
     conn, session_id: str, guild_id: int, channel_id: int,
     user1_id: int, user2_id: int, now: float,
+    *, session_seconds: int = _SESSION_SECS,
 ) -> None:
-    expiry = now + _SESSION_SECS
+    expiry = now + session_seconds
     conn.execute(
         """
         INSERT INTO pen_pals_sessions
@@ -414,6 +436,7 @@ async def _do_pair(
     cfg = await asyncio.to_thread(_load_cfg)
     if cfg is None or not cfg["enabled"] or not cfg["category_id"]:
         return False
+    session_seconds = cfg["session_seconds"]
 
     category = guild.get_channel(cfg["category_id"])
     if not isinstance(category, discord.CategoryChannel):
@@ -445,7 +468,10 @@ async def _do_pair(
                 or _get_active_session(conn, guild_id, user2_id)
             ):
                 return False
-            _create_session(conn, session_id, guild_id, channel.id, user1_id, user2_id, now)
+            _create_session(
+                conn, session_id, guild_id, channel.id, user1_id, user2_id, now,
+                session_seconds=session_seconds,
+            )
             _record_question(conn, session_id, question)
             _remove_from_pool(conn, guild_id, user1_id)
             _remove_from_pool(conn, guild_id, user2_id)
@@ -475,7 +501,7 @@ async def _do_pair(
             pass
         return False
 
-    expiry_at = now + _SESSION_SECS
+    expiry_at = now + session_seconds
     accent = await resolve_accent_color(db_path, guild)
     try:
         await _post_intro(channel, user1, user2, expiry_at, question, color=accent)
@@ -509,11 +535,13 @@ async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[
     def _load_eligible_and_stamp():
         with open_db(db_path) as conn:
             now = time.time()
+            cfg = _get_config(conn, guild_id)
+            match_cooldown_seconds = cfg["match_cooldown_seconds"] if cfg else _MATCH_COOLDOWN_SECS
             eligible = [
                 r["user_id"]
                 for r in _get_pool(conn, guild_id)
                 if (last := _last_matched_at(conn, guild_id, r["user_id"])) is None
-                or now - last >= _MATCH_COOLDOWN_SECS
+                or now - last >= match_cooldown_seconds
             ]
             _update_last_auto_round(conn, guild_id)
             return eligible
@@ -581,6 +609,9 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
         warned = row["close_warning_sent"]
         user1_id = row["user1_id"]
         user2_id = row["user2_id"]
+        cfg = configs.get(guild_id)
+        warn_seconds = cfg["warn_seconds"] if cfg else _WARN_SECS
+        q_suppress_seconds = cfg["question_suppress_seconds"] if cfg else _Q_SUPPRESS_SECS
 
         raw = bot.get_channel(channel_id)
         if raw is None:
@@ -623,7 +654,7 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
             continue
 
         # 1-hour close warning
-        if not warned and (expiry_at - now) <= _WARN_SECS:
+        if not warned and (expiry_at - now) <= warn_seconds:
             try:
                 await channel.send("⏰ This pen pal channel closes in 1 hour.")
             except discord.HTTPException:
@@ -633,9 +664,8 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _set_close_warning_sent(conn, sid)
             await asyncio.to_thread(_mark_warned)
 
-        # Auto question (skip if < 2 h remain)
-        if next_q_at <= now and (expiry_at - now) >= _Q_SUPPRESS_SECS:
-            cfg = configs.get(guild_id)
+        # Auto question (skip if too little session time remains)
+        if next_q_at <= now and (expiry_at - now) >= q_suppress_seconds:
             question = await _draw_question(db_path, session_id, _cfg_allows_nsfw(cfg))
             try:
                 await channel.send(
@@ -974,7 +1004,7 @@ class _EndConfirmView(discord.ui.View):
 class PenPalsCog(commands.Cog):
     penpals = app_commands.Group(
         name="penpals",
-        description="Pen Pals — get matched with someone for a 24-hour private chat.",
+        description="Pen Pals — get matched with someone for a private chat.",
     )
 
     def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
@@ -1076,7 +1106,9 @@ class PenPalsCog(commands.Cog):
             with open_db(db_path) as conn:
                 session = _get_active_session(conn, guild_id, user_id)
                 if session:
-                    return "active", dict(session)
+                    cfg = _get_config(conn, guild_id)
+                    max_swaps = cfg["max_question_swaps"] if cfg else _MAX_SWAPS
+                    return "active", (dict(session), max_swaps)
                 pool = [r["user_id"] for r in _get_pool(conn, guild_id)]
                 if user_id in pool:
                     return "pool", pool.index(user_id) + 1
@@ -1085,12 +1117,13 @@ class PenPalsCog(commands.Cog):
         status, data = await asyncio.to_thread(_check)
 
         if status == "active":
-            assert isinstance(data, dict)
-            ch = interaction.guild.get_channel(data["channel_id"])
-            other_id = data["user2_id"] if data["user1_id"] == user_id else data["user1_id"]
+            assert isinstance(data, tuple)
+            session_data, max_swaps = data
+            ch = interaction.guild.get_channel(session_data["channel_id"])
+            other_id = session_data["user2_id"] if session_data["user1_id"] == user_id else session_data["user1_id"]
             other = interaction.guild.get_member(other_id)
-            expiry_at = int(data["expiry_at"])
-            swaps_left = _MAX_SWAPS - data["question_swaps_used"]
+            expiry_at = int(session_data["expiry_at"])
+            swaps_left = max_swaps - session_data["question_swaps_used"]
             lines = [
                 f"You have an active pen pal: {other.mention if other else f'<@{other_id}>'}",
                 f"Channel: {ch.mention if ch else '(channel missing)'}",
@@ -1111,7 +1144,7 @@ class PenPalsCog(commands.Cog):
 
     # ── /penpals new-question ─────────────────────────────────────────
 
-    @penpals.command(name="new-question", description="Swap the current question for a fresh one (3 times max).")
+    @penpals.command(name="new-question", description="Swap the current question for a fresh one (limited swaps per session).")
     async def penpals_new_question(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
             await interaction.response.send_message("This command only works in a server.", ephemeral=True)
@@ -1125,9 +1158,11 @@ class PenPalsCog(commands.Cog):
 
         def _load():
             with open_db(db_path) as conn:
-                return _get_session_by_channel(conn, channel_id)
+                session = _get_session_by_channel(conn, channel_id)
+                cfg = _get_config(conn, session["guild_id"]) if session else None
+                return session, cfg
 
-        session = await asyncio.to_thread(_load)
+        session, cfg = await asyncio.to_thread(_load)
         if session is None:
             await interaction.response.send_message(
                 "This command only works in an active pen pal channel.", ephemeral=True
@@ -1140,19 +1175,15 @@ class PenPalsCog(commands.Cog):
             )
             return
 
-        if session["question_swaps_used"] >= _MAX_SWAPS:
+        max_swaps = cfg["max_question_swaps"] if cfg else _MAX_SWAPS
+        if session["question_swaps_used"] >= max_swaps:
             await interaction.response.send_message(
-                "You've used all 3 question swaps for this session.", ephemeral=True
+                f"You've used all {max_swaps} question swaps for this session.", ephemeral=True
             )
             return
 
         await interaction.response.defer(ephemeral=True)
 
-        def _load_cfg():
-            with open_db(db_path) as conn:
-                return _get_config(conn, session["guild_id"])
-
-        cfg = await asyncio.to_thread(_load_cfg)
         question = await _draw_question(db_path, session["session_id"], _cfg_allows_nsfw(cfg))
 
         def _save():
@@ -1162,7 +1193,7 @@ class PenPalsCog(commands.Cog):
                 return swaps_used
 
         swaps_used = await asyncio.to_thread(_save)
-        swaps_left = _MAX_SWAPS - swaps_used
+        swaps_left = max_swaps - swaps_used
 
         user1_id = session["user1_id"]
         user2_id = session["user2_id"]

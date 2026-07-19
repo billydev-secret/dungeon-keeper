@@ -41,6 +41,9 @@ class GuessConfig:
     min_image_dimension_px: int = 400
     max_image_size_mb: int = 10
     prompt_message_id: int = 0
+    submit_max_per_window: int = 5
+    submit_window_seconds: int = 3600
+    max_guesses_per_round: int = 5
 
 
 @dataclass

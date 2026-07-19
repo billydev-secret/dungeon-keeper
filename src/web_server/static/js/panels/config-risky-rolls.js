@@ -71,6 +71,19 @@ export function mount(container) {
       "How long a round must be open before it can be closed early. 0 disables the minimum.",
     ));
 
+    // Max concurrent games per channel
+    const maxGamesInp = document.createElement("input");
+    maxGamesInp.type = "number";
+    maxGamesInp.name = "max_games_per_channel";
+    maxGamesInp.min = "1";
+    maxGamesInp.step = "1";
+    maxGamesInp.value = String(r.max_games_per_channel || 10);
+    form.appendChild(buildField(
+      "Max Concurrent Games Per Channel",
+      maxGamesInp,
+      "How many open rounds a single channel can have at once before /risky start is refused.",
+    ));
+
     const row = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
@@ -88,10 +101,16 @@ export function mount(container) {
         showStatus(statusEl, false, "Duration must be 0 or more");
         return;
       }
+      const maxGames = parseInt(fd.get("max_games_per_channel"), 10);
+      if (!Number.isFinite(maxGames) || maxGames < 1) {
+        showStatus(statusEl, false, "Max concurrent games must be at least 1");
+        return;
+      }
       try {
         await apiPut("/api/config/risky", {
           ping_role_id: fd.get("ping_role_id"),
           min_game_seconds: mins * 60,
+          max_games_per_channel: maxGames,
         });
         showStatus(statusEl, true);
       } catch (err) {

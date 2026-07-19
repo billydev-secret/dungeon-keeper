@@ -40,6 +40,9 @@ def test_guess_config_defaults():
     cfg = GuessConfig(guild_id=9001)
     assert cfg.crop_difficulty == "medium"
     assert cfg.guess_cooldown_seconds == 60
+    assert cfg.submit_max_per_window == 5
+    assert cfg.submit_window_seconds == 3600
+    assert cfg.max_guesses_per_round == 5
 
 
 def test_pipeline_result_empty_crops_by_default():

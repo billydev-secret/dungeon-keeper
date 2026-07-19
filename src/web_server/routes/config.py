@@ -120,6 +120,7 @@ from bot_modules.cogs.pen_pals_cog import (
     _get_config as _pp_get_config,
     _get_pool as _pp_get_pool,
     _set_config as _pp_set_config,
+    _set_timers as _pp_set_timers,
 )
 from bot_modules.services.voice_transcription_service import (
     DEFAULT_MODEL as _VT_DEFAULT_MODEL,
@@ -135,6 +136,7 @@ from bot_modules.services.ollama_client import is_available as _ollama_is_availa
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
 _RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
+_RISKY_MAX_GAMES_KEY = "risky_max_games_per_channel"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
 _POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
 _POLICY_VOTE_TIMEOUT_DEFAULT = 72
@@ -386,6 +388,9 @@ def _guess_section(conn, guild_id: int) -> dict:
         "guess_cooldown_seconds": gc.guess_cooldown_seconds,
         "min_image_dimension_px": gc.min_image_dimension_px,
         "max_image_size_mb": gc.max_image_size_mb,
+        "submit_max_per_window": gc.submit_max_per_window,
+        "submit_window_seconds": gc.submit_window_seconds,
+        "max_guesses_per_round": gc.max_guesses_per_round,
     }
 
 
@@ -422,15 +427,20 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "channel_id": str(wc.channel_id),
         "role_id": str(wc.role_id),
         "log_channel_id": str(wc.log_channel_id),
+        "cooldown_seconds": wc.cooldown_seconds,
+        "hourly_cap_per_target": wc.hourly_cap_per_target,
     }
 
 
 def _risky_section(conn, guild_id: int) -> dict:
     ping_role = get_config_value(conn, _RISKY_PING_KEY, "0", guild_id=guild_id)
     min_secs = get_config_value(conn, _RISKY_MIN_GAME_KEY, "0", guild_id=guild_id)
+    # Default "10" mirrors risky_roll.store.MAX_GAMES_PER_CHANNEL.
+    max_games = get_config_value(conn, _RISKY_MAX_GAMES_KEY, "10", guild_id=guild_id)
     return {
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
+        "max_games_per_channel": int(max_games),
     }
 
 
@@ -657,6 +667,11 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "auto_round_hour": 12,
             "panel_channel_id": None,
             "pool_size": pool_size,
+            "session_seconds": 86400,
+            "match_cooldown_seconds": 2592000,
+            "max_question_swaps": 3,
+            "warn_seconds": 3600,
+            "question_suppress_seconds": 7200,
         }
     return {
         "enabled": bool(cfg["enabled"]),
@@ -668,6 +683,11 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "auto_round_hour": int(cfg["auto_round_hour"]),
         "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
         "pool_size": pool_size,
+        "session_seconds": int(cfg["session_seconds"]),
+        "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
+        "max_question_swaps": int(cfg["max_question_swaps"]),
+        "warn_seconds": int(cfg["warn_seconds"]),
+        "question_suppress_seconds": int(cfg["question_suppress_seconds"]),
     }
 
 
@@ -2841,6 +2861,50 @@ async def update_pen_pals_config(
     return {"ok": True}
 
 
+class PenPalsTimersUpdate(BaseModel):
+    session_seconds: int
+    match_cooldown_seconds: int
+    max_question_swaps: int
+    warn_seconds: int
+    question_suppress_seconds: int
+
+
+@router.put("/config/pen-pals/timers")
+async def update_pen_pals_timers(
+    request: Request,
+    body: PenPalsTimersUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    if body.session_seconds < 1:
+        raise HTTPException(400, "session_seconds must be at least 1")
+    if body.match_cooldown_seconds < 0:
+        raise HTTPException(400, "match_cooldown_seconds cannot be negative")
+    if body.max_question_swaps < 0:
+        raise HTTPException(400, "max_question_swaps cannot be negative")
+    if body.warn_seconds < 0:
+        raise HTTPException(400, "warn_seconds cannot be negative")
+    if body.question_suppress_seconds < 0:
+        raise HTTPException(400, "question_suppress_seconds cannot be negative")
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _pp_set_timers(
+                conn,
+                guild_id,
+                session_seconds=body.session_seconds,
+                match_cooldown_seconds=body.match_cooldown_seconds,
+                max_question_swaps=body.max_question_swaps,
+                warn_seconds=body.warn_seconds,
+                question_suppress_seconds=body.question_suppress_seconds,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
 # ── Voice transcription config ───────────────────────────────────────
 
 
@@ -3291,6 +3355,7 @@ async def update_birthday(
 class RiskyConfigUpdate(BaseModel):
     ping_role_id: str | None = None
     min_game_seconds: int | None = None
+    max_games_per_channel: int | None = None
 
 
 @router.put("/config/risky")
@@ -3304,14 +3369,17 @@ async def update_risky(
 
     if body.min_game_seconds is not None and body.min_game_seconds < 0:
         raise HTTPException(400, "min_game_seconds cannot be negative")
+    if body.max_games_per_channel is not None and body.max_games_per_channel < 1:
+        raise HTTPException(400, "max_games_per_channel must be at least 1")
 
     new_ping_role: int | None = None
     clear_ping_role = False
     new_min_secs: int | None = None
     clear_min_secs = False
+    new_max_games: int | None = None
 
     def _q():
-        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs
+        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs, new_max_games
         with ctx.open_db() as conn:
             if body.ping_role_id is not None:
                 role_id = int(body.ping_role_id)
@@ -3335,6 +3403,9 @@ async def update_risky(
                 else:
                     set_config_value(conn, _RISKY_MIN_GAME_KEY, str(secs), guild_id)
                     new_min_secs = secs
+            if body.max_games_per_channel is not None:
+                set_config_value(conn, _RISKY_MAX_GAMES_KEY, str(body.max_games_per_channel), guild_id)
+                new_max_games = body.max_games_per_channel
         return {"ok": True}
 
     result = await run_query(_q)
@@ -3350,6 +3421,8 @@ async def update_risky(
         rr_state.min_game_seconds.pop(guild_id, None)
     elif new_min_secs is not None:
         rr_state.min_game_seconds[guild_id] = new_min_secs
+    if new_max_games is not None:
+        rr_state.max_games_per_channel[guild_id] = new_max_games
 
     return result
 
@@ -3491,6 +3564,9 @@ class GuessConfigUpdate(BaseModel):
     guess_cooldown_seconds: int | None = None
     min_image_dimension_px: int | None = None
     max_image_size_mb: int | None = None
+    submit_max_per_window: int | None = None
+    submit_window_seconds: int | None = None
+    max_guesses_per_round: int | None = None
 
 
 @router.put("/config/guess")
@@ -3539,6 +3615,12 @@ async def update_guess_config(
                 set_guess_config_value(conn, guild_id, "guess_min_image_dimension_px", str(body.min_image_dimension_px))
             if body.max_image_size_mb is not None:
                 set_guess_config_value(conn, guild_id, "guess_max_image_size_mb", str(body.max_image_size_mb))
+            if body.submit_max_per_window is not None:
+                set_guess_config_value(conn, guild_id, "guess_submit_max_per_window", str(max(1, body.submit_max_per_window)))
+            if body.submit_window_seconds is not None:
+                set_guess_config_value(conn, guild_id, "guess_submit_window_seconds", str(max(1, body.submit_window_seconds)))
+            if body.max_guesses_per_round is not None:
+                set_guess_config_value(conn, guild_id, "guess_max_guesses_per_round", str(max(1, body.max_guesses_per_round)))
         return {"ok": True}
 
     return await run_query(_q)
@@ -3548,6 +3630,8 @@ class WhisperConfigUpdate(BaseModel):
     channel_id: str | None = None
     role_id: str | None = None
     log_channel_id: str | None = None
+    cooldown_seconds: int | None = None
+    hourly_cap_per_target: int | None = None
 
 
 @router.put("/config/whisper")
@@ -3568,6 +3652,14 @@ async def update_whisper_config(
                 set_whisper_config_value(conn, guild_id, "whisper_role_id", body.role_id)
             if body.log_channel_id is not None:
                 set_whisper_config_value(conn, guild_id, "whisper_log_channel_id", body.log_channel_id)
+            if body.cooldown_seconds is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_cooldown_seconds", str(max(0, body.cooldown_seconds))
+                )
+            if body.hourly_cap_per_target is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_hourly_cap_per_target", str(max(1, body.hourly_cap_per_target))
+                )
         return {"ok": True}
 
     return await run_query(_q)

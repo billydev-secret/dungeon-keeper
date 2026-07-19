@@ -418,6 +418,9 @@ def test_get_config_includes_guess_section(authed_client):
     assert v["guess_cooldown_seconds"] == 60
     assert v["min_image_dimension_px"] == 400
     assert v["max_image_size_mb"] == 10
+    assert v["submit_max_per_window"] == 5
+    assert v["submit_window_seconds"] == 3600
+    assert v["max_guesses_per_round"] == 5
 
 
 def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
@@ -517,6 +520,24 @@ def test_update_guess_invalid_difficulty_returns_error(authed_client):
     data = resp.json()
     assert data["ok"] is False
     assert "crop_difficulty" in data["detail"]
+
+
+def test_update_guess_rate_limit_fields(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/guess",
+        json={
+            "submit_max_per_window": 2,
+            "submit_window_seconds": 600,
+            "max_guesses_per_round": 3,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "guess_submit_max_per_window", "5", fake_ctx.guild_id) == "2"
+        assert get_config_value(conn, "guess_submit_window_seconds", "3600", fake_ctx.guild_id) == "600"
+        assert get_config_value(conn, "guess_max_guesses_per_round", "5", fake_ctx.guild_id) == "3"
 
 
 # ── Multi-guild safety ───────────────────────────────────────────────
@@ -648,6 +669,63 @@ def test_update_birthday_rejects_empty_message(authed_client):
     assert resp.status_code == 400
 
 
+def test_get_config_includes_risky_section_defaults(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    r = resp.json()["risky"]
+    assert r["ping_role_id"] == "0"
+    assert r["min_game_seconds"] == 0
+    assert r["max_games_per_channel"] == 10
+
+
+def test_get_config_includes_pen_pals_timer_defaults(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    pp = resp.json()["pen_pals"]
+    assert pp["session_seconds"] == 86400
+    assert pp["match_cooldown_seconds"] == 2592000
+    assert pp["max_question_swaps"] == 3
+    assert pp["warn_seconds"] == 3600
+    assert pp["question_suppress_seconds"] == 7200
+
+
+def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 1800,
+            "match_cooldown_seconds": 86400,
+            "max_question_swaps": 1,
+            "warn_seconds": 300,
+            "question_suppress_seconds": 600,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    resp2 = authed_client.get("/api/config")
+    pp = resp2.json()["pen_pals"]
+    assert pp["session_seconds"] == 1800
+    assert pp["match_cooldown_seconds"] == 86400
+    assert pp["max_question_swaps"] == 1
+    assert pp["warn_seconds"] == 300
+    assert pp["question_suppress_seconds"] == 600
+
+
+def test_update_pen_pals_timers_rejects_invalid_session_seconds(authed_client):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 0,
+            "match_cooldown_seconds": 0,
+            "max_question_swaps": 0,
+            "warn_seconds": 0,
+            "question_suppress_seconds": 0,
+        },
+    )
+    assert resp.status_code == 400
+
+
 # ── /config/risky — in-memory state must be updated ──────────────────
 
 
@@ -657,15 +735,24 @@ def test_update_risky_persists_and_updates_in_memory_state(authed_client, fake_c
 
     rr_state.ping_roles.pop(fake_ctx.guild_id, None)
     rr_state.min_game_seconds.pop(fake_ctx.guild_id, None)
+    rr_state.max_games_per_channel.pop(fake_ctx.guild_id, None)
 
     resp = authed_client.put(
         "/api/config/risky",
-        json={"ping_role_id": "5555", "min_game_seconds": 90},
+        json={"ping_role_id": "5555", "min_game_seconds": 90, "max_games_per_channel": 4},
     )
     assert resp.status_code == 200
 
     assert rr_state.ping_roles[fake_ctx.guild_id] == 5555
     assert rr_state.min_game_seconds[fake_ctx.guild_id] == 90
+    assert rr_state.max_games_per_channel[fake_ctx.guild_id] == 4
+
+
+def test_update_risky_rejects_max_games_below_one(authed_client):
+    resp = authed_client.put(
+        "/api/config/risky", json={"max_games_per_channel": 0}
+    )
+    assert resp.status_code == 400
 
 
 def test_update_risky_zero_values_clear_in_memory_state(authed_client, fake_ctx):

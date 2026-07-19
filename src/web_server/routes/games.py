@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
@@ -95,6 +95,10 @@ class GenerateBody(BaseModel):
 
 class ChannelAddBody(BaseModel):
     channel_id: str
+
+
+class LegitLibsMaxTierBody(BaseModel):
+    max_tier: int = Field(ge=1, le=4)
 
 
 class AuditChannelBody(BaseModel):
@@ -1360,11 +1364,21 @@ async def get_allowed_channels(
     def _q():
         with ctx.open_db() as conn:
             rows = conn.execute(
-                "SELECT channel_id, added_by, added_at FROM games_allowed_channels ORDER BY added_at DESC"
+                """
+                SELECT a.channel_id, a.added_by, a.added_at, l.max_tier
+                FROM games_allowed_channels a
+                LEFT JOIN legitlibs_channel_config l ON l.channel_id = a.channel_id
+                ORDER BY a.added_at DESC
+                """
             ).fetchall()
             return {
                 "channels": [
-                    {"channel_id": r[0], "added_by": r[1], "added_at": r[2]}
+                    {
+                        "channel_id": r[0],
+                        "added_by": r[1],
+                        "added_at": r[2],
+                        "legitlibs_max_tier": r[3] if r[3] is not None else 4,
+                    }
                     for r in rows
                 ]
             }
@@ -1404,6 +1418,34 @@ async def remove_allowed_channel(
         with ctx.open_db() as conn:
             conn.execute(
                 "DELETE FROM games_allowed_channels WHERE channel_id = ?", (channel_id,)
+            )
+            conn.commit()
+            return {}
+
+    return await run_query(_q)
+
+
+@router.put("/config/channels/{channel_id}/legitlibs-max-tier")
+async def set_legitlibs_channel_max_tier(
+    request: Request,
+    channel_id: str,
+    body: LegitLibsMaxTierBody,
+    user: AuthenticatedUser = Depends(require_game_host),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO legitlibs_channel_config (channel_id, max_tier, set_by)
+                VALUES (?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    max_tier = excluded.max_tier,
+                    set_by = excluded.set_by,
+                    set_at = CURRENT_TIMESTAMP
+                """,
+                (channel_id, body.max_tier, user.user_id),
             )
             conn.commit()
             return {}

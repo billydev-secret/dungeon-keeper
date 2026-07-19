@@ -58,6 +58,8 @@ from bot_modules.services.guess_repo import (
 )
 
 # Hard cap on per-(user, round) guesses — kills brute-force-by-dropdown.
+# Fallback matching GuessConfig's default; actual enforcement reads
+# config.max_guesses_per_round, configurable per-guild from the dashboard.
 MAX_GUESSES_PER_USER_ROUND = 5
 
 # Maximum number of persistent GameViews to re-register at startup. Bounds the
@@ -75,18 +77,23 @@ log = logging.getLogger("dungeonkeeper.guess")
 # kept until the round is solved.
 _GUESS_ORIG_DIR = Path("guess_cache") / "orig"
 
-# Per-user submission rate limit (in-memory flood protection; resets on restart).
+# Per-user submission rate limit (in-memory flood protection; resets on
+# restart). Fallbacks matching GuessConfig's defaults; actual enforcement
+# reads config.submit_max_per_window / config.submit_window_seconds,
+# configurable per-guild from the dashboard's Guess config panel.
 _SUBMIT_WINDOW_S = 3600
 _SUBMIT_MAX_PER_WINDOW = 5
 _submit_history: dict[int, list[float]] = {}
 
 
-def _submit_rate_limited(user_id: int) -> bool:
+def _submit_rate_limited(
+    user_id: int, *, max_per_window: int = _SUBMIT_MAX_PER_WINDOW, window_seconds: int = _SUBMIT_WINDOW_S
+) -> bool:
     """Return True (and record the attempt) if the user has exceeded the
     submission cap within the rolling window."""
     now = time.time()
-    hist = [t for t in _submit_history.get(user_id, []) if now - t < _SUBMIT_WINDOW_S]
-    if len(hist) >= _SUBMIT_MAX_PER_WINDOW:
+    hist = [t for t in _submit_history.get(user_id, []) if now - t < window_seconds]
+    if len(hist) >= max_per_window:
         _submit_history[user_id] = hist
         return True
     hist.append(now)
@@ -392,6 +399,7 @@ class GuessSelectView(discord.ui.View):
         game_message: discord.Message,
         *,
         cooldown_seconds: int = 0,
+        max_guesses_per_round: int = MAX_GUESSES_PER_USER_ROUND,
         guess_placeholder: str = "Who is in this photo?",
     ) -> None:
         super().__init__(timeout=SELECT_TIMEOUT_SECONDS)
@@ -399,6 +407,7 @@ class GuessSelectView(discord.ui.View):
         self.round_id = round_id
         self.game_message = game_message
         self.cooldown_seconds = cooldown_seconds
+        self.max_guesses_per_round = max_guesses_per_round
         self._all_members = list(guess_members)
         self._display_members = self._all_members
         self._filter_query = ""
@@ -518,7 +527,7 @@ class GuessSelectView(discord.ui.View):
         prior_guesses = await asyncio.to_thread(
             _do_count_user_guesses, db_path, self.round_id, interaction.user.id
         )
-        if prior_guesses >= MAX_GUESSES_PER_USER_ROUND:
+        if prior_guesses >= self.max_guesses_per_round:
             self._disable_all()
             guild_id = interaction.guild.id if interaction.guild else 0
             await asyncio.to_thread(
@@ -530,7 +539,7 @@ class GuessSelectView(discord.ui.View):
             await interaction.edit_original_response(
                 content=(
                     f"You're out of guesses on this round "
-                    f"(cap: {MAX_GUESSES_PER_USER_ROUND})."
+                    f"(cap: {self.max_guesses_per_round})."
                 ),
                 view=self,
             )
@@ -768,6 +777,7 @@ class GameView(discord.ui.View):
             view=GuessSelectView(
                 self.bot, self.round_id, guess_members, interaction.message,
                 cooldown_seconds=config.guess_cooldown_seconds,
+                max_guesses_per_round=config.max_guesses_per_round,
                 guess_placeholder=placeholder,
             ),
             ephemeral=True,
@@ -1596,10 +1606,14 @@ class GuessCog(commands.Cog):
             )
             return
 
-        if _submit_rate_limited(interaction.user.id):
+        if _submit_rate_limited(
+            interaction.user.id,
+            max_per_window=config.submit_max_per_window,
+            window_seconds=config.submit_window_seconds,
+        ):
             await interaction.followup.send(
-                f"You've hit the submission limit ({_SUBMIT_MAX_PER_WINDOW} per hour). "
-                "Please wait a bit before submitting again.",
+                f"You've hit the submission limit ({config.submit_max_per_window} per "
+                f"{config.submit_window_seconds}s). Please wait a bit before submitting again.",
                 ephemeral=True,
             )
             return

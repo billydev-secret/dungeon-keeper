@@ -11,11 +11,13 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.chat_revive.logic import DAY_BAND
 from bot_modules.chat_revive.starter_pack import STARTER_QUESTIONS
 from bot_modules.services.chat_revive_service import (
+    RHYTHM_MAX_AGE_SECONDS,
     ChannelConfig,
     GuildConfig,
     add_question,
     bulk_add_questions,
     channel_activity,
+    evaluate,
     frequency_state,
     get_channel_config,
     get_guild_config,
@@ -74,6 +76,7 @@ def test_guild_config_defaults(db):
     assert cfg.daily_budget == 3
     assert cfg.ping_max_per_day == 3
     assert cfg.ping_cooldown_minutes == 60
+    assert cfg.rhythm_max_age_seconds == RHYTHM_MAX_AGE_SECONDS
 
 
 def test_guild_config_roundtrip(db):
@@ -88,6 +91,7 @@ def test_guild_config_roundtrip(db):
         flourish_enabled=False,
         ping_max_per_day=5,
         ping_cooldown_minutes=30,
+        rhythm_max_age_seconds=1800.0,
     )
     with open_db(db) as conn:
         save_guild_config(conn, cfg)
@@ -382,3 +386,27 @@ def test_get_rhythm_recomputes_when_stale(db):
         assert recomputed != first
         _, computed_at = load_rhythm(conn, GID, CID)
     assert computed_at == NOW
+
+
+def test_evaluate_passes_configured_rhythm_max_age_not_hardcoded_default(db, monkeypatch):
+    """evaluate() must feed get_rhythm the guild's configured staleness
+    window, not the module's RHYTHM_MAX_AGE_SECONDS constant."""
+    import bot_modules.services.chat_revive_service as svc
+
+    with open_db(db) as conn:
+        save_guild_config(conn, GuildConfig(guild_id=GID, rhythm_max_age_seconds=999.0))
+
+    captured = {}
+    real_get_rhythm = svc.get_rhythm
+
+    def spy_get_rhythm(*args, **kwargs):
+        captured.update(kwargs)
+        return real_get_rhythm(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "get_rhythm", spy_get_rhythm)
+
+    with open_db(db) as conn:
+        evaluate(conn, GID, CID, now_ts=NOW, busy=False, slowmode_delay=0)
+
+    assert captured["max_age_seconds"] == 999.0
+    assert captured["max_age_seconds"] != RHYTHM_MAX_AGE_SECONDS

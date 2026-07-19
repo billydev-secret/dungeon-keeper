@@ -22,6 +22,9 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "guess_min_image_dimension_px": "400",
     "guess_max_image_size_mb": "10",
     "guess_prompt_message_id": "0",
+    "guess_submit_max_per_window": "5",
+    "guess_submit_window_seconds": "3600",
+    "guess_max_guesses_per_round": "5",
 }
 
 
@@ -38,6 +41,9 @@ def get_guess_config(conn: sqlite3.Connection, guild_id: int) -> GuessConfig:
         min_image_dimension_px=int(_get("guess_min_image_dimension_px") or 400),
         max_image_size_mb=int(_get("guess_max_image_size_mb") or 10),
         prompt_message_id=int(_get("guess_prompt_message_id") or 0),
+        submit_max_per_window=int(_get("guess_submit_max_per_window") or 5),
+        submit_window_seconds=int(_get("guess_submit_window_seconds") or 3600),
+        max_guesses_per_round=int(_get("guess_max_guesses_per_round") or 5),
     )
 
 

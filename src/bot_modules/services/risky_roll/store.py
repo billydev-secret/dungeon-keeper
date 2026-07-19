@@ -80,6 +80,33 @@ class StateStore:
     async def set_min_game_time(self, guild_id: int, seconds: int | None) -> None:
         await asyncio.to_thread(self._set_min_game_time, guild_id, seconds)
 
+    def _load_max_games_per_channel(self) -> dict[int, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT guild_id, value FROM config WHERE key = 'risky_max_games_per_channel'"
+            ).fetchall()
+        return {int(row["guild_id"]): int(row["value"]) for row in rows}
+
+    async def load_max_games_per_channel(self) -> dict[int, int]:
+        return await asyncio.to_thread(self._load_max_games_per_channel)
+
+    def _set_max_games_per_channel(self, guild_id: int, cap: int | None) -> None:
+        with self._connect() as conn:
+            if cap is None:
+                conn.execute(
+                    "DELETE FROM config WHERE guild_id = ? AND key = 'risky_max_games_per_channel'",
+                    (guild_id,),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO config (guild_id, key, value) VALUES (?, 'risky_max_games_per_channel', ?) "
+                    "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+                    (guild_id, str(cap)),
+                )
+
+    async def set_max_games_per_channel(self, guild_id: int, cap: int | None) -> None:
+        await asyncio.to_thread(self._set_max_games_per_channel, guild_id, cap)
+
     # ------------------------------------------------------------------
     # Active rounds
     # ------------------------------------------------------------------
@@ -369,7 +396,7 @@ class StateStore:
             conn.execute("DELETE FROM risky_posted_questions WHERE guild_id = ?", (guild_id,))
             conn.execute(
                 "DELETE FROM config WHERE guild_id = ? AND key IN "
-                "('risky_ping_role_id', 'risky_min_game_seconds')",
+                "('risky_ping_role_id', 'risky_min_game_seconds', 'risky_max_games_per_channel')",
                 (guild_id,),
             )
         return game_ids

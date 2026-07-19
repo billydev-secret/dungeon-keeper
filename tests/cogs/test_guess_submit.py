@@ -299,6 +299,33 @@ async def test_submit_rejects_when_guess_role_not_configured():
     assert "role" in msg.lower() and ("not configured" in msg.lower() or "ask an admin" in msg.lower())
 
 
+# ── configurable submission flood cap ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_submit_uses_configured_flood_cap_not_hardcoded_default():
+    """A guild with a lower configured flood cap is blocked before the
+    hardcoded 5/hour default — proving config.submit_max_per_window, not the
+    module constant, drives enforcement."""
+    member = _guess_member()
+    guild = _guild(member)
+    interaction = fake_interaction(user=member, guild=guild)
+    interaction.guild_id = GUILD_ID
+    interaction.guild.get_member = lambda uid: guild.members.get(uid)
+
+    cog = _make_cog()
+    cfg = _cfg(submit_max_per_window=1, submit_window_seconds=3600)
+    with patch("bot_modules.cogs.guess_cog._load_config", return_value=cfg):
+        # First submit fails validation (no pipeline mocking) but still
+        # records a submission attempt against the flood cap.
+        await _submit(cog, interaction, _attachment(content_type="video/mp4"))
+        interaction.followup.send.reset_mock()
+        await _submit(cog, interaction, _attachment(content_type="video/mp4"))
+
+    msg = interaction.followup.send.call_args.args[0]
+    assert "submission limit" in msg.lower()
+    assert "1 per" in msg
+
+
 @pytest.mark.asyncio
 async def test_on_post_reposts_prompt_after_game_message():
     """After posting a game round, _repost_prompt is called to move the

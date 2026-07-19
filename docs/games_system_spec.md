@@ -62,7 +62,7 @@ These settings are **live and enforced** but are configured from the web dashboa
 - **Per-guild per-game enable/disable** (`games_game_config`, default enabled). Checked by `check_game_enabled`.
 - **Audit channel** (`games_audit_channel`). When set, anonymous submissions are mirrored there with the original author visible.
 - **Game Host / editor role** (`games_editor_role`). Holders pass the Game-Host check for content authoring on the dashboard and can add/remove other players via `/games join|leave`.
-- **LegitLibs per-channel tier cap** (`legitlibs_channel_config.max_tier`, default 4) and LegitLibs template/vocabulary content.
+- **LegitLibs per-channel tier cap** (`legitlibs_channel_config.max_tier`, default 4), set per-row on the Games Config → Allowed Channels table, and LegitLibs template/vocabulary content.
 
 ### Dashboard
 
