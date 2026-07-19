@@ -418,6 +418,9 @@ def test_get_config_includes_guess_section(authed_client):
     assert v["guess_cooldown_seconds"] == 60
     assert v["min_image_dimension_px"] == 400
     assert v["max_image_size_mb"] == 10
+    assert v["submit_max_per_window"] == 5
+    assert v["submit_window_seconds"] == 3600
+    assert v["max_guesses_per_round"] == 5
 
 
 def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
@@ -517,6 +520,24 @@ def test_update_guess_invalid_difficulty_returns_error(authed_client):
     data = resp.json()
     assert data["ok"] is False
     assert "crop_difficulty" in data["detail"]
+
+
+def test_update_guess_rate_limit_fields(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/guess",
+        json={
+            "submit_max_per_window": 2,
+            "submit_window_seconds": 600,
+            "max_guesses_per_round": 3,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "guess_submit_max_per_window", "5", fake_ctx.guild_id) == "2"
+        assert get_config_value(conn, "guess_submit_window_seconds", "3600", fake_ctx.guild_id) == "600"
+        assert get_config_value(conn, "guess_max_guesses_per_round", "5", fake_ctx.guild_id) == "3"
 
 
 # ── Multi-guild safety ───────────────────────────────────────────────

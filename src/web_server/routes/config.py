@@ -386,6 +386,9 @@ def _guess_section(conn, guild_id: int) -> dict:
         "guess_cooldown_seconds": gc.guess_cooldown_seconds,
         "min_image_dimension_px": gc.min_image_dimension_px,
         "max_image_size_mb": gc.max_image_size_mb,
+        "submit_max_per_window": gc.submit_max_per_window,
+        "submit_window_seconds": gc.submit_window_seconds,
+        "max_guesses_per_round": gc.max_guesses_per_round,
     }
 
 
@@ -3493,6 +3496,9 @@ class GuessConfigUpdate(BaseModel):
     guess_cooldown_seconds: int | None = None
     min_image_dimension_px: int | None = None
     max_image_size_mb: int | None = None
+    submit_max_per_window: int | None = None
+    submit_window_seconds: int | None = None
+    max_guesses_per_round: int | None = None
 
 
 @router.put("/config/guess")
@@ -3541,6 +3547,12 @@ async def update_guess_config(
                 set_guess_config_value(conn, guild_id, "guess_min_image_dimension_px", str(body.min_image_dimension_px))
             if body.max_image_size_mb is not None:
                 set_guess_config_value(conn, guild_id, "guess_max_image_size_mb", str(body.max_image_size_mb))
+            if body.submit_max_per_window is not None:
+                set_guess_config_value(conn, guild_id, "guess_submit_max_per_window", str(max(1, body.submit_max_per_window)))
+            if body.submit_window_seconds is not None:
+                set_guess_config_value(conn, guild_id, "guess_submit_window_seconds", str(max(1, body.submit_window_seconds)))
+            if body.max_guesses_per_round is not None:
+                set_guess_config_value(conn, guild_id, "guess_max_guesses_per_round", str(max(1, body.max_guesses_per_round)))
         return {"ok": True}
 
     return await run_query(_q)
