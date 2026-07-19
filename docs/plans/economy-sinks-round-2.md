@@ -129,16 +129,54 @@ Today `pay_game_rewards` is called from **9 scattered sites**, and it sits
 *beside* rather than *inside* the two shared resolvers. Escrow cannot land on
 that safely — nothing would enforce that we found every path.
 
-- Move the payout into `BaseDuel._finalize_result` (`duels/base_duel.py:242`)
-  and `BaseGame._post_group_result` (`duels/base_game.py:770`). Both already
-  receive winner/loser/game.
-- Chicken's cosmetic path (`chicken/cog.py:141-182`) and Quickdraw's VOID
-  (`quickdraw/cog.py:145-167`) never reach those helpers with a winner and need
-  explicit handling.
-- **Add the missing tests first** — there is currently no test for
-  `_expire_active`/`ABANDONED`, Quickdraw VOID, the Musical Chairs
-  `winner=None` branch, or the pressure-cooker payout site. Those are exactly
-  the branches a refund will live in.
+### What the first survey said to do, and why it isn't enough
+
+The obvious move is: put the payout inside `BaseDuel._finalize_result`
+(`duels/base_duel.py:242`) and `BaseGame._post_group_result`
+(`duels/base_game.py:770`), both of which already receive winner/loser/game.
+
+**Reading the actual cogs (2026-07-19) shows that does not produce a
+chokepoint.** Three of the six games don't route their resolution through
+those helpers at all:
+
+| Game | Why the shared resolver isn't the seam |
+|---|---|
+| Hot Potato (duel) | `cog.py:130-171` hand-rolls the whole resolution — disables the view, posts its own `ResultView`, writes state via `hpdb.set_game_state` directly. Never calls `_finalize_result`. |
+| Pressure Cooker | Pays inside `handle_interaction` (`cog.py:192`) and *then* returns `("done", loser)`, which is what triggers the result post. Payout happens a layer above the resolver. |
+| Quickdraw | `WINNER_FIRED` pays at `cog.py:179` and only calls `_finalize_result` **if the channel is still resolvable** — so today a vanished channel pays but never finalizes. `VOID` (`:145-167`) never pays at all. |
+
+### The seam that would actually hold
+
+`BaseGame._db_set_state` (`base_game.py:933`) is abstract, implemented once per
+cog, and *every* terminal transition is supposed to go through it. Making it a
+concrete template method on `BaseGame` — write the state via a new abstract
+`_db_write_state`, then fire an `_on_terminal_state` hook for
+`RESOLVED`/`RESOLVED_NO_NICK`/`ABANDONED`/`VOID`/`EXPIRED_*` — gives exactly
+the guarantee escrow needs: no cog can end a game without the economy seeing it.
+
+**But it leaks today.** Across the six cogs there are **30** `set_game_state`
+call sites; only 6 are the `_db_set_state` implementations. The other ~24 write
+state by calling their `db` module directly, bypassing the base entirely.
+
+So the real stage 4a is:
+
+1. Write the missing tests **first** — there is currently no test for
+   `_expire_active`/`ABANDONED`, Quickdraw `VOID`, the Musical Chairs
+   `winner=None` branch, or the pressure-cooker payout site. Those are exactly
+   the branches a refund will live in, and they're the regression net for
+   everything below.
+2. Convert the ~24 direct `xxdb.set_game_state(self.db, …)` calls to
+   `self._db_set_state(…)`. Mechanical and greppable, but it touches every
+   resolution path in six games.
+3. Make `_db_set_state` concrete on `BaseGame` (delegating to a new abstract
+   `_db_write_state`) and move the payout into its terminal-state branch.
+4. Delete the 9 scattered `pay_game_rewards` calls.
+
+This is materially bigger than "move the payout into two helpers". It is still
+the right order — escrow on top of the current call graph would be guesswork —
+but it should be costed as a refactor of six games' resolution paths, not as a
+one-file change.
+
 - Party-suite games are **out of scope** — only 3 of ~50 `end_game` calls pass
   players at all.
 
