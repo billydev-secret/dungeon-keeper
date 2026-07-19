@@ -4,20 +4,53 @@ One branded embed summarising how members earn and spend the guild's currency,
 posted (and refreshed in place) by ``/bank post-guide``. The panel's channel and
 message ids live in the ``econ_`` config (``guide_channel_id`` /
 ``guide_message_id``, same pattern as Voice Master's persistent panel) so a
-repost replaces the old panel instead of stacking duplicates. Pure builder —
-all Discord I/O stays in the cog.
+repost replaces the old panel instead of stacking duplicates.
+
+The panel also carries the economy's one member-facing self-service control: a
+**persistent** 🔔 Notifications button that toggles the opt-in role
+(``game_role_id``) on the clicker. Its ``custom_id`` is static — there is no
+per-message state to carry — so the cog re-registers a bare ``GuideView`` with
+``bot.add_view`` at load and clicks on the existing panel still route after a
+restart. That role is a DM preference only: it gates no channel and no payout,
+so opting out costs a member nothing but their DMs.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import logging
+from typing import TYPE_CHECKING, cast
 
 import discord
 
 from bot_modules.economy.leaderboard import _pad
+from bot_modules.economy.logic import resolve_notify_toggle
+from bot_modules.services.economy_service import load_econ_settings
 
 if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
     from bot_modules.services.economy_service import EconSettings
+
+log = logging.getLogger("dungeonkeeper.economy")
+
+NOTIFY_CUSTOM_ID = "econ_guide_notify"
+
+NOTIFY_ON_MSG = (
+    "🔔 Notifications **on** — quest completions and streak milestones will "
+    "come to your DMs. Click again to turn them off."
+)
+NOTIFY_OFF_MSG = (
+    "🔕 Notifications **off** — you'll still earn and spend exactly as before, "
+    "you just won't get the DMs. Click again to turn them back on."
+)
+NOTIFY_UNCONFIGURED_MSG = (
+    "Notifications aren't set up in this server yet — ask a mod to pick the "
+    "economy notification role on the dashboard."
+)
+NOTIFY_FAILED_MSG = (
+    "I couldn't update your roles just now — my role may sit below the "
+    "notification role. Ask a mod to check, then try again."
+)
 
 
 def build_guide_embed(
@@ -40,14 +73,16 @@ def build_guide_embed(
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
 
-    # `<id:customize>` renders as a clickable "Channels & Roles" link — the
-    # server's onboarding screen where members grab the economy-game role that
-    # unlocks these channels. Not a real text channel, so there is no id to
-    # mention; this token is the only way to point at it.
+    # The opt-in role is a DM preference, nothing more — it gates no channel
+    # and no payout — so this field promises notifications, not access. (It
+    # used to point at <id:customize>, back when that role doubled as the
+    # onboarding gate hiding these channels.)
     embed.add_field(
-        name="Joining",
+        name="Notifications",
         value=(
-            "Opt in any time from <id:customize> to join the game economy."
+            "Hit **🔔 Notifications** below to have quest completions and "
+            "streak milestones DMed to you. Toggle it off any time — it only "
+            "changes your DMs, never what you can see or earn."
             "\n\u200b"
         ),
         inline=False,
@@ -103,6 +138,84 @@ def build_guide_embed(
     )
     embed.set_footer(text=" ".join(footer_bits))
     return embed
+
+
+async def _safe_ephemeral(interaction: discord.Interaction, message: str) -> None:
+    """Send an ephemeral note whether or not the interaction was answered."""
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        log.debug("econ guide: failed to send ephemeral note", exc_info=True)
+
+
+class GuideNotifyButton(discord.ui.Button):
+    """Persistent 🔔 toggle for the economy's opt-in DM role.
+
+    One button serves everyone, so its label can't reflect per-member state;
+    the click answers ephemerally with whichever way it just flipped.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="Notifications",
+            emoji="🔔",
+            style=discord.ButtonStyle.secondary,
+            custom_id=NOTIFY_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await _safe_ephemeral(interaction, "This only works in a server.")
+            return
+
+        bot = cast("Bot", interaction.client)
+
+        def _read() -> EconSettings:
+            with bot.ctx.open_db() as conn:
+                return load_econ_settings(conn, guild.id)
+
+        settings = await asyncio.to_thread(_read)
+        action = resolve_notify_toggle(
+            role_id=settings.game_role_id,
+            member_role_ids={r.id for r in member.roles},
+        )
+        if action == "unconfigured":
+            await _safe_ephemeral(interaction, NOTIFY_UNCONFIGURED_MSG)
+            return
+
+        role = guild.get_role(settings.game_role_id)
+        if role is None:
+            # Configured but deleted since — same dead end as unconfigured
+            # from the member's side, so it reads the same.
+            await _safe_ephemeral(interaction, NOTIFY_UNCONFIGURED_MSG)
+            return
+
+        try:
+            if action == "grant":
+                await member.add_roles(role, reason="Economy notifications opt-in")
+            else:
+                await member.remove_roles(role, reason="Economy notifications opt-out")
+        except discord.HTTPException:
+            log.debug("econ guide: notify toggle failed", exc_info=True)
+            await _safe_ephemeral(interaction, NOTIFY_FAILED_MSG)
+            return
+
+        await _safe_ephemeral(
+            interaction, NOTIFY_ON_MSG if action == "grant" else NOTIFY_OFF_MSG
+        )
+
+
+class GuideView(discord.ui.View):
+    """The persistent view attached to the guide panel."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(GuideNotifyButton())
 
 
 def should_restick_guide(

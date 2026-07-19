@@ -1814,9 +1814,10 @@ async def test_game_role_holder_gets_dm_not_channel_reply(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_game_role_non_member_paid_silently(ctx, db):
-    """With game_role_id set, a member WITHOUT the role is paid silently —
-    no reaction, no reply, no DM."""
+async def test_game_role_non_member_still_acknowledged_in_channel(ctx, db):
+    """The opt-in role is a DM preference, so a member WITHOUT it is *not*
+    paid silently: they get the reaction + in-channel reply (the pre-opt-in
+    behaviour), just no DM. Silence used to read as the quest having failed."""
     _enable(db, game_role_id=777)
     _mk_quest(db, reward=10, trigger_words="gm")
     cog = _make_cog(ctx)
@@ -1829,9 +1830,36 @@ async def test_game_role_non_member_paid_silently(ctx, db):
     ) as notify:
         await cog._on_trigger_message(msg)
 
-    assert _balance(db, 501) == 10  # still paid
-    msg.add_reaction.assert_not_awaited()
-    msg.reply.assert_not_awaited()
+    assert _balance(db, 501) == 10
+    msg.add_reaction.assert_awaited_once_with("✅")
+    msg.reply.assert_awaited_once()
+    notify.assert_not_awaited()  # DMs stay opt-in
+
+
+@pytest.mark.asyncio
+async def test_game_role_non_member_signoff_gets_channel_reply(ctx, db):
+    """Same for a sign-off quest: the card still posts for the manager and the
+    member gets the 📝 reaction + reply rather than nothing at all."""
+    _enable(db, game_role_id=777)
+    _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)  # no role_ids
+
+    msg = _trigger_message(author=member, content="did it")
+    with (
+        patch(
+            "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
+        ) as card,
+        patch(
+            "bot_modules.cogs.economy_cog.notify_member",
+            new=AsyncMock(return_value=True),
+        ) as notify,
+    ):
+        await cog._on_trigger_message(msg)
+
+    card.assert_awaited_once()
+    msg.add_reaction.assert_awaited_once_with("📝")
+    msg.reply.assert_awaited_once()
     notify.assert_not_awaited()
 
 

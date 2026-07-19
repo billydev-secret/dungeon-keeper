@@ -23,7 +23,11 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.economy.guide import build_guide_embed, should_restick_guide
+from bot_modules.economy.guide import (
+    GuideView,
+    build_guide_embed,
+    should_restick_guide,
+)
 from bot_modules.economy.leaderboard import (
     _pad,
     build_leaderboard_embed,
@@ -2342,27 +2346,23 @@ class EconomyCog(commands.Cog):
             )
             reaction, note = "📝", embed
 
-        # When a "game role" is configured, the completion card is a DM to
-        # opted-in players (keeps the trigger channel clean); members without
-        # the role are paid silently. With no role set the feature is off and
-        # everyone gets the legacy in-channel reaction + reply.
+        # The opt-in role decides *where* the completion card lands, never
+        # whether the member hears about it: opted-in players get it DMed
+        # (keeps the trigger channel clean), everyone else gets the in-channel
+        # reply. Both always get the reaction. Members without the role used to
+        # be paid in total silence, which reads as the quest having failed.
+        try:
+            await message.add_reaction(reaction)
+        except discord.HTTPException:
+            log.debug("econ trigger: failed to react", exc_info=True)
+
         role_id = settings.game_role_id
-        if role_id:
-            if not any(r.id == role_id for r in member.roles):
-                return
-            try:
-                await message.add_reaction(reaction)
-            except discord.HTTPException:
-                log.debug("econ trigger: failed to react", exc_info=True)
+        if role_id and any(r.id == role_id for r in member.roles):
             await notify_member(
                 self.bot, self.ctx.db_path, guild.id, member.id, embed=note
             )
             return
 
-        try:
-            await message.add_reaction(reaction)
-        except discord.HTTPException:
-            log.debug("econ trigger: failed to react", exc_info=True)
         try:
             await message.reply(embed=note, mention_author=False)
         except discord.HTTPException:
@@ -2870,7 +2870,7 @@ class EconomyCog(commands.Cog):
         if settings.guide_message_id and settings.guide_channel_id == target.id:
             try:
                 old = await target.fetch_message(settings.guide_message_id)
-                await old.edit(embed=embed)
+                await old.edit(embed=embed, view=GuideView())
             except discord.HTTPException:
                 pass  # gone or unreachable — fall through to a fresh post
             else:
@@ -2930,7 +2930,8 @@ class EconomyCog(commands.Cog):
 
             try:
                 message = await target.send(
-                    embed=build_guide_embed(settings, color=accent)
+                    embed=build_guide_embed(settings, color=accent),
+                    view=GuideView(),
                 )
             except discord.Forbidden:
                 return None
@@ -3285,6 +3286,9 @@ class EconomyCog(commands.Cog):
             SponsorApproveButton,
             SponsorDenyButton,
         )
+        # The guide panel's 🔔 toggle carries no per-message state, so it is a
+        # plain static-custom_id view rather than a dynamic item.
+        self.bot.add_view(GuideView())
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:

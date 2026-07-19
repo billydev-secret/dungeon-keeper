@@ -61,11 +61,15 @@ function render(container, cfg, channels, roles, members) {
           <span data-picker="manager_role_id"></span>
         </div>
         <div class="field">
-          <label>Game role</label>
+          <label>Notifications role</label>
           <span data-picker="game_role_id"></span>
-          <div class="field-hint">When set, auto-claimed quest completions DM the
-            player their card instead of replying in the channel; members without
-            the role are paid silently. Leave unset to reply in-channel for everyone.</div>
+          <div class="field-hint">The opt-in role members toggle with the 🔔 button
+            on the how-it-works panel. It only controls DMs — holders get quest
+            completions and streak milestones in their DMs instead of an
+            in-channel reply, and are the only ones sent recurring economy
+            notices. It gates no channel and no payout, so don't use it for
+            channel permissions. Leave unset to reply in-channel for everyone and
+            send no recurring DMs.</div>
         </div>
         <div class="field">
           <label>Community weekly host</label>
