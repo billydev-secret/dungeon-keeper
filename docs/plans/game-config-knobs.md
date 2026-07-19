@@ -56,12 +56,22 @@ old hardcoded default— drives behavior.
 - `src/bot_modules/services/chat_revive_service.py`: `RHYTHM_MAX_AGE_SECONDS`
   (6h). Lower priority/impact than the others.
 
-### 7. LegitLibs — round timers
-- `src/bot_modules/cogs/games_legitlibs/modes/classic.py`: `FILL_TIMEOUT`
-  (300s), `CLAIM_TIMEOUT` (45s), `RESCUE_TIMEOUT` (120s), `POLL_INTERVAL`
-  (15s); `modes/quiplash.py`: `FILL_TIMEOUT` (300s). No existing panel
-  manages round timing (`games-legitlibs.js` only manages the template
-  bank) — needs a new section there.
+### 7. LegitLibs — round timers — SCOPED DOWN
+- The round timers (`FILL_TIMEOUT`/`CLAIM_TIMEOUT`/`RESCUE_TIMEOUT`/
+  `POLL_INTERVAL` in `modes/classic.py`, `FILL_TIMEOUT` in `modes/quiplash.py`)
+  are per-CHANNEL, not per-guild — a different shape from every other item
+  in this sweep — and there's no existing dashboard section for LegitLibs
+  round timing to extend. Building that means designing a new per-channel
+  config UI from scratch. Discussed with the user; decision: skip the round
+  timers for now (candidate follow-up, own session).
+- Along the way found a real bug instead: `legitlibs_channel_config.max_tier`
+  (per-channel heat-tier cap, already read by `run_classic`/`run_quiplash`
+  via `get_channel_max_tier`) had **no writer anywhere** — always silently
+  fell back to the default (4), making the whole per-channel tier cap
+  feature dead despite `docs/games_system_spec.md` describing it as
+  dashboard-managed. Fixed: added a "LegitLibs Max Tier" selector per row on
+  the existing Games Config → Allowed Channels table
+  (`PUT /api/games/config/channels/{id}/legitlibs-max-tier`).
 
 ## Excluded (checked, not real gaps)
 

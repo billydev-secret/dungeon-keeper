@@ -919,6 +919,35 @@ def test_channels_add_and_appear_in_list(open_client, fake_ctx):
     channels = resp.json()["channels"]
     assert len(channels) == 1
     assert channels[0]["channel_id"] == 123456789
+    assert channels[0]["legitlibs_max_tier"] == 4
+
+
+def test_set_legitlibs_max_tier_persists(open_client, fake_ctx):
+    open_client.post(f"{BASE}/config/channels", json={"channel_id": "123456789"})
+
+    resp = open_client.put(
+        f"{BASE}/config/channels/123456789/legitlibs-max-tier", json={"max_tier": 2}
+    )
+    assert resp.status_code == 200
+
+    channels = open_client.get(f"{BASE}/config/channels").json()["channels"]
+    assert channels[0]["legitlibs_max_tier"] == 2
+
+    # Updating again overwrites rather than duplicating.
+    resp2 = open_client.put(
+        f"{BASE}/config/channels/123456789/legitlibs-max-tier", json={"max_tier": 3}
+    )
+    assert resp2.status_code == 200
+    channels = open_client.get(f"{BASE}/config/channels").json()["channels"]
+    assert channels[0]["legitlibs_max_tier"] == 3
+
+
+def test_set_legitlibs_max_tier_rejects_out_of_range(open_client, fake_ctx):
+    open_client.post(f"{BASE}/config/channels", json={"channel_id": "123456789"})
+    resp = open_client.put(
+        f"{BASE}/config/channels/123456789/legitlibs-max-tier", json={"max_tier": 5}
+    )
+    assert resp.status_code == 422
 
 
 def test_channels_remove(open_client, fake_ctx):

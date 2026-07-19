@@ -92,17 +92,26 @@ export function mount(container) {
           el.innerHTML = `<div class="empty">No allowed channels configured.</div>`;
           return;
         }
+        const tierOptions = (selected) => [1, 2, 3, 4].map((t) =>
+          `<option value="${t}" ${t === selected ? "selected" : ""}>${t}</option>`
+        ).join("");
+
         let rows = "";
         for (const ch of channels) {
           const added = ch.added_at ? String(ch.added_at).slice(0, 10) : "";
           rows += `<tr>
             <td>${esc(channelName(guildChannels, ch.channel_id))}</td>
             <td style="font-size:12px;">${esc(added)}</td>
+            <td>
+              <select data-action="legitlibs-max-tier" data-cid="${esc(ch.channel_id)}" style="width:60px;">
+                ${tierOptions(ch.legitlibs_max_tier)}
+              </select>
+            </td>
             <td><button class="btn" style="padding:2px 6px;font-size:12px;" data-action="remove-channel" data-cid="${esc(ch.channel_id)}">Remove</button></td>
           </tr>`;
         }
-        el.innerHTML = `<table style="width:100%;max-width:500px;">
-          <thead><tr><th>Channel</th><th>Added</th><th style="width:80px;"></th></tr></thead>
+        el.innerHTML = `<table style="width:100%;max-width:560px;">
+          <thead><tr><th>Channel</th><th>Added</th><th title="Highest LegitLibs heat tier allowed in this channel">LegitLibs Max Tier</th><th style="width:80px;"></th></tr></thead>
           <tbody>${rows}</tbody>
         </table>`;
 
@@ -115,6 +124,18 @@ export function mount(container) {
               await apiDelete(`/api/games/config/channels/${encodeURIComponent(cid)}`);
               loadAllowedChannels();
             } catch (err) { toast(`Remove failed: ${err.message}`, "error"); }
+          });
+        });
+
+        el.querySelectorAll('[data-action="legitlibs-max-tier"]').forEach((sel) => {
+          sel.addEventListener("change", async () => {
+            const cid = sel.dataset.cid;
+            try {
+              await apiPut(`/api/games/config/channels/${encodeURIComponent(cid)}/legitlibs-max-tier`, {
+                max_tier: parseInt(sel.value, 10),
+              });
+              toast("Saved");
+            } catch (err) { toast(`Save failed: ${err.message}`, "error"); }
           });
         });
       } catch (err) {
