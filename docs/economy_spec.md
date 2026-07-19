@@ -668,9 +668,13 @@ the member owns and gift rentals where they are the beneficiary.
   ("on pace"/"needs a push", same 90%-of-linear rule as `compute_live`),
   contributor count, today's contribution delta (from `econ_kind_activity`;
   omitted for channel-scoped goals the scope-blind activity ledger can't
-  measure), and a week-end deadline clock; the active quest board
-  (daily/weekly/monthly/event, capped at 12 lines, ⚡ spotlight line with an
-  "until" clock); an **anonymous live feed** — today's paid completions
+  measure), and a week-end deadline clock; a **quest-board summary** — one
+  line per board cadence ("**N** on your board, drawn from M" + reward
+  range; a cadence sized 0 or with an empty pool is omitted) rather than the
+  full pool, since members only ever face their personal draw; board-less
+  "Anytime" (event) quests stay individually listed (capped at 12 lines),
+  and the ⚡ spotlight line keeps its "until" clock; an **anonymous live
+  feed** — today's paid completions
   aggregated per quest (title × count + latest relative timestamp, max 5
   lines, plus a full-board-bonus count; titles and counts only, never member
   names, per the 2026-07-18 ticker decision); and a blurb pointing members

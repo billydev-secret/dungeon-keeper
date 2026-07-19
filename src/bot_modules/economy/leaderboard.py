@@ -1,7 +1,8 @@
 """Economy leaderboard panel — the live, auto-updating channel embed.
 
 One branded embed showing today's pulse, the top earners over a rolling
-window, community goal progress with pace, the active quest board, and an
+window, community goal progress with pace, a per-cadence quest-board
+summary (members draw personal boards, so no full-pool menu), and an
 anonymous live feed of today's completions. Posted by ``/bank
 post-leaderboard``; refreshed in place by the hourly economy loop AND by the
 debounced live loop (``leaderboard_live_loop``) whenever economy activity
@@ -60,7 +61,8 @@ _QTYPE_LABELS = {
     "event": "Anytime",
 }
 
-# Keep the quest board inside Discord's 1024-char field limit.
+# Cap listed "Anytime" (event) quest lines so the field stays inside
+# Discord's 1024-char limit; board cadences summarize to one line each.
 _MAX_QUEST_LINES = 12
 
 # Pace rule shared with the Statistics page's "Happening now" card: expected
@@ -460,19 +462,56 @@ def build_leaderboard_embed(
                 f"⚡ **Spotlight:** {data.spotlight_label} pays "
                 f"**double**{until}!"
             )
+        # Members never face the whole pool: each draws a personal board of
+        # board_size quests per cadence. Summarize the draw instead of
+        # listing a menu nobody actually has; only board-less "Anytime"
+        # (event) quests are named, because those really are open to all.
+        sizes = {
+            "daily": settings.quest_board_daily,
+            "weekly": settings.quest_board_weekly,
+            "monthly": settings.quest_board_monthly,
+        }
         label_width = max(len(v) for v in _QTYPE_LABELS.values())
-        for q in data.quests[:_MAX_QUEST_LINES]:
-            xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
-            label = _QTYPE_LABELS[q.qtype].ljust(label_width)
-            spot_tag = "⚡ " if q.spotlight else ""
-            quest_lines.append(
-                f"`{label}` {spot_tag}**{q.title}** — "
-                f"{emoji} {q.reward:,}{xp}"
+        body: list[str] = []
+        for qtype, qtype_label in _QTYPE_LABELS.items():
+            pool = [q for q in data.quests if q.qtype == qtype]
+            if not pool:
+                continue
+            label = qtype_label.ljust(label_width)
+            if qtype == "event":
+                for q in pool[:_MAX_QUEST_LINES]:
+                    xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
+                    spot_tag = "⚡ " if q.spotlight else ""
+                    body.append(
+                        f"`{label}` {spot_tag}**{q.title}** — "
+                        f"{emoji} {q.reward:,}{xp}"
+                    )
+                if len(pool) > _MAX_QUEST_LINES:
+                    body.append(
+                        f"…and {len(pool) - _MAX_QUEST_LINES} more on "
+                        "`/quests`."
+                    )
+                continue
+            n = min(sizes.get(qtype, 0), len(pool))
+            if n <= 0:
+                continue
+            lo = min(q.reward for q in pool)
+            hi = max(q.reward for q in pool)
+            reward = f"{emoji} {lo:,}" + (
+                f"–{hi:,}" if hi != lo else ""
+            ) + " each"
+            body.append(
+                f"`{label}` **{n}** on your board, "
+                f"drawn from {len(pool)} — {reward}"
             )
-        hidden = len(data.quests) - _MAX_QUEST_LINES
-        if hidden > 0:
-            quest_lines.append(f"…and {hidden} more on `/quests`.")
+        if body:
+            quest_lines.extend(body)
+            quest_lines.append(
+                "Boards reshuffle each reset — `/quests` shows yours."
+            )
         board = "\n".join(quest_lines)
+        if not board:
+            board = "No quests running right now — check back soon."
     else:
         board = "No quests running right now — check back soon."
     embed.add_field(name="Quest board", value=board, inline=False)

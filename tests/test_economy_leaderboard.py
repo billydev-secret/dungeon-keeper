@@ -260,18 +260,47 @@ def test_embed_community_bar_and_states():
     assert "✅ paid out" in goals
 
 
-def test_embed_quest_board_lines_and_overflow():
+def test_embed_quest_board_summarizes_per_cadence():
+    # Members draw personal boards, so the panel shows one summary line per
+    # cadence (draw count vs pool, reward range) — never the full pool.
     quests = [
-        QuestLine("daily", f"Quest {i}", reward=5, reward_xp=10 if i == 0 else 0)
+        QuestLine("daily", f"Quest {i}", reward=40 if i == 0 else 5, reward_xp=0)
         for i in range(14)
+    ] + [
+        QuestLine("weekly", "Solo weekly", reward=30, reward_xp=0),
+        QuestLine("monthly", "Big month", reward=100, reward_xp=0),
+    ]
+    settings = EconSettings(quest_board_daily=3, quest_board_monthly=0)
+    embed = build_leaderboard_embed(
+        settings, LeaderboardData([], [], quests), _names({}), now_ts=NOW
+    )
+    board = next(f.value for f in embed.fields if f.name == "Quest board")
+    assert board is not None
+    assert "`Daily  ` **3** on your board, drawn from 14" in board
+    assert "5–40 each" in board
+    # A pool smaller than the configured size clamps to the pool.
+    assert "`Weekly ` **1** on your board, drawn from 1" in board
+    assert "30 each" in board
+    # A cadence sized 0 is off for this guild — no line at all.
+    assert "Monthly" not in board
+    # No individual titles leak into the summary.
+    assert "Quest 0" not in board and "Solo weekly" not in board
+    assert "reshuffle each reset" in board and "/quests" in board
+
+
+def test_embed_quest_board_lists_event_quests():
+    # "Anytime" (event) quests aren't board-drawn — those stay named.
+    quests = [
+        QuestLine("daily", "Chatter", reward=5, reward_xp=0),
+        QuestLine("event", "Secret Santa", reward=25, reward_xp=10),
     ]
     embed = build_leaderboard_embed(
         EconSettings(), LeaderboardData([], [], quests), _names({}), now_ts=NOW
     )
     board = next(f.value for f in embed.fields if f.name == "Quest board")
     assert board is not None
-    assert "`Daily  ` **Quest 0**" in board and "+⭐10xp" in board
-    assert "…and 2 more" in board
+    assert "**Secret Santa** — " in board and "+⭐10xp" in board
+    assert "Chatter" not in board
 
 
 def test_embed_empty_states_and_personal_blurb():
@@ -370,7 +399,7 @@ async def test_post_leaderboard_posts_and_saves_ids(ctx, db):
     interaction.user = _admin()
     interaction.channel = channel
 
-    await cog.bank_post_leaderboard.callback(cog, interaction, None)
+    await cog.bank_post_leaderboard.callback(cog, interaction, None)  # pyright: ignore[reportCallIssue]
 
     embed = channel.send.await_args.kwargs["embed"]
     top = next(f.value for f in embed.fields if "Top earners" in (f.name or ""))
@@ -402,7 +431,7 @@ async def test_post_leaderboard_refreshes_in_place(ctx, db):
     interaction.user = _admin()
     interaction.channel = channel
 
-    await cog.bank_post_leaderboard.callback(cog, interaction, None)
+    await cog.bank_post_leaderboard.callback(cog, interaction, None)  # pyright: ignore[reportCallIssue]
 
     channel.fetch_message.assert_awaited_once_with(4444)
     old.edit.assert_awaited_once()
@@ -522,6 +551,7 @@ def test_embed_auto_goal_tier_marker():
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
     goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    assert goals is not None
     assert "🏁 tier 2/3 secured · next at 100" in goals
 
 
@@ -613,7 +643,8 @@ def test_embed_spotlight_gets_countdown():
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
     board = _fields(embed)["Quest board"]
     assert f"pays **double** — until <t:{int(NOW + 7200)}:R>!" in board
-    assert "⚡ **Chatter**" in board
+    # The banner names the doubled kind; the summary no longer lists titles.
+    assert "Chatter" not in board
 
 
 # ── live signal + debounced refresh loop ────────────────────────────────────
