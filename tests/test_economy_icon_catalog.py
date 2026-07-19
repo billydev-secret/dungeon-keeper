@@ -90,12 +90,13 @@ def test_update_and_get(db):
 
 
 def test_price_range(db):
+    """(min, max, count) — the count feeds the shop's "N to pick from" note."""
     with open_db(db) as conn:
         assert catalog_price_range(conn, GUILD) is None  # empty catalog
         _add_icon(conn, price=50)
         _add_icon(conn, price=300)
         _add_icon(conn, price=999, enabled=False)  # disabled excluded
-        assert catalog_price_range(conn, GUILD) == (50, 300)
+        assert catalog_price_range(conn, GUILD) == (50, 300, 2)
 
 
 def test_in_use_guard_tracks_live_rentals(db):

@@ -864,6 +864,21 @@ async def _shop(cog, interaction) -> None:
     await cog.bank_shop.callback(cog, interaction)
 
 
+def _build_shop_embed(*args, **kwargs):
+    from bot_modules.cogs.economy_cog import _build_shop_embed as build
+
+    return build(*args, **kwargs)
+
+
+def _shop_row(embed, label: str) -> str:
+    """The shop-table line whose first code cell is ``label``."""
+    for field in embed.fields:
+        for line in field.value.splitlines():
+            if line.startswith(f"`{label}") and "`" in line[1:]:
+                return line
+    raise AssertionError(f"no {label!r} row in {[f.name for f in embed.fields]}")
+
+
 @pytest.mark.asyncio
 async def test_shop_lists_perks_and_gates_features(ctx, db):
     _enable(db)
@@ -888,7 +903,102 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     }
     assert disabled == {"role_gradient", "role_icon"}
     blob = " ".join(f.value for f in kwargs["embed"].fields)
-    assert "requires a server feature" in blob
+    assert "needs a server feature" in blob
+
+
+def test_shop_table_aligns_cells_and_tiers_by_price(db):
+    """Rows are fixed-width code cells, grouped in tiers, cheapest first."""
+    _enable(
+        db,
+        price_role_name=35,
+        price_role_color=50,
+        price_role_gradient=120,
+        price_role_icon=400,
+    )
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+
+    tiers = {f.name: f.value for f in embed.fields}
+    assert list(tiers) == ["Essentials", "Signature", "For a friend"]
+
+    # Every row's cells share one width across the whole embed, so the columns
+    # line up across tier headings rather than restarting at each one.
+    rows = [
+        line
+        for value in tiers.values()
+        for line in value.splitlines()
+        if line.startswith("`")
+    ]
+    assert len(rows) == 5
+    prefixes = {line.split("` `")[0] for line in rows}
+    assert len({len(p) for p in prefixes}) == 1
+
+    # Ascending price inside each tier, and the blurb is present.
+    assert tiers["Essentials"].index("**35**") < tiers["Essentials"].index("**50**")
+    assert tiers["Signature"].index("**120**") < tiers["Signature"].index("**400**")
+    assert "call yourself anything" in _shop_row(embed, "Name")
+
+
+def test_shop_table_reorders_when_prices_are_reconfigured(db):
+    """The ladder follows the guild's prices, not the hardcoded tier order."""
+    _enable(db, price_role_name=90, price_role_color=10)
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    essentials = next(f.value for f in embed.fields if f.name == "Essentials")
+    assert essentials.index("**10**") < essentials.index("**90**")
+
+
+def test_shop_icon_row_shows_catalog_span_and_size(db):
+    """A curated catalog prices per icon — show the span and how many there are."""
+    _enable(db)
+    embed = _build_shop_embed(
+        _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
+    )
+    row = _shop_row(embed, "Icon")
+    assert "**120–400**" in row
+    assert "40 to pick from" in row
+
+
+def test_shop_icon_row_collapses_a_single_priced_catalog(db):
+    """One price across the catalog reads as a price, not a degenerate span."""
+    _enable(db)
+    embed = _build_shop_embed(
+        _settings(db), set(), None, panel=True, icon_catalog=(200, 200, 3)
+    )
+    assert "**200**" in _shop_row(embed, "Icon")
+    assert "–" not in _shop_row(embed, "Icon")
+
+
+def test_shop_shows_balance_to_a_member_but_not_in_the_panel(db):
+    """The wallet anchors the prices — but the channel panel is member-agnostic."""
+    _enable(db)
+    settings = _settings(db)
+    mine = _build_shop_embed(settings, set(), None, balance=1240)
+    assert "1,240" in mine.description
+
+    panel = _build_shop_embed(settings, set(), None, panel=True)
+    assert "1,240" not in panel.description
+    assert "you have" not in panel.description
+
+
+@pytest.mark.asyncio
+async def test_shop_buttons_carry_no_price(ctx, db):
+    """Prices live in the table only, so re-pricing can't stale a button label."""
+    _enable(db, price_role_name=35)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)
+    ):
+        await _shop(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    labels = [
+        str(b.label)
+        for b in kwargs["view"].children
+        if isinstance(b, discord.ui.Button)
+    ]
+    assert not any("35" in label for label in labels)
+    assert "✨ Name" in labels
 
 
 @pytest.mark.parametrize(
@@ -931,8 +1041,9 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     assert "econ_shop_rent:role_color" not in ids
     # The other perks still offer Rent.
     assert "econ_shop_rent:role_name" in ids
-    blob = " ".join(f.value for f in kwargs["embed"].fields)
-    assert "rented" in blob
+    # The rented row is ticked in the table.
+    color_row = _shop_row(kwargs["embed"], "Color")
+    assert "✅" in color_row
 
 
 @pytest.mark.asyncio

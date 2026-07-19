@@ -130,6 +130,40 @@ _SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
 # Feature-gated perks and the friendly reason shown when the gate is closed.
 _FEATURE_GATED = ("role_gradient", "role_icon")
 
+# Shop-table furniture. The full `_PERK_LABELS` names are too wide for an
+# aligned two-cell row, so the shop uses a short cell label plus a one-line
+# blurb — most members have never seen a gradient role and can't price what
+# they can't picture. Blurbs stay under ~27 chars so a row survives mobile.
+_PERK_SHORT = {
+    "role_color": "Color",
+    "role_name": "Name",
+    "role_gradient": "Gradient",
+    "role_icon": "Icon",
+    "gift_color": "Gift",
+}
+_PERK_BLURBS = {
+    "role_color": "one solid color, your pick",
+    "role_name": "call yourself anything",
+    "role_gradient": "two-color fade on your name",
+    "role_icon": "a badge beside your name",
+    "gift_color": "buy someone a role color",
+}
+_PERK_EMOJI = {
+    "role_color": "🎨",
+    "role_name": "✨",
+    "role_gradient": "🌈",
+    "role_icon": "🖼️",
+    "gift_color": "🎁",
+}
+# Self-perks grouped into a price ladder — cheap everyday tweaks first, the
+# showy ones second — so the shop reads as tiers to climb rather than a flat
+# spreadsheet. Rows sort by price inside each tier at render time, since
+# prices are guild-configurable and can reorder.
+_PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Essentials", ("role_name", "role_color")),
+    ("Signature", ("role_gradient", "role_icon")),
+)
+
 
 def _perk_price(settings: EconSettings, perk: str) -> int:
     return int(getattr(settings, f"price_{perk}"))
@@ -577,11 +611,16 @@ class _ShopView(discord.ui.View):
                 # single picker — renting and restyling both happen by choosing
                 # an icon (each carries its own price).
                 button = discord.ui.Button(
-                    label="Change icon" if perk in owned else "Browse icons",
+                    label=(
+                        "Change icon" if perk in owned else "🖼️ Browse icons"
+                    ),
+                    # The catalog opener is the odd one out — it browses rather
+                    # than rents — so it takes the only secondary style in the
+                    # row instead of blending into the blurple slabs.
                     style=(
                         discord.ButtonStyle.success
                         if perk in owned
-                        else discord.ButtonStyle.primary
+                        else discord.ButtonStyle.secondary
                     ),
                     disabled=perk in gated,
                     custom_id="econ_shop_icons",
@@ -598,9 +637,10 @@ class _ShopView(discord.ui.View):
                 )
                 button.callback = self._make_cfg_callback(perk)
             else:
-                price = _perk_price(settings, perk)
+                # No price in the label — the table above carries it, and a
+                # short emoji-led label keeps the row scannable.
                 button = discord.ui.Button(
-                    label=f"Rent {_PERK_LABELS[perk]} · {price}",
+                    label=f"{_PERK_EMOJI[perk]} {_PERK_SHORT[perk]}",
                     style=discord.ButtonStyle.primary,
                     disabled=perk in gated,
                     custom_id=f"econ_shop_rent:{perk}",
@@ -724,17 +764,23 @@ class ShopRentButton(
 
     Unlike the ephemeral /bank shop view, settings and the feature gate are
     re-read on every click — the panel can sit in a channel for months, so
-    nothing rendered at post time is trusted at click time (except the label,
-    which a `/bank post-shop` re-run refreshes after re-pricing).
+    nothing rendered at post time is trusted at click time. Labels carry no
+    price (the embed's table does), so re-pricing only needs the embed
+    refreshed, not the buttons re-labelled.
     """
 
     def __init__(
-        self, perk: str, *, label: str | None = None, disabled: bool = False
+        self,
+        perk: str,
+        *,
+        label: str | None = None,
+        style: discord.ButtonStyle = discord.ButtonStyle.primary,
+        disabled: bool = False,
     ) -> None:
         super().__init__(
             discord.ui.Button(
                 label=label or f"Rent {_PERK_LABELS.get(perk, perk)}",
-                style=discord.ButtonStyle.primary,
+                style=style,
                 disabled=disabled,
                 custom_id=f"econ_shop_panel:{perk}",
             )
@@ -790,6 +836,23 @@ class ShopRentButton(
         await _rent_perk_flow(interaction, cog, settings, guild, self.perk)
 
 
+def _shop_row_price(
+    settings: EconSettings,
+    perk: str,
+    icon_catalog: tuple[int, int, int] | None,
+) -> tuple[int, str]:
+    """(sort key, display string) for a shop row's price.
+
+    A curated icon catalog prices per icon, so the role-icon row shows the
+    catalog's span and sorts on its floor.
+    """
+    if perk == "role_icon" and icon_catalog is not None:
+        lo, hi, _count = icon_catalog
+        return lo, f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
+    price = _perk_price(settings, perk)
+    return price, f"{price:,}"
+
+
 def _build_shop_embed(
     settings: EconSettings,
     gated: set[str],
@@ -797,49 +860,83 @@ def _build_shop_embed(
     *,
     panel: bool = False,
     owned: set[str] | frozenset[str] = frozenset(),
-    icon_price_range: tuple[int, int] | None = None,
+    icon_catalog: tuple[int, int, int] | None = None,
+    balance: int | None = None,
 ) -> discord.Embed:
     """The shop listing, shared by /bank shop and the channel panel.
 
-    ``owned`` marks the viewer's rented rows — only meaningful for the
-    ephemeral per-member view; the channel panel is member-agnostic.
-    ``icon_price_range`` is the (min, max) weekly price across the guild's
-    curated icon catalog; when set, the role-icon row shows that range and
-    points at the catalog instead of a single flat price.
+    Rendered as the aligned code-cell table the leaderboard, guide and quest
+    panels use: ``label`` | ``blurb`` | price, grouped into price tiers. Five
+    ``inline=False`` fields carrying four words each read as an airy list;
+    a table reads as a storefront.
+
+    ``owned`` marks the viewer's rented rows and ``balance`` puts their wallet
+    in the footer — both only meaningful for the ephemeral per-member view;
+    the channel panel is member-agnostic and passes neither.
+    ``icon_catalog`` is (min price, max price, icon count) across the guild's
+    curated catalog; when set, the role-icon row shows that span and its size
+    instead of a single flat price.
     """
-    description = "Weekly rentals — billed every 7 days, cancel any time."
-    if panel:
-        description += " Tap a button to rent — the reply is private to you."
-    else:
-        description += " Green buttons customise what you've already rented."
+    # The balance lives in the description, not the footer: footers render
+    # plain text, so a custom currency emoji would show as raw <:name:id>.
+    header = "Weekly rentals · cancel any time"
+    if balance is not None:
+        header += f" · you have {settings.currency_emoji} **{balance:,}**"
+    description = (
+        header
+        + "\n"
+        + (
+            "Tap a button to rent — the reply is private to you."
+            if panel
+            else "Green buttons customise what you've already rented."
+        )
+        + "\n​"
+    )
     embed = discord.Embed(
         title="🛍️ Perk shop", description=description, color=accent
     )
-    for perk in _SELF_PERKS:
+
+    # One width per table, not per tier, so cells line up across the whole
+    # embed rather than jumping at each heading.
+    rows = [*_SELF_PERKS, "gift_color"]
+    label_width = max(len(_PERK_SHORT[p]) for p in rows)
+    blurb_width = max(len(_PERK_BLURBS[p]) for p in rows)
+
+    def _line(perk: str) -> str:
+        _sort, price_str = _shop_row_price(settings, perk, icon_catalog)
         note = ""
         if perk in gated:
-            note = " · _requires a server feature not enabled here_"
+            note = " · _needs a server feature not enabled here_"
         elif perk in owned:
-            note = " · ✅ rented"
-        if perk == "role_icon" and icon_price_range is not None:
-            lo, hi = icon_price_range
-            price_str = f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
-            value = (
-                f"{settings.currency_emoji} **{price_str}** / week · "
-                f"pick from the catalog{note}"
-            )
-        else:
-            price = _perk_price(settings, perk)
-            value = f"{settings.currency_emoji} **{price:,}** / week{note}"
-        embed.add_field(name=_PERK_LABELS[perk], value=value, inline=False)
-    gift_price = _perk_price(settings, "gift_color")
+            note = " · ✅"
+        elif perk == "role_icon" and icon_catalog is not None:
+            note = f" · {icon_catalog[2]} to pick from"
+        return (
+            f"`{_pad(_PERK_SHORT[perk], label_width)}` "
+            f"`{_pad(_PERK_BLURBS[perk], blurb_width)}` "
+            f"{settings.currency_emoji} **{price_str}**{note}"
+        )
+
+    for tier_name, perks in _PERK_TIERS:
+        ordered = sorted(
+            perks, key=lambda p: _shop_row_price(settings, p, icon_catalog)[0]
+        )
+        embed.add_field(
+            name=tier_name,
+            value="\n".join(_line(p) for p in ordered) + "\n​",
+            inline=False,
+        )
     embed.add_field(
-        name=_PERK_LABELS["gift_color"],
-        value=(
-            f"{settings.currency_emoji} **{gift_price:,}** / week · "
-            "gift a friend a color with /bank gift"
-        ),
+        name="For a friend",
+        value=f"{_line('gift_color')}\nSend it with `/bank gift`.",
         inline=False,
+    )
+
+    embed.set_footer(
+        text=(
+            "Prices are per week, billed every 7 days. A short grace period "
+            "covers a missed renewal."
+        )
     )
     return embed
 
@@ -861,15 +958,17 @@ def _shop_panel_view(
         if perk == "role_icon" and has_catalog:
             view.add_item(
                 ShopRentButton(
-                    perk, label="Browse role icons", disabled=perk in gated
+                    perk,
+                    label="🖼️ Browse icons",
+                    style=discord.ButtonStyle.secondary,
+                    disabled=perk in gated,
                 )
             )
             continue
-        price = _perk_price(settings, perk)
         view.add_item(
             ShopRentButton(
                 perk,
-                label=f"Rent {_PERK_LABELS[perk]} · {price}",
+                label=f"{_PERK_EMOJI[perk]} {_PERK_SHORT[perk]}",
                 disabled=perk in gated,
             )
         )
@@ -1236,7 +1335,7 @@ class EconomyCog(commands.Cog):
         guild = interaction.guild
         user_id = interaction.user.id
 
-        settings, owned = await asyncio.to_thread(
+        settings, owned, balance = await asyncio.to_thread(
             self._load_role_ctx, guild.id, user_id
         )
         if not settings.enabled:
@@ -1252,7 +1351,12 @@ class EconomyCog(commands.Cog):
         has_catalog = icon_range is not None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = _build_shop_embed(
-            settings, gated, accent, owned=owned, icon_price_range=icon_range
+            settings,
+            gated,
+            accent,
+            owned=owned,
+            icon_catalog=icon_range,
+            balance=balance,
         )
         view = _ShopView(self, settings, guild, user_id, gated, owned, has_catalog)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -1470,7 +1574,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        settings, ent, _bal = await asyncio.to_thread(
+            self._load_role_ctx, guild.id, user_id
+        )
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
@@ -1502,7 +1608,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        settings, ent, _bal = await asyncio.to_thread(
+            self._load_role_ctx, guild.id, user_id
+        )
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
@@ -1538,7 +1646,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        settings, ent, _bal = await asyncio.to_thread(
+            self._load_role_ctx, guild.id, user_id
+        )
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
@@ -1580,7 +1690,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        settings, ent, _bal = await asyncio.to_thread(
+            self._load_role_ctx, guild.id, user_id
+        )
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
@@ -1651,7 +1763,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        settings, ent, _bal = await asyncio.to_thread(
+            self._load_role_ctx, guild.id, user_id
+        )
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
@@ -1756,11 +1870,17 @@ class EconomyCog(commands.Cog):
 
     def _load_role_ctx(
         self, guild_id: int, user_id: int
-    ) -> tuple[EconSettings, set[str]]:
+    ) -> tuple[EconSettings, set[str], int]:
+        """Settings, the member's entitlements, and their balance in one trip.
+
+        The shop header shows the balance next to the prices, so it rides
+        along on the connection the perk rows already need.
+        """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             ent = entitlements(conn, guild_id, user_id)
-        return settings, ent
+            balance = get_balance(conn, guild_id, user_id)
+        return settings, ent, balance
 
     def _name_blocklist(self, guild_id: int) -> list[str]:
         with self.ctx.open_db() as conn:
@@ -1780,8 +1900,8 @@ class EconomyCog(commands.Cog):
                 for r in list_catalog(conn, guild_id, enabled_only=True)
             ]
 
-    def _icon_price_range(self, guild_id: int) -> tuple[int, int] | None:
-        """(min, max) enabled-icon price, or None when no catalog is configured."""
+    def _icon_price_range(self, guild_id: int) -> tuple[int, int, int] | None:
+        """(min, max, count) over enabled icons, or None with no catalog set up."""
         with self.ctx.open_db() as conn:
             return catalog_price_range(conn, guild_id)
 
@@ -2967,7 +3087,7 @@ class EconomyCog(commands.Cog):
         has_catalog = icon_range is not None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = _build_shop_embed(
-            settings, gated, accent, panel=True, icon_price_range=icon_range
+            settings, gated, accent, panel=True, icon_catalog=icon_range
         )
         view = _shop_panel_view(settings, gated, has_catalog=has_catalog)
 

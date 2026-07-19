@@ -592,7 +592,9 @@ takes effect on the next cycle, never retroactively.
 uploads, an admin can stock a per-guild catalog of named role icons, each with its
 own weekly price, from the **Sinks** dashboard page — which also now **owns the flat
 perk prices** (moved off the Settings panel). When a catalog exists, `/bank shop`'s
-role-icon row becomes a picker of curated icons (Discord caps the select at 25) instead
+role-icon row shows the catalog's price span and how many icons back it
+(`catalog_price_range` returns `(min, max, count)`), and its button becomes a
+picker of curated icons (Discord caps the select at 25) instead
 of a single flat-priced Rent button; choosing one rents or switches to it. It reuses the
 existing `role_icon` rental perk and the personal-role projector — **no new perk kind
 and no `econ_rentals.perk` CHECK change**: the rented catalog icon id is recorded on the
@@ -644,9 +646,15 @@ the member owns and gift rentals where they are the beneficiary.
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
   - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — one ephemeral
-    panel that both browses and configures: unrented rows carry a **Rent** button,
-    rented rows a green **customise** button opening the matching modal (name /
-    color hex / gradient hexes / server-emoji icon), with icon/gradient rows
+    panel that both browses and configures. The listing is an aligned code-cell
+    table in the leaderboard's house style (`label` | `blurb` | price), grouped
+    into price tiers — **Essentials** (name, color), **Signature** (gradient,
+    icon), **For a friend** (gift) — sorted by the guild's configured price
+    inside each tier, with the viewer's balance in the description and the
+    renewal fine print in the footer. Unrented rows carry an emoji-led **Rent**
+    button (no price in the label), rented rows a green **customise** button
+    opening the matching modal (name / color hex / gradient hexes /
+    server-emoji icon), with icon/gradient rows
     reflecting the server's role features and rented rows marked ✅. A fresh rental's
     confirmation carries the same customise button, and a member holding only a
     *gifted* color gets a "Set gifted color" button. **`/bank gift @member
@@ -690,10 +698,10 @@ the member owns and gift rentals where they are the beneficiary.
   clicker. The rent flow itself (`_rent_perk_flow`) is shared with the
   ephemeral `/bank shop` view. Panel ids persist as `econ_shop_channel_id` /
   `econ_shop_message_id` (guide-panel pattern: same-channel repost edits in
-  place — embed **and** view, so re-priced button labels refresh — another
-  channel deletes + reposts). Button labels bake prices at post time; re-run
-  the command after re-pricing. Gifting stays command-only (`/bank gift`
-  needs a target member, which a button can't carry).
+  place — embed **and** view — another channel deletes + reposts). Button
+  labels carry no price (the embed's table does), so re-pricing only needs
+  the embed refreshed. Gifting stays command-only (`/bank gift` needs a
+  target member, which a button can't carry).
 - **Leaderboard panel (shipped, live):** **`/bank post-leaderboard
   [channel]`** [mod] posts a single live status embed — the economy's
   centerpiece surface. Content, top to bottom: **today's pulse** (guild-local
