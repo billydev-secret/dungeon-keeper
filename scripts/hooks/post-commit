@@ -1,5 +1,5 @@
 #!/bin/sh
-# Mirror newly queued live-tests into the #testing-queue channel.
+# Post this commit's "Testing:" checklist (if it has one) as a QA card.
 #
 # Installed by scripts/hooks/install.sh into $(git rev-parse --git-common-dir)/hooks,
 # which every worktree shares -- so this resolves the *committing* worktree and

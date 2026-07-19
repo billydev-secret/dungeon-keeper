@@ -87,9 +87,11 @@ SQLite-backed. Tests in `tests/`.
   `Pen Pals: dashboard question bank + AI prompt studio`. Prose body: why,
   edge cases handled, what tests cover it.
 - **No** `Co-Authored-By` / `Claude-Session` trailers.
-- Behavior-changing commit ⇒ append a live-test entry to
-  `docs/TESTING_QUEUE.md` (same commit): what to verify on the live server,
-  as checkboxes, with the commit hash.
+- Behavior-changing commit ⇒ end the message body with a `Testing:` section
+  listing what to verify on the live server, as `- [ ]` checkbox lines. The
+  post-commit hook (`scripts/post_testing_docs.py`) reads it straight off the
+  commit and posts a QA Tracker card (Pass/Fail/Blocked buttons in Discord)
+  automatically — no separate doc to maintain.
 
 ## Conventions
 
