@@ -44,6 +44,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
+| [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch cog design |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
 | [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
