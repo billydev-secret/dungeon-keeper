@@ -1,6 +1,6 @@
 # Quest variety, community weeklies, live tracker
 
-**Status:** planned · **Owner:** economy · **Spec:** `docs/economy_spec.md` §4
+**Status:** built (stages 1–5 + dynamic targets, 2026-07-18) · **Owner:** economy · **Spec:** `docs/economy_spec.md` §4
 
 ## Goal
 
