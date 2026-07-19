@@ -67,11 +67,13 @@ def test_get_economy_config_returns_defaults(authed_client):
     assert data["currency_plural"] == "Coins"
     assert data["booster_multiplier"] == 1.5
     assert data["xp_per_coin"] == 15.0
-    assert data["bank_channel_id"] == 0
+    # Snowflakes leave as strings (see test_get_config_emits_snowflakes_as_
+    # strings) — including the 0 sentinel, so the picker always sees one type.
+    assert data["bank_channel_id"] == "0"
     assert data["price_role_color"] == 50
     # The QOTD panel reads this straight off the GET — absent means the picker
     # silently renders undefined.
-    assert data["qotd_ping_role_id"] == 0
+    assert data["qotd_ping_role_id"] == "0"
 
 
 def test_get_economy_config_requires_admin(fake_ctx):
@@ -243,3 +245,102 @@ def test_metrics_requires_admin(fake_ctx):
     resp = client.get("/api/economy/metrics")
     assert resp.status_code == 403
     client.close()
+
+
+# ── snowflake precision (ids above 2**53) ────────────────────────────────────
+
+# A real snowflake from the guild that hit this bug. As a JS number it becomes
+# 1526051848518373600 — parseInt and JSON.parse both round it — which is how
+# econ_game_role_id came to point at a role that never existed.
+BIG_ROLE_ID = 1526051848518373608
+BIG_CHANNEL_ID = 1526017396094144584
+
+
+def test_get_config_emits_snowflakes_as_strings(authed_client, fake_ctx):
+    """A bare JSON number would be rounded by the browser's JSON.parse before
+    any panel code could defend against it, so ids must leave as strings."""
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.services.economy_service import save_econ_settings
+
+        save_econ_settings(
+            conn,
+            fake_ctx.guild_id,
+            {"game_role_id": BIG_ROLE_ID, "bank_channel_id": BIG_CHANNEL_ID},
+        )
+
+    data = authed_client.get("/api/economy/config").json()
+
+    assert data["game_role_id"] == str(BIG_ROLE_ID)
+    assert data["bank_channel_id"] == str(BIG_CHANNEL_ID)
+    # No precision lost: the exact digits survive.
+    assert int(data["game_role_id"]) == BIG_ROLE_ID
+    # Non-id numerics stay numbers — only snowflakes are stringified.
+    assert data["reward_qotd"] == 10
+    assert data["booster_multiplier"] == 1.5
+
+
+def test_put_accepts_snowflake_as_string_losslessly(authed_client, fake_ctx):
+    """The panel sends ids as strings; pydantic must coerce without rounding."""
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "game_role_id": str(BIG_ROLE_ID),
+            "manager_role_id": str(BIG_ROLE_ID),
+            "bank_channel_id": str(BIG_CHANNEL_ID),
+            "qotd_ping_role_id": str(BIG_ROLE_ID),
+        },
+    )
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        settings = load_econ_settings(conn, fake_ctx.guild_id)
+    assert settings.game_role_id == BIG_ROLE_ID
+    assert settings.manager_role_id == BIG_ROLE_ID
+    assert settings.bank_channel_id == BIG_CHANNEL_ID
+    assert settings.qotd_ping_role_id == BIG_ROLE_ID
+
+
+def test_snowflake_survives_a_get_put_round_trip(authed_client, fake_ctx):
+    """The whole loop the panel performs: read the config, save it back
+    unchanged, and the ids must be byte-identical. This is the cycle that
+    silently corrupted three settings in production."""
+    authed_client.put(
+        "/api/economy/config", json={"game_role_id": str(BIG_ROLE_ID)}
+    )
+    fetched = authed_client.get("/api/economy/config").json()
+
+    # Echo it back exactly as the panel would.
+    resp = authed_client.put(
+        "/api/economy/config", json={"game_role_id": fetched["game_role_id"]}
+    )
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        settings = load_econ_settings(conn, fake_ctx.guild_id)
+    assert settings.game_role_id == BIG_ROLE_ID
+
+
+def test_no_panel_parses_a_snowflake_with_parseint():
+    """Guard the browser half of the fix.
+
+    There is no Node in this repo, so the panel JS can't be unit-tested; this
+    reads the source instead. `parseInt` on a 19-digit id silently rounds it,
+    and that is how three settings in production came to point at objects that
+    don't exist. Snowflakes must be sent as strings — the server coerces them.
+    """
+    import re
+    from pathlib import Path
+
+    panels = Path("src/web_server/static/js/panels")
+    # parseInt(...) applied to anything that looks like an id source.
+    offender = re.compile(r"parseInt\([^)]*(?:getValue\(\)|_id)[^)]*\)")
+    hits = []
+    for path in sorted(panels.glob("*.js")):
+        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+            if offender.search(line):
+                hits.append(f"{path.name}:{lineno}: {line.strip()}")
+
+    assert not hits, (
+        "snowflake ids must be sent as strings, not parseInt'd:\n"
+        + "\n".join(hits)
+    )
