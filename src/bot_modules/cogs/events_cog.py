@@ -47,10 +47,13 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
+from bot_modules.economy.leaderboard import progress_bar
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.quests import TRIGGER_KINDS
 from bot_modules.services.economy_quests_service import (
     fire_trigger_inline,
     fire_trigger_quests,
+    load_member_quest_board,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -105,6 +108,44 @@ def _counts_as_member_activity(message: discord.Message) -> bool:
         discord.MessageType.default,
         discord.MessageType.reply,
     }
+
+
+# How many still-open quests the login DM lists before pointing at /bank
+# quests for the rest — keeps the digest a glance, not a wall of text.
+_LOGIN_QUEST_RECAP_LIMIT = 6
+
+
+def _quest_recap_line(q: dict) -> str:
+    """One friendly line for a quest in the login digest: title + a status bar."""
+    title = q["title"]
+    state = q.get("state")
+    if state == "community":
+        return f"🔹 **{title}** {progress_bar(q['current'], q['target'])}"
+    if q.get("progress_target"):
+        return f"🔹 **{title}** {progress_bar(q['progress_current'], q['progress_target'])}"
+    if state == "claimable":
+        return f"🔹 **{title}** — ✅ ready to claim!"
+    if state == "pending":
+        return f"🔹 **{title}** — ⏳ awaiting sign-off"
+    hint = TRIGGER_KINDS.get(state or "", "")
+    return f"🔹 **{title}** — {hint}" if hint else f"🔹 **{title}**"
+
+
+def _quest_recap_field(quests_out: list[dict]) -> str | None:
+    """The login DM's quest checklist: what's still open, most relevant first.
+
+    None when nothing's open, so a quiet guild's DM doesn't grow an empty
+    "nothing to do" field.
+    """
+    open_quests = [q for q in quests_out if q.get("state") != "done"]
+    if not open_quests:
+        return None
+    shown = open_quests[:_LOGIN_QUEST_RECAP_LIMIT]
+    lines = [_quest_recap_line(q) for q in shown]
+    leftover = len(open_quests) - len(shown)
+    if leftover > 0:
+        lines.append(f"…and {leftover} more — check `/bank quests`")
+    return "\n".join(lines)
 
 
 _collect_backfill_channels = collect_messageable_channels
@@ -720,7 +761,8 @@ class EventsCog(commands.Cog):
 
         The DB work (settings load, streak read, login, QOTD award) runs in one
         off-loop transaction; the streak read *before* ``process_login`` captures
-        the pre-login streak so a trivial 1→short reset stays silent (spec §10).
+        the pre-login streak so a trivial 1→short reset omits its own callout in
+        the daily digest DM (spec §10) rather than reading as a real break.
         """
         assert message.guild is not None
         guild_id = message.guild.id
@@ -742,7 +784,7 @@ class EventsCog(commands.Cog):
             isinstance(resolved, discord.Message) and resolved.author.id == user_id
         )
 
-        def _econ_work() -> tuple[EconSettings, LoginOutcome, int] | None:
+        def _econ_work() -> tuple[EconSettings, LoginOutcome, int, list[dict]] | None:
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 if not settings.enabled:
@@ -798,25 +840,22 @@ class EventsCog(commands.Cog):
                     )
                 if outcome is None:
                     return None
-                return settings, outcome, prior_streak
+                quests_out = load_member_quest_board(
+                    conn, settings, guild_id, user_id, today
+                )
+                return settings, outcome, prior_streak, quests_out
 
         result = await asyncio.to_thread(_econ_work)
         if result is None:
             return
-        settings, outcome, prior_streak = result
-
-        # The login payout itself is silent; only milestones, a used grace day,
-        # or a *meaningful* streak reset (a real streak, not a 1→1 blip) DM.
-        notify_reset = outcome.reset and prior_streak >= 3
-        if not (outcome.milestone > 0 or outcome.grace_consumed or notify_reset):
-            return
+        settings, outcome, prior_streak, quests_out = result
 
         accent = await resolve_accent_color(self.ctx.db_path, message.guild)
-        embed = self._econ_login_embed(settings, outcome, prior_streak, accent)
-        # Streak/milestone/grace notices are recurring engagement — only DM
-        # players who took the opt-in economy role. Payout stays silent for
-        # everyone else (matches the quest-card path and the game_role_id
-        # design intent).
+        embed = self._econ_login_embed(settings, outcome, prior_streak, quests_out, accent)
+        # A daily digest (streak + quest recap) is recurring engagement —
+        # only DM players who took the opt-in economy role. Payout stays
+        # silent for everyone else (matches the quest-card path and the
+        # game_role_id design intent).
         await notify_member(
             self.bot,
             self.ctx.db_path,
@@ -831,18 +870,24 @@ class EventsCog(commands.Cog):
         settings: EconSettings,
         outcome: LoginOutcome,
         prior_streak: int,
+        quests_out: list[dict],
         accent: discord.Color,
     ) -> discord.Embed:
-        """Branded streak-update embed covering every triggered login event."""
+        """Daily digest DM: streak update + a fun little quest checklist."""
         embed = discord.Embed(
             title=f"{settings.currency_emoji} Daily streak",
             color=accent,
         )
+        unit = settings.currency_name if outcome.paid == 1 else settings.currency_plural
+        streak_line = f"Day **{outcome.streak}** checked in"
+        if outcome.paid > 0:
+            streak_line += f" — +**{outcome.paid:,}** {unit}"
+        embed.description = f"{streak_line}."
         if outcome.milestone > 0:
-            unit = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
+            unit_m = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
             embed.add_field(
                 name=f"🏆 Day {outcome.streak} milestone!",
-                value=f"Bonus **{outcome.milestone:,}** {unit}",
+                value=f"Bonus **{outcome.milestone:,}** {unit_m}",
                 inline=False,
             )
         if outcome.grace_consumed:
@@ -861,6 +906,13 @@ class EventsCog(commands.Cog):
                     f"Your **{prior_streak}**-day streak ended. Starting fresh "
                     f"at day **{outcome.streak}**."
                 ),
+                inline=False,
+            )
+        quest_field = _quest_recap_field(quests_out)
+        if quest_field:
+            embed.add_field(
+                name="🎯 Quests to play with today",
+                value=quest_field,
                 inline=False,
             )
         return embed
