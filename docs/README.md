@@ -2,12 +2,6 @@
 
 Discord moderation, community, voice, and analytics bot.
 
-## Features
-
-> Each entry below is written as a short, advertising-ready blurb. Slash commands and
-> the web dashboard panels that drive each feature are listed in
-> [Slash Commands](#slash-commands) and the dashboard sections further down.
-
 ### Moderation & safety
 - **Jail** — Send a member to a private intake channel with their roles stripped and automatically restored on release. Pull witnesses in or remove them, and every action lands in a unified `/modinfo` history and audit log.
 - **Tickets** — Panel-button-driven private support channels members open for help, or mods open for a quiet word. Claim, escalate, close, reopen, and generate a full transcript on close — all from persistent buttons that survive restarts.
