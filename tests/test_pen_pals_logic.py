@@ -214,6 +214,20 @@ def test_draw_from_bank_ignores_other_game_types(sync_db_path):
         assert pp._draw_from_bank(conn, False, []) is None
 
 
+def test_draw_from_bank_is_round_robin_not_repeating_until_pool_cycles(sync_db_path):
+    """The small pen_pals pool shouldn't repeat a question across separate
+    sessions while an unserved row is still available — each draw marks the
+    row served, so every row in the pool gets used once before any repeat."""
+    _add_bank_question(sync_db_path, "q1")
+    _add_bank_question(sync_db_path, "q2")
+    _add_bank_question(sync_db_path, "q3")
+    drawn = []
+    with open_db(sync_db_path) as conn:
+        for _ in range(3):
+            drawn.append(pp._draw_from_bank(conn, False, []))
+    assert sorted(drawn) == ["q1", "q2", "q3"]
+
+
 # ── _draw_question fallback chain ─────────────────────────────────────
 
 

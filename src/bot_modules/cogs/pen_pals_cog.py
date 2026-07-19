@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import random
 import time
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +17,7 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.ai_client import generate_text
-from bot_modules.games.utils.question_source import get_ai_config
+from bot_modules.games.utils.question_source import get_ai_config, _pick_least_recently_served
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -244,19 +243,33 @@ def _parse_tags(tags_json) -> set[str]:
 
 
 def _draw_from_bank(conn, allow_nsfw: bool, exclude: list[str]) -> str | None:
-    """Random unshown bank question; rows tagged 'nsfw' need *allow_nsfw*."""
+    """Round-robin unshown bank question; rows tagged 'nsfw' need *allow_nsfw*.
+
+    Prefers the least-recently-served matching row (see
+    ``question_source._pick_least_recently_served``) and marks it served, so
+    the small pen_pals pool doesn't repeat a question across separate
+    sessions until every row has been served once.
+    """
     rows = conn.execute(
-        "SELECT question_text, tags FROM games_question_bank WHERE game_type = ?",
+        "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
         (_GAME_TYPE,),
     ).fetchall()
     seen = set(exclude)
     candidates = [
-        r["question_text"]
+        (r["question_id"], r["question_text"], r["last_served_at"])
         for r in rows
         if r["question_text"] not in seen
         and (allow_nsfw or "nsfw" not in _parse_tags(r["tags"]))
     ]
-    return random.choice(candidates) if candidates else None
+    picked = _pick_least_recently_served(candidates)
+    if picked is None:
+        return None
+    qid, text = picked
+    conn.execute(
+        "UPDATE games_question_bank SET last_served_at = CURRENT_TIMESTAMP WHERE question_id = ?",
+        (qid,),
+    )
+    return text
 
 
 def _update_last_auto_round(conn, guild_id: int) -> None:
