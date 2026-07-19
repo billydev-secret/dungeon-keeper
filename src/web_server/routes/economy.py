@@ -48,6 +48,9 @@ class EconomyConfigUpdate(BaseModel):
 
     enabled: bool | None = None
     bank_channel_id: int | None = Field(default=None, ge=0)
+    # The public transaction feed's channel; 0 = feed off (the picker is the
+    # toggle). The drain cursor beside it stays bot-managed, so it is not here.
+    register_channel_id: int | None = Field(default=None, ge=0)
     manager_role_id: int | None = Field(default=None, ge=0)
     game_role_id: int | None = Field(default=None, ge=0)
     qotd_ping_role_id: int | None = Field(default=None, ge=0)

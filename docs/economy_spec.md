@@ -774,10 +774,78 @@ member-to-member consent and does **not** gate bot DMs — no interaction there.
 | Login payout & daily conversion | Silent (ledger) |
 | Sign-off claims, community settlements | Bank channel |
 
+### 10.1 Register channel (public transaction feed)
+
+`econ_register_channel_id` (dashboard: **Economy → Config → Register channel**)
+turns on a running public feed of the guild's currency movements — a bank
+register. Unset (`0`) is off; the picker **is** the toggle. It is deliberately
+a *separate* channel from `bank_channel_id`: the bank channel is the
+interactive approval surface (sign-off cards, ceiling alerts, DM fallback), and
+posting register entries there would double up every signed-off quest.
+
+**Source: the ledger, not the call sites.** The feed drains `econ_ledger` by
+`id`. Since `apply_credit` / `apply_debit` are the only paths that mutate a
+wallet, draining the ledger catches every movement — quest payouts, community
+settlements, rentals and renewals, transfers, milestones, QOTD, game rewards,
+and staff grants from both `/bank grant` and the dashboard — with no
+per-call-site hook to forget.
+
+**What it does NOT post** (`register.SKIP_KINDS`): `login` and `conversion` are
+the automated per-member faucets — they fire once per active member and all
+land together at the day roll, so posting them would bury every quest, purchase
+and transfer under a nightly burst of routine noise. They still hit the ledger,
+the wallet, and the metrics rollup; they are simply not news. `transfer_in` is
+skipped because a transfer writes two rows for one event: the register posts the
+`transfer_out` leg as a single consolidated "A → B" entry (unsigned, in its own
+neutral colour — the currency moved sideways rather than entering or leaving the
+economy) with the sender's resulting balance.
+
+The skip list is applied **in SQL, before the LIMIT** — filtering after it would
+let a midnight flood of login rows fill the batch and starve the entries anyone
+wants to read. Balance reconstruction still walks the *unfiltered* rows: a
+skipped login between two posted entries moved the wallet, and ignoring it would
+print arithmetic that doesn't add up.
+
+**Completions only.** A ledger row exists only once a transaction has happened,
+so there is no per-tick progress spam. A counted quest's entry shows the final
+tally instead ("Daily Chatterbox (5/5)"); for a *banded* quest the tally is the
+member's own `effective_target`, resolved via the claim's period — never the
+library's raw `target_count`, which no member necessarily worked to.
+
+**Each entry says what it was for** (`register.render_memo`): `kind` + the
+`meta` blob become a human memo, and a `quest` row resolves `meta.quest_id` to
+the quest's title — the Venmo memo line. Every kind has a memo; an unknown
+future kind degrades to its title-cased name rather than rendering blank.
+Credits are green, debits red — here the colour is semantic, so this is a
+deliberate exception to the `resolve_accent_color` convention. The footer
+carries the balance that row produced, reconstructed per row (the live wallet
+balance would be wrong for every entry but the last).
+
+**Cursor.** `econ_register_cursor_id` is bot-managed bookkeeping (like the
+`*_message_id` fields — readable via `GET /economy/config`, absent from the
+editable whitelist). `-1` means "never seeded": the first drain seeds it to the
+ledger's current `MAX(id)` and posts nothing, so switching the feed on never
+replays history. `-1` rather than `0` because `0` is a legitimate seeded cursor
+for a guild whose ledger is still empty — conflating them would re-seed past
+that guild's first-ever transaction and swallow it. The cursor advances only
+over rows actually posted (or deliberately skipped), and only after the sends
+land, so a crash mid-drain replays the un-posted tail rather than losing it: at
+worst a duplicate entry, never a silent gap. A `Forbidden` (missing perms)
+leaves the cursor for a later retry.
+
 ## 11. Scheduled Work
 
-One economy loop registered via `bot.startup_task_factories` (gets `_resilient_task`
-crash-restart), ticking hourly:
+Two loops, both registered via `bot.startup_task_factories` (each gets
+`_resilient_task` crash-restart). The main economy loop ticks hourly; the
+**register loop** (§10.1) ticks every `REGISTER_INTERVAL_SECONDS` (30s) because
+a transaction entry is only useful while it is still news — the hourly tick
+would batch a day's activity into lumps an hour apart. The register drain is
+capped at `REGISTER_MAX_PER_TICK` (8) entries per guild per tick so a burst (a
+community settlement paying dozens of members at once) spills into later ticks
+instead of hammering the channel's rate limit, and skips rows older than
+`REGISTER_STALE_SECONDS` (1h) — a backlog after downtime is noise, not news.
+
+The hourly economy loop:
 
 | On tick | Action |
 |---|---|
