@@ -9,6 +9,18 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: opt-in notify gate defaults to no contact when unconfigured  (19b5093)
+
+- [ ] On a guild with **no** economy Game role configured (e.g. TGM today),
+      trigger a login streak/milestone from an alt account → **no** DM and
+      **no** bank-channel fallback post; the alt still shows the payout
+      landing silently in `/bank wallet`.
+- [ ] Set a Game role in that guild's Economy dashboard config, grant it to
+      the test alt, then trigger another streak-worthy login → the DM now
+      lands (or bank-channel fallback if the alt's DMs are closed).
+- [ ] Same guild, an alt **without** the newly-configured Game role →
+      still silent, no DM/fallback (unchanged prior behavior).
+
 ### XP: promotion-review trust — spicy-access field, 2-day tenure gate, /grant_missing  (this commit)
 
 - [ ] Level a fresh test alt (joined <2 days ago) up to level 5 → **no**
