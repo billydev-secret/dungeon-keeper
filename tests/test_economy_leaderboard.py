@@ -260,6 +260,31 @@ def test_embed_community_bar_and_states():
     assert "✅ paid out" in goals
 
 
+def test_embed_grid_layout():
+    # 2×2 grid: pulse | earners, then quest board | live feed — each row
+    # closed by a zero-width spacer so Discord's 3-per-row flow keeps two
+    # columns. Community goals and the blurb stay full-width.
+    data = LeaderboardData(
+        top_earners=[(1, 10)],
+        community=[CommunityGoal("Goal", 1, 10, completed=False, settled=False)],
+        quests=[QuestLine("daily", "Q", 5, 0)],
+    )
+    embed = build_leaderboard_embed(
+        EconSettings(), data, _names({}), now_ts=NOW
+    )
+    layout = [(f.name, f.inline) for f in embed.fields]
+    assert layout == [
+        ("📡 Today's pulse", True),
+        (f"Top earners (last {ROLLING_DAYS} days)", True),
+        ("\u200b", True),
+        ("Community goals — everyone gets paid when we hit them", False),
+        ("Quest board", True),
+        ("📰 Live feed — today", True),
+        ("\u200b", True),
+        ("Your progress", False),
+    ]
+
+
 def test_embed_quest_board_summarizes_per_cadence():
     # Members draw personal boards, so the panel shows one summary line per
     # cadence (draw count vs pool, reward range) — never the full pool.

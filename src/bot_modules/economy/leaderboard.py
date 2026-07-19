@@ -420,10 +420,14 @@ def build_leaderboard_embed(
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
 
+    # The four content sections sit in a 2×2 grid: pulse | earners on the
+    # first row, quest board | live feed on the second. Discord flows up to
+    # three inline fields per row, so each pair carries a zero-width spacer
+    # to pin the two-column shape; mobile clients stack fields regardless.
     embed.add_field(
         name="📡 Today's pulse",
         value=_pulse_lines(data, emoji, plural),
-        inline=False,
+        inline=True,
     )
 
     if data.top_earners:
@@ -440,8 +444,9 @@ def build_leaderboard_embed(
     embed.add_field(
         name=f"Top earners (last {ROLLING_DAYS} days)",
         value="\n".join(earner_lines),
-        inline=False,
+        inline=True,
     )
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     if data.community:
         embed.add_field(
@@ -514,13 +519,14 @@ def build_leaderboard_embed(
             board = "No quests running right now — check back soon."
     else:
         board = "No quests running right now — check back soon."
-    embed.add_field(name="Quest board", value=board, inline=False)
+    embed.add_field(name="Quest board", value=board, inline=True)
 
     embed.add_field(
         name="📰 Live feed — today",
         value=_feed_lines(data),
-        inline=False,
+        inline=True,
     )
+    embed.add_field(name="\u200b", value="\u200b", inline=True)
 
     embed.add_field(
         name="Your progress",
