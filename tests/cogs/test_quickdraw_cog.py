@@ -119,3 +119,21 @@ async def test_winner_fired_void_resolves_and_pays(db, sync_db_path):
     with open_db(sync_db_path) as conn:
         assert get_balance(conn, GUILD, P1) == 25
         assert get_balance(conn, GUILD, P2) == 5
+
+
+async def test_winner_fired_void_channel_gone_still_resolves_and_pays(db, sync_db_path):
+    """A vanished channel used to pay but leave the row ACTIVE for the sweep
+    to abandon; now the round terminalizes so the economy seam sees it."""
+    cog = _econ_cog(db, sync_db_path)  # no channel resolvable
+    now = time.time()
+    game = await _active_game(
+        db, qd_state="WINNER_FIRED",
+        winner_id=P1, loser_id=P2, fired_at=now - 6.0, resolved_at=now - 5.5,
+    )
+    await cog._fire_void(game.id)
+    g = await qdb.get_game(db, game.id)
+    assert g.state == "RESOLVED"
+    assert g.result_message_id is None
+    with open_db(sync_db_path) as conn:
+        assert get_balance(conn, GUILD, P1) == 25
+        assert get_balance(conn, GUILD, P2) == 5

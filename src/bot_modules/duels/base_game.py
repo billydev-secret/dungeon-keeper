@@ -24,6 +24,7 @@ from typing import Any
 import discord
 from discord.ext import commands, tasks
 
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
@@ -36,6 +37,17 @@ log = logging.getLogger("dungeonkeeper.duels")
 
 _RATE_LIMIT_WINDOW = 3600
 _RATE_LIMIT_MAX = 3
+
+# The states a game can end in. Every one of them must pass through
+# _db_set_state so _on_terminal_state observes it — that guarantee is what
+# stage 4b's wager escrow will settle/refund on. NICKED / NO_NICK_SET are
+# post-terminal cosmetic follow-ups to RESOLVED, not game ends; DECLINED
+# only needs adding if stakes are ever debited before a challenge is
+# accepted.
+_TERMINAL_STATES = frozenset({
+    "RESOLVED", "RESOLVED_NO_NICK", "ABANDONED", "VOID",
+    "EXPIRED_PENDING", "EXPIRED_LOBBY",
+})
 
 
 class BaseGame(commands.Cog):
@@ -931,7 +943,62 @@ class BaseGame(commands.Cog):
         raise NotImplementedError
 
     async def _db_set_state(self, game_id: int, state: str, **kw: Any) -> None:
+        """Template method: persist the state, then let the economy observe
+        game ends. Cogs implement the write in ``_db_write_state`` and must
+        route every state change through here — writing through their db
+        module directly would end a game without the economy seeing it."""
+        await self._db_write_state(game_id, state, **kw)
+        if state in _TERMINAL_STATES:
+            await self._on_terminal_state(game_id, state)
+
+    async def _db_write_state(self, game_id: int, state: str, **kw: Any) -> None:
         raise NotImplementedError
+
+    async def _on_terminal_state(self, game_id: int, state: str) -> None:
+        """Economy hook fired on every game end.
+
+        RESOLVED / RESOLVED_NO_NICK pay the participation/win faucet (winner
+        may legitimately be None — wipeouts pay participation only). The other
+        terminal states pay nothing today but still land here so stage 4b's
+        escrow can refund on them. Failures are swallowed — economy must never
+        block game flow. Stage 4b's escrow *debit* must NOT inherit that: a
+        failed debit has to block the game from starting.
+        """
+        try:
+            if state not in ("RESOLVED", "RESOLVED_NO_NICK"):
+                return
+            game = await self._db_get_game(game_id)
+            if game is None:
+                return
+            winner_id = getattr(game, "winner_id", None)
+            await pay_game_rewards(
+                self.bot,
+                game.guild_id,
+                self._game_participants(game),
+                [winner_id] if winner_id is not None else [],
+                self.GAME_KEY,
+                occurrence=str(game_id),
+            )
+        except Exception:
+            log.exception(
+                "%s terminal-state hook failed for game %s (%s)",
+                self.GAME_DISPLAY_NAME, game_id, state,
+            )
+
+    def _game_participants(self, game: Any) -> list[int]:
+        """Everyone who played: the roster for group games (bailed/eliminated
+        players included), the challenger/target pair for duels."""
+        roster = getattr(game, "roster", None)
+        if roster:
+            return [int(u) for u in roster]
+        return [
+            int(uid)
+            for uid in (
+                getattr(game, "challenger_id", None),
+                getattr(game, "target_id", None),
+            )
+            if uid is not None
+        ]
 
     async def _db_fetch_active_games(self) -> list:
         raise NotImplementedError

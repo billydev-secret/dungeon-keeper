@@ -180,6 +180,26 @@ one-file change.
 - Party-suite games are **out of scope** — only 3 of ~50 `end_game` calls pass
   players at all.
 
+**Done (2026-07-19).** Landed exactly in that order:
+
+- Regression net first: new runtime test files for Quickdraw, Pressure Cooker
+  and Hot Potato (duel); ABANDONED/wipeout coverage for Chicken; degenerate
+  `winner=None` + terminal-payout coverage for Musical Chairs; final-detonation
+  payout for Hot Potato group. `FakeEconGamesBot` promoted into `tests/fakes.py`.
+- `BaseGame._db_set_state` is now the concrete template method; the 24 direct
+  writes were converted, the 6 cog impls renamed to `_db_write_state`, the 9
+  scattered `pay_game_rewards` calls deleted. `_on_terminal_state` pays on
+  `RESOLVED`/`RESOLVED_NO_NICK` (winner may be None → participation only) and
+  merely observes `ABANDONED`/`VOID`/`EXPIRED_*` — the escrow attachment
+  points. `BaseDuel._finalize_result` persists `winner_id`/`loser_id` with the
+  terminal write so the hook's re-read is always self-sufficient.
+- Behavior fix along the way: Quickdraw `WINNER_FIRED` with an unresolvable
+  channel used to pay but leave the row ACTIVE (the sweep later abandoned it);
+  it now terminalizes to RESOLVED so the seam sees it.
+- `tests/test_duels_terminal_seam.py` pins the seam contract itself: every
+  terminal state fires the hook exactly once, non-terminal writes don't, and a
+  hook failure never breaks game resolution.
+
 ## Stage 4b — coin wagers on the duel games
 
 Equal ante, winner takes the pot, no rake.

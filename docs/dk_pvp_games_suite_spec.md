@@ -103,9 +103,15 @@ Each cog folder also carries a `game.py` (pure dataclass/logic, no Discord), a `
 | `on_game_resume(game)` *(optional)* | Re-arm timers on restart (cog_load). |
 | `on_game_resolved(game_id)` *(optional)* | Cancel any running timers. |
 
-Plus the abstract DB hooks (`_db_get_game`, `_db_set_state`, `_db_fetch_active_games`,
+Plus the abstract DB hooks (`_db_get_game`, `_db_write_state`, `_db_fetch_active_games`,
 `_db_fetch_sweepable`, and — duels — `_db_create_game`/`_db_get_active_game_for_pair`, or —
 group — `_db_create_lobby`/`_db_fetch_lobby_games`/`get_lobby_params`).
+
+`_db_set_state` itself is **concrete** on `BaseGame` (a template method): it writes via the
+cog's `_db_write_state`, then fires `_on_terminal_state` for every game-ending transition
+(`RESOLVED`, `RESOLVED_NO_NICK`, `ABANDONED`, `VOID`, `EXPIRED_PENDING`, `EXPIRED_LOBBY`).
+That hook is the single seam where the economy observes a game ending — cogs must route all
+state changes through `_db_set_state`, never call their db module's `set_game_state` directly.
 
 ---
 
@@ -553,9 +559,10 @@ valid scramble presses seat; one press per player per round; a lock guards the l
 ## 12. Implementation status
 
 All six games in §9 are built and live under `src/bot_modules/cogs/`, on the shared
-`BaseGame`/`BaseDuel` foundation in `src/bot_modules/duels/`. Games also pay economy rewards on
-completion via `bot_modules/economy/game_rewards.pay_game_rewards` (XP/economy for
-participants, with a winner bonus).
+`BaseGame`/`BaseDuel` foundation in `src/bot_modules/duels/`. Economy rewards (participation
+for everyone, a winner bonus) are paid centrally by `BaseGame._on_terminal_state` when a game
+reaches `RESOLVED`/`RESOLVED_NO_NICK` — no cog calls `pay_game_rewards` itself
+(economy-sinks round 2, stage 4a).
 
 The suite was built roughly in this order: `BaseGame`/`BaseDuel` → Pressure Cooker → Quickdraw
 → Hot Potato (duel → group) → Musical Chairs → Chicken.
@@ -626,7 +633,9 @@ getting cosmetic standings only — is not implemented.
 - **Reputation / honor tracker** — cross-game character scores and titles; `elimination_order`
   already gives placement-based signal.
 - **Economy layer (betting/payouts by placement)** — games already pay participation/win
-  rewards via `pay_game_rewards`; wagering and placement payouts are not built.
+  rewards through the terminal-state seam; wagering (economy-sinks round 2, stage 4b) and
+  placement payouts are not built. The seam's `_on_terminal_state` hook is the intended
+  attachment point for wager escrow settlement/refunds.
 - **Per-game leaderboards & session recap** integration with the Poppy/DK session tracker.
 - **More games (cheap once `BaseGame` exists):** Russian Roulette, Higher/Lower, Tug of War,
   Odds Are, Last One Standing, Wheel of Fate, Werewolf/Mafia-lite (bigger build).

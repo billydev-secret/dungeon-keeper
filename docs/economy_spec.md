@@ -138,8 +138,17 @@ XP earned that local day converts to currency.
     expire** — they're waiting on staff, and timing them out would punish the
     member for staff latency. `price_qotd_sponsor = 0` disables the feature.
 - **Game participation 5:** paid at the party-games `end_game` choke point
-  (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
-  resolution point. Participation now covers **20 of 23 games**: the six duel games,
+  (`games/utils/game_manager.py`) from the session's player set, and — since the
+  stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
+  seam**: `BaseGame._db_set_state` is a concrete template method (cogs implement
+  `_db_write_state`) that fires `_on_terminal_state` on every game-ending
+  transition (`RESOLVED`/`RESOLVED_NO_NICK`/`ABANDONED`/`VOID`/`EXPIRED_*`).
+  `RESOLVED`/`RESOLVED_NO_NICK` pay participation + win from the re-read row
+  (roster for group games, challenger/target for duels; `winner_id=None`
+  wipeouts pay participation only); the other terminal states pay nothing but
+  still reach the hook, which is the guarantee the stage-4b wager escrow will
+  settle and refund on. No duel cog calls `pay_game_rewards` directly anymore.
+  Participation now covers **20 of 23 games**: the six duel games,
   ttl/traditional/legitlibs, and — enriched in Stage 2 — 11 party cogs that now pass
   their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
   mlt, nhie, price, rushmore, story, wyr). ffa and fantasies are excluded by design

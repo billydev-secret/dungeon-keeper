@@ -16,7 +16,6 @@ import discord
 from discord import app_commands
 
 from bot_modules.duels.base_game import BaseGame
-from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
 
@@ -46,7 +45,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     async def _db_get_game(self, game_id: int) -> MusicalChairsGame | None:
         return await mcdb.get_game(self.db, game_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await mcdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
@@ -105,8 +104,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 return
             now = time.time()
             cfg = await mcdb.get_config(self.db, game.guild_id)
-            await mcdb.set_game_state(
-                self.db, game_id, "ACTIVE",
+            await self._db_set_state(
+                game_id, "ACTIVE",
                 phase="SCRAMBLE",
                 seated="[]",
                 chairs=chairs_for(len(game.alive)),
@@ -143,8 +142,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             loser = new_elim[-1] if new_elim else None
             game.alive = survivors
             game.elimination_order = new_elim
-            await mcdb.set_game_state(
-                self.db, game.id, "ACTIVE",
+            await self._db_set_state(
+                game.id, "ACTIVE",
                 alive=json.dumps(survivors),
                 elimination_order=json.dumps(new_elim),
                 seated="[]",
@@ -152,17 +151,13 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             )
             if winner is not None and loser is not None:
                 await self._post_group_result(game, winner, loser)
-                await pay_game_rewards(
-                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY,
-                    occurrence=str(game.id),
-                )
             return True
 
         cfg = await mcdb.get_config(self.db, game.guild_id)
         music = random.uniform(cfg["min_music"], cfg["max_music"])
         new_chairs = chairs_for(len(survivors))
-        await mcdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             phase="MUSIC",
             round=game.round + 1,
             chairs=new_chairs,
@@ -237,8 +232,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                     )
                     return
                 new_seated = list(game.seated) + [uid]
-                await mcdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     seated=json.dumps(new_seated), last_action_at=time.time(),
                 )
                 game.seated = new_seated
@@ -261,8 +256,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         cfg = await mcdb.get_config(self.db, game.guild_id)
         music = random.uniform(cfg["min_music"], cfg["max_music"])
         now = time.time()
-        await mcdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             phase="MUSIC",
             round=1,
             chairs=chairs_for(len(game.alive)),
