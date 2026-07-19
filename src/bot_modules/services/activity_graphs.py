@@ -4,16 +4,30 @@ from __future__ import annotations
 
 import bisect
 import io
+import os
 import sqlite3
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
+from pathlib import Path
 from typing import Literal
 
-import matplotlib
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
+# The unit runs with ProtectHome=read-only, so matplotlib cannot write its
+# default config dir (~/.config/matplotlib): it warns and falls back to a fresh
+# temp dir on every boot, rebuilding the font cache each time. Point it at this
+# repo-local dir (the unit's only ReadWritePath) BEFORE importing matplotlib,
+# which resolves the path at import time. setdefault so an explicit
+# MPLCONFIGDIR still wins. Mirrored in interaction_graph.py — whichever module
+# is imported first wins, so both must set it.
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    str(Path(__file__).resolve().parents[3] / ".cache" / "matplotlib"),
+)
+
+import matplotlib  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker as ticker  # noqa: E402
 
 matplotlib.use("Agg")
 

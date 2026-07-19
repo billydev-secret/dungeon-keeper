@@ -1,0 +1,14 @@
+# In-process LLM inference — only needed when LLAMA_SERVER_URL is UNSET.
+#
+# This is the one dependency in the tree that builds from source: there is no
+# manylinux wheel for cp314, so installing it needs gcc/g++ and cmake and takes
+# several minutes. Hosts that point LLAMA_SERVER_URL at a llama.cpp
+# `llama-server` elsewhere on the LAN never import llama_cpp at all (the import
+# is lazy, inside ollama_client's loader thread), so they should skip this file.
+#
+#   in-process backend:  pip install -r requirements.txt -r requirements-local-llm.txt
+#   remote backend:      pip install -r requirements.txt
+#
+# Skipping it when the in-process backend IS in use is not fatal but is visible:
+# the model load fails and ollama_client.status() reports phase="error".
+llama-cpp-python>=0.3.0
