@@ -414,12 +414,23 @@ board), and `_load_quests_state` shows only the board on `/quests` + the wallet.
 Because assignment cadence equals the claim period, counted progress never
 fragments mid-period.
 
-**Gaussian target band:** a counted quest may carry a target *band*
-(`0 < target_min < target_max`) instead of a fixed `target_count`. Then each
-member's target for a period is drawn from a Gaussian over `[min, max]`
-(`quests.effective_target`), deterministic on `(user, quest, period)` — so it is
-stable all period and varies member to member (the band is set from the p35–p85
-historical percentile of that action, keeping targets in a "reasonable" range).
+**Dynamic target band:** a counted quest may carry a target *band*
+(`0 < target_min < target_max`) instead of a fixed `target_count`. Each
+member's target for a period then resolves **from their own pace**
+(`resolve_member_target`, migration 083): the median of their trailing
+completed periods of that kind in `econ_kind_activity` (4 days / 4 ISO
+weeks / 2 months by cadence) × `DYNAMIC_STRETCH` (1.15), clamped to the
+author's band — a chatty member gets "send 45", a quiet one "send 10", for
+the same flat reward (effort-equity; scaling the payout would re-reward the
+already-active). The result is **stored on the progress row at first
+touch** (fire path or wallet view, whichever sees the period first), so it
+never moves mid-period and both surfaces agree. Members with fewer than 2
+active trailing periods of the kind fall back to the deterministic
+**Gaussian draw** over the band (`quests.effective_target`, stable on
+`(user, quest, period)`) — the cold-start behavior, and the entire behavior
+before migration 080's ledger accrued history. Sandbagging by going quiet
+floors out at `target_min` and is self-defeating (less activity is less
+income anyway).
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.

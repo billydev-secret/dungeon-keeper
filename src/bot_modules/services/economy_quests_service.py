@@ -457,6 +457,112 @@ def set_income_source(
     )
 
 
+def _trailing_period_counts(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    kind: str,
+    qtype: str,
+    local_day: str,
+) -> list[int]:
+    """The member's kind-activity totals for the trailing completed periods.
+
+    daily → previous 4 days, weekly → previous 4 ISO weeks, monthly →
+    previous 2 calendar months (the 70-day ledger window can't hold 4).
+    Quiet periods count as 0 — the median should reflect real pace.
+    """
+    from datetime import date, timedelta
+
+    day = date.fromisoformat(local_day)
+
+    def _range_sum(start: date, end: date) -> int:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(count), 0) AS s FROM econ_kind_activity "
+            "WHERE guild_id = ? AND user_id = ? AND kind = ? "
+            "AND local_day >= ? AND local_day < ?",
+            (guild_id, user_id, kind, start.isoformat(), end.isoformat()),
+        ).fetchone()
+        return int(row["s"])
+
+    if qtype == "daily":
+        return [
+            _range_sum(day - timedelta(days=n), day - timedelta(days=n - 1))
+            for n in range(1, 5)
+        ]
+    if qtype == "weekly":
+        monday = day - timedelta(days=day.weekday())
+        return [
+            _range_sum(monday - timedelta(weeks=n), monday - timedelta(weeks=n - 1))
+            for n in range(1, 5)
+        ]
+    # monthly
+    first = day.replace(day=1)
+    out: list[int] = []
+    end = first
+    for _ in range(2):
+        start = (end - timedelta(days=1)).replace(day=1)
+        out.append(_range_sum(start, end))
+        end = start
+    return out
+
+
+def resolve_member_target(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    quest: sqlite3.Row,
+    *,
+    period: str,
+    local_day: str,
+) -> int:
+    """A member's target for a counted quest this period (spec: dynamic).
+
+    Fixed ``target_count`` quests pass straight through. Band quests resolve
+    once per (quest, member, period) and the result is STORED on the
+    progress row — stable all period, and the wallet shows exactly what the
+    fire path enforces. Resolution prefers the member's own pace (trailing
+    period median of the kind × DYNAMIC_STRETCH, clamped to the band) and
+    falls back to the deterministic Gaussian draw when they have fewer than
+    2 active trailing periods of that kind.
+    """
+    target_count = int(quest["target_count"])
+    tmin, tmax = int(quest["target_min"]), int(quest["target_max"])
+    if not (0 < tmin < tmax):
+        return target_count
+    qid = int(quest["id"])
+    row = conn.execute(
+        "SELECT target FROM econ_quest_progress "
+        "WHERE quest_id = ? AND user_id = ? AND period = ?",
+        (qid, user_id, period),
+    ).fetchone()
+    if row is not None and row["target"]:
+        return int(row["target"])
+
+    import statistics as _stats
+
+    counts = _trailing_period_counts(
+        conn, guild_id, user_id, str(quest["trigger_kind"]),
+        str(quest["qtype"]), local_day,
+    )
+    if sum(1 for c in counts if c > 0) >= 2:
+        target = quests.dynamic_target(_stats.median(counts), tmin, tmax)
+    else:
+        target = quests.effective_target(
+            target_count, tmin, tmax,
+            user_id=user_id, quest_id=qid, period=period,
+        )
+    conn.execute(
+        """
+        INSERT INTO econ_quest_progress (quest_id, user_id, period, current, target)
+        VALUES (?, ?, ?, 0, ?)
+        ON CONFLICT (quest_id, user_id, period) DO UPDATE SET
+            target = COALESCE(econ_quest_progress.target, excluded.target)
+        """,
+        (qid, user_id, period, target),
+    )
+    return target
+
+
 def record_kind_activity(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -605,13 +711,9 @@ def fire_trigger_quests(
             if int(quest["id"]) not in boards[qtype]:
                 continue  # not on this member's board this period
             period = quests.quest_period(qtype, local_day)
-            target = quests.effective_target(
-                int(quest["target_count"]),
-                int(quest["target_min"]),
-                int(quest["target_max"]),
-                user_id=user_id,
-                quest_id=int(quest["id"]),
-                period=period,
+            target = resolve_member_target(
+                conn, guild_id, user_id, quest,
+                period=period, local_day=local_day,
             )
             if target > 1:
                 # Counted quest: each distinct occurrence bumps the period's

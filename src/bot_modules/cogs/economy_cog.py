@@ -46,7 +46,6 @@ from bot_modules.economy.quest_views import (
 )
 from bot_modules.economy.quests import (
     compile_trigger_pattern,
-    effective_target,
     has_board,
     message_matches_trigger,
     parse_trigger_words,
@@ -59,6 +58,7 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
     get_progress,
     list_trigger_quests,
+    resolve_member_target,
     source_enabled,
 )
 from bot_modules.services.economy_icon_catalog_service import (
@@ -1895,13 +1895,12 @@ class EconomyCog(commands.Cog):
                     ).fetchone()
                     kind = str(row["trigger_kind"] or "")
                     has_trigger = bool(str(row["trigger_words"] or "").strip())
-                    target = effective_target(
-                        int(row["target_count"]),
-                        int(row["target_min"]),
-                        int(row["target_max"]),
-                        user_id=user_id,
-                        quest_id=quest_id,
-                        period=period,
+                    # Resolves (and stores) the member's dynamic target on
+                    # first sight, so the wallet shows the same number the
+                    # fire path will enforce all period.
+                    target = resolve_member_target(
+                        conn, guild_id, user_id, row,
+                        period=period, local_day=day,
                     )
                     if kind and target > 1:
                         entry["progress_current"] = get_progress(

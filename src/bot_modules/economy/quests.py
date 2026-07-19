@@ -160,6 +160,19 @@ def community_auto_target(four_week_total: int) -> int:
     return max(10, round(weekly_typical / 0.75))
 
 
+# Personal dynamic-target stretch factor: a member's counted target is
+# their own trailing-period median × this, clamped to the author's band —
+# ~15% over their normal pace, so effort is comparable across members while
+# reward stays flat (paying more for higher output would just re-reward the
+# already-active).
+DYNAMIC_STRETCH = 1.15
+
+
+def dynamic_target(median_count: float, target_min: int, target_max: int) -> int:
+    """Clamp a member's stretched trailing median into the author's band."""
+    return max(target_min, min(target_max, round(median_count * DYNAMIC_STRETCH)))
+
+
 # ── Community-weekly beat sheets ──────────────────────────────────────
 # DMed to the host (not posted publicly): the numbers plus suggested copy
 # they can paste or rewrite in their own voice. Pure string builders so the

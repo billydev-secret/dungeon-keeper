@@ -9,6 +9,22 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: dynamic personal targets on band quests  (hash stamped on merge)
+
+Needs a counted quest with a target BAND (min/max, not fixed count) — the
+seeded library is all fixed targets, so band up one of the counted quests
+(e.g. Daily Chatter min 5 / max 40) on the Quests page first. Warm history
+comes from the stage-2 backfill for message/reply/reaction/voice kinds.
+
+- [ ] Two members with clearly different chattiness see different targets on
+      `/quests` for the same band quest (the chatty one higher, both inside
+      the band)
+- [ ] The shown target matches what actually completes the quest, and does
+      NOT change mid-period no matter how active the member gets
+- [ ] Next period the target re-resolves (can differ from last period)
+- [ ] A brand-new member (no history) still gets a sane in-band target
+      (Gaussian fallback)
+
 ### Economy: live "Happening now" tracker on Statistics  (8df168e)
 
 - [ ] Statistics page opens with the "Happening now" card on top; it

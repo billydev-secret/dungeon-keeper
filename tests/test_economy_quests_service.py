@@ -1665,3 +1665,125 @@ def test_create_quest_rejects_bad_band(db):
         with pytest.raises(ValueError):
             _make(conn, qtype="weekly", trigger_kind="message_sent",
                   target_min=9, target_max=3)  # min !< max
+
+
+# ── dynamic personal targets ──────────────────────────────────────────
+
+
+def _band_quest(conn, *, qtype="weekly", kind="message_sent", lo=10, hi=60):
+    qid = _make(
+        conn, qtype=qtype, trigger_kind=kind, target_min=lo, target_max=hi,
+        title=f"band-{qtype}-{kind}",
+    )
+    return conn.execute(
+        "SELECT * FROM econ_quests WHERE id = ?", (qid,)
+    ).fetchone()
+
+
+def test_resolve_target_fixed_passes_through(db):
+    from bot_modules.services.economy_quests_service import resolve_member_target
+
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="weekly", trigger_kind="message_sent", target_count=7)
+        quest = conn.execute("SELECT * FROM econ_quests WHERE id = ?", (qid,)).fetchone()
+        assert resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 7
+
+
+def test_resolve_target_uses_own_trailing_median(db):
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn)  # weekly band 10..60
+        # Previous 4 ISO weeks (local_day 2026-07-14 is in W29): W25..W28.
+        # Weekly sums 20/20/30/40 → median 25 → ×1.15 = 28.75 → 29.
+        for day, n in (
+            ("2026-06-17", 20),  # W25
+            ("2026-06-24", 20),  # W26
+            ("2026-07-01", 30),  # W27
+            ("2026-07-08", 40),  # W28
+        ):
+            for _ in range(n):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        target = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        assert target == 29
+        # Stored: later activity can't move it mid-period.
+        for _ in range(500):
+            record_kind_activity(conn, GUILD, USER, "message_sent", "2026-07-08")
+        assert resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 29
+
+
+def test_resolve_target_clamps_to_band(db):
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn, lo=10, hi=25)
+        for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):
+            for _ in range(100):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        assert resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 25  # 100×1.15 clamped to band max — no absurd ceilings
+        # And the floor stops sandbagging for a mostly-quiet member with
+        # just enough history to qualify.
+        for day in ("2026-07-01", "2026-07-08"):
+            record_kind_activity(conn, GUILD, USER_2, "message_sent", day)
+        assert resolve_member_target(
+            conn, GUILD, USER_2, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 10  # median ~1 × 1.15 floored at band min
+
+
+def test_resolve_target_gaussian_fallback_without_history(db):
+    from bot_modules.services.economy_quests_service import resolve_member_target
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn)
+        got = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        expected = effective_target(
+            1, 10, 60, user_id=USER, quest_id=int(quest["id"]), period="2026-W29"
+        )
+        assert got == expected  # deterministic Gaussian draw, band-bounded
+        assert 10 <= got <= 60
+
+
+def test_resolve_target_new_period_resizes(db):
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn)
+        for day, n in (
+            ("2026-06-17", 20), ("2026-06-24", 20),
+            ("2026-07-01", 30), ("2026-07-08", 40),
+        ):
+            for _ in range(n):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        first = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        # Next ISO week: window slides to W26..W29 (20/30/40/0 → median 25).
+        second = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W30", local_day="2026-07-21"
+        )
+        assert first == 29 and second == 29  # same median here, fresh row
+        rows = conn.execute(
+            "SELECT period, target FROM econ_quest_progress "
+            "WHERE quest_id = ? AND user_id = ? ORDER BY period",
+            (int(quest["id"]), USER),
+        ).fetchall()
+        assert [r["period"] for r in rows] == ["2026-W29", "2026-W30"]
