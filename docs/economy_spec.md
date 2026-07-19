@@ -666,6 +666,7 @@ takes effect on the next cycle, never retroactively.
 | Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
 | Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Sinks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
 | Voice style | **0 (dark)**, suggested 30 | Leases Voice Master **rename + user limit** (sinks round 3, stage 3). Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Sinks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
+| Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the leaderboard panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon
@@ -1096,6 +1097,10 @@ panel with live preview · spotlight slots.
 **Parking lot** (unchanged from V3 unless noted): auto-tracked quest criteria
 (partially delivered: trigger words §4.4 + the photo-reply event trigger §4.5;
 further trigger kinds — game wins, streaks — remain parked) ·
-fines/tickets (Jail exists — integration stays parked by design call) · giveaway
-entries · emoji sponsorship · room upgrades · streak-rental discount ·
-auctions/seasonal drops · per-quest contributors-only payout · scheduled/auto QOTD.
+fines/tickets (Jail exists — integration stays parked by design call) ·
+room upgrades · streak-rental discount ·
+auctions/seasonal drops · per-quest contributors-only payout · scheduled/auto
+QOTD · soundboard-sound sponsorship (the emoji-sponsorship machinery pointed
+at soundboard slots — build only if emoji lands well). *Delivered by sinks
+round 3 (2026-07-19): giveaway entries (as the weekly raffle) and emoji
+sponsorship — see §6.*

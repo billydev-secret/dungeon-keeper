@@ -125,6 +125,23 @@ def test_put_voice_style_price_roundtrips(authed_client, fake_ctx):
     assert cfg.price_voice_style == 30
 
 
+def test_put_raffle_fields_roundtrip(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "raffle_enabled": True,
+            "price_raffle_ticket": 15,
+            "raffle_max_tickets": 5,
+        },
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.raffle_enabled is True
+    assert cfg.price_raffle_ticket == 15
+    assert cfg.raffle_max_tickets == 5
+
+
 def test_put_emoji_sponsor_fields_roundtrip(authed_client, fake_ctx):
     resp = authed_client.put(
         "/api/economy/config",

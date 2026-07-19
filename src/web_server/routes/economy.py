@@ -94,6 +94,9 @@ class EconomyConfigUpdate(BaseModel):
     emoji_sponsor_expire_days: int | None = Field(default=None, ge=0)
     price_text_room: int | None = Field(default=None, ge=0)
     price_voice_room: int | None = Field(default=None, ge=0)
+    raffle_enabled: bool | None = None
+    price_raffle_ticket: int | None = Field(default=None, ge=0)
+    raffle_max_tickets: int | None = Field(default=None, ge=0)
     price_quest_reroll: int | None = Field(default=None, ge=0)
     quest_reroll_daily_cap: int | None = Field(default=None, ge=0)
     price_streak_shield: int | None = Field(default=None, ge=0)

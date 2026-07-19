@@ -36,6 +36,7 @@ from bot_modules.services.economy_quests_service import (
     list_quests,
     spotlight_kind,
 )
+from bot_modules.services.economy_service import load_econ_settings
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -154,6 +155,14 @@ class LeaderboardData:
     # flip, spotlight changes, community weeklies end). None = omit clocks.
     day_roll_ts: float | None = None
     week_roll_ts: float | None = None
+    # Weekly raffle (sinks round 3, stage 5). raffle_on gates the section;
+    # last_winner_id is announced BY NAME (the deliberate anonymous-ticker
+    # carve-out — buying a ticket is opting in).
+    raffle_on: bool = False
+    raffle_tickets: int = 0
+    raffle_entrants: int = 0
+    last_winner_id: int | None = None
+    last_winner_week: str = ""
 
 
 def collect_leaderboard_data(
@@ -173,6 +182,30 @@ def collect_leaderboard_data(
     day_obj = date.fromisoformat(today)
     next_monday = day_obj + timedelta(days=7 - day_obj.weekday())
     week_end, _ = local_day_bounds(next_monday.isoformat(), offset)
+
+    settings = load_econ_settings(conn, guild_id)
+    this_week = quest_rules.iso_week_for(today)
+    raffle_on = bool(settings.raffle_enabled) and settings.price_raffle_ticket > 0
+    raffle_tickets = raffle_entrants = 0
+    last_winner_id: int | None = None
+    last_winner_week = ""
+    if raffle_on:
+        trow = conn.execute(
+            "SELECT COALESCE(SUM(count), 0) AS t, COUNT(*) AS e "
+            "FROM econ_raffle_tickets "
+            "WHERE guild_id = ? AND iso_week = ? AND count > 0",
+            (guild_id, this_week),
+        ).fetchone()
+        raffle_tickets, raffle_entrants = int(trow["t"]), int(trow["e"])
+        drow = conn.execute(
+            "SELECT iso_week, winner_id FROM econ_raffle_draws "
+            "WHERE guild_id = ? AND winner_id IS NOT NULL "
+            "ORDER BY drawn_at DESC LIMIT 1",
+            (guild_id,),
+        ).fetchone()
+        if drow is not None:
+            last_winner_id = int(drow["winner_id"])
+            last_winner_week = str(drow["iso_week"])
 
     cutoff = now_ts - ROLLING_DAYS * 86400
     earners = [
@@ -327,6 +360,11 @@ def collect_leaderboard_data(
         set_bonuses_today=set_bonuses_today,
         day_roll_ts=day_end,
         week_roll_ts=week_end,
+        raffle_on=raffle_on,
+        raffle_tickets=raffle_tickets,
+        raffle_entrants=raffle_entrants,
+        last_winner_id=last_winner_id,
+        last_winner_week=last_winner_week,
     )
 
 

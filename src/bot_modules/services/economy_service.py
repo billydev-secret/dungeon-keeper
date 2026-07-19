@@ -123,6 +123,15 @@ class EconSettings:
     emoji_sponsor_expire_days: int = 14
     price_text_room: int = 200
     price_voice_room: int = 200
+    # Weekly raffle (sinks round 3, stage 5): week-scoped tickets, weighted
+    # draw at the ISO-week roll, prize = a free-perk-week voucher (never
+    # coins — ticket revenue is a pure burn). Default OFF; the winner is
+    # announced BY NAME on the leaderboard panel (buying in = opting in, the
+    # deliberate carve-out from the anonymous-ticker rule), so enable only
+    # after telling the server. The cap keeps a whale from buying certainty.
+    raffle_enabled: bool = False
+    price_raffle_ticket: int = 10
+    raffle_max_tickets: int = 10
     # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);
     # readable via GET /economy/config but deliberately absent from the
     # dashboard's editable-field whitelist.
@@ -154,7 +163,7 @@ class EconSettings:
 
 DEFAULT_ECON_SETTINGS = EconSettings()
 
-_BOOL_KEYS = ["enabled", "transfers_enabled"]
+_BOOL_KEYS = ["enabled", "transfers_enabled", "raffle_enabled"]
 _FLOAT_KEYS = ["booster_multiplier", "xp_per_coin"]
 _STR_KEYS = [
     "currency_name",

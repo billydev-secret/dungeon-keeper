@@ -1274,3 +1274,46 @@ async def test_emoji_lapse_deletes_emoji_and_closes_submission(db, monkeypatch):
     with open_db(db) as conn:
         sub = emoji_svc.get_submission(conn, out.submission_id)
     assert sub is not None and sub["state"] == "cancelled"
+
+
+# ── raffle draw at the week roll (sinks round 3, stage 5) ──────────────
+
+
+def test_week_roll_draws_raffle_exactly_once(db):
+    from bot_modules.services import economy_raffle_service as raffle_svc
+
+    _enable(db, raffle_enabled=True, price_raffle_ticket=10, raffle_max_tickets=10)
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        raffle_svc.buy_tickets(conn, settings, GUILD, USER, "2026-W28", 5)
+    bot = _Bot([_Guild(GUILD)])
+
+    _roll(bot, db, _ts(D1))          # first sight → mark W28
+    _roll(bot, db, _ts("2026-07-13"))  # Monday → W29: week rolls, W28 drawn
+
+    with open_db(db) as conn:
+        draw = raffle_svc.get_draw(conn, GUILD, "2026-W28")
+        assert draw is not None
+        assert draw["winner_id"] == USER and draw["tickets"] == 5
+        voucher = raffle_svc.live_voucher(conn, GUILD, USER)
+        assert voucher is not None
+
+        # Replay the same roll: marks already advanced, and even a forced
+        # re-draw of W28 is refused by the draws PK.
+        assert raffle_svc.draw_raffle(conn, GUILD, "2026-W28") is None
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM econ_vouchers WHERE user_id = ?",
+            (USER,),
+        ).fetchone()["n"] == 1
+
+
+def test_week_roll_raffle_disabled_draws_nothing(db):
+    from bot_modules.services import economy_raffle_service as raffle_svc
+
+    _enable(db)  # raffle off (default)
+    bot = _Bot([_Guild(GUILD)])
+    _roll(bot, db, _ts(D1))
+    _roll(bot, db, _ts("2026-07-13"))
+    with open_db(db) as conn:
+        assert raffle_svc.get_draw(conn, GUILD, "2026-W28") is None

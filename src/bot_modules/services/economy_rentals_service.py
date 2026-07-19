@@ -52,6 +52,7 @@ from typing import TYPE_CHECKING
 
 from bot_modules.economy import rentals
 from bot_modules.economy.rentals import WEEK_SECONDS, BillingAction, classify
+from bot_modules.services.economy_raffle_service import try_redeem_voucher
 from bot_modules.services.economy_service import apply_debit
 
 if TYPE_CHECKING:
@@ -209,14 +210,20 @@ def rent_perk(
         raise ValueError("already rented") from exc
 
     rental_id = int(cur.lastrowid or 0)
-    ok = apply_debit(
-        conn, guild_id, user_id, price, "rental",
-        actor_id=user_id, meta={"rental_id": rental_id, "perk": perk},
-    )
-    if not ok:
-        # Roll back the whole insert by raising — the caller's transaction
-        # unwinds, so an unaffordable rent leaves zero writes.
-        raise ValueError("insufficient")
+    # A raffle free-week voucher covers the first week of a new rent (spec
+    # §6 stage 5) — the redeem writes its own 0-amount ledger row.
+    if not try_redeem_voucher(
+        conn, guild_id, user_id, rental_id=rental_id, perk=perk,
+        covered=price, now=now,
+    ):
+        ok = apply_debit(
+            conn, guild_id, user_id, price, "rental",
+            actor_id=user_id, meta={"rental_id": rental_id, "perk": perk},
+        )
+        if not ok:
+            # Roll back the whole insert by raising — the caller's transaction
+            # unwinds, so an unaffordable rent leaves zero writes.
+            raise ValueError("insufficient")
 
     row = _get_rental(conn, rental_id)
     assert row is not None  # just inserted in this transaction
@@ -418,12 +425,17 @@ def bill_rental(
         )
         return _result(BillingAction.REVOKE)
 
-    # CHARGE (first attempt this period) or RETRY (in grace) both try the debit.
+    # CHARGE (first attempt this period) or RETRY (in grace) both try the
+    # debit — unless a raffle free-week voucher covers this renewal, which
+    # counts as a successful payment (grace recovery included).
     price = _price_for(
         conn, settings, int(rental["guild_id"]), perk,
         rental["catalog_icon_id"], meta_json=rental["meta"],
     )
-    ok = apply_debit(
+    ok = try_redeem_voucher(
+        conn, int(rental["guild_id"]), user_id, rental_id=rental_id,
+        perk=perk, covered=price, now=now,
+    ) is not None or apply_debit(
         conn, rental["guild_id"], user_id, price, "rental",
         actor_id=user_id, meta={"rental_id": rental_id, "perk": perk, "renewal": True},
     )

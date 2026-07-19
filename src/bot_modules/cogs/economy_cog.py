@@ -34,6 +34,7 @@ from bot_modules.economy.leaderboard import (
     collect_leaderboard_data,
     progress_bar,
 )
+from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
@@ -93,6 +94,7 @@ from bot_modules.services.economy_rentals_service import (
     upsert_personal_role,
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
+from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -509,6 +511,22 @@ class _GiftConfirmView(discord.ui.View):
         )
 
 
+class _RaffleBuyModal(discord.ui.Modal, title="Weekly raffle tickets"):
+    quantity = discord.ui.TextInput(
+        label="How many tickets?", min_length=1, max_length=3, placeholder="1"
+    )
+
+    def __init__(self, cog: EconomyCog, settings: EconSettings) -> None:
+        super().__init__()
+        self.cog = cog
+        self.settings = settings
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_buy_raffle_tickets(
+            interaction, self.settings, str(self.quantity.value)
+        )
+
+
 class _EmojiCancelView(discord.ui.View):
     """Cancel button on the bare /bank emoji status reply (pending only)."""
 
@@ -761,6 +779,14 @@ class _ShopView(discord.ui.View):
                 )
                 button.callback = self._make_rent_callback("voice_style")
             self.add_item(button)
+        if raffle_svc.raffle_enabled(settings):
+            button = discord.ui.Button(
+                label="🎟️ Tickets",
+                style=discord.ButtonStyle.secondary,
+                custom_id="econ_shop_raffle",
+            )
+            button.callback = self._make_raffle_callback()
+            self.add_item(button)
         if settings.price_streak_shield > 0:
             # A held shield stays visible (green, disabled) so the cap reads
             # as "you have one", not as the button being broken.
@@ -807,6 +833,14 @@ class _ShopView(discord.ui.View):
     def _make_shield_callback(self):
         async def _cb(interaction: discord.Interaction) -> None:
             await self.cog.do_buy_shield(interaction, self.settings, self.guild)
+
+        return _cb
+
+    def _make_raffle_callback(self):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await interaction.response.send_modal(
+                _RaffleBuyModal(self.cog, self.settings)
+            )
 
         return _cb
 
@@ -938,7 +972,7 @@ class ShopRentButton(
         guild = interaction.guild
         if guild is None or (
             self.perk not in _SELF_PERKS
-            and self.perk not in ("voice_style", "streak_shield")
+            and self.perk not in ("voice_style", "streak_shield", "raffle_ticket")
         ):
             await interaction.response.send_message(
                 "That perk isn't available.", ephemeral=True
@@ -975,6 +1009,22 @@ class ShopRentButton(
             await interaction.response.send_message(
                 "The voice-style lease isn't active here right now.",
                 ephemeral=True,
+            )
+            return
+        if self.perk == "raffle_ticket":
+            if not raffle_svc.raffle_enabled(settings):
+                await interaction.response.send_message(
+                    "The raffle isn't running here right now.", ephemeral=True
+                )
+                return
+            cog2 = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
+            if cog2 is None:
+                await interaction.response.send_message(
+                    "That isn't available right now.", ephemeral=True
+                )
+                return
+            await interaction.response.send_modal(
+                _RaffleBuyModal(cog2, settings)
             )
             return
         if self.perk == "streak_shield":
@@ -1109,6 +1159,18 @@ def _build_shop_embed(
             ),
             inline=False,
         )
+    if raffle_svc.raffle_enabled(settings):
+        embed.add_field(
+            name="Weekly raffle",
+            value=(
+                f"🎟️ Tickets — {settings.currency_emoji} "
+                f"**{settings.price_raffle_ticket:,}** each, up to "
+                f"{settings.raffle_max_tickets}/week. Drawn at the week "
+                "roll; the winner's next weekly perk payment is free "
+                "(and they're announced by name)."
+            ),
+            inline=False,
+        )
     embed.add_field(
         name="For a friend",
         value=(
@@ -1160,6 +1222,14 @@ def _shop_panel_view(
         )
     if settings.price_voice_style > 0:
         view.add_item(ShopRentButton("voice_style", label="🎙️ Voice"))
+    if raffle_svc.raffle_enabled(settings):
+        view.add_item(
+            ShopRentButton(
+                "raffle_ticket",
+                label="🎟️ Tickets",
+                style=discord.ButtonStyle.secondary,
+            )
+        )
     if settings.price_streak_shield > 0:
         view.add_item(
             ShopRentButton(
@@ -1603,6 +1673,46 @@ class EconomyCog(commands.Cog):
             f"🛡️ Streak shield ready ({settings.currency_emoji} {price:,}). "
             "If a gap would break your login streak, it burns automatically "
             "and the streak lives on.",
+            ephemeral=True,
+        )
+
+    async def do_buy_raffle_tickets(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        raw_quantity: str,
+    ) -> None:
+        """Buy tickets for the current guild-local ISO week (modal submit)."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+        try:
+            quantity = int(raw_quantity.strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "Give a whole number of tickets.", ephemeral=True
+            )
+            return
+
+        def _buy() -> raffle_svc.TicketPurchase:
+            with self.ctx.open_db() as conn:
+                offset = get_tz_offset_hours(conn, guild.id)
+                week = quest_rules.iso_week_for(local_day_for(time.time(), offset))
+                return raffle_svc.buy_tickets(
+                    conn, settings, guild.id, user_id, week, quantity
+                )
+
+        try:
+            purchase = await asyncio.to_thread(_buy)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+        await interaction.response.send_message(
+            f"🎟️ {purchase.quantity} ticket(s) bought "
+            f"({settings.currency_emoji} {purchase.price:,}) — you hold "
+            f"{purchase.week_total} this week. Winner drawn at the week "
+            "roll and announced by name; the prize is a free weekly perk "
+            "payment.",
             ephemeral=True,
         )
 

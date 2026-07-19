@@ -100,6 +100,7 @@ from bot_modules.services.voice_master_service import (
     resolve_channel_name,
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
+from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
 )
@@ -195,6 +196,10 @@ class DayRollResult:
 
     beats: tuple[CommunityBeat, ...] = ()
     week_rolled: bool = False
+    # The raffle draw for the week that just closed (sinks round 3, stage 5);
+    # None when the raffle is off, the week was already drawn (a replay), or
+    # no week rolled.
+    raffle: raffle_svc.DrawResult | None = None
 
 
 def _settle_completed_community(
@@ -299,6 +304,7 @@ def run_guild_day_roll(
     # (record the week, don't settle) rather than a spurious week change.
     last_week = row["last_iso_week"]
     community_week = row["last_community_week"]
+    raffle_result: raffle_svc.DrawResult | None = None
     if last_week is not None and last_week != this_week:
         week_rolled = True
         rotate_pool(conn, guild_id, "weekly")
@@ -316,6 +322,12 @@ def run_guild_day_roll(
         compute_weekly_rollup(
             conn, settings, guild_id, last_week, offset_hours=offset, now=now_ts
         )
+        # Draw the closed week's raffle. Exactly-once via the draws PK — a
+        # crash-and-replay of this roll gets None and stays quiet.
+        if raffle_svc.raffle_enabled(settings):
+            raffle_result = raffle_svc.draw_raffle(
+                conn, guild_id, last_week, now=now_ts
+            )
 
     # Marks advance LAST (both columns together) so any crash above replays the
     # whole roll on the next tick.
@@ -324,7 +336,9 @@ def run_guild_day_roll(
         "last_community_week = ? WHERE guild_id = ?",
         (today, this_week, community_week, guild_id),
     )
-    return DayRollResult(beats=tuple(beats), week_rolled=week_rolled)
+    return DayRollResult(
+        beats=tuple(beats), week_rolled=week_rolled, raffle=raffle_result
+    )
 
 
 def _roll_community_weekly(
@@ -1178,11 +1192,13 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         beats: list[CommunityBeat] = []
         sponsor_notices: list[ExpiredSponsorNotice] = []
         week_rolled = False
+        raffle_draw: raffle_svc.DrawResult | None = None
         try:
             with open_db(db_path) as conn:
                 roll = run_guild_day_roll(bot, conn, guild.id, now_ts)
                 beats.extend(roll.beats)
                 week_rolled = roll.week_rolled
+                raffle_draw = roll.raffle
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1244,6 +1260,32 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                 log.exception(
                     "Economy loop: failed to DM expired emoji sponsor to %s.",
                     notice.user_id,
+                )
+
+        if raffle_draw is not None and raffle_draw.winner_id is not None:
+            # The draw row is already committed — the DM is best-effort and
+            # gated on the opt-in role like every recurring economy DM.
+            try:
+                await notify_member(
+                    bot,
+                    db_path,
+                    guild.id,
+                    raffle_draw.winner_id,
+                    content=(
+                        f"🎟️ You won the {raffle_draw.iso_week} raffle "
+                        f"({raffle_draw.tickets} tickets in the draw)! Your "
+                        "prize: the next weekly perk payment from your wallet "
+                        "— a renewal or a brand-new rent — is free. It's "
+                        "applied automatically and keeps for 28 days."
+                    ),
+                    require_game_role=True,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to DM raffle winner %s.",
+                    raffle_draw.winner_id,
                 )
 
         if week_rolled:

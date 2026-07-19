@@ -2715,3 +2715,48 @@ async def test_bank_emoji_disabled_at_price_zero(ctx, db):
     interaction = _interaction(_member(member_id=500))
     await cog.bank_emoji.callback(cog, interaction, None, None)
     assert "isn't enabled" in interaction.response.send_message.await_args.args[0]
+
+
+# ── weekly raffle in the shop (sinks round 3, stage 5) ───────────────────────
+
+
+def test_shop_embed_raffle_row_only_when_enabled(db):
+    _enable(db)
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    assert not any(f.name == "Weekly raffle" for f in embed.fields)
+
+    _enable(db, raffle_enabled=True)
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    row = next(f for f in embed.fields if f.name == "Weekly raffle")
+    assert "10" in row.value  # ticket price
+
+
+@pytest.mark.asyncio
+async def test_buy_raffle_tickets_via_modal_flow(ctx, db):
+    _enable(db, raffle_enabled=True)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_buy_raffle_tickets(interaction, _settings(db), "3")
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "3 ticket(s)" in msg
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 70
+        row = conn.execute(
+            "SELECT count FROM econ_raffle_tickets WHERE user_id = 500"
+        ).fetchone()
+    assert row["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_buy_raffle_tickets_rejects_junk_quantity(ctx, db):
+    _enable(db, raffle_enabled=True)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    await cog.do_buy_raffle_tickets(interaction, _settings(db), "lots")
+    assert "whole number" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 100

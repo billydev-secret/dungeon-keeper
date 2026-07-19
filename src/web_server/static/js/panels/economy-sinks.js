@@ -32,6 +32,17 @@ const CONSUMABLE_FIELDS = [
   }],
 ];
 
+// Weekly raffle: tickets in, a free-perk-week voucher out. The enable flag
+// is a checkbox (the one non-numeric field on this page) because the winner
+// is announced BY NAME — turning it on is a communications decision, not a
+// price tweak.
+const RAFFLE_FIELDS = [
+  ["price_raffle_ticket", "Ticket price", {}],
+  ["raffle_max_tickets", "Max tickets / member / week", {
+    hint: "Caps how much certainty one wallet can buy.",
+  }],
+];
+
 // Sponsored emojis: weekly rentals opened by mod approval (queue below).
 const EMOJI_FIELDS = [
   ["price_emoji", "Emoji / week", {
@@ -46,7 +57,9 @@ const EMOJI_FIELDS = [
   }],
 ];
 
-const ALL_NUM_FIELDS = [...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS];
+const ALL_NUM_FIELDS = [
+  ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
+];
 
 function numField(key, label, { hint } = {}, pricing) {
   const hintHtml = hint ? `<div class="field-hint">${esc(hint)}</div>` : "";
@@ -131,6 +144,18 @@ function render(container, cfg, pricing, icons) {
         <div class="section-label" style="margin-top:16px;">Consumables</div>
         <div class="field-row" style="flex-wrap:wrap;">
           ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+        </div>
+        <div class="section-label" style="margin-top:16px;">Weekly raffle</div>
+        <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
+          <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+            <input type="checkbox" name="raffle_enabled" /> Enabled
+          </label>
+          ${RAFFLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+        </div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          Drawn at the ISO-week roll; the prize is a free weekly perk payment
+          (a voucher, never coins) and the winner is announced by name on the
+          leaderboard panel — announce the raffle before enabling it.
         </div>
         <div class="section-label" style="margin-top:16px;">Sponsored emojis</div>
         <div class="field-row" style="flex-wrap:wrap;">
@@ -268,12 +293,14 @@ function wirePrices(container, cfg) {
   for (const [key] of ALL_NUM_FIELDS) {
     form.querySelector(`[name=${key}]`).value = cfg[key];
   }
+  form.querySelector("[name=raffle_enabled]").checked = !!cfg.raffle_enabled;
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const payload = {};
     for (const [key] of ALL_NUM_FIELDS) {
       payload[key] = parseInt(form.querySelector(`[name=${key}]`).value, 10);
     }
+    payload.raffle_enabled = form.querySelector("[name=raffle_enabled]").checked;
     try {
       await apiPut("/api/economy/config", payload);
       showStatus(status, true);

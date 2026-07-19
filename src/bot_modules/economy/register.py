@@ -74,6 +74,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "quest_reroll": ("🎲", "Quest reroll"),
     "streak_shield": ("🛡️", "Streak shield"),
     "emoji_sponsor": ("😀", "Emoji sponsorship"),
+    "raffle_ticket": ("🎟️", "Raffle tickets"),
     "emoji_sponsor_refund": ("↩️", "Emoji sponsorship refund"),
 }
 
