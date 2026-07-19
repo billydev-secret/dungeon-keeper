@@ -45,6 +45,18 @@ from bot_modules.economy.quest_views import (
     can_manage_economy,
     post_signoff_card,
 )
+from bot_modules.economy.sponsor_views import (
+    SponsorApproveButton,
+    SponsorDenyButton,
+    post_review_card,
+)
+from bot_modules.services.economy_qotd_sponsor_service import (
+    attach_qotd,
+    claim_next_approved,
+    release_claim,
+    sponsor_enabled,
+    submit_sponsor,
+)
 from bot_modules.economy.quests import (
     compile_trigger_pattern,
     has_board,
@@ -59,7 +71,7 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
     list_trigger_quests,
     load_member_quest_board,
-    reroll_available,
+    reroll_quote,
     source_enabled,
 )
 from bot_modules.services.economy_icon_catalog_service import (
@@ -1368,6 +1380,67 @@ class EconomyCog(commands.Cog):
         """Rent a self-perk from the ephemeral shop view."""
         await _rent_perk_flow(interaction, self, settings, guild, perk)
 
+    # ── sponsor a QOTD ───────────────────────────────────────────────────
+
+    @bank.command(
+        name="sponsor",
+        description="Pay to put your question forward as a question of the day.",
+    )
+    @app_commands.describe(question="Your question — a mod reviews it before it runs")
+    async def bank_sponsor(
+        self, interaction: discord.Interaction, question: str
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not sponsor_enabled(settings):
+            await interaction.response.send_message(
+                "Sponsoring a question of the day isn't enabled here.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        def _submit():
+            with self.ctx.open_db() as conn:
+                return submit_sponsor(
+                    conn, settings, guild.id, member.id, question
+                )
+
+        try:
+            outcome = await asyncio.to_thread(_submit)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        # The money is already taken and the row exists; a card failure must
+        # never surface as an error to the member (it's still resolvable from
+        # the dashboard), so this is best-effort inside post_review_card.
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_review_card(
+            self.bot,
+            self.ctx,
+            guild,
+            settings,
+            accent,
+            outcome.submission_id,
+            member,
+        )
+        unit = _unit(settings, outcome.price)
+        await interaction.followup.send(
+            f"📨 Sent your question to the mods for review — {outcome.price} "
+            f"{unit} held. If it's turned down you'll get a full refund, and "
+            "you'll hear either way.",
+            ephemeral=True,
+        )
+
     # ── gift ─────────────────────────────────────────────────────────────
 
     @bank.command(name="gift", description="Gift a friend a custom color.")
@@ -1965,6 +2038,7 @@ class EconomyCog(commands.Cog):
             "view": QuestClaimView(
                 self.ctx, settings, guild, claimable,
                 rerollable=rerollable if show_reroll else None,
+                reroll_cost=board_meta.get("reroll_cost"),
                 local_day=str(board_meta.get("local_day") or ""),
                 detailable=quests_state,
                 accent=accent,
@@ -1988,10 +2062,14 @@ class EconomyCog(commands.Cog):
             day = local_day_for(time.time(), offset)
             out = load_member_quest_board(conn, settings, guild_id, user_id, day)
             # Reroll offer: board quests untouched this period (no claim, no
-            # counted progress) — one free swap per guild-local day.
+            # counted progress). One free swap per guild-local day, then paid
+            # ones up to the daily cap — `reroll_cost` is 0/price/None, and
+            # None is the only state that hides the select.
+            cost = reroll_quote(conn, settings, guild_id, user_id, day)
             meta = {
                 "local_day": day,
-                "reroll_ok": reroll_available(conn, guild_id, user_id, day),
+                "reroll_cost": cost,
+                "reroll_ok": cost is not None,
                 "rerollable": [
                     {"id": q["id"], "title": q["title"], "qtype": q["qtype"]}
                     for q in out
@@ -2513,9 +2591,11 @@ class EconomyCog(commands.Cog):
     @qotd.command(
         name="post", description="Post today's question of the day (staff only)."
     )
-    @app_commands.describe(question="The question to ask the server")
+    @app_commands.describe(
+        question="The question to ask (leave blank to post the next sponsored one)"
+    )
     async def qotd_post(
-        self, interaction: discord.Interaction, question: str
+        self, interaction: discord.Interaction, question: str | None = None
     ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
@@ -2542,18 +2622,48 @@ class EconomyCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+
+        # No question typed → take the oldest approved sponsored one. The claim
+        # is atomic and happens BEFORE the send, so two mods racing this can't
+        # both post the same question; if the send then fails we release it
+        # back to the queue rather than eating a member's paid slot.
+        submission_id = 0
+        sponsor_id = 0
+        if question is None:
+            queued = await asyncio.to_thread(self._claim_sponsored, guild_id)
+            if queued is None:
+                await interaction.followup.send(
+                    "No sponsored questions are waiting. Type a question to post "
+                    "your own.",
+                    ephemeral=True,
+                )
+                return
+            submission_id = int(queued["id"])
+            sponsor_id = int(queued["user_id"])
+            question = str(queued["question"])
+
         accent = await resolve_accent_color(self.ctx.db_path, guild)
 
         # Prefer the rendered quote card; fall back to a plain branded embed if
         # there's no usable background image or the renderer raises.
         card_file: discord.File | None = None
         image_bytes = await _resolve_qotd_image(guild, self.bot)
+        sponsor_name = ""
+        if sponsor_id:
+            sponsor = guild.get_member(sponsor_id)
+            sponsor_name = sponsor.display_name if sponsor else ""
+        byline = (
+            f"Question of the Day · sponsored by {sponsor_name}"
+            if sponsor_name
+            else "Question of the Day"
+        )
+
         if image_bytes is not None:
             try:
                 card_bytes = await asyncio.to_thread(
                     render_quote_card,
                     question,
-                    author_name="Question of the Day",
+                    author_name=byline,
                     avatar_bytes=image_bytes,
                     theme=THEMES["midnight"],
                     pfp_shape="none",
@@ -2581,26 +2691,49 @@ class EconomyCog(commands.Cog):
                     description=question,
                     color=accent,
                 )
+                if sponsor_name:
+                    embed.set_footer(text=f"Sponsored by {sponsor_name}")
                 message = await channel.send(
                     content=content, embed=embed, allowed_mentions=mentions
                 )
         except discord.Forbidden:
+            # The send failed, so put a claimed sponsored question back on the
+            # queue — the member paid for it and it hasn't run.
+            if submission_id:
+                await asyncio.to_thread(self._release_sponsored, submission_id)
             await interaction.followup.send(
                 "I don't have permission to post in this channel.", ephemeral=True
             )
             return
+        except Exception:
+            if submission_id:
+                await asyncio.to_thread(self._release_sponsored, submission_id)
+            raise
+
+        posted_question = question
 
         def _record() -> None:
             with self.ctx.open_db() as conn:
                 offset = get_tz_offset_hours(conn, guild_id)
                 today = local_day_for(time.time(), offset)
-                create_qotd(
-                    conn, guild_id, channel.id, message.id, question, actor.id, today
+                qotd_id = create_qotd(
+                    conn,
+                    guild_id,
+                    channel.id,
+                    message.id,
+                    posted_question,
+                    actor.id,
+                    today,
+                    sponsor_user_id=sponsor_id,
                 )
+                if submission_id:
+                    attach_qotd(conn, submission_id, qotd_id)
 
         await asyncio.to_thread(_record)
         await interaction.followup.send(
-            "Posted the question of the day.", ephemeral=True
+            f"Posted {sponsor_name}'s sponsored question." if sponsor_name
+            else "Posted the question of the day.",
+            ephemeral=True,
         )
 
     # ── how-to guide panel ───────────────────────────────────────────────
@@ -3053,14 +3186,27 @@ class EconomyCog(commands.Cog):
     async def cog_load(self) -> None:
         # Re-register the persistent buttons so clicks on existing messages
         # still route after a restart — the custom_ids carry the state
-        # (econ_claim:{approve,deny}:<id>, econ_shop_panel:<perk>).
+        # (econ_claim:{approve,deny}:<id>, econ_shop_panel:<perk>,
+        # econ_qotd_sub:{approve,deny}:<id>).
         self.bot.add_dynamic_items(
-            QuestApproveButton, QuestDenyButton, ShopRentButton
+            QuestApproveButton,
+            QuestDenyButton,
+            ShopRentButton,
+            SponsorApproveButton,
+            SponsorDenyButton,
         )
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:
             return load_econ_settings(conn, guild_id)
+
+    def _claim_sponsored(self, guild_id: int):
+        with self.ctx.open_db() as conn:
+            return claim_next_approved(conn, guild_id)
+
+    def _release_sponsored(self, submission_id: int) -> None:
+        with self.ctx.open_db() as conn:
+            release_claim(conn, submission_id)
 
 
 async def setup(bot: Bot) -> None:

@@ -102,7 +102,7 @@ XP earned that local day converts to currency.
 ### 3.3 Quests — per §4. Daily 10–20 · weekly 25–75 · community flat payout.
 
 ### 3.4 Interaction Rewards
-- **QOTD (built, manual):** a moderator runs `/qotd post <question>` in the target
+- **QOTD (built, manual):** a moderator runs `/qotd post [question]` in the target
   channel. The bot renders the question as a banner card (`render_quote_card`, the same
   renderer `ffa_banner` uses) and posts it. Every member who posts a non-bot message in
   that channel from post time until end of the guild-local day earns **10**, once per
@@ -111,9 +111,49 @@ XP earned that local day converts to currency.
   role; unset (the default) posts silently. The mention only notifies if the role is
   mentionable or the bot holds "Mention @everyone, @here, and All Roles" — Discord
   renders it as inert text otherwise.
+- **Sponsor a QOTD (built, sink — migration 090):** a member runs
+  `/bank sponsor <question>`, paying `price_qotd_sponsor` (default 40) to put a
+  question in front of the server. **Charged at submit** — a free queue invites
+  spam — which makes decline and expiry *refund* paths (ledger kind
+  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it on a
+  persistent Approve/Decline card in the bank channel (DynamicItems
+  `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
+  dashboard queue (Economy → Sponsored QOTD, `require_economy_manager`, which
+  also **withdraws** an already-approved question back out of the post queue —
+  the service only *resolves* pending rows, so withdrawal is its own path);
+  declining opens a reason modal and the reason reaches the member by DM.
+  Resolving from the dashboard re-renders the bank-channel card and DMs the
+  sponsor with the same copy the card buttons use, best-effort: a Discord
+  failure leaves the API 200 with `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
+  from when the mod supplies **no** question text; the QOTD card is bylined
+  "sponsored by <name>" and `econ_qotd.sponsor_user_id` records them
+  (`posted_by` stays the mod who ran the command — different people, both
+  audit-relevant). One open submission per member (partial unique index), so
+  nobody can buy the whole queue.
+  - **Refunds are exactly-once**, guarded by a `refunded_at IS NULL` predicate
+    inside the same UPDATE that moves the state — not a caller-set flag — so a
+    double-click or a replay cannot pay twice.
+  - **The queue claim is atomic and happens before the send**
+    (`claim_next_approved`, `UPDATE … RETURNING`), so two mods racing
+    `/qotd post` take different questions rather than double-posting one; if
+    the send then fails, `release_claim` puts it back rather than eating a
+    member's paid slot.
+  - Pending submissions expire after `qotd_sponsor_expire_days` (default 14)
+    and refund, swept per-guild by the hourly loop. **Approved ones never
+    expire** — they're waiting on staff, and timing them out would punish the
+    member for staff latency. `price_qotd_sponsor = 0` disables the feature.
 - **Game participation 5:** paid at the party-games `end_game` choke point
-  (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
-  resolution point. Participation now covers **20 of 23 games**: the six duel games,
+  (`games/utils/game_manager.py`) from the session's player set, and — since the
+  stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
+  seam**: `BaseGame._db_set_state` is a concrete template method (cogs implement
+  `_db_write_state`) that fires `_on_terminal_state` on every game-ending
+  transition (`RESOLVED`/`RESOLVED_NO_NICK`/`ABANDONED`/`VOID`/`EXPIRED_*`).
+  `RESOLVED`/`RESOLVED_NO_NICK` pay participation + win from the re-read row
+  (roster for group games, challenger/target for duels; `winner_id=None`
+  wipeouts pay participation only); the other terminal states pay nothing but
+  still reach the hook, which is the guarantee the stage-4b wager escrow will
+  settle and refund on. No duel cog calls `pay_game_rewards` directly anymore.
+  Participation now covers **20 of 23 games**: the six duel games,
   ttl/traditional/legitlibs, and — enriched in Stage 2 — 11 party cogs that now pass
   their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
   mlt, nhie, price, rushmore, story, wyr). ffa and fantasies are excluded by design
@@ -467,16 +507,24 @@ fragments mid-period.
 
 **Board add-ons (stage 5 of the quest-variety plan, migration 084):**
 
-- **Daily free reroll** — one per member per guild-local day
-  (`econ_rerolls`), via a 🎲 select on `/bank quests`. Swaps one *untouched*
+- **Board reroll** — one **free** per member per guild-local day
+  (`econ_rerolls`), then up to `EconSettings.quest_reroll_daily_cap`
+  (default 3) more at `price_quest_reroll` (default 10) each, ledger kind
+  `quest_reroll`, counted by `econ_rerolls.paid_count` (migration 089).
+  The cap is the point: unlimited paid rerolls turn a "this quest doesn't
+  fit how I use the server" escape hatch into a shopping trip for the
+  cheapest quests. Either setting at 0 disables the paid tier and leaves
+  the free reroll intact — the free one is never taken away. Offered via a
+  🎲 select on `/bank quests` that names the price. Swaps one *untouched*
   board quest (no claim, no counted progress this period) for the first
   pool quest in the member's own shuffle order that isn't on their board,
   **preferring a different trigger kind**. Persisted as an
   `econ_board_overrides` row keyed by the draw's `period_idx` and applied
   on top of the pure draw in `assigned_board_ids` (a same-period re-reroll
   would update `to_quest_id` in place, so application never chains; the
-  override dies with the period). The reroll burns *after* validation —
-  a refused reroll costs nothing.
+  override dies with the period). The reroll spends *after* validation —
+  a refused reroll costs neither the free allowance nor a coin, and a
+  failed debit leaves the board untouched.
 - **Clear-the-board set bonus** — completing every quest on the personal
   daily (or weekly) board in one period pays
   `EconSettings.quest_set_bonus_daily` / `_weekly` (**default 0 = off** —
@@ -839,14 +887,27 @@ balances only** (inequality of who-holds-what, not the zero-balance long tail); 
 fixed-bucket **balance histogram**; **7-day flow** — minted vs burned with a burn
 rate, plus transfer volume and grants (money definitions match the rollup: mint /
 income exclude `transfer_in`, burn excludes `transfer_out`); a **per-member income
-velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend,
-top faucet group, live rentals, streak, and last-earned; **engagement** — earner
+velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend
+(**every** sink kind, not just `rental` — it read rentals-only until consumables
+shipped), top faucet group, live rentals, streak, and last-earned; **engagement** — earner
 ratio (7d earners ÷ 30d active), spenders, quest claims, **quest approval rate**
 (resolved paid ÷ paid+denied over 30d, resolved-only), and **hoard-weeks** (median
 balance ÷ latest-rollup median weekly income); **perk affordability** in days of
-median daily income per price field; and the **top 5 transfer pairs** (30d, by
+median daily income per price field; the **biggest spenders board** (top 15 by
+**lifetime** currency burned, with each member's share of the guild's whole burn
+and the sink they spend most on); and the **top 5 transfer pairs** (30d, by
 `transfer_out` magnitude) as the alt-funnel audit surface for transfer abuse (§12).
 All ratios/divides are guarded (0 or `null` when there is no denominator).
+
+The spenders board is deliberately **all-time, not a trailing window** — its job
+is to make spending a standing status worth chasing, and a 7-day window would
+erase that standing every week. Burn excludes `transfer_out` (sideways: the coins
+land in another wallet, so nothing leaves the economy) and `qa_void` (a staff
+clawback is a real removal but not a purchase, and crediting it would rank
+someone top for having had a reward revoked). Shares are computed against the
+guild's **total** burn, not the sum of the visible rows, so the top-15 cut can't
+inflate its own percentages; ties break on user id so the table doesn't reshuffle
+between refreshes.
 
 ## 10. Notifications
 

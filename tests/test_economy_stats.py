@@ -285,6 +285,7 @@ def test_compute_stats_all_top_level_keys(db):
         "members",
         "engagement",
         "transfers_top",
+        "burn_top",
         "affordability",
     ):
         assert key in out
@@ -428,6 +429,93 @@ def test_transfers_top_skips_malformed_meta(db):
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
     assert out["transfers_top"] == []
+
+
+# ── pure: burn leaderboard ─────────────────────────────────────────────
+
+
+def test_burn_leaderboard_ranks_and_names_top_sink():
+    out = stats.burn_leaderboard(
+        {
+            1: {"rental": 100, "quest_reroll": 20},
+            2: {"quest_reroll": 60},
+            3: {"rental": 5},
+        }
+    )
+    assert [r["user_id"] for r in out] == ["1", "2", "3"]
+    assert [r["burned"] for r in out] == [120, 60, 5]
+    assert out[0]["top_sink"] == "rental"
+    assert out[1]["top_sink"] == "quest_reroll"
+    # Shares are of the whole burn (185), and sum back to it.
+    assert out[0]["share"] == pytest.approx(120 / 185, abs=1e-4)
+    assert sum(r["share"] for r in out) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_burn_leaderboard_share_is_of_total_not_the_visible_slice():
+    # A limit must not inflate the percentages it shows: two members are cut
+    # off, and the survivors' shares still reflect the full 100 burned.
+    out = stats.burn_leaderboard(
+        {1: {"rental": 40}, 2: {"rental": 30}, 3: {"rental": 20}, 4: {"rental": 10}},
+        limit=2,
+    )
+    assert len(out) == 2
+    assert out[0]["share"] == pytest.approx(0.4)
+    assert out[1]["share"] == pytest.approx(0.3)
+
+
+def test_burn_leaderboard_drops_zero_spenders_and_breaks_ties_stably():
+    out = stats.burn_leaderboard(
+        {5: {"rental": 10}, 3: {"rental": 10}, 9: {}, 7: {"rental": 0}}
+    )
+    # Equal burn → lower user id first, so refreshes don't reshuffle the table.
+    assert [r["user_id"] for r in out] == ["3", "5"]
+
+
+def test_burn_leaderboard_empty_and_zero_total():
+    assert stats.burn_leaderboard({}) == []
+    assert stats.burn_leaderboard({1: {"rental": 0}}) == []
+    assert stats.burn_leaderboard({1: {"rental": 5}}, limit=0) == []
+
+
+# ── service: burn leaderboard ──────────────────────────────────────────
+
+
+def test_burn_top_excludes_transfers_and_clawbacks(db):
+    _seed(db)
+    # Member 1 transferred 25 out (sideways) and had 40 clawed back by staff;
+    # neither is spending, so member 1 must not appear at all.
+    _ledger(db, 1, -40, "qa_void", NOW - DAY, actor=99)
+    # Member 3 buys two rerolls — a consumable sink, counted.
+    _ledger(db, 3, -10, "quest_reroll", NOW - DAY)
+    _ledger(db, 3, -10, "quest_reroll", NOW - 2 * DAY)
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    burn = out["burn_top"]
+    assert [b["user_id"] for b in burn] == ["3", "2"]  # 20 burned, then 18
+    assert burn[0]["top_sink"] == "quest_reroll"
+    assert burn[1]["burned"] == 18 and burn[1]["top_sink"] == "rental"
+
+
+def test_burn_top_is_lifetime_not_a_trailing_window(db):
+    # A rental paid 400 days ago still counts — the board is standing, not
+    # recent activity, so an old spender doesn't drop off it.
+    _wallet(db, 1, 10)
+    _ledger(db, 1, -75, "rental", NOW - 400 * DAY)
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    assert out["burn_top"][0]["burned"] == 75
+
+
+def test_spent_7d_counts_every_sink_not_just_rentals(db):
+    _seed(db)
+    # Member 2 already has an 18-coin rental debit inside 7d; a reroll adds to
+    # the same column (it read kind='rental' only before consumables existed).
+    _ledger(db, 2, -10, "quest_reroll", NOW - DAY)
+    _ledger(db, 2, -25, "transfer_out", NOW - DAY, meta={"to": 1})
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    m2 = next(m for m in out["members"] if m["user_id"] == "2")
+    assert m2["spent_7d"] == 28  # 18 rental + 10 reroll, transfer excluded
 
 
 # ── service: affordability ─────────────────────────────────────────────

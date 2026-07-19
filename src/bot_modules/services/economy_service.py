@@ -80,6 +80,20 @@ class EconSettings:
     # guild is seeded 10/25 by scripts/seed_quest_variety.py).
     quest_set_bonus_daily: int = 0
     quest_set_bonus_weekly: int = 0
+    # Paid board rerolls, bought after the one free reroll each guild-local
+    # day. The cap is the point: unlimited paid rerolls let a wealthy member
+    # cycle the board hunting for the cheapest quests, which turns a "this
+    # one doesn't fit how I use the server" escape hatch into a shopping
+    # trip. Either value at 0 disables paid rerolls (the free one stays).
+    price_quest_reroll: int = 10
+    quest_reroll_daily_cap: int = 3
+    # Sponsor-a-QOTD: a member pays to put a question in front of the server,
+    # a mod approves it first. Charged at submit (a free queue invites spam),
+    # so denial and expiry refund. 0 disables sponsoring entirely. Pending
+    # submissions nobody resolves expire and refund after this many days;
+    # approved ones never expire — they're waiting on staff, not the member.
+    price_qotd_sponsor: int = 40
+    qotd_sponsor_expire_days: int = 14
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75
@@ -577,15 +591,30 @@ def create_qotd(
     question: str,
     posted_by: int,
     local_day: str,
+    sponsor_user_id: int = 0,
 ) -> int:
+    """Record a posted QOTD. ``posted_by`` is the mod who ran the command;
+    ``sponsor_user_id`` is the member who paid for it (0 for a staff question)
+    — deliberately separate columns, since they're different people and both
+    matter for an audit.
+    """
     cur = conn.execute(
         """
         INSERT INTO econ_qotd
             (guild_id, channel_id, message_id, question, posted_by,
-             local_day, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             local_day, created_at, sponsor_user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, channel_id, message_id, question, posted_by, local_day, time.time()),
+        (
+            guild_id,
+            channel_id,
+            message_id,
+            question,
+            posted_by,
+            local_day,
+            time.time(),
+            sponsor_user_id,
+        ),
     )
     return int(cur.lastrowid or 0)
 

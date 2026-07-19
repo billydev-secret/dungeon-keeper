@@ -50,6 +50,9 @@ PRICING_FACTORS: dict[str, float] = {
     "price_gift_color": 0.5,
     "price_text_room": 2.0,
     "price_voice_room": 2.0,
+    # A consumable, not a rental — priced to be an impulse buy (a tenth of a
+    # week's income), not a considered purchase like the perks above.
+    "price_quest_reroll": 0.1,
 }
 
 

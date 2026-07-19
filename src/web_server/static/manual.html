@@ -867,7 +867,7 @@
       <li><strong>Daily activity conversion</strong> — the XP you earn each day (see <a href="#xp">XP System</a>) converts into currency at local midnight, automatically and silently.</li>
       <li><strong>Quests</strong> — daily / weekly / monthly quests drawn onto your personal board, plus server-wide community goals and event quests. Many complete automatically when you do the thing (send a trigger phrase, play a game, post a photo, answer a chat-revive prompt, host a voice hangout, set a bio…); others you claim from <code>/bank quests</code>, and some need a staff sign-off before paying. <strong>Getting-started nudges</strong> — one-time setup tasks like <em>filling out your bio</em> or <em>setting your birthday</em> — turn up among your daily quests too, and quietly drop off once you've done them, so they only ever show to people who haven't.</li>
       <li><strong>Community weeklies</strong> — every other week the server gets a shared goal ("send 3,000 messages together") sized from recent activity. Everyone's actions count automatically, milestones at 40/70/100% each pay <em>every</em> active member, and the top contributors earn a bonus — so even a partial week pays out.</li>
-      <li><strong>Board extras</strong> — one free 🎲 reroll per day on <code>/bank quests</code> swaps out a quest that doesn't fit you; clearing your whole daily or weekly board pays a set bonus; and each week one ⚡ spotlight activity pays <em>double</em> (announced when the new week's quests go up).</li>
+      <li><strong>Board extras</strong> — one free 🎲 reroll per day on <code>/bank quests</code> swaps out a quest that doesn't fit you, and you can buy a few more that day if you want another swap (the select tells you the price). Clearing your whole daily or weekly board pays a set bonus, and each week one ⚡ spotlight activity pays <em>double</em> (announced when the new week's quests go up).</li>
       <li><strong>Games &amp; QOTD</strong> — playing a party game or duel pays participation (winning pays more), and answering the question of the day in its channel pays once per QOTD.</li>
       <li><strong>Server boosters</strong> earn 1.5× on everything the server pays out (transfers between members are never multiplied).</li>
     </ul>
@@ -882,6 +882,7 @@
         <tr><td><code>/bank shop</code></td><td>Browse the perk shop in an ephemeral panel — rent perks, and customize rented ones via the panel's modals</td></tr>
         <tr><td><code>/bank pay member: amount:</code></td><td>Send currency to another member (optional memo; large transfers ask for confirmation)</td></tr>
         <tr><td><code>/bank gift member:</code></td><td>Pay to rent a friend a custom role color</td></tr>
+        <tr><td><code>/bank sponsor question:</code></td><td>Pay to put your question forward as a question of the day. A mod reviews it first — if it's turned down (or nobody gets to it in time) you're refunded in full, and you'll hear either way. Your name goes on the card when it runs. One question in flight at a time</td></tr>
         <tr><td><code>/bank role icon image:</code></td><td>Upload an image (max 256&nbsp;KB) for your rented role icon — the one customization that can't ride a modal</td></tr>
         <tr><td><code>/bank mute</code></td><td>Toggle the economy's DM notifications for yourself</td></tr>
       </tbody>
@@ -903,7 +904,7 @@
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><code>/bank grant member: amount: reason:</code></td><td>Award currency to a member (audit-tagged in the ledger)</td></tr>
-        <tr><td><code>/qotd post question:</code></td><td>Post today's question of the day as a banner card — replies in that channel earn currency until end of day</td></tr>
+        <tr><td><code>/qotd post [question]</code></td><td>Post today's question of the day as a banner card — replies in that channel earn currency until end of day. Leave <em>question</em> blank to post the next approved <strong>sponsored</strong> question instead, credited to the member who paid for it</td></tr>
         <tr><td><code>/bank post-guide [channel]</code></td><td>Post (or refresh) the sticky "how the economy works" panel, templated with your branding and live rates</td></tr>
         <tr><td><code>/bank post-shop [channel]</code></td><td>Post a persistent shop panel with rent buttons any member can click</td></tr>
         <tr><td><code>/bank post-leaderboard [channel]</code></td><td>Post the live leaderboard panel: today's pulse, top earners, community-goal progress with pace, a compact quest-board summary (your per-cadence draw counts, with Anytime quests listed), and an anonymous feed of today's completions — it repaints itself within a couple of minutes of economy activity</td></tr>
@@ -913,7 +914,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Everything else lives in the dashboard's Economy section</strong>
-        <p>Branding and wiring (<a href="/#/economy-config">Settings</a>, admin-only), quest authoring with AI idea generation (<a href="/#/economy-quests">Quests</a>), the pending sign-off queue (<a href="/#/economy-claims">Claims</a>), community goals / grants / rentals / ledger audit (<a href="/#/economy-bank-manager">Operations</a>), per-trigger enable switches and faucet rates (<a href="/#/economy-income-sources">Income Sources</a>), perk prices and the curated role-icon catalog (<a href="/#/economy-sinks">Sinks</a>, admin-only), the <a href="/#/economy-qotd">QOTD</a> ping role, and <a href="/#/economy-stats">Statistics</a>. The section is visible to admins and holders of the economy manager role.</p>
+        <p>Branding and wiring (<a href="/#/economy-config">Settings</a>, admin-only), quest authoring with AI idea generation (<a href="/#/economy-quests">Quests</a>), the pending sign-off queue (<a href="/#/economy-claims">Claims</a>), the paid question queue with approve / decline / withdraw (<a href="/#/economy-qotd-submissions">Sponsored QOTD</a>), community goals / grants / rentals / ledger audit (<a href="/#/economy-bank-manager">Operations</a>), per-trigger enable switches and faucet rates (<a href="/#/economy-income-sources">Income Sources</a>), perk prices and the curated role-icon catalog (<a href="/#/economy-sinks">Sinks</a>, admin-only), the <a href="/#/economy-qotd">QOTD</a> ping role, and <a href="/#/economy-stats">Statistics</a>. The section is visible to admins and holders of the economy manager role.</p>
       </div>
     </div>
 
@@ -1748,7 +1749,7 @@
         <tr><td><strong><a href="/#/config-wellness">Wellness</a></strong></td><td>Server defaults, wellness role + private channel, crisis-resource URL</td></tr>
         <tr><td><strong><a href="/#/config-ai">AI (Local LLM)</a></strong></td><td>Local AI model selection and settings (bot-wide, primary server only)</td></tr>
         <tr><td><strong><a href="/#/gender-admin">Gender Tagging</a></strong></td><td>Member gender classification for analytics breakdowns</td></tr>
-        <tr><td><strong><a href="/#/economy-config">Economy</a></strong></td><td>Branding, wiring, and rates (Settings) plus Quests, Claims, Operations, Income Sources, Sinks (perk prices + icon catalog), QOTD, and Statistics pages</td></tr>
+        <tr><td><strong><a href="/#/economy-config">Economy</a></strong></td><td>Branding, wiring, and rates (Settings) plus Quests, Claims, Operations, Income Sources, Sinks (perk prices + icon catalog), QOTD, Sponsored QOTD, and Statistics pages</td></tr>
         <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, reactions-to-earn threshold, auto-react emoji; prompt bank under Prompts &amp; AI</td></tr>
         <tr><td><strong><a href="/#/config-greeting-watch">Greeting Watch</a></strong></td><td>Watched channels, notify member, unanswered-window minutes</td></tr>
         <tr><td><strong><a href="/#/chat-revive">Chat Revive</a></strong></td><td>Eligible channels, ping role, budgets and quiet hours, question bank, manual fire, scoreboard</td></tr>

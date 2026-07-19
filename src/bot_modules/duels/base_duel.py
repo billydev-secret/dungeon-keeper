@@ -266,16 +266,26 @@ class BaseDuel(BaseGame):
         loser_m = guild.get_member(loser_id) if guild else None
         ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
 
+        # winner/loser ride along with the terminal write: the economy hook
+        # re-reads the row, and not every cog persists them before this point.
         if nick_mode:
             result_view = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
             result_msg = await send(
                 content=ping_content, embed=result_embed, view=result_view
             )
             self.bot.add_view(result_view, message_id=result_msg.id)
-            await self._db_set_state(game.id, "RESOLVED", result_message_id=result_msg.id)
+            await self._db_set_state(
+                game.id, "RESOLVED",
+                result_message_id=result_msg.id,
+                winner_id=winner_id,
+                loser_id=loser_id,
+            )
         else:
             # Custom stakes: announce only — no rename button, no expiry sweep.
             result_msg = await send(content=ping_content, embed=result_embed)
             await self._db_set_state(
-                game.id, "RESOLVED_NO_NICK", result_message_id=result_msg.id
+                game.id, "RESOLVED_NO_NICK",
+                result_message_id=result_msg.id,
+                winner_id=winner_id,
+                loser_id=loser_id,
             )

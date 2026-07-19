@@ -8,8 +8,10 @@ import pytest_asyncio
 
 from bot_modules.cogs.musical_chairs import db as mcdb
 from bot_modules.cogs.musical_chairs.cog import MusicalChairsCog
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.games_db import GamesDb
-from tests.fakes import FakeGuild, fake_interaction
+from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
 
 GUILD = 9001
 CH = 100
@@ -100,6 +102,49 @@ async def test_close_round_no_show_multi_elim(cog, db):
     assert g.state == "RESOLVED"
     assert g.winner_id == 1
     assert g.loser_id in (2, 3)  # last eliminated of the pair
+
+
+def _econ_cog(db, db_path, member_ids=(1, 2, 3)):
+    with open_db(db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    return MusicalChairsCog(FakeEconGamesBot(db, db_path, member_ids))  # type: ignore[arg-type]
+
+
+async def test_close_round_terminal_pays(db, sync_db_path):
+    cog = _econ_cog(db, sync_db_path)
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2], seated=[2])
+    await mcdb.set_game_state(db, game.id, "ACTIVE", roster=json.dumps([1, 2, 3]))
+    game = await mcdb.get_game(db, game.id)
+    resolved = await cog._close_round_locked(game)
+    assert resolved is True
+    with open_db(sync_db_path) as conn:
+        assert get_balance(conn, GUILD, 2) == 25   # winner: participation + win
+        assert get_balance(conn, GUILD, 1) == 5    # participation only
+        assert get_balance(conn, GUILD, 3) == 5    # eliminated earlier, still played
+
+
+async def test_close_round_degenerate_no_winner_pays_nothing(db, sync_db_path):
+    """The winner=None branch: nobody left to seat, nobody eliminated this
+    round. The game is left ACTIVE for the sweep to abandon; no payout."""
+    econ_cog = _econ_cog(db, sync_db_path)
+    gid = await mcdb.create_lobby(db, GUILD, CH, 1, None)
+    await mcdb.set_game_state(
+        db, gid, "ACTIVE",
+        phase="SCRAMBLE", round=1, chairs=0,
+        roster=json.dumps([1, 2, 3]),
+        alive="[]", seated="[]", elimination_order="[]",
+    )
+    game = await mcdb.get_game(db, gid)
+    resolved = await econ_cog._close_round_locked(game)
+    assert resolved is True
+    g = await mcdb.get_game(db, gid)
+    assert g.state == "ACTIVE"  # no terminal write — the sweep abandons it
+    await econ_cog._expire_active(g)
+    g = await mcdb.get_game(db, gid)
+    assert g.state == "ABANDONED"
+    with open_db(sync_db_path) as conn:
+        for uid in (1, 2, 3):
+            assert get_balance(conn, GUILD, uid) == 0
 
 
 # ── _on_sit: false start (MUSIC) ───────────────────────────────────────────────
