@@ -546,6 +546,19 @@ def test_compute_mod_workload_counts_audit_and_messages(db_conn):
     assert out["escalation_rate"] == 100.0
 
 
+def test_compute_mod_workload_excludes_voice_master_self_service(db_conn):
+    """A mod using their own Voice Master channel isn't moderation work."""
+    now = 1_700_000_000.0
+    _seed_audit(db_conn, action="kick", actor=10, ts=now - 60)
+    _seed_audit(db_conn, action="vm_channel_create", actor=10, ts=now - 90)
+    _seed_audit(db_conn, action="vm_claim", actor=10, ts=now - 120)
+    db_conn.commit()
+    out = hm.compute_mod_workload(db_conn, GUILD, now=now, mod_ids=[10])
+    assert out["total_actions_7d"] == 1
+    assert out["mod_actions"][0]["actions"] == 1
+    assert not any(t["action"].startswith("vm_") for t in out["action_types"])
+
+
 # ── compute_composite_health ─────────────────────────────────────────
 
 

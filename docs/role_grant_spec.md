@@ -9,8 +9,13 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or mod | Give a configured community role to a member |
+| `/grant_missing role:<key> min_level:<n>` | Slash | Mod | List members at/above a level who don't have a configured grant role yet |
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
+
+### `/grant_missing`
+
+A mod-only report, not a self-serve command. Defaults to `role:nsfw min_level:5` — surfaces members who hit the level-5 XP threshold (where the "promotion review" post fires, see `xp_spec.md`) but were never actually given the NSFW/adult-access role. Cross-references `member_xp.level` against live Discord role membership, and excludes anyone currently on an active inactive-channel hold (`inactive_members.status = 'active'`) — those members had every role stripped on purpose, so a missing grant there isn't an oversight. Replies ephemerally with an embed listing up to 40 members (mention + level), or a plain "nobody missing" message when the list is empty.
 
 ## Behavior
 

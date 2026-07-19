@@ -230,11 +230,13 @@ def build_leaderboard_embed(
                 f"⚡ **Spotlight:** {data.spotlight_label} pays **double** "
                 f"this week!"
             )
+        label_width = max(len(v) for v in _QTYPE_LABELS.values())
         for q in data.quests[:_MAX_QUEST_LINES]:
             xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
+            label = _QTYPE_LABELS[q.qtype].ljust(label_width)
             spot_tag = "⚡ " if q.spotlight else ""
             quest_lines.append(
-                f"`{_QTYPE_LABELS[q.qtype]}` {spot_tag}**{q.title}** — "
+                f"`{label}` {spot_tag}**{q.title}** — "
                 f"{emoji} {q.reward:,}{xp}"
             )
         hidden = len(data.quests) - _MAX_QUEST_LINES

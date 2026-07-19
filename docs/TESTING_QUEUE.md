@@ -9,6 +9,42 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### XP: promotion-review trust — spicy-access field, 2-day tenure gate, /grant_missing  (this commit)
+
+- [ ] Level a fresh test alt (joined <2 days ago) up to level 5 → **no**
+      promotion-review post lands in the level-5 log channel; a row appears
+      in `pending_promotion_posts` for that member.
+- [ ] Wait for (or manually trigger) `promotion_review_recheck_loop` after
+      the member's tenure clears 2 days → the post now lands, and the
+      `Spicy access` field shows ❌ Not granted (or ✅ Granted if the member
+      already has the NSFW role). The pending row is gone after.
+- [ ] Level an established member (joined weeks ago) to 5 → promotion post
+      lands immediately as before, with the `Spicy access` field.
+- [ ] `/grant_missing` with defaults → lists members at level 5+ missing the
+      NSFW role; a member on an active inactive-channel hold does **not**
+      appear even if they qualify otherwise.
+- [ ] `/grant_missing role:<other> min_level:<n>` → autocomplete offers the
+      guild's configured grant roles; the list respects the custom level.
+
+### Health: exclude Voice Master self-service from mod workload  (e4b9daa)
+
+- [ ] Have a mod create/claim/rename their own Voice Master channel, then
+      check the dashboard's Moderator Workload tile → those actions no
+      longer inflate that mod's action count or appear in the action-type
+      breakdown.
+
+### Quote cards: bump banner text size  (e56e1a1)
+
+- [ ] Trigger a QOTD banner and a `/quote banner` card → body text reads
+      noticeably larger than before; check a long quote on the with-avatar
+      layout doesn't visually clip at the bottom.
+
+### Economy: square up the quest board's cadence tags  (bd1d343)
+
+- [ ] `/bank` (or wherever the leaderboard embed posts) → the `Daily` /
+      `Weekly` / `Monthly` / `Anytime` tags in the Quest board field line up
+      in a single column instead of drifting per row.
+
 ### Economy: board add-ons — reroll, set bonus, spotlight, flip post  (d8f18e4)
 
 - [ ] `/bank quests` shows the 🎲 reroll select when you have untouched

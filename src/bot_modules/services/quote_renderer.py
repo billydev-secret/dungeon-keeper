@@ -839,8 +839,8 @@ def render_quote_card(
     text_pad_l = int(width * 0.34)
     text_col_w = int(width * 0.48)
 
-    body_size = max(26, width // 24)
-    attr_size = max(16, width // 40)
+    body_size = max(32, width // 19)
+    attr_size = max(19, width // 33)
     body_font = _load_font(body_size, font_style)
     attr_font = _load_font(attr_size, font_style)
 

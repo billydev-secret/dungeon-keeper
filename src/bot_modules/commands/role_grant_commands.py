@@ -175,3 +175,90 @@ async def _execute_grant(
                 embed=audit_embed,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+
+
+async def _execute_grant_missing(
+    interaction: discord.Interaction,
+    role_key: str,
+    min_level: int,
+    ctx: AppContext,
+) -> None:
+    """List members past a level who are missing a configured grant role."""
+    from bot_modules.inactive.store import active_inactive_user_ids
+    from bot_modules.services.xp_service import candidates_missing_grant_check
+
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "This command only works in a server.", ephemeral=True
+        )
+        return
+
+    cfg = ctx.guild_config(guild.id).grant_roles.get(role_key)
+    if cfg is None or cfg["role_id"] <= 0:
+        await interaction.response.send_message(
+            "This grant role is not configured.", ephemeral=True
+        )
+        return
+
+    grant_role = guild.get_role(cfg["role_id"])
+    if grant_role is None:
+        await interaction.response.send_message(
+            "The configured role no longer exists.", ephemeral=True
+        )
+        return
+
+    if min_level < 1:
+        await interaction.response.send_message(
+            "min_level must be at least 1.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    guild_id = guild.id
+
+    def _query() -> tuple[dict[int, int], set[int]]:
+        with ctx.open_db() as conn:
+            levels = {
+                int(r["user_id"]): int(r["level"])
+                for r in conn.execute(
+                    "SELECT user_id, level FROM member_xp WHERE guild_id=? AND level>=?",
+                    (guild_id, min_level),
+                ).fetchall()
+            }
+            inactive_ids = active_inactive_user_ids(conn, guild_id)
+        return levels, inactive_ids
+
+    levels, inactive_ids = await asyncio.to_thread(_query)
+
+    missing: list[tuple[discord.Member, int]] = []
+    for user_id, level in candidates_missing_grant_check(levels, inactive_ids):
+        member = guild.get_member(user_id)
+        if member is None or member.bot or grant_role in member.roles:
+            continue
+        missing.append((member, level))
+
+    if not missing:
+        await interaction.followup.send(
+            f"Nobody at level {min_level}+ is missing **{cfg['label']}**.",
+            ephemeral=True,
+        )
+        return
+
+    shown_cap = 40
+    lines = [f"• {m.mention} — level {lvl}" for m, lvl in missing[:shown_cap]]
+    extra = len(missing) - shown_cap
+    if extra > 0:
+        lines.append(f"…and {extra} more.")
+    embed = discord.Embed(
+        title=f"Level {min_level}+ missing {cfg['label']}",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(
+        text="Excludes members on an active inactive-channel hold — their roles were stripped, not skipped."
+    )
+    await interaction.followup.send(
+        embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+    )

@@ -227,3 +227,133 @@ async def test_grant_success_posts_public_message(grant_setup):
     ix.response.defer.assert_awaited_once()
     ix.followup.send.assert_awaited_once()
     assert "granted" in ix.followup.send.call_args[0][0].lower()
+
+
+# ── /grant_missing command tests ────────────────────────────────────────
+
+GM_GUILD_ID = 12345
+GM_NSFW_ROLE_ID = 555
+
+
+def _seed_level(db_path, *, user_id: int, level: int, guild_id: int = GM_GUILD_ID):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO member_xp (guild_id, user_id, total_xp, level, announced_level) "
+        "VALUES (?, ?, 0, ?, ?)",
+        (guild_id, user_id, level, level),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_inactive(db_path, *, user_id: int, guild_id: int = GM_GUILD_ID):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO inactive_members (guild_id, user_id, stored_roles, created_at, status) "
+        "VALUES (?, ?, '[]', 0, 'active')",
+        (guild_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def grant_missing_setup(tmp_path):
+    from bot_modules.core.db_utils import open_db
+    from migrations import apply_migrations_sync
+
+    db_path = tmp_path / "gm.db"
+    apply_migrations_sync(db_path)
+
+    ctx = _make_ctx(can_grant_any_role=True, is_mod=True)
+    ctx.grant_roles["nsfw"]["role_id"] = GM_NSFW_ROLE_ID
+    ctx.open_db = lambda: open_db(db_path)
+    cog = RoleGrantCog(MagicMock(), ctx)
+    cmd = RoleGrantCog.grant_missing_cmd.callback
+
+    async def grant_missing(interaction, role="nsfw", min_level=5):
+        return await cmd(cog, interaction, role, min_level)
+
+    return ctx, grant_missing, db_path
+
+
+def _gm_guild(members: dict[int, Any]):
+    nsfw_role = _MockRole(role_id=GM_NSFW_ROLE_ID)
+    guild = MagicMock()
+    guild.id = GM_GUILD_ID
+    guild.get_role = MagicMock(return_value=nsfw_role)
+    guild.get_member = MagicMock(side_effect=lambda uid: members.get(uid))
+    return guild, nsfw_role
+
+
+async def test_grant_missing_denied_for_non_mod(grant_missing_setup):
+    ctx, grant_missing, _ = grant_missing_setup
+    ctx.is_mod.return_value = False
+    ix = _make_interaction(guild=_gm_guild({})[0])
+    await grant_missing(ix)
+    assert "permission" in ix.response.send_message.call_args[0][0].lower()
+
+
+async def test_grant_missing_role_not_configured_denied(grant_missing_setup):
+    ctx, grant_missing, _ = grant_missing_setup
+    ctx.grant_roles["nsfw"]["role_id"] = 0
+    ix = _make_interaction(guild=_gm_guild({})[0])
+    await grant_missing(ix)
+    assert "not configured" in ix.response.send_message.call_args[0][0].lower()
+
+
+async def test_grant_missing_lists_qualifying_member(grant_missing_setup):
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=201, level=7)
+    member = _make_member(user_id=201)
+    guild, _ = _gm_guild({201: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    ix.response.defer.assert_awaited_once()
+    embed = ix.followup.send.call_args[1]["embed"]
+    assert "level 7" in embed.description.lower()
+    assert member.mention in embed.description
+
+
+async def test_grant_missing_excludes_members_who_already_have_the_role(grant_missing_setup):
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=202, level=6)
+    guild, nsfw_role = _gm_guild({})
+    member = _make_member(user_id=202, roles=[nsfw_role])
+    guild.get_member = MagicMock(side_effect=lambda uid: {202: member}.get(uid))
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
+
+
+async def test_grant_missing_excludes_inactive_members(grant_missing_setup):
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=203, level=8)
+    _seed_inactive(db_path, user_id=203)
+    member = _make_member(user_id=203)
+    guild, _ = _gm_guild({203: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
+
+
+async def test_grant_missing_excludes_below_threshold(grant_missing_setup):
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=204, level=4)
+    member = _make_member(user_id=204)
+    guild, _ = _gm_guild({204: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix, min_level=5)
+
+    assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
