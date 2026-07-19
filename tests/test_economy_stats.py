@@ -449,3 +449,75 @@ def test_affordability_empty_without_earners(db):
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
     assert out["affordability"] == {}
+
+
+# ── live "happening now" payload ──────────────────────────────────────
+
+
+def test_compute_live_shapes_and_counts(tmp_path):
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+        create_quest,
+        fire_trigger_quests,
+        set_quest_active,
+    )
+    from bot_modules.services.economy_service import save_econ_settings
+    from bot_modules.services.economy_stats_service import compute_live
+
+    db_path = tmp_path / "live.db"
+    apply_migrations_sync(db_path)
+    with open_db(db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        settings = SETTINGS
+        # A daily kind quest, an event quest, and a running community weekly.
+        daily = create_quest(
+            conn, GUILD, title="Chatter", description="", qtype="daily",
+            reward=10, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind="message_sent",
+        )
+        set_quest_active(conn, GUILD, daily, True)
+        event = create_quest(
+            conn, GUILD, title="Booster", description="", qtype="event",
+            reward=5, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind="boost",
+        )
+        set_quest_active(conn, GUILD, event, True)
+        comm = create_quest(
+            conn, GUILD, title="Together", description="", qtype="community",
+            reward=30, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind="message_sent",
+        )
+        activate_community_weekly(conn, GUILD, comm, target=100, week="2026-W29")
+
+        # One member completes the daily (also bumps community to 1) and one
+        # event occurrence pays.
+        fire_trigger_quests(
+            conn, settings, GUILD, "message_sent", 1,
+            local_day="2026-07-14", occurrence="m1", booster=False,
+        )
+        fire_trigger_quests(
+            conn, settings, GUILD, "boost", 1,
+            local_day="2026-07-14", occurrence="b1", booster=False,
+        )
+        # "Now" must sit inside the same guild-local day the fires used, or
+        # the current-period counts correctly read 0.
+        from datetime import datetime, timezone
+
+        live_now = datetime(
+            2026, 7, 14, 18, 0, tzinfo=timezone.utc
+        ).timestamp()
+        live = compute_live(conn, GUILD, now=live_now)
+
+    assert live["community"][0]["title"] == "Together"
+    assert live["community"][0]["current"] == 1
+    assert live["community"][0]["contributors"] == 1
+    assert live["community"][0]["tiers_crossed"] == 0
+    daily_rows = live["cadences"]["daily"]
+    assert daily_rows and daily_rows[0]["completed"] == 1
+    assert live["events"][0]["paid_total"] == 1
+    assert live["completions_week"] >= 1
+    assert live["seconds_to_day_roll"] > 0
+    assert live["seconds_to_week_roll"] > 0

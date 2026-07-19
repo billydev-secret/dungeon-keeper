@@ -683,6 +683,19 @@ fixed per-perk factor)` served from `GET /api/economy/metrics` and rendered unde
 price field in the config panel; advisory only (no enforcement), and `{}` until the
 first rollup lands.
 
+**"Happening now" (Statistics page, top card).** The live quest pulse
+(`GET /api/economy/quests/live` → `compute_live`, manager-gated,
+45 s panel auto-refresh): the running community weekly as a hero card
+(progress bar, %, 40/70/100 tier chips, contributor count, daily-bucket
+pace flag "on track"/"needs a push", time to the week roll — or a gap-week
+note), per-quest **anonymous** completion counts for the current period of
+every active daily/weekly/monthly quest (+ counted-quest in-flight counts),
+event-quest totals (7d / ever), quests-done-today / this-week tickers, and
+day/week reset countdowns. Aggregates only, never member names (2026-07-18
+decision). The leaderboard embed's community bars also show a
+"🏁 tier N/3 secured" state mid-run for auto weeklies, refreshed on the
+same hourly tick that detects the crossing.
+
 **Statistics page (Economy section).** A live, on-demand tuning surface
 (`GET /api/economy/stats`, gated on `require_economy_manager` — manager
 role or admin; member table capped at 500), complementing the weekly rollup with a

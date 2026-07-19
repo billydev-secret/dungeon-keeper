@@ -54,13 +54,29 @@ function fmtPct(frac) {
 // Panel-local sort state for the member table.
 const sortState = { key: "balance", dir: "desc" };
 
+// "Happening now" auto-refresh cadence. The endpoint is a handful of cheap
+// aggregates; 45s keeps the pulse feeling live without hammering it.
+const LIVE_REFRESH_MS = 45000;
+
+function fmtDur(secs) {
+  const s = Math.max(0, Math.round(Number(secs) || 0));
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600),
+    m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading Statistics…</div></div>`;
+  let liveTimer = null;
   (async () => {
     const members = await loadMembers().catch(() => []);
     render(container, members);
+    refreshLive(container);
+    liveTimer = setInterval(() => refreshLive(container), LIVE_REFRESH_MS);
   })();
-  return null;
+  return { unmount() { if (liveTimer) clearInterval(liveTimer); } };
 }
 
 function render(container, members) {
@@ -73,6 +89,12 @@ function render(container, members) {
         </div>
         <button class="btn" data-refresh>Refresh</button>
       </header>
+
+      <section class="card" data-live-card>
+        <div class="section-label">Happening now</div>
+        <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
+        <div data-live><div class="empty">Loading…</div></div>
+      </section>
 
       <div class="card-grid" data-summary style="margin-bottom:4px;"></div>
 
@@ -105,6 +127,78 @@ function render(container, members) {
     refresh(container, members);
   });
   refresh(container, members);
+}
+
+async function refreshLive(container) {
+  const host = container.querySelector("[data-live]");
+  if (!host) return;
+  let live;
+  try {
+    live = await api("/api/economy/quests/live");
+  } catch (err) {
+    host.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+    return;
+  }
+  const bits = [];
+
+  // Community hero (or the gap-week note).
+  if (live.community.length) {
+    for (const c of live.community) {
+      const pace = c.completed
+        ? "🎉 target cleared"
+        : c.on_track ? "✅ on track" : "🔥 needs a push";
+      const tiers = [40, 70, 100].map((pct, i) =>
+        `<span style="opacity:${c.tiers_crossed > i ? 1 : 0.35};">🏁${pct}%</span>`,
+      ).join(" ");
+      bits.push(`
+        <div style="margin:8px 0;">
+          <strong>${esc(c.title)}</strong>
+          <span class="field-hint" style="margin-left:8px;">${esc(c.kind_label)}</span>
+          <div style="background:var(--border); border-radius:6px; height:14px; margin:6px 0; overflow:hidden; max-width:480px;">
+            <div style="width:${Math.min(100, c.pct)}%; height:100%; background:var(--accent, #7aa2f7);"></div>
+          </div>
+          <div class="field-hint">
+            ${fmtNum(c.current)} / ${fmtNum(c.target)} (${c.pct}%) · ${tiers} ·
+            ${pace} · ${fmtNum(c.contributors)} contributor(s) ·
+            ends in ${fmtDur(live.seconds_to_week_roll)}
+          </div>
+        </div>`);
+    }
+  } else {
+    bits.push(`<div class="field-hint" style="margin:8px 0;">No community
+      weekly running — gap week. The next one kicks off at the week roll
+      (${fmtDur(live.seconds_to_week_roll)}) if the library has one.</div>`);
+  }
+
+  // Ticker aggregates + countdowns.
+  bits.push(`
+    <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin:8px 0;">
+      <div class="stat-card"><div class="stat-value">${fmtNum(live.completions_today)}</div><div class="stat-label">quests done today</div></div>
+      <div class="stat-card"><div class="stat-value">${fmtNum(live.completions_week)}</div><div class="stat-label">this week</div></div>
+      <div class="stat-card"><div class="stat-value">${fmtDur(live.seconds_to_day_roll)}</div><div class="stat-label">to daily reset</div></div>
+      <div class="stat-card"><div class="stat-value">${fmtDur(live.seconds_to_week_roll)}</div><div class="stat-label">to weekly reset</div></div>
+    </div>`);
+
+  // Per-cadence pulse tables.
+  const cadCols = ["daily", "weekly", "monthly"].map((cad) => {
+    const rows = (live.cadences[cad] || []).map((q) => {
+      const flight = q.in_progress ? ` · ${fmtNum(q.in_progress)} in progress` : "";
+      return `<div class="field-hint" style="margin:2px 0;">${esc(q.title)} —
+        <strong>${fmtNum(q.completed)}</strong> done${flight}</div>`;
+    }).join("") || `<div class="empty">none active</div>`;
+    return `<div><div class="section-label" style="text-transform:capitalize;">${cad} (this period)</div>${rows}</div>`;
+  }).join("");
+  const eventRows = (live.events || []).map((q) =>
+    `<div class="field-hint" style="margin:2px 0;">${esc(q.title)} —
+      <strong>${fmtNum(q.paid_7d)}</strong> this week · ${fmtNum(q.paid_total)} ever</div>`,
+  ).join("") || `<div class="empty">none active</div>`;
+  bits.push(`
+    <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
+      ${cadCols}
+      <div><div class="section-label">Event quests</div>${eventRows}</div>
+    </div>`);
+
+  host.innerHTML = bits.join("");
 }
 
 async function refresh(container, members) {

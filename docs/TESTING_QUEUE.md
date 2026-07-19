@@ -9,6 +9,22 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: live "Happening now" tracker on Statistics  (stage 4, hash stamped on merge)
+
+- [ ] Statistics page opens with the "Happening now" card on top; it
+      re-fetches by itself every ~45s (watch the counts move after
+      completing a quest in Discord)
+- [ ] With a community weekly running: hero card shows bar/%, tier chips
+      light up as crossed, contributor count and "ends in" countdown look
+      right; pace flag flips to "needs a push" when far behind
+- [ ] During a gap week: the card says so instead of showing an empty hero
+- [ ] Cadence columns show per-quest "N done" for the CURRENT period only
+      (yesterday's completions don't inflate today), counted quests show
+      "M in progress"
+- [ ] No member names anywhere on the card (anonymous by design)
+- [ ] Leaderboard embed: an auto weekly mid-run shows "🏁 tier N/3 secured"
+      on its community bar after the hourly refresh
+
 ### Economy: auto-tracking community weeklies  (3609f84)
 
 Needs at least one community quest WITH a game trigger in the library

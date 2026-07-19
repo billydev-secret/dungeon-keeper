@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.economy import quests as quest_rules
 from bot_modules.services.economy_quests_service import list_quests
 
 if TYPE_CHECKING:
@@ -64,6 +65,10 @@ class CommunityGoal:
     target: int | None
     completed: bool
     settled: bool
+    # Auto-tracking weekly (trigger_kind set): show the 40/70/100% tier
+    # markers instead of the manual goal's plain bar.
+    auto: bool = False
+    tiers: int = 0
 
 
 @dataclass(frozen=True)
@@ -111,13 +116,20 @@ def collect_leaderboard_data(
                 "FROM econ_community_progress WHERE quest_id = ?",
                 (int(row["id"]),),
             ).fetchone()
+            current = int(prog["current"]) if prog else 0
+            target = row["community_target"]
+            auto = bool(row["trigger_kind"])
             community.append(
                 CommunityGoal(
                     title=row["title"],
-                    current=int(prog["current"]) if prog else 0,
-                    target=row["community_target"],
+                    current=current,
+                    target=target,
                     completed=bool(prog and prog["completed_at"] is not None),
                     settled=bool(prog and prog["settled_at"] is not None),
+                    auto=auto,
+                    tiers=quest_rules.community_tiers_crossed(
+                        current, int(target or 0)
+                    ) if auto else 0,
                 )
             )
         elif row["qtype"] in _QTYPE_LABELS:
@@ -177,6 +189,9 @@ def build_leaderboard_embed(
                 state = " — ✅ paid out"
             elif g.completed:
                 state = " — 🎉 complete, payout coming"
+            elif g.auto and g.tiers > 0:
+                # Tiered weekly mid-run: each crossed tier is already banked.
+                state = f" — 🏁 tier {g.tiers}/3 secured"
             else:
                 state = ""
             goal_lines.append(

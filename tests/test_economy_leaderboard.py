@@ -397,3 +397,22 @@ async def test_loop_refresh_keeps_ids_on_transient_error(db):
     with open_db(db) as conn:
         settings = load_econ_settings(conn, GUILD_ID)
     assert settings.leaderboard_message_id == 4444  # untouched, retried next tick
+
+
+def test_embed_auto_goal_tier_marker():
+    from bot_modules.economy.leaderboard import CommunityGoal
+
+    data = LeaderboardData(
+        top_earners=[],
+        community=[
+            # 75/100 on an auto weekly = tiers 1+2 banked mid-run.
+            CommunityGoal(
+                "Weekly", 75, 100, completed=False, settled=False,
+                auto=True, tiers=2,
+            ),
+        ],
+        quests=[],
+    )
+    embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
+    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    assert "🏁 tier 2/3 secured" in goals

@@ -32,7 +32,7 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
 )
-from bot_modules.services.economy_stats_service import compute_stats
+from bot_modules.services.economy_stats_service import compute_live, compute_stats
 from web_server.auth import AuthenticatedUser
 from web_server.deps import (
     get_active_guild_id,
@@ -662,6 +662,25 @@ async def deny_claim(
         resolver_id=user.user_id,
         deny_reason=body.reason,
     )
+
+
+@router.get("/economy/quests/live")
+async def quests_live(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """The Statistics page's "Happening now" pulse (quest-variety stage 4).
+
+    Anonymous aggregates only — counts and progress, no member names.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return compute_live(conn, guild_id, now=time.time())
+
+    return await run_query(_q)
 
 
 # ── community quests ──────────────────────────────────────────────────
