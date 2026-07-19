@@ -11,10 +11,18 @@ it's been verified in the dev guild, with a date.
 
 ### Economy: 13 new quest trigger kinds + kind activity ledger  (f0a590c)
 
-Wire-up only — no seeded quests yet, so verify by creating a test quest per
-kind on the dashboard Quests page (event cadence pays every occurrence, best
-for testing). The Income Sources page should list all 13 new kinds with
-their switches.
+- [ ] **After restart, run `​.venv/bin/python scripts/seed_quest_variety.py`**
+      (main checkout) — backfills the activity ledger from xp_events
+      (~10k rows) and seeds+activates the 13 calibrated variety quests for
+      the main guild. It refuses to run pre-restart (migration 080 guard),
+      is idempotent, and `--dry-run` previews. Then check the Quests page
+      shows 39 active and the new kinds render with their switches on
+      Income Sources.
+
+The per-kind wire-up checks below can use the seeded quests (the sparse
+kinds landed as weekly/monthly, so a kind may need its quest drawn onto
+your board — event-cadence test quests are still the fastest way to force a
+specific kind).
 
 - [ ] `chat_revive`: talk in a channel within 30 min after a revive prompt →
       quest fires when the measure pass runs (up to ~35 min later, hourly loop)
