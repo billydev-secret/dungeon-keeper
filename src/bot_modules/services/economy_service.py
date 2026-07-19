@@ -86,7 +86,6 @@ class EconSettings:
     price_role_gradient: int = 120
     price_text_room: int = 200
     price_voice_room: int = 200
-    price_gift_color: int = 50
     # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);
     # readable via GET /economy/config but deliberately absent from the
     # dashboard's editable-field whitelist.

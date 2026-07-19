@@ -123,9 +123,10 @@ _PERK_LABELS = {
     "role_name": "Custom role name",
     "role_icon": "Role icon",
     "role_gradient": "Gradient role",
-    "gift_color": "Gift-a-color",
 }
-# The perks a member rents for themselves, in shop display order.
+# The perks a member rents for themselves, in shop display order. Every one
+# is also giftable — a gift is the same perk rented with the friend as
+# beneficiary (the separate gift_color kind retired in migration 090).
 _SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
 # Feature-gated perks and the friendly reason shown when the gate is closed.
 _FEATURE_GATED = ("role_gradient", "role_icon")
@@ -139,21 +140,18 @@ _PERK_SHORT = {
     "role_name": "Name",
     "role_gradient": "Gradient",
     "role_icon": "Icon",
-    "gift_color": "Gift",
 }
 _PERK_BLURBS = {
     "role_color": "one solid color, your pick",
     "role_name": "call yourself anything",
     "role_gradient": "two-color fade on your name",
     "role_icon": "a badge beside your name",
-    "gift_color": "buy someone a role color",
 }
 _PERK_EMOJI = {
     "role_color": "🎨",
     "role_name": "✨",
     "role_gradient": "🌈",
     "role_icon": "🖼️",
-    "gift_color": "🎁",
 }
 # Self-perks grouped into a price ladder — cheap everyday tweaks first, the
 # showy ones second — so the shop reads as tiers to climb rather than a flat
@@ -210,10 +208,10 @@ def _rental_lines(settings: EconSettings, rentals: list, user_id: int) -> list[s
         owner_id = int(r["user_id"])
         beneficiary_id = int(r["beneficiary_id"])
         attribution = ""
-        if perk == "gift_color":
-            if beneficiary_id == user_id and owner_id != user_id:
+        if beneficiary_id != owner_id:
+            if beneficiary_id == user_id:
                 attribution = " (gift received)"
-            elif owner_id == user_id and beneficiary_id != user_id:
+            elif owner_id == user_id:
                 attribution = f" (gift to <@{beneficiary_id}>)"
         grace = " · ⏳ in grace" if str(r["state"]) == "grace" else ""
         lines.append(
@@ -438,6 +436,58 @@ class _PayConfirmView(discord.ui.View):
         )
 
 
+class _GiftConfirmView(discord.ui.View):
+    """Ephemeral Confirm/Cancel gate for gifting a perk the friend already has.
+
+    The rental would stack silently (their role already shows the perk), so
+    the double-spend has to be an explicit choice, mirroring _PayConfirmView.
+    """
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        gifter: discord.Member,
+        member: discord.Member,
+        perk: str,
+    ) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.gifter = gifter
+        self.member = member
+        self.perk = perk
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.gifter.id:
+            await interaction.response.send_message(
+                "This confirmation isn't yours.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Gift anyway", style=discord.ButtonStyle.success)
+    async def _confirm(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await self.cog.finalize_gift(
+            interaction, self.settings, self.guild, self.gifter, self.member,
+            self.perk, via_confirm=True,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def _cancel(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content="Gift cancelled.", view=None
+        )
+
+
 class _RoleNameModal(discord.ui.Modal, title="Custom role name"):
     text = discord.ui.TextInput(
         label="Role name",
@@ -501,7 +551,8 @@ class _RoleIconModal(discord.ui.Modal, title="Role icon"):
         await self.cog.set_role_icon_emoji(interaction, str(self.emoji.value))
 
 
-# Which modal customises which perk; gift_color shares the color modal.
+# Which modal customises which perk; a gifted perk uses the same modal as a
+# self-rented one (entitlements are beneficiary-based, so the rows match).
 _CFG_MODALS = {
     "role_name": _RoleNameModal,
     "role_color": _RoleColorModal,
@@ -585,9 +636,9 @@ class _IconCatalogView(discord.ui.View):
 class _ShopView(discord.ui.View):
     """One button per self-perk: Rent when unowned, a customise modal when owned.
 
-    Feature-gated rows are disabled either way. A member holding only a
-    *gifted* color gets an extra "Set gifted color" button, since the
-    role_color row still shows Rent for them.
+    Feature-gated rows are disabled either way. ``owned`` is the viewer's
+    beneficiary-based entitlements, so a gifted perk shows its customise
+    button exactly like a self-rented one.
     """
 
     def __init__(
@@ -646,14 +697,6 @@ class _ShopView(discord.ui.View):
                     custom_id=f"econ_shop_rent:{perk}",
                 )
                 button.callback = self._make_rent_callback(perk)
-            self.add_item(button)
-        if "gift_color" in owned and "role_color" not in owned:
-            button = discord.ui.Button(
-                label="Set gifted color",
-                style=discord.ButtonStyle.success,
-                custom_id="econ_shop_cfg:gift_color",
-            )
-            button.callback = self._make_cfg_callback("role_color")
             self.add_item(button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -898,9 +941,8 @@ def _build_shop_embed(
 
     # One width per table, not per tier, so cells line up across the whole
     # embed rather than jumping at each heading.
-    rows = [*_SELF_PERKS, "gift_color"]
-    label_width = max(len(_PERK_SHORT[p]) for p in rows)
-    blurb_width = max(len(_PERK_BLURBS[p]) for p in rows)
+    label_width = max(len(_PERK_SHORT[p]) for p in _SELF_PERKS)
+    blurb_width = max(len(_PERK_BLURBS[p]) for p in _SELF_PERKS)
 
     def _line(perk: str) -> str:
         _sort, price_str = _shop_row_price(settings, perk, icon_catalog)
@@ -928,7 +970,10 @@ def _build_shop_embed(
         )
     embed.add_field(
         name="For a friend",
-        value=f"{_line('gift_color')}\nSend it with `/bank gift`.",
+        value=(
+            "🎁 Any perk above can be gifted at its listed price — "
+            "you pay the weekly rent, they wear it. Send one with `/bank gift`."
+        ),
         inline=False,
     )
 
@@ -1373,15 +1418,28 @@ class EconomyCog(commands.Cog):
 
     # ── gift ─────────────────────────────────────────────────────────────
 
-    @bank.command(name="gift", description="Gift a friend a custom color.")
-    @app_commands.describe(member="Who to gift a color to")
+    @bank.command(
+        name="gift",
+        description="Gift a friend a perk — you pay its weekly price.",
+    )
+    @app_commands.describe(member="Who to gift it to", perk="Which perk to gift")
+    @app_commands.choices(
+        perk=[
+            app_commands.Choice(name=_PERK_LABELS[p], value=p)
+            for p in _SELF_PERKS
+        ]
+    )
     async def bank_gift(
-        self, interaction: discord.Interaction, member: discord.Member
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        perk: app_commands.Choice[str],
     ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
         gifter = interaction.user
         assert isinstance(gifter, discord.Member)
+        perk_key = perk.value
 
         settings = await asyncio.to_thread(self._load_settings, guild.id)
         if not settings.enabled:
@@ -1389,22 +1447,64 @@ class EconomyCog(commands.Cog):
             return
         if member.bot:
             await interaction.response.send_message(
-                "Bots can't wear a color.", ephemeral=True
+                "Bots can't wear perks.", ephemeral=True
             )
             return
         if member.id == gifter.id:
             await interaction.response.send_message(
-                "Rent your own color with /bank shop.", ephemeral=True
+                "Rent your own perks with /bank shop.", ephemeral=True
             )
             return
+        if perk_key in _FEATURE_GATED and not await feature_gate_ok(
+            self.bot, guild.id, perk_key
+        ):
+            await interaction.response.send_message(
+                "That perk needs a server feature that isn't enabled here.",
+                ephemeral=True,
+            )
+            return
+
+        def _recipient_ent() -> set[str]:
+            with self.ctx.open_db() as conn:
+                return entitlements(conn, guild.id, member.id)
+
+        if perk_key in await asyncio.to_thread(_recipient_ent):
+            # Probably a mistake — the perk stacks silently (their role
+            # already shows it), so make the double-spend an explicit choice.
+            await interaction.response.send_message(
+                f"{member.display_name} already has **{_PERK_LABELS[perk_key]}**. "
+                "Gift it anyway?",
+                view=_GiftConfirmView(self, settings, guild, gifter, member, perk_key),
+                ephemeral=True,
+            )
+            return
+
+        await self.finalize_gift(
+            interaction, settings, guild, gifter, member, perk_key,
+            via_confirm=False,
+        )
+
+    async def finalize_gift(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        gifter: discord.Member,
+        member: discord.Member,
+        perk: str,
+        *,
+        via_confirm: bool,
+    ) -> None:
+        """Charge the gifter and open the rental with the friend as beneficiary."""
 
         def _rent() -> None:
             with self.ctx.open_db() as conn:
                 rent_perk(
-                    conn, settings, guild.id, gifter.id, "gift_color",
+                    conn, settings, guild.id, gifter.id, perk,
                     beneficiary_id=member.id, now=time.time(),
                 )
 
+        label = _PERK_LABELS[perk]
         try:
             await asyncio.to_thread(_rent)
         except ValueError as exc:
@@ -1413,27 +1513,33 @@ class EconomyCog(commands.Cog):
                 bal = await asyncio.to_thread(self._balance, guild.id, gifter.id)
                 text = (
                     f"You need {settings.currency_emoji} "
-                    f"{_perk_price(settings, 'gift_color'):,} but only have {bal:,}."
+                    f"{_perk_price(settings, perk):,} but only have {bal:,}."
                 )
             elif "already rented" in msg:
-                text = "You're already gifting them a color."
+                text = f"You're already gifting them **{label}**."
             else:
                 text = "That gift isn't available."
-            await interaction.response.send_message(text, ephemeral=True)
+            await self._reply(interaction, text, via_confirm=via_confirm)
             return
 
         await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
+        note = (
+            " They can upload one with `/bank role icon`."
+            if perk == "role_icon"
+            else ""
+        )
         await notify_member(
             self.bot, self.ctx.db_path, guild.id, member.id,
             content=(
-                f"{gifter.display_name} gifted you a custom color! "
-                "Pick one from /bank shop."
+                f"{gifter.display_name} gifted you **{label}**! "
+                "Set it up from /bank shop."
             ),
         )
-        await interaction.response.send_message(
-            f"Gifted a custom color to {member.mention}. They can set it from "
-            "`/bank shop`.",
-            ephemeral=True,
+        await self._reply(
+            interaction,
+            f"Gifted **{label}** to {member.mention}. They can set it from "
+            f"`/bank shop`.{note}",
+            via_confirm=via_confirm,
         )
 
     # ── role studio ──────────────────────────────────────────────────────
@@ -1614,7 +1720,7 @@ class EconomyCog(commands.Cog):
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
-        if "role_color" not in ent and "gift_color" not in ent:
+        if "role_color" not in ent:
             await interaction.response.send_message(
                 "Rent the **Custom role color** perk or get one gifted (/bank shop).",
                 ephemeral=True,

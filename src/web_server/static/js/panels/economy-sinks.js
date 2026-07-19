@@ -13,7 +13,6 @@ const PRICE_FIELDS = [
   ["price_role_gradient", "Role gradient", {}],
   ["price_text_room", "Text room", { hint: "Used by a later stage." }],
   ["price_voice_room", "Voice room", { hint: "Used by a later stage." }],
-  ["price_gift_color", "Gift color", {}],
 ];
 
 function numField(key, label, { hint } = {}, pricing) {

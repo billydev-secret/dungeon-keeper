@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
+from discord import app_commands
 
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy.logic import local_day_for
@@ -928,7 +929,9 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
         for line in value.splitlines()
         if line.startswith("`")
     ]
-    assert len(rows) == 5
+    # Four self-perk rows — the "For a friend" tier is prose since gifting
+    # generalized to every perk (no single gift price to tabulate).
+    assert len(rows) == 4
     prefixes = {line.split("` `")[0] for line in rows}
     assert len({len(p) for p in prefixes}) == 1
 
@@ -1072,9 +1075,9 @@ async def test_shop_customise_button_opens_modal(ctx, db):
 
 @pytest.mark.asyncio
 async def test_shop_gift_recipient_gets_color_customise(ctx, db):
-    """A gifted color (no own rental) adds a Set gifted color button."""
+    """A gifted perk shows its customise button exactly like a self-rental."""
     _enable(db)
-    _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)
+    _add_rental(db, "role_color", user_id=800, beneficiary_id=500)  # gift to 500
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
@@ -1083,9 +1086,9 @@ async def test_shop_gift_recipient_gets_color_customise(ctx, db):
 
     view = interaction.response.send_message.await_args.kwargs["view"]
     ids = {str(b.custom_id) for b in view.children if isinstance(b, discord.ui.Button)}
-    # Color customise via the gift, while the role_color row still offers Rent.
-    assert "econ_shop_cfg:gift_color" in ids
-    assert "econ_shop_rent:role_color" in ids
+    # The entitlement is beneficiary-based, so the row customises, not rents.
+    assert "econ_shop_cfg:role_color" in ids
+    assert "econ_shop_rent:role_color" not in ids
 
 
 @pytest.mark.asyncio
@@ -1311,7 +1314,7 @@ async def test_panel_button_rejects_unknown_perk(ctx, db):
     _enable(db)
     interaction = _panel_button_interaction(ctx)
 
-    await ShopRentButton("gift_color").callback(interaction)  # not self-rentable
+    await ShopRentButton("voice_style").callback(interaction)  # not self-rentable
 
     msg = interaction.response.send_message.await_args.args[0]
     assert "isn't available" in msg
@@ -1445,7 +1448,7 @@ async def test_role_color_delta_e_clash(ctx, db):
 @pytest.mark.asyncio
 async def test_role_color_gift_entitlement_allows(ctx, db):
     _enable(db)
-    _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)  # gifted to 500
+    _add_rental(db, "role_color", user_id=800, beneficiary_id=500)  # gifted to 500
     cog = _make_cog(ctx)
     interaction = _role_interaction(_member(member_id=500))
     with _patch_projection() as (apply_mock, _r, _n):
@@ -1604,8 +1607,11 @@ async def test_role_icon_image_too_big(ctx, db):
 # ── /bank gift ───────────────────────────────────────────────────────────────
 
 
-async def _gift(cog, interaction, member) -> None:
-    await cog.bank_gift.callback(cog, interaction, member)
+async def _gift(cog, interaction, member, perk="role_color") -> None:
+    from bot_modules.cogs.economy_cog import _PERK_LABELS
+
+    choice = app_commands.Choice(name=_PERK_LABELS[perk], value=perk)
+    await cog.bank_gift.callback(cog, interaction, member, choice)
 
 
 @pytest.mark.asyncio
@@ -1622,13 +1628,71 @@ async def test_gift_success_both_sides(ctx, db):
 
     rentals = _live_rentals(db)
     assert len(rentals) == 1
-    assert rentals[0]["perk"] == "gift_color"
+    assert rentals[0]["perk"] == "role_color"
     assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900
     # Beneficiary's role is projected and DM'd; payer gets the confirmation.
     apply_mock.assert_awaited_once_with(cog.bot, ctx.db_path, GUILD_ID, 900)
     notify.assert_awaited_once()
     assert notify.await_args is not None
     assert notify.await_args.args[3] == 900  # DM sent to the beneficiary
+
+
+@pytest.mark.asyncio
+async def test_gift_any_perk_bills_base_price(ctx, db):
+    _enable(db)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900), perk="role_name")
+
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1
+    assert rentals[0]["perk"] == "role_name"
+    assert rentals[0]["price"] == 35  # the base perk price, no gift surcharge
+    assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900
+
+
+@pytest.mark.asyncio
+async def test_gift_feature_gated_perk_refused_when_gate_closed(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with (
+        _patch_projection(),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        await _gift(cog, interaction, _member(member_id=900), perk="role_gradient")
+
+    assert "server feature" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_gift_duplicate_entitlement_requires_confirm(ctx, db):
+    """Gifting a perk the friend already has stops at a confirm view."""
+    from bot_modules.cogs.economy_cog import _GiftConfirmView
+
+    _enable(db)
+    _credit(db, 500, 100)
+    _add_rental(db, "role_color", user_id=900)  # friend self-rents it already
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900))
+
+    # No rental opened yet — the reply is the Gift anyway? confirm gate.
+    assert len(_live_rentals(db)) == 1  # just the friend's own rental
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert isinstance(kwargs["view"], _GiftConfirmView)
+    assert "already has" in interaction.response.send_message.await_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -1665,7 +1729,7 @@ async def test_gift_insufficient(ctx, db):
 async def test_wallet_shows_active_rentals(ctx, db):
     _enable(db)
     _add_rental(db, "role_color", user_id=500)
-    _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)  # gift received
+    _add_rental(db, "role_color", user_id=800, beneficiary_id=500)  # gift received
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
@@ -1696,7 +1760,7 @@ async def test_member_remove_cancels_and_reprojects_all(ctx, db):
     _enable(db)
     # Leaver 500 rents a color AND gifts a color to friend 900.
     _add_rental(db, "role_color", user_id=500)
-    _add_rental(db, "gift_color", user_id=500, beneficiary_id=900)
+    _add_rental(db, "role_color", user_id=500, beneficiary_id=900)
     cog = _make_cog(ctx)
 
     with _patch_projection() as (_a, revoke, _n):
@@ -1713,7 +1777,7 @@ async def test_member_remove_cancels_and_reprojects_all(ctx, db):
 async def test_member_remove_beneficiary_leaving_cancels_gift(ctx, db):
     _enable(db)
     # Friend 900 leaves; the gift 500→900 must lapse.
-    _add_rental(db, "gift_color", user_id=500, beneficiary_id=900)
+    _add_rental(db, "role_color", user_id=500, beneficiary_id=900)
     cog = _make_cog(ctx)
 
     with _patch_projection() as (_a, revoke, _n):

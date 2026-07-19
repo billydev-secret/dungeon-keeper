@@ -30,7 +30,6 @@ SETTINGS = EconSettings(
     price_role_name=35,
     price_role_icon=75,
     price_role_gradient=120,
-    price_gift_color=50,
     price_text_room=200,
     price_voice_room=200,
 )
@@ -235,7 +234,7 @@ def _seed(db):
 
     # Live rentals (member 1 self-color, member 3 gift to member 4).
     _rental(db, 1, "role_color", "active")
-    _rental(db, 3, "gift_color", "grace", beneficiary=4)
+    _rental(db, 3, "role_color", "grace", beneficiary=4)
 
     # Streaks.
     _streak(db, 1, 9, "2026-01-01")

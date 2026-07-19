@@ -56,7 +56,12 @@ from bot_modules.services.economy_service import apply_debit
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
 
-_PERKS = ("role_color", "role_name", "role_icon", "role_gradient", "gift_color")
+# The perks rent_perk will open a rental for. The schema CHECK (migration 090)
+# also lists voice_style/emoji for later stages — they join here only when
+# their price fields and flows ship, so a premature rent can't crash on a
+# missing ``price_<perk>`` setting. A gift is any of these rented with
+# ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 090).
+_PERKS = ("role_color", "role_name", "role_icon", "role_gradient")
 
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "
@@ -156,9 +161,9 @@ def rent_perk(
     price). ``catalog_icon_id`` ties a ``role_icon`` rental to a curated catalog
     icon, whose per-icon price is billed instead of the flat
     ``settings.price_role_icon`` (NULL = a bring-your-own icon at the flat
-    price). ``beneficiary_id`` defaults to ``user_id`` (the friend for
-    gift_color) and is always stored non-NULL so the live-rental unique index
-    fires. Raises ValueError: unknown ``perk``; "already rented" when a live
+    price). ``beneficiary_id`` defaults to ``user_id``; a gift passes the
+    friend's id, making them the beneficiary of the base perk. It is always
+    stored non-NULL so the live-rental unique index fires. Raises ValueError: unknown ``perk``; "already rented" when a live
     rental for this (perk, beneficiary) exists (IntegrityError on the partial
     unique index); "insufficient" when the upfront debit fails (guarded UPDATE →
     zero writes, and the whole insert rolls back with it).
@@ -254,7 +259,7 @@ def cancel_all_for_member(
     """Immediately cancel every live rental touching a member (leave/ban).
 
     Cancels rentals the member OWNS *and* rentals where they are the
-    beneficiary (a gifted color lapses when the recipient leaves; the giver's
+    beneficiary (a gifted perk lapses when the recipient leaves; the giver's
     gift rental is cancelled when the giver leaves). Returns the affected rows
     (post-update) so the caller can re-project / clean up Discord roles.
     """
@@ -484,7 +489,7 @@ def set_rental_suspended(
 def entitlements(conn: sqlite3.Connection, guild_id: int, user_id: int) -> set[str]:
     """Perks the member is currently entitled to AS BENEFICIARY.
 
-    Beneficiary-based so a gifted color counts for the friend, not the payer.
+    Beneficiary-based so a gifted perk counts for the friend, not the payer.
     Live states (active|grace) grant the perk — see ``rentals.entitled_perks``.
     """
     rows = conn.execute(

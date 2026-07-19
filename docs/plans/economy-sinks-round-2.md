@@ -1,6 +1,6 @@
 # Economy sinks, round 2
 
-**Status:** planned (2026-07-19) · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
+**Status:** stage 1 built (2026-07-19), stages 2–5 planned · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
 
 ## Goal
 

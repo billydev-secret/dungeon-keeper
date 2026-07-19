@@ -742,7 +742,7 @@ async def _dispatch_rental_effects(
                 if res.beneficiary_id != res.user_id:
                     await _safe_dm(
                         bot, db_path, guild_id, res.beneficiary_id,
-                        "The custom color gifted to you has lapsed.",
+                        "A perk gifted to you has lapsed.",
                     )
         # charge / retry / none → silent (no DM, no re-projection).
 

@@ -75,7 +75,9 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
 
-# Human labels for the rentable perks (rentals_service._PERKS).
+# Human labels for the rentable perks (rentals_service._PERKS). gift_color
+# stays although the kind retired in migration 090: ledger meta was not
+# rewritten, so pre-090 rental rows still carry it.
 _PERK_LABELS: dict[str, str] = {
     "role_color": "Custom role colour",
     "role_name": "Custom role name",

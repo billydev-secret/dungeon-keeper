@@ -193,7 +193,7 @@ def _rental_dict(row: sqlite3.Row) -> dict:
         "next_bill_at": row["next_bill_at"],
         "suspended": bool(row["suspended"]),
         "cancel_at_period_end": bool(row["cancel_at_period_end"]),
-        # Equal to user_id except for gift_color (the befriended recipient).
+        # Equal to user_id except for a gifted perk (the befriended recipient).
         "beneficiary_id": str(row["beneficiary_id"]),
     }
 

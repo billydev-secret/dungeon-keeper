@@ -224,7 +224,6 @@ def test_metrics_hints_from_latest_week_only(authed_client, fake_ctx):
     assert hints["price_role_name"] == 35
     assert hints["price_role_icon"] == 75
     assert hints["price_role_gradient"] == 120
-    assert hints["price_gift_color"] == 50
     assert hints["price_text_room"] == 200
     assert hints["price_voice_room"] == 200
 

@@ -80,7 +80,7 @@ def build_guide_embed(
     spend_rows = [
         ("/bank shop", "rent perks for your personal role — color, name, "
                        "gradient, icon (prices in the shop)"),
-        ("/bank gift", "treat a friend to a role color, on your tab"),
+        ("/bank gift", "treat a friend to any perk, on your tab"),
     ]
     if settings.transfers_enabled:
         spend_rows.append(("/bank pay", f"send {plural} straight to a member"))

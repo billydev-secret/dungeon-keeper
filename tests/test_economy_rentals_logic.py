@@ -109,11 +109,12 @@ def test_color_mode_solid_from_role_color():
     assert effective_color_mode({"role_color"}) == "solid"
 
 
-def test_color_mode_solid_from_gift():
-    assert effective_color_mode({"gift_color"}) == "solid"
+def test_color_mode_gift_color_kind_retired():
+    # A gifted color is a role_color rental since migration 090 — the old
+    # gift_color kind must no longer grant anything on its own.
+    assert effective_color_mode({"gift_color"}) == "none"
 
 
 def test_color_mode_gradient_supersedes_solid():
     assert effective_color_mode({"role_gradient", "role_color"}) == "gradient"
-    assert effective_color_mode({"role_gradient", "gift_color"}) == "gradient"
     assert effective_color_mode({"role_gradient"}) == "gradient"

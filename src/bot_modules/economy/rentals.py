@@ -22,7 +22,9 @@ WEEK_SECONDS = 7 * 86400
 GRACE_SECONDS = 36 * 3600
 
 # Perks whose entitlement grants a solid custom color (the beneficiary's).
-_SOLID_COLOR_PERKS = frozenset({"role_color", "gift_color"})
+# A gifted color is a role_color rental with a different beneficiary, so one
+# kind covers both (gift_color retired in migration 090).
+_SOLID_COLOR_PERKS = frozenset({"role_color"})
 
 
 class BillingAction(Enum):
@@ -97,8 +99,8 @@ def effective_color_mode(perks: set[str]) -> str:
     """Resolve the member's color mode from their entitled perks (spec §6).
 
     Gradient supersedes solid: 'gradient' when role_gradient is entitled,
-    else 'solid' when a solid-color perk (role_color or gift_color
-    beneficiary) is entitled, else 'none'.
+    else 'solid' when a solid-color perk (role_color, self-rented or
+    received as a gift) is entitled, else 'none'.
     """
     if "role_gradient" in perks:
         return "gradient"

@@ -10,7 +10,6 @@ const PERK_LABELS = {
   price_role_name: "Role name",
   price_role_icon: "Role icon",
   price_role_gradient: "Role gradient",
-  price_gift_color: "Gift color",
   price_text_room: "Text room",
   price_voice_room: "Voice room",
 };

@@ -463,7 +463,7 @@ def test_list_rentals_shape(authed_client, fake_ctx):
     gift_id = _seed_rental(
         fake_ctx,
         user_id=200,
-        perk="gift_color",
+        perk="role_color",
         state="grace",
         price=60,
         beneficiary_id=201,
@@ -477,7 +477,7 @@ def test_list_rentals_shape(authed_client, fake_ctx):
     gift = by_id[gift_id]
     assert gift["user_id"] == "200"
     assert gift["beneficiary_id"] == "201"
-    assert gift["perk"] == "gift_color"
+    assert gift["perk"] == "role_color"
     assert gift["state"] == "grace"
     assert gift["price"] == 60
     assert gift["suspended"] is False
@@ -545,7 +545,7 @@ def test_cancel_grace_deprojects_with_ready_bot(authed_client, fake_ctx):
     rid = _seed_rental(
         fake_ctx,
         user_id=200,
-        perk="gift_color",
+        perk="role_color",
         state="grace",
         beneficiary_id=201,
     )

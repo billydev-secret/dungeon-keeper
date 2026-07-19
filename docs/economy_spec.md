@@ -568,9 +568,14 @@ render time) in the wallet ledger and the dashboard bank-manager ledger.
 ## 6. Sinks (The Perk Shop)
 
 **Shipped (Stage 3):** the role-customization perks (solid color, name, icon,
-gradient) and **gift-a-color** are live — browsed, rented **and customised** in
-`/bank shop`'s ephemeral panel (§7). Private rooms stay **Stage 6** and the
-spotlight slot stays **v2** — both still design-only below.
+gradient) are live — browsed, rented **and customised** in `/bank shop`'s
+ephemeral panel (§7), and **every one is giftable** (sinks round 2, stage 1:
+a gift is the base perk rented with `beneficiary_id` = the friend; the old
+`gift_color` kind and its separate `price_gift_color` retired in migration
+090, which rewrote live rows to `role_color`-with-beneficiary and widened the
+perk CHECK once for the round's later kinds, `voice_style` and `emoji` —
+see `docs/plans/economy-sinks-round-2.md`). Private rooms stay **Stage 6**
+and the spotlight slot stays **v2** — both still design-only below.
 
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
 tunable (§9). **Renewal bills the CURRENT guild price at each anniversary** — the
@@ -585,7 +590,7 @@ takes effect on the next cycle, never retroactively.
 | Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
 | Private text room | 200 | §8 (Stage 2) |
 | Private voice room | 200 | §8 (Stage 2) |
-| Gift-a-color | 50 | Payer funds a friend's solid color |
+| Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon
@@ -649,17 +654,21 @@ the member owns and gift rentals where they are the beneficiary.
     panel that both browses and configures. The listing is an aligned code-cell
     table in the leaderboard's house style (`label` | `blurb` | price), grouped
     into price tiers — **Essentials** (name, color), **Signature** (gradient,
-    icon), **For a friend** (gift) — sorted by the guild's configured price
+    icon), **For a friend** (a prose row — gifting has no single price to
+    tabulate) — sorted by the guild's configured price
     inside each tier, with the viewer's balance in the description and the
     renewal fine print in the footer. Unrented rows carry an emoji-led **Rent**
     button (no price in the label), rented rows a green **customise** button
     opening the matching modal (name / color hex / gradient hexes /
     server-emoji icon), with icon/gradient rows
     reflecting the server's role features and rented rows marked ✅. A fresh rental's
-    confirmation carries the same customise button, and a member holding only a
-    *gifted* color gets a "Set gifted color" button. **`/bank gift @member
-    <perk>`** — pay to rent a friend a solid color (eager role creation on the
-    recipient).
+    confirmation carries the same customise button. Entitlements are
+    beneficiary-based, so a *gifted* perk surfaces exactly like a self-rented
+    one (customise button, ✅ mark). **`/bank gift @member perk:<choice>`** —
+    pay to rent a friend any self-perk at its base price (eager role creation
+    on the recipient); feature-gated perks check the guild gate, and gifting
+    a perk the friend already has stops at an explicit "Gift anyway?" confirm
+    (the rental would stack silently).
   - Each modal setter applies the matching rented component to the member's personal
     role (§6), re-checking entitlements on submit, subject to the blocklist / ΔE /
     feature gates. Emoji icons accept **this server's custom emojis only** (typed

@@ -153,11 +153,11 @@ def test_rent_duplicate_live_rejected_and_no_double_charge(db):
 
 def test_rent_gift_duplicate_same_beneficiary_rejected(db):
     _fund(db, USER, 300)
-    _rent(db, USER, "gift_color", beneficiary_id=OTHER)
+    _rent(db, USER, "role_color", beneficiary_id=OTHER)
     with pytest.raises(ValueError, match="already rented"):
         with open_db(db) as conn:
             rent_perk(
-                conn, SETTINGS, GUILD, USER, "gift_color",
+                conn, SETTINGS, GUILD, USER, "role_color",
                 beneficiary_id=OTHER, now=T0 + 5,
             )
 
@@ -166,8 +166,8 @@ def test_rent_gift_different_beneficiaries_both_succeed(db):
     # Proves beneficiary_id participates in the live-rental unique index: the
     # same payer + perk with two different beneficiaries is NOT a collision.
     _fund(db, USER, 300)
-    a = _rent(db, USER, "gift_color", beneficiary_id=OTHER)
-    b = _rent(db, USER, "gift_color", beneficiary_id=THIRD, now=T0 + 5)
+    a = _rent(db, USER, "role_color", beneficiary_id=OTHER)
+    b = _rent(db, USER, "role_color", beneficiary_id=THIRD, now=T0 + 5)
     assert a["id"] != b["id"]
     assert a["beneficiary_id"] == OTHER
     assert b["beneficiary_id"] == THIRD
@@ -185,7 +185,7 @@ def test_rent_same_perk_allowed_after_lapse(db):
 
 def test_rent_gift_beneficiary_is_the_friend(db):
     _fund(db, USER, 200)
-    row = _rent(db, USER, "gift_color", beneficiary_id=OTHER)
+    row = _rent(db, USER, "role_color", beneficiary_id=OTHER)
     assert row["user_id"] == USER  # payer
     assert row["beneficiary_id"] == OTHER  # friend
 
@@ -250,7 +250,7 @@ def test_cancel_all_for_member_hits_owner_and_beneficiary(db):
     _fund(db, OTHER, 200)
     _fund(db, THIRD, 200)
     owned = _rent(db, USER, "role_color")  # USER owns
-    gift = _rent(db, OTHER, "gift_color", beneficiary_id=USER)  # USER benefits
+    gift = _rent(db, OTHER, "role_color", beneficiary_id=USER)  # USER benefits
     unrelated = _rent(db, THIRD, "role_color")  # untouched
     with open_db(db) as conn:
         affected = cancel_all_for_member(conn, GUILD, USER, now=T0 + 1)
@@ -293,7 +293,7 @@ def test_cancel_all_for_member_stamps_ended_at(db):
     _fund(db, USER, 200)
     _fund(db, OTHER, 200)
     owned = _rent(db, USER, "role_color")
-    gift = _rent(db, OTHER, "gift_color", beneficiary_id=USER)
+    gift = _rent(db, OTHER, "role_color", beneficiary_id=USER)
     with open_db(db) as conn:
         cancel_all_for_member(conn, GUILD, USER, now=T0 + 9)
     assert _get(db, owned["id"])["ended_at"] == T0 + 9
@@ -534,9 +534,9 @@ def test_entitlements_owner_and_gift_beneficiary(db):
     _fund(db, USER, 500)
     _fund(db, OTHER, 500)
     _rent(db, USER, "role_color")  # USER owns + benefits
-    _rent(db, OTHER, "gift_color", beneficiary_id=USER)  # USER benefits, OTHER pays
+    _rent(db, OTHER, "role_name", beneficiary_id=USER)  # USER benefits, OTHER pays
     with open_db(db) as conn:
-        assert entitlements(conn, GUILD, USER) == {"role_color", "gift_color"}
+        assert entitlements(conn, GUILD, USER) == {"role_color", "role_name"}
         # OTHER paid but is not the beneficiary of the gift.
         assert entitlements(conn, GUILD, OTHER) == set()
 
@@ -570,7 +570,7 @@ def test_list_member_rentals_owner_or_beneficiary(db):
     _fund(db, USER, 500)
     _fund(db, OTHER, 500)
     owned = _rent(db, USER, "role_color")
-    gift = _rent(db, OTHER, "gift_color", beneficiary_id=USER)
+    gift = _rent(db, OTHER, "role_color", beneficiary_id=USER)
     with open_db(db) as conn:
         ids = {r["id"] for r in list_member_rentals(conn, GUILD, USER)}
     assert ids == {owned["id"], gift["id"]}

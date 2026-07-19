@@ -89,7 +89,6 @@ class EconomyConfigUpdate(BaseModel):
     price_role_gradient: int | None = Field(default=None, ge=0)
     price_text_room: int | None = Field(default=None, ge=0)
     price_voice_room: int | None = Field(default=None, ge=0)
-    price_gift_color: int | None = Field(default=None, ge=0)
 
 
 @router.get("/economy/config")

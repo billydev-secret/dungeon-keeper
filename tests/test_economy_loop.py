@@ -856,7 +856,7 @@ async def test_grace_elapsed_gift_dms_owner_and_beneficiary(db, monkeypatch):
     notify = _NotifyRecorder()
     monkeypatch.setattr(economy_loop, "notify_member", notify)
     _fund(db, USER, PRICE_COLOR)  # payer funds one week only
-    rid = _rent(db, USER, "gift_color", beneficiary_id=OTHER)
+    rid = _rent(db, USER, "role_color", beneficiary_id=OTHER)
     due = _rental(db, rid)["next_bill_at"]
     await _rental_tick(_rental_bot(), db, due)  # → grace
     notify.calls.clear()
