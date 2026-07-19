@@ -191,18 +191,27 @@ async function refreshCommunity(container, members) {
     host.innerHTML = "";
     return;
   }
-  const rows = community.map((q) => `
-    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--border);">
-      <strong>${esc(q.title)}</strong>
-      <div class="field-hint">${q.community_current || 0} / ${q.community_target ?? "—"} ${q.community_completed_at ? "· completed" : ""} ${q.community_settled_at ? "· settled" : ""}</div>
-      <div class="field-row" style="align-items:flex-end;">
+  const rows = community.map((q) => {
+    const stateBits = `${q.community_current || 0} / ${q.community_target ?? "—"} ${q.community_completed_at ? "· completed" : ""} ${q.community_settled_at ? "· settled" : ""}`;
+    // Auto-tracking weeklies (trigger_kind set) run themselves: member
+    // activity moves the counter and the scheduler pays the tiers — the
+    // manual controls would 422, so they aren't rendered.
+    const controls = q.trigger_kind
+      ? `<div class="field-hint">⚙️ auto-tracking (${esc(q.trigger_kind)}) — counter moves from member activity; the biweekly scheduler sizes the target and settles the 40/70/100% tiers${q.active ? "" : " · waiting in rotation"}</div>`
+      : `<div class="field-row" style="align-items:flex-end;">
         <div class="field"><label>Set progress</label>
           <input type="number" min="0" step="1" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
         <div class="field"><button class="btn" data-cprogress-save="${q.id}">Save</button></div>
         <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle payout</button></div>
         <span class="save-status" data-cstatus="${q.id}"></span>
-      </div>
-    </div>`).join("");
+      </div>`;
+    return `
+    <div class="community-goal" data-cgoal="${q.id}" style="margin:10px 0; padding:8px 0; border-top:1px solid var(--border);">
+      <strong>${esc(q.title)}</strong>
+      <div class="field-hint">${stateBits}</div>
+      ${controls}
+    </div>`;
+  }).join("");
   host.innerHTML = rows;
 
   host.querySelectorAll("[data-cprogress-save]").forEach((btn) => {

@@ -29,6 +29,7 @@ from bot_modules.services.economy_quests_service import (
     SlotLimitError,
     active_member_ids,
     claim_quest,
+    community_contrib_summary,
     create_quest,
     delete_quest,
     deny_history,
@@ -63,6 +64,7 @@ from migrations import apply_migrations_sync
 
 GUILD = 500
 USER = 1001
+USER_2 = 1002
 OTHER = 1002
 MANAGER = 9001
 
@@ -881,8 +883,15 @@ def test_trigger_kind_validation_matrix(db):
             _make(conn, qtype="event")  # event needs a kind
         with pytest.raises(ValueError):
             _make(conn, qtype="event", trigger_kind="nope")  # unknown kind
+        # Community + kind is legal since stage 3 (auto-tracking weekly)…
+        ck = _make(conn, qtype="community", trigger_kind="duel", community_target=5)
+        assert _get(conn, GUILD, ck)["trigger_kind"] == "duel"
+        # …but cannot be sign-off (tier settlement is automatic).
         with pytest.raises(ValueError):
-            _make(conn, qtype="community", trigger_kind="duel", community_target=5)
+            _make(
+                conn, qtype="community", trigger_kind="duel",
+                community_target=5, signoff=1, title="ck-signoff",
+            )
         with pytest.raises(ValueError):  # words and kind are exclusive
             _make(conn, qtype="daily", trigger_kind="duel", trigger_words="gm")
         # Daily/weekly may carry a kind ("do it once this period")…
@@ -1103,6 +1112,179 @@ def test_kind_activity_records_every_occurrence(db):
         )
         assert _activity_count(conn, "whisper", "2026-07-14") == 2
         assert get_balance(conn, GUILD, USER) == 0  # measured, never paid
+
+
+# ── community weeklies (auto-tracking, tiered) ────────────────────────
+
+
+def _community_kind(conn, *, kind="message_sent", target=100, reward=30, **kw):
+    qid = _make(
+        conn, qtype="community", trigger_kind=kind,
+        community_target=target, reward=reward, **kw,
+    )
+    return qid
+
+
+def test_community_kind_quest_validation(db):
+    with open_db(db) as conn:
+        _community_kind(conn, title="ok")  # kind on community now allowed
+        with pytest.raises(ValueError, match="sign-off"):
+            _make(
+                conn, qtype="community", trigger_kind="message_sent",
+                community_target=50, signoff=1, title="bad",
+            )
+
+
+def test_community_counter_bumps_guild_wide(db):
+    # NOT board-filtered: with an empty daily/weekly pool the member has no
+    # board, yet the community counter and their contribution still move.
+    with open_db(db) as conn:
+        qid = _community_kind(conn, target=3, reward=30)
+        for occ in ("a", "b"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "message_sent", USER,
+                local_day="2026-07-14", occurrence=occ, booster=False,
+            )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER_2,
+            local_day="2026-07-14", occurrence="c", booster=False,
+        )
+        prog = conn.execute(
+            "SELECT current, completed_at FROM econ_community_progress "
+            "WHERE quest_id = ?", (qid,),
+        ).fetchone()
+        assert int(prog["current"]) == 3
+        assert prog["completed_at"] is not None  # stamped on the crossing
+        n, top = community_contrib_summary(conn, qid)
+        assert n == 2 and top[0] == (USER, 2)
+        # Members were never paid by the counter itself.
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_community_auto_sizing_from_ledger(db):
+    from bot_modules.services.economy_quests_service import (
+        auto_size_community_target,
+        record_kind_activity,
+    )
+
+    with open_db(db) as conn:
+        # 4 trailing weeks × 75/week → typical 75 → target 100.
+        for week in range(4):
+            for d in range(1, 6):
+                day = f"2026-06-{week * 7 + d:02d}"
+                for _ in range(15):
+                    record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        assert (
+            auto_size_community_target(conn, GUILD, "message_sent", "2026-06-29")
+            == 100
+        )
+        # Cold kind → floor.
+        assert auto_size_community_target(conn, GUILD, "whisper", "2026-06-29") == 10
+
+
+def test_community_weekly_settlement_tiers_and_bonus(db):
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+        get_quest,
+        settle_community_weekly,
+    )
+
+    with open_db(db) as conn:
+        qid = _community_kind(conn, target=100, reward=30, active=False)
+        activate_community_weekly(conn, GUILD, qid, target=100, week="2026-W29")
+        # Drive to 75% → tiers 1+2 crossed, tier 3 not.
+        conn.execute(
+            "UPDATE econ_community_progress SET current = 75 WHERE quest_id = ?",
+            (qid,),
+        )
+        conn.execute(
+            "INSERT INTO econ_community_contrib (quest_id, user_id, count) "
+            "VALUES (?, ?, 50), (?, ?, 25)",
+            (qid, USER, qid, USER_2),
+        )
+        quest = get_quest(conn, GUILD, qid)
+        summary = settle_community_weekly(
+            conn, SETTINGS, GUILD, quest, {USER: False, USER_2: False}
+        )
+        assert summary["tiers_crossed"] == 2
+        assert summary["contributors"] == 2
+        assert summary["bonus"] == 15
+        assert set(summary["bonus_paid"]) == {USER, USER_2}
+        # 2 tiers × 30 flat + 15 bonus each.
+        assert get_balance(conn, GUILD, USER) == 75
+        assert get_balance(conn, GUILD, USER_2) == 75
+        # Replay pays nothing more and the quest is closed.
+        summary2 = settle_community_weekly(
+            conn, SETTINGS, GUILD, get_quest(conn, GUILD, qid),
+            {USER: False, USER_2: False},
+        )
+        assert summary2["paid_member_tiers"] == 0
+        assert get_balance(conn, GUILD, USER) == 75
+        assert int(get_quest(conn, GUILD, qid)["active"]) == 0
+
+
+def test_community_reactivation_resets_run_state(db):
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+        get_quest,
+        settle_community_weekly,
+    )
+
+    with open_db(db) as conn:
+        qid = _community_kind(conn, target=10, reward=10, active=False)
+        activate_community_weekly(conn, GUILD, qid, target=10, week="2026-W29")
+        conn.execute(
+            "UPDATE econ_community_progress SET current = 10 WHERE quest_id = ?",
+            (qid,),
+        )
+        settle_community_weekly(
+            conn, SETTINGS, GUILD, get_quest(conn, GUILD, qid), {USER: False}
+        )
+        bal_after_first = get_balance(conn, GUILD, USER)
+        assert bal_after_first > 0
+        # Second run of the same library quest must be able to pay again.
+        activate_community_weekly(conn, GUILD, qid, target=10, week="2026-W31")
+        prog = conn.execute(
+            "SELECT current, settled_at, notified_tier FROM "
+            "econ_community_progress WHERE quest_id = ?", (qid,),
+        ).fetchone()
+        assert int(prog["current"]) == 0 and prog["settled_at"] is None
+        conn.execute(
+            "UPDATE econ_community_progress SET current = 10 WHERE quest_id = ?",
+            (qid,),
+        )
+        settle_community_weekly(
+            conn, SETTINGS, GUILD, get_quest(conn, GUILD, qid), {USER: False}
+        )
+        assert get_balance(conn, GUILD, USER) > bal_after_first
+
+
+def test_old_community_sweep_skips_kind_quests(db):
+    with open_db(db) as conn:
+        _community_kind(conn, target=2, reward=10)
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day="2026-07-14", occurrence="b", booster=False,
+        )
+        # Completed, unsettled — but the legacy flat sweep must not see it.
+        assert list_settleable_community_quests(conn, GUILD) == []
+
+
+def test_next_community_weekly_rotation_order(db):
+    from bot_modules.services.economy_quests_service import next_community_weekly
+
+    with open_db(db) as conn:
+        a = _community_kind(conn, title="A", active=False)
+        b = _community_kind(conn, title="B", active=False, kind="reply_sent")
+        conn.execute(
+            "UPDATE econ_quests SET last_run_week = '2026-W20' WHERE id = ?", (a,)
+        )
+        pick = next_community_weekly(conn, GUILD)
+        assert pick is not None and int(pick["id"]) == b  # never-run first
 
 
 def test_kind_activity_prune_keeps_trailing_window(db):

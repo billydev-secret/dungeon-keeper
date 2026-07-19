@@ -9,6 +9,33 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: auto-tracking community weeklies  (stage 3, hash stamped on merge)
+
+Needs at least one community quest WITH a game trigger in the library
+(Quests page → type Community → completion "game trigger" — note the target
+field is replaced by an "auto-sized" note). Runs alternate weeks, so the full
+cycle takes ~3 ISO weeks to observe; the state machine can be nudged by
+setting `econ_day_marks.last_iso_week` back in sqlite if you want it faster.
+
+- [ ] Editor: community + game trigger saves; community + trigger + sign-off
+      is rejected; manual community quests still take a hand-set target
+- [ ] On the first ISO-week roll: the quest activates itself, target is
+      auto-sized (floor 10 for a cold kind), and the **host gets a kickoff
+      DM** (host = Settings → "Community weekly host", empty = server owner)
+- [ ] Member actions of that kind move the counter guild-wide — including
+      members who don't have that kind on their personal board
+- [ ] Crossing 40% DMs the host a tier beat exactly once (hourly loop)
+- [ ] Sunday inside the last 24h with tier 3 open: final-24h DM, once
+- [ ] Next week roll: run settles — every 30d-active member is paid once per
+      crossed tier (ledger kind `quest_community`), top contributors get the
+      bonus (`quest_community_bonus`), host gets the resolution beat sheet,
+      quest deactivates
+- [ ] The week after that: nothing activates (gap week); the week after THAT,
+      the next library community quest kicks off
+- [ ] Operations page: auto quests render read-only ("auto-tracking" note, no
+      Set progress / Settle buttons); manual community quests unchanged
+- [ ] Re-run protection: replaying the settle (crash sim) pays nothing twice
+
 ### Economy: 13 new quest trigger kinds + kind activity ledger  (f0a590c)
 
 - [ ] **After restart, run `​.venv/bin/python scripts/seed_quest_variety.py`**

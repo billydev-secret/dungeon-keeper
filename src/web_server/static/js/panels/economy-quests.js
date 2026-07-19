@@ -15,7 +15,7 @@ const TYPE_HINTS = {
   daily: "Members can complete it once per day (guild-local midnight). Active dailies form a pool; each member is shown a few of them per day — set how many under Board size.",
   weekly: "Members can complete it once per ISO week. Active weeklies form a pool drawn from per member — see Board size.",
   monthly: "Members can complete it once per calendar month (starts on the 1st, guild-local). Active monthlies form a pool drawn from per member — see Board size.",
-  community: "One shared goal for the whole server. You track progress and settle the payout from the Operations page.",
+  community: "One shared goal for the whole server. Manual completion: you track progress and settle from Operations. Game trigger: every member's action counts automatically, the target auto-sizes from recent activity, and the biweekly scheduler runs it with tiered payouts (40/70/100%).",
   event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
 };
 
@@ -141,6 +141,8 @@ function render(container, channels, cfg) {
               <div class="field-hint">Levelling XP paid with the coins (no booster multiplier).</div></div>
             <div class="field" data-community-target style="display:none;"><label>Community target</label>
               <input type="number" name="community_target" min="0" step="1" style="max-width:120px;" /></div>
+            <div class="field" data-community-auto style="display:none;"><label>Community target</label>
+              <div class="field-hint">Auto-sized when the scheduler kicks the run off — a typical week lands ~75%, a push clears it. No manual override.</div></div>
             <div class="field" data-rotate-field><label>Rotate tag</label>
               <input type="text" name="rotate_tag" maxlength="64" style="max-width:160px;" /></div>
           </div>
@@ -407,36 +409,46 @@ function wireAuthoring(container, channels) {
   };
 
   const updateHint = () => { hint.textContent = bandHint(qtypeSel.value, rewardInput.value); };
+  const communityAuto = form.querySelector("[data-community-auto]");
   const updateKindHint = () => {
-    kindHint.textContent = qtypeSel.value === "event"
+    const qtype = qtypeSel.value;
+    kindHint.textContent = qtype === "event"
       ? "Pays every time it happens — one payout per member per game/card/round."
-      : "Auto-completes the quest the first time it happens each period.";
+      : qtype === "community"
+        ? "Every member's action counts toward the shared goal — the biweekly scheduler activates it, sizes the target, and pays the 40/70/100% tiers."
+        : "Auto-completes the quest the first time it happens each period.";
   };
   const updateCommunity = () => {
     const qtype = qtypeSel.value;
     const isCommunity = qtype === "community";
     const isEvent = qtype === "event";
     typeHint.textContent = TYPE_HINTS[qtype] || "";
-    communityField.style.display = isCommunity ? "" : "none";
     rotateField.style.display = qtype === "daily" ? "" : "none";
-    // Community settles guild-wide (no per-member completion); an event
-    // quest IS its game trigger — so the choice only exists for daily/weekly.
-    completionBlock.style.display = isCommunity ? "none" : "";
-    if (isCommunity) setCompletion("manual");
+    // An event quest IS its game trigger; community may be manual (the old
+    // Operations-driven goal) or game-triggered (the auto-tracking weekly)
+    // but never phrase-completed.
     if (isEvent) setCompletion("game");
+    if (isCommunity && completion() === "phrase") setCompletion("manual");
     form.querySelectorAll("[name=completion]").forEach((r) => {
-      r.disabled = isCommunity || (isEvent && r.value !== "game");
+      r.disabled =
+        (isEvent && r.value !== "game") ||
+        (isCommunity && r.value === "phrase");
     });
     const mode = completion();
     completionHint.textContent = COMPLETION_HINTS[mode] || "";
+    // Manual community goals take a hand-set target; auto-tracking ones are
+    // sized by the scheduler at kickoff.
+    communityField.style.display = isCommunity && mode !== "game" ? "" : "none";
+    communityAuto.style.display = isCommunity && mode === "game" ? "" : "none";
     const channelScoped =
       mode === "phrase" ||
       (mode === "game" && CHANNEL_SCOPED_KINDS.has(kindSel.value));
-    wordsField.style.display = mode === "phrase" && !isCommunity ? "" : "none";
-    channelField.style.display = channelScoped && !isCommunity ? "" : "none";
-    kindField.style.display = mode === "game" && !isCommunity ? "" : "none";
+    wordsField.style.display = mode === "phrase" ? "" : "none";
+    channelField.style.display = channelScoped ? "" : "none";
+    kindField.style.display = mode === "game" ? "" : "none";
     // Counted quests need a trigger to count and a calendar cadence to
-    // count within — events pay every occurrence, no target.
+    // count within — events pay every occurrence, no target; a community
+    // counter has the guild-wide target instead.
     const countable = mode === "game" && ["daily", "weekly", "monthly"].includes(qtype);
     targetField.style.display = countable ? "" : "none";
     updateKindHint();
@@ -513,8 +525,18 @@ function wireAuthoring(container, channels) {
       target_count: 1,
     };
     if (qtype === "community") {
-      const t = form.querySelector("[name=community_target]").value;
-      body.community_target = t === "" ? null : parseInt(t, 10);
+      if (mode === "game") {
+        // Auto-tracking weekly: the scheduler sizes the target at kickoff.
+        body.trigger_kind = kindSel.value;
+        body.community_target = null;
+        if (CHANNEL_SCOPED_KINDS.has(kindSel.value)) {
+          const trigCh = triggerPicker.getValue();
+          body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;
+        }
+      } else {
+        const t = form.querySelector("[name=community_target]").value;
+        body.community_target = t === "" ? null : parseInt(t, 10);
+      }
     } else if (mode === "game") {
       body.trigger_kind = kindSel.value;
       if (["daily", "weekly", "monthly"].includes(qtype)) {

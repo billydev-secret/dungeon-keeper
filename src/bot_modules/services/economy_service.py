@@ -67,6 +67,11 @@ class EconSettings:
     quest_board_daily: int = 2
     quest_board_weekly: int = 2
     quest_board_monthly: int = 2
+    # Community-weekly beat sheets (kickoff / tier crossed / final-24h /
+    # resolution) DM this member so they can host the event in their own
+    # voice — the bot posts nothing publicly (2026-07-18 decision). 0 =
+    # fall back to the guild owner.
+    community_host_user_id: int = 0
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75

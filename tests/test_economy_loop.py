@@ -997,3 +997,113 @@ async def test_run_tick_drives_the_rental_pass(db, monkeypatch):
     assert row["state"] == "active"
     assert row["next_bill_at"] == due + WEEK_SECONDS  # renewal charged + advanced
     assert _balance(db) == 0
+
+
+# ── community weeklies: gap-week alternation + beats (stage 3) ────────
+
+
+def _mk_community_kind(db_path, *, title, kind, reward=30, guild_id=GUILD) -> int:
+    with open_db(db_path) as conn:
+        return create_quest(
+            conn, guild_id,
+            title=title, description="d", qtype="community", reward=reward,
+            signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind=kind,
+        )
+
+
+def _fire(db_path, kind, user_id, occ, day, guild_id=GUILD) -> None:
+    from bot_modules.services.economy_quests_service import fire_trigger_quests
+
+    with open_db(db_path) as conn:
+        settings = load_econ_settings(conn, guild_id)
+        fire_trigger_quests(
+            conn, settings, guild_id, kind, user_id,
+            local_day=day, occurrence=occ, booster=False,
+        )
+
+
+def _roll_beats(bot, db_path, now_ts, guild_id=GUILD):
+    with open_db(db_path) as conn:
+        return run_guild_day_roll(bot, conn, guild_id, now_ts)
+
+
+def _community_state(db_path, qid):
+    with open_db(db_path) as conn:
+        q = conn.execute(
+            "SELECT active, community_target, last_run_week FROM econ_quests "
+            "WHERE id = ?", (qid,),
+        ).fetchone()
+        p = conn.execute(
+            "SELECT current, settled_at FROM econ_community_progress "
+            "WHERE quest_id = ?", (qid,),
+        ).fetchone()
+        return q, p
+
+
+def test_community_weekly_gap_week_lifecycle(db):
+    _enable(db)
+    bot = _Bot([_Guild(GUILD, {USER: _Member()})])
+    qa = _mk_community_kind(db, title="Msgs", kind="message_sent")
+    qb = _mk_community_kind(db, title="Replies", kind="reply_sent")
+    _add_activity(db, USER)
+
+    _roll(bot, db, _ts(D1))  # first sight: marks only
+
+    # W28 → W29 roll: first-ever community week activates the library's next
+    # quest (id order when never run) with an auto-sized (floor) target.
+    beats = _roll_beats(bot, db, _ts("2026-07-13"))
+    assert any("kicked off" in b.text for b in beats)
+    q, p = _community_state(db, qa)
+    assert int(q["active"]) == 1 and int(q["community_target"]) == 10
+    assert q["last_run_week"] == "2026-W29"
+
+    # Members act during the run week → counter + contrib move.
+    for i in range(7):
+        _fire(db, "message_sent", USER, f"m{i}", "2026-07-15")
+
+    # W29 → W30 roll: the run settles (7/10 = 70% → tiers 1+2), resolution
+    # beat, quest deactivates, and nothing new activates (the win breathes).
+    beats = _roll_beats(bot, db, _ts("2026-07-20"))
+    assert any("resolved" in b.text for b in beats)
+    assert not any("kicked off" in b.text for b in beats)
+    q, p = _community_state(db, qa)
+    assert int(q["active"]) == 0 and p["settled_at"] is not None
+    # 2 tiers × 30 flat + 15 top-contributor bonus.
+    assert _balance(db, USER) == 75
+
+    # W30 → W31 roll: gap week over → the OTHER quest activates.
+    beats = _roll_beats(bot, db, _ts("2026-07-27"))
+    assert any("kicked off" in b.text for b in beats)
+    q, _ = _community_state(db, qb)
+    assert int(q["active"]) == 1 and q["last_run_week"] == "2026-W31"
+
+
+def test_community_hourly_beats_fire_once(db):
+    from bot_modules.services.economy_loop import community_hourly_beats
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+    )
+
+    _enable(db)
+    qid = _mk_community_kind(db, title="Msgs", kind="message_sent")
+    with open_db(db) as conn:
+        activate_community_weekly(conn, GUILD, qid, target=10, week="2026-W29")
+    for i in range(5):  # 50% → tier 1
+        _fire(db, "message_sent", USER, f"x{i}", "2026-07-15")
+
+    now = _ts("2026-07-15")  # Wed of W29 — far from week end
+    with open_db(db) as conn:
+        beats = community_hourly_beats(conn, GUILD, now)
+    assert len(beats) == 1 and "Tier 1 crossed" in beats[0].text
+    with open_db(db) as conn:
+        assert community_hourly_beats(conn, GUILD, now) == []
+
+    # Sunday inside the final day → the 24h nudge, exactly once.
+    sunday = _ts("2026-07-19", hour=12)
+    with open_db(db) as conn:
+        beats = community_hourly_beats(conn, GUILD, sunday)
+    assert len(beats) == 1 and "Final 24h" in beats[0].text
+    with open_db(db) as conn:
+        assert community_hourly_beats(conn, GUILD, sunday) == []

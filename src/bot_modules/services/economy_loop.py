@@ -77,13 +77,19 @@ from bot_modules.economy.perk_actions import (
 )
 from bot_modules.economy.rentals import GRACE_SECONDS, BillingAction
 from bot_modules.services.economy_quests_service import (
+    activate_community_weekly,
     active_member_ids,
+    auto_size_community_target,
+    community_contrib_summary,
     expire_stale_claims,
     get_quest,
+    list_active_community_kind_quests,
     list_settleable_community_quests,
+    next_community_weekly,
     prune_kind_activity,
     rotate_pool,
     settle_community_quest,
+    settle_community_weekly,
 )
 from bot_modules.services.economy_metrics_service import compute_weekly_rollup
 from bot_modules.services.economy_rentals_service import (
@@ -129,6 +135,18 @@ class ExpiredClaimNotice:
     quest_title: str
 
 
+@dataclass(frozen=True)
+class CommunityBeat:
+    """One community-weekly beat sheet to DM the host after commit.
+
+    ``text`` is the fully rendered sheet (numbers + suggested copy) — the
+    host posts it publicly in their own voice; the bot never does.
+    """
+
+    guild_id: int
+    text: str
+
+
 def _settle_completed_community(
     bot: discord.Client,
     conn: sqlite3.Connection,
@@ -158,7 +176,7 @@ def run_guild_day_roll(
     conn: sqlite3.Connection,
     guild_id: int,
     now_ts: float,
-) -> None:
+) -> list[CommunityBeat]:
     """Detect and process a guild-local day (and ISO-week) roll.
 
     First sight of a guild just records both marks — nothing is converted,
@@ -172,14 +190,15 @@ def run_guild_day_roll(
     """
     settings = load_econ_settings(conn, guild_id)
     if not settings.enabled:
-        return
+        return []
 
     offset = get_tz_offset_hours(conn, guild_id)
     today = logic.local_day_for(now_ts, offset)
     this_week = quests.iso_week_for(today)
 
     row = conn.execute(
-        "SELECT last_local_day, last_iso_week FROM econ_day_marks WHERE guild_id = ?",
+        "SELECT last_local_day, last_iso_week, last_community_week "
+        "FROM econ_day_marks WHERE guild_id = ?",
         (guild_id,),
     ).fetchone()
 
@@ -189,11 +208,12 @@ def run_guild_day_roll(
             "(guild_id, last_local_day, last_iso_week) VALUES (?, ?, ?)",
             (guild_id, today, this_week),
         )
-        return
+        return []
 
     last_day = row["last_local_day"]
     if last_day == today:
-        return
+        return []
+    beats: list[CommunityBeat] = []
 
     # ── day roll: convert the day that just ended, advance daily pool ──
     start, end = logic.local_day_bounds(last_day, offset)
@@ -227,9 +247,18 @@ def run_guild_day_roll(
     # ``last_iso_week`` is NULL for pre-064 mark rows; treat that as a backfill
     # (record the week, don't settle) rather than a spurious week change.
     last_week = row["last_iso_week"]
+    community_week = row["last_community_week"]
     if last_week is not None and last_week != this_week:
         rotate_pool(conn, guild_id, "weekly")
         _settle_completed_community(bot, conn, settings, guild_id)
+        week_beats, community_week = _roll_community_weekly(
+            bot, conn, settings, guild_id,
+            closed_week=last_week,
+            new_week=this_week,
+            community_week=community_week,
+            local_day=today,
+        )
+        beats.extend(week_beats)
         # Roll up metrics for the week that JUST closed (idempotent via PK —
         # a replay before the marks advance recomputes nothing).
         compute_weekly_rollup(
@@ -239,10 +268,181 @@ def run_guild_day_roll(
     # Marks advance LAST (both columns together) so any crash above replays the
     # whole roll on the next tick.
     conn.execute(
-        "UPDATE econ_day_marks SET last_local_day = ?, last_iso_week = ? "
-        "WHERE guild_id = ?",
-        (today, this_week, guild_id),
+        "UPDATE econ_day_marks SET last_local_day = ?, last_iso_week = ?, "
+        "last_community_week = ? WHERE guild_id = ?",
+        (today, this_week, community_week, guild_id),
     )
+    return beats
+
+
+def _roll_community_weekly(
+    bot: discord.Client,
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    *,
+    closed_week: str,
+    new_week: str,
+    community_week: str | None,
+    local_day: str,
+) -> tuple[list[CommunityBeat], str | None]:
+    """Gap-week alternation at the ISO-week roll (quest-variety stage 3).
+
+    One week on, one week off: a run settles at the roll that closes its
+    week (tier payouts + resolution beat, quest deactivates), the next roll
+    finds a full gap week behind it and activates the library's next
+    community weekly (auto-sized target, kickoff beat). Returns the beats
+    plus the updated ``last_community_week`` mark — the run week, advanced
+    only at activation, so "gap over" is simply ``community_week !=
+    closed_week``. First-ever roll (mark NULL) activates immediately.
+    """
+    beats: list[CommunityBeat] = []
+    active = list_active_community_kind_quests(conn, guild_id)
+    if active:
+        member_ids = active_member_ids(conn, guild_id, days=30)
+        boosters = {
+            uid: member_is_booster(bot, guild_id, uid) for uid in member_ids
+        }
+        for quest in active:
+            summary = settle_community_weekly(
+                conn, settings, guild_id, quest, boosters
+            )
+            beats.append(
+                CommunityBeat(guild_id, quests.beat_resolution(summary))
+            )
+        return beats, community_week
+
+    if community_week is not None and community_week == closed_week:
+        return beats, community_week  # the gap week — let the win breathe
+
+    nxt = next_community_weekly(conn, guild_id)
+    if nxt is None:
+        return beats, community_week  # library has no community weeklies
+    kind = str(nxt["trigger_kind"])
+    target = auto_size_community_target(conn, guild_id, kind, local_day)
+    activate_community_weekly(
+        conn, guild_id, int(nxt["id"]), target=target, week=new_week
+    )
+    beats.append(
+        CommunityBeat(
+            guild_id,
+            quests.beat_kickoff(
+                str(nxt["title"]),
+                quests.TRIGGER_KINDS.get(kind, kind),
+                target,
+                new_week,
+            ),
+        )
+    )
+    return beats, new_week
+
+
+def community_hourly_beats(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    now_ts: float,
+) -> list[CommunityBeat]:
+    """Every-tick beat detection for the running community weekly.
+
+    Tier crossings compare the live counter against ``notified_tier`` (which
+    advances here, same transaction, so a beat DMs once); the final-24h
+    nudge fires when the guild-local ISO week has under a day left and the
+    top tier is still open.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return []
+    beats: list[CommunityBeat] = []
+    offset = get_tz_offset_hours(conn, guild_id)
+    today = logic.local_day_for(now_ts, offset)
+    for quest in list_active_community_kind_quests(conn, guild_id):
+        qid = int(quest["id"])
+        target = int(quest["community_target"] or 0)
+        current = int(quest["current"] or 0)
+        crossed = quests.community_tiers_crossed(current, target)
+        notified = int(quest["notified_tier"] or 0)
+        if crossed > notified:
+            conn.execute(
+                "UPDATE econ_community_progress SET notified_tier = ? "
+                "WHERE quest_id = ?",
+                (crossed, qid),
+            )
+            contributors, _top = community_contrib_summary(conn, qid)
+            beats.append(
+                CommunityBeat(
+                    guild_id,
+                    quests.beat_tier(
+                        str(quest["title"]), crossed, current, target,
+                        contributors,
+                    ),
+                )
+            )
+        if (
+            not quest["final_notice_sent"]
+            and crossed < len(quests.COMMUNITY_TIERS)
+            and _seconds_to_next_week_start(today, offset, now_ts) < 86400
+        ):
+            conn.execute(
+                "UPDATE econ_community_progress SET final_notice_sent = 1 "
+                "WHERE quest_id = ?",
+                (qid,),
+            )
+            beats.append(
+                CommunityBeat(
+                    guild_id,
+                    quests.beat_final24(str(quest["title"]), current, target),
+                )
+            )
+    return beats
+
+
+def _seconds_to_next_week_start(
+    local_day: str, offset: float, now_ts: float
+) -> float:
+    """Seconds until the next guild-local ISO week (Monday 00:00) begins."""
+    from datetime import date, timedelta
+
+    day = date.fromisoformat(local_day)
+    next_monday = day + timedelta(days=7 - day.weekday())
+    start_ts, _end = logic.local_day_bounds(next_monday.isoformat(), offset)
+    return max(0.0, start_ts - now_ts)
+
+
+async def _send_community_beats(
+    bot: discord.Client, db_path: Path, beats: list[CommunityBeat]
+) -> None:
+    """DM beat sheets to each guild's community host (post-commit effect).
+
+    Host = ``community_host_user_id`` when set, else the guild owner. A
+    failed DM is logged and dropped — beats are advisory copy, never money.
+    """
+    for beat in beats:
+        try:
+            guild = bot.get_guild(beat.guild_id)
+            if guild is None:
+                continue
+
+            def _load_host(gid: int = beat.guild_id) -> int:
+                with open_db(db_path) as conn:
+                    return load_econ_settings(conn, gid).community_host_user_id
+
+            host_id = await asyncio.to_thread(_load_host)
+            if not host_id:
+                host_id = guild.owner_id or 0
+            member = guild.get_member(int(host_id)) if host_id else None
+            if member is None:
+                log.warning(
+                    "Community beat: no host resolvable for guild %s.",
+                    beat.guild_id,
+                )
+                continue
+            await member.send(beat.text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Community beat DM failed for guild %s.", beat.guild_id
+            )
 
 
 def run_claim_expiry(
@@ -570,13 +770,35 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             )
 
     for guild in list(bot.guilds):
+        beats: list[CommunityBeat] = []
         try:
             with open_db(db_path) as conn:
-                run_guild_day_roll(bot, conn, guild.id, now_ts)
+                beats.extend(run_guild_day_roll(bot, conn, guild.id, now_ts))
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("Economy loop: unhandled error for guild %s.", guild.id)
+
+        try:
+            with open_db(db_path) as conn:
+                beats.extend(community_hourly_beats(conn, guild.id, now_ts))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: community beat check failed for guild %s.",
+                guild.id,
+            )
+
+        try:
+            await _send_community_beats(bot, db_path, beats)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: community beat send failed for guild %s.",
+                guild.id,
+            )
 
         try:
             await run_guild_rentals(bot, db_path, guild.id, now_ts)

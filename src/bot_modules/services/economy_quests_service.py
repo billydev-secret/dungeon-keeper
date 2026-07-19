@@ -172,7 +172,12 @@ def _check_trigger_config(
     claimed). Daily/weekly quests may carry one — "do the thing once this
     period" — or trigger words, but not both (two auto-claim paths racing for
     one period would be ambiguous to explain, so it's rejected outright).
-    Community quests settle guild-wide and take neither.
+
+    Community quests may carry a kind since stage 3 (quest-variety plan):
+    the kind's events then bump the guild-wide counter automatically and the
+    weekly scheduler owns activation/settlement. A kind community quest
+    can't be sign-off (settlement is tiered and automatic; a human gate
+    belongs on manual community quests) and never takes trigger words.
 
     The ``confession`` kind additionally forbids sign-off: a sign-off claim
     posts a bank-channel card naming the claimant, which is timing-correlatable
@@ -185,8 +190,11 @@ def _check_trigger_config(
         if not trigger_kind:
             raise ValueError("event quests need a trigger kind")
     elif qtype == "community":
-        if trigger_kind:
-            raise ValueError("community quests cannot have a trigger kind")
+        if trigger_kind and signoff:
+            raise ValueError(
+                "auto-tracking community quests cannot require sign-off "
+                "(tier settlement is automatic)"
+            )
     if trigger_kind and trigger_words.strip():
         raise ValueError("a quest takes trigger words or a trigger kind, not both")
     if trigger_kind == "confession" and signoff:
@@ -627,7 +635,68 @@ def fire_trigger_quests(
         except ValueError:
             continue  # already claimed this period/occurrence, or window closed
         out.append((quest, outcome))
+    _bump_community_kind(conn, guild_id, trigger_kind, user_id, channel_ids)
     return out
+
+
+def _bump_community_kind(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    trigger_kind: str,
+    user_id: int,
+    channel_ids: tuple[int, ...] | None,
+) -> None:
+    """Advance any active auto-tracking community quest of this kind.
+
+    Guild-wide by design — deliberately NOT filtered by personal boards, so
+    every member's action counts toward the shared goal even when the kind
+    isn't on their board this period. Per-member contribution rows feed the
+    top-contributor bonus and the "N members contributed" line.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, trigger_channel_id, community_target
+        FROM econ_quests
+        WHERE guild_id = ? AND qtype = 'community' AND active = 1
+          AND trigger_kind = ?
+        """,
+        (guild_id, trigger_kind),
+    ).fetchall()
+    now = time.time()
+    for quest in rows:
+        scope = quest["trigger_channel_id"]
+        if scope is not None and (
+            channel_ids is None or int(scope) not in channel_ids
+        ):
+            continue
+        target = int(quest["community_target"] or 0)
+        if target <= 0:
+            continue  # not activated through the scheduler yet
+        qid = int(quest["id"])
+        conn.execute(
+            """
+            INSERT INTO econ_community_progress (quest_id, current)
+            VALUES (?, 1)
+            ON CONFLICT(quest_id) DO UPDATE SET current = current + 1
+            """,
+            (qid,),
+        )
+        conn.execute(
+            """
+            INSERT INTO econ_community_contrib (quest_id, user_id, count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(quest_id, user_id) DO UPDATE SET count = count + 1
+            """,
+            (qid, user_id),
+        )
+        conn.execute(
+            """
+            UPDATE econ_community_progress
+            SET completed_at = ?
+            WHERE quest_id = ? AND completed_at IS NULL AND current >= ?
+            """,
+            (now, qid, target),
+        )
 
 
 def _bump_progress(
@@ -1101,11 +1170,228 @@ def list_settleable_community_quests(
         SELECT q.* FROM econ_quests q
         JOIN econ_community_progress p ON p.quest_id = q.id
         WHERE q.guild_id = ? AND q.qtype = 'community' AND q.signoff = 0
+          AND q.trigger_kind = ''
           AND p.completed_at IS NOT NULL AND p.settled_at IS NULL
         ORDER BY q.id
         """,
         (guild_id,),
     ).fetchall()
+
+
+def list_active_community_kind_quests(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[sqlite3.Row]:
+    """Active auto-tracking (kind-carrying) community quests for a guild."""
+    return conn.execute(
+        """
+        SELECT q.*, p.current, p.completed_at, p.settled_at,
+               p.notified_tier, p.final_notice_sent
+        FROM econ_quests q
+        LEFT JOIN econ_community_progress p ON p.quest_id = q.id
+        WHERE q.guild_id = ? AND q.qtype = 'community' AND q.active = 1
+          AND q.trigger_kind != ''
+        ORDER BY q.id
+        """,
+        (guild_id,),
+    ).fetchall()
+
+
+def next_community_weekly(
+    conn: sqlite3.Connection, guild_id: int
+) -> sqlite3.Row | None:
+    """The library's next community weekly: inactive, kind-carrying, least
+    recently run ('' sorts first, so never-run quests lead the rotation)."""
+    return conn.execute(
+        """
+        SELECT * FROM econ_quests
+        WHERE guild_id = ? AND qtype = 'community' AND active = 0
+          AND trigger_kind != ''
+        ORDER BY last_run_week ASC, id ASC
+        LIMIT 1
+        """,
+        (guild_id,),
+    ).fetchone()
+
+
+def auto_size_community_target(
+    conn: sqlite3.Connection, guild_id: int, kind: str, local_day: str
+) -> int:
+    """Target from the guild's trailing 28 full days of this kind's activity.
+
+    Fully automatic by design decision (2026-07-18 Q&A) — no manual override.
+    Cold kinds fall to the floor target (quests.community_auto_target), which
+    keeps a first-week goal achievable rather than impossible.
+    """
+    from datetime import date, timedelta
+
+    end = date.fromisoformat(local_day)  # exclusive: today is partial
+    start = end - timedelta(days=28)
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(count), 0) AS total FROM econ_kind_activity
+        WHERE guild_id = ? AND kind = ? AND local_day >= ? AND local_day < ?
+        """,
+        (guild_id, kind, start.isoformat(), end.isoformat()),
+    ).fetchone()
+    return quests.community_auto_target(int(row["total"]))
+
+
+def activate_community_weekly(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    quest_id: int,
+    *,
+    target: int,
+    week: str,
+) -> None:
+    """Open a community weekly's run: size it, reset per-run state, activate.
+
+    Contribution and tier-payout rows are per-run — cleared here (same
+    transaction) so a library quest can re-run in a later week and pay
+    again. Exactly-once only has to hold *within* a run, where settlement
+    replays share the reservation rows.
+    """
+    conn.execute(
+        """
+        UPDATE econ_quests
+        SET active = 1, community_target = ?, last_run_week = ?
+        WHERE id = ? AND guild_id = ?
+        """,
+        (target, week, quest_id, guild_id),
+    )
+    conn.execute("DELETE FROM econ_community_contrib WHERE quest_id = ?", (quest_id,))
+    conn.execute(
+        "DELETE FROM econ_community_tier_payouts WHERE quest_id = ?", (quest_id,)
+    )
+    conn.execute(
+        """
+        INSERT INTO econ_community_progress
+            (quest_id, current, completed_at, settled_at, notified_tier,
+             final_notice_sent)
+        VALUES (?, 0, NULL, NULL, 0, 0)
+        ON CONFLICT(quest_id) DO UPDATE SET
+            current = 0, completed_at = NULL, settled_at = NULL,
+            notified_tier = 0, final_notice_sent = 0
+        """,
+        (quest_id,),
+    )
+
+
+def community_contrib_summary(
+    conn: sqlite3.Connection, quest_id: int, *, top_n: int = 3
+) -> tuple[int, list[tuple[int, int]]]:
+    """(contributor count, top-N [(user_id, count)]) for a community run."""
+    total = conn.execute(
+        "SELECT COUNT(*) AS n FROM econ_community_contrib "
+        "WHERE quest_id = ? AND count > 0",
+        (quest_id,),
+    ).fetchone()
+    top = conn.execute(
+        """
+        SELECT user_id, count FROM econ_community_contrib
+        WHERE quest_id = ? AND count > 0
+        ORDER BY count DESC, user_id ASC
+        LIMIT ?
+        """,
+        (quest_id, top_n),
+    ).fetchall()
+    return int(total["n"]), [(int(r["user_id"]), int(r["count"])) for r in top]
+
+
+def settle_community_weekly(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    quest: sqlite3.Row,
+    member_boosters: dict[int, bool],
+) -> dict[str, object]:
+    """Close a community weekly's run: pay crossed tiers + bonus, deactivate.
+
+    Each crossed tier pays the quest's flat ``reward`` to every member in
+    ``member_boosters`` (the loop passes 30d-actives), exactly-once via the
+    per-(quest, tier, user) reservation rows — the settle_community_quest
+    pattern. Tier 0 rows reserve the top-contributor bonus (reward // 2,
+    top 3 by contribution). Returns the resolution summary for the beat
+    sheet. Idempotent: a replay pays only what it missed.
+    """
+    qid = int(quest["id"])
+    reward = int(quest["reward"])
+    target = int(quest["community_target"] or 0)
+    row = conn.execute(
+        "SELECT current FROM econ_community_progress WHERE quest_id = ?", (qid,)
+    ).fetchone()
+    current = int(row["current"]) if row else 0
+    crossed = quests.community_tiers_crossed(current, target)
+
+    paid_members = 0
+    for tier in range(1, crossed + 1):
+        for user_id, booster in member_boosters.items():
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO econ_community_tier_payouts "
+                "(quest_id, tier, user_id) VALUES (?, ?, ?)",
+                (qid, tier, user_id),
+            )
+            if (cur.rowcount or 0) == 0:
+                continue
+            if reward >= 1:
+                apply_credit(
+                    conn,
+                    guild_id,
+                    user_id,
+                    reward,
+                    "quest_community",
+                    meta={"quest_id": qid, "tier": tier},
+                    booster=booster,
+                    multiplier=settings.booster_multiplier,
+                )
+            paid_members += 1
+
+    contributors, top = community_contrib_summary(conn, qid)
+    bonus = reward // 2
+    bonus_paid: list[int] = []
+    if crossed > 0 and bonus >= 1:
+        for user_id, _count in top:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO econ_community_tier_payouts "
+                "(quest_id, tier, user_id) VALUES (?, 0, ?)",
+                (qid, user_id),
+            )
+            if (cur.rowcount or 0) == 0:
+                continue
+            apply_credit(
+                conn,
+                guild_id,
+                user_id,
+                bonus,
+                "quest_community_bonus",
+                meta={"quest_id": qid},
+                booster=member_boosters.get(user_id, False),
+                multiplier=settings.booster_multiplier,
+            )
+            bonus_paid.append(user_id)
+
+    now = time.time()
+    conn.execute(
+        "UPDATE econ_community_progress SET settled_at = ? WHERE quest_id = ?",
+        (now, qid),
+    )
+    conn.execute(
+        "UPDATE econ_quests SET active = 0 WHERE id = ? AND guild_id = ?",
+        (qid, guild_id),
+    )
+    return {
+        "quest_id": qid,
+        "title": str(quest["title"]),
+        "current": current,
+        "target": target,
+        "tiers_crossed": crossed,
+        "reward_per_tier": reward,
+        "paid_member_tiers": paid_members,
+        "contributors": contributors,
+        "top_contributors": top,
+        "bonus": bonus,
+        "bonus_paid": bonus_paid,
+    }
 
 
 def active_member_ids(

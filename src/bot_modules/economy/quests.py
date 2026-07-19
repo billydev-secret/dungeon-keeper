@@ -134,6 +134,106 @@ _REWARD_BANDS: dict[str, tuple[int, int]] = {
 }
 
 
+# Community weekly milestone tiers, as fractions of the auto-sized target.
+# Tier 1 is sized to be near-certain, tier 3 a genuine stretch; each tier
+# crossed pays the quest's flat reward once (research: binary pass/fail
+# community goals at small scale just produce attributable disappointment).
+COMMUNITY_TIERS: tuple[float, ...] = (0.4, 0.7, 1.0)
+
+
+def community_tiers_crossed(current: int, target: int) -> int:
+    """How many milestone tiers a community counter has crossed (0-3)."""
+    if target <= 0 or current <= 0:
+        return 0
+    frac = current / target
+    return sum(1 for t in COMMUNITY_TIERS if frac >= t)
+
+
+def community_auto_target(four_week_total: int) -> int:
+    """Size a community weekly from the guild's trailing 4-week kind total.
+
+    target ≈ typical week ÷ 0.75, so an average week lands at ~75% (tier 2)
+    and a visible push closes tier 3. Floor of 10 keeps a cold kind from
+    producing a degenerate one-action goal.
+    """
+    weekly_typical = four_week_total / 4
+    return max(10, round(weekly_typical / 0.75))
+
+
+# ── Community-weekly beat sheets ──────────────────────────────────────
+# DMed to the host (not posted publicly): the numbers plus suggested copy
+# they can paste or rewrite in their own voice. Pure string builders so the
+# copy stays table-testable.
+
+
+def beat_kickoff(title: str, kind_label: str, target: int, week: str) -> str:
+    return (
+        f"🎬 **Community weekly kicked off** ({week})\n"
+        f"**{title}** — {kind_label}\n"
+        f"Target: **{target}** · tiers at 40% / 70% / 100%, each tier pays "
+        f"everyone.\n\n"
+        f"Suggested post:\n"
+        f"> 📣 New community goal this week: **{title}**! Every one of us "
+        f"counts toward it — {kind_label.lower()}. Hit {target} together "
+        f"and everyone gets paid three times over. Progress lives on the "
+        f"leaderboard. Go!"
+    )
+
+
+def beat_tier(
+    title: str, tier: int, current: int, target: int, contributors: int
+) -> str:
+    pct = round(100 * current / target) if target else 0
+    return (
+        f"🏁 **Tier {tier} crossed** — {title}\n"
+        f"{current}/{target} ({pct}%) · {contributors} members contributed\n\n"
+        f"Suggested post:\n"
+        f"> 🎉 Tier {tier} down on **{title}** — {pct}% and climbing, "
+        f"{contributors} of you have chipped in. Payout secured for "
+        f"everyone; next tier's on the board!"
+    )
+
+
+def beat_final24(title: str, current: int, target: int) -> str:
+    pct = round(100 * current / target) if target else 0
+    need = max(0, target - current)
+    return (
+        f"⏳ **Final 24h** — {title}\n"
+        f"{current}/{target} ({pct}%) · {need} to go for the full clear\n\n"
+        f"Suggested post:\n"
+        f"> ⏰ Last day on **{title}** — we're at {pct}%. {need} more and "
+        f"it's a full clear. One push!"
+    )
+
+
+def beat_resolution(summary: dict) -> str:
+    title = summary["title"]
+    crossed = summary["tiers_crossed"]
+    current, target = summary["current"], summary["target"]
+    contributors = summary["contributors"]
+    top = summary["top_contributors"]
+    bonus_paid = summary["bonus_paid"]
+    pct = round(100 * int(current) / int(target)) if target else 0
+    top_lines = "\n".join(
+        f"  {i + 1}. <@{uid}> — {n}" for i, (uid, n) in enumerate(top)
+    ) or "  (nobody)"
+    tier_word = f"{crossed}/3 tiers" if crossed else "no tiers"
+    return (
+        f"🏆 **Community weekly resolved** — {title}\n"
+        f"Final: {current}/{target} ({pct}%) → **{tier_word}** paid to every "
+        f"active member ({summary['reward_per_tier']} per tier).\n"
+        f"Contributors: {contributors}\n"
+        f"Top contributors{' (bonus paid)' if bonus_paid else ''}:\n"
+        f"{top_lines}\n\n"
+        f"Suggested post:\n"
+        f"> 🏆 **{title}** is in the books: {pct}% and {tier_word} cleared — "
+        f"payouts are in your wallets. Shout-out to our top contributors "
+        f"{' '.join(f'<@{uid}>' for uid, _ in top) or '…nobody?!'} and all "
+        f"{contributors} of you who moved the bar. Next goal after a "
+        f"breather week. 💰"
+    )
+
+
 def iso_week_for(local_day: str) -> str:
     """Return the ISO week ("YYYY-Www") a guild-local calendar day falls in.
 

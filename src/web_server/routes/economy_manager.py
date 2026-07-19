@@ -684,6 +684,12 @@ async def set_progress(
                 raise HTTPException(404, "quest not found")
             if quest["qtype"] != "community":
                 raise HTTPException(422, "progress applies only to community quests")
+            if quest["trigger_kind"]:
+                raise HTTPException(
+                    422,
+                    "auto-tracking community quest — its counter moves from "
+                    "member activity, not the dashboard",
+                )
             target = quest["community_target"] or 0
             crossed = quests_svc.set_community_progress(
                 conn, quest_id, body.current, target=target
@@ -711,6 +717,12 @@ async def settle_quest(
                 raise HTTPException(404, "quest not found")
             if quest["qtype"] != "community":
                 raise HTTPException(422, "settle applies only to community quests")
+            if quest["trigger_kind"]:
+                raise HTTPException(
+                    422,
+                    "auto-tracking community quest — the weekly scheduler "
+                    "settles its tiers itself",
+                )
             settings = load_econ_settings(conn, guild_id)
             member_ids = quests_svc.active_member_ids(conn, guild_id)
             return settings, member_ids

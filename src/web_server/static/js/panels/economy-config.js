@@ -55,6 +55,16 @@ function render(container, cfg, channels, roles) {
             player their card instead of replying in the channel; members without
             the role are paid silently. Leave unset to reply in-channel for everyone.</div>
         </div>
+        <div class="field">
+          <label>Community weekly host</label>
+          <input type="text" name="community_host_user_id" inputmode="numeric"
+            pattern="[0-9]*" value="${cfg.community_host_user_id || ""}"
+            placeholder="member ID" style="max-width:220px;" />
+          <div class="field-hint">Community-weekly beat sheets (kickoff, tier
+            crossed, final-24h, resolution) are DMed to this member to post in
+            their own voice — the bot posts nothing publicly. Leave empty to
+            DM the server owner.</div>
+        </div>
         <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
           <input type="checkbox" name="transfers_enabled"${cfg.transfers_enabled ? " checked" : ""} />
           Member-to-member transfers enabled
@@ -135,6 +145,10 @@ function render(container, cfg, channels, roles) {
       bank_channel_id: parseInt(channelPicker.getValue() || "0", 10),
       manager_role_id: parseInt(rolePicker.getValue() || "0", 10),
       game_role_id: parseInt(gameRolePicker.getValue() || "0", 10),
+      // Sent as a string: a snowflake overflows JS number precision, and
+      // pydantic coerces the string to int losslessly server-side.
+      community_host_user_id:
+        form.querySelector("[name=community_host_user_id]").value.trim() || "0",
     };
     for (const key of numKeys) {
       const raw = form.querySelector(`[name=${key}]`).value;

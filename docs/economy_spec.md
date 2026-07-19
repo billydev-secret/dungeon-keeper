@@ -180,16 +180,54 @@ parity with the Games Studio is a parking-lot item).
   best-effort edits the card and DMs the claimant over the shared event loop.
 
 ### 4.3 Community Quests
-Guild-wide objective with a progress bar. Community quests are **not member-claimable** —
-a manager drives `current` toward the target from the Operations page and `completed_at`
-stamps once on the crossing. **Payout: flat, to every member active in the last 30 days**
-(`member_activity` via `active_member_ids`). Settlement is exactly-once: a per-(quest, user)
-row in `econ_community_payouts` is reserved before crediting (wellness-scheduler pattern),
-so a replay pays only the members it missed and `settled_at` stamps last. **Sign-off gates
-the sweep:** a sign-off community quest settles ONLY via the dashboard's manual Settle
-(`settle_community_quest`); a plain one auto-settles on the weekly ISO-week roll in the
-economy loop (`list_settleable_community_quests` filters out sign-off quests, so the
-auto-sweep never pays one awaiting approval).
+Guild-wide objective with a progress bar; never member-claimable. Two flavors
+since stage 3 of the quest-variety plan
+(`docs/plans/quest-variety-and-community-weeklies.md`):
+
+**Manual (no trigger kind — the original).** A manager drives `current`
+toward the target from the Operations page and `completed_at` stamps once on
+the crossing. **Payout: flat, to every member active in the last 30 days**
+(`member_activity` via `active_member_ids`). Settlement is exactly-once: a
+per-(quest, user) row in `econ_community_payouts` is reserved before
+crediting (wellness-scheduler pattern), so a replay pays only the members it
+missed and `settled_at` stamps last. **Sign-off gates the sweep:** a
+sign-off community quest settles ONLY via the dashboard's manual Settle
+(`settle_community_quest`); a plain one auto-settles on the weekly ISO-week
+roll (`list_settleable_community_quests` filters out sign-off AND
+kind-carrying quests).
+
+**Auto-tracking community weeklies (`trigger_kind` set).** The kind's module
+events advance the counter guild-wide — `fire_trigger_quests` bumps every
+active same-kind community quest (`_bump_community_kind`), deliberately NOT
+filtered by personal boards, with per-member rows in `econ_community_contrib`
+(migration 082). Lifecycle is scheduler-owned, **one week on / one week off**
+(`_roll_community_weekly` at the ISO-week roll, alternation state in
+`econ_day_marks.last_community_week`):
+
+- **Activation** (first roll after a full gap week, or ever): the library's
+  least-recently-run inactive kind community quest (`next_community_weekly`,
+  `last_run_week` ordering) activates with a **fully automatic target** —
+  trailing 28 days of that kind's `econ_kind_activity` ÷ 4 ÷ 0.75
+  (`community_auto_target`, floor 10), so a typical week lands ~75% and a
+  push clears it. No manual override by design (2026-07-18 decision).
+- **Tiers at 40/70/100%** (`quests.COMMUNITY_TIERS`): settlement at the
+  closing week roll pays the quest's flat `reward` once per crossed tier to
+  every 30d-active member — exactly-once per run via
+  `econ_community_tier_payouts` (tier 0 reserves the **top-contributor
+  bonus**: `reward // 2` to the top 3 by contribution). Contribution and
+  tier-payout rows reset at the next activation, so a re-run pays afresh;
+  idempotency only has to hold within a run.
+- **Beat sheets, not bot posts:** kickoff / tier-crossed / final-24h /
+  resolution are **DMed to the community host**
+  (`EconSettings.community_host_user_id`, 0 → guild owner) as numbers +
+  suggested copy — the host narrates publicly in their own voice
+  (2026-07-18 decision). Tier crossings and the final-24h nudge are detected
+  hourly (`community_hourly_beats`; `notified_tier` / `final_notice_sent`
+  advance in the same transaction, so each beat sends once).
+- Kind community quests reject `signoff=1`, and the dashboard's manual
+  progress/settle endpoints 422 on them (the Operations card renders them
+  read-only with an "auto-tracking" note); the manual Settle path and the
+  legacy completed-quest sweep are for manual quests only.
 
 ### 4.4 Trigger-Word Quests
 A daily/weekly quest may carry **trigger words** (comma/newline-separated phrases,
