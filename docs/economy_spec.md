@@ -842,14 +842,27 @@ balances only** (inequality of who-holds-what, not the zero-balance long tail); 
 fixed-bucket **balance histogram**; **7-day flow** — minted vs burned with a burn
 rate, plus transfer volume and grants (money definitions match the rollup: mint /
 income exclude `transfer_in`, burn excludes `transfer_out`); a **per-member income
-velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend,
-top faucet group, live rentals, streak, and last-earned; **engagement** — earner
+velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend
+(**every** sink kind, not just `rental` — it read rentals-only until consumables
+shipped), top faucet group, live rentals, streak, and last-earned; **engagement** — earner
 ratio (7d earners ÷ 30d active), spenders, quest claims, **quest approval rate**
 (resolved paid ÷ paid+denied over 30d, resolved-only), and **hoard-weeks** (median
 balance ÷ latest-rollup median weekly income); **perk affordability** in days of
-median daily income per price field; and the **top 5 transfer pairs** (30d, by
+median daily income per price field; the **biggest spenders board** (top 15 by
+**lifetime** currency burned, with each member's share of the guild's whole burn
+and the sink they spend most on); and the **top 5 transfer pairs** (30d, by
 `transfer_out` magnitude) as the alt-funnel audit surface for transfer abuse (§12).
 All ratios/divides are guarded (0 or `null` when there is no denominator).
+
+The spenders board is deliberately **all-time, not a trailing window** — its job
+is to make spending a standing status worth chasing, and a 7-day window would
+erase that standing every week. Burn excludes `transfer_out` (sideways: the coins
+land in another wallet, so nothing leaves the economy) and `qa_void` (a staff
+clawback is a real removal but not a purchase, and crediting it would rank
+someone top for having had a reward revoked). Shares are computed against the
+guild's **total** burn, not the sum of the visible rows, so the top-15 cut can't
+inflate its own percentages; ties break on user id so the table doesn't reshuffle
+between refreshes.
 
 ## 10. Notifications
 

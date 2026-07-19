@@ -20,9 +20,18 @@ import math
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from bot_modules.services.economy_service import EconSettings
+
+
+class BurnRow(TypedDict):
+    """One member's lifetime spend, ranked. ``share`` is of the guild's total burn."""
+
+    user_id: str
+    burned: int
+    share: float
+    top_sink: str | None
 
 
 class HistogramBucket(TypedDict):
@@ -36,6 +45,13 @@ class HistogramBucket(TypedDict):
 # [BUCKETS[i], BUCKETS[i+1] - 1]; the last bucket is open-ended (1000+). The
 # leading 0 bound gives 0 its own single-value bucket ([0, 0]).
 DEFAULT_BUCKETS: tuple[int, ...] = (0, 1, 10, 50, 100, 250, 500, 1000)
+
+# Negative-amount ledger kinds that are NOT a member spending on something,
+# and so don't count as burn. ``transfer_out`` is sideways — the coins land in
+# another wallet, nothing leaves the economy. ``qa_void`` is a staff clawback:
+# a real removal, but reading it as spending would put someone at the top of a
+# "biggest spenders" board for having had a reward revoked.
+BURN_EXCLUDED_KINDS: tuple[str, ...] = ("transfer_out", "qa_void")
 
 # The rentable-perk price fields, in the same set/order the pricing hints use so
 # an affordability figure lines up with its suggested-price hint on the dashboard.
@@ -113,6 +129,41 @@ def balance_histogram(
     for i, lo in enumerate(bounds):
         hi: int | None = bounds[i + 1] - 1 if i + 1 < len(bounds) else None
         out.append({"lo": lo, "hi": hi, "count": counts[i]})
+    return out
+
+
+def burn_leaderboard(
+    by_user: Mapping[int, Mapping[str, int]], limit: int = 10
+) -> list[BurnRow]:
+    """Rank members by lifetime currency *burned*, richest spender first.
+
+    ``by_user`` maps user id → {ledger kind → positive amount spent}. Each
+    member's ``share`` is their fraction of the guild's whole burn, not just
+    the burn of the rows that survive ``limit`` — a top-10 cut must not
+    inflate the percentages it shows.
+
+    Ties break on user id ascending so the table is stable between refreshes.
+    Members with nothing burned are dropped; a spender leaderboard with a row
+    reading 0 is noise.
+    """
+    totals = {uid: sum(kinds.values()) for uid, kinds in by_user.items()}
+    grand = sum(totals.values())
+    ranked = sorted(
+        ((uid, t) for uid, t in totals.items() if t > 0),
+        key=lambda pair: (-pair[1], pair[0]),
+    )
+    out: list[BurnRow] = []
+    for uid, burned in ranked[: max(limit, 0)]:
+        kinds = by_user[uid]
+        top_sink = max(kinds, key=lambda k: (kinds[k], k)) if kinds else None
+        out.append(
+            {
+                "user_id": str(uid),
+                "burned": burned,
+                "share": round(burned / grand, 4) if grand > 0 else 0.0,
+                "top_sink": top_sink,
+            }
+        )
     return out
 
 
