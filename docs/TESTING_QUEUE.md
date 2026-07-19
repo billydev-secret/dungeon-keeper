@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: live "Happening now" tracker on Statistics  (stage 4, hash stamped on merge)
+### Economy: live "Happening now" tracker on Statistics  (8df168e)
 
 - [ ] Statistics page opens with the "Happening now" card on top; it
       re-fetches by itself every ~45s (watch the counts move after
