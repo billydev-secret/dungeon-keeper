@@ -23,11 +23,15 @@ old hardcoded default— drives behavior.
 - `SEND_COOLDOWN_SECONDS` (30s), `SEND_PER_TARGET_HOURLY_CAP` (5/hr) →
   `WhisperConfig.cooldown_seconds` / `.hourly_cap_per_target`.
 
-### 2. Confessions — `max_attachments`
-- `src/bot_modules/services/confessions_service.py` already has a
-  `max_attachments` DB column (default 4) round-tripped at get/set — it's
-  simply missing from `ConfessionsConfigUpdate` (`config.py`) and
-  `config-confessions.js`. Smallest fix: wire the existing plumbing through.
+### 2. Confessions — `max_attachments` — SKIPPED, not a real gap
+- Turned out to be dead config: confessions submit via `ConfessModal`, a
+  Discord modal that only supports `TextInput` — there is no attachment path
+  at all (`docs/confessions_spec.md`: "No attachment support today. Text
+  bodies only."). `max_attachments` is stored/round-tripped but never read
+  anywhere to enforce anything. Exposing it on the dashboard would ship an
+  unenforced preference (CLAUDE.md: "Never ship a preference or toggle that
+  isn't enforced"). Left alone — not worth removing the dead column either,
+  out of scope for this sweep.
 
 ### 3. Guess — flood cap + per-round guess cap
 - `src/bot_modules/cogs/guess_cog.py`: `_SUBMIT_WINDOW_S` (3600) /
