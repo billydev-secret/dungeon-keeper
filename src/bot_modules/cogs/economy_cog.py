@@ -138,11 +138,13 @@ _PERK_LABELS = {
     "role_name": "Custom role name",
     "role_icon": "Role icon",
     "role_gradient": "Gradient role",
+    "voice_style": "Voice style",
 }
-# The perks a member rents for themselves, in shop display order. Every one
-# is also giftable — a gift is the same perk rented with the friend as
-# beneficiary (the separate gift_color kind retired in migration 091).
+# The role perks a member rents for themselves, in shop display order. Every
+# giftable perk (these + the voice-style lease) is gifted as the same perk
+# kind rented with the friend as beneficiary (gift_color retired in 091).
 _SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
+_GIFTABLE_PERKS = (*_SELF_PERKS, "voice_style")
 # Feature-gated perks and the friendly reason shown when the gate is closed.
 _FEATURE_GATED = ("role_gradient", "role_icon")
 
@@ -155,18 +157,21 @@ _PERK_SHORT = {
     "role_name": "Name",
     "role_gradient": "Gradient",
     "role_icon": "Icon",
+    "voice_style": "Voice",
 }
 _PERK_BLURBS = {
     "role_color": "one solid color, your pick",
     "role_name": "call yourself anything",
     "role_gradient": "two-color fade on your name",
     "role_icon": "a badge beside your name",
+    "voice_style": "name + size your voice room",
 }
 _PERK_EMOJI = {
     "role_color": "🎨",
     "role_name": "✨",
     "role_gradient": "🌈",
     "role_icon": "🖼️",
+    "voice_style": "🎙️",
 }
 # Self-perks grouped into a price ladder — cheap everyday tweaks first, the
 # showy ones second — so the shop reads as tiers to climb rather than a flat
@@ -714,6 +719,22 @@ class _ShopView(discord.ui.View):
                 )
                 button.callback = self._make_rent_callback(perk)
             self.add_item(button)
+        if settings.price_voice_style > 0:
+            if "voice_style" in owned:
+                button = discord.ui.Button(
+                    label="🎙️ Leased",
+                    style=discord.ButtonStyle.success,
+                    disabled=True,  # customization lives on the VM panel
+                    custom_id="econ_shop_rent:voice_style",
+                )
+            else:
+                button = discord.ui.Button(
+                    label="🎙️ Voice",
+                    style=discord.ButtonStyle.primary,
+                    custom_id="econ_shop_rent:voice_style",
+                )
+                button.callback = self._make_rent_callback("voice_style")
+            self.add_item(button)
         if settings.price_streak_shield > 0:
             # A held shield stays visible (green, disabled) so the cap reads
             # as "you have one", not as the button being broken.
@@ -824,6 +845,16 @@ async def _rent_perk_flow(
         await interaction.response.send_message(text, ephemeral=True)
         return
 
+    if perk == "voice_style":
+        # No personal role to project and no customise modal — the perk's
+        # controls ARE Voice Master's rename/limit, live again from now on.
+        await interaction.response.send_message(
+            "Rented **Voice style**! Renaming and sizing your voice channel "
+            "are unlocked — your saved name and limit apply the next time "
+            "you spin one up.",
+            ephemeral=True,
+        )
+        return
     await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
     note = (
         " (For an image icon, upload one with `/bank role icon`.)"
@@ -880,7 +911,8 @@ class ShopRentButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None or (
-            self.perk not in _SELF_PERKS and self.perk != "streak_shield"
+            self.perk not in _SELF_PERKS
+            and self.perk not in ("voice_style", "streak_shield")
         ):
             await interaction.response.send_message(
                 "That perk isn't available.", ephemeral=True
@@ -909,6 +941,14 @@ class ShopRentButton(
         if cog is None:  # cog unloaded mid-flight; the panel button outlives it
             await interaction.response.send_message(
                 "That perk isn't available right now.", ephemeral=True
+            )
+            return
+        if self.perk == "voice_style" and settings.price_voice_style <= 0:
+            # The lease shipped dark (price 0) — a stale panel button from a
+            # priced era refuses rather than renting a perk that gates nothing.
+            await interaction.response.send_message(
+                "The voice-style lease isn't active here right now.",
+                ephemeral=True,
             )
             return
         if self.perk == "streak_shield":
@@ -992,10 +1032,18 @@ def _build_shop_embed(
         title="🛍️ Perk shop", description=description, color=accent
     )
 
+    # The Voice tier exists only while the lease is priced (> 0 = the paywall
+    # is armed); at the price-0 dark default the shop shows no trace of it.
+    tiers = list(_PERK_TIERS)
+    table_perks: list[str] = list(_SELF_PERKS)
+    if settings.price_voice_style > 0:
+        tiers.append(("Voice", ("voice_style",)))
+        table_perks.append("voice_style")
+
     # One width per table, not per tier, so cells line up across the whole
     # embed rather than jumping at each heading.
-    label_width = max(len(_PERK_SHORT[p]) for p in _SELF_PERKS)
-    blurb_width = max(len(_PERK_BLURBS[p]) for p in _SELF_PERKS)
+    label_width = max(len(_PERK_SHORT[p]) for p in table_perks)
+    blurb_width = max(len(_PERK_BLURBS[p]) for p in table_perks)
 
     def _line(perk: str) -> str:
         _sort, price_str = _shop_row_price(settings, perk, icon_catalog)
@@ -1012,7 +1060,7 @@ def _build_shop_embed(
             f"{settings.currency_emoji} **{price_str}**{note}"
         )
 
-    for tier_name, perks in _PERK_TIERS:
+    for tier_name, perks in tiers:
         ordered = sorted(
             perks, key=lambda p: _shop_row_price(settings, p, icon_catalog)[0]
         )
@@ -1084,6 +1132,8 @@ def _shop_panel_view(
                 disabled=perk in gated,
             )
         )
+    if settings.price_voice_style > 0:
+        view.add_item(ShopRentButton("voice_style", label="🎙️ Voice"))
     if settings.price_streak_shield > 0:
         view.add_item(
             ShopRentButton(
@@ -1611,7 +1661,7 @@ class EconomyCog(commands.Cog):
     @app_commands.choices(
         perk=[
             app_commands.Choice(name=_PERK_LABELS[p], value=p)
-            for p in _SELF_PERKS
+            for p in _GIFTABLE_PERKS
         ]
     )
     async def bank_gift(
@@ -1645,6 +1695,12 @@ class EconomyCog(commands.Cog):
         ):
             await interaction.response.send_message(
                 "That perk needs a server feature that isn't enabled here.",
+                ephemeral=True,
+            )
+            return
+        if perk_key == "voice_style" and settings.price_voice_style <= 0:
+            await interaction.response.send_message(
+                "The voice-style lease isn't active here right now.",
                 ephemeral=True,
             )
             return
@@ -1707,17 +1763,22 @@ class EconomyCog(commands.Cog):
             await self._reply(interaction, text, via_confirm=via_confirm)
             return
 
-        await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
+        if perk in _SELF_PERKS:
+            await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
         note = (
             " They can upload one with `/bank role icon`."
             if perk == "role_icon"
             else ""
         )
+        gift_hint = (
+            "Renaming and sizing your voice channel are unlocked."
+            if perk == "voice_style"
+            else "Set it up from /bank shop."
+        )
         await notify_member(
             self.bot, self.ctx.db_path, guild.id, member.id,
             content=(
-                f"{gifter.display_name} gifted you **{label}**! "
-                "Set it up from /bank shop."
+                f"{gifter.display_name} gifted you **{label}**! {gift_hint}"
             ),
         )
         await self._reply(

@@ -2614,3 +2614,72 @@ async def test_panel_shield_button_refuses_at_price_zero(ctx, db):
     assert "aren't for sale" in interaction.response.send_message.await_args.args[0]
     with open_db(db) as conn:
         assert get_streak_shields(conn, GUILD_ID, 500) == 0
+
+
+# ── voice-style lease in the shop (sinks round 3, stage 3) ───────────────────
+
+
+def test_shop_embed_voice_tier_only_when_priced(db):
+    _enable(db)  # price_voice_style defaults to 0 — shipped dark
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    assert not any(f.name == "Voice" for f in embed.fields)
+
+    _enable(db, price_voice_style=30)
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    voice = next(f for f in embed.fields if f.name == "Voice")
+    assert "Voice" in voice.value and "30" in voice.value
+
+
+@pytest.mark.asyncio
+async def test_rent_voice_style_skips_role_projection(ctx, db):
+    _enable(db, price_voice_style=30)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection() as (apply_mock, _r, _n):
+        await cog.do_rent(interaction, _settings(db), _guild_roles(), "voice_style")
+
+    apply_mock.assert_not_awaited()  # no personal role involved
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "Voice style" in msg
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1 and rentals[0]["perk"] == "voice_style"
+    assert rentals[0]["price"] == 30
+
+
+@pytest.mark.asyncio
+async def test_panel_voice_button_refuses_while_dark(ctx, db):
+    from bot_modules.cogs.economy_cog import ShopRentButton
+
+    _enable(db)  # dark: price 0
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _panel_button_interaction(ctx, cog)
+
+    await ShopRentButton("voice_style").callback(interaction)
+
+    assert "isn't active" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_gift_voice_style_dark_refused_priced_allowed(ctx, db):
+    _enable(db)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900), perk="voice_style")
+    assert "isn't active" in interaction.response.send_message.await_args.args[0]
+    assert _live_rentals(db) == []
+
+    _enable(db, price_voice_style=30)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _gift(cog, interaction, _member(member_id=900), perk="voice_style")
+    apply_mock.assert_not_awaited()  # no role projection for a voice lease
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1
+    assert rentals[0]["perk"] == "voice_style"
+    assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900

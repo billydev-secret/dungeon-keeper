@@ -1,6 +1,6 @@
 # Economy sinks, round 3 (perks: gifts, shield, voice lease, emoji, raffle)
 
-**Status:** stages 1–2 built (2026-07-19), stages 3–5 planned · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
+**Status:** stages 1–3 built (2026-07-19), stages 4–5 planned · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
 
 > **Naming note:** planned in a parallel session as "round 2" before
 > `economy-sinks-round-2.md` (rerolls · QOTD sponsorship · burn list · PvP
@@ -126,8 +126,11 @@ row, cap enforcement.
 ## Stage 3 — voice style lease
 
 New perk kind `voice_style` (CHECK already extended in Stage 1),
-`price_voice_style` default 30/week (distinct from the Stage-6
-`price_voice_room` 200 — that remains private *rooms*).
+`price_voice_style` (distinct from the Stage-6 `price_voice_room` 200 —
+that remains private *rooms*). **Built with default 0, not 30:** price 0 IS
+the dark launch (and the per-guild opt-out) — no shop row, no gating, no
+separate toggle; pricing it on the Sinks page (suggested ≈30) is the launch
+switch.
 
 - **Gate:** the Voice Master panel's **rename** and **limit** actions check an
   active `voice_style` entitlement (beneficiary-based, so it's giftable via

@@ -48,6 +48,8 @@ from bot_modules.voice_master.embeds import (
     build_knock_request_embed,
     build_panel_embed as _build_panel_embed,
 )
+from bot_modules.services.economy_rentals_service import entitlements
+from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.voice_master.logic import (
     MemberInfo,
     PANEL_GROUP_ORDER,
@@ -73,6 +75,7 @@ from bot_modules.voice_master.logic import (
     plan_lock_text_grants,
     plan_spectator_grant_cleanup,
     plan_spectator_speaker_grants,
+    style_lease_blocks,
     plan_unhide_view_cleanup,
     plan_unlock_overwrite_cleanup,
     should_save_profile_field,
@@ -787,6 +790,39 @@ async def _setup_spectator_overwrites(
             pass
 
 
+async def _style_gate_blocked(
+    interaction: discord.Interaction, guild_id: int, owner_id: int
+) -> bool:
+    """True (after an ephemeral upsell) when the voice-style lease gates this
+    member out of rename/limit — the single choke point for both the slash
+    commands and the panel actions. The verdict itself is the pure
+    ``style_lease_blocks`` (economy on + price > 0 + not entitled)."""
+    ctx = _ctx_from_interaction(interaction)
+    if ctx is None:
+        return False
+
+    def _check() -> bool:
+        with ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled or settings.price_voice_style <= 0:
+                # Skip the entitlement read entirely while the paywall is dark.
+                return False
+            return style_lease_blocks(
+                economy_enabled=settings.enabled,
+                price=settings.price_voice_style,
+                entitled="voice_style" in entitlements(conn, guild_id, owner_id),
+            )
+
+    if not await asyncio.to_thread(_check):
+        return False
+    await _ephemeral(
+        interaction,
+        "Naming and sizing your channel is a leased perk here — rent "
+        "**Voice style** from `/bank shop` (a friend can gift it too).",
+    )
+    return True
+
+
 async def _apply_rename(
     interaction: discord.Interaction,
     channel: discord.VoiceChannel,
@@ -798,6 +834,8 @@ async def _apply_rename(
     if ctx is None:
         return
     _rename_guild_id = channel.guild.id
+    if await _style_gate_blocked(interaction, _rename_guild_id, row.owner_id):
+        return
 
     def _fetch_blocklist():
         with ctx.open_db() as conn:
@@ -1149,6 +1187,8 @@ async def _apply_limit(
 ) -> None:
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
+        return
+    if await _style_gate_blocked(interaction, channel.guild.id, row.owner_id):
         return
     err = validate_limit_value(new_limit)
     if err is not None:

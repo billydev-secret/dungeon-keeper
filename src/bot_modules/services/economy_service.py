@@ -105,6 +105,12 @@ class EconSettings:
     price_role_name: int = 35
     price_role_icon: int = 75
     price_role_gradient: int = 120
+    # Voice-style lease (sinks round 3, stage 3): Voice Master rename + user
+    # limit become leased while this is > 0 AND the economy is enabled. The
+    # 0 default is the dark launch — controls stay free until an admin prices
+    # the lease on the Sinks page (suggested ≈ 30). Distinct from
+    # price_voice_room (stage-6 private rooms).
+    price_voice_style: int = 0
     price_text_room: int = 200
     price_voice_room: int = 200
     # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);

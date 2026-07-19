@@ -1611,3 +1611,24 @@ def test_build_knock_request_embed_omits_guild_when_not_given():
     )
     assert embed.description is not None
     assert " in **" not in embed.description
+
+
+# ── voice-style lease verdict (economy sinks round 3, stage 3) ─────────
+
+
+def test_style_lease_blocks_table():
+    from bot_modules.voice_master.logic import style_lease_blocks
+
+    cases = [
+        # (economy_enabled, price, entitled) -> blocked
+        ((True, 30, False), True),    # armed paywall, no lease -> blocked
+        ((True, 30, True), False),    # leased (or gifted) -> free
+        ((True, 0, False), False),    # price 0 = shipped dark -> free for all
+        ((False, 30, False), False),  # economy off -> paywall can't arm
+        ((False, 0, False), False),
+        ((True, 1, False), True),     # any positive price arms it
+    ]
+    for (economy_enabled, price, entitled), blocked in cases:
+        assert style_lease_blocks(
+            economy_enabled=economy_enabled, price=price, entitled=entitled
+        ) is blocked, (economy_enabled, price, entitled)

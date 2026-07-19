@@ -93,6 +93,12 @@ from bot_modules.economy.register import (
     collect_register_entries,
 )
 from bot_modules.economy.rentals import GRACE_SECONDS, BillingAction
+from bot_modules.services.voice_master_service import (
+    DEFAULT_NAME_TEMPLATE,
+    get_owned_channel,
+    load_voice_master_config,
+    resolve_channel_name,
+)
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
 )
@@ -752,6 +758,52 @@ async def _dispatch_rental_effects(
                     notice.beneficiary_id,
                 )
 
+    async def _revert_voice_style(member_id: int) -> None:
+        """Best-effort de-style of a live temp channel when the lease ends.
+
+        The saved profile stays stored (dormant); only the LIVE channel is
+        walked back to the template name and default limit. Failures are
+        swallowed — the entitlement is already gone, so the next spawn is
+        clean either way. The rename burns one of Discord's 2-per-10-minutes
+        channel-rename slots; acceptable for a lapse.
+        """
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        def _load():
+            with open_db(db_path) as conn:
+                return (
+                    get_owned_channel(conn, guild_id, member_id),
+                    load_voice_master_config(conn, guild_id),
+                )
+
+        row, cfg = await asyncio.to_thread(_load)
+        if row is None:
+            return
+        channel = guild.get_channel(int(row.channel_id))
+        if not isinstance(channel, discord.VoiceChannel):
+            return
+        member = guild.get_member(member_id)
+        name, _fell_back = resolve_channel_name(
+            saved_name=None,
+            template=cfg.default_name_template or DEFAULT_NAME_TEMPLATE,
+            display_name=member.display_name if member else "member",
+            username=member.name if member else "member",
+            blocklist_patterns=[],
+        )
+        try:
+            await channel.edit(
+                name=name,
+                user_limit=cfg.default_user_limit,
+                reason="Economy: voice-style lease ended",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning(
+                "Economy loop: voice-style revert failed for channel %s.",
+                channel.id,
+            )
+
     for res in outcome.billing:
         if res.action == BillingAction.ENTER_GRACE.value:
             await _safe_dm(
@@ -765,7 +817,14 @@ async def _dispatch_rental_effects(
             BillingAction.CANCEL_PERIOD_END.value,
         ):
             try:
-                await revoke_role_perks(bot, db_path, guild_id, res.beneficiary_id)
+                if res.perk == "voice_style":
+                    # No personal role involved — walk back the live temp
+                    # channel instead of re-projecting role entitlements.
+                    await _revert_voice_style(res.beneficiary_id)
+                else:
+                    await revoke_role_perks(
+                        bot, db_path, guild_id, res.beneficiary_id
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:

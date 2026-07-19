@@ -615,6 +615,22 @@ def select_effective_bitrate(
     return chosen
 
 
+def style_lease_blocks(
+    *, economy_enabled: bool, price: int, entitled: bool
+) -> bool:
+    """Whether the voice-style lease blocks rename/limit for this member.
+
+    Economy sinks round 3, stage 3 (spec §6): rename and user-limit are leased
+    controls, but the paywall arms only while the guild's economy is enabled
+    AND ``price_voice_style`` is above zero — price 0 is the shipped-dark
+    default where every member keeps the controls free, and it doubles as the
+    per-guild opt-out. An armed paywall passes members entitled to the
+    ``voice_style`` perk (beneficiary-based, so a gifted lease counts). The
+    access dial, invite/kick/transfer, and reset are never gated.
+    """
+    return economy_enabled and price > 0 and not entitled
+
+
 def build_skipped_payload(
     *, name_fell_back: bool, missing_target_count: int
 ) -> list[str]:

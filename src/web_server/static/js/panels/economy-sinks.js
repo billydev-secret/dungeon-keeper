@@ -11,6 +11,9 @@ const PRICE_FIELDS = [
     hint: "Flat price when a member uploads their own icon. Curated catalog icons below are priced individually.",
   }],
   ["price_role_gradient", "Role gradient", {}],
+  ["price_voice_style", "Voice style", {
+    hint: "Weekly lease for Voice Master rename + user limit. 0 (the default) keeps those controls free for everyone — setting a price is the launch switch, so announce before flipping it.",
+  }],
   ["price_text_room", "Text room", { hint: "Used by a later stage." }],
   ["price_voice_room", "Voice room", { hint: "Used by a later stage." }],
 ];

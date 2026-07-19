@@ -664,6 +664,7 @@ takes effect on the next cycle, never retroactively.
 | Private voice room | 200 | §8 (Stage 2) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
 | Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
+| Voice style | **0 (dark)**, suggested 30 | Leases Voice Master **rename + user limit** (sinks round 3, stage 3). Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Sinks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon

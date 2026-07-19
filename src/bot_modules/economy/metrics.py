@@ -47,6 +47,7 @@ PRICING_FACTORS: dict[str, float] = {
     "price_role_name": 0.35,
     "price_role_icon": 0.75,
     "price_role_gradient": 1.2,
+    "price_voice_style": 0.3,
     "price_text_room": 2.0,
     "price_voice_room": 2.0,
     # Consumables, not rentals — priced as impulse buys, not considered

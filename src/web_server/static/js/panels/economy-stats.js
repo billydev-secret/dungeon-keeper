@@ -11,6 +11,7 @@ const PERK_LABELS = {
   price_role_icon: "Role icon",
   price_role_gradient: "Role gradient",
   price_streak_shield: "Streak shield",
+  price_voice_style: "Voice style",
   price_text_room: "Text room",
   price_voice_room: "Voice room",
   price_quest_reroll: "Quest reroll",

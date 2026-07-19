@@ -32,6 +32,8 @@ from bot_modules.commands.voice_master_commands import (
     post_panel,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.economy_rentals_service import entitlements
+from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
     ACCESS_LOCKED,
@@ -87,6 +89,7 @@ from bot_modules.voice_master.logic import (
     profile_reset_summary,
     select_effective_bitrate,
     select_effective_limit,
+    style_lease_blocks,
     validate_block_add,
     validate_trust_add,
 )
@@ -728,6 +731,20 @@ class VoiceMasterCog(commands.Cog):
                         )
                         trusted_ids_ = list_trusted(conn, guild_id, member_id)
                         blocked_ids_ = list_blocked(conn, guild_id, member_id)
+                    # Voice-style lease (economy sinks round 3, stage 3): the
+                    # saved name/limit only re-apply while leased — the profile
+                    # stays stored (dormant), so re-renting restores the setup.
+                    econ = load_econ_settings(conn, guild_id)
+                    if style_lease_blocks(
+                        economy_enabled=econ.enabled,
+                        price=econ.price_voice_style,
+                        entitled=(
+                            econ.enabled
+                            and econ.price_voice_style > 0
+                            and "voice_style" in entitlements(conn, guild_id, member_id)
+                        ),
+                    ):
+                        profile_ = replace(profile_, saved_name=None, saved_limit=0)
                     blocklist_ = list_name_blocklist(conn, guild_id)
                     return False, profile_, trusted_ids_, blocked_ids_, blocklist_
 

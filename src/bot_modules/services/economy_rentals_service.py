@@ -57,11 +57,11 @@ if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
 
 # The perks rent_perk will open a rental for. The schema CHECK (migration 091)
-# also lists voice_style/emoji for later stages — they join here only when
-# their price fields and flows ship, so a premature rent can't crash on a
-# missing ``price_<perk>`` setting. A gift is any of these rented with
+# also lists ``emoji`` for stage 4 — it joins here only when its price field
+# and flow ship, so a premature rent can't crash on a missing
+# ``price_<perk>`` setting. A gift is any of these rented with
 # ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 091).
-_PERKS = ("role_color", "role_name", "role_icon", "role_gradient")
+_PERKS = ("role_color", "role_name", "role_icon", "role_gradient", "voice_style")
 
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "

@@ -609,3 +609,118 @@ async def test_apply_invite_with_remember_writes_to_trust_list(ctx, voice_channe
     with open_db(ctx.db_path) as conn:
         trusted = list_trusted(conn, GUILD, OWNER)
     assert NEW_OWNER in trusted
+
+
+# ── voice-style lease gate on rename/limit (sinks round 3, stage 3) ─────────
+
+
+def _arm_style_paywall(ctx, *, price: int = 30, enabled: bool = True) -> None:
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(ctx.db_path) as conn:
+        save_econ_settings(
+            conn, GUILD, {"enabled": enabled, "price_voice_style": price}
+        )
+
+
+def _lease_voice_style(ctx, *, beneficiary: int = OWNER, payer: int | None = None) -> None:
+    with open_db(ctx.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_rentals
+                (guild_id, user_id, perk, state, price, started_at, next_bill_at,
+                 cancel_at_period_end, suspended, beneficiary_id, created_at)
+            VALUES (?, ?, 'voice_style', 'active', 30, 1, 999999, 0, 0, ?, 1)
+            """,
+            (GUILD, payer if payer is not None else beneficiary, beneficiary),
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_rename_blocked_by_armed_paywall(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_rename
+    from bot_modules.services.voice_master_service import get_active_channel
+
+    _arm_style_paywall(ctx)
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    assert row is not None
+
+    await _apply_rename(inter, voice_channel, row, new_name="Game Night")
+
+    voice_channel.edit.assert_not_called()
+    msg = inter.response.send_message.await_args.args[0]
+    assert "leased" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_apply_rename_passes_with_lease(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_rename
+    from bot_modules.services.voice_master_service import get_active_channel
+
+    _arm_style_paywall(ctx)
+    _lease_voice_style(ctx)
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    assert row is not None
+
+    await _apply_rename(inter, voice_channel, row, new_name="Game Night")
+
+    voice_channel.edit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_rename_free_while_dark_or_economy_off(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_rename
+    from bot_modules.services.voice_master_service import get_active_channel
+
+    # Case 1: economy on but price 0 (the shipped-dark default).
+    _arm_style_paywall(ctx, price=0)
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    assert row is not None
+    await _apply_rename(inter, voice_channel, row, new_name="Free Rename")
+    voice_channel.edit.assert_awaited_once()
+
+    # Case 2: priced but the economy itself is disabled.
+    voice_channel.edit.reset_mock()
+    _arm_style_paywall(ctx, price=30, enabled=False)
+    inter = _wire_interaction(ctx)
+    await _apply_rename(inter, voice_channel, row, new_name="Still Free")
+    voice_channel.edit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_limit_blocked_and_passes_with_gifted_lease(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_limit
+    from bot_modules.services.voice_master_service import get_active_channel
+
+    _arm_style_paywall(ctx)
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    assert row is not None
+
+    await _apply_limit(inter, voice_channel, row, new_limit=5)
+    voice_channel.edit.assert_not_called()
+
+    # A gifted lease (someone else pays, OWNER is beneficiary) unblocks.
+    _lease_voice_style(ctx, beneficiary=OWNER, payer=999)
+    inter = _wire_interaction(ctx)
+    await _apply_limit(inter, voice_channel, row, new_limit=5)
+    voice_channel.edit.assert_awaited_once()

@@ -221,3 +221,17 @@ Per-guild and per-member, all in the database:
 - **Guild config** — all `voice_master_*` keys in the shared `config` table.
 
 Admin profile views are logged. Sleep-kick timers, empty-grace timers and claim-prompt timers are in-memory only (the latter two are re-derived on restart by reconciliation; sleep-kick timers are simply lost).
+
+
+## Economy: the voice-style lease (sinks round 3, stage 3)
+
+**Rename and user-limit are leased controls** when the guild's economy is
+enabled AND `price_voice_style` > 0 (Sinks page; the shipped default is 0 =
+everything stays free). The verdict is pure (`logic.style_lease_blocks`) and
+enforced at the `_apply_rename` / `_apply_limit` choke point (covers the slash
+commands and the panel) plus the hub-spawn profile loader — saved name/limit
+stay stored but only re-apply while the member holds the `voice_style`
+rental entitlement (beneficiary-based, so gifts count). A lapse best-effort
+reverts a live temp channel to the template name and default limit. The
+access dial, invite/kick/transfer, and reset are never gated. See
+`docs/economy_spec.md` §6 and `docs/plans/economy-sinks-round-3.md`.

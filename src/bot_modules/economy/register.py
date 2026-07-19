@@ -85,6 +85,7 @@ _PERK_LABELS: dict[str, str] = {
     "role_name": "Custom role name",
     "role_icon": "Role icon",
     "role_gradient": "Gradient role colour",
+    "voice_style": "Voice style",
     "gift_color": "Gifted role colour",
 }
 

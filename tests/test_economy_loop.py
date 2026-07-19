@@ -1170,3 +1170,63 @@ def test_community_hourly_beats_fire_once(db):
     assert len(beats) == 1 and "Final 24h" in beats[0].text
     with open_db(db) as conn:
         assert community_hourly_beats(conn, GUILD, sunday) == []
+
+
+# ── voice-style lapse reverts the live channel (sinks round 3, stage 3) ─
+
+
+async def test_voice_style_revoke_reverts_channel_not_role(db, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import discord as _discord
+
+    _enable(db, price_voice_style=30)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 30)  # one week only — renewal fails into grace, then lapses
+    rid = _rent(db, USER, "voice_style")
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO voice_master_channels "
+            "(channel_id, guild_id, owner_id, created_at) VALUES (?, ?, ?, 1)",
+            (555, GUILD, USER),
+        )
+
+    channel = MagicMock(spec=_discord.VoiceChannel)
+    channel.id = 555
+    channel.edit = AsyncMock()
+    member = MagicMock()
+    member.display_name = "Alice"
+    member.name = "alice"
+    guild = _Guild(GUILD)
+    guild.get_channel = lambda cid: channel if cid == 555 else None
+    guild.get_member = lambda uid: member if uid == USER else None
+    bot = _Bot([guild])
+
+    due = _rental(db, rid)["next_bill_at"]
+    await _rental_tick(bot, db, due)  # -> grace
+    await _rental_tick(bot, db, due + GRACE_SECONDS + 1.0)  # -> revoke
+
+    assert _rental(db, rid)["state"] == "lapsed"
+    # The live channel walked back to the template, no role revoke fired.
+    channel.edit.assert_awaited_once()
+    kwargs = channel.edit.await_args.kwargs
+    assert kwargs["name"] == "Alice's Room"
+    assert rec.revoke_calls == []
+
+
+async def test_voice_style_revoke_without_live_channel_is_quiet(db, monkeypatch):
+    _enable(db, price_voice_style=30)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 30)
+    rid = _rent(db, USER, "voice_style")
+
+    due = _rental(db, rid)["next_bill_at"]
+    await _rental_tick(_rental_bot(), db, due)
+    await _rental_tick(_rental_bot(), db, due + GRACE_SECONDS + 1.0)
+
+    assert _rental(db, rid)["state"] == "lapsed"
+    assert rec.revoke_calls == []  # no role touch, no crash on missing channel

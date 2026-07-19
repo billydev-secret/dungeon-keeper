@@ -87,6 +87,7 @@ class EconomyConfigUpdate(BaseModel):
     price_role_name: int | None = Field(default=None, ge=0)
     price_role_icon: int | None = Field(default=None, ge=0)
     price_role_gradient: int | None = Field(default=None, ge=0)
+    price_voice_style: int | None = Field(default=None, ge=0)
     price_text_room: int | None = Field(default=None, ge=0)
     price_voice_room: int | None = Field(default=None, ge=0)
     price_quest_reroll: int | None = Field(default=None, ge=0)
