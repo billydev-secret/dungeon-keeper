@@ -295,23 +295,33 @@ on their behalf through the ordinary `claim_quest` state machine:
 - **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
   reacts 📝 — a manager still approves the payout.
 
-**Game-role delivery.** When `game_role_id` is set, the completion card
-(both the instant ✅ card and the sign-off 📝 card) is **DMed** to the
-claimant instead of replied in-channel — the reaction still lands on their
-message, but the embed goes via `notify_member` (DM, bank-channel fallback,
-honors the notify mute). Members **without** the role are paid/filed
-**silently** (no reaction, no reply, no DM). With `game_role_id` unset (0,
-the default) the feature is off and every claimant gets the legacy in-channel
-reaction + reply. The bank-channel sign-off card (manager approval) is posted
-regardless of the claimant's role.
+**Notification-role delivery.** `game_role_id` is a **DM preference and
+nothing else** — it gates no channel, no payout and no command. (Until
+2026-07-19 the same role doubled as a Discord onboarding gate hiding the
+economy channels; that coupling is gone, and the role must not be reused for
+channel permissions.) When it is set, the completion card (both the instant ✅
+card and the sign-off 📝 card) is **DMed** to a role-holder instead of replied
+in-channel — the reaction still lands on their message, but the embed goes via
+`notify_member` (DM, bank-channel fallback, honors the notify mute). Members
+**without** the role get the reaction + in-channel reply, exactly as if no role
+were configured; they are never paid silently (an unacknowledged payout reads
+as the quest having failed). With `game_role_id` unset (0, the default) every
+claimant gets the in-channel reaction + reply. The bank-channel sign-off card
+(manager approval) is posted regardless of the claimant's role.
+
+Members toggle the role themselves with the **🔔 Notifications** button on the
+guide panel (§ channel guide panel) — a persistent static-`custom_id` view
+(`econ_guide_notify`) re-registered via `bot.add_view` at cog load. The
+button answers ephemerally with whichever way it flipped; the toggle decision
+is the pure `economy/logic.py::resolve_notify_toggle`.
 
 The same opt-in gate covers the **daily digest DM** (§3.1: streak + payout +
 milestone/grace/reset callouts + quest checklist): it only reaches members who
 took the role (`notify_member(..., require_game_role=True)`); everyone else
-keeps earning silently. With no role configured, nobody has opted in yet, so
-the gate defaults to dropping the notice for everyone rather than notifying
-the whole guild. Transactional notices (rental billing) are *not* gated —
-they target a member by their prior spend, not by opt-in.
+keeps earning with no DMs about it. With no role configured, nobody has opted
+in yet, so the gate defaults to dropping the notice for everyone rather than
+notifying the whole guild. Transactional notices (rental billing) are *not*
+gated — they target a member by their prior spend, not by opt-in.
 
 Trigger quests are **excluded from the `/bank quests` claim select** (state
 `trigger` on the wallet page) — self-claiming without saying the phrase would
@@ -424,9 +434,9 @@ ordinary XP award.
 **Onboarding path (removed 2026-07-18):** an earlier build DMed each new member
 a "starter path" embed of the guild's `onboarding`-flagged quests on join. It
 was deleted — a join-time DM pushes the economy at members who never opted into
-the game role, contradicting the "role set = opt-in, members without it are
-paid silently" model (unlike a member who joins the server, a member who takes
-the role has opted in). No replacement fires on join; members discover the
+the notification role, contradicting the "role set = opt-in to DMs" model
+(unlike a member who joins the server, a member who takes the role has opted
+in). No replacement fires on join; members discover the
 library through `/quests`. The `onboarding` column and `econ_onboarding_dms`
 table remain as inert dead schema (migration 071), no longer read or written,
 and the quest editor's onboarding toggle is gone. Don't reintroduce a join-time
@@ -722,9 +732,10 @@ the member owns and gift rentals where they are the beneficiary.
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
     modals.
 - **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
-  single branded "how it works" embed (a **Joining** field pointing members at the
-  onboarding Channels & Roles screen via the `<id:customize>` mention to grab the
-  economy-game role, then an **Earning** table — aligned what-pays-what rows in
+  single branded "how it works" embed (a **Notifications** field explaining the
+  panel's own 🔔 toggle for the opt-in DM role — it replaced a **Joining** field
+  that pointed at `<id:customize>` back when that role also gated the channels —
+  then an **Earning** table — aligned what-pays-what rows in
   the leaderboard's fixed-width-cell style — and a **Spending** command table,
   with streak/booster/rental fine print collapsed into the footer — all
   templated from `EconSettings`) into a channel. Panel ids

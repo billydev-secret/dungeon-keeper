@@ -12,6 +12,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from bot_modules.services.economy_service import EconSettings
 
 GRACE_WINDOW_DAYS = 7
@@ -92,6 +94,20 @@ def evaluate_login(
     return LoginEval(
         new_streak=1, grace_consumed=False, reset=True, grace_covers_day=None
     )
+
+
+def resolve_notify_toggle(*, role_id: int, member_role_ids: Collection[int]) -> str:
+    """What the guide panel's 🔔 button should do for this member.
+
+    ``"unconfigured"`` when the guild has no opt-in role set (the button is
+    inert rather than silently doing nothing), else ``"remove"`` for a member
+    who already holds it and ``"grant"`` for one who doesn't. The role is a
+    DM preference only — it gates no channel and no payout — so this never
+    consults anything but role membership.
+    """
+    if not role_id:
+        return "unconfigured"
+    return "remove" if role_id in member_role_ids else "grant"
 
 
 def login_amount(streak: int, base: int, bonus_cap: int) -> int:

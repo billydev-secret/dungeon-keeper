@@ -30,11 +30,13 @@ class EconSettings:
     enabled: bool = False
     bank_channel_id: int = 0
     manager_role_id: int = 0
-    # Opt-in "economy game" role. When set, auto-claimed quest completions
-    # (trigger-word / photo-reply / media-post) DM the claimant their card
-    # instead of replying in-channel; members without the role are paid
-    # silently. 0 (default) = feature off: everyone gets the legacy
-    # in-channel reaction + reply.
+    # Opt-in economy-notifications role, toggled by the guide panel's 🔔
+    # button. It is a **DM preference only** — it gates no channel, no payout
+    # and no command. When set, auto-claimed quest completions (trigger-word /
+    # photo-reply / media-post) DM the claimant their card instead of replying
+    # in-channel, and recurring engagement notices (streaks, milestones) reach
+    # holders only; everyone else still gets the in-channel reaction + reply.
+    # 0 (default) = nobody has opted in, so the recurring DMs go to nobody.
     game_role_id: int = 0
     # Role pinged when a mod posts a question of the day. 0 (default) = no
     # ping, preserving the original silent post. The role must be mentionable
