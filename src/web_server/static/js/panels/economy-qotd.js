@@ -70,7 +70,9 @@ function render(container, cfg, roles) {
     e.preventDefault();
     try {
       await apiPut("/api/economy/config", {
-        qotd_ping_role_id: parseInt(pingRolePicker.getValue() || "0", 10),
+        // String, not parseInt: a 19-digit snowflake loses its low digits as a
+        // JS number. Pydantic coerces it back to int losslessly.
+        qotd_ping_role_id: pingRolePicker.getValue() || "0",
       });
       showStatus(status, true);
     } catch (err) {

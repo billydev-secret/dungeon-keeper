@@ -94,6 +94,23 @@ class EconomyConfigUpdate(BaseModel):
     quest_reroll_daily_cap: int | None = Field(default=None, ge=0)
 
 
+def _stringify_snowflakes(cfg: dict) -> dict:
+    """Emit every ``*_id`` as a JSON string.
+
+    Discord snowflakes exceed 2**53, so a bare JSON number loses its low digits
+    the moment the browser parses it: ``JSON.parse("1526051848518373608")``
+    yields ``1526051848518373600``. The panel would then write that rounded
+    value straight back on the next save, silently repointing the setting at a
+    role or channel that does not exist — which is exactly how this guild's
+    game role, manager role and bank channel were lost. Strings survive the
+    round trip, and every consumer already reads these via ``String(cfg.x)``.
+    """
+    return {
+        key: (str(val) if key.endswith("_id") and isinstance(val, int) else val)
+        for key, val in cfg.items()
+    }
+
+
 @router.get("/economy/config")
 async def get_economy_config(
     request: Request,
@@ -104,7 +121,7 @@ async def get_economy_config(
 
     def _q():
         with ctx.open_db() as conn:
-            return asdict(load_econ_settings(conn, guild_id))
+            return _stringify_snowflakes(asdict(load_econ_settings(conn, guild_id)))
 
     return await run_query(_q)
 

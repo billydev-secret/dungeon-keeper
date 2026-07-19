@@ -186,12 +186,14 @@ function render(container, cfg, channels, roles, members) {
     const payload = {
       enabled: form.querySelector("[name=enabled]").checked,
       transfers_enabled: form.querySelector("[name=transfers_enabled]").checked,
-      bank_channel_id: parseInt(channelPicker.getValue() || "0", 10),
-      register_channel_id: parseInt(registerChannelPicker.getValue() || "0", 10),
-      manager_role_id: parseInt(rolePicker.getValue() || "0", 10),
-      game_role_id: parseInt(gameRolePicker.getValue() || "0", 10),
-      // Sent as a string: a snowflake overflows JS number precision, and
-      // pydantic coerces the string to int losslessly server-side.
+      // All snowflakes go as strings: parseInt on a 19-digit id silently
+      // rounds it (parseInt("1526051848518373608") === 1526051848518373600),
+      // which repoints the setting at a role/channel that doesn't exist.
+      // Pydantic coerces the string to int losslessly server-side.
+      bank_channel_id: channelPicker.getValue() || "0",
+      register_channel_id: registerChannelPicker.getValue() || "0",
+      manager_role_id: rolePicker.getValue() || "0",
+      game_role_id: gameRolePicker.getValue() || "0",
       community_host_user_id: hostPicker.getValue() || "0",
     };
     for (const key of numKeys) {
