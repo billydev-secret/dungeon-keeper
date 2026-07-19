@@ -9,7 +9,14 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Quote cards: bump banner text size  (this commit)
+### Health: exclude Voice Master self-service from mod workload  (this commit)
+
+- [ ] Have a mod create/claim/rename their own Voice Master channel, then
+      check the dashboard's Moderator Workload tile → those actions no
+      longer inflate that mod's action count or appear in the action-type
+      breakdown.
+
+### Quote cards: bump banner text size  (e56e1a1)
 
 - [ ] Trigger a QOTD banner and a `/quote banner` card → body text reads
       noticeably larger than before; check a long quote on the with-avatar
