@@ -132,7 +132,19 @@ These labels are the primary long-term output of the system. As confirmed and di
 
 ## LLM lifetime
 
-Model loading is asynchronous and singleton: at most one model is loaded at a time. Phases are `idle → downloading → loading → ready` (or `error`). The model file is downloaded from HuggingFace on first start and cached locally. Inference is serialised — concurrent calls queue rather than race. Rules Watch guard calls share this queue with other AI commands.
+Two backends, selected by whether `LLAMA_SERVER_URL` is set.
+
+**In-process** (default). Model loading is asynchronous and singleton: at most one model is loaded at a time. Phases are `idle → downloading → loading → ready` (or `error`). The model file is downloaded from HuggingFace on first start and cached locally. Inference is serialised through a single worker thread — concurrent calls queue rather than race, and Rules Watch guard calls share that queue with `/ai` commands, so a slow manual review blocks passive monitoring.
+
+**Remote.** `LLAMA_SERVER_URL` points at a llama.cpp `llama-server` on another machine — typically one with a GPU. Nothing is downloaded or loaded locally; the phase goes straight to `ready`. Requests use the server's OpenAI-compatible `POST /v1/chat/completions`. Concurrency is the server's business (continuous batching), so guard calls no longer queue behind `/ai` commands. `status()` reports which backend is active.
+
+### Endpoint privacy gate
+
+The guard model sees raw conversation windows, which is exactly the content the local-inference design exists to keep off third-party services. So the remote backend **only accepts an endpoint it can prove is local**: loopback, RFC1918 private, link-local, or unique-local v6 addresses; `localhost`; or a hostname ending in `.local` / `.lan` / `.home` / `.internal` / `.localdomain`. A bare hostname cannot be classified without a DNS lookup and is refused rather than guessed at.
+
+A non-private URL is **refused with an error log and the bot falls back to in-process inference** — it does not silently send content off-network. `LLAMA_SERVER_ALLOW_PUBLIC=1` overrides this deliberately; unrecognised values for that flag fail closed.
+
+The `model` argument threaded through `chat()` remains ignored on both backends and is **never forwarded to the remote server**. Some guild rows still carry hosted model IDs from an abandoned cloud switch; honouring them would route moderation content off-box.
 
 ---
 
@@ -201,6 +213,16 @@ Global-only (host-level, not per-guild):
 - **HuggingFace repo + filename** — used to download the model on first start if local file is missing.
 
 Runtime tuning (context length, GPU layers, threads, batch size) is set once via environment variables — not user-tunable through the dashboard.
+
+Backend selection is deployment topology, so it lives in the environment alongside `LAVALINK_HOST` rather than on the dashboard:
+
+| Variable | Meaning |
+|---|---|
+| `LLAMA_SERVER_URL` | Base URL of a llama.cpp `llama-server`, e.g. `http://192.168.1.20:8080`. Unset ⇒ in-process. |
+| `LLAMA_SERVER_TIMEOUT` | Per-request timeout in seconds (default 120). |
+| `LLAMA_SERVER_ALLOW_PUBLIC` | `1` to permit a non-private endpoint. Off by default; see the privacy gate above. |
+
+Note that `LLAMA_N_CTX` must accommodate the largest prompt any command can build. `/ai scan` accepts up to 200 messages at 400 characters each (~20k tokens), which is what the current 32768 setting is sized for — lowering it without also lowering that ceiling will truncate or fail those calls. On the remote backend this is the *server's* `-c` flag, not the bot's env var.
 
 ---
 
