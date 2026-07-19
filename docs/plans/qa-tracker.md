@@ -197,8 +197,19 @@ re-render the Discord card best-effort through the in-process `ctx.bot`
 (archive strips the buttons); a card failure never rolls back the DB. Route
 tests in `tests/web/test_qa_routes.py`.
 
-**Stage 4 — polish (optional).** Archive sweep for long-verified cards;
-revisit bounty idea with real usage data.
+**Stage 4 — polish.** ✅ Archive sweep shipped
+(2026-07-18): `qa_archive_sweep_loop` (`qa_cog.py`, registered as a startup
+task) polls every 60s for tests `status='passed'` whose `verified_at` is 10+
+minutes old (`qa_service.list_stale_passed`) and deletes the card from the
+channel — the audit trail (verdicts, payouts) stays in the DB, only the
+Discord message goes. Best-effort on the Discord side: a message someone
+already deleted, or a channel the bot can no longer see, still gets marked
+`archived` (nothing left to clean up); a transient Discord error leaves the
+row `passed` for the next sweep to retry. Reuses the existing terminal
+`archived` status (same one the dashboard's manual Archive sets) — a swept
+card's jump-link in the board will 404 since the message is gone, unlike a
+manually-archived card which keeps its (dimmed) message. Bounty idea still
+open, revisit with real usage data.
 
 ## Addendum — `docs/TESTING_QUEUE.md` retired (2026-07-18)
 

@@ -12,6 +12,7 @@ from bot_modules.cogs.qa_cog import (
     _QABlockedButton,
     _QAFailButton,
     _QAPassButton,
+    _sweep_stale_card,
 )
 from bot_modules.core.db_utils import open_db
 from bot_modules.qa.cards import STATUS_COLORS
@@ -19,6 +20,7 @@ from bot_modules.services.economy_service import get_balance
 from bot_modules.services.qa_service import (
     archive_test,
     create_test,
+    get_test,
     save_qa_settings,
 )
 from migrations import apply_migrations_sync
@@ -327,6 +329,90 @@ async def test_modal_submit_regates_disabled(ctx, db):
     assert _verdict_rows(db, tid) == []
 
 
+# ── archive sweep ───────────────────────────────────────────────────────────
+
+
+class _SweepChannel:
+    """Just enough TextChannel for the sweep; isinstance-compatible."""
+
+    __class__ = discord.TextChannel  # type: ignore[assignment]
+
+    def __init__(self, *, fetch_exc: Exception | None = None) -> None:
+        self.message = AsyncMock(spec=discord.Message)
+        if fetch_exc is not None:
+            self.fetch_message = AsyncMock(side_effect=fetch_exc)
+        else:
+            self.fetch_message = AsyncMock(return_value=self.message)
+
+
+def _passed_test(db, *, channel_id: int | None = 555, message_id: int | None = 999) -> int:
+    tid = _mk_test(db)
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE qa_tests SET status='passed', verified_at='2000-01-01T00:00:00+00:00', "
+            "channel_id=?, message_id=? WHERE id=?",
+            (channel_id, message_id, tid),
+        )
+    return tid
+
+
+def _test_dict(db, tid: int) -> dict:
+    with open_db(db) as conn:
+        row = get_test(conn, tid)
+        assert row is not None
+        return dict(row)
+
+
+@pytest.mark.asyncio
+async def test_sweep_deletes_message_and_archives(db):
+    tid = _passed_test(db)
+    channel = _SweepChannel()
+    bot = SimpleNamespace(get_channel=lambda cid: channel if cid == 555 else None)
+
+    await _sweep_stale_card(bot, db, _test_dict(db, tid))
+
+    channel.fetch_message.assert_awaited_once_with(999)
+    channel.message.delete.assert_awaited_once()
+    assert _test_dict(db, tid)["status"] == "archived"
+
+
+@pytest.mark.asyncio
+async def test_sweep_archives_when_message_already_gone(db):
+    tid = _passed_test(db)
+    channel = _SweepChannel(
+        fetch_exc=discord.NotFound(SimpleNamespace(status=404, reason="gone"), "gone")
+    )
+    bot = SimpleNamespace(get_channel=lambda cid: channel)
+
+    await _sweep_stale_card(bot, db, _test_dict(db, tid))
+
+    assert _test_dict(db, tid)["status"] == "archived"
+
+
+@pytest.mark.asyncio
+async def test_sweep_archives_when_channel_unreachable(db):
+    tid = _passed_test(db)
+    bot = SimpleNamespace(get_channel=lambda cid: None)
+
+    await _sweep_stale_card(bot, db, _test_dict(db, tid))
+
+    assert _test_dict(db, tid)["status"] == "archived"
+
+
+@pytest.mark.asyncio
+async def test_sweep_leaves_passed_on_transient_discord_error(db):
+    tid = _passed_test(db)
+    channel = _SweepChannel(
+        fetch_exc=discord.HTTPException(SimpleNamespace(status=500, reason="err"), "boom")
+    )
+    bot = SimpleNamespace(get_channel=lambda cid: channel)
+
+    await _sweep_stale_card(bot, db, _test_dict(db, tid))
+
+    # Retried on the next pass rather than archived out from under a hiccup.
+    assert _test_dict(db, tid)["status"] == "passed"
+
+
 # ── wiring ────────────────────────────────────────────────────────────────────
 
 
@@ -338,6 +424,16 @@ async def test_cog_load_registers_dynamic_items(ctx):
     bot.add_dynamic_items.assert_called_once_with(
         _QAPassButton, _QAFailButton, _QABlockedButton
     )
+
+
+@pytest.mark.asyncio
+async def test_cog_load_registers_archive_sweep_task(ctx):
+    bot = MagicMock()
+    bot.startup_task_factories = []
+    cog = QACog(bot, ctx)
+    await cog.cog_load()
+    assert len(bot.startup_task_factories) == 1
+    assert callable(bot.startup_task_factories[0])
 
 
 def test_extension_registered_in_entry_point():
