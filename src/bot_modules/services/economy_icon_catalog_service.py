@@ -183,17 +183,17 @@ def delete_catalog_icon(
 
 def catalog_price_range(
     conn: sqlite3.Connection, guild_id: int
-) -> tuple[int, int] | None:
-    """(min, max) weekly price across a guild's ENABLED icons, or None if empty.
+) -> tuple[int, int, int] | None:
+    """(min price, max price, count) over ENABLED icons, or None if empty.
 
-    Feeds the shop's "role icon" row so it can show a price range instead of a
-    single flat price when a catalog is configured.
+    Feeds the shop's "role icon" row so it can show a price span and how many
+    icons back it, instead of a single flat price, when a catalog is set up.
     """
     row = conn.execute(
-        "SELECT MIN(price) AS lo, MAX(price) AS hi FROM econ_icon_catalog "
-        "WHERE guild_id = ? AND enabled = 1",
+        "SELECT MIN(price) AS lo, MAX(price) AS hi, COUNT(*) AS n "
+        "FROM econ_icon_catalog WHERE guild_id = ? AND enabled = 1",
         (guild_id,),
     ).fetchone()
     if row is None or row["lo"] is None:
         return None
-    return int(row["lo"]), int(row["hi"])
+    return int(row["lo"]), int(row["hi"]), int(row["n"])
