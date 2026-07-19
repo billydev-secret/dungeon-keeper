@@ -37,6 +37,11 @@ every currency movement, dashboard grants included, with nothing to forget.
 The tick also refreshes each guild's **leaderboard panel** in place
 (:func:`run_guild_leaderboard` — the ``/bank post-leaderboard`` embed; a 404
 on the stored message clears its ids so a deleted panel stops the refresh).
+Between ticks, :func:`leaderboard_live_loop` (a separate startup task) gives
+the panel its near-real-time cadence: economy writes mark their guild dirty
+via :mod:`bot_modules.economy.live_signal`, and the live loop repaints each
+dirty panel at most once per :data:`LIVE_MIN_INTERVAL` seconds — the hourly
+pass stays as the restart/rollback backstop.
 
 The same tick also drives the **rental billing pass** (spec §6) per enabled
 guild, after the day roll. Each pass has three phases, mirroring the loop's
@@ -72,7 +77,7 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
-from bot_modules.economy import logic, quests
+from bot_modules.economy import live_signal, logic, quests
 from bot_modules.economy.leaderboard import (
     build_leaderboard_embed,
     collect_leaderboard_data,
@@ -1070,3 +1075,50 @@ async def economy_loop(bot: discord.Client, db_path: Path) -> None:
         sleep_secs = _seconds_until_next_hour()
         await asyncio.sleep(sleep_secs)
         await run_tick(bot, db_path, time.time())
+
+
+# ── live leaderboard refresh ───────────────────────────────────────────
+
+
+# How often the live loop looks for dirty guilds, and the per-guild floor
+# between panel edits. 120 s keeps a busy hour to ≤30 edits per guild —
+# far inside Discord's edit limits — while a burst of quest activity still
+# lands on the panel within a couple of minutes.
+LIVE_POLL_SECONDS = 20.0
+LIVE_MIN_INTERVAL = 120.0
+
+
+async def run_live_tick(
+    bot: discord.Client, db_path: Path, now_ts: float
+) -> None:
+    """Refresh the leaderboard panel of every guild whose debounce is up.
+
+    Economy writes (:func:`economy_service.apply_credit`, community bumps,
+    dashboard progress edits) mark their guild dirty in
+    :mod:`bot_modules.economy.live_signal`; this consumes the marks.
+    Guilds without a posted panel exit :func:`run_guild_leaderboard` after
+    one settings read, and per-guild failures never stall the rest.
+    """
+    for guild_id in live_signal.take_ready(now_ts, LIVE_MIN_INTERVAL):
+        try:
+            await run_guild_leaderboard(bot, db_path, guild_id, now_ts)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Live leaderboard refresh failed for guild %s.", guild_id
+            )
+
+
+async def leaderboard_live_loop(bot: discord.Client, db_path: Path) -> None:
+    """The near-real-time companion to the hourly tick (live leaderboard).
+
+    Cheap when idle (an empty-set check every ``LIVE_POLL_SECONDS``); the
+    hourly :func:`run_guild_leaderboard` pass remains the backstop for
+    restarts, rollbacks, and marks lost in-process.
+    """
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        await asyncio.sleep(LIVE_POLL_SECONDS)
+        await run_live_tick(bot, db_path, time.time())

@@ -73,7 +73,8 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
 | [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–3 built (schema/service, cog, poster cards, dashboard); stage 4 polish optional |
-| [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, board add-ons | Planned — nothing built yet |
+| [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live leaderboard panel (today's pulse, pace, anonymous feed, event-driven debounced refresh) | Built 2026-07-18; awaiting live testing |
+| [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, dynamic targets, board add-ons | Built 2026-07-18 (all stages); awaiting live testing + post-restart seed script |
 | [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |
 | [survey_spec.md](survey_spec.md) | Anonymous Survey (launcher button, DM walkthrough, de-identified responses) | **Zero code** — no cog, no launcher, no DM session logic anywhere in `src/`. Pure design doc; not started. |
 | [TGM-Dashboard-Concept-Spec.md](TGM-Dashboard-Concept-Spec.md) | Web dashboard concept | |

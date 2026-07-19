@@ -118,6 +118,48 @@ SEEDS: list[tuple[str, str, str, int, int, int, str]] = [
     ),
 ]
 
+# Social-round seeds: (title, qtype, kind, reward, xp, tmin, tmax, desc).
+# Bands, not fixed targets — the dynamic-target machinery sizes each
+# member's number from their own trailing pace, clamped to these.
+SOCIAL_SEEDS: list[tuple[str, str, str, int, int, int, int, str]] = [
+    (
+        "Social Butterfly", "weekly", "conversed", 45, 20, 3, 15,
+        "Reply to different members this week — every new person counts once.",
+    ),
+    (
+        "Magnetic", "weekly", "replied_to", 40, 20, 2, 12,
+        "Say things people answer — have different members reply to you.",
+    ),
+    (
+        "Spread the Love", "daily", "reacted_to_member", 12, 5, 2, 8,
+        "React to messages from different members today.",
+    ),
+    (
+        "Tour the Server", "daily", "channel_hop", 12, 5, 2, 6,
+        "Talk in different channels today — the server's bigger than one room.",
+    ),
+    (
+        "Regular", "weekly", "active_day", 50, 25, 3, 6,
+        "Show up and say something on different days this week.",
+    ),
+    (
+        "Voice Circle", "weekly", "voice_partner", 45, 20, 2, 10,
+        "Share voice time with different members this week.",
+    ),
+    (
+        "Deep Diver", "weekly", "thread_deep", 35, 15, 1, 3,
+        "Be part of threads that hit 20+ messages.",
+    ),
+    (
+        "Welcome Wagon", "monthly", "welcome", 90, 45, 1, 5,
+        "Reply to brand-new members (joined within a week) — make them stay.",
+    ),
+    (
+        "Spark", "weekly", "conversation_starter", 50, 25, 1, 3,
+        "Post something that pulls 3+ different people into replying.",
+    ),
+]
+
 
 def backfill(conn: sqlite3.Connection, now: float, dry: bool) -> int:
     cutoff = now - BACKFILL_DAYS * 86400
@@ -156,14 +198,21 @@ def backfill(conn: sqlite3.Connection, now: float, dry: bool) -> int:
 
 def seed(conn: sqlite3.Connection, guild_id: int, dry: bool) -> list[str]:
     created: list[str] = []
-    for title, qtype, kind, reward, xp, target, desc in SEEDS:
+    rows = [
+        (t, q, k, r, x, tc, 0, 0, d) for t, q, k, r, x, tc, d in SEEDS
+    ] + [
+        (t, q, k, r, x, 1, lo, hi, d)
+        for t, q, k, r, x, lo, hi, d in SOCIAL_SEEDS
+    ]
+    for title, qtype, kind, reward, xp, target, tmin, tmax, desc in rows:
         exists = conn.execute(
             "SELECT 1 FROM econ_quests WHERE guild_id = ? AND title = ?",
             (guild_id, title),
         ).fetchone()
         if exists:
             continue
-        created.append(f"{title} [{qtype}/{kind}] {reward}c/{xp}xp")
+        band = f" band {tmin}-{tmax}" if tmax else ""
+        created.append(f"{title} [{qtype}/{kind}] {reward}c/{xp}xp{band}")
         if dry:
             continue
         qid = create_quest(
@@ -182,6 +231,8 @@ def seed(conn: sqlite3.Connection, guild_id: int, dry: bool) -> list[str]:
             created_by=None,
             trigger_kind=kind,
             target_count=target,
+            target_min=tmin,
+            target_max=tmax,
             reward_xp=xp,
         )
         set_quest_active(conn, guild_id, qid, True)

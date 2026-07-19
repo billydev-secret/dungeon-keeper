@@ -28,7 +28,7 @@ import logging
 
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.xp_system import apply_xp_award, load_xp_settings
-from bot_modules.economy import quests
+from bot_modules.economy import live_signal, quests
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -807,6 +807,13 @@ def prune_kind_activity(
         "DELETE FROM econ_kind_activity WHERE guild_id = ? AND local_day < ?",
         (guild_id, cutoff),
     )
+    # Same hygiene pass: conversation_starter's reply-count rows only need a
+    # couple of weeks — a message drawing its third reply later than that is
+    # conversation necromancy we're happy to miss.
+    conn.execute(
+        "DELETE FROM econ_msg_replies WHERE guild_id = ? AND created_at < ?",
+        (guild_id, time.time() - 14 * 86400),
+    )
 
 
 def fire_trigger_inline(
@@ -1003,6 +1010,8 @@ def _bump_community_kind(
             """,
             (now, qid, target),
         )
+        # Progress moved without a payout — still worth a live-panel repaint.
+        live_signal.mark_dirty(guild_id)
 
 
 def _bump_progress(
@@ -1427,6 +1436,11 @@ def set_community_progress(
         """,
         (quest_id, current, completed_at),
     )
+    owner = conn.execute(
+        "SELECT guild_id FROM econ_quests WHERE id = ?", (quest_id,)
+    ).fetchone()
+    if owner is not None:
+        live_signal.mark_dirty(int(owner["guild_id"]))
     return crossing
 
 

@@ -82,6 +82,15 @@ TRIGGER_KINDS: dict[str, str] = {
     "birthday_set": "Set your birthday",
     "level_up": "Reach a new level",
     "ama_answer": "Answer a question in your AMA",
+    "conversed": "Reply to different members",
+    "replied_to": "Have different members reply to you",
+    "reacted_to_member": "React to different members' messages",
+    "channel_hop": "Talk in different channels",
+    "active_day": "Be active on different days",
+    "voice_partner": "Share voice with different members",
+    "thread_deep": "Be part of a deep thread",
+    "welcome": "Welcome a new member",
+    "conversation_starter": "Start a conversation that takes off",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -123,6 +132,15 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "birthday_set": "Saving your birthday. Event cadence: once ever — the bio_set pattern.",
     "level_up": "Reaching a new XP level. Event cadence: once per level reached.",
     "ama_answer": "Answering a question as the hot seat in your own AMA. Event cadence: once per question answered — use daily/weekly with a target count.",
+    "conversed": "Replying to another member's message — each occurrence is that MEMBER, so a counted quest reads 'talk with N different people' (repeat replies to the same person never re-count in a period). Replies only, never bare mentions (mention spam is free; a reply is a real directed interaction).",
+    "replied_to": "Someone else replying to YOUR message — the passive twin of conversed; occurrences are the repliers, so counted = 'have N different people reply to you'.",
+    "reacted_to_member": "Reacting to a message by someone you haven't reacted to yet this period — occurrences are the message AUTHORS, so counted = 'spread reactions across N different members'. Inherits the reaction XP farm guard.",
+    "channel_hop": "Posting in a channel (threads count toward their parent) — occurrences are the CHANNELS, so counted = 'talk in N different channels'. Gets members out of their one home channel.",
+    "active_day": "Your first message of a guild-local day — occurrences are the DAYS, so a weekly counted quest reads 'show up any N days this week'. The gentle streak: skipping a day costs nothing but the day.",
+    "voice_partner": "Sharing a voice channel with another member while you both earn voice XP (anti-idle rules apply) — occurrences are the PARTNERS, so counted = 'hang out in voice with N different people'.",
+    "thread_deep": "Posting in a thread that has reached 20+ messages — once per thread. Rewards sustaining a deep conversation; everyone who posts after the crossing gets their credit.",
+    "welcome": "Replying to a member who joined within the last 7 days — occurrences are the newcomers, so counted = 'welcome N new faces'. The retention quest.",
+    "conversation_starter": "Your message drawing replies from 3+ distinct members (self-replies and bots never count) — once per message, detected at reply ingest. Event cadence: once per qualifying message — use daily/weekly with a target count.",
 }
 
 
@@ -159,6 +177,18 @@ def community_auto_target(four_week_total: int) -> int:
     weekly_typical = four_week_total / 4
     return max(10, round(weekly_typical / 0.75))
 
+
+# thread_deep fires for posts in threads at or past this message count —
+# deep enough to feel earned, common enough to happen weekly (2026-07-18
+# choice: 20).
+THREAD_DEEP_MIN = 20
+
+# welcome fires for replies to members who joined within this window.
+WELCOME_WINDOW_SECONDS = 7 * 86400
+
+# conversation_starter fires when a message has drawn replies from this many
+# distinct humans.
+CONVERSATION_STARTER_REPLIERS = 3
 
 # Personal dynamic-target stretch factor: a member's counted target is
 # their own trailing-period median × this, clamped to the author's band —

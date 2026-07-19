@@ -12,6 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.commands.jail_commands import check_jail_rejoin
+from bot_modules.economy import quests as quest_rules
 from bot_modules.core.post_monitoring import enforce_spoiler_requirement
 from bot_modules.services.auto_delete_service import (
     remove_tracked_auto_delete_message,
@@ -742,6 +743,37 @@ class EventsCog(commands.Cog):
             isinstance(resolved, discord.Message) and resolved.author.id == user_id
         )
 
+        # Social-kind context, resolved on-loop (Discord objects don't cross
+        # into the DB thread). Partner facts only exist when the reference
+        # resolved to a REAL other human's message — unresolvable references
+        # still count for reply_sent, but partner kinds need the partner.
+        partner_id: int | None = None
+        partner_booster = False
+        partner_is_newcomer = False
+        if (
+            isinstance(resolved, discord.Message)
+            and resolved.author.id != user_id
+            and not resolved.author.bot
+        ):
+            partner_id = resolved.author.id
+            partner = message.guild.get_member(partner_id)
+            if partner is not None:
+                partner_booster = partner.premium_since is not None
+                joined = partner.joined_at
+                partner_is_newcomer = joined is not None and (
+                    time.time() - joined.timestamp()
+                    < quest_rules.WELCOME_WINDOW_SECONDS
+                )
+        # Thread depth check: message_count is on the thread object at
+        # ingest — approximate per Discord, exact enough for a threshold.
+        thread_deep_id: int | None = None
+        if (
+            isinstance(message.channel, discord.Thread)
+            and (message.channel.message_count or 0) >= quest_rules.THREAD_DEEP_MIN
+        ):
+            thread_deep_id = message.channel.id
+        hop_channel_id = parent_id or channel_id
+
         def _econ_work() -> tuple[EconSettings, LoginOutcome, int] | None:
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
@@ -796,6 +828,66 @@ class EventsCog(commands.Cog):
                         local_day=today, occurrence=str(message_id),
                         booster=booster, channel_ids=channel_ids,
                     )
+                # Social kinds (quest-variety social round). Entity-keyed
+                # occurrences make the counted-quest marks table count
+                # DISTINCT channels/days/partners for free.
+                fire_trigger_quests(
+                    conn, settings, guild_id, "channel_hop", user_id,
+                    local_day=today, occurrence=str(hop_channel_id),
+                    booster=booster, channel_ids=channel_ids,
+                )
+                fire_trigger_quests(
+                    conn, settings, guild_id, "active_day", user_id,
+                    local_day=today, occurrence=today, booster=booster,
+                )
+                if thread_deep_id is not None:
+                    fire_trigger_quests(
+                        conn, settings, guild_id, "thread_deep", user_id,
+                        local_day=today, occurrence=str(thread_deep_id),
+                        booster=booster, channel_ids=channel_ids,
+                    )
+                if partner_id is not None:
+                    fire_trigger_quests(
+                        conn, settings, guild_id, "conversed", user_id,
+                        local_day=today, occurrence=str(partner_id),
+                        booster=booster, channel_ids=channel_ids,
+                    )
+                    fire_trigger_quests(
+                        conn, settings, guild_id, "replied_to", partner_id,
+                        local_day=today, occurrence=str(user_id),
+                        booster=partner_booster, channel_ids=channel_ids,
+                    )
+                    if partner_is_newcomer:
+                        fire_trigger_quests(
+                            conn, settings, guild_id, "welcome", user_id,
+                            local_day=today, occurrence=str(partner_id),
+                            booster=booster, channel_ids=channel_ids,
+                        )
+                    # conversation_starter: record this distinct replier and
+                    # fire for the target author exactly on the crossing.
+                    target_msg_id = int(resolved.id)  # type: ignore[union-attr]
+                    inserted = conn.execute(
+                        "INSERT OR IGNORE INTO econ_msg_replies "
+                        "(guild_id, target_message_id, target_author_id, "
+                        "replier_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (guild_id, target_msg_id, partner_id, user_id,
+                         time.time()),
+                    )
+                    if (inserted.rowcount or 0) > 0:
+                        n = conn.execute(
+                            "SELECT COUNT(*) AS n FROM econ_msg_replies "
+                            "WHERE guild_id = ? AND target_message_id = ?",
+                            (guild_id, target_msg_id),
+                        ).fetchone()
+                        if int(n["n"]) == quest_rules.CONVERSATION_STARTER_REPLIERS:
+                            fire_trigger_quests(
+                                conn, settings, guild_id,
+                                "conversation_starter", partner_id,
+                                local_day=today,
+                                occurrence=str(target_msg_id),
+                                booster=partner_booster,
+                                channel_ids=channel_ids,
+                            )
                 if outcome is None:
                     return None
                 return settings, outcome, prior_streak
@@ -949,6 +1041,14 @@ class EventsCog(commands.Cog):
                 and reactor.premium_since is not None
             )
 
+            # Author of the reacted-to message, for the distinct-partner
+            # kind (the XP guard already excluded self-reacts and bots).
+            _author_id = (
+                message.author.id
+                if message is not None and not message.author.bot
+                else None
+            )
+
             def _fire_reaction_quests():
                 with self.ctx.open_db() as conn:
                     fire_trigger_inline(
@@ -960,6 +1060,18 @@ class EventsCog(commands.Cog):
                         booster=_booster,
                         channel_ids=_channel_ids,
                     )
+                    if _author_id is not None and _author_id != reactor.id:
+                        # Occurrence = the AUTHOR: a counted quest reads
+                        # "react to N different members".
+                        fire_trigger_inline(
+                            conn,
+                            _guild_id,
+                            "reacted_to_member",
+                            reactor.id,
+                            occurrence=str(_author_id),
+                            booster=_booster,
+                            channel_ids=_channel_ids,
+                        )
 
             await asyncio.to_thread(_fire_reaction_quests)
 
