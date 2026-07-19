@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: auto-tracking community weeklies  (stage 3, hash stamped on merge)
+### Economy: auto-tracking community weeklies  (3609f84)
 
 Needs at least one community quest WITH a game trigger in the library
 (Quests page → type Community → completion "game trigger" — note the target
