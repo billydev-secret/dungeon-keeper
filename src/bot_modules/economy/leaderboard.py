@@ -190,10 +190,12 @@ def build_leaderboard_embed(
 
     if data.quests:
         quest_lines = []
+        label_width = max(len(v) for v in _QTYPE_LABELS.values())
         for q in data.quests[:_MAX_QUEST_LINES]:
             xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
+            label = _QTYPE_LABELS[q.qtype].ljust(label_width)
             quest_lines.append(
-                f"`{_QTYPE_LABELS[q.qtype]}` **{q.title}** — {emoji} {q.reward:,}{xp}"
+                f"`{label}` **{q.title}** — {emoji} {q.reward:,}{xp}"
             )
         hidden = len(data.quests) - _MAX_QUEST_LINES
         if hidden > 0:

@@ -161,7 +161,7 @@ def test_embed_quest_board_lines_and_overflow():
     )
     board = next(f.value for f in embed.fields if f.name == "Quest board")
     assert board is not None
-    assert "`Daily` **Quest 0**" in board and "+⭐10xp" in board
+    assert "`Daily  ` **Quest 0**" in board and "+⭐10xp" in board
     assert "…and 2 more" in board
 
 

@@ -9,6 +9,12 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy: square up the quest board's cadence tags  (this commit)
+
+- [ ] `/bank` (or wherever the leaderboard embed posts) → the `Daily` /
+      `Weekly` / `Monthly` / `Anytime` tags in the Quest board field line up
+      in a single column instead of drifting per row.
+
 ### Economy: 13 new quest trigger kinds + kind activity ledger  (f0a590c)
 
 - [ ] **After restart, run `​.venv/bin/python scripts/seed_quest_variety.py`**
