@@ -73,6 +73,11 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
 - **Milestones:** day 7 → +25 · day 30 → +100 · day 100 → +365 · +100 each 100 after.
 - Idempotency: `INSERT OR IGNORE` on `(guild_id, user_id, local_day)` — one login/day
   no matter how many events race (birthday-announcement pattern).
+- **Daily digest DM:** members with the opt-in `game_role_id` role get one DM per
+  qualifying login — a streak/payout line, any milestone/grace/reset callout, and a
+  "quests to play with today" checklist (open quests with `progress_bar` meters, capped
+  at `_LOGIN_QUEST_RECAP_LIMIT`) so deciding what to do next is one glance, not a dig
+  through `/bank quests`. Members without the role earn the same rewards with no DM.
 
 ### 3.2 XP → Daily Conversion
 Members earn XP exactly as today (`xp_events` ledger: text per-word, replies,
@@ -260,13 +265,13 @@ the default) the feature is off and every claimant gets the legacy in-channel
 reaction + reply. The bank-channel sign-off card (manager approval) is posted
 regardless of the claimant's role.
 
-The same opt-in gate covers the **streak / milestone / grace / reset DMs**
-(§3.1): those notices only reach members who took the role
-(`notify_member(..., require_game_role=True)`); everyone else keeps earning
-silently. With no role configured, nobody has opted in yet, so the gate
-defaults to dropping the notice for everyone rather than notifying the whole
-guild. Transactional notices (rental billing) are *not* gated — they target a
-member by their prior spend, not by opt-in.
+The same opt-in gate covers the **daily digest DM** (§3.1: streak + payout +
+milestone/grace/reset callouts + quest checklist): it only reaches members who
+took the role (`notify_member(..., require_game_role=True)`); everyone else
+keeps earning silently. With no role configured, nobody has opted in yet, so
+the gate defaults to dropping the notice for everyone rather than notifying
+the whole guild. Transactional notices (rental billing) are *not* gated —
+they target a member by their prior spend, not by opt-in.
 
 Trigger quests are **excluded from the `/bank quests` claim select** (state
 `trigger` on the wallet page) — self-claiming without saying the phrase would
@@ -852,10 +857,10 @@ member-to-member consent and does **not** gate bot DMs — no interaction there.
 
 | Event | Notify |
 |---|---|
-| Streak milestone / grace consumed / reset | DM |
+| Daily login digest (streak + quest recap, §3.1) | DM (opt-in role) |
 | Quest approved / denied (with reason) | DM |
 | Rental grace entered / lapsed | DM |
-| Login payout & daily conversion | Silent (ledger) |
+| Daily XP→currency conversion | Silent (ledger) |
 | Sign-off claims, community settlements | Bank channel |
 
 ### 10.1 Register channel (public transaction feed)

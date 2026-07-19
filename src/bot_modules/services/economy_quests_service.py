@@ -653,6 +653,107 @@ def spotlight_kind(
     return kinds[int(digest, 16) % len(kinds)]
 
 
+def load_member_quest_board(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    day: str,
+) -> list[dict]:
+    """Active quests for a member on ``day``, with progress/claim state.
+
+    Shared by the ``/bank quests`` panel and the daily-login DM's quest
+    recap — one place computing "what does this member still have to do".
+    """
+    rows = conn.execute(
+        """
+        SELECT * FROM econ_quests
+        WHERE guild_id = ? AND active = 1
+        ORDER BY qtype, id
+        """,
+        (guild_id,),
+    ).fetchall()
+    spot = spotlight_kind(conn, guild_id, quests.iso_week_for(day))
+    boards: dict[str, set[int]] = {}
+    out: list[dict] = []
+    for row in rows:
+        qtype = str(row["qtype"])
+        quest_id = int(row["id"])
+        if quests.has_board(qtype):
+            if qtype not in boards:
+                boards[qtype] = assigned_board_ids(
+                    conn, guild_id, user_id, qtype, day, settings
+                )
+            if quest_id not in boards[qtype]:
+                continue  # not on this member's board this period
+        entry: dict = {
+            "id": quest_id,
+            "title": row["title"],
+            "description": row["description"],
+            "qtype": qtype,
+            "reward": int(row["reward"]),
+            "reward_xp": int(row["reward_xp"]),
+            "signoff": bool(row["signoff"]),
+            "criteria": row["criteria"],
+            "spotlight": bool(
+                spot and str(row["trigger_kind"] or "") == spot
+            ),
+        }
+        if qtype == "community":
+            prog = conn.execute(
+                "SELECT current FROM econ_community_progress WHERE quest_id = ?",
+                (quest_id,),
+            ).fetchone()
+            target = row["community_target"]
+            entry["state"] = "community"
+            entry["current"] = int(prog["current"]) if prog else 0
+            entry["target"] = int(target) if target is not None else 0
+        elif qtype == "event":
+            # No calendar period — the trigger listener pays per
+            # occurrence (e.g. per photo card), so the list shows the
+            # standing how-to instead of a per-period claim state.
+            entry["state"] = str(row["trigger_kind"]) or "trigger"
+        else:
+            period = quests.quest_period(qtype, day)
+            claim = conn.execute(
+                """
+                SELECT state FROM econ_quest_claims
+                WHERE quest_id = ? AND user_id = ? AND period = ?
+                  AND state IN ('paid', 'pending')
+                ORDER BY CASE state WHEN 'paid' THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                (quest_id, user_id, period),
+            ).fetchone()
+            kind = str(row["trigger_kind"] or "")
+            has_trigger = bool(str(row["trigger_words"] or "").strip())
+            # Resolves (and stores) the member's dynamic target on first
+            # sight, so the wallet shows the same number the fire path
+            # will enforce all period.
+            target = resolve_member_target(
+                conn, guild_id, user_id, row,
+                period=period, local_day=day,
+            )
+            if kind and target > 1:
+                entry["progress_current"] = get_progress(
+                    conn, quest_id, user_id, period
+                )
+                entry["progress_target"] = target
+            if claim is None:
+                # Trigger quests never enter the claim select — the
+                # phrase/game event IS the verification, so a manual
+                # claim would bypass it.
+                entry["state"] = kind or (
+                    "trigger" if has_trigger else "claimable"
+                )
+            elif claim["state"] == "paid":
+                entry["state"] = "done"
+            else:
+                entry["state"] = "pending"
+        out.append(entry)
+    return out
+
+
 def local_day_for_period(qtype: str, period: str) -> str:
     """A representative guild-local day inside a cadence period key."""
     from datetime import date

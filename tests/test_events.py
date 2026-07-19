@@ -15,6 +15,7 @@ from bot_modules.cogs.events_cog import EventsCog, _collect_backfill_channels, _
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS
 from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_quests_service import create_quest, set_quest_active
 from bot_modules.services.economy_service import (
     get_balance,
     save_econ_settings,
@@ -910,12 +911,15 @@ async def test_econ_disabled_is_noop(mock_notify, econ_db):
     "bot_modules.cogs.events_cog.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
-async def test_econ_first_login_pays_silently(mock_notify, econ_db):
+async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
     _enable_econ(econ_db)
     cog = _econ_cog(econ_db)
     await cog._process_economy_message(_econ_message())
-    # A day-1 login pays but does not DM (login payout is silent, spec §10).
-    mock_notify.assert_not_awaited()
+    # Every login now DMs a streak + quest digest (opt-in gated by
+    # notify_member's require_game_role, mocked out here).
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert "day" in (embed.description or "").lower()
     with open_db(econ_db) as conn:
         assert get_balance(conn, ECON_GUILD, ECON_USER) > 0
         row = conn.execute(
@@ -978,19 +982,22 @@ async def test_econ_grace_dms(mock_notify, econ_db):
     "bot_modules.cogs.events_cog.resolve_accent_color",
     new=AsyncMock(return_value=discord.Color(0x123456)),
 )
-async def test_econ_reset_below_three_is_silent(mock_notify, econ_db):
+async def test_econ_reset_below_three_omits_reset_field(mock_notify, econ_db):
     _enable_econ(econ_db)
-    # A short 2-day streak that breaks (3-day gap) resets — too trivial to DM.
+    # A short 2-day streak that breaks (3-day gap) resets — too trivial to
+    # call out with its own field, but the daily digest still DMs.
     _seed_streak(econ_db, streak=2, last_login_day=_days_ago(3))
     cog = _econ_cog(econ_db)
     await cog._process_economy_message(_econ_message())
-    mock_notify.assert_not_awaited()
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert not any("reset" in f.name.lower() for f in embed.fields)
     with open_db(econ_db) as conn:
         row = conn.execute(
             "SELECT current_streak FROM econ_streaks WHERE guild_id=? AND user_id=?",
             (ECON_GUILD, ECON_USER),
         ).fetchone()
-    assert row["current_streak"] == 1  # it did reset, just silently
+    assert row["current_streak"] == 1  # it did reset, just no dedicated field
 
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
@@ -1007,6 +1014,38 @@ async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
     mock_notify.assert_awaited_once()
     embed = mock_notify.await_args.kwargs["embed"]
     assert any("reset" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    with open_db(econ_db) as conn:
+        quest_id = create_quest(
+            conn,
+            ECON_GUILD,
+            title="Say hello",
+            description="Chat a bit today.",
+            qtype="daily",
+            reward=25,
+            signoff=0,
+            criteria="",
+            starts_at=None,
+            ends_at=None,
+            rotate_tag="",
+            community_target=None,
+            created_by=None,
+        )
+        set_quest_active(conn, ECON_GUILD, quest_id, True)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    quest_field = next(f for f in embed.fields if "quest" in f.name.lower())
+    assert "Say hello" in quest_field.value
 
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
