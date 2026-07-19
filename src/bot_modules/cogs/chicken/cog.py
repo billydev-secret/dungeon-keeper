@@ -14,7 +14,6 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_game import BaseGame
@@ -385,29 +384,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     ) -> None:
         await self._base_lobby(interaction, stakes)
 
-    @chicken.command(name="stats", description="View Chicken stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def ch_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await chdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-        embed = discord.Embed(title=f"🐔 Chicken — {target.display_name}", color=accent)
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Crashes", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
 async def setup(bot: Bot) -> None:
     cog = ChickenCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats",):
-        cog.chicken.remove_command(name)
     bot.tree.remove_command("chicken")
     games.add_command(cog.chicken)

@@ -185,16 +185,6 @@ async def fetch_expired_nicks(db: GamesDb, now: float) -> list[dict]:
     return await duels_db.fetch_expired_nicks(db, now, _GAME_TYPE)
 
 
-async def get_active_nick_for_user(
-    db: GamesDb, guild_id: int, user_id: int
-) -> dict | None:
-    return await duels_db.get_active_nick_for_user(db, guild_id, user_id)
-
-
-async def mark_nick_reverted(db: GamesDb, nick_id: int, reason: str) -> None:
-    await duels_db.mark_nick_reverted(db, nick_id, reason)
-
-
 # ── Cooldowns (shim → duels/db) ───────────────────────────────────────────────
 
 async def check_cooldown(
@@ -207,30 +197,3 @@ async def check_cooldown(
 
 async def set_cooldown(db: GamesDb, guild_id: int, user_a: int, user_b: int) -> None:
     await duels_db.set_cooldown(db, guild_id, _GAME_TYPE, user_a, user_b)
-
-
-# ── Stats ─────────────────────────────────────────────────────────────────────
-
-async def get_stats(db: GamesDb, guild_id: int, user_id: int) -> dict:
-    row = await db.fetchone(
-        """
-        SELECT
-          SUM(CASE WHEN winner_id = ?1 THEN 1 ELSE 0 END)      AS wins,
-          SUM(CASE WHEN loser_id  = ?1 THEN 1 ELSE 0 END)      AS losses,
-          COUNT(*)                                               AS total_games,
-          MAX(CASE WHEN winner_id = ?1 THEN gauge ELSE NULL END) AS highest_gauge_win
-        FROM pressure_games
-        WHERE guild_id = ?2
-          AND (challenger_id = ?1 OR target_id = ?1)
-          AND state IN ('RESOLVED', 'NICKED', 'NO_NICK_SET', 'RESOLVED_NO_NICK', 'EXPIRED')
-        """,
-        (user_id, guild_id),
-    )
-    if not row:
-        return {"wins": 0, "losses": 0, "total_games": 0, "highest_gauge_win": None}
-    return {
-        "wins": row["wins"] or 0,
-        "losses": row["losses"] or 0,
-        "total_games": row["total_games"] or 0,
-        "highest_gauge_win": row["highest_gauge_win"],
-    }

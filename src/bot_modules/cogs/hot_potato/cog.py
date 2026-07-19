@@ -15,7 +15,6 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
@@ -383,66 +382,8 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     ) -> None:
         await self._base_challenge(interaction, user, stakes)
 
-    @hot_potato.command(name="cancel", description="Cancel your pending Hot Potato challenge")
-    async def hp_cancel(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        game = await hpdb.get_pending_game_for_challenger(
-            self.db,
-            interaction.guild.id,
-            interaction.channel_id,  # type: ignore[arg-type]
-            interaction.user.id,
-        )
-        if not game:
-            await interaction.response.send_message(
-                "You don't have a pending challenge in this channel.", ephemeral=True
-            )
-            return
-        await hpdb.set_game_state(self.db, game.id, "EXPIRED_PENDING")
-        await self._edit_message_silent(
-            game.channel_id,
-            game.message_id,
-            embed=discord.Embed(
-                title="🚫 Challenge Cancelled",
-                description=f"{interaction.user.mention} cancelled the challenge.",
-                color=COLOR_YELLOW,
-            ),
-            view=None,
-        )
-        await interaction.response.send_message("Challenge cancelled.", ephemeral=True)
-
-    @hot_potato.command(name="stats", description="View Hot Potato stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def hp_stats(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await hpdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-        embed = discord.Embed(
-            title=f"🥔 Hot Potato — {target.display_name}",
-            color=accent,
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Total Games", value=str(stats["total_games"]), inline=True)
-        embed.add_field(name="✨ Style Points", value=str(stats["style_points"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
 async def setup(bot: Bot) -> None:
     cog = HotPotatoDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "stats"):
-        cog.hot_potato.remove_command(name)
     bot.tree.remove_command("hotpotato")
     games.add_command(cog.hot_potato)

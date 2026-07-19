@@ -27,10 +27,6 @@ export function mount(container) {
             <div class="field-hint">How long the loser's imposed nickname lasts (default 24)</div>
           </div>
           <div class="field">
-            <label><input type="checkbox" name="allow_early_revert" ${cfg.allow_early_revert ? "checked" : ""} /> Allow early revert</label>
-            <div class="field-hint">Lets the loser restore their nickname early with /games quickdraw revert</div>
-          </div>
-          <div class="field">
             <label>Minimum Delay (seconds)</label>
             <input type="number" name="min_delay" min="0.5" step="0.5" value="${cfg.min_delay}" />
             <div class="field-hint">Minimum seconds before the draw signal (default 3.0)</div>
@@ -78,7 +74,6 @@ export function mount(container) {
         await apiPut("/api/config/games-quickdraw", {
           cooldown_hours: parseInt(fd.get("cooldown_hours"), 10),
           sentence_hours: parseInt(fd.get("sentence_hours"), 10),
-          allow_early_revert: form.querySelector('input[name="allow_early_revert"]').checked,
           min_delay: parseFloat(fd.get("min_delay")),
           max_delay: parseFloat(fd.get("max_delay")),
           draw_window: parseFloat(fd.get("draw_window")),

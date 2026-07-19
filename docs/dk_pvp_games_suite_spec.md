@@ -315,41 +315,42 @@ Slugs: `pressure`, `quickdraw`, `hotpotato`, `hotpotatogroup`, `chicken`, `music
 | Command | Who | Effect |
 |---|---|---|
 | `challenge <user> [stakes]` | Anyone | Challenge a target (accept/decline). |
-| `cancel` | Challenger | Cancel your pending challenge in this channel. |
-| `stats [user]` | Anyone | W/L (and flavor stats) for a user. |
-| `revert` | Loser | **Pressure Cooker & Quickdraw only** — request early revert of your active sentence (requires `allow_early_revert`). |
-
-Hot Potato (duel) exposes `challenge` / `cancel` / `stats` — **no `revert` command**, even
-though it carries an `allow_early_revert` config knob.
 
 **Group games** (`/games hotpotatogroup`, `/games chicken`, `/games musicalchairs`)
 
 | Command | Who | Effect |
 |---|---|---|
 | `start [stakes]` | Anyone | Open a join lobby. |
-| `stats [user]` | Anyone | W/L (and flavor stats) for a user. |
 
-Group games have **no `cancel` slash command** — the host cancels via the `🚫` button on the
-lobby. None expose `revert`.
+**`cancel`/`stats`/`revert`/`config` — all removed, none were ever reachable.** Every one of
+these subcommands (plus `config`, see below) was stripped from each cog's command tree in
+`setup()` (`cog.<group>.remove_command(...)`) before it ever registered under `/games`, so
+none of them were ever actually callable in Discord — a pending challenge could only be
+cancelled via timeout (60s) or the lobby's `🚫` button, W/L stats and Hot Potato's style points
+had no way to be viewed, and the nickname "early revert" toggle (`allow_early_revert`) had no
+command to exercise it, on any game, ever. Rather than wire these up, the dead command methods
+and their now-orphaned db-layer stats/revert-shim functions were deleted outright — they
+weren't needed for these short-lived games. `allow_early_revert` and `nick_denylist` remain
+unused columns on the shared `duel_config` table (see §10) but are no longer surfaced
+anywhere. A pending challenge still self-expires after 60s (see §7's stale-game reaper) so
+dropping `cancel` has no user-facing gap.
 
-**Per-game config — web dashboard only.** Every game previously shipped a `config […]`
-subcommand, but each cog's `setup()` stripped it from the command tree before registering
-under `/games` (`cog.<group>.remove_command("config")`), so none of them were ever actually
-reachable in Discord — the only way to change these settings was a direct SQLite edit. Those
-dead methods were deleted; settings now live on the web dashboard's **Games** nav section,
-one "Config" panel per game (`config-games-<slug>.js` / `PUT /api/config/games-<slug>`):
+**Per-game config — web dashboard only.** Settings (cooldowns, sentence duration,
+channel allowlist, nickname/stakes length caps, plus each game's own mechanics knobs) live on
+the web dashboard's **Games** nav section, one "Config" panel per game
+(`config-games-<slug>.js` / `PUT /api/config/games-<slug>`):
 
 | Game | Panel fields |
 |---|---|
-| Pressure Cooker | `cooldown_hours`, `sentence_hours`, `allow_early_revert`, `channel_allowlist`, `max_nick_length`, `max_stakes_length` |
+| Pressure Cooker | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length` |
 | Quickdraw | same shared fields, plus `min_delay`, `max_delay`, `draw_window` |
 | Hot Potato (duel) | same shared fields, plus `min_timer`, `max_timer` |
 | Hot Potato (group) | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `min_fuse`, `max_fuse`, `min_hold`, `min_players`, `max_players` |
 | Chicken | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `climb_duration`, `min_players`, `max_players` |
 | Musical Chairs | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `min_music`, `max_music`, `scramble_window`, `false_start_elim`, `min_players`, `max_players` |
 
-`channel_allowlist`/`max_nick_length`/`max_stakes_length` are now exposed for all six games,
-not just Pressure Cooker as the old (dead) commands had it — they were always enforced
+`channel_allowlist`/`max_nick_length`/`max_stakes_length` are exposed for all six games, not
+just Pressure Cooker as the old (dead) commands had it — they were always enforced
 generically in the shared base classes, so this closes a real gap rather than adding scope.
 
 **In-embed controls** (built): `✅ Accept` / `❌ Decline` (duel challenge); `✋ Join` /
@@ -386,8 +387,7 @@ press (`ROLL_MIN`/`ROLL_MAX` constants in `game.py`). When it reaches/exceeds **
 double-press race; turn ownership is enforced.
 
 **Config knobs:** none game-specific (gauge ceiling and roll are hardcoded constants). Shared:
-`cooldown_hours`, `sentence_hours`, `allow_early_revert`, `channel_allowlist`, `max_nick_length`,
-`max_stakes_length`.
+`cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`.
 
 ### 9.2 Quickdraw
 
@@ -428,13 +428,13 @@ A bomb passes between two players on a hidden fuse; the holder at detonation los
 3. Fuse expires → current holder loses.
 
 **Style points:** passes made deep in the "danger zone" earn cosmetic **style points**
-(`compute_style_points`), tracked in the player's stats.
+(`compute_style_points`), accumulated in `hot_potato_style` — write-only; there's no surface
+that displays them.
 
 **Server-authoritative:** the fuse is a hidden scheduled task; passing is locked to the holder;
 detonation cancels/reschedules on resolution.
 
-**Config knobs:** `min_timer` (10.0), `max_timer` (45.0), `allow_early_revert` (config knob
-present; no `revert` command wired) + shared.
+**Config knobs:** `min_timer` (10.0), `max_timer` (45.0) + shared.
 
 ### 9.4 Hot Potato (group)
 
@@ -537,9 +537,11 @@ valid scramble presses seat; one press per player per round; a lock guards the l
 ## 11. Config reference (defaults)
 
 **Shared `duel_config`** (all games, via `duels/db.py._CONFIG_DEFAULTS`)
-- `cooldown_hours` 48 · `sentence_hours` 24 · `allow_early_revert` 0
-- `channel_allowlist` `[]` · `nick_denylist` `[]`
-- `max_nick_length` 32 · `max_stakes_length` 200
+- `cooldown_hours` 48 · `sentence_hours` 24
+- `channel_allowlist` `[]` · `max_nick_length` 32 · `max_stakes_length` 200
+- `allow_early_revert` 0 · `nick_denylist` `[]` — real columns, but unused: no command or
+  web panel reads or writes either one (the games that carried a `revert` command never had
+  it wired into the live tree — see §8)
 
 **Rate limit:** 3 challenges/starts per user per hour (in-memory, not configurable).
 

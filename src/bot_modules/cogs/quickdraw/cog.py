@@ -14,8 +14,6 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
-from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
@@ -519,98 +517,9 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
     ) -> None:
         await self._base_challenge(interaction, user, stakes)
 
-    @quickdraw.command(name="cancel", description="Cancel your pending Quickdraw challenge")
-    async def quickdraw_cancel(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        game = await qdb.get_pending_game_for_challenger(
-            self.db,
-            interaction.guild.id,
-            interaction.channel_id,  # type: ignore[arg-type]
-            interaction.user.id,
-        )
-        if not game:
-            await interaction.response.send_message(
-                "You don't have a pending challenge in this channel.", ephemeral=True
-            )
-            return
-        await qdb.set_game_state(self.db, game.id, "EXPIRED_PENDING")
-        await self._edit_message_silent(
-            game.channel_id,
-            game.message_id,
-            embed=discord.Embed(
-                title="🚫 Challenge Cancelled",
-                description=f"{interaction.user.mention} cancelled the challenge.",
-                color=COLOR_YELLOW,
-            ),
-            view=None,
-        )
-        await interaction.response.send_message("Challenge cancelled.", ephemeral=True)
-
-    @quickdraw.command(name="stats", description="View Quickdraw stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def quickdraw_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await qdb.get_stats(self.db, interaction.guild.id, target.id)
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-        embed = discord.Embed(
-            title=f"🤠 Quickdraw — {target.display_name}",
-            color=accent,
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Total Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
-    @quickdraw.command(name="revert", description="Request early revert of your Quickdraw nickname")
-    async def quickdraw_revert(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-        if not cfg.get("allow_early_revert"):
-            await interaction.response.send_message(
-                "Early revert isn't enabled on this server. Ask a mod.", ephemeral=True
-            )
-            return
-        nick = await duels_db.get_active_nick_for_user(
-            self.db, interaction.guild.id, interaction.user.id
-        )
-        if not nick:
-            await interaction.response.send_message(
-                "You don't have an active nickname sentence.", ephemeral=True
-            )
-            return
-        member = interaction.guild.get_member(interaction.user.id)
-        if member:
-            try:
-                await member.edit(nick=nick["original_nick"], reason="Early revert requested by user")
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "I couldn't revert your nickname — I may not have permission.", ephemeral=True
-                )
-                return
-        await duels_db.mark_nick_reverted(self.db, nick["id"], "early_revert")
-        await interaction.response.send_message(
-            "Your nickname has been restored early.", ephemeral=True
-        )
 
 async def setup(bot: Bot) -> None:
     cog = QuickdrawDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "revert", "stats"):
-        cog.quickdraw.remove_command(name)
     bot.tree.remove_command("quickdraw")
     games.add_command(cog.quickdraw)

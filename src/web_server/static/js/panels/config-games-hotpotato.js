@@ -27,10 +27,6 @@ export function mount(container) {
             <div class="field-hint">How long the loser's imposed nickname lasts (default 24)</div>
           </div>
           <div class="field">
-            <label><input type="checkbox" name="allow_early_revert" ${cfg.allow_early_revert ? "checked" : ""} /> Allow early revert</label>
-            <div class="field-hint">Currently has no effect — Hot Potato has no /revert command</div>
-          </div>
-          <div class="field">
             <label>Minimum Timer (seconds)</label>
             <input type="number" name="min_timer" min="5" step="1" value="${cfg.min_timer}" />
             <div class="field-hint">Minimum seconds before the bomb explodes (default 10.0)</div>
@@ -73,7 +69,6 @@ export function mount(container) {
         await apiPut("/api/config/games-hot-potato", {
           cooldown_hours: parseInt(fd.get("cooldown_hours"), 10),
           sentence_hours: parseInt(fd.get("sentence_hours"), 10),
-          allow_early_revert: form.querySelector('input[name="allow_early_revert"]').checked,
           min_timer: parseFloat(fd.get("min_timer")),
           max_timer: parseFloat(fd.get("max_timer")),
           channel_allowlist: allowlist.getValues(),

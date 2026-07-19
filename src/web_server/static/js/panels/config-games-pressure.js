@@ -27,10 +27,6 @@ export function mount(container) {
             <div class="field-hint">How long the loser's imposed nickname lasts (default 24)</div>
           </div>
           <div class="field">
-            <label><input type="checkbox" name="allow_early_revert" ${cfg.allow_early_revert ? "checked" : ""} /> Allow early revert</label>
-            <div class="field-hint">Lets the loser restore their nickname early with /games pressure revert</div>
-          </div>
-          <div class="field">
             <label>Allowed Channels</label>
             <div data-picker="channel_allowlist"></div>
             <div class="field-hint">Leave empty to allow the game everywhere — type to search, click to add</div>
@@ -63,7 +59,6 @@ export function mount(container) {
         await apiPut("/api/config/games-pressure", {
           cooldown_hours: parseInt(fd.get("cooldown_hours"), 10),
           sentence_hours: parseInt(fd.get("sentence_hours"), 10),
-          allow_early_revert: form.querySelector('input[name="allow_early_revert"]').checked,
           channel_allowlist: allowlist.getValues(),
           max_nick_length: parseInt(fd.get("max_nick_length"), 10),
           max_stakes_length: parseInt(fd.get("max_stakes_length"), 10),

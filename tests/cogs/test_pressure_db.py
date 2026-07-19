@@ -9,6 +9,7 @@ import pytest_asyncio
 
 from bot_modules.services.games_db import GamesDb
 from bot_modules.cogs.pressure_cooker import db as pdb
+from bot_modules.duels import db as duels_db
 
 
 @pytest_asyncio.fixture
@@ -291,7 +292,7 @@ async def test_mark_nick_reverted(db):
     nick_id = await pdb.apply_nick(
         db, gid, GUILD, 1, 2, "OriginalName", "LoserFace", sentence_hours=0
     )
-    await pdb.mark_nick_reverted(db, nick_id, "expired")
+    await duels_db.mark_nick_reverted(db, nick_id, "expired")
     rows = await pdb.fetch_expired_nicks(db, time.time() + 1)
     assert not any(r["id"] == nick_id for r in rows)
 
@@ -299,7 +300,7 @@ async def test_mark_nick_reverted(db):
 async def test_get_active_nick_for_user(db):
     gid = await _create(db)
     await pdb.apply_nick(db, gid, GUILD, 1, 2, "Original", "Imposed", sentence_hours=24)
-    nick = await pdb.get_active_nick_for_user(db, GUILD, 1)
+    nick = await duels_db.get_active_nick_for_user(db, GUILD, 1)
     assert nick is not None
     assert nick["imposed_nick"] == "Imposed"
 
@@ -309,36 +310,9 @@ async def test_get_active_nick_after_revert_returns_none(db):
     nick_id = await pdb.apply_nick(
         db, gid, GUILD, 1, 2, "Original", "Imposed", sentence_hours=24
     )
-    await pdb.mark_nick_reverted(db, nick_id, "manual")
-    nick = await pdb.get_active_nick_for_user(db, GUILD, 1)
+    await duels_db.mark_nick_reverted(db, nick_id, "manual")
+    nick = await duels_db.get_active_nick_for_user(db, GUILD, 1)
     assert nick is None
-
-
-# ── stats ─────────────────────────────────────────────────────────────────────
-
-async def test_get_stats_no_games(db):
-    stats = await pdb.get_stats(db, GUILD, 99)
-    assert stats == {"wins": 0, "losses": 0, "total_games": 0, "highest_gauge_win": None}
-
-
-async def test_get_stats_counts_wins_and_losses(db):
-    # Win for user 1
-    g1 = await _create(db, challenger_id=1, target_id=2)
-    await pdb.set_game_state(
-        db, g1, "RESOLVED", winner_id=1, loser_id=2, resolved_at=time.time(), gauge=99
-    )
-    await db.execute("UPDATE pressure_games SET gauge = 99 WHERE id = ?", (g1,))
-
-    # Loss for user 1
-    g2 = await _create(db, challenger_id=1, target_id=2)
-    await pdb.set_game_state(
-        db, g2, "RESOLVED", winner_id=2, loser_id=1, resolved_at=time.time(), gauge=105
-    )
-
-    stats = await pdb.get_stats(db, GUILD, 1)
-    assert stats["wins"] == 1
-    assert stats["losses"] == 1
-    assert stats["total_games"] == 2
 
 
 # ── config ────────────────────────────────────────────────────────────────────

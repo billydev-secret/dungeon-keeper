@@ -12,7 +12,6 @@ import random
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
@@ -216,102 +215,8 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
     ) -> None:
         await self._base_challenge(interaction, user, stakes)
 
-    @pressure.command(name="cancel", description="Cancel your pending challenge in this channel")
-    async def pressure_cancel(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        game = await pdb.get_pending_game_for_challenger(
-            self.db,
-            interaction.guild.id,
-            interaction.channel_id,  # type: ignore[arg-type]
-            interaction.user.id,
-        )
-        if not game:
-            await interaction.response.send_message(
-                "You don't have a pending challenge in this channel.", ephemeral=True
-            )
-            return
-        await pdb.set_game_state(self.db, game.id, "EXPIRED_PENDING")
-        await self._edit_message_silent(
-            game.channel_id,
-            game.message_id,
-            embed=discord.Embed(
-                title="🚫 Challenge Cancelled",
-                description=f"{interaction.user.mention} cancelled the challenge.",
-                color=COLOR_YELLOW,
-            ),
-            view=None,
-        )
-        await interaction.response.send_message("Challenge cancelled.", ephemeral=True)
-
-    @pressure.command(name="stats", description="View Pressure Cooker stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def pressure_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await pdb.get_stats(self.db, interaction.guild.id, target.id)
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-        embed = discord.Embed(
-            title=f"🔥 Pressure Cooker — {target.display_name}",
-            color=accent,
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Total Games", value=str(stats["total_games"]), inline=True)
-        if stats["highest_gauge_win"] is not None:
-            embed.add_field(
-                name="Highest Gauge (Win)", value=f"{stats['highest_gauge_win']}/100", inline=True
-            )
-        await interaction.response.send_message(embed=embed)
-
-    @pressure.command(name="revert", description="Request early revert of your Pressure Cooker nickname")
-    async def pressure_revert(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        cfg = await pdb.get_config(self.db, interaction.guild.id)
-        if not cfg.get("allow_early_revert"):
-            await interaction.response.send_message(
-                "Early revert isn't enabled on this server. Ask a mod.", ephemeral=True
-            )
-            return
-        nick = await pdb.get_active_nick_for_user(
-            self.db, interaction.guild.id, interaction.user.id
-        )
-        if not nick:
-            await interaction.response.send_message(
-                "You don't have an active nickname sentence.", ephemeral=True
-            )
-            return
-        member = interaction.guild.get_member(interaction.user.id)
-        if member:
-            try:
-                await member.edit(nick=nick["original_nick"], reason="Early revert requested by user")
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "I couldn't revert your nickname — I may not have permission.", ephemeral=True
-                )
-                return
-        await pdb.mark_nick_reverted(self.db, nick["id"], "early_revert")
-        await interaction.response.send_message(
-            "Your nickname has been restored early.", ephemeral=True
-        )
-
 async def setup(bot: Bot) -> None:
     cog = PressureCookerDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "revert", "stats"):
-        cog.pressure.remove_command(name)
     bot.tree.remove_command("pressure")
     games.add_command(cog.pressure)

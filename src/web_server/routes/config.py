@@ -509,7 +509,6 @@ def _inactive_section(conn, guild_id: int) -> dict:
 _DUEL_SHARED_DEFAULTS: dict = {
     "cooldown_hours": 48,
     "sentence_hours": 24,
-    "allow_early_revert": 0,
     "channel_allowlist": "[]",
     "max_nick_length": 32,
     "max_stakes_length": 200,
@@ -521,7 +520,7 @@ _DUEL_GAMES: dict = {
         "table": None,
         "defaults": {},
         "shared_fields": (
-            "cooldown_hours", "sentence_hours", "allow_early_revert",
+            "cooldown_hours", "sentence_hours",
             "channel_allowlist", "max_nick_length", "max_stakes_length",
         ),
     },
@@ -529,7 +528,7 @@ _DUEL_GAMES: dict = {
         "table": "quickdraw_config",
         "defaults": {"min_delay": 3.0, "max_delay": 8.0, "draw_window": 5.0},
         "shared_fields": (
-            "cooldown_hours", "sentence_hours", "allow_early_revert",
+            "cooldown_hours", "sentence_hours",
             "channel_allowlist", "max_nick_length", "max_stakes_length",
         ),
     },
@@ -537,7 +536,7 @@ _DUEL_GAMES: dict = {
         "table": "hot_potato_config",
         "defaults": {"min_timer": 10.0, "max_timer": 45.0},
         "shared_fields": (
-            "cooldown_hours", "sentence_hours", "allow_early_revert",
+            "cooldown_hours", "sentence_hours",
             "channel_allowlist", "max_nick_length", "max_stakes_length",
         ),
     },
@@ -1731,7 +1730,6 @@ def _clamp_channel_allowlist(values: list[str] | None) -> str | None:
 class PressureConfigUpdate(BaseModel):
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
-    allow_early_revert: bool | None = None
     channel_allowlist: list[str] | None = None
     max_nick_length: int | None = None
     max_stakes_length: int | None = None
@@ -1752,8 +1750,6 @@ async def update_games_pressure(
             shared["cooldown_hours"] = max(0, body.cooldown_hours)
         if body.sentence_hours is not None:
             shared["sentence_hours"] = max(1, body.sentence_hours)
-        if body.allow_early_revert is not None:
-            shared["allow_early_revert"] = 1 if body.allow_early_revert else 0
         allowlist = _clamp_channel_allowlist(body.channel_allowlist)
         if allowlist is not None:
             shared["channel_allowlist"] = allowlist
@@ -1771,7 +1767,6 @@ async def update_games_pressure(
 class QuickdrawConfigUpdate(BaseModel):
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
-    allow_early_revert: bool | None = None
     channel_allowlist: list[str] | None = None
     max_nick_length: int | None = None
     max_stakes_length: int | None = None
@@ -1795,8 +1790,6 @@ async def update_games_quickdraw(
             shared["cooldown_hours"] = max(0, body.cooldown_hours)
         if body.sentence_hours is not None:
             shared["sentence_hours"] = max(1, body.sentence_hours)
-        if body.allow_early_revert is not None:
-            shared["allow_early_revert"] = 1 if body.allow_early_revert else 0
         allowlist = _clamp_channel_allowlist(body.channel_allowlist)
         if allowlist is not None:
             shared["channel_allowlist"] = allowlist
@@ -1821,7 +1814,6 @@ async def update_games_quickdraw(
 class HotPotatoConfigUpdate(BaseModel):
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
-    allow_early_revert: bool | None = None
     channel_allowlist: list[str] | None = None
     max_nick_length: int | None = None
     max_stakes_length: int | None = None
@@ -1844,8 +1836,6 @@ async def update_games_hot_potato(
             shared["cooldown_hours"] = max(0, body.cooldown_hours)
         if body.sentence_hours is not None:
             shared["sentence_hours"] = max(1, body.sentence_hours)
-        if body.allow_early_revert is not None:
-            shared["allow_early_revert"] = 1 if body.allow_early_revert else 0
         allowlist = _clamp_channel_allowlist(body.channel_allowlist)
         if allowlist is not None:
             shared["channel_allowlist"] = allowlist

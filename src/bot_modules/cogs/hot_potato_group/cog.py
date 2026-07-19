@@ -15,7 +15,6 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
@@ -356,31 +355,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
     ) -> None:
         await self._base_lobby(interaction, stakes)
 
-    @hotpotatogroup.command(name="stats", description="View Hot Potato (group) stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def hpg_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await hpgdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-        embed = discord.Embed(
-            title=f"🥔 Hot Potato (group) — {target.display_name}", color=accent
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
 async def setup(bot: Bot) -> None:
     cog = HotPotatoGroupGameCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats",):
-        cog.hotpotatogroup.remove_command(name)
     bot.tree.remove_command("hotpotatogroup")
     games.add_command(cog.hotpotatogroup)
