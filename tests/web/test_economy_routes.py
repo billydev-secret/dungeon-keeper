@@ -125,6 +125,25 @@ def test_put_voice_style_price_roundtrips(authed_client, fake_ctx):
     assert cfg.price_voice_style == 30
 
 
+def test_put_emoji_sponsor_fields_roundtrip(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "price_emoji": 80,
+            "price_emoji_animated": 120,
+            "emoji_sponsor_slots": 3,
+            "emoji_sponsor_expire_days": 7,
+        },
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.price_emoji == 80
+    assert cfg.price_emoji_animated == 120
+    assert cfg.emoji_sponsor_slots == 3
+    assert cfg.emoji_sponsor_expire_days == 7
+
+
 def test_put_streak_shield_price_roundtrips(authed_client, fake_ctx):
     resp = authed_client.put(
         "/api/economy/config", json={"price_streak_shield": 45}

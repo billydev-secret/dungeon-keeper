@@ -2683,3 +2683,35 @@ async def test_gift_voice_style_dark_refused_priced_allowed(ctx, db):
     assert len(rentals) == 1
     assert rentals[0]["perk"] == "voice_style"
     assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900
+
+
+# ── /bank emoji guards (sinks round 3, stage 4) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bank_emoji_rejects_oversize_and_bad_type(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+
+    big = MagicMock()
+    big.content_type = "image/png"
+    big.size = 300 * 1024
+    interaction = _interaction(_member(member_id=500))
+    await cog.bank_emoji.callback(cog, interaction, big, "party_blob")
+    assert "256KB" in interaction.response.send_message.await_args.args[0]
+
+    weird = MagicMock()
+    weird.content_type = "image/tiff"
+    weird.size = 1024
+    interaction = _interaction(_member(member_id=500))
+    await cog.bank_emoji.callback(cog, interaction, weird, "party_blob")
+    assert "PNG" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_bank_emoji_disabled_at_price_zero(ctx, db):
+    _enable(db, price_emoji=0)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    await cog.bank_emoji.callback(cog, interaction, None, None)
+    assert "isn't enabled" in interaction.response.send_message.await_args.args[0]

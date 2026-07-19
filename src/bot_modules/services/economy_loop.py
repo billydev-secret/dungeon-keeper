@@ -99,6 +99,7 @@ from bot_modules.services.voice_master_service import (
     load_voice_master_config,
     resolve_channel_name,
 )
+from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
 )
@@ -571,6 +572,44 @@ class ExpiredSponsorNotice:
     unit: str
 
 
+@dataclass(frozen=True)
+class ExpiredEmojiNotice:
+    """One expired emoji sponsorship to DM after the sweep commits."""
+
+    guild_id: int
+    user_id: int
+    name: str
+    refund: int
+    unit: str
+
+
+def run_emoji_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> list[ExpiredEmojiNotice]:
+    """Expire and refund pending emoji sponsorships staff never got to.
+
+    Mirrors :func:`run_sponsor_expiry` — pending only; approved rows are
+    mid-upload (or a limbo a human should look at) and live rows are running
+    rentals.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return []
+    return [
+        ExpiredEmojiNotice(
+            guild_id=guild_id,
+            user_id=int(row["user_id"]),
+            name=str(row["name"]),
+            refund=int(row["price"]),
+            unit=settings.currency_plural or "coins",
+        )
+        for row in emoji_svc.expire_stale_submissions(
+            conn, now_ts, expire_days=int(settings.emoji_sponsor_expire_days)
+        )
+        if int(row["guild_id"]) == guild_id
+    ]
+
+
 def run_sponsor_expiry(
     conn: sqlite3.Connection, guild_id: int, now_ts: float
 ) -> list[ExpiredSponsorNotice]:
@@ -804,6 +843,37 @@ async def _dispatch_rental_effects(
                 channel.id,
             )
 
+    async def _delete_sponsored_emoji(rental_id: int) -> None:
+        """Take the emoji down when its rental ends (lapse or cancel).
+
+        State first: the live submission row is closed in its own transaction
+        (freeing the member's slot and the name claim) before the Discord
+        delete, so a crash can't leave the ledger thinking the emoji is paid
+        for. A delete failure just logs — the emoji lingers until a mod
+        removes it by hand, but nobody is billed for it.
+        """
+
+        def _close():
+            with open_db(db_path) as conn:
+                return emoji_svc.mark_lapsed(conn, rental_id)
+
+        row = await asyncio.to_thread(_close)
+        if row is None or row["emoji_id"] is None:
+            return
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return
+        emoji = guild.get_emoji(int(row["emoji_id"]))
+        if emoji is None:
+            return
+        try:
+            await emoji.delete(reason="Economy: emoji sponsorship ended")
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning(
+                "Economy loop: failed to delete lapsed sponsored emoji %s.",
+                row["emoji_id"],
+            )
+
     for res in outcome.billing:
         if res.action == BillingAction.ENTER_GRACE.value:
             await _safe_dm(
@@ -821,6 +891,8 @@ async def _dispatch_rental_effects(
                     # No personal role involved — walk back the live temp
                     # channel instead of re-projecting role entitlements.
                     await _revert_voice_style(res.beneficiary_id)
+                elif res.perk == "emoji":
+                    await _delete_sponsored_emoji(res.rental_id)
                 else:
                     await revoke_role_perks(
                         bot, db_path, guild_id, res.beneficiary_id
@@ -1117,10 +1189,14 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             log.exception("Economy loop: unhandled error for guild %s.", guild.id)
 
         # Separate transaction: a day-roll failure must not swallow refunds
-        # members are owed, and vice versa.
+        # members are owed, and vice versa. Both lists are (re)set before the
+        # try so a failed sweep can't NameError below or leak the previous
+        # guild's notices.
+        sponsor_notices, emoji_notices = [], []
         try:
             with open_db(db_path) as conn:
                 sponsor_notices = run_sponsor_expiry(conn, guild.id, now_ts)
+                emoji_notices = run_emoji_expiry(conn, guild.id, now_ts)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1146,6 +1222,27 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             except Exception:
                 log.exception(
                     "Economy loop: failed to DM expired sponsor to user %s.",
+                    notice.user_id,
+                )
+
+        for notice in emoji_notices:
+            try:
+                await notify_member(
+                    bot,
+                    db_path,
+                    notice.guild_id,
+                    notice.user_id,
+                    content=(
+                        f"Nobody got to your sponsored emoji :{notice.name}: "
+                        f"in time, so you've had your {notice.refund} "
+                        f"{notice.unit} back."
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to DM expired emoji sponsor to %s.",
                     notice.user_id,
                 )
 

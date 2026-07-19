@@ -797,3 +797,133 @@ def test_stats_gated_to_manager(fake_ctx):
     client = _client(fake_ctx, admin=False, role_ids=[123])
     assert client.get("/api/economy/stats").status_code == 403
     client.close()
+
+
+# ── sponsored emojis (sinks round 3, stage 4) ─────────────────────────
+
+
+def _seed_emoji_submission(fake_ctx, tmp_path, *, name="party_blob", animated=False):
+    from bot_modules.services import economy_emoji_service as emoji_svc
+    from bot_modules.services.economy_service import (
+        apply_credit,
+        load_econ_settings,
+        save_econ_settings,
+    )
+
+    img = tmp_path / f"{name}.png"
+    img.write_bytes(b"\x89PNG fake")
+    with open_db(fake_ctx.db_path) as conn:
+        save_econ_settings(conn, fake_ctx.guild_id, {"enabled": True})
+        settings = load_econ_settings(conn, fake_ctx.guild_id)
+        apply_credit(conn, fake_ctx.guild_id, 100, 500, "grant")
+        out = emoji_svc.submit_sponsorship(
+            conn, settings, fake_ctx.guild_id, 100,
+            name=name, image_path=str(img), animated=animated,
+            blocklist_patterns=[], taken_names=set(), guild_slots_free=True,
+        )
+    return out.submission_id
+
+
+def test_emoji_submissions_list_and_image(authed_client, fake_ctx, tmp_path):
+    sid = _seed_emoji_submission(fake_ctx, tmp_path)
+    subs = authed_client.get(
+        "/api/economy/emoji-submissions?state=pending"
+    ).json()["submissions"]
+    assert [s["id"] for s in subs] == [sid]
+    assert subs[0]["name"] == "party_blob"
+    assert subs[0]["user_id"] == "100"
+
+    img = authed_client.get(f"/api/economy/emoji-submissions/{sid}/image")
+    assert img.status_code == 200
+    assert img.content == b"\x89PNG fake"
+
+
+def test_emoji_deny_refunds_via_route(authed_client, fake_ctx, tmp_path):
+    from bot_modules.services.economy_service import get_balance
+
+    sid = _seed_emoji_submission(fake_ctx, tmp_path)
+    resp = authed_client.post(
+        f"/api/economy/emoji-submissions/{sid}/deny",
+        json={"reason": "not a fit"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "denied"
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 100) == 500
+
+
+def test_emoji_approve_uploads_and_goes_live(authed_client, fake_ctx, tmp_path):
+    from unittest.mock import AsyncMock, MagicMock
+
+    sid = _seed_emoji_submission(fake_ctx, tmp_path)
+
+    uploaded = MagicMock()
+    uploaded.id = 424242
+    guild = MagicMock()
+    guild.create_custom_emoji = AsyncMock(return_value=uploaded)
+
+    class _ReadyBot:
+        def is_ready(self):
+            return True
+
+        def get_guild(self, _guild_id):
+            return guild
+
+    fake_ctx.bot = _ReadyBot()
+    try:
+        resp = authed_client.post(f"/api/economy/emoji-submissions/{sid}/approve")
+    finally:
+        fake_ctx.bot = None
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True, "state": "live"}
+    guild.create_custom_emoji.assert_awaited_once()
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM econ_emoji_submissions WHERE id = ?", (sid,)
+        ).fetchone()
+        rental = conn.execute(
+            "SELECT * FROM econ_rentals WHERE id = ?", (row["rental_id"],)
+        ).fetchone()
+    assert row["emoji_id"] == 424242
+    assert rental["perk"] == "emoji" and rental["state"] == "active"
+
+
+def test_emoji_approve_upload_failure_denies_and_refunds(
+    authed_client, fake_ctx, tmp_path
+):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from bot_modules.services.economy_service import get_balance
+
+    sid = _seed_emoji_submission(fake_ctx, tmp_path)
+    guild = MagicMock()
+    guild.create_custom_emoji = AsyncMock(side_effect=RuntimeError("no slots"))
+
+    class _ReadyBot:
+        def is_ready(self):
+            return True
+
+        def get_guild(self, _guild_id):
+            return guild
+
+    fake_ctx.bot = _ReadyBot()
+    try:
+        resp = authed_client.post(f"/api/economy/emoji-submissions/{sid}/approve")
+    finally:
+        fake_ctx.bot = None
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False and body["state"] == "denied"
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 100) == 500  # refunded
+
+
+def test_emoji_approve_requires_connected_bot(authed_client, fake_ctx, tmp_path):
+    sid = _seed_emoji_submission(fake_ctx, tmp_path)
+    resp = authed_client.post(f"/api/economy/emoji-submissions/{sid}/approve")
+    assert resp.status_code == 503
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT state FROM econ_emoji_submissions WHERE id = ?", (sid,)
+        ).fetchone()
+    assert row["state"] == "pending"  # no claim burned

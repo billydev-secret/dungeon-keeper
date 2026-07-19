@@ -92,6 +92,7 @@ from bot_modules.services.economy_rentals_service import (
     set_rental_catalog_icon,
     upsert_personal_role,
 )
+from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -506,6 +507,31 @@ class _GiftConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content="Gift cancelled.", view=None
         )
+
+
+class _EmojiCancelView(discord.ui.View):
+    """Cancel button on the bare /bank emoji status reply (pending only)."""
+
+    def __init__(self, cog: EconomyCog, submission_id: int, user_id: int) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.submission_id = submission_id
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "This isn't your submission.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Cancel & refund", style=discord.ButtonStyle.danger)
+    async def _cancel(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await self.cog.do_cancel_emoji(interaction, self.submission_id)
 
 
 class _RoleNameModal(discord.ui.Modal, title="Custom role name"):
@@ -1649,6 +1675,172 @@ class EconomyCog(commands.Cog):
             f"{unit} held. If it's turned down you'll get a full refund, and "
             "you'll hear either way.",
             ephemeral=True,
+        )
+
+    # ── emoji sponsorship ────────────────────────────────────────────────
+
+    @bank.command(
+        name="emoji",
+        description="Sponsor a custom emoji — you pay weekly rent to keep it.",
+    )
+    @app_commands.describe(
+        image="The emoji image (PNG/JPEG/WEBP, GIF for animated — max 256KB)",
+        name="Its :name: — 2–32 letters, numbers, underscores",
+    )
+    async def bank_emoji(
+        self,
+        interaction: discord.Interaction,
+        image: discord.Attachment | None = None,
+        name: str | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not emoji_svc.sponsoring_enabled(settings):
+            await interaction.response.send_message(
+                "Emoji sponsorship isn't enabled here.", ephemeral=True
+            )
+            return
+
+        if image is None or name is None:
+            await self._emoji_status(interaction, settings, guild, member)
+            return
+
+        content_types = {
+            "image/png": False, "image/jpeg": False,
+            "image/webp": False, "image/gif": True,
+        }
+        ctype = (image.content_type or "").split(";")[0].strip()
+        if ctype not in content_types:
+            await interaction.response.send_message(
+                "Emoji images are PNG, JPEG, WEBP, or GIF.", ephemeral=True
+            )
+            return
+        if image.size > emoji_svc.MAX_IMAGE_BYTES:
+            await interaction.response.send_message(
+                "Discord caps emoji images at 256KB — that one's too big.",
+                ephemeral=True,
+            )
+            return
+        animated = content_types[ctype]
+
+        await interaction.response.defer(ephemeral=True)
+        data = await image.read()
+
+        # Live Discord slot math the service layer can't see: sponsors may
+        # use the cap's worth of slots, but never the guild's LAST free slot
+        # of that kind (static and animated count separately).
+        same_kind = [e for e in guild.emojis if e.animated == animated]
+        guild_has_room = len(same_kind) < max(0, guild.emoji_limit - 1)
+
+        ext = "gif" if animated else "png"
+        directory = self.ctx.db_path.parent / "econ_emoji" / str(guild.id)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{int(time.time())}_{member.id}.{ext}"
+        path.write_bytes(data)
+
+        taken = {e.name for e in guild.emojis}
+
+        def _submit():
+            with self.ctx.open_db() as conn:
+                for row in emoji_svc.list_submissions(conn, guild.id):
+                    if row["state"] in ("pending", "approved", "live"):
+                        taken.add(str(row["name"]))
+                under_cap = (
+                    emoji_svc.open_submission_count(conn, guild.id)
+                    < max(0, settings.emoji_sponsor_slots)
+                )
+                return emoji_svc.submit_sponsorship(
+                    conn, settings, guild.id, member.id,
+                    name=name, image_path=str(path), animated=animated,
+                    blocklist_patterns=list_name_blocklist(conn, guild.id),
+                    taken_names=taken,
+                    guild_slots_free=guild_has_room and under_cap,
+                )
+
+        try:
+            outcome = await asyncio.to_thread(_submit)
+        except ValueError as exc:
+            path.unlink(missing_ok=True)
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        unit = _unit(settings, outcome.price)
+        await interaction.followup.send(
+            f"📨 Sent :{name.strip(':')}: to the mods for review — "
+            f"{outcome.price} {unit} held (that covers week one). If it's "
+            "turned down you get a full refund; once it's up it renews "
+            "weekly from your wallet, and lapsing takes it down.",
+            ephemeral=True,
+        )
+
+    async def _emoji_status(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        member: discord.Member,
+    ) -> None:
+        """Bare /bank emoji: show the member's in-flight sponsorship, if any."""
+
+        def _load():
+            with self.ctx.open_db() as conn:
+                return emoji_svc.open_submission(conn, guild.id, member.id)
+
+        row = await asyncio.to_thread(_load)
+        if row is None:
+            await interaction.response.send_message(
+                "Sponsor a custom emoji with `/bank emoji image: name:` — "
+                f"{settings.currency_emoji} {settings.price_emoji:,}/week "
+                f"(animated {settings.price_emoji_animated:,}), first week "
+                "held at submit, mod-approved.",
+                ephemeral=True,
+            )
+            return
+        state = str(row["state"])
+        if state == "pending":
+            view = _EmojiCancelView(self, int(row["id"]), member.id)
+            await interaction.response.send_message(
+                f"Your :{row['name']}: is waiting for a mod. Cancel to get "
+                "your escrow back:",
+                view=view,
+                ephemeral=True,
+            )
+            return
+        blurb = (
+            "being set up" if state == "approved"
+            else "live — it renews weekly from your wallet"
+        )
+        await interaction.response.send_message(
+            f"Your sponsored :{row['name']}: is {blurb}.", ephemeral=True
+        )
+
+    async def do_cancel_emoji(
+        self, interaction: discord.Interaction, submission_id: int
+    ) -> None:
+        def _cancel():
+            with self.ctx.open_db() as conn:
+                return emoji_svc.cancel_submission(
+                    conn, submission_id, user_id=interaction.user.id
+                )
+
+        try:
+            row = await asyncio.to_thread(_cancel)
+        except ValueError as exc:
+            await interaction.response.edit_message(content=str(exc), view=None)
+            return
+        await interaction.response.edit_message(
+            content=(
+                f"Cancelled :{row['name']}: — your "
+                f"{int(row['price']):,} escrow is back in your wallet."
+            ),
+            view=None,
         )
 
     # ── gift ─────────────────────────────────────────────────────────────

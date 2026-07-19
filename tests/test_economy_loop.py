@@ -1230,3 +1230,47 @@ async def test_voice_style_revoke_without_live_channel_is_quiet(db, monkeypatch)
 
     assert _rental(db, rid)["state"] == "lapsed"
     assert rec.revoke_calls == []  # no role touch, no crash on missing channel
+
+
+# ── emoji rental lapse deletes the emoji (sinks round 3, stage 4) ──────
+
+
+async def test_emoji_lapse_deletes_emoji_and_closes_submission(db, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from bot_modules.services import economy_emoji_service as emoji_svc
+
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, USER, settings.price_emoji, "grant")
+        out = emoji_svc.submit_sponsorship(
+            conn, settings, GUILD, USER,
+            name="party_blob", image_path="/tmp/party.png", animated=False,
+            blocklist_patterns=[], taken_names=set(), guild_slots_free=True,
+        )
+        emoji_svc.claim_approval(conn, out.submission_id, resolver_id=1)
+        row = emoji_svc.finalize_upload(
+            conn, settings, out.submission_id, emoji_id=777, now=RT0
+        )
+        rid = int(row["rental_id"])
+
+    emoji = MagicMock()
+    emoji.delete = AsyncMock()
+    guild = _Guild(GUILD)
+    guild.get_emoji = lambda eid: emoji if eid == 777 else None
+    bot = _Bot([guild])
+
+    due = _rental(db, rid)["next_bill_at"]
+    await _rental_tick(bot, db, due)  # renewal fails (escrow spent) -> grace
+    await _rental_tick(bot, db, due + GRACE_SECONDS + 1.0)  # -> revoke
+
+    assert _rental(db, rid)["state"] == "lapsed"
+    emoji.delete.assert_awaited_once()
+    assert rec.revoke_calls == []  # no role involved
+    with open_db(db) as conn:
+        sub = emoji_svc.get_submission(conn, out.submission_id)
+    assert sub is not None and sub["state"] == "cancelled"

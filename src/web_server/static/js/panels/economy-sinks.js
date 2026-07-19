@@ -32,7 +32,21 @@ const CONSUMABLE_FIELDS = [
   }],
 ];
 
-const ALL_NUM_FIELDS = [...PRICE_FIELDS, ...CONSUMABLE_FIELDS];
+// Sponsored emojis: weekly rentals opened by mod approval (queue below).
+const EMOJI_FIELDS = [
+  ["price_emoji", "Emoji / week", {
+    hint: "Weekly rent for a sponsored custom emoji, escrowed for week one at submit. 0 disables new sponsorships (running ones keep billing).",
+  }],
+  ["price_emoji_animated", "Animated emoji / week", {}],
+  ["emoji_sponsor_slots", "Sponsored slots", {
+    hint: "Max sponsorships in flight (pending + live). Sponsors also never take the server's last free emoji slot.",
+  }],
+  ["emoji_sponsor_expire_days", "Review timeout (days)", {
+    hint: "A pending submission nobody reviews refunds itself after this many days.",
+  }],
+];
+
+const ALL_NUM_FIELDS = [...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS];
 
 function numField(key, label, { hint } = {}, pricing) {
   const hintHtml = hint ? `<div class="field-hint">${esc(hint)}</div>` : "";
@@ -118,11 +132,27 @@ function render(container, cfg, pricing, icons) {
         <div class="field-row" style="flex-wrap:wrap;">
           ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
+        <div class="section-label" style="margin-top:16px;">Sponsored emojis</div>
+        <div class="field-row" style="flex-wrap:wrap;">
+          ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+        </div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
           <button type="submit" class="btn btn-primary">Save prices</button>
           <span data-price-status></span>
         </div>
       </form>
+
+      <section class="form card" style="margin-top:1.5rem;">
+        <div class="section-label">Emoji approval queue</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Member-sponsored emojis waiting for review. Approving uploads the
+          emoji and starts its weekly rental (the escrow already paid week
+          one); denying refunds in full. A lapsed rental takes the emoji down
+          automatically.
+        </div>
+        <div data-emoji-queue></div>
+        <div data-emoji-empty class="field-hint" style="display:none;">Nothing waiting.</div>
+      </section>
 
       <section class="form card" style="margin-top:1.5rem;">
         <div class="section-label">Rentable icon catalog</div>
@@ -164,6 +194,72 @@ function render(container, cfg, pricing, icons) {
 
   wirePrices(container, cfg);
   wireCatalog(container, icons);
+  wireEmojiQueue(container);
+}
+
+function emojiRow(sub) {
+  const kind = sub.animated ? "animated" : "static";
+  return `
+    <div class="card" data-sub-id="${sub.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      <img src="/api/economy/emoji-submissions/${sub.id}/image" alt=""
+           width="48" height="48"
+           style="width:48px;height:48px;object-fit:contain;
+                  background:repeating-conic-gradient(#808080 0% 25%, #a0a0a0 0% 50%) 50% / 12px 12px" />
+      <div>
+        <div><code>:${esc(sub.name)}:</code> <span class="field-hint">(${kind}, ${sub.price}/wk)</span></div>
+        <div class="field-hint">from <span data-member-id="${esc(sub.user_id)}">${esc(sub.user_id)}</span></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-left:auto;">
+        <button type="button" class="btn btn-primary" data-approve>Approve &amp; upload</button>
+        <button type="button" class="btn btn-danger" data-deny>Deny</button>
+      </div>
+      <span data-row-status></span>
+    </div>`;
+}
+
+function wireEmojiQueue(container) {
+  const listEl = container.querySelector("[data-emoji-queue]");
+  const emptyEl = container.querySelector("[data-emoji-empty]");
+
+  async function refresh() {
+    let subs = [];
+    try {
+      subs = (await api("/api/economy/emoji-submissions?state=pending")).submissions;
+    } catch (err) {
+      listEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      return;
+    }
+    listEl.innerHTML = subs.map(emojiRow).join("");
+    emptyEl.style.display = subs.length ? "none" : "block";
+  }
+  refresh();
+
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const row = btn.closest("[data-sub-id]");
+    const id = row.getAttribute("data-sub-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+    btn.disabled = true;
+    try {
+      if (btn.hasAttribute("data-approve")) {
+        const out = await apiPost(`/api/economy/emoji-submissions/${id}/approve`, {});
+        showStatus(rowStatus, out.ok, out.ok ? "Live" : out.error);
+      } else if (btn.hasAttribute("data-deny")) {
+        const reason = prompt("Reason (sent to the member):");
+        if (reason === null) { btn.disabled = false; return; }
+        await apiPost(`/api/economy/emoji-submissions/${id}/deny`, {
+          reason: reason.trim() || "not a fit for the server",
+        });
+        showStatus(rowStatus, true, "Denied & refunded");
+      }
+      await refresh();
+    } catch (err) {
+      showStatus(rowStatus, false, err.message);
+      btn.disabled = false;
+    }
+  });
 }
 
 function wirePrices(container, cfg) {

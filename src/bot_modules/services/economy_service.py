@@ -111,6 +111,16 @@ class EconSettings:
     # the lease on the Sinks page (suggested ≈ 30). Distinct from
     # price_voice_room (stage-6 private rooms).
     price_voice_style: int = 0
+    # Emoji sponsorship (sinks round 3, stage 4): weekly rent to keep a custom
+    # emoji in the server, escrowed at submit, mod-approved, deleted on lapse.
+    # price_emoji 0 disables the whole feature (running rentals still bill and
+    # can lapse). Animated emojis bill their own (richer) rate. The slot cap
+    # bounds pending+approved+live sponsorships; expiry refunds a pending
+    # submission nobody resolved (mirrors the sponsored-QOTD sweep).
+    price_emoji: int = 60
+    price_emoji_animated: int = 90
+    emoji_sponsor_slots: int = 5
+    emoji_sponsor_expire_days: int = 14
     price_text_room: int = 200
     price_voice_room: int = 200
     # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);

@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.perk_actions import revoke_role_perks
 from bot_modules.services import economy_quests_service as quests_svc
+from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
 from bot_modules.services import economy_rentals_service as rentals_svc
 from bot_modules.services.economy_service import (
@@ -682,6 +684,189 @@ async def deny_claim(
         resolver_id=user.user_id,
         deny_reason=body.reason,
     )
+
+
+# ── sponsored emojis ──────────────────────────────────────────────────
+
+
+def _emoji_submission_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "user_id": str(row["user_id"]),
+        "name": row["name"],
+        "animated": bool(row["animated"]),
+        "state": row["state"],
+        "price": int(row["price"]),
+        "deny_reason": row["deny_reason"],
+        "created_at": row["created_at"],
+        "resolved_at": row["resolved_at"],
+        "resolver_id": str(row["resolver_id"]) if row["resolver_id"] else None,
+    }
+
+
+@router.get("/economy/emoji-submissions")
+async def list_emoji_submissions(
+    request: Request,
+    state: str | None = None,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                _emoji_submission_dict(row)
+                for row in emoji_svc.list_submissions(conn, guild_id, state=state)
+            ]
+
+    return {"submissions": await run_query(_q)}
+
+
+@router.get("/economy/emoji-submissions/{submission_id}/image")
+async def emoji_submission_image(
+    request: Request,
+    submission_id: int,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    from fastapi.responses import FileResponse
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return emoji_svc.get_submission(conn, submission_id)
+
+    row = await run_query(_q)
+    if row is None or int(row["guild_id"]) != guild_id:
+        raise HTTPException(404, "submission not found")
+    path = str(row["image_path"])
+    media = "image/gif" if int(row["animated"]) else "image/png"
+    return FileResponse(path, media_type=media)
+
+
+@router.post("/economy/emoji-submissions/{submission_id}/approve")
+async def approve_emoji_submission(
+    request: Request,
+    submission_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Claim → upload → finalize (or fail back to denied+refund).
+
+    The claim lands in its own transaction before the upload so two racing
+    approvers can't both upload (claim-before-side-effect); an upload failure
+    auto-denies with a refund rather than stranding the claim.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    if bot is None or not bot.is_ready():
+        raise HTTPException(503, "bot is not connected — try again shortly")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "guild unavailable")
+
+    def _claim():
+        with ctx.open_db() as conn:
+            try:
+                row = emoji_svc.claim_approval(
+                    conn, submission_id, resolver_id=int(user.user_id)
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            if int(row["guild_id"]) != guild_id:
+                raise HTTPException(404, "submission not found")
+            return row, load_econ_settings(conn, guild_id)
+
+    row, settings = await run_query(_claim)
+
+    try:
+        image_bytes = Path(str(row["image_path"])).read_bytes()
+        emoji = await guild.create_custom_emoji(
+            name=str(row["name"]),
+            image=image_bytes,
+            reason=f"Economy: sponsored emoji (submission {submission_id})",
+        )
+    except Exception as exc:
+        _log.warning("emoji approve: upload failed for %s: %s", submission_id, exc)
+        fail_reason = f"upload failed: {exc}"
+
+        def _fail():
+            with ctx.open_db() as conn:
+                return emoji_svc.fail_upload(
+                    conn, submission_id, reason=fail_reason
+                )
+
+        fresh = await run_query(_fail)
+        await _dm_emoji_outcome(bot, ctx, guild_id, fresh)
+        return {"ok": False, "state": str(fresh["state"]), "error": "upload failed"}
+
+    def _finalize():
+        with ctx.open_db() as conn:
+            return emoji_svc.finalize_upload(
+                conn, settings, submission_id, emoji_id=emoji.id
+            )
+
+    fresh = await run_query(_finalize)
+    await _dm_emoji_outcome(bot, ctx, guild_id, fresh)
+    return {"ok": True, "state": str(fresh["state"])}
+
+
+@router.post("/economy/emoji-submissions/{submission_id}/deny")
+async def deny_emoji_submission(
+    request: Request,
+    submission_id: int,
+    body: DenyBody,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _deny():
+        with ctx.open_db() as conn:
+            row = emoji_svc.get_submission(conn, submission_id)
+            if row is None or int(row["guild_id"]) != guild_id:
+                raise HTTPException(404, "submission not found")
+            try:
+                return emoji_svc.deny_submission(
+                    conn,
+                    submission_id,
+                    resolver_id=int(user.user_id),
+                    deny_reason=body.reason,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+
+    fresh = await run_query(_deny)
+    bot = getattr(ctx, "bot", None)
+    if bot is not None and bot.is_ready():
+        await _dm_emoji_outcome(bot, ctx, guild_id, fresh)
+    return {"ok": True, "state": str(fresh["state"])}
+
+
+async def _dm_emoji_outcome(bot, ctx, guild_id, row) -> None:
+    """Best-effort DM for a resolved emoji submission (never fails the call)."""
+    state = str(row["state"])
+    name = str(row["name"])
+    if state == "live":
+        text = (
+            f"Your sponsored :{name}: is live! It renews weekly from your "
+            "wallet; if a renewal can't be paid it lapses and comes down."
+        )
+    elif state == "denied":
+        reason = str(row["deny_reason"] or "").strip()
+        text = f"Your sponsored :{name}: was turned down" + (
+            f" — {reason}." if reason else "."
+        ) + " Your escrow has been refunded."
+    else:
+        return
+    try:
+        await notify_member(
+            bot, ctx.db_path, guild_id, int(row["user_id"]), content=text
+        )
+    except Exception:
+        _log.exception("emoji sponsor DM failed for submission %s", row["id"])
 
 
 # ── sponsored QOTD submissions ────────────────────────────────────────

@@ -44,6 +44,7 @@ Ledger kinds added here: ``rental`` (upfront charge + weekly renewal).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -56,12 +57,12 @@ from bot_modules.services.economy_service import apply_debit
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
 
-# The perks rent_perk will open a rental for. The schema CHECK (migration 091)
-# also lists ``emoji`` for stage 4 — it joins here only when its price field
-# and flow ship, so a premature rent can't crash on a missing
-# ``price_<perk>`` setting. A gift is any of these rented with
+# The perks rent_perk will open a rental for. ``emoji`` (in the 091 CHECK) is
+# deliberately absent: an emoji rental is opened by
+# ``economy_emoji_service.finalize_upload`` after mod approval — never by a
+# direct shop rent. A gift is any of these rented with
 # ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 091).
-_PERKS = ("role_color", "role_name", "role_icon", "role_gradient", "voice_style")
+_PERKS = ("role_color", "role_name", "role_gradient", "role_icon", "voice_style")
 
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "
@@ -106,6 +107,7 @@ def _price_for(
     guild_id: int,
     perk: str,
     catalog_icon_id: int | None,
+    meta_json: str | None = None,
 ) -> int:
     """The current weekly price for a rental.
 
@@ -119,6 +121,16 @@ def _price_for(
         price = _catalog_icon_price(conn, guild_id, int(catalog_icon_id))
         if price is not None:
             return price
+    if perk == "emoji":
+        # Animated emojis bill their own rate; the flag rides the rental meta
+        # written at upload time (economy_emoji_service.finalize_upload).
+        try:
+            animated = bool(json.loads(meta_json or "{}").get("animated"))
+        except (TypeError, ValueError):
+            animated = False
+        return int(
+            settings.price_emoji_animated if animated else settings.price_emoji
+        )
     return int(getattr(settings, f"price_{perk}"))
 
 
@@ -408,7 +420,8 @@ def bill_rental(
 
     # CHARGE (first attempt this period) or RETRY (in grace) both try the debit.
     price = _price_for(
-        conn, settings, int(rental["guild_id"]), perk, rental["catalog_icon_id"]
+        conn, settings, int(rental["guild_id"]), perk,
+        rental["catalog_icon_id"], meta_json=rental["meta"],
     )
     ok = apply_debit(
         conn, rental["guild_id"], user_id, price, "rental",

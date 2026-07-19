@@ -73,6 +73,8 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "grant": ("🎁", "Staff grant"),
     "quest_reroll": ("🎲", "Quest reroll"),
     "streak_shield": ("🛡️", "Streak shield"),
+    "emoji_sponsor": ("😀", "Emoji sponsorship"),
+    "emoji_sponsor_refund": ("↩️", "Emoji sponsorship refund"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
@@ -86,6 +88,7 @@ _PERK_LABELS: dict[str, str] = {
     "role_icon": "Role icon",
     "role_gradient": "Gradient role colour",
     "voice_style": "Voice style",
+    "emoji": "Sponsored emoji",
     "gift_color": "Gifted role colour",
 }
 
