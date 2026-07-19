@@ -131,6 +131,7 @@ const SECTIONS = [
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
       { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js" },
       { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
+      { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },

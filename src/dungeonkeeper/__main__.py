@@ -16,6 +16,7 @@ from migrations import apply_migrations_sync
 from bot_modules.core.safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
 from bot_modules.services.watch_service import load_watched_users
 from bot_modules.core.db_utils import get_tz_offset_hours, migrate_grant_roles, open_db
+from bot_modules.services.announcements_service import announcements_loop
 from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
@@ -315,6 +316,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: bulk_cleanup_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
+
+    bot.startup_task_factories.append(lambda: announcements_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 
