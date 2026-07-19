@@ -2,6 +2,7 @@ import json
 import os
 import random
 import logging
+from typing import Any
 from bot_modules.games.utils.ai_client import generate_text
 
 log = logging.getLogger(__name__)
@@ -203,14 +204,41 @@ def _parse_tags(tags_json) -> set[str]:
         return set()
 
 
-async def _get_bank_question(
-    db,
-    game_type: str,
-    exclude: list[str] | None = None,
-    tags: list[str] | None = None,
-    allow_nsfw: bool = False,
-) -> str | None:
-    """Fetch a random bank question for game_type, applying tag rules.
+def _recency_key(last_served_at: str | None) -> tuple[int, str]:
+    """Sort key that puts never-served rows (NULL) before any timestamp."""
+    return (0, "") if last_served_at is None else (1, last_served_at)
+
+
+def _pick_least_recently_served(
+    candidates: list[tuple[int, Any, str | None]], rng: random.Random | None = None,
+) -> tuple[int, Any] | None:
+    """Pick a round-robin candidate: least-recently-served first, ties random.
+
+    *candidates* is a list of ``(question_id, payload, last_served_at)``
+    triples; returns the ``(question_id, payload)`` chosen, or ``None`` if
+    *candidates* is empty. Never-served rows (``last_served_at is None``)
+    are always preferred over any previously-served row, so a fresh bank
+    addition gets served before the pool starts repeating.
+    """
+    if not candidates:
+        return None
+    chooser = rng if rng is not None else random
+    min_key = min(_recency_key(c[2]) for c in candidates)
+    tied = [(qid, payload) for qid, payload, last in candidates if _recency_key(last) == min_key]
+    return chooser.choice(tied)
+
+
+async def _mark_served(db, question_id: int) -> None:
+    await db.execute(
+        "UPDATE games_question_bank SET last_served_at = CURRENT_TIMESTAMP WHERE question_id = ?",
+        (question_id,),
+    )
+
+
+def _filter_bank_rows(
+    rows, requested: set[str], allow_nsfw: bool,
+) -> list[tuple[int, str, str | None]]:
+    """Apply the shared nsfw/tag rules to raw bank rows.
 
     Tag rules (in precedence order):
       1. Rows tagged 'nsfw' are excluded unless *allow_nsfw* is True. NSFW is
@@ -219,26 +247,48 @@ async def _get_bank_question(
       2. If a non-empty tag filter is requested: keep rows whose tags intersect it
          (ANY-match).
       3. If no tag filter: keep all remaining rows.
+
+    Returns ``(question_id, question_text, last_served_at)`` triples.
+    """
+    out: list[tuple[int, str, str | None]] = []
+    for qid, text, tags_json, last_served_at in rows:
+        row_tags = _parse_tags(tags_json)
+        if "nsfw" in row_tags and not allow_nsfw:      # rule 1 — wins over intersection
+            continue
+        if requested and not (row_tags & requested):   # rule 2 — ANY-match
+            continue
+        out.append((qid, text, last_served_at))         # rule 3 — keep
+    return out
+
+
+async def _get_bank_question(
+    db,
+    game_type: str,
+    exclude: list[str] | None = None,
+    tags: list[str] | None = None,
+    allow_nsfw: bool = False,
+) -> str | None:
+    """Serve a round-robin bank question for game_type, applying tag rules.
+
+    Prefers the least-recently-served matching row (see
+    :func:`_pick_least_recently_served`) and marks it served, so a small pool
+    doesn't repeat a question until every row in it has been served once —
+    including across separate game sessions.
     """
     rows = await db.fetchall(
-        "SELECT question_text, tags FROM games_question_bank WHERE game_type = ?",
+        "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
         (game_type,),
     )
-    requested = set(tags or [])
-    opted_nsfw = allow_nsfw  # channel age-restriction is authoritative; a tag can't re-enable NSFW
-
-    candidates: list[str] = []
-    for text, tags_json in rows:
-        row_tags = _parse_tags(tags_json)
-        if "nsfw" in row_tags and not opted_nsfw:   # rule 1 — wins over intersection
-            continue
-        if requested and not (row_tags & requested):  # rule 2 — ANY-match
-            continue
-        candidates.append(text)                        # rule 3 — keep
-
+    filtered = _filter_bank_rows(rows, set(tags or []), allow_nsfw)
     if exclude:
-        candidates = [c for c in candidates if c not in exclude]
-    return random.choice(candidates) if candidates else None
+        filtered = [(qid, text, last) for qid, text, last in filtered if text not in exclude]
+
+    picked = _pick_least_recently_served(filtered)
+    if picked is None:
+        return None
+    qid, text = picked
+    await _mark_served(db, qid)
+    return text
 
 
 # The four Traditional Truth-or-Dare categories double as the reserved bank
@@ -253,11 +303,14 @@ TRADITIONAL_CATEGORIES: tuple[str, ...] = (
 async def get_traditional_question(
     db, category: str, exclude: list[str] | None = None,
 ) -> str | None:
-    """Return a random Traditional Truth-or-Dare bank question for *category*.
+    """Return a round-robin Traditional Truth-or-Dare bank question for *category*.
 
     *category* is one of :data:`TRADITIONAL_CATEGORIES`; a question matches
     only if its single category tag equals it exactly. *exclude* holds
     question texts already served this game so a bank round doesn't repeat.
+    Among the remaining candidates, the least-recently-served row wins (see
+    :func:`_pick_least_recently_served`), so a small pool doesn't repeat a
+    question across separate games until every row has been served once.
 
     Bank-only by design (no AI fallback): returns None when the bank has no
     matching, unexcluded question — the cog reports the player as unserved.
@@ -265,26 +318,37 @@ async def get_traditional_question(
     if category not in TRADITIONAL_CATEGORIES:
         return None
     rows = await db.fetchall(
-        "SELECT question_text, tags FROM games_question_bank WHERE game_type = ?",
+        "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
         ("traditional",),
     )
     seen = set(exclude or ())
     candidates = [
-        text
-        for text, tags_json in rows
+        (qid, text, last)
+        for qid, text, tags_json, last in rows
         if category in _parse_tags(tags_json) and text not in seen
     ]
-    return random.choice(candidates) if candidates else None
+    picked = _pick_least_recently_served(candidates)
+    if picked is None:
+        return None
+    qid, text = picked
+    await _mark_served(db, qid)
+    return text
 
 
 async def has_matching_questions(
     db, game_type: str, tags: list[str] | None, allow_nsfw: bool = False,
 ) -> bool:
     """True if at least one bank row matches the tag filter (same rules as
-    _get_bank_question). Used by slash commands to refuse-on-empty-filtered-pool."""
-    return await _get_bank_question(
-        db, game_type, tags=tags, allow_nsfw=allow_nsfw,
-    ) is not None
+    _get_bank_question). Used by slash commands to refuse-on-empty-filtered-pool.
+
+    Read-only: unlike the get_* serving functions, this must not mark a
+    question served — it's just an existence check.
+    """
+    rows = await db.fetchall(
+        "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
+        (game_type,),
+    )
+    return bool(_filter_bank_rows(rows, set(tags or []), allow_nsfw))
 
 
 async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None,
@@ -298,13 +362,15 @@ async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None
 
     *exclude* holds prompt texts already shown this game (the "Next" button's
     seen-set); matching bank rows are dropped so a game walks its selected set
-    without repeats. When every match is excluded the set is exhausted and this
-    returns None — the caller resets the seen-set and re-rolls.
+    without repeats. Among the remaining candidates, the least-recently-served
+    row wins so a small pool doesn't repeat across separate games. When every
+    match is excluded the set is exhausted and this returns None — the caller
+    resets the seen-set and re-rolls.
     """
     from bot_modules.games_ffa.prompts import pick_prompt, TRUTH, DARE
 
     rows = await db.fetchall(
-        "SELECT question_text, tags FROM games_question_bank WHERE game_type = ?",
+        "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
         ("ffa",),
     )
     requested = set(tags or [])
@@ -313,8 +379,8 @@ async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None
     want = {"truth"} if kind == "truth" else {"dare"} if kind == "dare" else set()
     seen = set(exclude or ())
 
-    candidates: list[tuple[str, str]] = []
-    for text, tags_json in rows:
+    candidates: list[tuple[int, tuple[str, str], str | None]] = []
+    for qid, text, tags_json, last_served_at in rows:
         row_tags = _parse_tags(tags_json)
         if "nsfw" in row_tags and not opted_nsfw:
             continue
@@ -324,10 +390,13 @@ async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None
             continue
         if text in seen:                             # already shown this game
             continue
-        candidates.append((DARE if "dare" in row_tags else TRUTH, text))
+        candidates.append((qid, (DARE if "dare" in row_tags else TRUTH, text), last_served_at))
 
-    if candidates:
-        return random.choice(candidates)
+    picked = _pick_least_recently_served(candidates)
+    if picked is not None:
+        qid, label_text = picked
+        await _mark_served(db, qid)
+        return label_text
     if requested or seen:            # tag filter OR exhausted seen-set → refuse (no code fallback)
         return None
     return pick_prompt(kind, False)                  # unfiltered empty → code fallback

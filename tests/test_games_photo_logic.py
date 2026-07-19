@@ -20,20 +20,26 @@ from bot_modules.games.utils.question_source import get_photo_prompt
 
 
 class _FakeDB:
-    """Minimal async db stub matching the fetchall surface used by
-    ``_get_bank_question`` (now selects ``question_text, tags``)."""
+    """Minimal async db stub matching the fetchall/execute surface used by
+    ``_get_bank_question`` (selects question_id, question_text, tags,
+    last_served_at; marks the served row via execute)."""
 
     def __init__(self, rows: list[tuple[str, list[str], str]]):
         # rows: (game_type, tags_list, question_text)
         self._rows = rows
+        self.served: list[int] = []
 
     async def fetchall(self, sql: str, params: tuple):
         (game_type,) = params
         return [
-            (r[2], json.dumps(r[1]))
-            for r in self._rows
+            (qid, r[2], json.dumps(r[1]), None)
+            for qid, r in enumerate(self._rows)
             if r[0] == game_type
         ]
+
+    async def execute(self, sql: str, params: tuple):
+        (qid,) = params
+        self.served.append(qid)
 
 
 def _run(coro):

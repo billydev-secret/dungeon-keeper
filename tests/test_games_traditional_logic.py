@@ -512,18 +512,26 @@ def test_bank_categories_empty_when_everyone_fully_asked():
 
 
 class _FakeDB:
-    """Minimal async db exposing only fetchall(query, params) for the getter."""
+    """Minimal async db exposing fetchall/execute for the getter."""
 
     def __init__(self, rows):
-        self._rows = rows
+        self._rows = list(rows)
+        self.served: list[int] = []
 
     async def fetchall(self, query, params=()):
         return list(self._rows)
 
+    async def execute(self, query, params=()):
+        (qid,) = params
+        self.served.append(qid)
 
-def _row(text, category):
+
+_next_qid = iter(range(1, 10_000))
+
+
+def _row(text, category, last_served_at=None):
     import json
-    return (text, json.dumps([category]))
+    return (next(_next_qid), text, json.dumps([category]), last_served_at)
 
 
 async def test_get_traditional_question_exact_category_match():
@@ -552,3 +560,28 @@ async def test_get_traditional_question_none_when_empty():
 async def test_get_traditional_question_unknown_category_returns_none():
     db = _FakeDB([_row("a", "sfw_truth")])
     assert await get_traditional_question(db, "bogus") is None
+
+
+# ── round-robin: least-recently-served wins over pure randomness ─────
+
+
+async def test_get_traditional_question_prefers_never_served_row():
+    """A never-served row (last_served_at is None) beats a previously-served
+    row every time, regardless of random tiebreaks — a small bank shouldn't
+    repeat a question while an untouched one is still available."""
+    db = _FakeDB([
+        _row("served already", "sfw_truth", last_served_at="2026-07-01 00:00:00"),
+        _row("never served", "sfw_truth", last_served_at=None),
+    ])
+    for _ in range(25):
+        assert await get_traditional_question(db, "sfw_truth") == "never served"
+
+
+async def test_get_traditional_question_marks_the_served_row():
+    """Serving a question records it as served (round-robin state) so the
+    next draw across a separate game session won't repeat it immediately."""
+    db = _FakeDB([_row("only one", "sfw_truth")])
+    qid = db._rows[0][0]
+    got = await get_traditional_question(db, "sfw_truth")
+    assert got == "only one"
+    assert db.served == [qid]

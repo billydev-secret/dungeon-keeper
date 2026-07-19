@@ -67,12 +67,21 @@ from bot_modules.games.utils.question_source import get_ffa_prompt
 
 class _FakeDB:
     def __init__(self, rows):
-        # rows: (game_type, tags_list, question_text)
+        # rows: (game_type, tags_list, question_text[, last_served_at])
         self._rows = rows
+        self.served: list[int] = []
 
     async def fetchall(self, sql, params):
         (game_type,) = params
-        return [(r[2], json.dumps(r[1])) for r in self._rows if r[0] == game_type]
+        return [
+            (qid, r[2], json.dumps(r[1]), r[3] if len(r) > 3 else None)
+            for qid, r in enumerate(self._rows)
+            if r[0] == game_type
+        ]
+
+    async def execute(self, sql, params):
+        (qid,) = params
+        self.served.append(qid)
 
 
 def _run(coro):
@@ -139,3 +148,21 @@ def test_get_ffa_prompt_exclude_exhausted_returns_none():
     even unfiltered), signalling the caller to reset the seen-set."""
     db = _FakeDB([("ffa", ["truth"], "Only truth.")])
     assert _run(get_ffa_prompt(db, kind="truth", exclude=["Only truth."])) is None
+
+
+# ── round-robin: least-recently-served wins over pure randomness ─────
+
+
+def test_get_ffa_prompt_prefers_never_served_row():
+    db = _FakeDB([
+        ("ffa", ["truth"], "Served already.", "2026-07-01 00:00:00"),
+        ("ffa", ["truth"], "Never served.", None),
+    ])
+    for _ in range(25):
+        assert _run(get_ffa_prompt(db, kind="truth"))[1] == "Never served."
+
+
+def test_get_ffa_prompt_marks_the_served_row():
+    db = _FakeDB([("ffa", ["truth"], "Only truth.")])
+    _run(get_ffa_prompt(db, kind="truth"))
+    assert db.served == [0]
