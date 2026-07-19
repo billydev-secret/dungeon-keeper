@@ -678,6 +678,54 @@ def test_get_config_includes_risky_section_defaults(authed_client):
     assert r["max_games_per_channel"] == 10
 
 
+def test_get_config_includes_pen_pals_timer_defaults(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    pp = resp.json()["pen_pals"]
+    assert pp["session_seconds"] == 86400
+    assert pp["match_cooldown_seconds"] == 2592000
+    assert pp["max_question_swaps"] == 3
+    assert pp["warn_seconds"] == 3600
+    assert pp["question_suppress_seconds"] == 7200
+
+
+def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 1800,
+            "match_cooldown_seconds": 86400,
+            "max_question_swaps": 1,
+            "warn_seconds": 300,
+            "question_suppress_seconds": 600,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    resp2 = authed_client.get("/api/config")
+    pp = resp2.json()["pen_pals"]
+    assert pp["session_seconds"] == 1800
+    assert pp["match_cooldown_seconds"] == 86400
+    assert pp["max_question_swaps"] == 1
+    assert pp["warn_seconds"] == 300
+    assert pp["question_suppress_seconds"] == 600
+
+
+def test_update_pen_pals_timers_rejects_invalid_session_seconds(authed_client):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 0,
+            "match_cooldown_seconds": 0,
+            "max_question_swaps": 0,
+            "warn_seconds": 0,
+            "question_suppress_seconds": 0,
+        },
+    )
+    assert resp.status_code == 400
+
+
 # ── /config/risky — in-memory state must be updated ──────────────────
 
 

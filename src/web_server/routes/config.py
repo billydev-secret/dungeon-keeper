@@ -120,6 +120,7 @@ from bot_modules.cogs.pen_pals_cog import (
     _get_config as _pp_get_config,
     _get_pool as _pp_get_pool,
     _set_config as _pp_set_config,
+    _set_timers as _pp_set_timers,
 )
 from bot_modules.services.voice_transcription_service import (
     DEFAULT_MODEL as _VT_DEFAULT_MODEL,
@@ -666,6 +667,11 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "auto_round_hour": 12,
             "panel_channel_id": None,
             "pool_size": pool_size,
+            "session_seconds": 86400,
+            "match_cooldown_seconds": 2592000,
+            "max_question_swaps": 3,
+            "warn_seconds": 3600,
+            "question_suppress_seconds": 7200,
         }
     return {
         "enabled": bool(cfg["enabled"]),
@@ -677,6 +683,11 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "auto_round_hour": int(cfg["auto_round_hour"]),
         "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
         "pool_size": pool_size,
+        "session_seconds": int(cfg["session_seconds"]),
+        "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
+        "max_question_swaps": int(cfg["max_question_swaps"]),
+        "warn_seconds": int(cfg["warn_seconds"]),
+        "question_suppress_seconds": int(cfg["question_suppress_seconds"]),
     }
 
 
@@ -2848,6 +2859,50 @@ async def update_pen_pals_config(
         )
 
     return {"ok": True}
+
+
+class PenPalsTimersUpdate(BaseModel):
+    session_seconds: int
+    match_cooldown_seconds: int
+    max_question_swaps: int
+    warn_seconds: int
+    question_suppress_seconds: int
+
+
+@router.put("/config/pen-pals/timers")
+async def update_pen_pals_timers(
+    request: Request,
+    body: PenPalsTimersUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    if body.session_seconds < 1:
+        raise HTTPException(400, "session_seconds must be at least 1")
+    if body.match_cooldown_seconds < 0:
+        raise HTTPException(400, "match_cooldown_seconds cannot be negative")
+    if body.max_question_swaps < 0:
+        raise HTTPException(400, "max_question_swaps cannot be negative")
+    if body.warn_seconds < 0:
+        raise HTTPException(400, "warn_seconds cannot be negative")
+    if body.question_suppress_seconds < 0:
+        raise HTTPException(400, "question_suppress_seconds cannot be negative")
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _pp_set_timers(
+                conn,
+                guild_id,
+                session_seconds=body.session_seconds,
+                match_cooldown_seconds=body.match_cooldown_seconds,
+                max_question_swaps=body.max_question_swaps,
+                warn_seconds=body.warn_seconds,
+                question_suppress_seconds=body.question_suppress_seconds,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 # ── Voice transcription config ───────────────────────────────────────

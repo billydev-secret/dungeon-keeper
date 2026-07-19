@@ -482,7 +482,7 @@
         <tr><td><strong><a href="#guess">Guess Who Image Game</a></strong></td><td>NSFW image-guessing game with cropped previews, a searchable member picker for guessing, leaderboards, and anonymous text confessions.</td></tr>
         <tr><td><strong><a href="#whisper">Whisper</a></strong></td><td>Anonymous member↔member DM game with reply / share / report inbox.</td></tr>
         <tr><td><strong><a href="#confessions">Confessions</a></strong></td><td>Anonymous member submissions with mod-only emoji identifiers.</td></tr>
-        <tr><td><strong><a href="#pen-pals">Pen Pals</a></strong></td><td>Opt-in pool that pairs members into private 2-person channels with a conversation starter; channels retire after ~72 hours.</td></tr>
+        <tr><td><strong><a href="#pen-pals">Pen Pals</a></strong></td><td>Opt-in pool that pairs members into private 2-person channels with a conversation starter; channels retire automatically after a configurable session length.</td></tr>
         <tr><td><strong><a href="#community">Community &amp; XP</a></strong></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). Leave-of-absence system. Starboard.</td></tr>
         <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, XP conversion, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, gradient) and gifts.</td></tr>
         <tr><td><strong><a href="#voice">Voice Channels</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
@@ -751,7 +751,7 @@
 
     
     <h2 id="pen-pals" class="section-break"><span class="section-num">8</span> Pen Pals</h2>
-    <p>Pen Pals quietly matches members into private one-on-one conversations. Members join a pool; when a pair is matched the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after about 72 hours.</p>
+    <p>Pen Pals quietly matches members into private one-on-one conversations. Members join a pool; when a pair is matched the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours).</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/penpals join</span>

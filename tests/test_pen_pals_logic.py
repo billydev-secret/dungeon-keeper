@@ -312,6 +312,49 @@ def test_session_lifecycle(sync_db_path):
         assert pp._get_session_by_channel(conn, 4242) is None
 
 
+def test_create_session_uses_configured_session_seconds_not_hardcoded_default(sync_db_path):
+    """A custom session_seconds value drives expiry_at, not the module default."""
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now, session_seconds=600)
+    with open_db(sync_db_path) as conn:
+        s = pp._get_session_by_channel(conn, 4242)
+        assert s is not None and s["expiry_at"] == pytest.approx(now + 600)
+
+
+def test_set_and_get_timers_round_trip(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        cfg = pp._get_config(conn, GUILD_ID)
+        assert cfg is None
+    with open_db(sync_db_path) as conn:
+        pp._set_timers(
+            conn, GUILD_ID,
+            session_seconds=1800, match_cooldown_seconds=86400,
+            max_question_swaps=1, warn_seconds=300, question_suppress_seconds=600,
+        )
+    with open_db(sync_db_path) as conn:
+        cfg = pp._get_config(conn, GUILD_ID)
+        assert cfg["session_seconds"] == 1800
+        assert cfg["match_cooldown_seconds"] == 86400
+        assert cfg["max_question_swaps"] == 1
+        assert cfg["warn_seconds"] == 300
+        assert cfg["question_suppress_seconds"] == 600
+
+
+def test_new_config_row_defaults_match_old_hardcoded_constants(sync_db_path):
+    """A freshly _set_config'd guild (no explicit timer overrides) must default
+    to the same values that used to be hardcoded module constants — no
+    behavior change for existing guilds that never touch the new panel."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        cfg = pp._get_config(conn, GUILD_ID)
+        assert cfg["session_seconds"] == pp._SESSION_SECS
+        assert cfg["match_cooldown_seconds"] == pp._MATCH_COOLDOWN_SECS
+        assert cfg["max_question_swaps"] == pp._MAX_SWAPS
+        assert cfg["warn_seconds"] == pp._WARN_SECS
+        assert cfg["question_suppress_seconds"] == pp._Q_SUPPRESS_SECS
+
+
 def test_increment_swaps_counts_up(sync_db_path):
     with open_db(sync_db_path) as conn:
         pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, time.time())
@@ -346,6 +389,27 @@ async def test_do_pair_creates_session_and_clears_pool(sync_db_path, pair_env):
     with open_db(sync_db_path) as conn:
         assert pp._get_shown_questions(conn, session["session_id"]) != []
     assert created == [{"nsfw": False}]
+
+
+async def test_do_pair_uses_configured_session_seconds_not_hardcoded_default(sync_db_path, pair_env):
+    """A guild with a configured session length gets that expiry, not _SESSION_SECS."""
+    bot, _channel, _created = pair_env
+    with open_db(sync_db_path) as conn:
+        pp._set_timers(
+            conn, GUILD_ID,
+            session_seconds=120, match_cooldown_seconds=pp._MATCH_COOLDOWN_SECS,
+            max_question_swaps=pp._MAX_SWAPS, warn_seconds=pp._WARN_SECS,
+            question_suppress_seconds=pp._Q_SUPPRESS_SECS,
+        )
+
+    before = time.time()
+    assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is True
+    after = time.time()
+
+    session = _active_session(sync_db_path, 1)
+    assert session is not None
+    assert before + 120 <= session["expiry_at"] <= after + 120
+    assert session["expiry_at"] < before + pp._SESSION_SECS
 
 
 async def test_do_pair_nsfw_channel_when_category_all(sync_db_path, pair_env):
@@ -597,6 +661,40 @@ async def test_do_round_skips_members_matched_within_the_month(sync_db_path, mon
     assert calls == [(2, 3)]
     assert pairs == 1 and waiting == 1
     assert _pool_ids(sync_db_path) == [1]
+
+
+async def test_do_round_uses_configured_match_cooldown_not_hardcoded_default(sync_db_path, monkeypatch):
+    """A guild with a short configured cooldown re-matches a member who'd
+    still be blocked under the hardcoded 30-day default."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._set_timers(
+            conn, GUILD_ID,
+            session_seconds=pp._SESSION_SECS, match_cooldown_seconds=3600,
+            max_question_swaps=pp._MAX_SWAPS, warn_seconds=pp._WARN_SECS,
+            question_suppress_seconds=pp._Q_SUPPRESS_SECS,
+        )
+        # 1 was matched a week ago — still inside the hardcoded 30-day
+        # default, but well past the guild's configured 1-hour cooldown.
+        pp._create_session(conn, "recent", GUILD_ID, 5, 1, 99, time.time() - 7 * 86400)
+        pp._close_session(conn, "recent", "expired")
+        for i, uid in enumerate([1, 2, 3], start=1):
+            pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
+
+    calls: list[tuple[int, int]] = []
+
+    async def fake_pair(bot, db_path, guild_id, u1, u2):
+        calls.append((u1, u2))
+        with open_db(db_path) as conn:
+            pp._remove_from_pool(conn, guild_id, u1)
+            pp._remove_from_pool(conn, guild_id, u2)
+        return True
+
+    monkeypatch.setattr(pp, "_do_pair", fake_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+    # All 3 (including the recently-matched 1) are eligible under the short cooldown.
+    assert pairs == 1 and waiting == 1
+    assert 1 not in _pool_ids(sync_db_path)
 
 
 async def test_do_round_eligible_once_cooldown_elapses(sync_db_path, monkeypatch):
