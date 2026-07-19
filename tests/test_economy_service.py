@@ -24,8 +24,10 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
     open_qotd_for,
+    get_streak_shields,
     process_conversion,
     process_login,
+    purchase_streak_shield,
     save_econ_settings,
     set_notify_muted,
     transfer_currency,
@@ -869,3 +871,100 @@ def test_transfer_min_amount_one(db):
     with open_db(db) as conn:
         assert get_balance(conn, GUILD, USER) == 0
         assert get_balance(conn, GUILD, OTHER) == 1
+
+
+# ── streak shield: purchase + consumption (sinks round 3, stage 2) ────
+
+
+def _shield_price():
+    return S.price_streak_shield
+
+
+def test_purchase_shield_debits_and_holds(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        charged = purchase_streak_shield(conn, S, GUILD, USER)
+        assert charged == _shield_price()
+        assert get_balance(conn, GUILD, USER) == 100 - _shield_price()
+        assert get_streak_shields(conn, GUILD, USER) == 1
+        assert [r["kind"] for r in get_ledger(conn, GUILD, USER)][0] == "streak_shield"
+
+
+def test_purchase_shield_refused_while_holding(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        purchase_streak_shield(conn, S, GUILD, USER)
+        with pytest.raises(ValueError, match="already holding"):
+            purchase_streak_shield(conn, S, GUILD, USER)
+        # Charged exactly once.
+        assert get_balance(conn, GUILD, USER) == 100 - _shield_price()
+
+
+def test_purchase_shield_insufficient_leaves_no_claim(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, _shield_price() - 1, "grant")
+    # The raise must escape the transaction block (as it does in the cog) so
+    # the claim-before-debit upsert rolls back with everything else.
+    with pytest.raises(ValueError, match="insufficient"):
+        with open_db(db) as conn:
+            purchase_streak_shield(conn, S, GUILD, USER)
+    with open_db(db) as conn:
+        assert get_streak_shields(conn, GUILD, USER) == 0
+        assert get_balance(conn, GUILD, USER) == _shield_price() - 1
+
+
+def test_purchase_shield_allowed_at_streak_zero(db):
+    # No econ_streaks row at all yet — the INSERT arm of the upsert claims it.
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        purchase_streak_shield(conn, S, GUILD, USER)
+        row = _streak_row(conn)
+        assert row["shields"] == 1
+        assert row["current_streak"] == 0
+
+
+def test_login_consumes_shield_when_grace_burned(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        # Day 1 login, then a graced miss, then logins to build the streak.
+        process_login(conn, S, GUILD, USER, local_day="2026-07-01", source="text", booster=False)
+        process_login(conn, S, GUILD, USER, local_day="2026-07-03", source="text", booster=False)  # grace covers 07-02
+        purchase_streak_shield(conn, S, GUILD, USER)
+        # Miss 07-04: grace is inside the rolling window -> shield burns.
+        out = process_login(conn, S, GUILD, USER, local_day="2026-07-05", source="text", booster=False)
+        assert out is not None
+        assert out.shield_consumed is True
+        assert out.grace_consumed is False
+        assert out.reset is False
+        assert out.streak == 3
+        assert get_streak_shields(conn, GUILD, USER) == 0
+
+
+def test_login_gap_three_consumes_grace_and_shield(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        process_login(conn, S, GUILD, USER, local_day="2026-07-01", source="text", booster=False)
+        process_login(conn, S, GUILD, USER, local_day="2026-07-02", source="text", booster=False)
+        purchase_streak_shield(conn, S, GUILD, USER)
+        # Miss 07-03 AND 07-04 -> grace + shield together keep it alive.
+        out = process_login(conn, S, GUILD, USER, local_day="2026-07-05", source="text", booster=False)
+        assert out is not None
+        assert out.grace_consumed is True
+        assert out.shield_consumed is True
+        assert out.streak == 3
+        row = _streak_row(conn)
+        assert row["shields"] == 0
+        assert row["last_grace_day"] == "2026-07-03"
+
+
+def test_login_hopeless_gap_keeps_shield(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        process_login(conn, S, GUILD, USER, local_day="2026-07-01", source="text", booster=False)
+        purchase_streak_shield(conn, S, GUILD, USER)
+        # Four missed days -> reset; the shield must survive for next time.
+        out = process_login(conn, S, GUILD, USER, local_day="2026-07-06", source="text", booster=False)
+        assert out is not None
+        assert out.reset is True
+        assert out.shield_consumed is False
+        assert get_streak_shields(conn, GUILD, USER) == 1

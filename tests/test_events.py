@@ -852,16 +852,21 @@ def _enable_econ(econ_db, **overrides) -> None:
         save_econ_settings(conn, ECON_GUILD, values)
 
 
-def _seed_streak(econ_db, *, streak: int, last_login_day: str, last_grace_day=None) -> None:
+def _seed_streak(
+    econ_db, *, streak: int, last_login_day: str, last_grace_day=None, shields=0
+) -> None:
     with open_db(econ_db) as conn:
         conn.execute(
             """
             INSERT INTO econ_streaks
                 (guild_id, user_id, current_streak, longest_streak,
-                 last_login_day, last_grace_day)
-            VALUES (?, ?, ?, ?, ?, ?)
+                 last_login_day, last_grace_day, shields)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (ECON_GUILD, ECON_USER, streak, streak, last_login_day, last_grace_day),
+            (
+                ECON_GUILD, ECON_USER, streak, streak, last_login_day,
+                last_grace_day, shields,
+            ),
         )
 
 
@@ -975,6 +980,52 @@ async def test_econ_grace_dms(mock_notify, econ_db):
     mock_notify.assert_awaited_once()
     embed = mock_notify.await_args.kwargs["embed"]
     assert any("saved" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_shield_consumed_dms_shield_copy(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # One missed day, but grace was burned inside the rolling window — only
+    # the held shield saves the streak, and the digest must say so.
+    _seed_streak(
+        econ_db, streak=4, last_login_day=_days_ago(2),
+        last_grace_day=_days_ago(4), shields=1,
+    )
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    saved = next(f for f in embed.fields if "saved" in f.name.lower())
+    assert "shield" in saved.value.lower()
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT current_streak, shields FROM econ_streaks "
+            "WHERE guild_id=? AND user_id=?",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row["current_streak"] == 5  # streak survived
+    assert row["shields"] == 0  # shield burned
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_grace_plus_shield_two_day_save(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # Two missed days: grace + shield burn together, one combined callout.
+    _seed_streak(econ_db, streak=6, last_login_day=_days_ago(3), shields=1)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    embed = mock_notify.await_args.kwargs["embed"]
+    saved = next(f for f in embed.fields if "saved" in f.name.lower())
+    assert "two missed days" in saved.value.lower()
+    assert sum(1 for f in embed.fields if "saved" in f.name.lower()) == 1
 
 
 @patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)

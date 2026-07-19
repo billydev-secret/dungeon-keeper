@@ -113,6 +113,16 @@ def test_put_partial_update_roundtrips(authed_client, fake_ctx):
     assert cfg.wallet_name == "Wallet"
 
 
+def test_put_streak_shield_price_roundtrips(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/economy/config", json={"price_streak_shield": 45}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.price_streak_shield == 45
+
+
 def test_put_partial_leaves_other_fields_unset(authed_client, fake_ctx):
     """Only the sent key is written — empty icon URL is settable, and the rest
     of the settings are not persisted."""

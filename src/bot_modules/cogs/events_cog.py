@@ -982,15 +982,22 @@ class EventsCog(commands.Cog):
                 value=f"Bonus **{outcome.milestone:,}** {unit_m}",
                 inline=False,
             )
-        if outcome.grace_consumed:
-            embed.add_field(
-                name="🛟 Streak saved",
-                value=(
-                    f"We covered a missed day — your streak lives on at "
-                    f"day **{outcome.streak}**."
-                ),
-                inline=False,
-            )
+        if outcome.grace_consumed or outcome.shield_consumed:
+            # One combined callout — a 3-day gap consumes grace AND the
+            # shield, and two separate "saved" fields would read as a glitch.
+            if outcome.shield_consumed and outcome.grace_consumed:
+                saved = (
+                    "Two missed days covered — the free grace day plus your "
+                    "🛡️ shield (now used up)"
+                )
+            elif outcome.shield_consumed:
+                saved = "Your 🛡️ shield covered a missed day (now used up)"
+            else:
+                saved = "We covered a missed day"
+            value = f"{saved} — your streak lives on at day **{outcome.streak}**."
+            if outcome.shield_consumed and settings.price_streak_shield > 0:
+                value += " Grab a fresh shield in `/bank shop`."
+            embed.add_field(name="🛟 Streak saved", value=value, inline=False)
         if outcome.reset and prior_streak >= 3:
             embed.add_field(
                 name="🔁 Streak reset",

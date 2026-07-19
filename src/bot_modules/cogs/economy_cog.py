@@ -99,8 +99,10 @@ from bot_modules.services.economy_service import (
     get_balance,
     get_ledger,
     get_notify_muted,
+    get_streak_shields,
     load_econ_settings,
     notify_member,
+    purchase_streak_shield,
     save_econ_settings,
     set_notify_muted,
     transfer_currency,
@@ -663,6 +665,7 @@ class _ShopView(discord.ui.View):
         gated: set[str],
         owned: set[str],
         has_catalog: bool = False,
+        shields_held: int = 0,
     ) -> None:
         super().__init__(timeout=120)
         self.cog = cog
@@ -711,6 +714,22 @@ class _ShopView(discord.ui.View):
                 )
                 button.callback = self._make_rent_callback(perk)
             self.add_item(button)
+        if settings.price_streak_shield > 0:
+            # A held shield stays visible (green, disabled) so the cap reads
+            # as "you have one", not as the button being broken.
+            held = shields_held > 0
+            button = discord.ui.Button(
+                label="🛡️ Shield held" if held else "🛡️ Shield",
+                style=(
+                    discord.ButtonStyle.success
+                    if held
+                    else discord.ButtonStyle.secondary
+                ),
+                disabled=held,
+                custom_id="econ_shop_shield",
+            )
+            button.callback = self._make_shield_callback()
+            self.add_item(button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -735,6 +754,12 @@ class _ShopView(discord.ui.View):
     def _make_icons_callback(self):
         async def _cb(interaction: discord.Interaction) -> None:
             await self.cog.open_icon_catalog(interaction, self.settings, self.guild)
+
+        return _cb
+
+    def _make_shield_callback(self):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.do_buy_shield(interaction, self.settings, self.guild)
 
         return _cb
 
@@ -854,7 +879,9 @@ class ShopRentButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
-        if guild is None or self.perk not in _SELF_PERKS:
+        if guild is None or (
+            self.perk not in _SELF_PERKS and self.perk != "streak_shield"
+        ):
             await interaction.response.send_message(
                 "That perk isn't available.", ephemeral=True
             )
@@ -883,6 +910,17 @@ class ShopRentButton(
             await interaction.response.send_message(
                 "That perk isn't available right now.", ephemeral=True
             )
+            return
+        if self.perk == "streak_shield":
+            # One-shot purchase, not a rental. Settings were re-read above, so
+            # a panel that predates a price-0 (disabled) change refuses here.
+            if settings.price_streak_shield <= 0:
+                await interaction.response.send_message(
+                    "Streak shields aren't for sale here right now.",
+                    ephemeral=True,
+                )
+                return
+            await cog.do_buy_shield(interaction, settings, guild)
             return
         if self.perk == "role_icon" and await asyncio.to_thread(
             cog._has_catalog, guild.id
@@ -918,6 +956,7 @@ def _build_shop_embed(
     owned: set[str] | frozenset[str] = frozenset(),
     icon_catalog: tuple[int, int, int] | None = None,
     balance: int | None = None,
+    shields_held: int = 0,
 ) -> discord.Embed:
     """The shop listing, shared by /bank shop and the channel panel.
 
@@ -926,9 +965,10 @@ def _build_shop_embed(
     ``inline=False`` fields carrying four words each read as an airy list;
     a table reads as a storefront.
 
-    ``owned`` marks the viewer's rented rows and ``balance`` puts their wallet
-    in the footer — both only meaningful for the ephemeral per-member view;
-    the channel panel is member-agnostic and passes neither.
+    ``owned`` marks the viewer's rented rows, ``balance`` puts their wallet
+    in the description, and ``shields_held`` marks the shield row — all only
+    meaningful for the ephemeral per-member view; the channel panel is
+    member-agnostic and passes none of them.
     ``icon_catalog`` is (min price, max price, icon count) across the guild's
     curated catalog; when set, the role-icon row shows that span and its size
     instead of a single flat price.
@@ -981,6 +1021,20 @@ def _build_shop_embed(
             value="\n".join(_line(p) for p in ordered) + "\n​",
             inline=False,
         )
+    if settings.price_streak_shield > 0:
+        # One-shot, not a rental — the only non-weekly row, so it carries its
+        # own field with the "once" spelled out instead of joining the table.
+        held = " · 🛡️ **held**" if shields_held > 0 else ""
+        embed.add_field(
+            name="One-shot",
+            value=(
+                f"🛡️ Streak shield — {settings.currency_emoji} "
+                f"**{settings.price_streak_shield:,}** once{held}\n"
+                "Auto-burns to save your login streak from a missed day the "
+                "free grace can't cover. Hold one at a time."
+            ),
+            inline=False,
+        )
     embed.add_field(
         name="For a friend",
         value=(
@@ -1028,6 +1082,14 @@ def _shop_panel_view(
                 perk,
                 label=f"{_PERK_EMOJI[perk]} {_PERK_SHORT[perk]}",
                 disabled=perk in gated,
+            )
+        )
+    if settings.price_streak_shield > 0:
+        view.add_item(
+            ShopRentButton(
+                "streak_shield",
+                label="🛡️ Shield",
+                style=discord.ButtonStyle.secondary,
             )
         )
     return view
@@ -1083,26 +1145,30 @@ class EconomyCog(commands.Cog):
         guild_id = guild.id
         user_id = interaction.user.id
 
-        def _load() -> tuple[EconSettings, int, list, list]:
+        def _load() -> tuple[EconSettings, int, list, list, int]:
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 balance = get_balance(conn, guild_id, user_id)
                 ledger = get_ledger(conn, guild_id, user_id, limit=10)
                 rentals = list_member_rentals(conn, guild_id, user_id)
-            return settings, balance, ledger, rentals
+                shields = get_streak_shields(conn, guild_id, user_id)
+            return settings, balance, ledger, rentals, shields
 
-        settings, balance, ledger, rentals = await asyncio.to_thread(_load)
+        settings, balance, ledger, rentals, shields = await asyncio.to_thread(_load)
 
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
+        description = (
+            f"{settings.currency_emoji} **{balance:,}** {_unit(settings, balance)}"
+        )
+        if shields > 0:
+            description += "\n🛡️ Streak shield held"
         embed = discord.Embed(
             title=settings.wallet_name,
-            description=(
-                f"{settings.currency_emoji} **{balance:,}** {_unit(settings, balance)}"
-            ),
+            description=description,
             color=accent,
         )
         if settings.currency_icon_url:
@@ -1407,6 +1473,7 @@ class EconomyCog(commands.Cog):
 
         icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         has_catalog = icon_range is not None
+        shields = await asyncio.to_thread(self._shields, guild.id, user_id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = _build_shop_embed(
             settings,
@@ -1415,9 +1482,53 @@ class EconomyCog(commands.Cog):
             owned=owned,
             icon_catalog=icon_range,
             balance=balance,
+            shields_held=shields,
         )
-        view = _ShopView(self, settings, guild, user_id, gated, owned, has_catalog)
+        view = _ShopView(
+            self, settings, guild, user_id, gated, owned, has_catalog,
+            shields_held=shields,
+        )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def do_buy_shield(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+    ) -> None:
+        """Buy the one-shot streak shield (shared by the shop view and panel)."""
+        user_id = interaction.user.id
+
+        def _buy() -> int:
+            with self.ctx.open_db() as conn:
+                return purchase_streak_shield(conn, settings, guild.id, user_id)
+
+        try:
+            price = await asyncio.to_thread(_buy)
+        except ValueError as exc:
+            msg = str(exc)
+            if "insufficient" in msg:
+                bal = await asyncio.to_thread(self._balance, guild.id, user_id)
+                text = (
+                    f"You need {settings.currency_emoji} "
+                    f"{settings.price_streak_shield:,} but only have {bal:,}."
+                )
+            elif "already holding" in msg:
+                text = (
+                    "You're already holding a 🛡️ shield — it burns "
+                    "automatically if a missed day would break your streak."
+                )
+            else:
+                text = "That isn't available right now."
+            await interaction.response.send_message(text, ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"🛡️ Streak shield ready ({settings.currency_emoji} {price:,}). "
+            "If a gap would break your login streak, it burns automatically "
+            "and the streak lives on.",
+            ephemeral=True,
+        )
 
     async def do_rent(
         self,
@@ -2047,6 +2158,10 @@ class EconomyCog(commands.Cog):
     def _balance(self, guild_id: int, user_id: int) -> int:
         with self.ctx.open_db() as conn:
             return get_balance(conn, guild_id, user_id)
+
+    def _shields(self, guild_id: int, user_id: int) -> int:
+        with self.ctx.open_db() as conn:
+            return get_streak_shields(conn, guild_id, user_id)
 
     def _load_role_ctx(
         self, guild_id: int, user_id: int

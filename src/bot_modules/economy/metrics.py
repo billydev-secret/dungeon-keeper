@@ -49,9 +49,11 @@ PRICING_FACTORS: dict[str, float] = {
     "price_role_gradient": 1.2,
     "price_text_room": 2.0,
     "price_voice_room": 2.0,
-    # A consumable, not a rental — priced to be an impulse buy (a tenth of a
-    # week's income), not a considered purchase like the perks above.
+    # Consumables, not rentals — priced as impulse buys, not considered
+    # purchases like the perks above. The shield runs richer than a reroll:
+    # it protects accumulated value (a long streak), not a single board slot.
     "price_quest_reroll": 0.1,
+    "price_streak_shield": 0.3,
 }
 
 

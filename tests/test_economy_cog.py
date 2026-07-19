@@ -24,6 +24,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     get_ledger,
     get_notify_muted,
+    get_streak_shields,
     load_econ_settings,
     notify_member,
     save_econ_settings,
@@ -881,6 +882,12 @@ def _build_shop_embed(*args, **kwargs):
     return build(*args, **kwargs)
 
 
+def _ShopView(*args, **kwargs):
+    from bot_modules.cogs.economy_cog import _ShopView as view_cls
+
+    return view_cls(*args, **kwargs)
+
+
 def _shop_row(embed, label: str) -> str:
     """The shop-table line whose first code cell is ``label``."""
     for field in embed.fields:
@@ -929,7 +936,7 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
     embed = _build_shop_embed(_settings(db), set(), None, panel=True)
 
     tiers = {f.name: f.value for f in embed.fields}
-    assert list(tiers) == ["Essentials", "Signature", "For a friend"]
+    assert list(tiers) == ["Essentials", "Signature", "One-shot", "For a friend"]
 
     # Every row's cells share one width across the whole embed, so the columns
     # line up across tier headings rather than restarting at each one.
@@ -1210,6 +1217,7 @@ async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
         "econ_shop_panel:role_name",
         "econ_shop_panel:role_gradient",
         "econ_shop_panel:role_icon",
+        "econ_shop_panel:streak_shield",
     }
     assert _shop_panel_stored(db) == (777, 8888)
 
@@ -2506,3 +2514,103 @@ async def test_pay_memo_survives_the_large_amount_confirm_gate(ctx, db):
         assert json.loads(get_ledger(conn, GUILD_ID, 500, limit=1)[0]["meta"])[
             "memo"
         ] == "big one"
+
+
+# ── streak shield in the shop (sinks round 3, stage 2) ───────────────────────
+
+
+def test_shop_embed_shield_row_and_held_marker(db):
+    _enable(db)
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    row = next(f for f in embed.fields if f.name == "One-shot")
+    assert "Streak shield" in row.value
+    assert "held" not in row.value
+    held = _build_shop_embed(_settings(db), set(), None, shields_held=1)
+    assert "held" in next(f for f in held.fields if f.name == "One-shot").value
+
+
+def test_shop_embed_hides_shield_at_price_zero(db):
+    _enable(db, price_streak_shield=0)
+    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
+    assert not any(f.name == "One-shot" for f in embed.fields)
+
+
+@pytest.mark.asyncio
+async def test_shop_view_shield_button_disabled_while_held(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    view = _ShopView(cog, _settings(db), _guild_roles(), 500, set(), set())
+    button = next(
+        b for b in view.children
+        if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_shield"
+    )
+    assert button.disabled is False
+    held = _ShopView(
+        cog, _settings(db), _guild_roles(), 500, set(), set(), shields_held=1
+    )
+    button = next(
+        b for b in held.children
+        if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_shield"
+    )
+    assert button.disabled is True
+
+
+@pytest.mark.asyncio
+async def test_buy_shield_debits_and_confirms(ctx, db):
+    _enable(db)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_buy_shield(interaction, _settings(db), _guild_roles())
+
+    assert "ready" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_streak_shields(conn, GUILD_ID, 500) == 1
+        assert get_balance(conn, GUILD_ID, 500) == 100 - 30
+
+
+@pytest.mark.asyncio
+async def test_buy_shield_already_holding_message(ctx, db):
+    _enable(db)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    await cog.do_buy_shield(
+        _interaction(_member(member_id=500)), _settings(db), _guild_roles()
+    )
+    interaction = _interaction(_member(member_id=500))
+    await cog.do_buy_shield(interaction, _settings(db), _guild_roles())
+    assert "already holding" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 100 - 30  # charged once
+
+
+@pytest.mark.asyncio
+async def test_panel_shield_button_buys(ctx, db):
+    from bot_modules.cogs.economy_cog import ShopRentButton
+
+    _enable(db)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _panel_button_interaction(ctx, cog)
+
+    await ShopRentButton("streak_shield").callback(interaction)
+
+    with open_db(db) as conn:
+        assert get_streak_shields(conn, GUILD_ID, 500) == 1
+
+
+@pytest.mark.asyncio
+async def test_panel_shield_button_refuses_at_price_zero(ctx, db):
+    from bot_modules.cogs.economy_cog import ShopRentButton
+
+    _enable(db, price_streak_shield=0)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    interaction = _panel_button_interaction(ctx, cog)
+
+    await ShopRentButton("streak_shield").callback(interaction)
+
+    assert "aren't for sale" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_streak_shields(conn, GUILD_ID, 500) == 0

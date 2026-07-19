@@ -39,6 +39,7 @@ class LoginEval:
     grace_consumed: bool
     reset: bool
     grace_covers_day: str | None
+    shield_consumed: bool = False
 
 
 def evaluate_login(
@@ -47,16 +48,20 @@ def evaluate_login(
     last_login_day: str | None,
     current_streak: int,
     last_grace_day: str | None,
+    shields_held: int = 0,
 ) -> LoginEval:
-    """Evaluate a first-login-of-the-day against the streak/grace rules.
+    """Evaluate a first-login-of-the-day against the streak/grace/shield rules.
 
-    Spec §3.1: a consecutive day extends the streak. A single missed day is
-    bridged silently by grace if no grace was consumed in the rolling 7 local
-    days before the missed day (anchored on ``last_grace_day``) — the streak
-    continues as if unbroken. A second miss inside that window, or a gap of
-    two or more days, resets the streak to 1. Callers never call on a repeat
-    same-day login (the econ_logins dedup row gates that), but a non-positive
-    gap is handled as a no-op defensively.
+    Spec §3.1: a consecutive day extends the streak. Each missed day needs one
+    cover for the streak to survive: the free grace covers ONE missed day if no
+    grace was consumed in the rolling 7 local days before it (anchored on
+    ``last_grace_day``), and a purchased streak shield (sinks round 3, stage 2)
+    covers one more. Covers are consumed grace-first — with the 1-shield cap
+    that means a 2-day gap survives on grace *or* shield, a 3-day gap only
+    with both, and a 4+ day gap always resets to 1. A shield is only consumed
+    when it actually saves the streak — a hopeless gap leaves it held.
+    Callers never call on a repeat same-day login (the econ_logins dedup row
+    gates that), but a non-positive gap is handled as a no-op defensively.
     """
     if last_login_day is None:
         return LoginEval(
@@ -78,19 +83,26 @@ def evaluate_login(
             reset=False,
             grace_covers_day=None,
         )
-    if gap == 2:
-        missed = date.fromisoformat(last_login_day) + timedelta(days=1)
-        grace_available = (
-            last_grace_day is None
-            or (missed - date.fromisoformat(last_grace_day)).days >= GRACE_WINDOW_DAYS
+    missed_days = gap - 1
+    first_missed = date.fromisoformat(last_login_day) + timedelta(days=1)
+    grace_available = (
+        last_grace_day is None
+        or (first_missed - date.fromisoformat(last_grace_day)).days
+        >= GRACE_WINDOW_DAYS
+    )
+    covers = (1 if grace_available else 0) + min(max(shields_held, 0), 1)
+    if missed_days <= covers:
+        # Consume grace first (anchoring its rolling window on the day it
+        # covered), then the shield for the remainder.
+        use_grace = grace_available
+        use_shield = missed_days > (1 if use_grace else 0)
+        return LoginEval(
+            new_streak=current_streak + 1,
+            grace_consumed=use_grace,
+            reset=False,
+            grace_covers_day=first_missed.isoformat() if use_grace else None,
+            shield_consumed=use_shield,
         )
-        if grace_available:
-            return LoginEval(
-                new_streak=current_streak + 1,
-                grace_consumed=True,
-                reset=False,
-                grace_covers_day=missed.isoformat(),
-            )
     return LoginEval(
         new_streak=1, grace_consumed=False, reset=True, grace_covers_day=None
     )

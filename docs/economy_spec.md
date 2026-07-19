@@ -70,11 +70,20 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
 - **Reward:** text login 5 base; **voice login 15 base** (voice deliberately richer —
   decided). +1 per consecutive day, streak bonus capped at +10.
 - **Grace:** one free missed day per rolling 7, automatic and silent; second miss resets.
+- **Streak shield (sinks round 3, stage 2):** a prepaid one-shot bought in `/bank shop`
+  (`price_streak_shield`, default 30; 0 hides the row), held at most ONE, auto-burned
+  when a reset would land — it covers what grace can't. Covers consume grace-first:
+  a 2-day gap survives on grace *or* shield, a 3-day gap only with both, 4+ always
+  resets, and a hopeless gap leaves the shield held. Purchase is a guarded
+  claim-before-debit upsert (`shields = 1 WHERE shields = 0`, then the debit — ledger
+  kind `streak_shield`), so a race can't double-charge; state is
+  `econ_streaks.shields` (migration 091). Purchasable at streak 0.
 - **Milestones:** day 7 → +25 · day 30 → +100 · day 100 → +365 · +100 each 100 after.
 - Idempotency: `INSERT OR IGNORE` on `(guild_id, user_id, local_day)` — one login/day
   no matter how many events race (birthday-announcement pattern).
 - **Daily digest DM:** members with the opt-in `game_role_id` role get one DM per
-  qualifying login — a streak/payout line, any milestone/grace/reset callout, and a
+  qualifying login — a streak/payout line, any milestone/grace/shield/reset callout
+  (grace and shield burning together collapse into one "streak saved" field), and a
   "quests to play with today" checklist (open quests with `progress_bar` meters, capped
   at `_LOGIN_QUEST_RECAP_LIMIT`) so deciding what to do next is one glance, not a dig
   through `/bank quests`. Members without the role earn the same rewards with no DM.
@@ -654,6 +663,7 @@ takes effect on the next cycle, never retroactively.
 | Private text room | 200 | §8 (Stage 2) |
 | Private voice room | 200 | §8 (Stage 2) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
+| Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon

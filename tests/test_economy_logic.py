@@ -316,3 +316,98 @@ def test_convert_xp_remainder_stays_below_rate_across_days():
     # 30 days x 9.7 XP = 291 XP -> 19 coins, 6 XP carried.
     assert total_coins == 19
     assert remainder == pytest.approx(6.0)
+
+
+# ── evaluate_login: streak shields (sinks round 3, stage 2) ───────────
+
+
+@pytest.mark.parametrize(
+    ("today", "last_login", "last_grace", "shields", "expected"),
+    [
+        # Single miss, grace burned inside the window, shield steps in.
+        (
+            "2026-07-10", "2026-07-08", "2026-07-05", 1,
+            LoginEval(
+                6, grace_consumed=False, reset=False, grace_covers_day=None,
+                shield_consumed=True,
+            ),
+        ),
+        # Single miss with grace available: grace first, shield kept.
+        (
+            "2026-07-10", "2026-07-08", None, 1,
+            LoginEval(
+                6, grace_consumed=True, reset=False,
+                grace_covers_day="2026-07-09", shield_consumed=False,
+            ),
+        ),
+        # Two missed days: survives only on grace AND shield together.
+        (
+            "2026-07-10", "2026-07-07", None, 1,
+            LoginEval(
+                6, grace_consumed=True, reset=False,
+                grace_covers_day="2026-07-08", shield_consumed=True,
+            ),
+        ),
+        # Two missed days, shield but no grace: reset, shield NOT consumed.
+        (
+            "2026-07-10", "2026-07-07", "2026-07-05", 1,
+            LoginEval(1, grace_consumed=False, reset=True, grace_covers_day=None),
+        ),
+        # Two missed days, grace but no shield: reset (pre-shield behavior).
+        (
+            "2026-07-10", "2026-07-07", None, 0,
+            LoginEval(1, grace_consumed=False, reset=True, grace_covers_day=None),
+        ),
+        # Three missed days: reset even with both covers.
+        (
+            "2026-07-10", "2026-07-06", None, 1,
+            LoginEval(1, grace_consumed=False, reset=True, grace_covers_day=None),
+        ),
+        # Defensive: shields over the cap behave like exactly one.
+        (
+            "2026-07-10", "2026-07-06", None, 5,
+            LoginEval(1, grace_consumed=False, reset=True, grace_covers_day=None),
+        ),
+        # Defensive: negative shields behave like zero.
+        (
+            "2026-07-10", "2026-07-08", "2026-07-05", -3,
+            LoginEval(1, grace_consumed=False, reset=True, grace_covers_day=None),
+        ),
+        # Consecutive day: shield untouched, nothing consumed.
+        (
+            "2026-07-10", "2026-07-09", None, 1,
+            LoginEval(6, grace_consumed=False, reset=False, grace_covers_day=None),
+        ),
+    ],
+)
+def test_evaluate_login_shield_table(today, last_login, last_grace, shields, expected):
+    result = evaluate_login(
+        today=today,
+        last_login_day=last_login,
+        current_streak=5,
+        last_grace_day=last_grace,
+        shields_held=shields,
+    )
+    assert result == expected
+
+
+def test_shield_save_anchors_grace_window_on_covered_day():
+    # A gap-3 save consumes grace on the FIRST missed day — a single miss
+    # five days later is still inside the rolling window and must reset
+    # (no shield left, grace anchored on 07-08).
+    first = evaluate_login(
+        today="2026-07-10",
+        last_login_day="2026-07-07",
+        current_streak=5,
+        last_grace_day=None,
+        shields_held=1,
+    )
+    assert first.grace_covers_day == "2026-07-08"
+    later = evaluate_login(
+        today="2026-07-13",
+        last_login_day="2026-07-11",
+        current_streak=7,
+        last_grace_day=first.grace_covers_day,
+        shields_held=0,
+    )
+    assert later.reset is True

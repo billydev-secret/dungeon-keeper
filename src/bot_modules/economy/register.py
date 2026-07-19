@@ -72,6 +72,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "game_win": ("🥇", "Game win"),
     "grant": ("🎁", "Staff grant"),
     "quest_reroll": ("🎲", "Quest reroll"),
+    "streak_shield": ("🛡️", "Streak shield"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")

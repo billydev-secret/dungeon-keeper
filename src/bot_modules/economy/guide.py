@@ -129,6 +129,11 @@ def build_guide_embed(
         f"Streaks add +1/day (up to +{settings.streak_bonus_cap}), with "
         "bonuses at day 7, 30 and 100.",
     ]
+    if settings.price_streak_shield > 0:
+        footer_bits.append(
+            "One missed day is forgiven each week; a 🛡️ shield from the shop "
+            "covers one more."
+        )
     if settings.booster_multiplier > 1:
         footer_bits.append(
             f"Boosters earn ×{settings.booster_multiplier:g} on everything."

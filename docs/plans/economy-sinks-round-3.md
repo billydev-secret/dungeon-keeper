@@ -1,6 +1,6 @@
 # Economy sinks, round 3 (perks: gifts, shield, voice lease, emoji, raffle)
 
-**Status:** stage 1 built (2026-07-19), stages 2–5 planned · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
+**Status:** stages 1–2 built (2026-07-19), stages 3–5 planned · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
 
 > **Naming note:** planned in a parallel session as "round 2" before
 > `economy-sinks-round-2.md` (rerolls · QOTD sponsorship · burn list · PvP

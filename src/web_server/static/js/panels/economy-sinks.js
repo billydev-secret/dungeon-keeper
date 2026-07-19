@@ -24,6 +24,9 @@ const CONSUMABLE_FIELDS = [
   ["quest_reroll_daily_cap", "Paid rerolls / day", {
     hint: "How many paid rerolls a member can buy per day, on top of the free one. 0 disables paid rerolls.",
   }],
+  ["price_streak_shield", "Streak shield", {
+    hint: "One-shot: auto-burned to save a login streak the free grace day can't. Members hold at most one. 0 removes it from the shop.",
+  }],
 ];
 
 const ALL_NUM_FIELDS = [...PRICE_FIELDS, ...CONSUMABLE_FIELDS];

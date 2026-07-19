@@ -96,6 +96,11 @@ class EconSettings:
     # approved ones never expire — they're waiting on staff, not the member.
     price_qotd_sponsor: int = 40
     qotd_sponsor_expire_days: int = 14
+    # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
+    # held (max 1) until a login gap would reset the streak, then auto-burned
+    # to save it — covers what the free grace day can't. 0 hides the shop row
+    # (a shield already held still works).
+    price_streak_shield: int = 30
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75
@@ -425,6 +430,7 @@ class LoginOutcome:
     milestone: int
     grace_consumed: bool
     reset: bool
+    shield_consumed: bool = False
 
 
 def process_login(
@@ -456,36 +462,45 @@ def process_login(
 
     row = conn.execute(
         """
-        SELECT current_streak, longest_streak, last_login_day, last_grace_day
+        SELECT current_streak, longest_streak, last_login_day, last_grace_day,
+               shields
         FROM econ_streaks
         WHERE guild_id = ? AND user_id = ?
         """,
         (guild_id, user_id),
     ).fetchone()
+    shields = int(row["shields"]) if row else 0
     ev = logic.evaluate_login(
         today=local_day,
         last_login_day=row["last_login_day"] if row else None,
         current_streak=int(row["current_streak"]) if row else 0,
         last_grace_day=row["last_grace_day"] if row else None,
+        shields_held=shields,
     )
 
     last_grace_day = ev.grace_covers_day if ev.grace_consumed else (
         row["last_grace_day"] if row else None
     )
     longest = max(ev.new_streak, int(row["longest_streak"]) if row else 0)
+    if ev.shield_consumed:
+        shields = max(0, shields - 1)
     conn.execute(
         """
         INSERT INTO econ_streaks
             (guild_id, user_id, current_streak, longest_streak,
-             last_login_day, last_grace_day)
-        VALUES (?, ?, ?, ?, ?, ?)
+             last_login_day, last_grace_day, shields)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
             current_streak = excluded.current_streak,
             longest_streak = excluded.longest_streak,
             last_login_day = excluded.last_login_day,
-            last_grace_day = excluded.last_grace_day
+            last_grace_day = excluded.last_grace_day,
+            shields = excluded.shields
         """,
-        (guild_id, user_id, ev.new_streak, longest, local_day, last_grace_day),
+        (
+            guild_id, user_id, ev.new_streak, longest, local_day,
+            last_grace_day, shields,
+        ),
     )
 
     base = settings.login_voice_base if source == "voice" else settings.login_text_base
@@ -530,7 +545,56 @@ def process_login(
         milestone=milestone_paid,
         grace_consumed=ev.grace_consumed,
         reset=ev.reset,
+        shield_consumed=ev.shield_consumed,
     )
+
+
+def purchase_streak_shield(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+) -> int:
+    """Buy the prepaid streak shield (one-shot, held until a reset would land).
+
+    Cap is ONE held at a time. The guarded upsert is the race anchor — it
+    claims the slot (``shields = 1`` only where currently 0) before any money
+    moves, so two concurrent buys can't both charge; the debit failing then
+    unwinds the claim with the caller's transaction. Purchasable at any streak,
+    including 0 (it protects the next streak). Returns the price charged.
+    Raises ValueError: "already holding" when a shield is held, "insufficient"
+    when the debit fails.
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO econ_streaks (guild_id, user_id, shields)
+        VALUES (?, ?, 1)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET shields = 1
+        WHERE econ_streaks.shields = 0
+        """,
+        (guild_id, user_id),
+    )
+    if (cur.rowcount or 0) == 0:
+        raise ValueError("already holding")
+    price = int(settings.price_streak_shield)
+    ok = apply_debit(
+        conn, guild_id, user_id, price, "streak_shield",
+        actor_id=user_id, meta={},
+    )
+    if not ok:
+        raise ValueError("insufficient")
+    return price
+
+
+def get_streak_shields(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> int:
+    """How many streak shields the member holds (0 or 1 under the cap)."""
+    row = conn.execute(
+        "SELECT shields FROM econ_streaks WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    return int(row["shields"]) if row else 0
 
 
 def process_conversion(
