@@ -9,7 +9,24 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Health: exclude Voice Master self-service from mod workload  (this commit)
+### XP: promotion-review trust — spicy-access field, 2-day tenure gate, /grant_missing  (this commit)
+
+- [ ] Level a fresh test alt (joined <2 days ago) up to level 5 → **no**
+      promotion-review post lands in the level-5 log channel; a row appears
+      in `pending_promotion_posts` for that member.
+- [ ] Wait for (or manually trigger) `promotion_review_recheck_loop` after
+      the member's tenure clears 2 days → the post now lands, and the
+      `Spicy access` field shows ❌ Not granted (or ✅ Granted if the member
+      already has the NSFW role). The pending row is gone after.
+- [ ] Level an established member (joined weeks ago) to 5 → promotion post
+      lands immediately as before, with the `Spicy access` field.
+- [ ] `/grant_missing` with defaults → lists members at level 5+ missing the
+      NSFW role; a member on an active inactive-channel hold does **not**
+      appear even if they qualify otherwise.
+- [ ] `/grant_missing role:<other> min_level:<n>` → autocomplete offers the
+      guild's configured grant roles; the list respects the custom level.
+
+### Health: exclude Voice Master self-service from mod workload  (e4b9daa)
 
 - [ ] Have a mod create/claim/rename their own Voice Master channel, then
       check the dashboard's Moderator Workload tile → those actions no

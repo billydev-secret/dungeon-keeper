@@ -31,7 +31,11 @@ from bot_modules.services.wellness_partners import (
     WellnessPartnerDeclineButton,
 )
 from bot_modules.services.db_backup import db_backup_loop
-from bot_modules.services.xp_service import handle_level_progress
+from bot_modules.services.xp_service import (
+    handle_level_progress,
+    nsfw_grant_role_id,
+    promotion_review_recheck_loop,
+)
 from bot_modules.core.utils import format_guild_for_log
 from bot_modules.services.games_db import GamesDb
 
@@ -286,6 +290,7 @@ def main() -> None:
             level_5_log_channel_id=cfg.level_5_log_channel_id,
             settings=cfg.xp_settings,
             db_path=db_path,
+            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
         )
 
     bot.startup_task_factories.append(
@@ -295,6 +300,10 @@ def main() -> None:
             _handle_level_progress_cb,
             settings_for=lambda gid: ctx.guild_config(gid).xp_settings,
         )
+    )
+
+    bot.startup_task_factories.append(
+        lambda: promotion_review_recheck_loop(bot, db_path, ctx.guild_config)
     )
 
     bot.startup_task_factories.append(lambda: auto_delete_loop(bot, db_path))

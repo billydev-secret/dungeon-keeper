@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime, timezone
+import sqlite3
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,6 +23,8 @@ from bot_modules.core.xp_system import (
 )
 
 if TYPE_CHECKING:
+    from bot_modules.core.app_context import GuildConfig
+
     GuildTextLike = discord.TextChannel | discord.Thread
 
 log = logging.getLogger("dungeonkeeper.xp_service")
@@ -33,6 +38,73 @@ class LevelRoleDecision(Enum):
     SKIP_BELOW_THRESHOLD = "skip_below_threshold"
     SKIP_ROLE_MISSING = "skip_role_missing"
     SKIP_ALREADY_HAS = "skip_already_has"
+
+
+def nsfw_grant_role_id(grant_roles: dict) -> int:
+    """The guild's configured NSFW/"spicy" access role id, or 0 if unset."""
+    cfg = grant_roles.get("nsfw")
+    return int(cfg["role_id"]) if cfg else 0
+
+
+def candidates_missing_grant_check(
+    level_by_user: dict[int, int], inactive_user_ids: set[int]
+) -> list[tuple[int, int]]:
+    """``(user_id, level)`` pairs worth checking for a missing grant role.
+
+    Excludes members currently on an inactive-channel hold: their roles were
+    stripped on purpose when they went inactive, not skipped by mistake, so
+    they shouldn't show up as "missing" a grant. Sorted highest level first.
+    """
+    out = [
+        (uid, lvl) for uid, lvl in level_by_user.items() if uid not in inactive_user_ids
+    ]
+    out.sort(key=lambda p: -p[1])
+    return out
+
+
+# A level-5 crossing this fresh reads as a burst, not a track record — the
+# promotion-review post waits for the member to clear this tenure bar.
+PROMOTION_REVIEW_MIN_TENURE = timedelta(days=2)
+
+
+def record_pending_promotion_post(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    total_xp: float,
+    eligible_at: float,
+    *,
+    now: float | None = None,
+) -> None:
+    """Park a level-5 promotion post until the member clears the tenure bar."""
+    conn.execute(
+        "INSERT INTO pending_promotion_posts "
+        "(guild_id, user_id, total_xp, eligible_at, created_at) VALUES (?, ?, ?, ?, ?)"
+        " ON CONFLICT (guild_id, user_id) DO UPDATE SET "
+        "total_xp=excluded.total_xp, eligible_at=excluded.eligible_at",
+        (guild_id, user_id, total_xp, eligible_at, now if now is not None else eligible_at),
+    )
+    conn.commit()
+
+
+def list_due_pending_promotion_posts(
+    conn: sqlite3.Connection, now: float
+) -> list[sqlite3.Row]:
+    """Pending promotion posts whose tenure bar has now cleared, across all guilds."""
+    return conn.execute(
+        "SELECT guild_id, user_id, total_xp FROM pending_promotion_posts WHERE eligible_at <= ?",
+        (now,),
+    ).fetchall()
+
+
+def delete_pending_promotion_post(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> None:
+    conn.execute(
+        "DELETE FROM pending_promotion_posts WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    conn.commit()
 
 
 def should_grant_level_role(
@@ -157,6 +229,8 @@ async def maybe_log_level_5(
     level_5_log_channel_id: int,
     level_5_role_id: int,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    *,
+    nsfw_role_id: int = 0,
 ) -> None:
     """Log a level 5 achievement announcement."""
     if level_5_log_channel_id <= 0:
@@ -188,6 +262,13 @@ async def maybe_log_level_5(
     embed.add_field(name="Total XP", value=f"{total_xp:.2f}", inline=True)
     if reward_role is not None:
         embed.add_field(name="Reward Role", value=reward_role.mention, inline=True)
+    if nsfw_role_id > 0:
+        has_nsfw = any(r.id == nsfw_role_id for r in member.roles)
+        embed.add_field(
+            name="Spicy access",
+            value="✅ Granted" if has_nsfw else "❌ Not granted",
+            inline=True,
+        )
     if member.joined_at is not None:
         joined_ts = int(member.joined_at.timestamp())
         embed.add_field(
@@ -332,6 +413,7 @@ async def handle_level_progress(
     level_5_log_channel_id: int,
     db_path: Path,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    nsfw_role_id: int = 0,
 ) -> None:
     """Handle role grants and announcements when a member levels up.
 
@@ -404,13 +486,33 @@ async def handle_level_progress(
                 award.new_level,
                 award.total_xp,
             )
-            await maybe_log_level_5(
-                member,
-                award.total_xp,
-                level_5_log_channel_id,
-                level_5_role_id,
-                settings,
+            eligible_at = (
+                (member.joined_at + PROMOTION_REVIEW_MIN_TENURE).timestamp()
+                if member.joined_at is not None
+                else 0.0
             )
+            if member.joined_at is None or eligible_at <= datetime.now(timezone.utc).timestamp():
+                await maybe_log_level_5(
+                    member,
+                    award.total_xp,
+                    level_5_log_channel_id,
+                    level_5_role_id,
+                    settings,
+                    nsfw_role_id=nsfw_role_id,
+                )
+            else:
+                log.info(
+                    "Deferring level %s promotion post for %s until tenure clears (eligible_at=%s).",
+                    settings.role_grant_level,
+                    format_user_for_log(member),
+                    eligible_at,
+                )
+                from bot_modules.core.db_utils import open_db
+
+                with open_db(db_path) as conn:
+                    record_pending_promotion_post(
+                        conn, member.guild.id, member.id, award.total_xp, eligible_at
+                    )
         else:
             log.debug(
                 "No level %s trigger for %s from source=%s (old_level=%s new_level=%s).",
@@ -420,3 +522,65 @@ async def handle_level_progress(
                 award.old_level,
                 award.new_level,
             )
+
+
+async def promotion_review_recheck_loop(
+    bot: discord.Client,
+    db_path: Path,
+    guild_config_for: Callable[[int], GuildConfig],
+    *,
+    interval_seconds: int = 1800,
+) -> None:
+    """Fire promotion posts deferred by ``handle_level_progress`` once due.
+
+    A pending row is dropped (not retried) once handled — the member left,
+    the guild is gone, or the post was attempted. This matches the
+    best-effort reliability of the immediate post path, which likewise
+    doesn't retry a failed Discord send beyond logging it.
+    """
+    from bot_modules.core.db_utils import open_db
+
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        try:
+            with open_db(db_path) as conn:
+                due = list_due_pending_promotion_posts(conn, datetime.now(timezone.utc).timestamp())
+
+            for row in due:
+                guild_id, user_id, total_xp = row["guild_id"], row["user_id"], row["total_xp"]
+                guild = bot.get_guild(guild_id)
+                member = guild.get_member(user_id) if guild is not None else None
+                if guild is not None and member is None:
+                    try:
+                        member = await guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        member = None
+                    except discord.HTTPException:
+                        log.exception(
+                            "Failed to fetch member %s in guild %s for a deferred promotion post.",
+                            user_id, guild_id,
+                        )
+                        continue
+
+                if guild is not None and member is not None:
+                    cfg = guild_config_for(guild_id)
+                    await maybe_log_level_5(
+                        member,
+                        total_xp,
+                        cfg.level_5_log_channel_id,
+                        cfg.level_5_role_id,
+                        cfg.xp_settings,
+                        nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                    )
+
+                with open_db(db_path) as conn:
+                    delete_pending_promotion_post(conn, guild_id, user_id)
+        except asyncio.CancelledError:
+            raise
+        except sqlite3.OperationalError:
+            log.exception("Promotion review recheck hit a SQLite operational error.")
+        except Exception:
+            log.exception("Promotion review recheck failed.")
+
+        await asyncio.sleep(interval_seconds)

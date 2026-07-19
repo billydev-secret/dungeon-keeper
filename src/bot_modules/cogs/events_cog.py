@@ -42,7 +42,7 @@ from bot_modules.services.message_xp_service import (
 from bot_modules.services.sentiment_service import score_text
 from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
 from bot_modules.services.wellness_enforcement import wellness_on_message
-from bot_modules.services.xp_service import handle_level_progress
+from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
@@ -704,6 +704,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.ctx.db_path,
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
             )
 
         # Economy faucets — daily text login + QOTD reward. Optional and fully
@@ -932,6 +933,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.ctx.db_path,
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
             )
             # Reaction quest trigger — `given` is non-None only when the XP
             # dedup admitted a NEW (message, reactor) pair, so the quest
@@ -984,6 +986,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.ctx.db_path,
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
             )
 
         if payload.guild_id:

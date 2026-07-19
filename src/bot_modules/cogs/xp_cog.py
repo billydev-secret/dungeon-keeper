@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.services.xp_service import handle_level_progress
+from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.xp_system import (
     XP_SOURCE_GRANT,
     XP_SOURCE_IMAGE_REACT,
@@ -336,6 +336,7 @@ class XpCog(commands.Cog):
             level_5_log_channel_id=cfg.level_5_log_channel_id,
             settings=xp_settings,
             db_path=ctx.db_path,
+            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
         )
 
         await interaction.response.send_message(

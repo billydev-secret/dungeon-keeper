@@ -459,6 +459,7 @@ class _StubGuildConfig:
         level_5_role_id: int = 0,
         level_5_log_channel_id: int = 0,
         level_up_log_channel_id: int = 0,
+        grant_roles: Any = None,
         xp_settings: Any = DEFAULT_XP_SETTINGS,
         message_storage_level: str = "none",
         auto_role_ids: Any = None,
@@ -491,6 +492,7 @@ class _StubGuildConfig:
         self.level_5_role_id = level_5_role_id
         self.level_5_log_channel_id = level_5_log_channel_id
         self.level_up_log_channel_id = level_up_log_channel_id
+        self.grant_roles = {} if grant_roles is None else grant_roles
         self.xp_settings = xp_settings
         self.message_storage_level = message_storage_level
         self.auto_role_ids = (
