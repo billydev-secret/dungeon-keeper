@@ -9,7 +9,13 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy: square up the quest board's cadence tags  (this commit)
+### Quote cards: bump banner text size  (this commit)
+
+- [ ] Trigger a QOTD banner and a `/quote banner` card → body text reads
+      noticeably larger than before; check a long quote on the with-avatar
+      layout doesn't visually clip at the bottom.
+
+### Economy: square up the quest board's cadence tags  (bd1d343)
 
 - [ ] `/bank` (or wherever the leaderboard embed posts) → the `Daily` /
       `Weekly` / `Monthly` / `Anytime` tags in the Quest board field line up
