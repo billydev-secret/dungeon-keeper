@@ -15,7 +15,6 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
@@ -69,7 +68,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     ) -> HotPotatoGame | None:
         return await hpdb.get_pending_game_for_challenger(self.db, guild_id, channel_id, user_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await hpdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_fetch_active_games(self) -> list[HotPotatoGame]:
@@ -155,19 +154,14 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-            await hpdb.set_game_state(
-                self.db, game_id, "RESOLVED",
+            await self._db_set_state(
+                game_id, "RESOLVED",
                 winner_id=winner_id,
                 loser_id=loser_id,
                 pass_log=json.dumps(new_log),
                 result_message_id=result_message_id,
                 resolved_at=now,
                 last_action_at=now,
-            )
-            await pay_game_rewards(
-                self.bot, game.guild_id,
-                [game.challenger_id, game.target_id], [winner_id], self.GAME_KEY,
-                occurrence=str(game.id),
             )
 
         self._cancel_timer(game_id)
@@ -183,8 +177,8 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         initial_log = json.dumps(
             [{"holder_id": game.challenger_id, "received_at": now, "passed_at": None}]
         )
-        await hpdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             holder_id=game.challenger_id,
             timer_seconds=timer,
             started_at=now,
@@ -357,8 +351,8 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             new_log[-1] = {**new_log[-1], "passed_at": now}
         new_log.append({"holder_id": new_holder, "received_at": now, "passed_at": None})
 
-        await hpdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             holder_id=new_holder,
             pass_log=json.dumps(new_log),
             last_action_at=now,

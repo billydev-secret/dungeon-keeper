@@ -13,7 +13,6 @@ import discord
 from discord import app_commands
 
 from bot_modules.duels.base_duel import BaseDuel
-from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
@@ -61,7 +60,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
     ) -> PressureGame | None:
         return await pdb.get_pending_game_for_challenger(self.db, guild_id, channel_id, user_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await pdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_fetch_active_games(self) -> list[PressureGame]:
@@ -77,7 +76,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
 
     async def on_game_start(self, game: PressureGame) -> None:
         first_player = random.choice([game.challenger_id, game.target_id])
-        await pdb.set_game_state(self.db, game.id, "ACTIVE", active_player=first_player)
+        await self._db_set_state(game.id, "ACTIVE", active_player=first_player)
 
     def render_game_state(
         self, game: PressureGame, guild: discord.Guild
@@ -189,13 +188,6 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
             game_view = self.build_game_view(game.id)
             game_view.disable()
             await interaction.edit_original_response(embed=bust_embed, view=game_view)
-            await pay_game_rewards(
-                self.bot, game.guild_id,
-                [game.challenger_id, game.target_id],
-                [game.winner_id] if game.winner_id is not None else [],
-                self.GAME_KEY,
-                occurrence=str(game.id),
-            )
             return ("done", game.loser_id)
 
         return ("continue", None)

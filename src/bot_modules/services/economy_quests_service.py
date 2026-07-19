@@ -33,6 +33,8 @@ from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
+    apply_debit,
+    get_balance,
     load_econ_settings,
 )
 
@@ -530,16 +532,19 @@ def reroll_board_slot(
     user_id: int,
     quest_id: int,
     local_day: str,
-) -> sqlite3.Row:
+) -> tuple[sqlite3.Row, int]:
     """Swap one personal-board quest for a different pool quest (stage 5).
 
-    One free reroll per member per guild-local day, across all cadences.
-    The slot must be untouched this period (no claim, no counted progress).
-    The replacement is the first pool quest in the member's own shuffle
-    order that isn't on their board, preferring a **different trigger
-    kind** — the reroll exists for "this quest doesn't fit how I use the
-    server", so same-kind swaps are the last resort. Returns the new quest
-    row; ValueError with a member-facing message otherwise.
+    One free reroll per member per guild-local day, across all cadences,
+    then up to ``quest_reroll_daily_cap`` more at ``price_quest_reroll``
+    each. The slot must be untouched this period (no claim, no counted
+    progress). The replacement is the first pool quest in the member's own
+    shuffle order that isn't on their board, preferring a **different
+    trigger kind** — the reroll exists for "this quest doesn't fit how I use
+    the server", so same-kind swaps are the last resort.
+
+    Returns ``(new_quest_row, cost)`` where cost is 0 for the free reroll;
+    raises ValueError with a member-facing message otherwise.
     """
     quest = get_quest(conn, guild_id, quest_id)
     if quest is None or not quest["active"]:
@@ -586,14 +591,17 @@ def reroll_board_slot(
     ]
     new_id = (different or candidates)[0]
 
-    # Burn the daily reroll LAST, so validation failures never consume it.
+    # Spend the reroll LAST, so validation failures never consume the free
+    # allowance or charge the wallet. Free first: the row's existence is the
+    # "free one is gone" flag, so a successful INSERT *is* the free reroll.
+    cost = 0
     cur = conn.execute(
         "INSERT OR IGNORE INTO econ_rerolls (guild_id, user_id, local_day) "
         "VALUES (?, ?, ?)",
         (guild_id, user_id, local_day),
     )
     if (cur.rowcount or 0) == 0:
-        raise ValueError("You've already used today's free reroll.")
+        cost = _charge_paid_reroll(conn, settings, guild_id, user_id, local_day)
 
     # If the outgoing quest was itself a replacement, update that override
     # in place — application then never has to chain from→to→to.
@@ -612,7 +620,61 @@ def reroll_board_slot(
         )
     new_quest = get_quest(conn, guild_id, new_id)
     assert new_quest is not None
-    return new_quest
+    return new_quest, cost
+
+
+def _paid_rerolls_today(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, local_day: str
+) -> int:
+    row = conn.execute(
+        "SELECT paid_count FROM econ_rerolls WHERE guild_id = ? AND user_id = ? "
+        "AND local_day = ?",
+        (guild_id, user_id, local_day),
+    ).fetchone()
+    return int(row["paid_count"]) if row is not None else 0
+
+
+def _charge_paid_reroll(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    local_day: str,
+) -> int:
+    """Debit one paid reroll and count it, or raise a member-facing ValueError.
+
+    Only reached once the free reroll is gone. Every failure raises before any
+    write, so a capped-out or broke member loses nothing.
+    """
+    price = int(settings.price_quest_reroll)
+    cap = int(settings.quest_reroll_daily_cap)
+    if price < 1 or cap < 1:
+        raise ValueError("You've already used today's free reroll.")
+    used = _paid_rerolls_today(conn, guild_id, user_id, local_day)
+    if used >= cap:
+        raise ValueError(
+            f"You've used today's free reroll and all {cap} paid ones — "
+            "your board refreshes tomorrow."
+        )
+    unit = settings.currency_plural or "coins"
+    if not apply_debit(
+        conn,
+        guild_id,
+        user_id,
+        price,
+        "quest_reroll",
+        meta={"local_day": local_day},
+    ):
+        have = get_balance(conn, guild_id, user_id)
+        raise ValueError(
+            f"Another reroll costs {price} {unit} — you have {have}."
+        )
+    conn.execute(
+        "UPDATE econ_rerolls SET paid_count = paid_count + 1 "
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+        (guild_id, user_id, local_day),
+    )
+    return price
 
 
 def reroll_available(
@@ -625,6 +687,30 @@ def reroll_available(
         (guild_id, user_id, local_day),
     ).fetchone()
     return row is None
+
+
+def reroll_quote(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    local_day: str,
+) -> int | None:
+    """What the member's next reroll would cost: 0 free, >0 paid, None if none left.
+
+    Affordability is deliberately *not* checked here — the shop tells you the
+    price and lets you find out you're short, rather than hiding the option
+    and leaving you wondering where the reroll went.
+    """
+    if reroll_available(conn, guild_id, user_id, local_day):
+        return 0
+    price = int(settings.price_quest_reroll)
+    cap = int(settings.quest_reroll_daily_cap)
+    if price < 1 or cap < 1:
+        return None
+    if _paid_rerolls_today(conn, guild_id, user_id, local_day) >= cap:
+        return None
+    return price
 
 
 def spotlight_kind(
@@ -651,6 +737,107 @@ def spotlight_kind(
         return None
     digest = hashlib.sha256(f"{guild_id}:{iso_week}".encode()).hexdigest()
     return kinds[int(digest, 16) % len(kinds)]
+
+
+def load_member_quest_board(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    day: str,
+) -> list[dict]:
+    """Active quests for a member on ``day``, with progress/claim state.
+
+    Shared by the ``/bank quests`` panel and the daily-login DM's quest
+    recap — one place computing "what does this member still have to do".
+    """
+    rows = conn.execute(
+        """
+        SELECT * FROM econ_quests
+        WHERE guild_id = ? AND active = 1
+        ORDER BY qtype, id
+        """,
+        (guild_id,),
+    ).fetchall()
+    spot = spotlight_kind(conn, guild_id, quests.iso_week_for(day))
+    boards: dict[str, set[int]] = {}
+    out: list[dict] = []
+    for row in rows:
+        qtype = str(row["qtype"])
+        quest_id = int(row["id"])
+        if quests.has_board(qtype):
+            if qtype not in boards:
+                boards[qtype] = assigned_board_ids(
+                    conn, guild_id, user_id, qtype, day, settings
+                )
+            if quest_id not in boards[qtype]:
+                continue  # not on this member's board this period
+        entry: dict = {
+            "id": quest_id,
+            "title": row["title"],
+            "description": row["description"],
+            "qtype": qtype,
+            "reward": int(row["reward"]),
+            "reward_xp": int(row["reward_xp"]),
+            "signoff": bool(row["signoff"]),
+            "criteria": row["criteria"],
+            "spotlight": bool(
+                spot and str(row["trigger_kind"] or "") == spot
+            ),
+        }
+        if qtype == "community":
+            prog = conn.execute(
+                "SELECT current FROM econ_community_progress WHERE quest_id = ?",
+                (quest_id,),
+            ).fetchone()
+            target = row["community_target"]
+            entry["state"] = "community"
+            entry["current"] = int(prog["current"]) if prog else 0
+            entry["target"] = int(target) if target is not None else 0
+        elif qtype == "event":
+            # No calendar period — the trigger listener pays per
+            # occurrence (e.g. per photo card), so the list shows the
+            # standing how-to instead of a per-period claim state.
+            entry["state"] = str(row["trigger_kind"]) or "trigger"
+        else:
+            period = quests.quest_period(qtype, day)
+            claim = conn.execute(
+                """
+                SELECT state FROM econ_quest_claims
+                WHERE quest_id = ? AND user_id = ? AND period = ?
+                  AND state IN ('paid', 'pending')
+                ORDER BY CASE state WHEN 'paid' THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                (quest_id, user_id, period),
+            ).fetchone()
+            kind = str(row["trigger_kind"] or "")
+            has_trigger = bool(str(row["trigger_words"] or "").strip())
+            # Resolves (and stores) the member's dynamic target on first
+            # sight, so the wallet shows the same number the fire path
+            # will enforce all period.
+            target = resolve_member_target(
+                conn, guild_id, user_id, row,
+                period=period, local_day=day,
+            )
+            if kind and target > 1:
+                entry["progress_current"] = get_progress(
+                    conn, quest_id, user_id, period
+                )
+                entry["progress_target"] = target
+            if claim is None:
+                # Trigger quests never enter the claim select — the
+                # phrase/game event IS the verification, so a manual
+                # claim would bypass it.
+                entry["state"] = kind or (
+                    "trigger" if has_trigger else "claimable"
+                )
+            elif claim["state"] == "paid":
+                entry["state"] = "done"
+            else:
+                entry["state"] = "pending"
+        out.append(entry)
+    return out
 
 
 def local_day_for_period(qtype: str, period: str) -> str:

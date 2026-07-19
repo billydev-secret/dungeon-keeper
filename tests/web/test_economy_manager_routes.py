@@ -8,8 +8,10 @@ import time
 from fastapi.testclient import TestClient
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
 from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services.economy_service import (
+    apply_credit,
     get_balance,
     load_econ_settings,
     save_econ_settings,
@@ -290,6 +292,170 @@ def test_list_pending_claims(authed_client, fake_ctx):
     assert len(claims) == 1
     assert claims[0]["user_id"] == "600"
     assert claims[0]["deny_count"] == 0
+
+
+# ── sponsored QOTD queue ───────────────────────────────────────────────
+
+
+SPONSOR_PRICE = 40
+QUESTION = "What is the strangest thing you have ever eaten?"
+
+
+def _seed_submission(fake_ctx, user_id: int, question: str = QUESTION) -> int:
+    """Fund a member and buy one pending submission through the service."""
+    with open_db(fake_ctx.db_path) as conn:
+        save_econ_settings(
+            conn, fake_ctx.guild_id, {"price_qotd_sponsor": SPONSOR_PRICE}
+        )
+        apply_credit(conn, fake_ctx.guild_id, user_id, SPONSOR_PRICE, "grant")
+        settings = load_econ_settings(conn, fake_ctx.guild_id)
+        outcome = sponsor_svc.submit_sponsor(
+            conn, settings, fake_ctx.guild_id, user_id, question
+        )
+        return outcome.submission_id
+
+
+def _submission(fake_ctx, sub_id: int):
+    with open_db(fake_ctx.db_path) as conn:
+        return sponsor_svc.get_submission(conn, sub_id)
+
+
+def test_approve_queues_submission(authed_client, fake_ctx):
+    sub_id = _seed_submission(fake_ctx, user_id=701)
+
+    resp = authed_client.post(f"/api/economy/qotd-submissions/{sub_id}/approve")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "approved"
+    assert resp.json()["card_updated"] is False  # no bot in tests
+
+    row = _submission(fake_ctx, sub_id)
+    assert row["state"] == "approved"
+    assert row["resolver_id"]  # the dashboard user, recorded for the audit
+    with open_db(fake_ctx.db_path) as conn:
+        # Approval keeps the money: only a decline refunds.
+        assert get_balance(conn, fake_ctx.guild_id, 701) == 0
+        assert sponsor_svc.next_approved(conn, fake_ctx.guild_id)["id"] == sub_id
+
+    # Approved is no longer pending → a second approve is a 409, not a re-queue.
+    assert (
+        authed_client.post(
+            f"/api/economy/qotd-submissions/{sub_id}/approve"
+        ).status_code
+        == 409
+    )
+
+
+def test_deny_refunds_and_requires_reason(authed_client, fake_ctx):
+    sub_id = _seed_submission(fake_ctx, user_id=702)
+
+    assert (
+        authed_client.post(
+            f"/api/economy/qotd-submissions/{sub_id}/deny", json={"reason": ""}
+        ).status_code
+        == 422
+    )
+
+    resp = authed_client.post(
+        f"/api/economy/qotd-submissions/{sub_id}/deny", json={"reason": "Off topic"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "denied"
+
+    row = _submission(fake_ctx, sub_id)
+    assert row["deny_reason"] == "Off topic"
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 702) == SPONSOR_PRICE
+
+    # Replay must not pay twice.
+    assert (
+        authed_client.post(
+            f"/api/economy/qotd-submissions/{sub_id}/deny", json={"reason": "again"}
+        ).status_code
+        == 409
+    )
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 702) == SPONSOR_PRICE
+
+
+def test_withdraw_pulls_approved_back_and_refunds(authed_client, fake_ctx):
+    sub_id = _seed_submission(fake_ctx, user_id=703)
+
+    # Withdraw only applies once approved.
+    assert (
+        authed_client.post(
+            f"/api/economy/qotd-submissions/{sub_id}/withdraw", json={"reason": ""}
+        ).status_code
+        == 409
+    )
+    authed_client.post(f"/api/economy/qotd-submissions/{sub_id}/approve")
+
+    resp = authed_client.post(
+        f"/api/economy/qotd-submissions/{sub_id}/withdraw",
+        json={"reason": "Saving it for next month"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "denied"
+
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 703) == SPONSOR_PRICE
+        assert sponsor_svc.next_approved(conn, fake_ctx.guild_id) is None
+
+
+def test_withdraw_reason_optional(authed_client, fake_ctx):
+    sub_id = _seed_submission(fake_ctx, user_id=704)
+    authed_client.post(f"/api/economy/qotd-submissions/{sub_id}/approve")
+
+    resp = authed_client.post(f"/api/economy/qotd-submissions/{sub_id}/withdraw")
+    assert resp.status_code == 200
+    assert _submission(fake_ctx, sub_id)["deny_reason"] == ""
+
+
+def test_list_submissions_filters_by_state(authed_client, fake_ctx):
+    pending_id = _seed_submission(fake_ctx, user_id=705)
+    approved_id = _seed_submission(fake_ctx, user_id=706)
+    authed_client.post(f"/api/economy/qotd-submissions/{approved_id}/approve")
+
+    pending = authed_client.get(
+        "/api/economy/qotd-submissions", params={"state": "pending"}
+    ).json()["submissions"]
+    assert [s["id"] for s in pending] == [pending_id]
+    assert pending[0]["user_id"] == "705"
+    assert pending[0]["question"] == QUESTION
+    assert pending[0]["price"] == SPONSOR_PRICE
+    assert pending[0]["resolved_at"] is None
+
+    approved = authed_client.get(
+        "/api/economy/qotd-submissions", params={"state": "approved"}
+    ).json()["submissions"]
+    assert [s["id"] for s in approved] == [approved_id]
+
+    everything = authed_client.get("/api/economy/qotd-submissions").json()[
+        "submissions"
+    ]
+    assert {s["id"] for s in everything} == {pending_id, approved_id}
+
+
+def test_submission_endpoints_unknown_id_404(authed_client):
+    assert (
+        authed_client.post("/api/economy/qotd-submissions/9999/approve").status_code
+        == 404
+    )
+
+
+def test_submission_endpoints_require_manager(fake_ctx):
+    _set_manager_role(fake_ctx)
+    sub_id = _seed_submission(fake_ctx, user_id=707)
+    client = _client(fake_ctx, admin=False, role_ids=[123])
+    assert client.get("/api/economy/qotd-submissions").status_code == 403
+    assert (
+        client.post(f"/api/economy/qotd-submissions/{sub_id}/approve").status_code
+        == 403
+    )
+    client.close()
+
+    mgr = _client(fake_ctx, admin=False, role_ids=[MANAGER_ROLE])
+    assert mgr.get("/api/economy/qotd-submissions").status_code == 200
+    mgr.close()
 
 
 # ── community progress + settle ────────────────────────────────────────

@@ -10,7 +10,18 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.economy.guide import build_guide_embed, should_restick_guide
+from bot_modules.economy.guide import (
+    NOTIFY_CUSTOM_ID,
+    NOTIFY_FAILED_MSG,
+    NOTIFY_OFF_MSG,
+    NOTIFY_ON_MSG,
+    NOTIFY_UNCONFIGURED_MSG,
+    GuideNotifyButton,
+    GuideView,
+    build_guide_embed,
+    should_restick_guide,
+)
+from bot_modules.economy.logic import resolve_notify_toggle
 from bot_modules.services.economy_service import (
     EconSettings,
     load_econ_settings,
@@ -49,14 +60,18 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert "+10" in footer and "×1.5" in footer and "grace" in footer
 
 
-def test_guide_embed_points_at_channels_and_roles_optin():
+def test_guide_embed_offers_notifications_not_channel_access():
     fields = {
         f.name: f.value or ""
         for f in build_guide_embed(EconSettings()).fields
     }
-    joining = fields["Joining"]
-    assert "<id:customize>" in joining  # clickable "Channels & Roles" link
-    assert "opt in" in joining.lower()
+    notifications = fields["Notifications"]
+    assert "Notifications" in notifications  # names the button to click
+    assert "DM" in notifications
+    # The role is a DM preference, so the panel must not promise access — and
+    # must no longer point at the onboarding screen that used to gate it.
+    assert "<id:customize>" not in notifications
+    assert "never what you can see or earn" in notifications
 
 
 def test_guide_embed_uses_guild_branding():
@@ -450,3 +465,156 @@ async def test_post_guide_forbidden_target(ctx, db):
     msg = interaction.response.send_message.await_args.args[0]
     assert "permission to post" in msg
     assert _stored(db) == (0, 0)  # nothing saved
+
+
+# ── notifications toggle ─────────────────────────────────────────────────────
+
+
+NOTIFY_ROLE_ID = 6060
+
+
+def test_resolve_notify_toggle_grants_when_member_lacks_the_role():
+    assert resolve_notify_toggle(role_id=NOTIFY_ROLE_ID, member_role_ids=set()) == "grant"
+    assert (
+        resolve_notify_toggle(role_id=NOTIFY_ROLE_ID, member_role_ids={999})
+        == "grant"
+    )
+
+
+def test_resolve_notify_toggle_removes_when_member_holds_the_role():
+    assert (
+        resolve_notify_toggle(
+            role_id=NOTIFY_ROLE_ID, member_role_ids={999, NOTIFY_ROLE_ID}
+        )
+        == "remove"
+    )
+
+
+def test_resolve_notify_toggle_unconfigured_without_a_role():
+    # An unset role must not read as "grant" — there is nothing to grant.
+    assert resolve_notify_toggle(role_id=0, member_role_ids={999}) == "unconfigured"
+
+
+def _notify_interaction(db, *, member, guild):
+    inter = fake_interaction(guild=guild)
+    inter.user = member
+    inter.client = MagicMock()
+    inter.client.ctx = SimpleNamespace(db_path=db, open_db=lambda: open_db(db))
+    return inter
+
+
+def _notify_member_mock(*, role_ids: tuple[int, ...]) -> MagicMock:
+    m = _member(role_ids=role_ids)
+    m.add_roles = AsyncMock()
+    m.remove_roles = AsyncMock()
+    return m
+
+
+def _guild_with_role(role_id: int | None):
+    guild = FakeGuild(id=GUILD_ID)
+    role = MagicMock(spec=discord.Role)
+    role.id = role_id
+    guild.get_role = MagicMock(return_value=None if role_id is None else role)
+    return guild, role
+
+
+@pytest.mark.asyncio
+async def test_notify_button_grants_role_and_confirms(db):
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    guild, role = _guild_with_role(NOTIFY_ROLE_ID)
+    member = _notify_member_mock(role_ids=())
+    inter = _notify_interaction(db, member=member, guild=guild)
+
+    await GuideNotifyButton().callback(inter)
+
+    member.add_roles.assert_awaited_once()
+    assert member.add_roles.await_args.args[0] is role
+    member.remove_roles.assert_not_awaited()
+    assert inter.response.send_message.await_args.args[0] == NOTIFY_ON_MSG
+
+
+@pytest.mark.asyncio
+async def test_notify_button_removes_role_when_already_opted_in(db):
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    guild, role = _guild_with_role(NOTIFY_ROLE_ID)
+    member = _notify_member_mock(role_ids=(NOTIFY_ROLE_ID,))
+    inter = _notify_interaction(db, member=member, guild=guild)
+
+    await GuideNotifyButton().callback(inter)
+
+    member.remove_roles.assert_awaited_once()
+    assert member.remove_roles.await_args.args[0] is role
+    member.add_roles.assert_not_awaited()
+    assert inter.response.send_message.await_args.args[0] == NOTIFY_OFF_MSG
+
+
+@pytest.mark.asyncio
+async def test_notify_button_inert_when_no_role_configured(db):
+    _enable(db)  # game_role_id stays 0
+    guild, _ = _guild_with_role(NOTIFY_ROLE_ID)
+    member = _notify_member_mock(role_ids=())
+    inter = _notify_interaction(db, member=member, guild=guild)
+
+    await GuideNotifyButton().callback(inter)
+
+    member.add_roles.assert_not_awaited()
+    assert inter.response.send_message.await_args.args[0] == NOTIFY_UNCONFIGURED_MSG
+
+
+@pytest.mark.asyncio
+async def test_notify_button_handles_deleted_role(db):
+    # Configured, but the role has since been deleted in Discord.
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    guild, _ = _guild_with_role(None)
+    member = _notify_member_mock(role_ids=())
+    inter = _notify_interaction(db, member=member, guild=guild)
+
+    await GuideNotifyButton().callback(inter)
+
+    member.add_roles.assert_not_awaited()
+    assert inter.response.send_message.await_args.args[0] == NOTIFY_UNCONFIGURED_MSG
+
+
+@pytest.mark.asyncio
+async def test_notify_button_reports_a_failed_role_edit(db):
+    # Bot's own role sits below the notification role → Discord refuses.
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    guild, _ = _guild_with_role(NOTIFY_ROLE_ID)
+    member = _notify_member_mock(role_ids=())
+    member.add_roles.side_effect = discord.Forbidden(MagicMock(status=403), "no")
+    inter = _notify_interaction(db, member=member, guild=guild)
+
+    await GuideNotifyButton().callback(inter)
+
+    assert inter.response.send_message.await_args.args[0] == NOTIFY_FAILED_MSG
+
+
+@pytest.mark.asyncio
+async def test_notify_button_rejects_a_dm_click(db):
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    inter = fake_interaction(guild=None)
+    inter.user = MagicMock(spec=discord.User)  # not a Member
+    inter.client = MagicMock()
+
+    await GuideNotifyButton().callback(inter)
+
+    assert "only works in a server" in inter.response.send_message.await_args.args[0]
+
+
+def test_guide_view_carries_the_persistent_toggle():
+    view = GuideView()
+    assert view.timeout is None  # persistent across restarts
+    assert [item.custom_id for item in view.children] == [NOTIFY_CUSTOM_ID]
+
+
+@pytest.mark.asyncio
+async def test_post_guide_attaches_the_notify_button(ctx, db):
+    _enable(db, game_role_id=NOTIFY_ROLE_ID)
+    cog = _make_cog(ctx)
+    channel = _channel(CHANNEL_ID)
+    interaction = _interaction(_member(admin=True), channel)
+
+    await _post_guide(cog, interaction)
+
+    view = channel.send.await_args.kwargs["view"]
+    assert [item.custom_id for item in view.children] == [NOTIFY_CUSTOM_ID]

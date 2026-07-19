@@ -1,4 +1,4 @@
--- Economy sinks round 2, stage 1 (docs/plans/economy-sinks-round-2.md).
+-- Economy sinks round 3, stage 1 (docs/plans/economy-sinks-round-3.md).
 --
 -- 1) Widen the econ_rentals perk CHECK for the perks this round adds
 --    (`voice_style` stage 3, `emoji` stage 4) — the SQLite table rebuild, done

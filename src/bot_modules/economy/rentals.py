@@ -23,7 +23,7 @@ GRACE_SECONDS = 36 * 3600
 
 # Perks whose entitlement grants a solid custom color (the beneficiary's).
 # A gifted color is a role_color rental with a different beneficiary, so one
-# kind covers both (gift_color retired in migration 090).
+# kind covers both (gift_color retired in migration 091).
 _SOLID_COLOR_PERKS = frozenset({"role_color"})
 
 

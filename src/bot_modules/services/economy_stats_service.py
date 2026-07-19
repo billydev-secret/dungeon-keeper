@@ -59,8 +59,29 @@ def compute_stats(
         "members": _members(conn, guild_id, cut7, cut30, member_limit),
         "engagement": _engagement(conn, settings, guild_id, cut7, cut30, supply),
         "transfers_top": _transfers_top(conn, guild_id, cut30),
+        "burn_top": _burn_top(conn, guild_id),
         "affordability": _affordability(conn, settings, guild_id, cut7),
     }
+
+
+def _burn_top(
+    conn: sqlite3.Connection, guild_id: int, limit: int = 15
+) -> list[stats.BurnRow]:
+    """Lifetime biggest spenders. Deliberately all-time, not a trailing window.
+
+    The point of showing this is to make spending itself a status worth
+    chasing, and a 7-day window would erase that standing every week.
+    """
+    by_user: dict[int, dict[str, int]] = {}
+    placeholders = ", ".join("?" for _ in stats.BURN_EXCLUDED_KINDS)
+    for r in conn.execute(
+        "SELECT user_id, kind, SUM(-amount) AS s FROM econ_ledger "
+        f"WHERE guild_id = ? AND amount < 0 AND kind NOT IN ({placeholders}) "
+        "GROUP BY user_id, kind",
+        (guild_id, *stats.BURN_EXCLUDED_KINDS),
+    ):
+        by_user.setdefault(int(r["user_id"]), {})[str(r["kind"])] = int(r["s"])
+    return stats.burn_leaderboard(by_user, limit)
 
 
 # ── supply / distribution ──────────────────────────────────────────────
@@ -185,12 +206,15 @@ def _members(
                 group_totals.get(uid, {}).get(group, 0) + amt
             )
 
+    # Every sink, not just rentals — this column read 'rental' only, which
+    # silently under-reported the moment one-shot consumables shipped.
     spent_7d: dict[int, int] = {}
+    burn_placeholders = ", ".join("?" for _ in stats.BURN_EXCLUDED_KINDS)
     for r in conn.execute(
         "SELECT user_id, SUM(-amount) AS s FROM econ_ledger "
-        "WHERE guild_id = ? AND created_at >= ? AND kind = 'rental' "
-        "AND amount < 0 GROUP BY user_id",
-        (guild_id, cut7),
+        "WHERE guild_id = ? AND created_at >= ? AND amount < 0 "
+        f"AND kind NOT IN ({burn_placeholders}) GROUP BY user_id",
+        (guild_id, cut7, *stats.BURN_EXCLUDED_KINDS),
     ):
         spent_7d[int(r["user_id"])] = int(r["s"])
 

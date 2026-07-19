@@ -20,6 +20,9 @@ Pillow
 pilmoji
 numpy
 matplotlib>=3.8.0
-llama-cpp-python>=0.3.0
+# llama-cpp-python lives in requirements-local-llm.txt — it is the only
+# dependency here that builds from source (no manylinux wheel for cp314), so
+# hosts using the remote llama-server backend skip a full C++ toolchain by
+# not installing it. See deploy/README.md.
 huggingface_hub>=0.24.0
 faster-whisper>=1.0.0

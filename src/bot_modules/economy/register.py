@@ -71,12 +71,13 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "game_participation": ("🎲", "Game participation"),
     "game_win": ("🥇", "Game win"),
     "grant": ("🎁", "Staff grant"),
+    "quest_reroll": ("🎲", "Quest reroll"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
 
 # Human labels for the rentable perks (rentals_service._PERKS). gift_color
-# stays although the kind retired in migration 090: ledger meta was not
+# stays although the kind retired in migration 091: ledger meta was not
 # rewritten, so pre-090 rental rows still carry it.
 _PERK_LABELS: dict[str, str] = {
     "role_color": "Custom role colour",

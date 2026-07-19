@@ -1,8 +1,8 @@
-"""Migration 090 round-trip: the econ_rentals rebuild that retires gift_color.
+"""Migration 091 round-trip: the econ_rentals rebuild that retires gift_color.
 
-Seeds a pre-090 database (migrations up to 089 only), inserts gift_color
+Seeds a pre-091 database (everything before the rebuild, including the parallel round's 090_qotd_sponsor), inserts gift_color
 rentals alongside the self-rental that could collide with the rewrite, then
-applies 090 and asserts the copy: gift_color rows land as role_color with
+applies 091 and asserts the copy: gift_color rows land as role_color with
 beneficiary/state intact, the live-rental unique index survives, the widened
 perk CHECK accepts the round-2 kinds, and econ_streaks grew ``shields``.
 """
@@ -50,9 +50,9 @@ def _insert_rental(
 
 @pytest.fixture
 def migrated(tmp_path, monkeypatch):
-    """A DB seeded pre-090 with gift_color rows, then migrated through 090."""
+    """A DB seeded pre-091 with gift_color rows, then migrated through 091."""
     db_path = tmp_path / "t.db"
-    _apply_up_to(db_path, monkeypatch, "090")
+    _apply_up_to(db_path, monkeypatch, "091")
 
     with sqlite3.connect(db_path) as conn:
         # Friend 2 self-rents a color AND receives a gifted color from 1 —

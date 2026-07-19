@@ -770,12 +770,13 @@ class QuestClaimSelect(discord.ui.Select):
 
 
 class QuestRerollSelect(discord.ui.Select):
-    """One-free-per-day board reroll: swap an untouched quest for a new one.
+    """Board reroll: swap an untouched quest for a new one.
 
+    One free reroll per guild-local day, then paid ones up to the daily cap.
     The service picks the replacement (member's own shuffle order, different
-    trigger kind preferred) and validates everything — this select just
-    surfaces the result; on success it confirms old → new and disables
-    itself (the reroll is spent for the day).
+    trigger kind preferred), validates everything and charges — this select
+    just surfaces the result; on success it confirms old → new and disables
+    itself, since the price of the *next* reroll may have changed.
     """
 
     def __init__(
@@ -785,6 +786,7 @@ class QuestRerollSelect(discord.ui.Select):
         guild: discord.Guild,
         rerollable: list[dict],
         local_day: str,
+        reroll_cost: int | None = 0,
     ) -> None:
         self.ctx = ctx
         self.settings = settings
@@ -798,8 +800,13 @@ class QuestRerollSelect(discord.ui.Select):
             )
             for q in rerollable[:25]
         ]
+        if reroll_cost:
+            unit = _unit(settings, int(reroll_cost))
+            price = f"{reroll_cost} {unit}"
+        else:
+            price = "free"
         super().__init__(
-            placeholder="🎲 Reroll one untouched quest (1 free per day)…",
+            placeholder=f"🎲 Reroll one untouched quest ({price})…"[:150],
             min_values=1,
             max_values=1,
             options=options,
@@ -814,14 +821,14 @@ class QuestRerollSelect(discord.ui.Select):
         def _do_reroll():
             with self.ctx.open_db() as conn:
                 old = get_quest(conn, guild_id, quest_id)
-                new = reroll_board_slot(
+                new, cost = reroll_board_slot(
                     conn, self.settings, guild_id, user_id, quest_id,
                     self.local_day,
                 )
-                return old, new
+                return old, new, cost
 
         try:
-            old, new = await asyncio.to_thread(_do_reroll)
+            old, new, cost = await asyncio.to_thread(_do_reroll)
         except ValueError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
             return
@@ -832,9 +839,14 @@ class QuestRerollSelect(discord.ui.Select):
             pass
         old_title = str(old["title"]) if old else "that quest"
         unit = _unit(self.settings, int(new["reward"]))
+        paid = (
+            f" Cost {cost} {_unit(self.settings, int(cost))}."
+            if cost
+            else " That was today's free reroll."
+        )
         await interaction.followup.send(
             f"🎲 Swapped **{old_title}** for **{new['title']}** "
-            f"({new['reward']} {unit} · {new['qtype']}). "
+            f"({new['reward']} {unit} · {new['qtype']}).{paid} "
             "Run `/bank quests` again to see your refreshed board.",
             ephemeral=True,
         )
@@ -851,6 +863,7 @@ class QuestClaimView(discord.ui.View):
         claimable: list[dict],
         *,
         rerollable: list[dict] | None = None,
+        reroll_cost: int | None = 0,
         local_day: str = "",
         detailable: list[dict] | None = None,
         accent: discord.Color | None = None,
@@ -862,5 +875,7 @@ class QuestClaimView(discord.ui.View):
             self.add_item(QuestClaimSelect(ctx, settings, guild, claimable))
         if rerollable and local_day:
             self.add_item(
-                QuestRerollSelect(ctx, settings, guild, rerollable, local_day)
+                QuestRerollSelect(
+                    ctx, settings, guild, rerollable, local_day, reroll_cost
+                )
             )

@@ -15,7 +15,6 @@ import discord
 from discord import app_commands
 
 from bot_modules.duels.base_duel import BaseDuel
-from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
@@ -67,7 +66,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
     ) -> QuickdrawGame | None:
         return await qdb.get_pending_game_for_challenger(self.db, guild_id, channel_id, user_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await qdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_fetch_active_games(self) -> list[QuickdrawGame]:
@@ -112,8 +111,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             if not game or game.state != "ACTIVE" or game.qd_state != "WAITING":
                 return
 
-            await qdb.set_game_state(
-                self.db, game_id, "ACTIVE",
+            await self._db_set_state(
+                game_id, "ACTIVE",
                 qd_state="DRAW",
                 fired_at=fired_at,
                 last_action_at=fired_at,
@@ -145,7 +144,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
 
             if game.qd_state == "DRAW":
                 # Nobody fired in time — void, no consequence.
-                await qdb.set_game_state(self.db, game_id, "VOID")
+                await self._db_set_state(game_id, "VOID")
                 void_embed = discord.Embed(
                     title="🌵 Nobody Drew",
                     description=(
@@ -170,19 +169,12 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             elif game.qd_state == "WINNER_FIRED":
                 # Winner drew; the opponent never fired. Resolve with no loser
                 # time (loser_fired_at stays NULL → result shows "didn't draw").
-                await qdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     qd_state="COMPLETE",
                     last_action_at=time.time(),
                 )
                 game.qd_state = "COMPLETE"
-                await pay_game_rewards(
-                    self.bot, game.guild_id,
-                    [game.challenger_id, game.target_id],
-                    [game.winner_id] if game.winner_id is not None else [],
-                    self.GAME_KEY,
-                    occurrence=str(game.id),
-                )
                 if guild:
                     dview = self.build_game_view(game_id)
                     dview.disable()
@@ -195,6 +187,16 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                     await self._finalize_result(
                         game, game.winner_id, game.loser_id,  # type: ignore[arg-type]
                         send=channel.send,  # type: ignore[union-attr]
+                    )
+                else:
+                    # Channel unresolvable — terminalize anyway so the economy
+                    # seam still sees the round end (this path used to pay but
+                    # leave the row ACTIVE for the sweep to abandon).
+                    await self._db_set_state(
+                        game.id,
+                        "RESOLVED" if game.stakes_text is None else "RESOLVED_NO_NICK",
+                        winner_id=game.winner_id,
+                        loser_id=game.loser_id,
                     )
             else:
                 return
@@ -209,8 +211,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         delay = random.uniform(cfg["min_delay"], cfg["max_delay"])
         draw_window = cfg["draw_window"]
         now = time.time()
-        await qdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             qd_state="WAITING",
             draw_delay=delay,
             last_action_at=now,
@@ -227,8 +229,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             # Re-roll delay and restart from scratch; let players know
             delay = random.uniform(cfg["min_delay"], cfg["max_delay"])
             now = time.time()
-            await qdb.set_game_state(
-                self.db, game.id, "ACTIVE",
+            await self._db_set_state(
+                game.id, "ACTIVE",
                 draw_delay=delay,
                 last_action_at=now,
             )
@@ -407,8 +409,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                 game.challenger_id if player_id == game.target_id else game.target_id
             )
             now = time.time()
-            await qdb.set_game_state(
-                self.db, game.id, "ACTIVE",
+            await self._db_set_state(
+                game.id, "ACTIVE",
                 qd_state="COMPLETE",
                 winner_id=winner_id,
                 loser_id=loser_id,
@@ -426,11 +428,6 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             await interaction.edit_original_response(
                 embed=self.render_game_state(game, guild), view=view
             )
-            await pay_game_rewards(
-                self.bot, game.guild_id,
-                [game.challenger_id, game.target_id], [winner_id], self.GAME_KEY,
-                occurrence=str(game.id),
-            )
             return ("done", loser_id)
 
         if game.qd_state == "DRAW":
@@ -442,8 +439,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                 game.challenger_id if player_id == game.target_id else game.target_id
             )
             now = time.time()
-            await qdb.set_game_state(
-                self.db, game.id, "ACTIVE",
+            await self._db_set_state(
+                game.id, "ACTIVE",
                 qd_state="WINNER_FIRED",
                 winner_id=winner_id,
                 loser_id=loser_id,
@@ -474,8 +471,8 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
 
             # Opponent fired second: record their reaction time and resolve.
             now = time.time()
-            await qdb.set_game_state(
-                self.db, game.id, "ACTIVE",
+            await self._db_set_state(
+                game.id, "ACTIVE",
                 qd_state="COMPLETE",
                 loser_fired_at=now,
                 last_action_at=now,
@@ -488,13 +485,6 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             view.disable()
             await interaction.edit_original_response(
                 embed=self.render_game_state(game, guild), view=view
-            )
-            await pay_game_rewards(
-                self.bot, game.guild_id,
-                [game.challenger_id, game.target_id],
-                [game.winner_id] if game.winner_id is not None else [],
-                self.GAME_KEY,
-                occurrence=str(game.id),
             )
             return ("done", game.loser_id)
 

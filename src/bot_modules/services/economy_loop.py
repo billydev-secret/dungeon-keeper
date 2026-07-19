@@ -93,6 +93,9 @@ from bot_modules.economy.register import (
     collect_register_entries,
 )
 from bot_modules.economy.rentals import GRACE_SECONDS, BillingAction
+from bot_modules.services.economy_qotd_sponsor_service import (
+    expire_stale_submissions,
+)
 from bot_modules.services.economy_quests_service import (
     activate_community_weekly,
     active_member_ids,
@@ -551,6 +554,42 @@ def run_claim_expiry(
     return notices
 
 
+@dataclass(frozen=True)
+class ExpiredSponsorNotice:
+    """A sponsored question nobody reviewed in time (for the post-commit DM)."""
+
+    guild_id: int
+    user_id: int
+    question: str
+    refund: int
+    unit: str
+
+
+def run_sponsor_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> list[ExpiredSponsorNotice]:
+    """Expire and refund pending sponsored questions staff never got to.
+
+    Guild-scoped (unlike the claim sweep) because the timeout is a per-guild
+    setting. ``expire_stale_submissions`` refunds exactly once and only touches
+    'pending' — an *approved* question is waiting on a mod to run `/qotd post`,
+    and timing that out would punish the member for staff latency.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return []
+    return [
+        ExpiredSponsorNotice(
+            guild_id=guild_id,
+            user_id=int(row["user_id"]),
+            question=str(row["question"]),
+            refund=int(row["price"]),
+            unit=settings.currency_plural or "coins",
+        )
+        for row in expire_stale_submissions(conn, settings, guild_id, now=now_ts)
+    ]
+
+
 # ── rental billing pass ────────────────────────────────────────────────
 
 
@@ -1006,6 +1045,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
 
     for guild in list(bot.guilds):
         beats: list[CommunityBeat] = []
+        sponsor_notices: list[ExpiredSponsorNotice] = []
         week_rolled = False
         try:
             with open_db(db_path) as conn:
@@ -1016,6 +1056,39 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             raise
         except Exception:
             log.exception("Economy loop: unhandled error for guild %s.", guild.id)
+
+        # Separate transaction: a day-roll failure must not swallow refunds
+        # members are owed, and vice versa.
+        try:
+            with open_db(db_path) as conn:
+                sponsor_notices = run_sponsor_expiry(conn, guild.id, now_ts)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: sponsor-expiry sweep failed for guild %s.", guild.id
+            )
+
+        for notice in sponsor_notices:
+            try:
+                await notify_member(
+                    bot,
+                    db_path,
+                    notice.guild_id,
+                    notice.user_id,
+                    content=(
+                        f"Nobody got to your sponsored question in time, so "
+                        f"you've had your {notice.refund} {notice.unit} back.\n"
+                        f"> {notice.question}"
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to DM expired sponsor to user %s.",
+                    notice.user_id,
+                )
 
         if week_rolled:
             try:

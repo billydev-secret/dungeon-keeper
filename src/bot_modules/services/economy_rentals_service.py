@@ -56,11 +56,11 @@ from bot_modules.services.economy_service import apply_debit
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
 
-# The perks rent_perk will open a rental for. The schema CHECK (migration 090)
+# The perks rent_perk will open a rental for. The schema CHECK (migration 091)
 # also lists voice_style/emoji for later stages — they join here only when
 # their price fields and flows ship, so a premature rent can't crash on a
 # missing ``price_<perk>`` setting. A gift is any of these rented with
-# ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 090).
+# ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 091).
 _PERKS = ("role_color", "role_name", "role_icon", "role_gradient")
 
 _RENTAL_COLS = (

@@ -15,7 +15,6 @@ import discord
 from discord import app_commands
 
 from bot_modules.duels import db as duels_db
-from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
@@ -57,7 +56,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     async def _db_get_game(self, game_id: int) -> ChickenGame | None:
         return await chdb.get_game(self.db, game_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await chdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
@@ -128,10 +127,6 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             winner, loser = resolve_crash(crashers, game.bail_log)
             if loser is not None and winner is not None:
                 await self._post_group_result(game, winner, loser)
-                await pay_game_rewards(
-                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY,
-                    occurrence=str(game.id),
-                )
             else:
                 # total wipeout (nobody bailed) → cosmetic, no nick
                 await self._resolve_cosmetic(game, winner)
@@ -167,19 +162,14 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-        await chdb.set_game_state(
-            self.db, game.id, "RESOLVED_NO_NICK",
+        await self._db_set_state(
+            game.id, "RESOLVED_NO_NICK",
             winner_id=winner_id,
             result_message_id=result_message_id,
             resolved_at=now,
             last_action_at=now,
         )
         await self.on_game_resolved(game.id)
-        await pay_game_rewards(
-            self.bot, game.guild_id, list(game.roster),
-            [winner_id] if winner_id is not None else [], self.GAME_KEY,
-            occurrence=str(game.id),
-        )
 
     # ── Button handler ────────────────────────────────────────────────────────
 
@@ -206,8 +196,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             new_bail = list(game.bail_log) + [
                 {"player_id": uid, "bail_ts": now, "meter_pct": pct}
             ]
-            await chdb.set_game_state(
-                self.db, game_id, "ACTIVE",
+            await self._db_set_state(
+                game_id, "ACTIVE",
                 alive=json.dumps(new_alive),
                 bail_log=json.dumps(new_bail),
                 last_action_at=now,
@@ -234,8 +224,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         cfg = await chdb.get_config(self.db, game.guild_id)
         duration = float(cfg["climb_duration"])
         now = time.time()
-        await chdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             phase="CLIMBING",
             climb_started_at=now,
             climb_duration=duration,

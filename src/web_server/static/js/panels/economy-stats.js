@@ -12,6 +12,7 @@ const PERK_LABELS = {
   price_role_gradient: "Role gradient",
   price_text_room: "Text room",
   price_voice_room: "Voice room",
+  price_quest_reroll: "Quest reroll",
 };
 
 const FAUCET_LABELS = {
@@ -109,6 +110,12 @@ function render(container, members) {
           <div class="field-hint">Solid color ≈ how many days of median daily income each perk costs.</div>
           <div data-affordability><div class="empty">Loading…</div></div></section>
       </div>
+
+      <section class="card">
+        <div class="section-label">Biggest spenders (all time)</div>
+        <div class="field-hint">Lifetime currency burned — rentals, consumables and other sinks. Transfers and staff clawbacks don't count: a transfer moves currency sideways rather than removing it.</div>
+        <div data-burn><div class="empty">Loading…</div></div>
+      </section>
 
       <section class="card">
         <div class="section-label">Top transfers (30d)</div>
@@ -218,6 +225,7 @@ async function refresh(container, members) {
   renderDistribution(container, data.distribution);
   renderEngagement(container, data.engagement);
   renderAffordability(container, data.affordability);
+  renderBurn(container, data.burn_top, members);
   renderTransfers(container, data.transfers_top, members);
   renderMembers(container, data.members, members);
 }
@@ -321,6 +329,46 @@ function renderAffordability(container, aff) {
 }
 
 // ── top transfers ────────────────────────────────────────────────────
+
+// Ledger kinds that can show up as a member's top sink. Unknown kinds fall
+// back to the raw kind rather than being hidden — a new sink should look
+// unpolished here, not invisible.
+const SINK_LABELS = {
+  rental: "Perk rentals",
+  quest_reroll: "Quest rerolls",
+};
+
+function sinkLabel(kind) {
+  if (!kind) return "—";
+  return SINK_LABELS[kind] || kind;
+}
+
+function renderBurn(container, burn, members) {
+  const host = container.querySelector("[data-burn]");
+  const list = burn || [];
+  if (!list.length) {
+    host.innerHTML = `<div class="empty">Nobody has spent anything yet.</div>`;
+    return;
+  }
+  const rows = list.map((b, i) => `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td>${esc(memberName(members, b.user_id))}</td>
+        <td class="num">${fmtNum(b.burned)}</td>
+        <td class="num">${fmtPct(b.share)}</td>
+        <td>${esc(sinkLabel(b.top_sink))}</td>
+      </tr>`).join("");
+  host.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table class="data-table">
+        <thead><tr>
+          <th class="num">#</th><th>Member</th><th class="num">Burned</th>
+          <th class="num">Share</th><th>Mostly on</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
 
 function renderTransfers(container, transfers, members) {
   const host = container.querySelector("[data-transfers]");

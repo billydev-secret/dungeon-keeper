@@ -44,6 +44,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
+| [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch cog design |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
 | [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
@@ -70,10 +71,11 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |
 | [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |
+| [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sink round 2: paid quest rerolls, sponsor-a-QOTD (mod-approved), burn list, PvP coin wagers | In progress 2026-07-19 |
 | [events_spec.md](events_spec.md) | Events cog | |
 | [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
-| [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–3 built (schema/service, cog, poster cards, dashboard); stage 4 polish optional |
+| [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–4 built (schema/service, cog, poster cards, dashboard, auto-archive sweep); bounty idea still open |
 | [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live leaderboard panel (today's pulse, pace, anonymous feed, event-driven debounced refresh) | Built 2026-07-18; awaiting live testing |
 | [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, dynamic targets, board add-ons | Built 2026-07-18 (all stages); awaiting live testing + post-restart seed script |
 | [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |

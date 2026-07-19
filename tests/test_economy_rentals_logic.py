@@ -110,7 +110,7 @@ def test_color_mode_solid_from_role_color():
 
 
 def test_color_mode_gift_color_kind_retired():
-    # A gifted color is a role_color rental since migration 090 — the old
+    # A gifted color is a role_color rental since migration 091 — the old
     # gift_color kind must no longer grant anything on its own.
     assert effective_color_mode({"gift_color"}) == "none"
 

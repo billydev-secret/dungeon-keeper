@@ -16,7 +16,6 @@ import discord
 from discord import app_commands
 
 from bot_modules.duels.base_game import BaseGame
-from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
 
@@ -52,7 +51,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
     async def _db_get_game(self, game_id: int) -> HotPotatoGroupGame | None:
         return await hpgdb.get_game(self.db, game_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await hpgdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
@@ -113,18 +112,14 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 game.alive = new_alive
                 game.elimination_order = new_elim
                 game.pass_log = new_log
-                await hpgdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     alive=json.dumps(new_alive),
                     elimination_order=json.dumps(new_elim),
                     pass_log=json.dumps(new_log),
                     last_action_at=now,
                 )
                 await self._post_group_result(game, winner, loser)
-                await pay_game_rewards(
-                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY,
-                    occurrence=str(game.id),
-                )
                 resolved = True
             else:
                 cfg = await hpgdb.get_config(self.db, game.guild_id)
@@ -133,8 +128,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 new_log.append(
                     {"holder_id": next_holder, "received_at": now, "passed_at": None}
                 )
-                await hpgdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     round=game.round + 1,
                     alive=json.dumps(new_alive),
                     elimination_order=json.dumps(new_elim),
@@ -180,8 +175,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         now = time.time()
         holder = random.choice(game.alive)
         init_log = json.dumps([{"holder_id": holder, "received_at": now, "passed_at": None}])
-        await hpgdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             round=1,
             holder_id=holder,
             fuse_seconds=fuse,
@@ -336,8 +331,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
             new_log[-1] = {**new_log[-1], "passed_at": now}
         new_log.append({"holder_id": new_holder, "received_at": now, "passed_at": None})
 
-        await hpgdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             holder_id=new_holder,
             pass_log=json.dumps(new_log),
             last_action_at=now,

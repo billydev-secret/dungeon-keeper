@@ -73,6 +73,11 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
 - **Milestones:** day 7 → +25 · day 30 → +100 · day 100 → +365 · +100 each 100 after.
 - Idempotency: `INSERT OR IGNORE` on `(guild_id, user_id, local_day)` — one login/day
   no matter how many events race (birthday-announcement pattern).
+- **Daily digest DM:** members with the opt-in `game_role_id` role get one DM per
+  qualifying login — a streak/payout line, any milestone/grace/reset callout, and a
+  "quests to play with today" checklist (open quests with `progress_bar` meters, capped
+  at `_LOGIN_QUEST_RECAP_LIMIT`) so deciding what to do next is one glance, not a dig
+  through `/bank quests`. Members without the role earn the same rewards with no DM.
 
 ### 3.2 XP → Daily Conversion
 Members earn XP exactly as today (`xp_events` ledger: text per-word, replies,
@@ -97,7 +102,7 @@ XP earned that local day converts to currency.
 ### 3.3 Quests — per §4. Daily 10–20 · weekly 25–75 · community flat payout.
 
 ### 3.4 Interaction Rewards
-- **QOTD (built, manual):** a moderator runs `/qotd post <question>` in the target
+- **QOTD (built, manual):** a moderator runs `/qotd post [question]` in the target
   channel. The bot renders the question as a banner card (`render_quote_card`, the same
   renderer `ffa_banner` uses) and posts it. Every member who posts a non-bot message in
   that channel from post time until end of the guild-local day earns **10**, once per
@@ -106,9 +111,49 @@ XP earned that local day converts to currency.
   role; unset (the default) posts silently. The mention only notifies if the role is
   mentionable or the bot holds "Mention @everyone, @here, and All Roles" — Discord
   renders it as inert text otherwise.
+- **Sponsor a QOTD (built, sink — migration 090):** a member runs
+  `/bank sponsor <question>`, paying `price_qotd_sponsor` (default 40) to put a
+  question in front of the server. **Charged at submit** — a free queue invites
+  spam — which makes decline and expiry *refund* paths (ledger kind
+  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it on a
+  persistent Approve/Decline card in the bank channel (DynamicItems
+  `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
+  dashboard queue (Economy → Sponsored QOTD, `require_economy_manager`, which
+  also **withdraws** an already-approved question back out of the post queue —
+  the service only *resolves* pending rows, so withdrawal is its own path);
+  declining opens a reason modal and the reason reaches the member by DM.
+  Resolving from the dashboard re-renders the bank-channel card and DMs the
+  sponsor with the same copy the card buttons use, best-effort: a Discord
+  failure leaves the API 200 with `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
+  from when the mod supplies **no** question text; the QOTD card is bylined
+  "sponsored by <name>" and `econ_qotd.sponsor_user_id` records them
+  (`posted_by` stays the mod who ran the command — different people, both
+  audit-relevant). One open submission per member (partial unique index), so
+  nobody can buy the whole queue.
+  - **Refunds are exactly-once**, guarded by a `refunded_at IS NULL` predicate
+    inside the same UPDATE that moves the state — not a caller-set flag — so a
+    double-click or a replay cannot pay twice.
+  - **The queue claim is atomic and happens before the send**
+    (`claim_next_approved`, `UPDATE … RETURNING`), so two mods racing
+    `/qotd post` take different questions rather than double-posting one; if
+    the send then fails, `release_claim` puts it back rather than eating a
+    member's paid slot.
+  - Pending submissions expire after `qotd_sponsor_expire_days` (default 14)
+    and refund, swept per-guild by the hourly loop. **Approved ones never
+    expire** — they're waiting on staff, and timing them out would punish the
+    member for staff latency. `price_qotd_sponsor = 0` disables the feature.
 - **Game participation 5:** paid at the party-games `end_game` choke point
-  (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
-  resolution point. Participation now covers **20 of 23 games**: the six duel games,
+  (`games/utils/game_manager.py`) from the session's player set, and — since the
+  stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
+  seam**: `BaseGame._db_set_state` is a concrete template method (cogs implement
+  `_db_write_state`) that fires `_on_terminal_state` on every game-ending
+  transition (`RESOLVED`/`RESOLVED_NO_NICK`/`ABANDONED`/`VOID`/`EXPIRED_*`).
+  `RESOLVED`/`RESOLVED_NO_NICK` pay participation + win from the re-read row
+  (roster for group games, challenger/target for duels; `winner_id=None`
+  wipeouts pay participation only); the other terminal states pay nothing but
+  still reach the hook, which is the guarantee the stage-4b wager escrow will
+  settle and refund on. No duel cog calls `pay_game_rewards` directly anymore.
+  Participation now covers **20 of 23 games**: the six duel games,
   ttl/traditional/legitlibs, and — enriched in Stage 2 — 11 party cogs that now pass
   their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
   mlt, nhie, price, rushmore, story, wyr). ffa and fantasies are excluded by design
@@ -250,23 +295,33 @@ on their behalf through the ordinary `claim_quest` state machine:
 - **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
   reacts 📝 — a manager still approves the payout.
 
-**Game-role delivery.** When `game_role_id` is set, the completion card
-(both the instant ✅ card and the sign-off 📝 card) is **DMed** to the
-claimant instead of replied in-channel — the reaction still lands on their
-message, but the embed goes via `notify_member` (DM, bank-channel fallback,
-honors the notify mute). Members **without** the role are paid/filed
-**silently** (no reaction, no reply, no DM). With `game_role_id` unset (0,
-the default) the feature is off and every claimant gets the legacy in-channel
-reaction + reply. The bank-channel sign-off card (manager approval) is posted
-regardless of the claimant's role.
+**Notification-role delivery.** `game_role_id` is a **DM preference and
+nothing else** — it gates no channel, no payout and no command. (Until
+2026-07-19 the same role doubled as a Discord onboarding gate hiding the
+economy channels; that coupling is gone, and the role must not be reused for
+channel permissions.) When it is set, the completion card (both the instant ✅
+card and the sign-off 📝 card) is **DMed** to a role-holder instead of replied
+in-channel — the reaction still lands on their message, but the embed goes via
+`notify_member` (DM, bank-channel fallback, honors the notify mute). Members
+**without** the role get the reaction + in-channel reply, exactly as if no role
+were configured; they are never paid silently (an unacknowledged payout reads
+as the quest having failed). With `game_role_id` unset (0, the default) every
+claimant gets the in-channel reaction + reply. The bank-channel sign-off card
+(manager approval) is posted regardless of the claimant's role.
 
-The same opt-in gate covers the **streak / milestone / grace / reset DMs**
-(§3.1): those notices only reach members who took the role
-(`notify_member(..., require_game_role=True)`); everyone else keeps earning
-silently. With no role configured, nobody has opted in yet, so the gate
-defaults to dropping the notice for everyone rather than notifying the whole
-guild. Transactional notices (rental billing) are *not* gated — they target a
-member by their prior spend, not by opt-in.
+Members toggle the role themselves with the **🔔 Notifications** button on the
+guide panel (§ channel guide panel) — a persistent static-`custom_id` view
+(`econ_guide_notify`) re-registered via `bot.add_view` at cog load. The
+button answers ephemerally with whichever way it flipped; the toggle decision
+is the pure `economy/logic.py::resolve_notify_toggle`.
+
+The same opt-in gate covers the **daily digest DM** (§3.1: streak + payout +
+milestone/grace/reset callouts + quest checklist): it only reaches members who
+took the role (`notify_member(..., require_game_role=True)`); everyone else
+keeps earning with no DMs about it. With no role configured, nobody has opted
+in yet, so the gate defaults to dropping the notice for everyone rather than
+notifying the whole guild. Transactional notices (rental billing) are *not*
+gated — they target a member by their prior spend, not by opt-in.
 
 Trigger quests are **excluded from the `/bank quests` claim select** (state
 `trigger` on the wallet page) — self-claiming without saying the phrase would
@@ -379,9 +434,9 @@ ordinary XP award.
 **Onboarding path (removed 2026-07-18):** an earlier build DMed each new member
 a "starter path" embed of the guild's `onboarding`-flagged quests on join. It
 was deleted — a join-time DM pushes the economy at members who never opted into
-the game role, contradicting the "role set = opt-in, members without it are
-paid silently" model (unlike a member who joins the server, a member who takes
-the role has opted in). No replacement fires on join; members discover the
+the notification role, contradicting the "role set = opt-in to DMs" model
+(unlike a member who joins the server, a member who takes the role has opted
+in). No replacement fires on join; members discover the
 library through `/quests`. The `onboarding` column and `econ_onboarding_dms`
 table remain as inert dead schema (migration 071), no longer read or written,
 and the quest editor's onboarding toggle is gone. Don't reintroduce a join-time
@@ -462,16 +517,24 @@ fragments mid-period.
 
 **Board add-ons (stage 5 of the quest-variety plan, migration 084):**
 
-- **Daily free reroll** — one per member per guild-local day
-  (`econ_rerolls`), via a 🎲 select on `/bank quests`. Swaps one *untouched*
+- **Board reroll** — one **free** per member per guild-local day
+  (`econ_rerolls`), then up to `EconSettings.quest_reroll_daily_cap`
+  (default 3) more at `price_quest_reroll` (default 10) each, ledger kind
+  `quest_reroll`, counted by `econ_rerolls.paid_count` (migration 089).
+  The cap is the point: unlimited paid rerolls turn a "this quest doesn't
+  fit how I use the server" escape hatch into a shopping trip for the
+  cheapest quests. Either setting at 0 disables the paid tier and leaves
+  the free reroll intact — the free one is never taken away. Offered via a
+  🎲 select on `/bank quests` that names the price. Swaps one *untouched*
   board quest (no claim, no counted progress this period) for the first
   pool quest in the member's own shuffle order that isn't on their board,
   **preferring a different trigger kind**. Persisted as an
   `econ_board_overrides` row keyed by the draw's `period_idx` and applied
   on top of the pure draw in `assigned_board_ids` (a same-period re-reroll
   would update `to_quest_id` in place, so application never chains; the
-  override dies with the period). The reroll burns *after* validation —
-  a refused reroll costs nothing.
+  override dies with the period). The reroll spends *after* validation —
+  a refused reroll costs neither the free allowance nor a coin, and a
+  failed debit leaves the board untouched.
 - **Clear-the-board set bonus** — completing every quest on the personal
   daily (or weekly) board in one period pays
   `EconSettings.quest_set_bonus_daily` / `_weekly` (**default 0 = off** —
@@ -572,9 +635,9 @@ gradient) are live — browsed, rented **and customised** in `/bank shop`'s
 ephemeral panel (§7), and **every one is giftable** (sinks round 2, stage 1:
 a gift is the base perk rented with `beneficiary_id` = the friend; the old
 `gift_color` kind and its separate `price_gift_color` retired in migration
-090, which rewrote live rows to `role_color`-with-beneficiary and widened the
+091, which rewrote live rows to `role_color`-with-beneficiary and widened the
 perk CHECK once for the round's later kinds, `voice_style` and `emoji` —
-see `docs/plans/economy-sinks-round-2.md`). Private rooms stay **Stage 6**
+see `docs/plans/economy-sinks-round-3.md`). Private rooms stay **Stage 6**
 and the spotlight slot stays **v2** — both still design-only below.
 
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
@@ -678,9 +741,10 @@ the member owns and gift rentals where they are the beneficiary.
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
     modals.
 - **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
-  single branded "how it works" embed (a **Joining** field pointing members at the
-  onboarding Channels & Roles screen via the `<id:customize>` mention to grab the
-  economy-game role, then an **Earning** table — aligned what-pays-what rows in
+  single branded "how it works" embed (a **Notifications** field explaining the
+  panel's own 🔔 toggle for the opt-in DM role — it replaced a **Joining** field
+  that pointed at `<id:customize>` back when that role also gated the channels —
+  then an **Earning** table — aligned what-pays-what rows in
   the leaderboard's fixed-width-cell style — and a **Spending** command table,
   with streak/booster/rental fine print collapsed into the footer — all
   templated from `EconSettings`) into a channel. Panel ids
@@ -843,14 +907,27 @@ balances only** (inequality of who-holds-what, not the zero-balance long tail); 
 fixed-bucket **balance histogram**; **7-day flow** — minted vs burned with a burn
 rate, plus transfer volume and grants (money definitions match the rollup: mint /
 income exclude `transfer_in`, burn excludes `transfer_out`); a **per-member income
-velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend,
-top faucet group, live rentals, streak, and last-earned; **engagement** — earner
+velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend
+(**every** sink kind, not just `rental` — it read rentals-only until consumables
+shipped), top faucet group, live rentals, streak, and last-earned; **engagement** — earner
 ratio (7d earners ÷ 30d active), spenders, quest claims, **quest approval rate**
 (resolved paid ÷ paid+denied over 30d, resolved-only), and **hoard-weeks** (median
 balance ÷ latest-rollup median weekly income); **perk affordability** in days of
-median daily income per price field; and the **top 5 transfer pairs** (30d, by
+median daily income per price field; the **biggest spenders board** (top 15 by
+**lifetime** currency burned, with each member's share of the guild's whole burn
+and the sink they spend most on); and the **top 5 transfer pairs** (30d, by
 `transfer_out` magnitude) as the alt-funnel audit surface for transfer abuse (§12).
 All ratios/divides are guarded (0 or `null` when there is no denominator).
+
+The spenders board is deliberately **all-time, not a trailing window** — its job
+is to make spending a standing status worth chasing, and a 7-day window would
+erase that standing every week. Burn excludes `transfer_out` (sideways: the coins
+land in another wallet, so nothing leaves the economy) and `qa_void` (a staff
+clawback is a real removal but not a purchase, and crediting it would rank
+someone top for having had a reward revoked). Shares are computed against the
+guild's **total** burn, not the sum of the visible rows, so the top-15 cut can't
+inflate its own percentages; ties break on user id so the table doesn't reshuffle
+between refreshes.
 
 ## 10. Notifications
 
@@ -861,10 +938,10 @@ member-to-member consent and does **not** gate bot DMs — no interaction there.
 
 | Event | Notify |
 |---|---|
-| Streak milestone / grace consumed / reset | DM |
+| Daily login digest (streak + quest recap, §3.1) | DM (opt-in role) |
 | Quest approved / denied (with reason) | DM |
 | Rental grace entered / lapsed | DM |
-| Login payout & daily conversion | Silent (ledger) |
+| Daily XP→currency conversion | Silent (ledger) |
 | Sign-off claims, community settlements | Bank channel |
 
 ### 10.1 Register channel (public transaction feed)
