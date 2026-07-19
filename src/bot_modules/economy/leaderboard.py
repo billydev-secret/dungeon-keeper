@@ -431,6 +431,7 @@ def build_leaderboard_embed(
         title=f"{emoji} {plural} — leaderboard & quest board",
         description=(
             "Who's earning, what's running, and what there is to do — live."
+            "\n\u200b"
         ),
         color=color,
     )
@@ -439,12 +440,13 @@ def build_leaderboard_embed(
 
     # Each section's body is a small table: fixed-width inline-code cells
     # align the columns (see _pad) while emoji, bold, and live timestamps
-    # stay outside the backticks where Discord still renders them.
-    embed.add_field(
-        name="📡 Today's pulse",
-        value=_pulse_lines(data, emoji, plural),
-        inline=False,
-    )
+    # stay outside the backticks where Discord still renders them. Every
+    # value (and the description) ends with a zero-width blank line so the
+    # next section's heading has breathing room; the last field skips it.
+    def _add_section(name: str, value: str) -> None:
+        embed.add_field(name=name, value=f"{value}\n\u200b", inline=False)
+
+    _add_section("📡 Today's pulse", _pulse_lines(data, emoji, plural))
 
     if data.top_earners:
         names = {uid: resolve_name(uid) for uid, _ in data.top_earners}
@@ -460,17 +462,14 @@ def build_leaderboard_embed(
             )
     else:
         earner_lines = ["Nobody has earned yet this week — be the first!"]
-    embed.add_field(
-        name=f"Top earners (last {ROLLING_DAYS} days)",
-        value="\n".join(earner_lines),
-        inline=False,
+    _add_section(
+        f"Top earners (last {ROLLING_DAYS} days)", "\n".join(earner_lines)
     )
 
     if data.community:
-        embed.add_field(
-            name="Community goals — everyone gets paid when we hit them",
-            value="\n".join(_community_block(g) for g in data.community),
-            inline=False,
+        _add_section(
+            "Community goals — everyone gets paid when we hit them",
+            "\n".join(_community_block(g) for g in data.community),
         )
 
     if data.quests:
@@ -542,13 +541,9 @@ def build_leaderboard_embed(
             board = "No quests running right now — check back soon."
     else:
         board = "No quests running right now — check back soon."
-    embed.add_field(name="Quest board", value=board, inline=False)
+    _add_section("Quest board", board)
 
-    embed.add_field(
-        name="📰 Live feed — today",
-        value=_feed_lines(data),
-        inline=False,
-    )
+    _add_section("📰 Live feed — today", _feed_lines(data))
 
     embed.add_field(
         name="Your progress",
