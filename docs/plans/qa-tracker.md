@@ -44,7 +44,8 @@ qa_tests(
   guild_id INTEGER NOT NULL,
   entry_key TEXT NOT NULL,          -- poster's entry_key(): heading minus trailing parens
   title TEXT NOT NULL,
-  body_md TEXT NOT NULL,            -- the checklist body as authored in TESTING_QUEUE.md
+  body_md TEXT NOT NULL,            -- the checklist body (commit's Testing: section, or
+                                     --   a checklist doc's ### block)
   commit_sha TEXT, commit_subject TEXT,
   channel_id INTEGER, message_id INTEGER,  -- the posted card
   thread_id INTEGER,                -- created lazily on first fail/blocked note
@@ -171,11 +172,6 @@ flag of its own. Backend `require_perms({"admin"})`; UI copied from
 
 - **How members get the QA role** — Discord's own onboarding / existing role
   flows; the tracker only *reads* the role.
-- **Auto-editing `TESTING_QUEUE.md`'s Done section.** The checkout is
-  production; a bot writing repo files creates uncommitted drift. Instead the
-  board is the runtime truth and stage 4 ships
-  `scripts/qa_done_report.py` printing a paste-ready Done block for the human
-  commit that retires entries.
 - Bug-bounty bonus payouts (revisit after the crew is active).
 
 ## Stages
@@ -201,5 +197,18 @@ re-render the Discord card best-effort through the in-process `ctx.bot`
 (archive strips the buttons); a card failure never rolls back the DB. Route
 tests in `tests/web/test_qa_routes.py`.
 
-**Stage 4 — polish (optional).** `qa_done_report.py`; archive sweep for
-long-verified cards; revisit bounty idea with real usage data.
+**Stage 4 — polish (optional).** Archive sweep for long-verified cards;
+revisit bounty idea with real usage data.
+
+## Addendum — `docs/TESTING_QUEUE.md` retired (2026-07-18)
+
+Once the board became the runtime source of truth (stage 3), the queue
+file itself bit-rotted: 1758 lines, almost entirely still under `##
+Pending` — nobody was doing the manual Done-archiving step by hand, because
+the real verified/pass/fail state already lived in `qa_tests`. The file was
+deleted; the post-commit hook now sources a card straight from the
+triggering commit's own message instead of diffing a queue file across
+commits. See CLAUDE.md's Commits section for the `Testing:` trailer
+convention. `post_commit()`/`testing_checklist()` in
+`scripts/post_testing_docs.py` carry the new logic; the role checklists
+(admin/moderator/user) are unaffected — still dumped via `--only`.

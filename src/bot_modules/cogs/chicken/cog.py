@@ -14,7 +14,6 @@ import time
 import discord
 from discord import app_commands
 
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_game import BaseGame
@@ -385,98 +384,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     ) -> None:
         await self._base_lobby(interaction, stakes)
 
-    @chicken.command(name="stats", description="View Chicken stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def ch_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await chdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-        embed = discord.Embed(title=f"🐔 Chicken — {target.display_name}", color=accent)
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Crashes", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
-    @chicken.command(name="config", description="Configure Chicken (mods only)")
-    @app_commands.describe(
-        cooldown_hours="Hours before a player can join another game (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        climb_duration="Seconds for the meter to climb 0→100 (default 25)",
-        min_players="Minimum players to start (default 2)",
-        max_players="Maximum players in a lobby (default 8)",
-    )
-    async def ch_config(
-        self,
-        interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        climb_duration: float | None = None,
-        min_players: int | None = None,
-        max_players: int | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure this game.", ephemeral=True
-            )
-            return
-
-        shared_updates: dict = {}
-        game_updates: dict = {}
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if climb_duration is not None:
-            game_updates["climb_duration"] = max(5.0, climb_duration)
-        if min_players is not None:
-            game_updates["min_players"] = max(2, min_players)
-        if max_players is not None:
-            game_updates["max_players"] = max(2, max_players)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await chdb.get_config(self.db, interaction.guild.id)
-            accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
-            embed = discord.Embed(title="🔧 Chicken Config", color=accent)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(
-                self.db, interaction.guild.id, self.GAME_KEY, **shared_updates
-            )
-        if game_updates:
-            await chdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
 async def setup(bot: Bot) -> None:
     cog = ChickenCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats", "config"):
-        cog.chicken.remove_command(name)
     bot.tree.remove_command("chicken")
     games.add_command(cog.chicken)

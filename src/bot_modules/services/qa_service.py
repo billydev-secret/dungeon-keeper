@@ -1,8 +1,10 @@
 """QA Tracker service — DB layer for tests, verdicts, and per-guild settings.
 
-One row per TESTING_QUEUE entry (``qa_tests``), one verdict per tester per
-test (``qa_verdicts``), instant currency pay on a fresh verdict (daily cap),
-admin void with clawback. See docs/plans/qa-tracker.md for the feature design.
+One row per posted QA card (``qa_tests``) — sourced from a commit's own
+``Testing:`` section or a role-checklist feature block — one verdict per
+tester per test (``qa_verdicts``), instant currency pay on a fresh verdict
+(daily cap), admin void with clawback. See docs/plans/qa-tracker.md for the
+feature design.
 
 Everything rides the caller's connection/transaction, mirroring
 ``economy_service`` — the caller's commit is the boundary, so a verdict

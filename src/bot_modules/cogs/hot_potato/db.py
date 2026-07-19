@@ -135,14 +135,6 @@ async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
     )
 
 
-async def get_style_points(db: GamesDb, guild_id: int, user_id: int) -> int:
-    row = await db.fetchone(
-        "SELECT total_points FROM hot_potato_style WHERE guild_id = ? AND user_id = ?",
-        (guild_id, user_id),
-    )
-    return row["total_points"] if row else 0
-
-
 async def add_style_points(db: GamesDb, guild_id: int, user_id: int, points: int) -> None:
     await db.execute(
         """
@@ -153,28 +145,3 @@ async def add_style_points(db: GamesDb, guild_id: int, user_id: int, points: int
         """,
         (guild_id, user_id, points),
     )
-
-
-async def get_stats(db: GamesDb, guild_id: int, user_id: int) -> dict:
-    row = await db.fetchone(
-        """
-        SELECT
-          SUM(CASE WHEN winner_id = ?1 THEN 1 ELSE 0 END) AS wins,
-          SUM(CASE WHEN loser_id  = ?1 THEN 1 ELSE 0 END) AS losses,
-          COUNT(*)                                          AS total_games
-        FROM hot_potato_games
-        WHERE guild_id = ?2
-          AND (challenger_id = ?1 OR target_id = ?1)
-          AND state IN ('RESOLVED', 'NICKED', 'NO_NICK_SET', 'RESOLVED_NO_NICK', 'EXPIRED')
-        """,
-        (user_id, guild_id),
-    )
-    style = await get_style_points(db, guild_id, user_id)
-    if not row:
-        return {"wins": 0, "losses": 0, "total_games": 0, "style_points": style}
-    return {
-        "wins": row["wins"] or 0,
-        "losses": row["losses"] or 0,
-        "total_games": row["total_games"] or 0,
-        "style_points": style,
-    }
