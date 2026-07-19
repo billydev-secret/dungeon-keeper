@@ -4,6 +4,9 @@ import {
   showStatus,
   loadChannels,
   loadRoles,
+  loadMembers,
+  toMemberOptions,
+  mountPicker,
   mountChannelPicker,
   mountRolePicker,
 } from "../config-helpers.js";
@@ -15,16 +18,17 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading economy config…</div></div>`;
 
   (async () => {
-    const [cfg, channels, roles] = await Promise.all([
+    const [cfg, channels, roles, members] = await Promise.all([
       api("/api/economy/config"),
       loadChannels(),
       loadRoles(),
+      loadMembers(),
     ]);
-    render(container, cfg, channels, roles);
+    render(container, cfg, channels, roles, members);
   })();
 }
 
-function render(container, cfg, channels, roles) {
+function render(container, cfg, channels, roles, members) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -57,9 +61,7 @@ function render(container, cfg, channels, roles) {
         </div>
         <div class="field">
           <label>Community weekly host</label>
-          <input type="text" name="community_host_user_id" inputmode="numeric"
-            pattern="[0-9]*" value="${cfg.community_host_user_id || ""}"
-            placeholder="member ID" style="max-width:220px;" />
+          <span data-picker="community_host_user_id"></span>
           <div class="field-hint">Community-weekly beat sheets (kickoff, tier
             crossed, final-24h, resolution) are DMed to this member to post in
             their own voice — the bot posts nothing publicly. Leave empty to
@@ -141,6 +143,12 @@ function render(container, cfg, channels, roles) {
     roles,
     String(cfg.game_role_id),
   );
+  const hostPicker = mountPicker(
+    form.querySelector('[data-picker="community_host_user_id"]'),
+    toMemberOptions(members),
+    String(cfg.community_host_user_id || "0"),
+    { emptyValue: "0", emptyLabel: "(server owner)", placeholder: "Search members…" },
+  );
 
   const numKeys = [
     "booster_multiplier",
@@ -166,8 +174,7 @@ function render(container, cfg, channels, roles) {
       game_role_id: parseInt(gameRolePicker.getValue() || "0", 10),
       // Sent as a string: a snowflake overflows JS number precision, and
       // pydantic coerces the string to int losslessly server-side.
-      community_host_user_id:
-        form.querySelector("[name=community_host_user_id]").value.trim() || "0",
+      community_host_user_id: hostPicker.getValue() || "0",
     };
     for (const key of numKeys) {
       const raw = form.querySelector(`[name=${key}]`).value;
