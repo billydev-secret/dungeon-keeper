@@ -17,8 +17,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot_modules.announcements.buttons import (
+    BUTTON_STYLES,
+    DEFAULT_STYLE,
+    MAX_BUTTONS,
+)
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.core.role_safety import role_block_reason
+from bot_modules.core.utils import get_bot_member
 from bot_modules.services.announcements_service import (
     VALID_MENTION_KINDS,
     clone_announcement,
@@ -27,6 +34,8 @@ from bot_modules.services.announcements_service import (
     delete_announcement,
     get_announcement,
     list_announcements,
+    list_buttons,
+    replace_buttons,
     update_announcement,
 )
 from bot_modules.services.branding_service import DEFAULT_ACCENT
@@ -41,8 +50,20 @@ require_admin = require_perms({"admin"})
 
 _HEX_RE = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
+# Discord's own custom-emoji form, matching PartialEmoji.from_str's regex.
+_CUSTOM_EMOJI_RE = re.compile(r"^<a?:[a-zA-Z0-9_]{1,32}:[0-9]{15,20}>$")
+
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
+
+class ButtonBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role_id: str
+    label: str = Field(default="", max_length=80)
+    emoji: str = Field(default="", max_length=64)
+    style: str = DEFAULT_STYLE
+
 
 class AnnouncementBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -57,6 +78,7 @@ class AnnouncementBody(BaseModel):
     mention_role_id: Optional[str] = None
     post_date: Optional[str] = None       # guild-local "YYYY-MM-DD"
     post_time: Optional[str] = None       # guild-local "HH:MM"
+    buttons: list[ButtonBody] = Field(default_factory=list)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -128,6 +150,83 @@ def _validate(body: AnnouncementBody) -> dict:
     }
 
 
+def _validate_emoji(raw: str) -> str:
+    """Reject text that only *looks* like an emoji to discord.py.
+
+    ``PartialEmoji.from_str`` never fails: it wraps anything unmatched as a
+    unicode emoji named after the raw string, so "notanemoji" sails through
+    here and comes back as a 400 from Discord at post time — after the
+    announcement is already marked sent-with-an-error. Catching it on save
+    turns a surprise into a form error.
+    """
+    if not raw or _CUSTOM_EMOJI_RE.match(raw):
+        return raw
+    # Real unicode emoji carry no ASCII; this also passes flags, skin-tone
+    # modifiers and ZWJ sequences without enumerating them.
+    if any(ord(ch) < 128 for ch in raw):
+        raise HTTPException(
+            status_code=400,
+            detail=f"“{raw}” isn't an emoji — paste one, or leave the box empty.",
+        )
+    return raw
+
+
+def _validate_buttons(body: AnnouncementBody) -> list[dict]:
+    """Shape-check the role buttons; return normalized rows in submitted order.
+
+    Guild-side safety (does the role exist, can we grant it, is it dangerous)
+    needs the gateway and happens in ``_check_buttons_against_guild``.
+    """
+    if len(body.buttons) > MAX_BUTTONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"An announcement can carry at most {MAX_BUTTONS} role buttons",
+        )
+    out: list[dict] = []
+    seen: set[int] = set()
+    for btn in body.buttons:
+        try:
+            role_id = int(btn.role_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Pick a role for every button")
+        if role_id <= 0:
+            raise HTTPException(status_code=400, detail="Pick a role for every button")
+        if role_id in seen:
+            # Two buttons for one role would toggle each other — always a mistake.
+            raise HTTPException(
+                status_code=400, detail="Two buttons can't offer the same role"
+            )
+        seen.add(role_id)
+        if btn.style not in BUTTON_STYLES:
+            raise HTTPException(status_code=400, detail=f"Invalid button style: {btn.style}")
+        out.append({
+            "role_id": role_id,
+            "label": btn.label.strip(),
+            "emoji": _validate_emoji(btn.emoji.strip()),
+            "style": btn.style,
+        })
+    return out
+
+
+def _check_buttons_against_guild(ctx, guild_id: int, buttons: list[dict]) -> None:
+    """Refuse any role we can't safely let members self-assign.
+
+    Unlike role menus there is no elevated-permission override: an announcement
+    is a public, permanent post, so a role carrying mod powers is simply not
+    allowed on one. The bot re-checks this at click time too — this is the
+    early, legible failure.
+    """
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        return  # off-gateway (e.g. tests) — the click-path check still stands
+    bot_member = get_bot_member(guild)
+    for btn in buttons:
+        reason = role_block_reason(guild.get_role(btn["role_id"]), bot_member)
+        if reason is not None:
+            raise HTTPException(status_code=400, detail=f"Can't add that button — {reason}.")
+
+
 def _channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
     """True if the live bot can see this channel in the active guild (best-effort)."""
     bot = getattr(ctx, "bot", None)
@@ -139,7 +238,16 @@ def _channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
     return guild.get_channel(channel_id) is not None
 
 
-def _ann_dict(row: sqlite3.Row, guild_id: int) -> dict:
+def _button_dict(row: sqlite3.Row) -> dict:
+    return {
+        "role_id": str(row["role_id"]),
+        "label": row["label"],
+        "emoji": row["emoji"],
+        "style": row["style"],
+    }
+
+
+def _ann_dict(row: sqlite3.Row, guild_id: int, buttons: list[sqlite3.Row]) -> dict:
     jump_url = None
     if row["sent_channel_id"] and row["sent_message_id"]:
         jump_url = (
@@ -163,6 +271,7 @@ def _ann_dict(row: sqlite3.Row, guild_id: int) -> dict:
         "sent_at": row["sent_at"],
         "error": row["error"],
         "jump_url": jump_url,
+        "buttons": [_button_dict(b) for b in buttons],
         "created_by": str(row["created_by"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -200,7 +309,11 @@ async def list_all(
         with ctx.open_db() as conn:
             rows = list_announcements(conn, guild_id)
             return {
-                "items": [_ann_dict(r, guild_id) for r in rows],
+                "items": [
+                    _ann_dict(r, guild_id, list_buttons(conn, int(r["id"])))
+                    for r in rows
+                ],
+                "max_buttons": MAX_BUTTONS,
                 "tz_offset_hours": get_tz_offset_hours(conn, guild_id),
                 "default_accent_hex": f"{default_accent:06X}",
                 "guild_id": str(guild_id),
@@ -218,9 +331,11 @@ async def create(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     fields = _validate(body)
+    buttons = _validate_buttons(body)
 
     if not _channel_in_guild(ctx, guild_id, fields["channel_id"]):
         raise HTTPException(status_code=400, detail="Channel is not in this server")
+    _check_buttons_against_guild(ctx, guild_id, buttons)
 
     now = time.time()
 
@@ -237,6 +352,7 @@ async def create(
                 updated_at=now,
                 **fields,
             )
+            replace_buttons(conn, ann_id, buttons)
         return {"ok": True, "id": ann_id, "status": status, "post_at": post_at}
 
     return await run_query(_q)
@@ -252,9 +368,11 @@ async def update(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     fields = _validate(body)
+    buttons = _validate_buttons(body)
 
     if not _channel_in_guild(ctx, guild_id, fields["channel_id"]):
         raise HTTPException(status_code=400, detail="Channel is not in this server")
+    _check_buttons_against_guild(ctx, guild_id, buttons)
 
     now = time.time()
 
@@ -273,6 +391,7 @@ async def update(
                 {**fields, "post_at": post_at, "status": status, "error": None},
                 now,
             )
+            replace_buttons(conn, ann_id, buttons)
         return {"ok": True, "status": status, "post_at": post_at}
 
     return await run_query(_q)

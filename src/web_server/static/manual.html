@@ -177,6 +177,15 @@
     margin: 1.75rem 0 0.5rem;
     scroll-margin-top: 1rem;
   }
+  /* Sub-topic inside an h3 section. Must stay an h4: the Help panel slices a
+     page by walking siblings until the next h3, so an h3 here would truncate
+     the rendered section (help.js extractSectionContent). */
+  h4 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 1.25rem 0 0.4rem;
+  }
   p { margin-bottom: 0.75rem; }
 
   /* ── Command blocks ────────────────────────────────────────── */
@@ -1705,6 +1714,18 @@
       <div class="callout-body">
         <strong>Manage via the <a href="/#/announcements">web dashboard</a></strong>
         <p>The Announcements panel (admin-only) has the queue, a live Discord-style preview while you type, and a Sent history. Save without a time to keep a <em>draft</em>; add a date and time to schedule it. <strong>Post now</strong> sends within a minute. Sent items keep an "Open in Discord" jump link and can be <em>cloned</em> back into a fresh draft. If the bot was offline at post time it still posts up to 2 hours late; past that the item is marked as missed instead of posting stale news — clone and reschedule it.</p>
+      </div>
+    </div>
+
+    <h4>Role buttons</h4>
+    <p>An announcement can carry up to <strong>five</strong> role buttons. A member clicks one to give themselves that role and clicks again to drop it — the reply is only ever visible to them. Handy for opt-in pings, event signups, and notification roles: post the announcement once and the button keeps working from then on, including after the bot restarts and even if you later delete the announcement from the queue.</p>
+    <p>Give each button a role, and optionally a label (blank uses the role's own name, so renaming the role renames the button), an emoji, and a color. Leave the button list empty for a plain announcement.</p>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon">⚠️</span>
+      <div class="callout-body">
+        <strong>Roles with mod powers can't go on a button</strong>
+        <p>Any role carrying Administrator, Manage Server / Roles / Channels / Messages / Webhooks, Kick, Ban, Timeout, or Mention Everyone is refused, as is any role above Dungeon Keeper in the role list. Unlike Role Menus there's no override — an announcement is public and stays clickable forever, so this one is a hard no. The check runs again on every click, so if a role picks up mod permissions later, the old button stops handing it out on its own. Members who already have the role can always still remove it.</p>
       </div>
     </div>
 

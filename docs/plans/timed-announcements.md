@@ -3,6 +3,13 @@
 Status: **built** 2026-07-19 (single commit; awaiting live testing). Decisions
 confirmed with Billy 2026-07-19. Reference spec: [../announcements.md](../announcements.md).
 
+**Follow-up shipped 2026-07-20 — self-assign role buttons.** Up to 5 per
+announcement, toggle on/off, elevated roles refused outright (no role-menus-style
+override), re-checked at click time because a posted announcement stays clickable
+indefinitely. Migration 095; shared danger list extracted to
+`core/role_safety.py`. Behavior is documented in the reference spec — this plan
+covers the original build only.
+
 ## Context
 
 There's no way to queue a server announcement ahead of time: QOTD is a manual
