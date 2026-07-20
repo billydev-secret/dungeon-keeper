@@ -86,8 +86,8 @@ SQLite-backed. Tests in `tests/`.
   you do run it locally, run it **solo**: a parallel full run alongside other
   work can exhaust the tmpfs quota and spray hundreds of bogus sqlite errors
   (see memory: rm -rf /tmp/pytest-of-ben and re-run). `--quick` runs
-  ruff + pyright only (no pytest). Coverage floor in pyproject.toml must not
-  be lowered.
+  ruff + pyright (no pytest) plus the scoped mobile-layout check when dashboard
+  assets changed. Coverage floor in pyproject.toml must not be lowered.
 - Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage on
   every push/PR to main, and `nightly.yml` runs it on a schedule — so a miss in
   the scoped tier is caught at push, not in prod.
@@ -118,5 +118,13 @@ SQLite-backed. Tests in `tests/`.
   `gjs` `Reflect.parse` one-liner. Static-asset cache-busting is automatic
   (per-boot `?v=` rewrite in `server.py`); JS edits show up after the next
   service restart, not before.
+- **The dashboard is used on phones — check layout there.** A browser-driven
+  responsive gate (`tests/web/test_mobile_layout.py`, Playwright) fails a panel
+  whose content runs off-screen or gets clipped at phone/tablet/desktop width.
+  It runs scoped to changed panels in `gate.py` (so a dashboard-asset commit
+  triggers it) and fully in nightly; it auto-skips without a browser. When you
+  add or restyle a panel, prefer wrapping/scrolling flex rows over fixed-width
+  ones, and add an interaction scenario if the layout lives behind a click. See
+  `docs/mobile_layout_testing.md`; measure with `scripts/mobile_layout_scan.py`.
 - New embeds take their color from `resolve_accent_color(db_path, guild)`;
   keep red/green/etc. only where the color is semantic.

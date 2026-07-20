@@ -19,6 +19,8 @@ nightly (``.github/workflows/nightly.yml``), so anything the heuristic misses
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -185,6 +187,107 @@ def run(py: str, label: str, *args: str) -> None:
         sys.exit(result.returncode)
 
 
+# ── mobile-layout gate (scoped) ──────────────────────────────────────────
+#
+# Static assets → the browser-driven responsive check (tests/web/test_mobile_layout.py).
+# Scope narrows to affected panels so a one-panel edit doesn't sweep all 173:
+#   * a change under static/js/panels/<x>.js (not help.js) → just the panel(s)
+#     whose module is <x>.js;
+#   * any CSS, or shared JS (static/js/ outside panels/, or panels/help.js which
+#     every help page shares) → all panels, since one rule restyles everything.
+# HTML-only changes are skipped here (content, not layout; the one wide-table
+# risk, help-overview, is already in the test's KNOWN_OVERFLOW baseline).
+# Non-fatal when Playwright/Chromium isn't installed — the test itself skips, and
+# a machine without a browser (plain CI) must not be blocked from committing.
+
+STATIC_ROOT = "src/web_server/static/"
+_PANEL_MODULE_RE = re.compile(r'id:\s*"([^"]+)".*?module:\s*"\./panels/([^"?]+)"')
+
+
+def _panel_id_to_module() -> dict[str, str]:
+    """Map every panel id → its module basename, parsed from app.js's registry."""
+    app_js = ROOT / STATIC_ROOT / "js" / "app.js"
+    out: dict[str, str] = {}
+    if app_js.exists():
+        for m in _PANEL_MODULE_RE.finditer(app_js.read_text(encoding="utf-8")):
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def mobile_scope(changed: list[str]) -> tuple[bool, set[str] | None]:
+    """(run?, panel ids or None-for-all) for the changed static assets."""
+    static = [c for c in changed if c.startswith(STATIC_ROOT)]
+    if not static:
+        return False, None
+    panels_prefix = STATIC_ROOT + "js/panels/"
+    id_to_mod = _panel_id_to_module()
+    scoped: set[str] = set()
+    for c in static:
+        if c.endswith(".css"):
+            return True, None  # any CSS rule can restyle every panel
+        if c.startswith(panels_prefix) and not c.endswith("/help.js"):
+            base = c[len(panels_prefix):]
+            hits = {pid for pid, mod in id_to_mod.items() if mod == base}
+            if hits:
+                scoped |= hits
+            else:
+                return True, None  # unknown module (helper?) — be safe, sweep all
+        elif c.endswith(".js"):
+            return True, None  # shared JS (root of js/, or help.js) → all panels
+        # .html and everything else: no layout scope
+    if not scoped:
+        return False, None
+    return True, scoped
+
+
+_BROWSER_PROBE = (
+    "import sys; from pathlib import Path; from playwright.sync_api import sync_playwright\n"
+    "try:\n"
+    "    with sync_playwright() as pw:\n"
+    "        sys.exit(0 if Path(pw.chromium.executable_path).exists() else 3)\n"
+    "except Exception:\n"
+    "    sys.exit(3)\n"
+)
+
+
+def _browser_available(py: str) -> bool:
+    """True if Playwright imports *and* a Chromium build is actually installed."""
+    return subprocess.run([py, "-c", _BROWSER_PROBE], cwd=ROOT,
+                          capture_output=True).returncode == 0
+
+
+def run_mobile(py: str, changed: list[str]) -> None:
+    """Run the scoped mobile-layout check if static assets changed and a browser
+    is available; otherwise print why it was skipped and return (non-fatal)."""
+    should, panels = mobile_scope(changed)
+    if not should:
+        return
+    label = "all panels" if panels is None else ", ".join(sorted(panels))
+    if not _browser_available(py):
+        print("── mobile: Playwright/Chromium not installed → skipping layout check " + "─" * 3)
+        print("   (install: pip install playwright && python -m playwright install chromium)")
+        return
+    print(f"── mobile: responsive layout check ({label}) " + "─" * 10, flush=True)
+    env = dict(os.environ)
+    if panels is not None:
+        # A handful of panels — check all three widths, it's cheap.
+        env["MOBILE_PANELS"] = ",".join(sorted(panels))
+    else:
+        # A CSS / shared-JS change sweeps every panel; at ~1s each that's minutes
+        # per width, too slow for a pre-commit tier. Phone is where nearly every
+        # overflow manifests, so the gate checks that width and nightly's full
+        # sweep covers tablet/desktop. Respect an explicit MOBILE_VIEWPORTS.
+        env.setdefault("MOBILE_VIEWPORTS", "phone")
+    result = subprocess.run(
+        [py, "-m", "pytest", "-m", "mobile", "-n", "0",
+         str(TESTS / "web" / "test_mobile_layout.py")],
+        cwd=ROOT, env=env,
+    )
+    if result.returncode != 0:
+        print("GATE FAILED: mobile layout", file=sys.stderr)
+        sys.exit(result.returncode)
+
+
 def main() -> None:
     argv = sys.argv[1:]
     quick = "--quick" in argv
@@ -196,6 +299,9 @@ def main() -> None:
     run(py, "pyright", "-m", "pyright")
 
     if quick:
+        # Scoped mobile-layout check for any changed dashboard assets. Non-fatal
+        # without a browser, so a plain machine still commits.
+        run_mobile(py, changed_paths())
         print("GATE OK (quick)")
         return
 
@@ -235,6 +341,7 @@ def main() -> None:
             run(py, "pytest", "-m", "pytest", *targets, *pytest_args)
         else:
             print("── scope: no code/test changes mapped → skipping pytest " + "─" * 6)
+        run_mobile(py, changed)
         print("GATE OK (scoped)")
         return
 
