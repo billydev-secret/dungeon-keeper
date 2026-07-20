@@ -1858,17 +1858,26 @@ def test_set_bonus_waits_for_signoff_approval(db):
 
 
 def test_spotlight_needs_two_kinds_and_doubles_payout(db):
+    import time as _t
+
+    from bot_modules.economy.logic import local_day_for
+    from bot_modules.economy.quests import iso_week_for
     from bot_modules.services.economy_quests_service import spotlight_kind
+
+    # The credit path resolves the spotlight from the week it runs in, not
+    # from the claim's local_day — so this has to ask about *this* week. A
+    # hardcoded week silently passes until the calendar rolls past it.
+    day = local_day_for(_t.time(), 0.0)
+    week = iso_week_for(day)
 
     with open_db(db) as conn:
         _make(conn, qtype="daily", trigger_kind="whisper", reward=10, title="A")
-        assert spotlight_kind(conn, GUILD, "2026-W29") is None  # 1 kind = off
+        assert spotlight_kind(conn, GUILD, week) is None  # 1 kind = off
         _make(conn, qtype="daily", trigger_kind="quote", reward=10, title="B")
-        spot = spotlight_kind(conn, GUILD, "2026-W29")
+        spot = spotlight_kind(conn, GUILD, week)
         assert spot in ("whisper", "quote")
-        assert spotlight_kind(conn, GUILD, "2026-W29") == spot  # stable
+        assert spotlight_kind(conn, GUILD, week) == spot  # stable
         other = "quote" if spot == "whisper" else "whisper"
-        day = "2026-07-14"  # W29
         fire_trigger_quests(
             conn, SETTINGS, GUILD, spot, USER,
             local_day=day, occurrence="s1", booster=False,

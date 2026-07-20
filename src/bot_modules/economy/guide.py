@@ -36,7 +36,7 @@ log = logging.getLogger("dungeonkeeper.economy")
 NOTIFY_CUSTOM_ID = "econ_guide_notify"
 
 NOTIFY_ON_MSG = (
-    "🔔 Notifications **on** — quest completions and streak milestones will "
+    "🔔 Notifications **on** — your daily streak digest and raffle wins will "
     "come to your DMs. Click again to turn them off."
 )
 NOTIFY_OFF_MSG = (
@@ -80,8 +80,8 @@ def build_guide_embed(
     embed.add_field(
         name="Notifications",
         value=(
-            "Hit **🔔 Notifications** below to have quest completions and "
-            "streak milestones DMed to you. Toggle it off any time — it only "
+            "Hit **🔔 Notifications** below to have your daily streak digest "
+            "and raffle wins DMed to you. Toggle it off any time — it only "
             "changes your DMs, never what you can see or earn."
             "\n\u200b"
         ),

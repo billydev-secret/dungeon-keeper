@@ -34,7 +34,7 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.logic import is_economy_manager, local_day_for
 from bot_modules.economy.leaderboard import progress_bar
 from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
@@ -98,10 +98,11 @@ def can_manage_economy(member: discord.Member, settings: EconSettings) -> bool:
     ``/bank`` grant check and the sign-off buttons share one rule (defined here
     rather than in the cog to avoid a views→cog import cycle).
     """
-    if member.guild_permissions.administrator:
-        return True
-    role_id = settings.manager_role_id
-    return role_id != 0 and any(r.id == role_id for r in member.roles)
+    return is_economy_manager(
+        is_admin=member.guild_permissions.administrator,
+        role_ids=[r.id for r in member.roles],
+        manager_role_id=settings.manager_role_id,
+    )
 
 
 def _unit(settings: EconSettings, amount: int) -> str:

@@ -322,11 +322,9 @@ class _TriggerQuest:
 
     quest_id: int
     qtype: str
-    title: str
     signoff: bool
     channel_id: int | None  # None = any channel counts
     pattern: re.Pattern[str]
-    reward_xp: int
 
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif")
@@ -2765,11 +2763,9 @@ class EconomyCog(commands.Cog):
                 _TriggerQuest(
                     quest_id=int(row["id"]),
                     qtype=str(row["qtype"]),
-                    title=str(row["title"]),
                     signoff=bool(row["signoff"]),
                     channel_id=int(channel_id) if channel_id is not None else None,
                     pattern=pattern,
-                    reward_xp=int(row["reward_xp"]),
                 )
             )
         return out
@@ -2821,76 +2817,39 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        await self._announce_quest_claim(
-            message, member, trig.title, settings, outcome,
-            reward_xp=trig.reward_xp,
-        )
+        await self._announce_quest_claim(message, member, settings, outcome)
 
     async def _announce_quest_claim(
         self,
         message: discord.Message,
         member: discord.Member,
-        title: str,
         settings: EconSettings,
         outcome,
-        reward_xp: int = 0,
     ) -> None:
-        """React + reply for an auto-claimed quest (trigger phrase or photo)."""
+        """React for an auto-claimed quest (trigger phrase or photo).
+
+        Silent otherwise — no channel reply, no DM. Wallet/quest log carries
+        the news, same as every other trigger kind.
+        """
         guild = message.guild
         assert guild is not None
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
 
         if outcome.state == "paid":
-            paid = int(outcome.paid)
-            xp_note = f" (+⭐ {reward_xp:,} XP)" if reward_xp > 0 else ""
-            embed = discord.Embed(
-                title="Quest complete!",
-                description=(
-                    f"{member.mention} completed **{title}** — "
-                    f"{settings.currency_emoji} {paid:,} {_unit(settings, paid)} "
-                    f"added to their wallet{xp_note}."
-                ),
-                color=accent,
-            )
-            reaction, note = "✅", embed
+            reaction = "✅"
         else:
             # Sign-off trigger quest: the phrase files the claim; a manager
             # still approves the payout from the bank-channel card.
+            accent = await resolve_accent_color(self.ctx.db_path, guild)
             await post_signoff_card(
                 self.bot, self.ctx, guild, settings, accent,
                 int(outcome.claim_id), member,
             )
-            embed = discord.Embed(
-                title="Quest submitted",
-                description=(
-                    f"{member.mention} triggered **{title}** — "
-                    "sent for manager sign-off."
-                ),
-                color=accent,
-            )
-            reaction, note = "📝", embed
+            reaction = "📝"
 
-        # The opt-in role decides *where* the completion card lands, never
-        # whether the member hears about it: opted-in players get it DMed
-        # (keeps the trigger channel clean), everyone else gets the in-channel
-        # reply. Both always get the reaction. Members without the role used to
-        # be paid in total silence, which reads as the quest having failed.
         try:
             await message.add_reaction(reaction)
         except discord.HTTPException:
             log.debug("econ trigger: failed to react", exc_info=True)
-
-        role_id = settings.game_role_id
-        if role_id and any(r.id == role_id for r in member.roles):
-            await notify_member(
-                self.bot, self.ctx.db_path, guild.id, member.id, embed=note
-            )
-            return
-
-        try:
-            await message.reply(embed=note, mention_author=False)
-        except discord.HTTPException:
-            log.debug("econ trigger: failed to reply", exc_info=True)
 
     # ── photo-react event quest (a Photo Challenge post that earns reactions) ──
 
@@ -3061,11 +3020,8 @@ class EconomyCog(commands.Cog):
         if result is None:
             return
         settings, fired = result
-        for quest, outcome in fired:
-            await self._announce_quest_claim(
-                message, member, str(quest["title"]), settings, outcome,
-                reward_xp=int(quest["reward_xp"]),
-            )
+        for _quest, outcome in fired:
+            await self._announce_quest_claim(message, member, settings, outcome)
 
     def _photo_eligible(self, guild_id: int) -> bool:
         """True when a photo-react payout is possible in this guild right now.
@@ -3190,11 +3146,8 @@ class EconomyCog(commands.Cog):
         if result is None:
             return
         settings, fired = result
-        for quest, outcome in fired:
-            await self._announce_quest_claim(
-                message, member, str(quest["title"]), settings, outcome,
-                reward_xp=int(quest["reward_xp"]),
-            )
+        for _quest, outcome in fired:
+            await self._announce_quest_claim(message, member, settings, outcome)
 
     qotd = app_commands.Group(
         name="qotd",

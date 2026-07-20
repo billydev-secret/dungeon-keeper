@@ -19,11 +19,11 @@ from bot_modules.rules_watch import service
 from bot_modules.rules_watch.scorer import (
     Signals,
     TargetResult,
-    check_boundary_token,
     compute_priority,
     compute_thread_reciprocity,
     compute_vader_trajectory,
     count_persistence,
+    detect_boundary_crossing,
     detect_slur,
     get_consent_state,
     get_mutual_count,
@@ -125,7 +125,6 @@ class RulesWatchMonitor(commands.Cog):
                 if vader_row and vader_row["sentiment"] is not None:
                     _vader_compound = float(vader_row["sentiment"])
 
-                _boundary_hit = check_boundary_token(content)
                 _slur_hit = detect_slur(content)
 
                 target_preliminary = identify_target(
@@ -133,11 +132,20 @@ class RulesWatchMonitor(commands.Cog):
                     reply_to_id, mention_ids,
                 )
 
+                # A boundary event is the TARGET telling THIS author to stop and
+                # the author continuing — not the author's own use of the word
+                # "no". Requires a target, so it is computed here rather than
+                # from `content`.
                 _persistence = 0
+                _boundary_hit = False
                 if target_preliminary.target_id is not None:
                     _persistence = count_persistence(
                         conn, guild_id, channel_id, author_id,
                         target_preliminary.target_id,
+                    )
+                    _boundary_hit = detect_boundary_crossing(
+                        conn, guild_id, channel_id, author_id,
+                        target_preliminary.target_id, message_created_ts,
                     )
 
                 # Pre-filter gate: skip LLM unless at least one signal fires

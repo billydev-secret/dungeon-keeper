@@ -23,7 +23,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     member_is_booster,
     notify_member,
-    open_qotd_for,
+    qotd_for_message,
     get_streak_shields,
     process_conversion,
     process_login,
@@ -532,27 +532,28 @@ def test_process_conversion_zero_rate_carries_everything(db):
 CHANNEL = 42
 
 
-def test_create_and_open_qotd(db):
+def test_create_and_find_qotd_by_message(db):
     with open_db(db) as conn:
         qid = create_qotd(conn, GUILD, CHANNEL, 555, "Best snack?", USER, DAY)
         assert qid > 0
-        row = open_qotd_for(conn, GUILD, CHANNEL, DAY)
+        row = qotd_for_message(conn, GUILD, 555)
         assert row is not None
         assert row["id"] == qid
         assert row["question"] == "Best snack?"
         assert row["posted_by"] == USER
-        # Wrong day / wrong channel -> no match.
-        assert open_qotd_for(conn, GUILD, CHANNEL, PREV) is None
-        assert open_qotd_for(conn, GUILD, CHANNEL + 1, DAY) is None
+        assert row["local_day"] == DAY
+        # Another message / another guild -> no match.
+        assert qotd_for_message(conn, GUILD, 556) is None
+        assert qotd_for_message(conn, GUILD + 1, 555) is None
 
 
-def test_open_qotd_latest_wins(db):
+def test_qotd_for_message_keeps_old_days_findable(db):
+    """Staleness is the caller's call — the row itself never expires."""
     with open_db(db) as conn:
-        create_qotd(conn, GUILD, CHANNEL, 555, "First?", USER, DAY)
-        second = create_qotd(conn, GUILD, CHANNEL, 556, "Second?", USER, DAY)
-        row = open_qotd_for(conn, GUILD, CHANNEL, DAY)
+        create_qotd(conn, GUILD, CHANNEL, 555, "Yesterday?", USER, PREV)
+        row = qotd_for_message(conn, GUILD, 555)
         assert row is not None
-        assert row["id"] == second
+        assert row["local_day"] == PREV
 
 
 def test_try_award_qotd_once_per_member(db):

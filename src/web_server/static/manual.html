@@ -882,7 +882,7 @@
       <li><strong>Quests</strong> — daily / weekly / monthly quests drawn onto your personal board, plus server-wide community goals and event quests. Many complete automatically when you do the thing (send a trigger phrase, play a game, post a photo, answer a chat-revive prompt, host a voice hangout, set a bio…); others you claim from <code>/bank quests</code>, and some need a staff sign-off before paying. <strong>Getting-started nudges</strong> — one-time setup tasks like <em>filling out your bio</em> or <em>setting your birthday</em> — turn up among your daily quests too, and quietly drop off once you've done them, so they only ever show to people who haven't.</li>
       <li><strong>Community weeklies</strong> — every other week the server gets a shared goal ("send 3,000 messages together") sized from recent activity. Everyone's actions count automatically, milestones at 40/70/100% each pay <em>every</em> active member, and the top contributors earn a bonus — so even a partial week pays out.</li>
       <li><strong>Board extras</strong> — one free 🎲 reroll per day on <code>/bank quests</code> swaps out a quest that doesn't fit you, and you can buy a few more that day if you want another swap (the select tells you the price). Clearing your whole daily or weekly board pays a set bonus, and each week one ⚡ spotlight activity pays <em>double</em> (announced when the new week's quests go up).</li>
-      <li><strong>Games &amp; QOTD</strong> — playing a party game or duel pays participation (winning pays more), and answering the question of the day in its channel pays once per QOTD.</li>
+      <li><strong>Games &amp; QOTD</strong> — playing a party game or duel pays participation (winning pays more), and <strong>replying to</strong> the question of the day pays once per QOTD. Use Discord's reply on the question itself — just talking in the channel doesn't count, and yesterday's question stops paying when the day rolls over.</li>
       <li><strong>Server boosters</strong> earn 1.5× on everything the server pays out (transfers between members are never multiplied).</li>
     </ul>
 
@@ -909,7 +909,7 @@
       <span class="callout-icon">🔔</span>
       <div class="callout-body">
         <strong>Getting economy DMs</strong>
-        <p>The "how it works" panel carries a <strong>🔔 Notifications</strong> button. Click it to have quest completions and streak milestones land in your DMs instead of as a reply in the channel; click again to turn them off. It only changes where your notices go — everyone earns, spends and sees the same channels either way.</p>
+        <p>The "how it works" panel carries a <strong>🔔 Notifications</strong> button. Click it to have your daily streak digest and raffle wins land in your DMs; click again to turn them off. Quest completions are only ever marked with a reaction on your message, never a reply — this toggle just decides whether the other recurring notices go to your DMs. Everyone earns, spends and sees the same channels either way.</p>
       </div>
     </div>
 
@@ -929,7 +929,7 @@
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><code>/bank grant member: amount: reason:</code></td><td>Award currency to a member (audit-tagged in the ledger)</td></tr>
-        <tr><td><code>/qotd post [question]</code></td><td>Post today's question of the day as a banner card — replies in that channel earn currency until end of day. Leave <em>question</em> blank to post the next approved <strong>sponsored</strong> question instead, credited to the member who paid for it</td></tr>
+        <tr><td><code>/qotd post [question]</code></td><td>Post today's question of the day as a banner card. Members who <strong>reply to</strong> that message earn currency, once each, until end of day. Leave <em>question</em> blank to post the next approved <strong>sponsored</strong> question instead, credited to the member who paid for it. You don't need the command to ask: any message from a mod that <strong>tags the QOTD role</strong> becomes that day's question too</td></tr>
         <tr><td><code>/bank post-guide [channel]</code></td><td>Post (or refresh) the sticky "how the economy works" panel, templated with your branding and live rates. It carries the 🔔 Notifications button members use to opt into economy DMs, so it needs to sit somewhere they can see</td></tr>
         <tr><td><code>/bank post-shop [channel]</code></td><td>Post a persistent shop panel with rent buttons any member can click</td></tr>
         <tr><td><code>/bank post-leaderboard [channel]</code></td><td>Post the live leaderboard panel: today's pulse, top earners, community-goal progress with pace, a compact quest-board summary (your per-cadence draw counts, with Anytime quests listed), and an anonymous feed of today's completions — it repaints itself within a couple of minutes of economy activity</td></tr>
@@ -939,7 +939,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Everything else lives in the dashboard's Economy section</strong>
-        <p>Branding and wiring (<a href="/#/economy-config">Settings</a>, admin-only), quest authoring with AI idea generation (<a href="/#/economy-quests">Quests</a>), the pending sign-off queue (<a href="/#/economy-claims">Claims</a>), the paid question queue with approve / decline / withdraw (<a href="/#/economy-qotd-submissions">Sponsored QOTD</a>), community goals / grants / rentals / ledger audit (<a href="/#/economy-bank-manager">Operations</a>), per-trigger enable switches and faucet rates (<a href="/#/economy-income-sources">Income Sources</a>), perk prices and the curated role-icon catalog (<a href="/#/economy-sinks">Sinks</a>, admin-only), the <a href="/#/economy-qotd">QOTD</a> ping role, and <a href="/#/economy-stats">Statistics</a>. The section is visible to admins and holders of the economy manager role.</p>
+        <p>Branding and wiring (<a href="/#/economy-config">Settings</a>, admin-only), quest authoring with AI idea generation (<a href="/#/economy-quests">Quests</a>), the pending sign-off queue (<a href="/#/economy-claims">Claims</a>), the paid question queue with approve / decline / withdraw (<a href="/#/economy-qotd-submissions">Sponsored QOTD</a>), community goals / grants / rentals / ledger audit (<a href="/#/economy-bank-manager">Operations</a>), per-trigger enable switches and faucet rates (<a href="/#/economy-income-sources">Income Sources</a>), perk prices and the curated role-icon catalog (<a href="/#/economy-sinks">Sinks</a>, admin-only), the <a href="/#/economy-qotd">QOTD</a> role (pinged by <code>/qotd post</code>, and the tag mods use to open a question), and <a href="/#/economy-stats">Statistics</a>. The section is visible to admins and holders of the economy manager role.</p>
       </div>
     </div>
 

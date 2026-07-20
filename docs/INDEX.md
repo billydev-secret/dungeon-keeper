@@ -79,6 +79,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live leaderboard panel (today's pulse, pace, anonymous feed, event-driven debounced refresh) | Built 2026-07-18; awaiting live testing |
 | [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, dynamic targets, board add-ons | Built 2026-07-18 (all stages); awaiting live testing + post-restart seed script |
 | [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |
+| [rules_watch_tuning.md](rules_watch_tuning.md) | Rules Watch tuning: why the guard flags 98.7% of everything, the real bannable patterns from a full history audit, and what to change | Boundary-gate fix shipped 2026-07-19 (45.4→7.7 alerts/day); rest not started. Eval set: `tests/data/rules_watch_eval.jsonl`; harness: `scripts/rules_watch_tune.py` |
 | [survey_spec.md](survey_spec.md) | Anonymous Survey (launcher button, DM walkthrough, de-identified responses) | **Zero code** — no cog, no launcher, no DM session logic anywhere in `src/`. Pure design doc; not started. |
 | [TGM-Dashboard-Concept-Spec.md](TGM-Dashboard-Concept-Spec.md) | Web dashboard concept | |
 | [tools_spec.md](tools_spec.md) | Bot tools | |

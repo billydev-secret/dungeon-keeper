@@ -49,7 +49,11 @@ from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
 from bot_modules.economy.leaderboard import progress_bar
-from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.logic import (
+    is_economy_manager,
+    local_day_for,
+    qotd_marker_question,
+)
 from bot_modules.economy.quests import TRIGGER_KINDS
 from bot_modules.services.economy_quests_service import (
     fire_trigger_inline,
@@ -59,10 +63,11 @@ from bot_modules.services.economy_quests_service import (
 from bot_modules.services.economy_service import (
     EconSettings,
     LoginOutcome,
+    create_qotd,
     load_econ_settings,
     notify_member,
-    open_qotd_for,
     process_login,
+    qotd_for_message,
     try_award_qotd,
 )
 
@@ -758,7 +763,10 @@ class EventsCog(commands.Cog):
                 log.exception("economy on_message hook failed")
 
     async def _process_economy_message(self, message: discord.Message) -> None:
-        """Pay the daily text login and any open QOTD reward for a member message.
+        """Pay the daily text login, and the QOTD reward when this is a reply.
+
+        Also registers the QOTD itself: a mod message tagging the QOTD role
+        becomes that day's question, and replies to it are what pay.
 
         The DB work (settings load, streak read, login, QOTD award) runs in one
         off-loop transaction; the streak read *before* ``process_login`` captures
@@ -784,6 +792,26 @@ class EventsCog(commands.Cog):
         is_reply = ref is not None and not (
             isinstance(resolved, discord.Message) and resolved.author.id == user_id
         )
+        # The message this one replies to — the QOTD faucet's key. Present even
+        # when the reference didn't resolve in cache, which is the point: the
+        # id is all the lookup needs.
+        replied_to_id = ref.message_id if ref is not None else None
+
+        # QOTD marker facts, resolved on-loop: a mod tagging the QOTD role
+        # makes that message the day's question. The manager check can't run
+        # here (manager_role_id lives in settings, loaded in the DB thread), so
+        # carry the raw ids across and decide there.
+        role_mention_ids = [r.id for r in message.role_mentions]
+        author_role_ids = (
+            [r.id for r in message.author.roles]
+            if isinstance(message.author, discord.Member)
+            else []
+        )
+        author_is_admin = (
+            isinstance(message.author, discord.Member)
+            and message.author.guild_permissions.administrator
+        )
+        content = message.content or ""
 
         # Social-kind context, resolved on-loop (Discord objects don't cross
         # into the DB thread). Partner facts only exist when the reference
@@ -838,8 +866,36 @@ class EventsCog(commands.Cog):
                     source="text",
                     booster=booster,
                 )
-                qotd = open_qotd_for(conn, guild_id, channel_id, today)
-                if qotd is not None:
+                # A mod tagging the QOTD role registers this message as today's
+                # question — no command, no rendered card. Registration and
+                # payout are mutually exclusive by construction: the marker
+                # isn't a reply to itself.
+                question = qotd_marker_question(
+                    content=content,
+                    role_mention_ids=role_mention_ids,
+                    qotd_role_id=settings.qotd_ping_role_id,
+                    author_is_manager=is_economy_manager(
+                        is_admin=author_is_admin,
+                        role_ids=author_role_ids,
+                        manager_role_id=settings.manager_role_id,
+                    ),
+                )
+                if question is not None and (
+                    qotd_for_message(conn, guild_id, message_id) is None
+                ):
+                    create_qotd(
+                        conn, guild_id, channel_id, message_id, question,
+                        user_id, today,
+                    )
+                # Reward: a real reply to a registered question, and only while
+                # that question is still today's — old QOTD messages stay in
+                # the table forever and would otherwise be a coin farm.
+                qotd = (
+                    qotd_for_message(conn, guild_id, replied_to_id)
+                    if replied_to_id is not None
+                    else None
+                )
+                if qotd is not None and str(qotd["local_day"]) == today:
                     newly_awarded = try_award_qotd(
                         conn,
                         settings,
