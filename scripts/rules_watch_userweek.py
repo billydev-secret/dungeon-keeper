@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """User-week detection experiment for Rules Watch.
 
-The per-message framing in docs/rules_watch_tuning.md §12 is the wrong unit:
+The per-message framing in docs/reviews/2026-07-20-rules-watch-tuning.md §12 is the wrong unit:
 rate and breadth only exist as aggregates, and the mod-facing card (§11) is a
 user-week artifact. This builds (user, week) features over the WHOLE corpus and
 evaluates whether the relational signal separates weeks that drew human

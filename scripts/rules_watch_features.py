@@ -8,7 +8,7 @@ from data BEFORE the case timestamp -- no lookahead), then reports:
   2. leave-one-out cross-validated logistic regression
 
 Both are scored with balanced accuracy so they are directly comparable to the
-LLM sweep in docs/rules_watch_tuning.md §12 (3B 0.52, 8B 0.58, Nemo-12B 0.61-0.66).
+LLM sweep in docs/reviews/2026-07-20-rules-watch-tuning.md §12 (3B 0.52, 8B 0.58, Nemo-12B 0.61-0.66).
 
 Usage:  python scripts/rules_watch_features.py [--features N] [--show-weights]
 """
