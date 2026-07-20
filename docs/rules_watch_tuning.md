@@ -12,7 +12,7 @@ patterns look like, and what to change.
 | | |
 |---|---|
 | ✅ **Done** | §2.1 boundary-gate fix — 45.4 → **7.7 alerts/day** (−82.9%), `tests/test_rules_watch_scorer.py` |
-| 📊 **Measured** | §12 sweep — LLM ceiling **0.66**, **0.61** on a 4060 build, vs 0.52 today. A **2-feature classifier scores 0.65 for free** (§12.2). Ship **classifier detects → LLM vetoes** (§12.3): same accuracy, false alarms 13 → 7. Noise ±0.02 |
+| 📊 **Measured** | §12 sweep — LLM ceiling **0.66**, **0.61** on a 4060 build, vs 0.52 today. ⚠️ The classifier's 0.65 (§12.2) is an **eval-set artifact** — at a realistic base rate it ranks **0/13 positives in the top 100** (§12.2b). **Detection is unsolved**; keep human reporting primary |
 | ⬜ **Not started** | everything in §7, the §11 card, and the §2.2 model decision |
 
 **Companions:** `tests/data/rules_watch_eval.jsonl` (57 labeled real messages — read
@@ -784,6 +784,57 @@ auditability is worth more than a 0.01 score difference.
 **Not applicable: OpenClaw.** Checked, since it came up — it is a stateful Node.js
 *agent harness* (per-instance workspaces, tool deny-lists), not a classifier. No
 text-classification component; nothing to use here.
+
+### 12.2b ⚠️ CORRECTION — the 0.65 classifier result does not survive the full corpus
+
+**§12.2's headline ("two features match a 12B") is an artifact of eval-set
+composition. Do not build on it.**
+
+The 57-case eval set draws its violations from banned/actioned users — who were
+mostly recent joiners — and many of its negatives from long-tenured members. The
+`days_known` split is stark:
+
+| | median days_known | mean |
+|---|---|---|
+| violations (n=37) | **4.4** | 8.7 |
+| ok (n=20) | **13.0** | 24.2 |
+
+So the classifier was substantially learning *"this author is new"*, which was true
+of the people I had labelled, rather than *"this author is ahead of the rapport
+curve"*. Violations also concentrate in five authors (Raptor 11, Whoami23 8,
+Ciccio 8, ds_01 4, Nismowood 3).
+
+**Tested at a realistic base rate it fails completely.** `scripts/rules_watch_userweek.py`
+builds (user, week) features over the whole corpus — 1,181 user-weeks ≥20 messages,
+13 labelled positives (1.1%), pair state frozen at week start so there is no
+lookahead. Labels are dated from tickets, `💛│golden-girls` and `🏢│mod-chat`, and
+count *cleared* cases (bigprop03, Heli, JayGuerrero) as positive because the job is
+to surface, not to decide.
+
+| feature set | positives in top 10 | top 50 | top 100 | median rank |
+|---|---|---|---|---|
+| all 13 features | 0/13 | 1/13 | 3/13 | 320 / 1181 |
+| relational ratios only | 0/13 | 0/13 | **0/13** | 319 / 1181 |
+
+Both degenerate, in different ways:
+
+- **With volume features** it ranks the most active members first — Cat Bae (5,088
+  msgs), UnfeelingFreedom, Barbs. This is the "most-beloved-member detector" §7.7
+  warns about, reproduced empirically.
+- **With ratios only** it ranks everyone whose pairs have no prior history —
+  i.e. *anyone in their first week*, including Billy's. Prior-only pair stats are
+  undefined for new members, so `median_recip=0, days_known=0` encodes "is new",
+  not "is predatory".
+
+**The underlying difficulty, stated plainly:** the target signature — new person,
+high intensity, low reciprocity — is structurally near-identical to *new person,
+normal enthusiasm*. velocibaker's bad week was his second week; so is every happy
+newcomer's. Absolute tenure cannot separate them.
+
+**The one principled fix not yet tried** is tenure-matched comparison: score a user
+against *others at the same point in their membership*, turning an absolute feature
+into a relative one. Until that is tested, treat detection as unsolved and keep
+human reporting primary.
 
 ### 12.3 Should we run both? Yes — as detect-then-veto, not as a vote
 
