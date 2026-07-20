@@ -174,3 +174,123 @@ Worth stating plainly, because the sophistication of the scoring can create an i
 
 What the system honestly is: **triage that surfaces candidates for human judgment, calibrated to match the moderators' own judgment and validated against held-out history so the calibration generalizes.** When you tune weights until the output "looks right," the target you're fitting to is your own moderation intuition made explicit. That is genuinely valuable — it makes your judgment faster, more consistent, and eventually trainable — but it means the system's ceiling is your own consistency, and its role is to *route attention*, never to *assess consent*. The alert-only, never-suppress, human-decides design is what keeps the system inside that honest role.
 
+
+---
+
+## 12. The ledger (§7.3 / §7.4 of the 2026-07-20 tuning spec)
+
+Everything above this section is *detection*: the guard model plus a context
+scorer, producing a priority tier. Three independent attempts to make that
+approach discriminate at a realistic base rate failed (see
+`docs/reviews/2026-07-20-rules-watch-tuning.md` §12.2b/§12.2c). The ledger is
+what survives that result, and it works on a different principle.
+
+**A ledger row is an observation, not an opinion.** It records that a specific,
+narrowly-defined thing was said, with a date and the matched phrase. It carries
+no score, no tier, no verdict, and no label buttons — there is nothing to agree
+or disagree with. It posts nothing to Discord. Its entire value is that when a
+human is already reviewing somebody, the prior acts are on record instead of
+being reconstructed from memory months later.
+
+Code: `rules_watch/ledger.py`; storage: `rules_ledger` (migration 095); surfaced
+on the dashboard's Rules Watch → Ledger tab. It runs from `on_message` on a task
+independent of the guard pipeline, so a concrete act is recorded whether or not
+the sentiment pre-filter would have let the message through, and it never calls
+the model.
+
+### 12.1 What fires, and why it is shaped that way
+
+Both patterns were measured by replaying the whole corpus through the module
+(395,095 messages with surviving content, ~163 days) *before* being finalised,
+and both were narrowed substantially from their description in §7 as a result.
+Combined output is **5 rows / 5.4 months (~0.9/month)**. All three actioned
+people surface; no mod, greeter, or ordinary member does.
+
+**DM consent** — a claim that the consent bot is unusable, alongside intent to DM
+a specific person.
+
+| filter | hits |
+|---|---|
+| bot-disclaimer alone | 14 — picks up cat-bot and jail-bot outage chatter |
+| **+ DM intent, non-mod channel** | **2 — both Ciccio, 2.5 months before his ban** |
+
+§8.1 is the reason this fires on the *disclaimer* rather than on asking. Dona's
+etiquette guide explicitly endorses asking publicly before a DM, so public asking
+must never be recorded; the evasion is the claim that the bot can't be used.
+DM intent may appear in a nearby message from the same author (5-minute window)
+because bigoryx's script split the two across messages.
+
+**Cross-platform** — the author demonstrates he has already viewed the target's
+off-platform content.
+
+| filter | hits |
+|---|---|
+| bare platform mention | 850 |
+| + directed at the addressee | 67 |
+| of which the intake ritual | ~70 (overlapping) |
+| **+ observation, ritual excluded, target hasn't just raised it** | **3 — Burner ×2 (benign) and Whoami23 naming lily's Reddit post, the actioned case** |
+
+### 12.2 Three corrections to §7.4 as written
+
+The spec's §7.4 claims this pattern has a "near-zero false positive rate." That
+holds for the *conduct*, not for the *detector* it proposes, which the corpus
+shows would have misfired badly:
+
+1. **The dominant hit class is the server's own welcome ritual.** Greeters and
+   mods asking new arrivals "What's your Reddit name? I like connecting the
+   faces" accounts for essentially all directed platform mentions. Shipping §7.4
+   as specified would have built another most-beloved-member detector (§7.7),
+   firing mostly on mods doing their job — exactly the failure §6.5 predicted.
+   What separates the actioned case is not *naming* a platform but demonstrating
+   you already went and looked. So the detector requires observation and
+   subtracts the ritual.
+2. **`your bio` and `your post` are in-server features here**, not off-platform
+   ones. Bios are a Dungeon Keeper feature with an icebreaker pool, and "your
+   post" in the photo channels means an in-server post. Both are dropped.
+3. **Bare `OF` is unusable** — it matches the word "of". Requires `onlyfans`.
+
+### 12.3 Invariants — do not widen without re-measuring
+
+- Public DM-asking must never fire. It is taught by the etiquette guide.
+- The intake ritual must never fire. It is performed by mods dozens of times.
+- A cross-platform row requires a resolved target. §11 names the directedness
+  filter as what keeps this in the low-risk tier.
+- The "she raised it herself" exemption is **same-channel and 6 hours**, and must
+  stay that way. See §12.5 — a broader version silently suppressed the one case
+  this detector exists to catch.
+- Ledger rows store the matched phrase and a 240-character excerpt, never full
+  message content.
+- Combined volume is ~0.9 rows/month. If it starts filling up, a pattern has been
+  widened and the change should be re-measured against the corpus.
+
+### 12.4 What the ledger is not
+
+It is not an early-warning system and does not attempt to be. It would not have
+caught velocibaker (no platform reference, no bot disclaimer), and it says
+nothing about the rapport-curve pattern that §4.1 identifies as load-bearing.
+Detection of that pattern remains unsolved and human reporting stays primary —
+§12.2c is unchanged by anything here. What the ledger does is make two specific,
+recurring evasions permanently citable at near-zero cost and near-zero risk.
+
+### 12.5 The exemption that nearly buried the case it was built for
+
+Worth recording, because the mistake is subtle and the fix is counter-intuitive.
+
+The cross-platform detector exempts a target who raised the platform herself —
+if she just said "posted a new set on my Reddit", someone responding to that is
+being responsive, not predatory. The first implementation made that check
+**guild-wide over 30 days**, reasoning that a false exemption is cheap and a
+false hit is expensive (§11).
+
+Replaying the corpus showed it silently suppressed **the Whoami23 case** — the
+one actioned incident the detector exists to catch. lily is a Reddit poster who
+talks about Reddit, so she always had a recent mention somewhere. Worse: one of
+the mentions granting him immunity was lily *reporting velocibaker for finding
+her Reddit profile*, 121 hours earlier.
+
+The general lesson: **an exemption keyed on the target's own behaviour grants the
+most immunity to the people with the most exposure** — here, precisely the women
+whose off-platform presence is known and who are therefore most pursued. The
+window is now same-channel and 6 hours, so it means "she just brought it up" and
+nothing more. `tests/test_rules_watch_ledger.py` has two regression cases that
+fail against the old window.
