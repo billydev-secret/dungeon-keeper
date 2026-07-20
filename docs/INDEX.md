@@ -101,6 +101,7 @@ These describe features or shapes of the system that don't match reality. They'r
 | [reviews/2026-07-01-deep-review.md](reviews/2026-07-01-deep-review.md) | Full system audit (2026-07-01) |
 | [reviews/2026-07-01-rules-watch-followups.md](reviews/2026-07-01-rules-watch-followups.md) | Rules Watch follow-ups (audit follow-up) |
 | [reviews/2026-07-20-rules-watch-tuning.md](reviews/2026-07-20-rules-watch-tuning.md) | Rules Watch tuning investigation (2026-07-20): why the guard flagged 98.7% of everything, what the ban record shows, and three failed attempts at automated detection. Boundary-gate fix shipped (45.4→7.7 alerts/day); **detection unsolved, human reporting primary** |
+| [reviews/2026-07-20-automated-moderation-research.md](reviews/2026-07-20-automated-moderation-research.md) | Literature review companion to the tuning spec (2026-07-20): external evidence that the 0.61–0.66 detection ceiling is **structural, not local** — the closest published analogue (CGA derailment forecasting) hits the same wall with 1000× the labels and a 34–44% FPR. Confirms 13 positives is below every supervised/PU/weak-supervision floor; endorses the ledger + human-primary approach |
 
 ---
 

@@ -25,6 +25,16 @@ any size tested (§12), and neither can a feature classifier once it is evaluate
 realistic base rate (§12.2b, §12.2c). Human reporting stays primary. The binding
 constraint is **labels, not compute**: 13 positive user-weeks cannot support learning.
 
+**External corroboration (added 2026-07-20):** a literature review —
+`2026-07-20-automated-moderation-research.md` — confirms this ceiling is
+*structural, not local*. The closest published analogue (conversation-derailment
+forecasting) hits the same 0.61–0.66 balanced accuracy with ~1000× the labels and
+a million-conversation pre-train, and carries a 34–44% false-positive rate that at
+our base rate means ~30 false alarms per true positive. Thirteen positives is below
+every supervised / PU-learning / weak-supervision floor in the literature. What
+survives is the **ledger** (§7.3/§7.4, built — see `rules_watch_cog.md` §12) and
+harvesting labels from the §11 card.
+
 ⚠️ **Reading order matters.** §4 and §7 were written before the classifier was
 tested at scale and describe features as though they work. §12.2b and §12.2c are the
 correction and take precedence. Anything in §4/§7 asserting that a signal "works" is
