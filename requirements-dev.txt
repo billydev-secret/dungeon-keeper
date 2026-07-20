@@ -14,3 +14,8 @@ invoke>=2.2.0
 aiosqlite>=0.19
 pyright>=1.1
 PyYAML>=6.0
+# Browser-driven responsive-layout gate (tests/web/test_mobile_layout.py). The
+# pip package is small; the Chromium build is installed separately
+# (`python -m playwright install chromium`) only where the sweep runs — nightly
+# CI and dev machines. The default suite and per-push CI skip these tests.
+playwright>=1.61

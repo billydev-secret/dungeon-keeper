@@ -43,3 +43,13 @@ jobs:
           AUDIT_CHANNEL_DEV: "0"
         run: |
           python -m pytest --tb=short -q --cov=src --cov-report=term-missing
+
+      # The browser-driven responsive-layout sweep runs only here (it needs a
+      # Chromium download and is minutes long, so it stays out of per-push CI
+      # and the default suite). Full sweep: every panel × phone/tablet/desktop.
+      - name: Install Chromium for layout sweep
+        run: python -m playwright install --with-deps chromium
+
+      - name: Responsive layout sweep (all panels)
+        run: |
+          python -m pytest -m mobile --tb=short -q tests/web/test_mobile_layout.py

@@ -102,6 +102,8 @@ frozenlist==1.8.0
     #   aiosignal
 fsspec==2026.6.0
     # via huggingface-hub
+greenlet==3.5.3
+    # via playwright
 h11==0.16.0
     # via
     #   httpcore
@@ -207,6 +209,8 @@ platformdirs==4.10.0
     # via
     #   python-discovery
     #   virtualenv
+playwright==1.61.0
+    # via -r requirements-dev.txt
 pluggy==1.6.0
     # via
     #   pytest
@@ -230,6 +234,8 @@ pydantic==2.13.4
     #   fastapi
 pydantic-core==2.46.4
     # via pydantic
+pyee==13.0.1
+    # via playwright
 pygments==2.20.0
     # via pytest
 pynacl==1.6.2
@@ -308,6 +314,7 @@ typing-extensions==4.16.0
     #   mypy
     #   pydantic
     #   pydantic-core
+    #   pyee
     #   pyright
     #   typing-inspection
     #   wavelink
