@@ -12,7 +12,7 @@ patterns look like, and what to change.
 | | |
 |---|---|
 | ✅ **Done** | §2.1 boundary-gate fix — 45.4 → **7.7 alerts/day** (−82.9%), `tests/test_rules_watch_scorer.py` |
-| 📊 **Measured** | §12 model/prompt/context sweep — ceiling is **0.65 balanced accuracy** (Mistral-Nemo-12B + rapport context) |
+| 📊 **Measured** | §12 model/prompt/context sweep — ceiling **0.66** (Nemo-12B Q4_K_M); **0.61** on a 4060-sized build (Nemo-12B IQ4_XS + `baseline_plus`), vs 0.52 today. Noise floor ±0.02 |
 | ⬜ **Not started** | everything in §7, the §11 card, and the §2.2 model decision |
 
 **Companions:** `tests/data/rules_watch_eval.jsonl` (57 labeled real messages — read
@@ -687,6 +687,56 @@ purely by never saying ok (TNR = 0.00 across 57 cases). Use **balanced accuracy*
    request, Chi-Gal's joking *"I SAID NO QUESTIONS"*); 8B and Nemo additionally
    flagged Cat Bae's *"Let's get together and count freckles"* — the consensual
    case this whole spec is built around not flagging.
+
+### 12.1 Round 2 — sizing for the 4060, and prompt tuning (2026-07-20)
+
+**Noise floor first.** Four runs of an identical config gave 0.68 / 0.66 / 0.65 /
+0.66 — temperature 0 is not deterministic here (batching + quantized KV).
+**Run-to-run variance is ~±0.02, so differences under ~0.05 at n=57 are not
+meaningful.** Any single-run comparison in this document should be read with that
+in mind.
+
+**A methodology trap worth recording.** llama-server splits `-c` across `--parallel`
+slots. At `-c 4096 --parallel 4` each slot gets 1,024 tokens, and the longer prompts
+plus a real window overflow it — the model returns unparseable output and the run
+silently scores on 1–3 of 57 cases while still printing a plausible balanced
+accuracy. Always check that TP+FP+TN+FN equals the case count.
+
+**Quantization curve** (Mistral-Nemo-12B, best prompt per row, 4060 budget = 8 GB,
+weights + KV at `q8_0`):
+
+| model | quant | weights | +KV @4k q8 | fits 4060? | best BalAcc |
+|---|---|---|---|---|---|
+| Llama-3.2-3B (current prod) | Q4_K_M | 2.0 | 2.3 | yes | 0.52 |
+| Llama-3.1-8B | Q4_K_M | 4.9 | 5.2 | yes | 0.58 |
+| Qwen2.5-14B | Q4_K_M | 9.0 | — | no | 0.57 |
+| Mistral-Nemo-12B | Q3_K_M | 6.1 | 6.4 | yes | 0.60 |
+| **Mistral-Nemo-12B** | **IQ4_XS** | **6.7** | **7.1** | **yes — largest that fits** | **0.61** |
+| Mistral-Nemo-12B | Q4_K_M | 7.5 | 7.8 | no (needs the 5080) | **0.66** |
+
+Q4_K_S (7.12 GB) nominally fits but leaves no room for compute buffers. **IQ4_XS is
+the largest usable model on an 8 GB 4060**, and the step down from Q4_K_M costs
+~0.05 — right at the edge of significance, but consistent across prompts. Note the
+4060 must run `--parallel 1`: 16k total context would need 1.3 GB of KV and blow the
+budget. At ~7 evaluations/day, serialised inference is irrelevant.
+
+**Prompt tuning results** (8 variants × context levels):
+
+| prompt | what it is | outcome |
+|---|---|---|
+| **`baseline_plus`** | the **original** prompt + two surgical fixes: demote the slur criterion, state that explicitness is permitted | **best or tied-best on every model** |
+| `baseline` | shipped prompt, unchanged | competitive but higher flag rate |
+| `traffic` | green/yellow/red output instead of flag/ok | competitive on the quantized models |
+| `dona`, `cot`, `fewshot` | full etiquette rubric / reasoning field / worked examples | **worse** — flag rates collapse to 11–23%, recall craters |
+
+The lesson is counter-intuitive and worth keeping: **elaborate rubrics hurt.** A 12B
+follows "flag only if…" too literally and goes quiet. The winning edit was small —
+keep the prompt that works and remove its two specific pathologies.
+
+**Net for a 4060 deployment:** Nemo-12B IQ4_XS + `baseline_plus` + pair-rapport
+context ≈ **0.61**, against 0.52 for the current 3B. Model choice bought ~+0.09;
+prompt tuning bought ~+0.03. Real, but still far short of alert-grade on its own —
+§12's conclusion is unchanged.
 
 **Conclusion.** The LLM cannot perform detection. It *can* rank and suppress:
 Nemo at `neutral+*` reaches TNR 0.90–0.95, and Qwen `neutral+full` TNR 0.85. So the

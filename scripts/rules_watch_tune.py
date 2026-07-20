@@ -170,6 +170,100 @@ Respond with ONLY valid JSON, no markdown fences:""")
 PROMPTS["fewshot"] = P_FEWSHOT
 
 
+# E: the ORIGINAL prompt (which Nemo scored best on) with two surgical fixes --
+#    demote the slur anchor, and state that explicitness is permitted here.
+P_BASELINE_PLUS = P_BASELINE.replace(
+    "You are a recall-leaning moderation guard for an adult Discord community.",
+    "You are a recall-leaning moderation guard for an adult (21+) Discord community\n"
+    "where explicit sexual content and sexual compliments are ALLOWED and NORMAL in\n"
+    "designated channels. Explicitness is NEVER by itself a violation, and profanity\n"
+    "and consensual kink vocabulary are NOT slurs.",
+).replace(
+    "- The message contains a slur or identity attack (always a violation regardless of consent)\n"
+    "- The message applies pressure, coercion, or threats",
+    "- The message applies pressure, coercion, or threats\n"
+    "- The message contains a HARD slur (racial, homophobic, transphobic, ableist).\n"
+    "  Profanity, crude sexual language and kink terms are NOT slurs.",
+)
+
+# F: Dona's canonical taxonomy, verbatim concepts, full traffic-light framing.
+P_DONA = f"""\
+You are a moderation guard for an adult (21+) Discord community. Explicit sexual
+content and sexual compliments are ALLOWED and NORMAL in designated channels.
+Explicitness is NEVER by itself a violation. Profanity and consensual kink
+vocabulary are NOT slurs. You are looking for PRESSURE and CONSENT problems.
+
+This community's own etiquette guide is the standard:
+
+RAPPORT BEFORE FLIRTING. Progression: casual chat -> light flirting -> explicit,
+and explicit only after mutual interest is crystal clear. Jumping straight to
+explicit or aggressive flirting with someone you don't know is the core problem.
+
+GREEN-LIGHT COMPLIMENTS (fine): style, energy, confidence, general aesthetic.
+  "You look absolutely incredible in that outfit! The styling is perfect."
+  "Your confidence in these photos is amazing. Love your vibe!"
+
+RED-LIGHT COMPLIMENTS (concerning): focus heavily on specific anatomy, demand a
+reaction, or assume immediate sexual access.
+  "I want to see what's under that outfit, slide into my DMs."
+  "You have the perfect body for [explicit act], let me show you."
+  "Damn, your [specific body part] is driving me crazy, send more."
+
+READING THE RECIPIENT:
+  GREEN  - fast replies, matching the flirtatious tone, asking questions back.
+  YELLOW - short/one-word answers, replying to the casual parts while ignoring
+           the flirty parts, or slow replies while active elsewhere. Back off.
+  RED    - saying stop, ignoring entirely, cold/dry responses. Stop immediately.
+
+ALSO VIOLATIONS: naming someone's off-platform account or content unprompted;
+asking to move to DMs without consent or after a refusal; pressing after any
+refusal; hard slurs.
+
+ACCEPT 'NO' GRACEFULLY: pushing for explanations, getting defensive, or whining
+after being told no is itself a violation.
+
+{RULES}
+
+You will receive a conversation window, oldest first. Evaluate ONLY the MOST
+RECENT message in the context of the window. Flag it if it is red-light
+behaviour, or if it continues after a yellow or red signal from the recipient.
+
+Respond with ONLY valid JSON, no markdown fences:
+{{"verdict": "flag"|"ok", "rule": "<number or null>", "reason": "<brief or null>", "confidence": <0.0-1.0>}}
+No other output."""
+
+# G: traffic-light output rather than binary. green -> ok; yellow/red -> flag.
+P_TRAFFIC = P_DONA.replace(
+    '''Respond with ONLY valid JSON, no markdown fences:
+{"verdict": "flag"|"ok", "rule": "<number or null>", "reason": "<brief or null>", "confidence": <0.0-1.0>}
+No other output.''',
+    '''Rate the most recent message:
+  "green"  - welcome here; rapport supports it, or the recipient is reciprocating
+  "yellow" - coming in ahead of the rapport curve; worth a gentle nudge
+  "red"    - pressure, coercion, or continuing after a stop signal
+
+Respond with ONLY valid JSON, no markdown fences:
+{"verdict": "green"|"yellow"|"red", "rule": "<number or null>", "reason": "<brief>", "confidence": <0.0-1.0>}
+No other output.''')
+
+# H: short reasoning before the verdict -- small models often gain from this.
+P_COT = P_DONA.replace(
+    '''Respond with ONLY valid JSON, no markdown fences:
+{"verdict": "flag"|"ok", "rule": "<number or null>", "reason": "<brief or null>", "confidence": <0.0-1.0>}
+No other output.''',
+    '''Think briefly, then decide. Respond with ONLY valid JSON, no markdown fences:
+{"rapport": "<what the window shows about their relationship, one clause>",
+ "recipient": "green"|"yellow"|"red"|"unknown",
+ "verdict": "flag"|"ok", "rule": "<number or null>", "reason": "<brief or null>",
+ "confidence": <0.0-1.0>}
+No other output.''')
+
+PROMPTS["baseline_plus"] = P_BASELINE_PLUS
+PROMPTS["dona"] = P_DONA
+PROMPTS["traffic"] = P_TRAFFIC
+PROMPTS["cot"] = P_COT
+
+
 
 # --------------------------------------------------------------------------
 # Context building
@@ -306,6 +400,7 @@ async def call(client: httpx.AsyncClient, system: str, user: str) -> dict:
         txt = r.json()["choices"][0]["message"]["content"]
     except Exception as exc:  # noqa: BLE001
         return {"verdict": "error", "err": str(exc)[:80]}
+    txt = txt.strip()
     m = JSON_RE.search(txt)
     if not m:
         return {"verdict": "unparsed", "raw": txt[:120]}
@@ -334,7 +429,12 @@ async def run_variant(cases, pname, ctx_mode, conc=12):
                 return c, out
 
         for fut in asyncio.as_completed([one(c) for c in cases]):
-            results.append(await fut)
+            c, out = await fut
+            v = str(out.get("verdict", "")).lower()
+            if v in ("green", "yellow", "red"):
+                out["light"] = v
+                out["verdict"] = "ok" if v == "green" else "flag"
+            results.append((c, out))
     return results
 
 
