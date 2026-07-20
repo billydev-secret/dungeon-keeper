@@ -870,19 +870,56 @@ def _seed_streak(
         )
 
 
-def _econ_message(*, booster: bool = False) -> MagicMock:
+def _econ_message(
+    *,
+    booster: bool = False,
+    user_id: int = ECON_USER,
+    message_id: int | None = None,
+    reply_to: int | None = None,
+    content: str = "",
+    role_mentions: tuple[int, ...] = (),
+    admin: bool = False,
+    manager_role_id: int | None = None,
+) -> MagicMock:
     msg = MagicMock(spec=discord.Message)
     guild = MagicMock()
     guild.id = ECON_GUILD
     msg.guild = guild
     author = MagicMock(spec=discord.Member)
-    author.id = ECON_USER
+    author.id = user_id
     author.premium_since = object() if booster else None
+    author.guild_permissions = SimpleNamespace(administrator=admin)
+    author.roles = (
+        [SimpleNamespace(id=manager_role_id)] if manager_role_id is not None else []
+    )
     msg.author = author
     channel = MagicMock()
     channel.id = ECON_CHANNEL
     msg.channel = channel
+    if message_id is not None:
+        msg.id = message_id
+    msg.content = content
+    msg.role_mentions = [SimpleNamespace(id=r) for r in role_mentions]
+    # Default to "not a reply" — a bare MagicMock reference would read as a
+    # reply to a mock message id and reach the QOTD lookup as a non-integer.
+    msg.reference = (
+        SimpleNamespace(message_id=reply_to, resolved=None)
+        if reply_to is not None
+        else None
+    )
     return msg
+
+
+def _seed_qotd(econ_db, *, message_id: int, local_day: str | None = None) -> None:
+    with open_db(econ_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_qotd
+                (guild_id, channel_id, message_id, question, posted_by, local_day, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ECON_GUILD, ECON_CHANNEL, message_id, "Q?", 1, local_day or _today(), 0.0),
+        )
 
 
 def _days_ago(n: int) -> str:
@@ -1106,25 +1143,109 @@ async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
 )
 async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
     _enable_econ(econ_db, reward_qotd=10)
-    with open_db(econ_db) as conn:
-        conn.execute(
-            """
-            INSERT INTO econ_qotd
-                (guild_id, channel_id, message_id, question, posted_by, local_day, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (ECON_GUILD, ECON_CHANNEL, 999, "Q?", 1, _today(), 0.0),
-        )
+    _seed_qotd(econ_db, message_id=999)
     cog = _econ_cog(econ_db)
-    await cog._process_economy_message(_econ_message())
+    await cog._process_economy_message(_econ_message(reply_to=999))
     with open_db(econ_db) as conn:
         rewarded = conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"]
     assert rewarded == 1
-    # A second same-day message must not re-reward the QOTD.
-    await cog._process_economy_message(_econ_message())
+    # A second reply to the same question must not re-reward it.
+    await cog._process_economy_message(_econ_message(reply_to=999))
     with open_db(econ_db) as conn:
         rewarded2 = conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"]
     assert rewarded2 == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_plain_message_earns_nothing(mock_notify, econ_db):
+    """Talking in the channel isn't answering — only a reply pays."""
+    _enable_econ(econ_db, reward_qotd=10)
+    _seed_qotd(econ_db, message_id=999)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_stale_question_earns_nothing(mock_notify, econ_db):
+    """Yesterday's question is closed — replying to it late can't be farmed."""
+    _enable_econ(econ_db, reward_qotd=10)
+    _seed_qotd(econ_db, message_id=999, local_day=_days_ago(1))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message(reply_to=999))
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_mod_tag_opens_the_question(mock_notify, econ_db):
+    _enable_econ(econ_db, reward_qotd=10, qotd_ping_role_id=77)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(
+        _econ_message(
+            message_id=555,
+            content="<@&77> what's your comfort food?",
+            role_mentions=(77,),
+            admin=True,
+        )
+    )
+    with open_db(econ_db) as conn:
+        row = conn.execute("SELECT message_id, question, local_day FROM econ_qotd").fetchone()
+    assert row is not None
+    assert row["message_id"] == 555
+    assert row["question"] == "what's your comfort food?"
+    assert row["local_day"] == _today()
+    # …and a member replying to it gets paid.
+    await cog._process_economy_message(_econ_message(user_id=ECON_USER + 1, reply_to=555))
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"] == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_tag_from_non_mod_opens_nothing(mock_notify, econ_db):
+    """The manager gate is the security boundary — anyone can type the tag."""
+    _enable_econ(econ_db, reward_qotd=10, qotd_ping_role_id=77)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(
+        _econ_message(message_id=555, content="<@&77> free coins?", role_mentions=(77,))
+    )
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_tag_registers_once(mock_notify, econ_db):
+    """An edit/retry replaying the same message must not open a second QOTD."""
+    _enable_econ(econ_db, reward_qotd=10, qotd_ping_role_id=77)
+    cog = _econ_cog(econ_db)
+    msg = _econ_message(
+        message_id=555, content="<@&77> question?", role_mentions=(77,), admin=True
+    )
+    await cog._process_economy_message(msg)
+    await cog._process_economy_message(msg)
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 1
 
 
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)

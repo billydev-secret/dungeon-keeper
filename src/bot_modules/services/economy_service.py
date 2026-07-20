@@ -38,10 +38,13 @@ class EconSettings:
     # holders only; everyone else still gets the in-channel reaction + reply.
     # 0 (default) = nobody has opted in, so the recurring DMs go to nobody.
     game_role_id: int = 0
-    # Role pinged when a mod posts a question of the day. 0 (default) = no
-    # ping, preserving the original silent post. The role must be mentionable
-    # (or the bot must hold "Mention @everyone, @here, and All Roles"), else
-    # Discord renders the mention as inert text.
+    # The QOTD role — one dial doing two jobs. ``/qotd post`` pings it, AND
+    # any message from a mod that tags it registers as that day's question,
+    # so a mod can just ask in their own words instead of running a command.
+    # Replies to a registered question are what pay ``reward_qotd``. 0
+    # (default) = no ping and no auto-registration. The role must be
+    # mentionable (or the bot must hold "Mention @everyone, @here, and All
+    # Roles"), else Discord renders the mention as inert text.
     qotd_ping_role_id: int = 0
     currency_name: str = "Coin"
     currency_plural: str = "Coins"
@@ -709,19 +712,25 @@ def create_qotd(
     return int(cur.lastrowid or 0)
 
 
-def open_qotd_for(
-    conn: sqlite3.Connection, guild_id: int, channel_id: int, local_day: str
+def qotd_for_message(
+    conn: sqlite3.Connection, guild_id: int, message_id: int
 ) -> sqlite3.Row | None:
-    """Return the QOTD open in this channel for this local day (latest wins)."""
+    """Return the QOTD registered for this exact message, if any.
+
+    The reward is keyed on the message a member *replied to*, so this is the
+    lookup the on_message faucet does — not a channel/day scan. Callers still
+    check ``local_day`` themselves: an old QOTD message stays in the table
+    forever, and replying to a month of them would otherwise be a coin farm.
+    """
     return conn.execute(
         """
         SELECT id, guild_id, channel_id, message_id, question, posted_by,
                local_day, created_at
         FROM econ_qotd
-        WHERE guild_id = ? AND channel_id = ? AND local_day = ?
+        WHERE guild_id = ? AND message_id = ?
         ORDER BY id DESC LIMIT 1
         """,
-        (guild_id, channel_id, local_day),
+        (guild_id, message_id),
     ).fetchone()
 
 

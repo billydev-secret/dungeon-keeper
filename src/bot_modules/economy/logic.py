@@ -7,6 +7,7 @@ deterministic on its inputs so the subtle streak rules stay table-testable.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -120,6 +121,53 @@ def resolve_notify_toggle(*, role_id: int, member_role_ids: Collection[int]) -> 
     if not role_id:
         return "unconfigured"
     return "remove" if role_id in member_role_ids else "grant"
+
+
+def is_economy_manager(
+    *, is_admin: bool, role_ids: Collection[int], manager_role_id: int
+) -> bool:
+    """The economy-manager rule, on plain ids — admin, or the manager role.
+
+    ``quest_views.can_manage_economy`` is the discord.Member-shaped wrapper
+    over this; the id form exists because the on_message faucet resolves the
+    member on the event loop but only learns ``manager_role_id`` once the
+    settings load in the DB thread.
+    """
+    if is_admin:
+        return True
+    return manager_role_id != 0 and manager_role_id in set(role_ids)
+
+
+QOTD_QUESTION_MAX = 300
+
+
+def qotd_marker_question(
+    *,
+    content: str,
+    role_mention_ids: Collection[int],
+    qotd_role_id: int,
+    author_is_manager: bool,
+) -> str | None:
+    """The question text when this message marks a new QOTD, else ``None``.
+
+    A message becomes the day's question by **tagging the QOTD role** — the
+    same role ``/qotd post`` pings, so guilds configure one dial rather than
+    two. The manager gate is the security boundary: Discord lets anyone type
+    ``<@&id>`` whether or not they may ping it, so without this any member
+    could mint a faucet and then farm replies to it.
+
+    An empty string is a valid result (a mod who tags the role with only an
+    image still posted a question), so callers must test ``is not None``
+    rather than truthiness.
+    """
+    if qotd_role_id <= 0 or not author_is_manager:
+        return None
+    if qotd_role_id not in set(role_mention_ids):
+        return None
+    # Drop every role/user mention — the stored question is for the audit
+    # trail and the ping renders as raw "<@&123…>" noise there.
+    text = re.sub(r"<@[!&]?\d+>", " ", content)
+    return " ".join(text.split())[:QOTD_QUESTION_MAX]
 
 
 def login_amount(streak: int, base: int, bonus_cap: int) -> int:

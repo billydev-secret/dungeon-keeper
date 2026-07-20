@@ -111,15 +111,29 @@ XP earned that local day converts to currency.
 ### 3.3 Quests — per §4. Daily 10–20 · weekly 25–75 · community flat payout.
 
 ### 3.4 Interaction Rewards
-- **QOTD (built, manual):** a moderator runs `/qotd post [question]` in the target
-  channel. The bot renders the question as a banner card (`render_quote_card`, the same
-  renderer `ffa_banner` uses) and posts it. Every member who posts a non-bot message in
-  that channel from post time until end of the guild-local day earns **10**, once per
-  QOTD (dedup row per member). No scheduler — mods run it when they want.
-  When `qotd_ping_role_id` is set (dashboard → Economy → QOTD), the post mentions that
-  role; unset (the default) posts silently. The mention only notifies if the role is
-  mentionable or the bot holds "Mention @everyone, @here, and All Roles" — Discord
-  renders it as inert text otherwise.
+- **QOTD (built, manual):** the reward is paid for **replying** to a registered
+  question — a direct Discord reply (`message.reference`) to the QOTD message earns
+  **10**, once per QOTD (dedup row per member). Two ways to register one:
+  - **Tag the role (the usual path).** Any message from an economy manager
+    (admin or `manager_role_id`) that mentions `qotd_ping_role_id` becomes that
+    day's question — no command, no card, the mod asks in their own words.
+    `logic.qotd_marker_question` strips the mentions for the stored audit text
+    (capped at 300 chars; empty is valid, since an image can be the question) and
+    `events_cog._econ_work` writes the `econ_qotd` row in the same transaction as
+    the login faucet. The manager gate is the security boundary — Discord lets
+    anyone *type* `<@&id>` regardless of ping permission, so without it any member
+    could mint a faucet and farm replies to it. Re-entrant: a row already
+    registered for that message id is never duplicated.
+  - **`/qotd post [question]`**, which renders the banner card
+    (`render_quote_card`, the same renderer `ffa_banner` uses), pings the role, and
+    is still how the paid **sponsored** queue reaches the server.
+  Replies pay only while the question's `local_day` is still the current
+  guild-local day — the row lives forever, so without that check a member could
+  reply down a month of old questions for 10 each. No scheduler; mods ask when
+  they want. `qotd_ping_role_id` unset (the default) means silent posts and no
+  tag-to-ask. The mention only notifies if the role is mentionable or the bot holds
+  "Mention @everyone, @here, and All Roles" — Discord renders it as inert text
+  otherwise; that permission governs *notification*, not registration.
 - **Sponsor a QOTD (built, sink — migration 090):** a member runs
   `/bank sponsor <question>`, paying `price_qotd_sponsor` (default 40) to put a
   question in front of the server. **Charged at submit** — a free queue invites

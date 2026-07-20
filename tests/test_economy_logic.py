@@ -13,10 +13,12 @@ from bot_modules.economy.logic import (
     LoginEval,
     convert_xp,
     evaluate_login,
+    is_economy_manager,
     local_day_bounds,
     local_day_for,
     login_amount,
     milestone_amount,
+    qotd_marker_question,
 )
 from bot_modules.services.economy_service import EconSettings
 
@@ -411,3 +413,71 @@ def test_shield_save_anchors_grace_window_on_covered_day():
         shields_held=0,
     )
     assert later.reset is True
+
+
+# ── QOTD marker ───────────────────────────────────────────────────────────────
+
+
+def _marker(**kw):
+    args = {
+        "content": "<@&77> what's your comfort food?",
+        "role_mention_ids": [77],
+        "qotd_role_id": 77,
+        "author_is_manager": True,
+    }
+    args.update(kw)
+    return qotd_marker_question(**args)
+
+
+def test_qotd_marker_strips_the_ping_from_the_question():
+    assert _marker() == "what's your comfort food?"
+
+
+def test_qotd_marker_strips_user_mentions_and_collapses_whitespace():
+    assert (
+        _marker(content="<@&77>  hey  <@123> \n what's up?") == "hey what's up?"
+    )
+
+
+def test_qotd_marker_allows_an_empty_question():
+    # A mod tagging the role with only an image still opened a question, so
+    # this is "" (falsy) rather than None — callers test `is not None`.
+    assert _marker(content="<@&77>") == ""
+
+
+def test_qotd_marker_truncates_a_wall_of_text():
+    long = _marker(content="<@&77> " + "x" * 500)
+    assert len(long) == 300
+
+
+def test_qotd_marker_requires_the_tag():
+    assert _marker(content="just chatting", role_mention_ids=[]) is None
+    assert _marker(role_mention_ids=[99]) is None
+
+
+def test_qotd_marker_requires_a_manager():
+    assert _marker(author_is_manager=False) is None
+
+
+def test_qotd_marker_off_when_no_role_configured():
+    assert _marker(qotd_role_id=0) is None
+
+
+# ── manager gate ──────────────────────────────────────────────────────────────
+
+
+def test_is_economy_manager_admin_always_passes():
+    assert is_economy_manager(is_admin=True, role_ids=[], manager_role_id=0) is True
+
+
+def test_is_economy_manager_role_holder_passes():
+    assert is_economy_manager(is_admin=False, role_ids=[5, 7], manager_role_id=7) is True
+
+
+def test_is_economy_manager_rejects_plain_member():
+    assert is_economy_manager(is_admin=False, role_ids=[5], manager_role_id=7) is False
+
+
+def test_is_economy_manager_unconfigured_role_never_matches():
+    # manager_role_id 0 must not match a member who somehow holds role 0.
+    assert is_economy_manager(is_admin=False, role_ids=[0], manager_role_id=0) is False
