@@ -19,9 +19,16 @@ patterns look like, and what to change.
 §13 on what it does and doesn't measure), `scripts/rules_watch_tune.py` (sweep
 harness), `scripts/rules_watch_model_swap.sh` (remote server swap/restore).
 
-**The one-line conclusion:** the LLM cannot do detection at any size tested; the
-arithmetic can. Ship deterministic detection with the model as a false-positive
-suppressor and card-phraser, never as the decider.
+**The one-line conclusion:** one real bug was found and fixed (§2.1, −82.9% volume);
+**automated detection of the behaviour itself is unsolved** — the LLM can't do it at
+any size tested (§12), and neither can a feature classifier once it is evaluated at a
+realistic base rate (§12.2b, §12.2c). Human reporting stays primary. The binding
+constraint is **labels, not compute**: 13 positive user-weeks cannot support learning.
+
+⚠️ **Reading order matters.** §4 and §7 were written before the classifier was
+tested at scale and describe features as though they work. §12.2b and §12.2c are the
+correction and take precedence. Anything in §4/§7 asserting that a signal "works" is
+supported only by the 57-case eval set, whose composition is itself the artifact.
 
 ---
 
@@ -123,8 +130,12 @@ essentially any input, and labels the result "slur".
 
 **Decide deliberately.** Removing the override sends member message content to an
 external API. That is a privacy posture change and is the owner's call, not a
-default. If it stays local, §7 (deterministic features) carries the load and the
-LLM should be a narrow confirmer, not the primary engine.
+default. ~~If it stays local, §7 (deterministic features) carries the load.~~ That
+fallback no longer exists — the deterministic features were tested and do not
+discriminate (§12.2b/c). **Neither path yields a working detector**, so the model
+choice affects alert *quality* at the margin, not whether detection works. It is
+therefore a lower-stakes decision than this section originally implied, and not
+worth trading privacy for on its own.
 
 **Two refinements from the measured sweep (§12), both of which cut against an
 earlier draft of this section:**
@@ -200,8 +211,13 @@ The community has its own name for the distinction. mimi, twice, independently:
 
 Same sentence, different relationship history, different verdict. This is *the* feature.
 
-**It is computable, and it works.** Pair reciprocity for velocibaker's targets,
-from `reply_to_id` edges:
+**It is computable — but "it works" was overstated, see §12.2b.** The table below is
+a *post-hoc* look at one banned user's targets. It reads convincingly, and it is why
+this feature was promoted to load-bearing. When the same signal was later evaluated
+prospectively across all 1,181 user-weeks it produced **no lift**. Treat this table
+as an illustration of the concept, not as evidence the feature discriminates.
+
+Pair reciprocity for velocibaker's targets, from `reply_to_id` edges:
 
 | target | his | hers | reciprocity | outcome |
 |---|---|---|---|---|
@@ -310,7 +326,7 @@ is not a necessary condition. The better-supported measurable predictor is
 
 | mode | exemplar | public trace? |
 |---|---|---|
-| **A — ahead of the rapport curve** | velocibaker | **Yes.** Rate, breadth, reciprocity, want-verbs. |
+| **A — ahead of the rapport curve** | velocibaker | **Visible to a human, not to a detector.** Rate, breadth, reciprocity and want-verbs all *describe* it accurately in hindsight, but none of them discriminate prospectively (§12.2b/c) — the same profile fits an ordinary enthusiastic newcomer. |
 | **B — cross-platform pursuit** | whoami23, Rere34 | **Yes.** One message is enough. |
 | **C — attention-contingent DM coercion** | Ciccio | **Barely.** See below. |
 | **D — consent-bot evasion w/ rehearsed excuse** | bigoryx | **Partly** — the excuse is often said in public. |
@@ -386,6 +402,15 @@ used for velocibaker, and it produced watchfulness, not a complaint. Useful cont
 ## 7. Recommended changes
 
 Ordered by (value ÷ effort).
+
+⚠️ **Status after §12.2b/§12.2c: only items 1 and 2 are validated.** They are
+mechanical fixes to a demonstrated bug and were measured on real events. Items 3–10
+are *detector* proposals that predate testing at a realistic base rate, and every
+detector built from these signals subsequently failed. Do not read the ordering below
+as evidence any of them work — read them as hypotheses that still need a dataset
+capable of testing them. Item 3 (the DM-consent tripwire) is the exception worth
+building anyway, because it is a **ledger, not an alert**: it records a concrete act
+at 0.17 hits/day and never accuses anyone.
 
 1. **Fix the boundary gate** (§2.1). Check the *target's* recent messages, not the
    author's. Drop bare `red`/`yellow`. Expect flag volume to fall by most of the 71.5%
@@ -738,7 +763,11 @@ context ≈ **0.61**, against 0.52 for the current 3B. Model choice bought ~+0.0
 prompt tuning bought ~+0.03. Real, but still far short of alert-grade on its own —
 §12's conclusion is unchanged.
 
-### 12.2 A feature classifier beats the 4060 LLM and ties the best one
+### 12.2 ⚠️ SUPERSEDED — a feature classifier appeared to tie the best LLM
+
+**The headline below is wrong; §12.2b explains why. Kept because the failure mode is
+instructive: a result this good from two features should have prompted suspicion, not
+a commit.**
 
 `scripts/rules_watch_features.py` extracts relational + lexical features per case
 (strictly pre-timestamp, no lookahead) and scores them on the **same 57 cases**,
@@ -755,7 +784,7 @@ in this environment.
 | Nemo-12B IQ4_XS (best on a 4060) | 0.61 | | | 6.7 GB GPU |
 | Llama-3.2-3B (production today) | 0.52 | | | |
 
-**Two numbers match a 12B model.** Pair reciprocity and days-known tie the best LLM
+~~**Two numbers match a 12B model.**~~ (False — §12.2b.) Pair reciprocity and days-known tie the best LLM
 measured, beat everything a 4060 can host, and cost nothing.
 
 The learned weights recover the rapport curve without being told about it:
@@ -869,7 +898,13 @@ caveats worth carrying forward rather than treating as excuses:
 - Rows with `recipients=0` (no directed messages at all) are scorable and shouldn't
   be; filter them before any future attempt.
 
-### 12.3 Should we run both? Yes — as detect-then-veto, not as a vote
+### 12.3 Should we run both? The comparison, and why its conclusion is now moot
+
+⚠️ **Read §12.2b and §12.2c first.** This section was written before the classifier
+was tested at a realistic base rate. Its recommendation — "classifier detects, model
+vetoes" — assumed a working detector. There isn't one. What survives is the
+*measurement* of how the two systems fail differently, which stays useful if a
+detector is ever built; the "ship AND" conclusion does not.
 
 **Rule-2-focused prompting fails.** A short prompt naming only Rule 2 and the three
 mechanisms every model missed (attention-pressure, conditional worth, third-party
@@ -892,9 +927,12 @@ picking the better one each time would score **0.82** against 0.61–0.65 indivi
 | OR (either flags) | 0.62 | 1.00 | 0.25 | 15 | 0.71 |
 | **AND (classifier detects → LLM confirms)** | 0.64 | 0.62 | 0.65 | **7** | **0.77** |
 
-**Ship AND.** Not for the balanced accuracy — 0.64 vs 0.65 is inside the noise floor
-— but because **false alarms drop from 13 to 7**, a 46% cut in the one error that
-costs a relationship (§11).
+~~**Ship AND.**~~ **Superseded.** The original argument was: not for the balanced
+accuracy — 0.64 vs 0.65 is inside the noise floor — but because false alarms drop
+from 13 to 7, a 46% cut in the error that costs a relationship (§11). That still
+holds *conditionally on having a detector worth vetoing*, which §12.2b/§12.2c show we
+do not. Both numbers come from the 57-case eval set and inherit its composition
+artifact. Revisit only if a detector clears a pre-registered bar on real labels.
 
 **Why the LLM earns its place in that arrangement:** 6 of its 8 unique wins are
 *negatives* — `"Aw you're sweet, I'm he/him"`, `"Not without consent, don't jinx my
