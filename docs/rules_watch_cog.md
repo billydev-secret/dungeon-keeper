@@ -77,7 +77,11 @@ This pairing is used **only** as a relationship-confidence input that reduces fa
 
 **Persistence after non-response.** Consecutive directed messages to a target who hasn't responded. This *is* Rule 2's "sustained pressure," and it's purely structural — no content judgment, near-zero false positives in this context. Strong up-weight.
 
-**Boundary-token state change.** A narrow detector for explicit stop-signals ("stop," "no," "not interested," recognized safewords). Not a violation by itself, but it's the *state change* that flips subsequent directed content from play to violation. Once seen, directed messages afterward weight heavily. The closest thing to a real consent signal available from public text.
+**Boundary-token state change.** A narrow detector for explicit stop-signals ("stop," "not interested," "leave me alone," "back off"). Not a violation by itself, but it's the *state change* that flips subsequent directed content from play to violation. Once seen, directed messages afterward weight heavily. The closest thing to a real consent signal available from public text.
+
+The detector is **relational, not lexical** (`detect_boundary_crossing`, corrected 2026-07-19). It fires only when the **target** signalled stop **to this author** — replying directly to them, or following something the author said in-channel within a 6h window. A stop-signal replying to someone else is attributed to that person. Bare "no" counts only as a whole-message refusal in a direct reply, and "red"/"yellow" are **not** treated as safewords.
+
+Both exclusions are load-bearing. The original detector matched boundary tokens in the *author's own* message, so the author saying "no" registered as a boundary event: bare "no" drove **71.5%** of all guard evaluations and "red" matched colour words, so `The red and black combo 😍` was logged as a slur. Because this check also gates which messages reach the guard model, the bug set the whole system's volume — fixing it took alerts from **45.4/day to 7.7** (−82.9%). See `docs/rules_watch_tuning.md` §2.1.
 
 **Withdrawal.** A flag directed at someone who then goes quiet or leaves the channel **gains** priority. Silence is neutral-to-suspicious, never "safe" — the quiet, no-reaction event is both hardest to detect and most serious.
 
