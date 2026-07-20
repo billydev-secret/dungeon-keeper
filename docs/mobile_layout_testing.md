@@ -42,7 +42,8 @@ failure reads like a bug report: `[phone] qa-tracker: off-screen — button[data
   [--limit N] [--json out.json]`. Sweeps panels and prints per-check counts and
   the panels involved. Use it to investigate, or to re-measure after a CSS
   change. It reports faults; it never fails a build.
-- **Gate** — `tests/web/test_mobile_layout.py`, marked `mobile` and excluded
+- **Gate** — `tests/web/test_mobile_layout.py`, marked `browser` (and `mobile`)
+  and excluded
   from the default suite (`-m "not mobile"` in `pyproject.toml`). It auto-skips
   where Playwright or Chromium isn't installed, so the ordinary suite and
   per-push CI (which have no browser) are unaffected.
@@ -104,6 +105,6 @@ python -m playwright install chromium
 Scope one run by hand:
 
 ```
-MOBILE_PANELS=announcements,role-menus MOBILE_VIEWPORTS=phone \
+PANEL_SCOPE=announcements,role-menus PANEL_VIEWPORTS=phone \
   python -m pytest -m mobile tests/web/test_mobile_layout.py
 ```

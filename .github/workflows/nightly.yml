@@ -44,12 +44,13 @@ jobs:
         run: |
           python -m pytest --tb=short -q --cov=src --cov-report=term-missing
 
-      # The browser-driven responsive-layout sweep runs only here (it needs a
-      # Chromium download and is minutes long, so it stays out of per-push CI
-      # and the default suite). Full sweep: every panel × phone/tablet/desktop.
-      - name: Install Chromium for layout sweep
+      # The browser-driven panel sweeps run only here (they need a Chromium
+      # download and are minutes long, so they stay out of per-push CI and the
+      # default suite). Full: every panel — layout at 3 widths + console/network.
+      - name: Install Chromium for browser sweeps
         run: python -m playwright install --with-deps chromium
 
-      - name: Responsive layout sweep (all panels)
+      - name: Browser panel sweeps (all panels)
         run: |
-          python -m pytest -m mobile --tb=short -q tests/web/test_mobile_layout.py
+          python -m pytest -m browser --tb=short -q \
+            tests/web/test_mobile_layout.py tests/web/test_panel_console.py

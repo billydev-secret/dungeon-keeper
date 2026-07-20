@@ -256,35 +256,38 @@ def _browser_available(py: str) -> bool:
                           capture_output=True).returncode == 0
 
 
+_BROWSER_TESTS = ("test_mobile_layout.py", "test_panel_console.py")
+
+
 def run_mobile(py: str, changed: list[str]) -> None:
-    """Run the scoped mobile-layout check if static assets changed and a browser
-    is available; otherwise print why it was skipped and return (non-fatal)."""
+    """Run the scoped browser checks (layout + console) if dashboard assets
+    changed and a browser is available; else print why it skipped (non-fatal)."""
     should, panels = mobile_scope(changed)
     if not should:
         return
     label = "all panels" if panels is None else ", ".join(sorted(panels))
     if not _browser_available(py):
-        print("── mobile: Playwright/Chromium not installed → skipping layout check " + "─" * 3)
+        print("── browser: Playwright/Chromium not installed → skipping panel checks " + "─" * 3)
         print("   (install: pip install playwright && python -m playwright install chromium)")
         return
-    print(f"── mobile: responsive layout check ({label}) " + "─" * 10, flush=True)
+    print(f"── browser: panel checks — layout + console ({label}) " + "─" * 6, flush=True)
     env = dict(os.environ)
     if panels is not None:
         # A handful of panels — check all three widths, it's cheap.
-        env["MOBILE_PANELS"] = ",".join(sorted(panels))
+        env["PANEL_SCOPE"] = ",".join(sorted(panels))
     else:
-        # A CSS / shared-JS change sweeps every panel; at ~1s each that's minutes
-        # per width, too slow for a pre-commit tier. Phone is where nearly every
-        # overflow manifests, so the gate checks that width and nightly's full
-        # sweep covers tablet/desktop. Respect an explicit MOBILE_VIEWPORTS.
-        env.setdefault("MOBILE_VIEWPORTS", "phone")
+        # A CSS / shared-JS change sweeps every panel; at ~1s each a three-width
+        # layout sweep is minutes, too slow for a pre-commit tier. Phone is where
+        # nearly every overflow shows; nightly's full sweep covers the rest.
+        # (The console sweep ignores viewport, so this only trims the layout one.)
+        env.setdefault("PANEL_VIEWPORTS", "phone")
     result = subprocess.run(
-        [py, "-m", "pytest", "-m", "mobile", "-n", "0",
-         str(TESTS / "web" / "test_mobile_layout.py")],
+        [py, "-m", "pytest", "-m", "browser", "-n", "0",
+         *[str(TESTS / "web" / t) for t in _BROWSER_TESTS]],
         cwd=ROOT, env=env,
     )
     if result.returncode != 0:
-        print("GATE FAILED: mobile layout", file=sys.stderr)
+        print("GATE FAILED: browser panel checks", file=sys.stderr)
         sys.exit(result.returncode)
 
 

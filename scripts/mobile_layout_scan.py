@@ -131,8 +131,21 @@ class _Ctx:
         self._cache.pop(guild_id, None)
 
 
+def _disable_rate_limit() -> None:
+    """Neutralize the per-IP rate limiter for in-process browser tests.
+
+    Every browser request originates from the one loopback IP, so the limiter
+    would 429 the sweep and bury the console/network signal we're checking. This
+    patches the token check to always pass — test process only, never prod.
+    """
+    from web_server import server as _srv
+
+    _srv._RateBucket.consume = lambda self: True  # type: ignore[method-assign]
+
+
 def serve(db_path: Path, port: int) -> uvicorn.Server:
     """Start the dashboard on a background thread; return once it's accepting."""
+    _disable_rate_limit()
     app = create_app(_Ctx(db_path), auth=OpenAuth())
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
     threading.Thread(target=server.run, daemon=True).start()
