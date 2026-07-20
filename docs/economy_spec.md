@@ -313,24 +313,14 @@ The message is the verification: when a member's message contains a phrase
 `compile_trigger_pattern`), the `EconomyCog` `on_message` listener claims the quest
 on their behalf through the ordinary `claim_quest` state machine:
 
-- **Instant quest:** pays on the spot — ✅ reaction + a reply embed naming the
-  quest and payout.
+- **Instant quest:** pays on the spot — ✅ reaction only, no reply or DM.
+  Wallet/quest log carries the news, same as every other trigger kind.
 - **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
   reacts 📝 — a manager still approves the payout.
 
-**Notification-role delivery.** `game_role_id` is a **DM preference and
-nothing else** — it gates no channel, no payout and no command. (Until
-2026-07-19 the same role doubled as a Discord onboarding gate hiding the
-economy channels; that coupling is gone, and the role must not be reused for
-channel permissions.) When it is set, the completion card (both the instant ✅
-card and the sign-off 📝 card) is **DMed** to a role-holder instead of replied
-in-channel — the reaction still lands on their message, but the embed goes via
-`notify_member` (DM, bank-channel fallback, honors the notify mute). Members
-**without** the role get the reaction + in-channel reply, exactly as if no role
-were configured; they are never paid silently (an unacknowledged payout reads
-as the quest having failed). With `game_role_id` unset (0, the default) every
-claimant gets the in-channel reaction + reply. The bank-channel sign-off card
-(manager approval) is posted regardless of the claimant's role.
+`game_role_id` no longer affects trigger/photo/media quest completions (it
+used to gate an in-channel reply vs. a DM); it still gates other recurring
+engagement DMs — the daily digest (§3.1) and the weekly raffle-winner notice.
 
 Members toggle the role themselves with the **🔔 Notifications** button on the
 guide panel (§ channel guide panel) — a persistent static-`custom_id` view

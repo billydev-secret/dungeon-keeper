@@ -1852,7 +1852,7 @@ async def test_trigger_message_pays_instant_quest_once_per_period(ctx, db):
     await cog._on_trigger_message(msg)
     assert _balance(db, 501) == 10
     msg.add_reaction.assert_awaited_once_with("✅")
-    msg.reply.assert_awaited_once()
+    msg.reply.assert_not_awaited()
 
     # A repeat inside the same period stays silent and pays nothing more.
     repeat = _trigger_message(author=member, content="gm again")
@@ -1863,103 +1863,53 @@ async def test_trigger_message_pays_instant_quest_once_per_period(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_game_role_holder_gets_dm_not_channel_reply(ctx, db):
-    """With game_role_id set, a role-holder is DMed the card (reaction stays,
-    no in-channel reply); notify_member carries the embed."""
+async def test_trigger_quest_completion_is_reaction_only_regardless_of_role(ctx, db):
+    """No reply, no DM either way — game_role_id no longer affects this path
+    (it still gates the daily digest / raffle-winner notices elsewhere)."""
     _enable(db, game_role_id=777)
     _mk_quest(db, reward=10, title="Say GM", trigger_words="gm")
     cog = _make_cog(ctx)
-    member = _member(member_id=501, role_ids=(777,))
 
-    msg = _trigger_message(author=member, content="gm")
-    with patch(
-        "bot_modules.cogs.economy_cog.notify_member",
-        new=AsyncMock(return_value=True),
-    ) as notify:
-        await cog._on_trigger_message(msg)
+    for member in (_member(member_id=501, role_ids=(777,)), _member(member_id=502)):
+        msg = _trigger_message(author=member, content="gm")
+        with patch(
+            "bot_modules.cogs.economy_cog.notify_member",
+            new=AsyncMock(return_value=True),
+        ) as notify:
+            await cog._on_trigger_message(msg)
 
-    assert _balance(db, 501) == 10
-    msg.add_reaction.assert_awaited_once_with("✅")
-    msg.reply.assert_not_awaited()
-    notify.assert_awaited_once()
-    assert notify.await_args.kwargs["embed"].title == "Quest complete!"
-
-
-@pytest.mark.asyncio
-async def test_game_role_non_member_still_acknowledged_in_channel(ctx, db):
-    """The opt-in role is a DM preference, so a member WITHOUT it is *not*
-    paid silently: they get the reaction + in-channel reply (the pre-opt-in
-    behaviour), just no DM. Silence used to read as the quest having failed."""
-    _enable(db, game_role_id=777)
-    _mk_quest(db, reward=10, trigger_words="gm")
-    cog = _make_cog(ctx)
-    member = _member(member_id=501)  # no role_ids
-
-    msg = _trigger_message(author=member, content="gm")
-    with patch(
-        "bot_modules.cogs.economy_cog.notify_member",
-        new=AsyncMock(return_value=True),
-    ) as notify:
-        await cog._on_trigger_message(msg)
-
-    assert _balance(db, 501) == 10
-    msg.add_reaction.assert_awaited_once_with("✅")
-    msg.reply.assert_awaited_once()
-    notify.assert_not_awaited()  # DMs stay opt-in
+        assert _balance(db, member.id) == 10
+        msg.add_reaction.assert_awaited_once_with("✅")
+        msg.reply.assert_not_awaited()
+        notify.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_game_role_non_member_signoff_gets_channel_reply(ctx, db):
-    """Same for a sign-off quest: the card still posts for the manager and the
-    member gets the 📝 reaction + reply rather than nothing at all."""
+async def test_signoff_trigger_quest_posts_card_and_reacts_only(ctx, db):
+    """A sign-off quest still files the claim and posts the manager card, but
+    the member only gets the 📝 reaction — no reply, no DM, regardless of
+    game_role_id."""
     _enable(db, game_role_id=777)
     _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
     cog = _make_cog(ctx)
-    member = _member(member_id=501)  # no role_ids
 
-    msg = _trigger_message(author=member, content="did it")
-    with (
-        patch(
-            "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
-        ) as card,
-        patch(
-            "bot_modules.cogs.economy_cog.notify_member",
-            new=AsyncMock(return_value=True),
-        ) as notify,
-    ):
-        await cog._on_trigger_message(msg)
+    for member in (_member(member_id=501, role_ids=(777,)), _member(member_id=502)):
+        msg = _trigger_message(author=member, content="did it")
+        with (
+            patch(
+                "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
+            ) as card,
+            patch(
+                "bot_modules.cogs.economy_cog.notify_member",
+                new=AsyncMock(return_value=True),
+            ) as notify,
+        ):
+            await cog._on_trigger_message(msg)
 
-    card.assert_awaited_once()
-    msg.add_reaction.assert_awaited_once_with("📝")
-    msg.reply.assert_awaited_once()
-    notify.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_game_role_signoff_dms_role_holder_and_posts_card(ctx, db):
-    """A sign-off quest under game_role_id: the bank-channel card posts
-    regardless, and a role-holder is DMed the 📝 card instead of a reply."""
-    _enable(db, game_role_id=777)
-    _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
-    cog = _make_cog(ctx)
-    member = _member(member_id=501, role_ids=(777,))
-
-    msg = _trigger_message(author=member, content="did it")
-    with (
-        patch(
-            "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
-        ) as card,
-        patch(
-            "bot_modules.cogs.economy_cog.notify_member",
-            new=AsyncMock(return_value=True),
-        ) as notify,
-    ):
-        await cog._on_trigger_message(msg)
-
-    card.assert_awaited_once()  # manager approval flow survives the role gate
-    msg.add_reaction.assert_awaited_once_with("📝")
-    msg.reply.assert_not_awaited()
-    notify.assert_awaited_once()
+        card.assert_awaited_once()
+        msg.add_reaction.assert_awaited_once_with("📝")
+        msg.reply.assert_not_awaited()
+        notify.assert_not_awaited()
 
 
 @pytest.mark.asyncio
