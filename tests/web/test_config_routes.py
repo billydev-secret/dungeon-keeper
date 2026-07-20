@@ -726,6 +726,33 @@ def test_update_pen_pals_timers_rejects_invalid_session_seconds(authed_client):
     assert resp.status_code == 400
 
 
+def test_update_pen_pals_separations_persists_normalized(authed_client):
+    # Big snowflake-ish ids to confirm they round-trip as strings.
+    a, b = "1469000000000000123", "1469000000000000456"
+    resp = authed_client.put(
+        "/api/config/pen-pals/separations",
+        json={"separations": [{"user_a": b, "user_b": a}]},  # entered high→low
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["separations"] == [{"user_a": a, "user_b": b}]  # normalized low→high
+
+    # Sending an empty list clears them.
+    resp2 = authed_client.put("/api/config/pen-pals/separations", json={"separations": []})
+    assert resp2.status_code == 200
+    assert authed_client.get("/api/config").json()["pen_pals"]["separations"] == []
+
+
+def test_update_pen_pals_separations_rejects_self_pair(authed_client):
+    resp = authed_client.put(
+        "/api/config/pen-pals/separations",
+        json={"separations": [{"user_a": "42", "user_b": "42"}]},
+    )
+    assert resp.status_code == 400
+
+
 # ── /config/risky — in-memory state must be updated ──────────────────
 
 

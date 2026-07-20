@@ -1,15 +1,16 @@
 import {
-  loadConfig, loadChannels, loadCategories, loadRoles,
+  loadConfig, loadChannels, loadCategories, loadRoles, loadMembers,
   channelSelect, categorySelect, roleSelect,
-  apiPut, showStatus,
+  toMemberOptions, mountPicker,
+  apiPut, showStatus, esc,
 } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`;
 
   (async () => {
-    const [config, channels, categories, roles] = await Promise.all([
-      loadConfig(), loadChannels(), loadCategories(), loadRoles(),
+    const [config, channels, categories, roles, members] = await Promise.all([
+      loadConfig(), loadChannels(), loadCategories(), loadRoles(), loadMembers(),
     ]);
     const pp = config.pen_pals || {};
 
@@ -102,6 +103,24 @@ export function mount(container) {
 
           <div><button type="submit" class="btn btn-primary">Save</button><span data-timers-status></span></div>
         </form>
+
+        <header>
+          <h2>Never-match separations</h2>
+          <div class="subtitle">Pairs of members Pen Pals must never match together — for mod-enforced separations. Members can also block people themselves with <code>/penpals block</code>; those personal blocks don't show here.</div>
+        </header>
+        <div class="field" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;">
+          <div style="flex:1 1 200px;min-width:0;">
+            <label>Member A</label>
+            <span data-picker="sep_a"></span>
+          </div>
+          <div style="flex:1 1 200px;min-width:0;">
+            <label>Member B</label>
+            <span data-picker="sep_b"></span>
+          </div>
+          <button type="button" class="btn btn-primary" data-add-sep>Add separation</button>
+        </div>
+        <div data-sep-list style="display:flex;flex-direction:column;gap:6px;"></div>
+        <span data-sep-status></span>
       </div>
     `;
 
@@ -144,5 +163,81 @@ export function mount(container) {
         showStatus(timersStatus, false, err.message);
       }
     });
+
+    // ── Never-match separations ──────────────────────────────────────
+    const memberName = (id) => {
+      const m = members.find((x) => String(x.id) === String(id));
+      if (!m) return `User ${id}`;
+      return m.display_name && m.display_name !== m.name ? m.display_name : m.name;
+    };
+
+    let separations = (pp.separations || []).map((s) => ({
+      user_a: String(s.user_a), user_b: String(s.user_b),
+    }));
+    const memberOpts = toMemberOptions(members);
+    const pickerA = mountPicker(container.querySelector('[data-picker="sep_a"]'),
+      memberOpts, "0", { emptyValue: "0", emptyLabel: "(pick a member)", placeholder: "Search members…" });
+    const pickerB = mountPicker(container.querySelector('[data-picker="sep_b"]'),
+      memberOpts, "0", { emptyValue: "0", emptyLabel: "(pick a member)", placeholder: "Search members…" });
+    const sepList = container.querySelector("[data-sep-list]");
+    const sepStatus = container.querySelector("[data-sep-status]");
+
+    const renderSeps = () => {
+      if (!separations.length) {
+        sepList.innerHTML = `<div class="empty">No separations yet. Members are matched freely.</div>`;
+        return;
+      }
+      sepList.innerHTML = separations.map((s, i) => `
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;">
+          <span>${esc(memberName(s.user_a))} <span style="opacity:.6;">⊘</span> ${esc(memberName(s.user_b))}</span>
+          <button type="button" class="btn btn-small" data-remove-sep="${i}">Remove</button>
+        </div>
+      `).join("");
+    };
+
+    const samePair = (x, y) =>
+      (x.user_a === y.user_a && x.user_b === y.user_b) ||
+      (x.user_a === y.user_b && x.user_b === y.user_a);
+
+    const persistSeps = async () => {
+      try {
+        await apiPut("/api/config/pen-pals/separations", { separations });
+        showStatus(sepStatus, true, "Saved");
+      } catch (err) {
+        showStatus(sepStatus, false, err.message);
+      }
+    };
+
+    container.querySelector("[data-add-sep]").addEventListener("click", async () => {
+      const a = pickerA.getValue(), b = pickerB.getValue();
+      if (!a || a === "0" || !b || b === "0") {
+        showStatus(sepStatus, false, "Pick two members");
+        return;
+      }
+      if (a === b) {
+        showStatus(sepStatus, false, "Pick two different members");
+        return;
+      }
+      const pair = { user_a: a, user_b: b };
+      if (separations.some((s) => samePair(s, pair))) {
+        showStatus(sepStatus, false, "Already separated");
+        return;
+      }
+      separations.push(pair);
+      renderSeps();
+      pickerA.setValue("0");
+      pickerB.setValue("0");
+      await persistSeps();
+    });
+
+    sepList.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-remove-sep]");
+      if (!btn) return;
+      separations.splice(parseInt(btn.dataset.removeSep), 1);
+      renderSeps();
+      await persistSeps();
+    });
+
+    renderSeps();
   })();
 }

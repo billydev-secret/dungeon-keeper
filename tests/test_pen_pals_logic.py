@@ -859,6 +859,181 @@ async def test_do_round_eligible_once_cooldown_elapses(sync_db_path, monkeypatch
     assert _pool_ids(sync_db_path) == []
 
 
+# ── Block list / separations ──────────────────────────────────────────
+
+
+def test_is_blocked_pair_is_symmetric_for_a_member_block(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 1, 2)  # 1 blocks 2
+        # Symmetric: one side blocking is enough, in either lookup order.
+        assert pp._is_blocked_pair(conn, GUILD_ID, 1, 2) is True
+        assert pp._is_blocked_pair(conn, GUILD_ID, 2, 1) is True
+        # Unrelated pair is untouched.
+        assert pp._is_blocked_pair(conn, GUILD_ID, 1, 3) is False
+
+
+def test_member_block_add_get_remove_roundtrip(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 1, 2)
+        pp._add_block(conn, GUILD_ID, 1, 3)
+        pp._add_block(conn, GUILD_ID, 1, 2)  # idempotent
+        assert set(pp._get_member_blocks(conn, GUILD_ID, 1)) == {2, 3}
+        pp._remove_block(conn, GUILD_ID, 1, 2)
+        assert pp._get_member_blocks(conn, GUILD_ID, 1) == [3]
+
+
+def test_admin_separations_normalize_and_dedupe(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        # Same couple entered both orders, plus a self-pair that must drop.
+        pp._set_admin_separations(conn, GUILD_ID, [(2, 1), (1, 2), (3, 3), (4, 5)])
+        seps = pp._get_admin_separations(conn, GUILD_ID)
+        assert set(seps) == {(1, 2), (4, 5)}  # normalized (min, max), deduped
+        assert pp._is_blocked_pair(conn, GUILD_ID, 1, 2) is True
+        assert pp._is_blocked_pair(conn, GUILD_ID, 5, 4) is True
+
+
+def test_set_admin_separations_leaves_member_blocks_alone(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 1, 9)          # member block
+        pp._set_admin_separations(conn, GUILD_ID, [(1, 2)])
+        # Replacing admin separations doesn't touch the member's own list…
+        assert pp._get_member_blocks(conn, GUILD_ID, 1) == [9]
+        # …and the member block isn't surfaced as an admin separation.
+        assert pp._get_admin_separations(conn, GUILD_ID) == [(1, 2)]
+
+
+def test_member_unblock_does_not_remove_admin_separation(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._set_admin_separations(conn, GUILD_ID, [(1, 2)])
+        pp._remove_block(conn, GUILD_ID, 1, 2)  # member-source delete only
+        assert pp._is_blocked_pair(conn, GUILD_ID, 1, 2) is True
+
+
+def test_find_instant_match_excludes_a_blocked_candidate(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
+        pp._add_block(conn, GUILD_ID, 1, 2)
+        assert pp._find_instant_match(conn, GUILD_ID, 1) is None
+        # A non-blocked waiter is still matched.
+        pp._add_to_pool(conn, GUILD_ID, 3, joined_at=200.0)
+        assert pp._find_instant_match(conn, GUILD_ID, 1) == 3
+
+
+async def test_handle_join_queues_when_only_candidate_is_blocked(sync_db_path, monkeypatch):
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
+        pp._add_block(conn, GUILD_ID, 1, 2)
+    do_pair = AsyncMock(return_value=True)
+    monkeypatch.setattr(pp, "_do_pair", do_pair)
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+
+    interaction = _join_interaction(1)
+    await pp._handle_join(interaction, sync_db_path)
+
+    do_pair.assert_not_awaited()
+    assert "in the pool" in interaction.response.send_message.await_args.args[0]
+    assert _pool_ids(sync_db_path) == [2, 1]
+
+
+async def test_do_round_pairs_around_a_blocked_pair(sync_db_path, monkeypatch):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        for i, uid in enumerate([1, 2, 3], start=1):
+            pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
+        pp._add_block(conn, GUILD_ID, 1, 2)  # 1 won't take 2…
+
+    calls: list[tuple[int, int]] = []
+
+    async def fake_pair(bot, db_path, guild_id, u1, u2):
+        calls.append((u1, u2))
+        with open_db(db_path) as conn:
+            pp._remove_from_pool(conn, guild_id, u1)
+            pp._remove_from_pool(conn, guild_id, u2)
+        return True
+
+    monkeypatch.setattr(pp, "_do_pair", fake_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+    # 1 pairs with 3 instead of the blocked 2; 2 is left waiting.
+    assert calls == [(1, 3)]
+    assert pairs == 1 and waiting == 1
+    assert _pool_ids(sync_db_path) == [2]
+
+
+async def test_do_round_leaves_both_pooled_when_the_only_pair_is_blocked(sync_db_path, monkeypatch):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=1.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=2.0)
+        pp._add_block(conn, GUILD_ID, 2, 1)  # blocked either direction
+
+    do_pair = AsyncMock(return_value=True)
+    monkeypatch.setattr(pp, "_do_pair", do_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+
+    do_pair.assert_not_awaited()
+    assert pairs == 0 and waiting == 2
+    assert _pool_ids(sync_db_path) == [1, 2]  # nobody forced, nobody dropped
+
+
+async def test_do_pair_refuses_a_blocked_pair(sync_db_path, pair_env):
+    """The safety net: even a direct pair (admin force, lost race) is refused."""
+    bot, _channel, created = pair_env
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 1, 2)
+    assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is False
+    assert created == []  # no channel ever created
+
+
+def test_block_panel_content_empty_and_populated():
+    guild = _make_guild_mock(2)
+    assert "no blocks" in pp._block_panel_content(guild, []).lower()
+    body = pp._block_panel_content(guild, [2])
+    assert "user2" in body  # resolved display name
+    body_left = pp._block_panel_content(guild, [999])
+    assert "User 999" in body_left  # left-server fallback
+
+
+async def test_handle_block_renders_current_blocklist(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 1, 2)
+    g = FakeGuild(id=GUILD_ID)
+    g.members[2] = FakeUser(id=2, display_name="Blocked Person")
+    interaction = _join_interaction(1, guild=g)
+    await pp._handle_block(interaction, sync_db_path)
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    assert isinstance(kwargs["view"], pp._PenPalsBlockView)
+    assert "Blocked Person" in interaction.response.send_message.await_args.args[0]
+
+
+async def test_penpals_pair_command_refuses_a_blocked_pair(sync_db_path):
+    """The admin force-pair gives a clear reason instead of silently failing."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 10, 20)
+
+    ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(MagicMock(), ctx)
+    g = FakeGuild(id=GUILD_ID)
+    u1 = FakeUser(id=10, display_name="Ten")
+    u2 = FakeUser(id=20, display_name="Twenty")
+    interaction = fake_interaction(user=FakeUser(id=1), guild=g)
+
+    await cog.penpals_pair.callback(cog, interaction, u1, u2)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "blocked" in msg.lower()
+
+
 # ── Panel refresh serialization ───────────────────────────────────────
 
 

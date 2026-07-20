@@ -774,7 +774,7 @@
 
     
     <h2 id="pen-pals" class="section-break"><span class="section-num">8</span> Pen Pals</h2>
-    <p>Pen Pals quietly matches members into private one-on-one conversations. Joining matches you straight away if someone eligible is already waiting — otherwise you sit in the pool and are matched the moment the next person joins. Either way the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours). Nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again.</p>
+    <p>Pen Pals quietly matches members into private one-on-one conversations. Joining matches you straight away if someone eligible is already waiting — otherwise you sit in the pool and are matched the moment the next person joins. Either way the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours). Nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again. If there's someone you'd rather not be matched with, <span class="cmd-name">/penpals block</span> keeps the two of you apart — privately, and one block is enough.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/penpals join</span>
@@ -792,6 +792,12 @@
       <span class="cmd-name">/penpals status</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
       <span class="cmd-desc">Check your current Pen Pals status — whether you're waiting in the pool or matched, and when your session ends.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals block</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Open a private panel to manage who Pen Pals should never match you with. Pick members to block, or unblock them later — one block is enough to keep the two of you apart, and the other person is never told. Blocking someone doesn't end a chat you're already in.</span>
     </div>
 
     <div class="cmd-block">

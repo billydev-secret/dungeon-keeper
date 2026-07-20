@@ -9,11 +9,12 @@ Members opt in to a pairing pool. Joining pairs immediately when an eligible mem
 | `/penpals join` | Slash | Everyone (server only) | Matched on the spot if someone eligible is waiting, otherwise queued until the next person joins |
 | `/penpals leave` | Slash | Everyone (server only) | Leave the pool before being paired |
 | `/penpals status` | Slash | Everyone (server only) | Ephemeral: current pairing state, time remaining, or pool position |
+| `/penpals block` | Slash | Everyone (server only) | Ephemeral panel to manage your own "never match me with these members" list |
 | `/penpals new-question` | Slash | Session members (active channel only) | Replace the current question with a fresh one from the bank (max 3 per session) |
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
 | `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two specific members, bypassing the pool |
 | `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the 5-minute tick |
-| Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels |
+| Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels; manage never-match separations |
 | Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
 
 ## Behavior
@@ -94,6 +95,15 @@ Both paths share `_pick_partner`: among the *eligible* candidates the bot checks
 
 If an opt-in role is configured, `/penpals join` requires the invoker to hold that role. Members without it are told: "You need the **{role}** role to join Pen Pals." This lets the server gate participation (e.g., require Level 5 or a verified role).
 
+### Never-match blocks
+
+Two sources feed one exclusion list, and matching treats every entry as **symmetric** — a pairing is skipped whenever any entry connects the two members in either direction:
+
+- **Member blocks (self-service).** `/penpals block` opens an ephemeral panel: a user-select adds people to your personal "never match me with them" list, and a select of your current blocks removes them. One member blocking is enough to prevent that pairing, and the other side is never told they were blocked. Blocking is directional intent but symmetric in effect; it does **not** end a chat you're already in (use `/penpals end` for that). Self- and bot-selections are ignored.
+- **Admin separations.** The dashboard Pen Pals panel has a "Never-match separations" section where a mod pairs two members who must never be matched, regardless of either member's own list. Separations are normalized to one row per couple (order-independent) and are independent of member blocks — replacing the separation list never touches anyone's personal blocks, and unblocking a member never clears an admin separation.
+
+Enforcement is layered so no path can slip a blocked pair through: instant matching filters the candidate, a round filters each candidate and leaves anyone with no un-blocked partner pooled for a later round, and a final check inside the pairing transaction (`_do_pair`) refuses — this last one also covers `/penpals pair`, which tells the admin "these two can't be paired — one has blocked the other, or they're on the separations list."
+
 ### Pool sweep
 
 There is no round schedule to configure — the weekly auto-round (day-of-week + UTC hour) was removed when instant matching landed, since the 5-minute sweep always gets there first. The `auto_round_dow` / `auto_round_hour` columns remain in `pen_pals_config` but are unread; `last_auto_round_at` now records the last sweep. Pair confirmations go to the configured log channel (or nowhere if none is set).
@@ -110,6 +120,7 @@ There is no round schedule to configure — the weekly auto-round (day-of-week +
 | `/penpals new-question` outside an active pen pal channel | "This command only works in an active pen pal channel." |
 | All 3 question swaps used | "You've used all 3 question swaps for this session." |
 | Bot lacks Manage Channels in the category | "I don't have permission to create channels here — ask an admin to fix the bot's permissions." |
+| `/penpals pair` on a blocked/separated pair | "These two can't be paired — one has blocked the other, or they're on the Pen Pals separations list. Clear the block first if this is intended." |
 | Early-close confirm timed out | "Close cancelled." |
 | Invoker already has DMs closed for early-close DM to the other party | Silent — DM failure doesn't block channel deletion. |
 
@@ -130,6 +141,7 @@ Per-guild keys set via the dashboard:
 - **Question category** — `sfw` (default) or `all` (includes NSFW questions). Optional.
 - **Log channel** — where the bot posts pair confirmations. Optional.
 - **Enabled** — per-guild on/off switch. Default off.
+- **Never-match separations** — mod-defined pairs of members who must never be matched. Optional; independent of members' own `/penpals block` lists.
 
 **Pairing Mechanics** (separate dashboard section):
 
@@ -146,6 +158,8 @@ Per-guild keys set via the dashboard:
 **`pen_pals_pool`** — one row per queued member: `guild_id`, `user_id`, `joined_at`.
 
 **`pen_pals_questions`** — which questions have been shown per session: `session_id`, `question_id`, `shown_at`. Used for no-repeat within a session and for logging what was asked.
+
+**`pen_pals_blocks`** — never-match entries: `guild_id`, `user_id`, `blocked_user_id`, `source` (`member` / `admin`), `created_at`. Member rows are directional (blocker → blockee); admin rows are normalized to `(min_id, max_id)`, one per couple. The match exclusion (`_is_blocked_pair`) treats any row as symmetric across both directions and both sources.
 
 Past pairings are queried from `pen_pals_sessions` for the no-repeat check. No separate history table is needed.
 

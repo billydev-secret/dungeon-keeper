@@ -121,6 +121,96 @@ def _get_pool(conn, guild_id: int) -> list:
     ).fetchall()
 
 
+# ── Block list / separations ──────────────────────────────────────────────────
+#
+# One table, two sources (see migration 096). Members manage their own
+# directional blocks via /penpals block; admins manage symmetric separations on
+# the dashboard. Matching treats every row as symmetric — a pairing is excluded
+# when any row connects the two members in either direction.
+
+
+def _is_blocked_pair(conn, guild_id: int, a: int, b: int) -> bool:
+    """True if these two must never be matched (either side, either source)."""
+    return conn.execute(
+        """
+        SELECT 1 FROM pen_pals_blocks
+        WHERE guild_id = ?
+          AND ((user_id = ? AND blocked_user_id = ?)
+            OR (user_id = ? AND blocked_user_id = ?))
+        LIMIT 1
+        """,
+        (guild_id, a, b, b, a),
+    ).fetchone() is not None
+
+
+def _add_block(conn, guild_id: int, user_id: int, blocked_user_id: int) -> None:
+    """Add a member's self-service block (blocker → blockee), idempotent."""
+    conn.execute(
+        """INSERT OR IGNORE INTO pen_pals_blocks
+               (guild_id, user_id, blocked_user_id, source, created_at)
+           VALUES (?, ?, ?, 'member', ?)""",
+        (guild_id, user_id, blocked_user_id, time.time()),
+    )
+
+
+def _remove_block(conn, guild_id: int, user_id: int, blocked_user_id: int) -> None:
+    """Remove one of a member's own blocks (leaves admin separations alone)."""
+    conn.execute(
+        """DELETE FROM pen_pals_blocks
+           WHERE guild_id = ? AND user_id = ? AND blocked_user_id = ? AND source = 'member'""",
+        (guild_id, user_id, blocked_user_id),
+    )
+
+
+def _get_member_blocks(conn, guild_id: int, user_id: int) -> list[int]:
+    """The members this member has blocked, most recent first."""
+    rows = conn.execute(
+        """SELECT blocked_user_id FROM pen_pals_blocks
+           WHERE guild_id = ? AND user_id = ? AND source = 'member'
+           ORDER BY created_at DESC""",
+        (guild_id, user_id),
+    ).fetchall()
+    return [r["blocked_user_id"] for r in rows]
+
+
+def _get_admin_separations(conn, guild_id: int) -> list[tuple[int, int]]:
+    """All mod-enforced separations as (user_a, user_b) pairs (a < b)."""
+    rows = conn.execute(
+        """SELECT user_id, blocked_user_id FROM pen_pals_blocks
+           WHERE guild_id = ? AND source = 'admin'
+           ORDER BY created_at DESC""",
+        (guild_id,),
+    ).fetchall()
+    return [(r["user_id"], r["blocked_user_id"]) for r in rows]
+
+
+def _set_admin_separations(conn, guild_id: int, pairs: list[tuple[int, int]]) -> None:
+    """Replace the guild's admin separations with *pairs* (member blocks untouched).
+
+    Pairs are normalized to (min, max) so each separated couple is one row
+    regardless of the order they were entered; self-pairs are dropped.
+    """
+    conn.execute(
+        "DELETE FROM pen_pals_blocks WHERE guild_id = ? AND source = 'admin'",
+        (guild_id,),
+    )
+    now = time.time()
+    seen: set[tuple[int, int]] = set()
+    for a, b in pairs:
+        if a == b:
+            continue
+        lo, hi = (a, b) if a < b else (b, a)
+        if (lo, hi) in seen:
+            continue
+        seen.add((lo, hi))
+        conn.execute(
+            """INSERT INTO pen_pals_blocks
+                   (guild_id, user_id, blocked_user_id, source, created_at)
+               VALUES (?, ?, ?, 'admin', ?)""",
+            (guild_id, lo, hi, now),
+        )
+
+
 def _get_active_session(conn, guild_id: int, user_id: int):
     return conn.execute(
         """
@@ -287,7 +377,11 @@ def _find_instant_match(conn, guild_id: int, user_id: int) -> int | None:
         return None
     if (last := _last_matched_at(conn, guild_id, user_id)) is not None and now - last < cooldown:
         return None
-    candidates = [u for u in _eligible_pool(conn, guild_id, now, cooldown) if u != user_id]
+    candidates = [
+        u
+        for u in _eligible_pool(conn, guild_id, now, cooldown)
+        if u != user_id and not _is_blocked_pair(conn, guild_id, user_id, u)
+    ]
     return _pick_partner(candidates, _recent_partners(conn, guild_id, user_id))
 
 
@@ -472,10 +566,16 @@ async def _do_pair(
 
     def _load_cfg():
         with open_db(db_path) as conn:
-            return _get_config(conn, guild_id)
+            return _get_config(conn, guild_id), _is_blocked_pair(conn, guild_id, user1_id, user2_id)
 
-    cfg = await asyncio.to_thread(_load_cfg)
+    cfg, blocked = await asyncio.to_thread(_load_cfg)
     if cfg is None or not cfg["enabled"] or not cfg["category_id"]:
+        return False
+    # Final safety net: no path — instant match, sweep, admin force-pair, or a
+    # race where a block landed mid-pairing — ever opens a channel for a pair
+    # that must stay apart.
+    if blocked:
+        log.info("pen_pals: refused blocked pairing %d ↔ %d in guild %d", user1_id, user2_id, guild_id)
         return False
     session_seconds = cfg["session_seconds"]
 
@@ -588,12 +688,18 @@ async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[
     while len(remaining) >= 2:
         u1 = remaining.pop(0)
 
-        def _recent(uid: int = u1):
+        def _recent_and_allowed(uid: int = u1, pool: list[int] = remaining):
             with open_db(db_path) as conn:
-                return _recent_partners(conn, guild_id, uid)
+                recent = _recent_partners(conn, guild_id, uid)
+                allowed = [u for u in pool if not _is_blocked_pair(conn, guild_id, uid, u)]
+                return recent, allowed
 
-        partner = _pick_partner(remaining, await asyncio.to_thread(_recent))
-        assert partner is not None  # remaining had ≥2 entries before the pop
+        recent, allowed = await asyncio.to_thread(_recent_and_allowed)
+        partner = _pick_partner(allowed, recent)
+        if partner is None:
+            # u1 has blocked (or been blocked by) everyone still waiting — leave
+            # them pooled for a future round rather than forcing a bad pairing.
+            continue
         remaining.remove(partner)
 
         if await _do_pair(bot, db_path, guild_id, u1, partner):
@@ -998,6 +1104,134 @@ class _PenPalsPanelLeaveButton(
         await _handle_leave(interaction, ctx.db_path)
 
 
+# ── Self-service blocklist (/penpals block) ───────────────────────────────────
+
+
+def _block_panel_content(guild: discord.Guild, blocked_ids: list[int]) -> str:
+    """Ephemeral message body listing a member's current Pen Pals blocks."""
+    if not blocked_ids:
+        return (
+            "🚫 **Pen Pals — your blocklist**\n"
+            "You have no blocks. Pick members below and Pen Pals will never "
+            "match you with them. They're never told they were blocked."
+        )
+
+    def _label(uid: int) -> str:
+        member = guild.get_member(uid)
+        return member.display_name if member else f"User {uid}"
+
+    lines = "\n".join(f"• {_label(u)}" for u in blocked_ids)
+    return (
+        "🚫 **Pen Pals — your blocklist**\n"
+        "You'll never be matched with:\n"
+        f"{lines}\n\n"
+        "Add more below, or pick someone to unblock. Blocking someone doesn't "
+        "end a chat you're already in — use `/penpals end` for that."
+    )
+
+
+class _PenPalsBlockView(discord.ui.View):
+    """Ephemeral, single-viewer manager for a member's own Pen Pals blocklist.
+
+    Only the invoker can see or use this (it rides on an ephemeral message), so
+    it needs no author check. A user-select adds blocks; a string-select of the
+    current blocks removes them. Both rebuild the view in place.
+    """
+
+    def __init__(
+        self,
+        db_path: Path,
+        guild: discord.Guild,
+        user_id: int,
+        blocked_ids: list[int],
+    ) -> None:
+        super().__init__(timeout=180)
+        self.db_path = db_path
+        self.guild = guild
+        self.user_id = user_id
+        self.blocked_ids = blocked_ids
+        self._build()
+
+    def _label(self, uid: int) -> str:
+        member = self.guild.get_member(uid)
+        return member.display_name if member else f"User {uid}"
+
+    def content(self) -> str:
+        return _block_panel_content(self.guild, self.blocked_ids)
+
+    def _build(self) -> None:
+        self.clear_items()
+
+        add = discord.ui.UserSelect(placeholder="Block someone…", min_values=1, max_values=25)
+        add.callback = self._on_add  # type: ignore[method-assign]
+        self.add_item(add)
+
+        if self.blocked_ids:
+            options = [
+                discord.SelectOption(label=self._label(u)[:100], value=str(u))
+                for u in self.blocked_ids[:25]
+            ]
+            remove = discord.ui.Select(
+                placeholder="Unblock someone…",
+                min_values=1,
+                max_values=len(options),
+                options=options,
+            )
+            remove.callback = self._on_remove  # type: ignore[method-assign]
+            self.add_item(remove)
+
+    async def _reload_and_edit(self, interaction: discord.Interaction) -> None:
+        def _load() -> list[int]:
+            with open_db(self.db_path) as conn:
+                return _get_member_blocks(conn, self.guild.id, self.user_id)
+
+        self.blocked_ids = await asyncio.to_thread(_load)
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _on_add(self, interaction: discord.Interaction) -> None:
+        select = cast(discord.ui.UserSelect, self.children[0])
+        # Never block yourself (you can't be matched with yourself) or bots.
+        ids = [u.id for u in select.values if u.id != self.user_id and not getattr(u, "bot", False)]
+
+        def _save() -> None:
+            with open_db(self.db_path) as conn:
+                for uid in ids:
+                    _add_block(conn, self.guild.id, self.user_id, uid)
+
+        await asyncio.to_thread(_save)
+        await self._reload_and_edit(interaction)
+
+    async def _on_remove(self, interaction: discord.Interaction) -> None:
+        select = cast(discord.ui.Select, self.children[1])
+        ids = [int(v) for v in select.values]
+
+        def _save() -> None:
+            with open_db(self.db_path) as conn:
+                for uid in ids:
+                    _remove_block(conn, self.guild.id, self.user_id, uid)
+
+        await asyncio.to_thread(_save)
+        await self._reload_and_edit(interaction)
+
+
+async def _handle_block(interaction: discord.Interaction, db_path: Path) -> None:
+    if not interaction.guild:
+        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    user_id = interaction.user.id
+
+    def _load() -> list[int]:
+        with open_db(db_path) as conn:
+            return _get_member_blocks(conn, guild.id, user_id)
+
+    blocked = await asyncio.to_thread(_load)
+    view = _PenPalsBlockView(db_path, guild, user_id, blocked)
+    await interaction.response.send_message(view.content(), view=view, ephemeral=True)
+
+
 # ── Confirm view for /penpals end ─────────────────────────────────────────────
 
 
@@ -1160,6 +1394,15 @@ class PenPalsCog(commands.Cog):
     @penpals.command(name="leave", description="Leave the Pen Pals pool before being matched.")
     async def penpals_leave(self, interaction: discord.Interaction) -> None:
         await _handle_leave(interaction, self.ctx.db_path)
+
+    # ── /penpals block ────────────────────────────────────────────────
+
+    @penpals.command(
+        name="block",
+        description="Manage who Pen Pals should never match you with.",
+    )
+    async def penpals_block(self, interaction: discord.Interaction) -> None:
+        await _handle_block(interaction, self.ctx.db_path)
 
     # ── /penpals status ───────────────────────────────────────────────
 
@@ -1354,6 +1597,8 @@ class PenPalsCog(commands.Cog):
                 cfg = _get_config(conn, guild_id)
                 if cfg is None or not cfg["enabled"]:
                     return "disabled", None
+                if _is_blocked_pair(conn, guild_id, user1.id, user2.id):
+                    return "blocked", None
                 s1 = _get_active_session(conn, guild_id, user1.id)
                 s2 = _get_active_session(conn, guild_id, user2.id)
                 return "ok", (s1, s2)
@@ -1361,6 +1606,13 @@ class PenPalsCog(commands.Cog):
         status, data = await asyncio.to_thread(_check)
         if status == "disabled":
             await interaction.response.send_message("Pen Pals isn't enabled on this server.", ephemeral=True)
+            return
+        if status == "blocked":
+            await interaction.response.send_message(
+                "These two can't be paired — one has blocked the other, or they're "
+                "on the Pen Pals separations list. Clear the block first if this is intended.",
+                ephemeral=True,
+            )
             return
 
         assert data is not None

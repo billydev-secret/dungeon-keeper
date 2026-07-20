@@ -117,8 +117,10 @@ from bot_modules.cogs.bump_tracker_cog import (
 )
 from bot_modules.starboard.filters import validate_emoji as _starboard_validate_emoji
 from bot_modules.cogs.pen_pals_cog import (
+    _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
     _get_pool as _pp_get_pool,
+    _set_admin_separations as _pp_set_admin_separations,
     _set_config as _pp_set_config,
     _set_timers as _pp_set_timers,
 )
@@ -656,6 +658,12 @@ def _auto_react_section(conn, guild_id: int) -> list:
 def _pen_pals_section(conn, guild_id: int) -> dict:
     cfg = _pp_get_config(conn, guild_id)
     pool_size = len(_pp_get_pool(conn, guild_id))
+    # Snowflake ids cross to the browser as strings so JS float math can't
+    # round them into non-existent members.
+    separations = [
+        {"user_a": str(a), "user_b": str(b)}
+        for a, b in _pp_get_admin_separations(conn, guild_id)
+    ]
     if cfg is None:
         return {
             "enabled": False,
@@ -670,6 +678,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "max_question_swaps": 3,
             "warn_seconds": 3600,
             "question_suppress_seconds": 7200,
+            "separations": separations,
         }
     return {
         "enabled": bool(cfg["enabled"]),
@@ -684,6 +693,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "max_question_swaps": int(cfg["max_question_swaps"]),
         "warn_seconds": int(cfg["warn_seconds"]),
         "question_suppress_seconds": int(cfg["question_suppress_seconds"]),
+        "separations": separations,
     }
 
 
@@ -2892,6 +2902,42 @@ async def update_pen_pals_timers(
                 warn_seconds=body.warn_seconds,
                 question_suppress_seconds=body.question_suppress_seconds,
             )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class PenPalsSeparation(BaseModel):
+    user_a: str
+    user_b: str
+
+
+class PenPalsSeparationsUpdate(BaseModel):
+    separations: list[PenPalsSeparation] = []
+
+
+@router.put("/config/pen-pals/separations")
+async def update_pen_pals_separations(
+    request: Request,
+    body: PenPalsSeparationsUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    pairs: list[tuple[int, int]] = []
+    for sep in body.separations:
+        try:
+            a, b = int(sep.user_a), int(sep.user_b)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "separation user ids must be numeric")
+        if a == b:
+            raise HTTPException(400, "a separation must be between two different members")
+        pairs.append((a, b))
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _pp_set_admin_separations(conn, guild_id, pairs)
         return {"ok": True}
 
     return await run_query(_q)
