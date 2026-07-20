@@ -3645,14 +3645,22 @@ select option { background: var(--bg-input); color: var(--ink); }
 }
 .ann-plain { font-size: 14px; color: var(--ink); margin-bottom: 8px; word-break: break-word; }
 
-/* Role-button editor rows + the preview pills that mirror them. */
+/* Role-button editor rows + the preview pills that mirror them.
+   The row must wrap: on a phone the four controls can't share a line, and
+   without wrapping they overflow off-screen where they can't be reached.
+   Each child sets its own flex-basis as the width it wants before wrapping,
+   with min-width:0 so a long role name shrinks instead of pushing siblings out. */
 .ann-btn-row {
-  display: flex; gap: 6px; align-items: center; margin-bottom: 6px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin-bottom: 8px; padding: 8px; border: 1px solid var(--rule-soft);
+  border-radius: 6px; background: var(--bg-alt);
 }
-.ann-btn-row .filter-select { flex: 1 1 40%; min-width: 0; }
-.ann-btn-row input[data-b-label] { flex: 1 1 30%; min-width: 0; }
-.ann-btn-row input[data-b-emoji] { width: 56px; flex: none; text-align: center; }
-.ann-btn-row select { flex: none; }
+.ann-btn-row .filter-select { flex: 1 1 200px; min-width: 0; }
+.ann-btn-row input[data-b-label] { flex: 1 1 150px; min-width: 0; }
+.ann-btn-row input[data-b-emoji] { flex: 0 0 52px; width: 52px; text-align: center; }
+.ann-btn-row select[data-b-style] { flex: 0 0 auto; }
+/* Pinned to the end of whichever line it lands on, so it never hides. */
+.ann-btn-row .doc-x { flex: 0 0 auto; margin-left: auto; }
 .ann-btns-preview { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ann-btn-pill {
   display: inline-flex; align-items: center; gap: 6px; font-size: 14px;
