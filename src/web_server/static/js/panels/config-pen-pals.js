@@ -4,24 +4,6 @@ import {
   apiPut, showStatus,
 } from "../config-helpers.js";
 
-const DOW_OPTIONS = [
-  { value: "-1", label: "Disabled" },
-  { value: "0",  label: "Monday" },
-  { value: "1",  label: "Tuesday" },
-  { value: "2",  label: "Wednesday" },
-  { value: "3",  label: "Thursday" },
-  { value: "4",  label: "Friday" },
-  { value: "5",  label: "Saturday" },
-  { value: "6",  label: "Sunday" },
-];
-
-function dowSelect(selected) {
-  const sel = String(selected ?? -1);
-  return DOW_OPTIONS.map(o =>
-    `<option value="${o.value}" ${sel === o.value ? "selected" : ""}>${o.label}</option>`
-  ).join("");
-}
-
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`;
 
@@ -70,19 +52,7 @@ export function mount(container) {
           <div class="field">
             <label>Log Channel</label>
             <select name="log_channel_id">${channelSelect(channels, pp.log_channel_id)}</select>
-            <div class="field-hint">Where auto-round summaries are posted. Optional.</div>
-          </div>
-
-          <div class="field">
-            <label>Auto-round Day</label>
-            <select name="auto_round_dow" data-dow>${dowSelect(pp.auto_round_dow)}</select>
-            <div class="field-hint">Day of the week to automatically drain the pool and pair everyone waiting.</div>
-          </div>
-
-          <div class="field" data-hour-field>
-            <label>Auto-round UTC Hour</label>
-            <input type="number" name="auto_round_hour" min="0" max="23" value="${pp.auto_round_hour ?? 12}" />
-            <div class="field-hint">UTC hour (0–23) the auto-round fires.</div>
+            <div class="field-hint">Where pairing confirmations are posted. Optional.</div>
           </div>
 
           <div class="field">
@@ -109,7 +79,7 @@ export function mount(container) {
           <div class="field">
             <label>Re-match Cooldown (days)</label>
             <input type="number" name="match_cooldown_days" min="0" step="1" value="${Math.round((pp.match_cooldown_seconds ?? 2592000) / 86400)}" />
-            <div class="field-hint">A member won't be auto-paired again until this long after their last pen pal.</div>
+            <div class="field-hint">A member won't be paired again until this long after their last pen pal started — set 0 to allow back-to-back chats. Nobody is ever in two chats at once regardless.</div>
           </div>
 
           <div class="field">
@@ -137,15 +107,6 @@ export function mount(container) {
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
-    const dowSel = form.querySelector("[data-dow]");
-    const hourField = form.querySelector("[data-hour-field]");
-
-    function syncHour() {
-      hourField.style.display = dowSel.value === "-1" ? "none" : "";
-    }
-    syncHour();
-    dowSel.addEventListener("change", syncHour);
-
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -156,8 +117,6 @@ export function mount(container) {
           opt_in_role_id:     fd.get("opt_in_role_id") || null,
           question_category:  fd.get("question_category"),
           log_channel_id:     fd.get("log_channel_id") || null,
-          auto_round_dow:     parseInt(fd.get("auto_round_dow")),
-          auto_round_hour:    parseInt(fd.get("auto_round_hour")) || 12,
           panel_channel_id:   fd.get("panel_channel_id") || null,
         });
         showStatus(status, true);

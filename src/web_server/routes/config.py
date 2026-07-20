@@ -663,8 +663,6 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "opt_in_role_id": None,
             "question_category": "sfw",
             "log_channel_id": None,
-            "auto_round_dow": -1,
-            "auto_round_hour": 12,
             "panel_channel_id": None,
             "pool_size": pool_size,
             "session_seconds": 86400,
@@ -679,8 +677,6 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "opt_in_role_id": str(cfg["opt_in_role_id"]) if cfg["opt_in_role_id"] else None,
         "question_category": cfg["question_category"] or "sfw",
         "log_channel_id": str(cfg["log_channel_id"]) if cfg["log_channel_id"] else None,
-        "auto_round_dow": int(cfg["auto_round_dow"]),
-        "auto_round_hour": int(cfg["auto_round_hour"]),
         "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
         "pool_size": pool_size,
         "session_seconds": int(cfg["session_seconds"]),
@@ -2816,8 +2812,6 @@ class PenPalsConfigUpdate(BaseModel):
     opt_in_role_id: str | None = None
     question_category: str = "sfw"
     log_channel_id: str | None = None
-    auto_round_dow: int = -1
-    auto_round_hour: int = 12
     panel_channel_id: str | None = None
 
 
@@ -2844,8 +2838,6 @@ async def update_pen_pals_config(
                 opt_in_role_id=int(body.opt_in_role_id) if body.opt_in_role_id else 0,
                 question_category=body.question_category,
                 log_channel_id=int(body.log_channel_id) if body.log_channel_id else 0,
-                auto_round_dow=body.auto_round_dow,
-                auto_round_hour=body.auto_round_hour,
                 panel_channel_id=new_channel_id,
             )
             return old_channel_id, old_message_id

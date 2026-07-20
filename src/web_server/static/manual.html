@@ -774,12 +774,12 @@
 
     
     <h2 id="pen-pals" class="section-break"><span class="section-num">8</span> Pen Pals</h2>
-    <p>Pen Pals quietly matches members into private one-on-one conversations. Members join a pool; when a pair is matched the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours).</p>
+    <p>Pen Pals quietly matches members into private one-on-one conversations. Joining matches you straight away if someone eligible is already waiting — otherwise you sit in the pool and are matched the moment the next person joins. Either way the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours). Nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/penpals join</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Join the Pen Pals pool. When you're matched the bot opens a private channel with your pen pal and drops a question to break the ice.</span>
+      <span class="cmd-desc">Get a pen pal. If someone's already waiting you're matched on the spot; if not you join the pool and are matched as soon as the next person does. Either way the bot opens a private channel with your pen pal and drops a question to break the ice.</span>
     </div>
 
     <div class="cmd-block">
@@ -815,7 +815,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/penpals round</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Pair up everyone currently waiting in the pool in one go.</span>
+      <span class="cmd-desc">Force a pool sweep now. The bot sweeps every pool automatically every few minutes, so this is only for when you don't want to wait.</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════

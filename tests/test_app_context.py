@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -332,3 +333,54 @@ async def test_setup_hook_handles_forbidden_during_debug_guild_sync(tmp_path):
         str(call.args[0]) for call in print_mock.call_args_list if call.args
     )
     assert "missing access" in printed_text.lower()
+
+
+async def test_setup_hook_starts_loops_registered_during_cog_load():
+    """Cogs append their loop factories from cog_load — those must still start.
+
+    Regression: the launch loop used to run *before* load_extension(), so every
+    cog-owned background loop (pen pals, jail expiry, birthdays…) was registered
+    into a list nobody ever read and silently never ran in production.
+    """
+    bot = Bot(intents=discord.Intents.none(), debug=False, guild_id=0)
+    bot.ctx = MagicMock()
+    started = asyncio.Event()
+
+    async def cog_loop() -> None:
+        started.set()
+
+    async def fake_load_extension(_name: str) -> None:
+        # Stand in for a cog's cog_load() registering its background loop.
+        bot.startup_task_factories.append(lambda: cog_loop())
+
+    bot.extension_names = ["fake_cog"]
+    with patch.object(bot, "load_extension", side_effect=fake_load_extension), patch(
+        "bot_modules.services.command_sync.sync_if_changed",
+        new=AsyncMock(return_value=([], False)),
+    ), patch("builtins.print"):
+        await bot.setup_hook()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await bot.close()
+
+    assert len(bot.startup_tasks) == 1
+
+
+async def test_setup_hook_starts_loops_registered_before_setup():
+    """Factories the entry point registers up front still start (no regression)."""
+    bot = Bot(intents=discord.Intents.none(), debug=False, guild_id=0)
+    bot.ctx = MagicMock()
+    started = asyncio.Event()
+
+    async def entrypoint_loop() -> None:
+        started.set()
+
+    bot.startup_task_factories.append(lambda: entrypoint_loop())
+    with patch(
+        "bot_modules.services.command_sync.sync_if_changed",
+        new=AsyncMock(return_value=([], False)),
+    ), patch("builtins.print"):
+        await bot.setup_hook()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await bot.close()
+
+    assert len(bot.startup_tasks) == 1

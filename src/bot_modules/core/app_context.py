@@ -152,6 +152,11 @@ class Bot(commands.Bot):
         for ext in self.extension_names:
             await self.load_extension(ext)
 
+        # Launch background loops *after* the extensions load: cogs register
+        # their own factories from cog_load(), so anything started earlier
+        # would silently skip every cog-owned loop.
+        self._start_background_tasks()
+
         if self.debug:
             if self.guild_id <= 0:
                 print(
@@ -237,6 +242,13 @@ class Bot(commands.Bot):
                 ", ".join(missing),
             )
 
+    def _start_background_tasks(self) -> None:
+        """Spawn every registered background loop under the restart supervisor.
+
+        Called once from ``setup_hook`` after the extensions are loaded, so it
+        sees both the factories the entry point registers up front and the ones
+        cogs append from their ``cog_load``.
+        """
         for factory in self.startup_task_factories:
             self.startup_tasks.append(asyncio.create_task(
                 self._resilient_task(factory)

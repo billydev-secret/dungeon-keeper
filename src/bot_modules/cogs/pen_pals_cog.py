@@ -6,7 +6,6 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -53,18 +52,16 @@ def _set_config(
     opt_in_role_id: int,
     question_category: str,
     log_channel_id: int,
-    auto_round_dow: int,
-    auto_round_hour: int,
     panel_channel_id: int,
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET enabled=?, category_id=?, opt_in_role_id=?, question_category=?,
-               log_channel_id=?, auto_round_dow=?, auto_round_hour=?, panel_channel_id=?
+               log_channel_id=?, panel_channel_id=?
            WHERE guild_id=?""",
         (int(enabled), category_id, opt_in_role_id, question_category,
-         log_channel_id, auto_round_dow, auto_round_hour, panel_channel_id, guild_id),
+         log_channel_id, panel_channel_id, guild_id),
     )
 
 
@@ -251,6 +248,49 @@ def _last_matched_at(conn, guild_id: int, user_id: int) -> float | None:
     return row[0] if row and row[0] is not None else None
 
 
+def _eligible_pool(conn, guild_id: int, now: float, cooldown_seconds: int) -> list[int]:
+    """Pool members who can be matched right now, oldest signup first.
+
+    Two rules, both hard: nobody already in an active session (one pen pal at a
+    time — a stale pool row must never hand someone a second channel), and
+    nobody inside the re-match cooldown. Ineligible members stay in the pool
+    untouched and become eligible on their own.
+    """
+    return [
+        r["user_id"]
+        for r in _get_pool(conn, guild_id)
+        if not _get_active_session(conn, guild_id, r["user_id"])
+        and (
+            (last := _last_matched_at(conn, guild_id, r["user_id"])) is None
+            or now - last >= cooldown_seconds
+        )
+    ]
+
+
+def _pick_partner(candidates: list[int], recent: set[int]) -> int | None:
+    """Best partner from *candidates* (FIFO): first non-recent, else the oldest.
+
+    Avoiding a repeat is a preference, not a gate — when the only person
+    waiting is a past partner, pairing them beats leaving both alone.
+    """
+    if not candidates:
+        return None
+    return next((u for u in candidates if u not in recent), candidates[0])
+
+
+def _find_instant_match(conn, guild_id: int, user_id: int) -> int | None:
+    """Partner for *user_id* to be paired with on the spot, or None to wait."""
+    cfg = _get_config(conn, guild_id)
+    cooldown = cfg["match_cooldown_seconds"] if cfg else _MATCH_COOLDOWN_SECS
+    now = time.time()
+    if _get_active_session(conn, guild_id, user_id):
+        return None
+    if (last := _last_matched_at(conn, guild_id, user_id)) is not None and now - last < cooldown:
+        return None
+    candidates = [u for u in _eligible_pool(conn, guild_id, now, cooldown) if u != user_id]
+    return _pick_partner(candidates, _recent_partners(conn, guild_id, user_id))
+
+
 def _cfg_allows_nsfw(cfg) -> bool:
     """True when the guild's configured question pool includes NSFW prompts."""
     return cfg is not None and (cfg["question_category"] or "sfw") == "all"
@@ -294,7 +334,8 @@ def _draw_from_bank(conn, allow_nsfw: bool, exclude: list[str]) -> str | None:
     return text
 
 
-def _update_last_auto_round(conn, guild_id: int) -> None:
+def _update_last_sweep(conn, guild_id: int) -> None:
+    """Stamp when the pool was last drained (column kept from the old auto-round)."""
     conn.execute(
         "UPDATE pen_pals_config SET last_auto_round_at = ? WHERE guild_id = ?",
         (time.time(), guild_id),
@@ -526,24 +567,19 @@ async def _do_pair(
 async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[int, int]:
     """Drain the pool for a guild. Returns (pairs_made, still_waiting).
 
-    Only members who haven't had a pen pal in the last month are eligible;
-    anyone still inside that cooldown is left untouched in the pool. Users
-    whose pairing fails likewise stay in the DB pool. ``still_waiting`` is the
-    pool size once the round settles, so it counts cooled-down members, the
-    odd one out, and any failed pairs alike.
+    Pairing normally happens the moment someone joins (see ``_handle_join``);
+    this is the sweeper for whoever is left over — the odd one out, members who
+    were on cooldown when they joined, and anyone a failed pairing put back.
+    Ineligible members are left untouched in the pool. ``still_waiting`` is the
+    pool size once the round settles, so it counts cooled-down members, the odd
+    one out, and any failed pairs alike.
     """
     def _load_eligible_and_stamp():
         with open_db(db_path) as conn:
-            now = time.time()
             cfg = _get_config(conn, guild_id)
             match_cooldown_seconds = cfg["match_cooldown_seconds"] if cfg else _MATCH_COOLDOWN_SECS
-            eligible = [
-                r["user_id"]
-                for r in _get_pool(conn, guild_id)
-                if (last := _last_matched_at(conn, guild_id, r["user_id"])) is None
-                or now - last >= match_cooldown_seconds
-            ]
-            _update_last_auto_round(conn, guild_id)
+            eligible = _eligible_pool(conn, guild_id, time.time(), match_cooldown_seconds)
+            _update_last_sweep(conn, guild_id)
             return eligible
 
     remaining = await asyncio.to_thread(_load_eligible_and_stamp)
@@ -556,8 +592,8 @@ async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[
             with open_db(db_path) as conn:
                 return _recent_partners(conn, guild_id, uid)
 
-        recent = await asyncio.to_thread(_recent)
-        partner = next((u for u in remaining if u not in recent), remaining[0])
+        partner = _pick_partner(remaining, await asyncio.to_thread(_recent))
+        assert partner is not None  # remaining had ≥2 entries before the pop
         remaining.remove(partner)
 
         if await _do_pair(bot, db_path, guild_id, u1, partner):
@@ -593,7 +629,7 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                 for gid in guild_ids
             }
             auto_cfgs = conn.execute(
-                "SELECT * FROM pen_pals_config WHERE enabled = 1 AND auto_round_dow >= 0"
+                "SELECT * FROM pen_pals_config WHERE enabled = 1"
             ).fetchall()
             return sessions, configs, list(auto_cfgs)
 
@@ -681,17 +717,22 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _advance_next_question(conn, sid, nq + _Q_INTERVAL)
             await asyncio.to_thread(_save_q)
 
-    # Auto-round
-    now_utc = datetime.now(timezone.utc)
-    current_dow = now_utc.weekday()
-    current_hour = now_utc.hour
+    # Pool sweep. Joining pairs on the spot, so a backlog only forms when
+    # someone was ineligible at join time (on cooldown, mid-session) and became
+    # eligible later. Sweeping every tick means those pairs go out within
+    # minutes of becoming possible instead of waiting for a scheduled round.
     for cfg in auto_cfgs:
-        if cfg["auto_round_dow"] != current_dow or cfg["auto_round_hour"] != current_hour:
+        guild_id = cfg["guild_id"]
+
+        def _pending(gid: int = guild_id, c=cfg) -> int:
+            with open_db(db_path) as conn:
+                cooldown = c["match_cooldown_seconds"]
+                return len(_eligible_pool(conn, gid, time.time(), cooldown))
+
+        if await asyncio.to_thread(_pending) < 2:
             continue
-        if now - (cfg["last_auto_round_at"] or 0) < 3600:
-            continue
-        pairs, left = await _do_round(bot, db_path, cfg["guild_id"])
-        log.info("pen_pals: auto-round guild %d — %d pairs, %d left over", cfg["guild_id"], pairs, left)
+        pairs, left = await _do_round(bot, db_path, guild_id)
+        log.info("pen_pals: swept guild %d — %d pairs, %d left over", guild_id, pairs, left)
 
 
 # ── Signup panel ──────────────────────────────────────────────────────────────
@@ -706,8 +747,9 @@ def _build_panel_embed(
         title="🖊️ Pen Pals",
         description=(
             "Get matched 1-on-1 with another server member for 24 hours.\n"
-            "A private channel opens for just the two of you, "
-            "with a conversation starter already waiting."
+            "If someone's already waiting you're matched on the spot — "
+            "a private channel opens for just the two of you, "
+            "with a conversation starter already in it."
         ),
         color=color,
     )
@@ -827,16 +869,18 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
             )
             return
 
-    def _check() -> str:
+    def _check() -> tuple[str, int | None]:
         with open_db(db_path) as conn:
             if _get_active_session(conn, guild_id, user_id):
-                return "active"
+                return "active", None
             if _in_pool(conn, guild_id, user_id):
-                return "in_pool"
+                return "in_pool", None
             _add_to_pool(conn, guild_id, user_id)
-            return "queued"
+            # Joining pairs immediately when someone eligible is already
+            # waiting; the pool is only for when nobody is.
+            return "queued", _find_instant_match(conn, guild_id, user_id)
 
-    status = await asyncio.to_thread(_check)
+    status, partner_id = await asyncio.to_thread(_check)
 
     if status == "active":
         await interaction.response.send_message(
@@ -849,10 +893,37 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
         )
         return
 
-    await interaction.response.send_message(
-        "✅ You're in the pool! You'll get a private channel the next time matches are drawn.",
-        ephemeral=True,
-    )
+    if partner_id is None:
+        await interaction.response.send_message(
+            "✅ You're in the pool! The moment someone else joins, "
+            "your private channel opens automatically.",
+            ephemeral=True,
+        )
+        await _refresh_panel(interaction.client, db_path, guild_id)
+        return
+
+    # Channel creation is several round-trips — defer so the token survives.
+    await interaction.response.defer(ephemeral=True)
+    paired = await _do_pair(interaction.client, db_path, guild_id, user_id, partner_id)
+    if paired:
+        def _channel_of():
+            with open_db(db_path) as conn:
+                row = _get_active_session(conn, guild_id, user_id)
+                return row["channel_id"] if row else None
+
+        channel_id = await asyncio.to_thread(_channel_of)
+        where = f"<#{channel_id}>" if channel_id else "your new pen pal channel"
+        await interaction.followup.send(
+            f"🖊️ Matched! Say hi to <@{partner_id}> in {where}.", ephemeral=True
+        )
+    else:
+        # Pairing fell through (permissions, a lost race, member left) — the
+        # joiner stays pooled for the sweeper rather than losing their spot.
+        await interaction.followup.send(
+            "✅ You're in the pool! The moment someone else joins, "
+            "your private channel opens automatically.",
+            ephemeral=True,
+        )
     await _refresh_panel(interaction.client, db_path, guild_id)
 
 
@@ -1080,7 +1151,7 @@ class PenPalsCog(commands.Cog):
 
     # ── /penpals join ─────────────────────────────────────────────────
 
-    @penpals.command(name="join", description="Join the Pen Pals pool to be matched in the next round.")
+    @penpals.command(name="join", description="Get matched with a pen pal now, or wait for the next person to join.")
     async def penpals_join(self, interaction: discord.Interaction) -> None:
         await _handle_join(interaction, self.ctx.db_path)
 
@@ -1134,7 +1205,9 @@ class PenPalsCog(commands.Cog):
         elif status == "pool":
             pos = data
             await interaction.response.send_message(
-                f"You're in the pool at position **#{pos}**. Hang tight!", ephemeral=True
+                f"You're in the pool at position **#{pos}** — you'll be matched "
+                "as soon as someone eligible joins.",
+                ephemeral=True,
             )
         else:
             await interaction.response.send_message(
