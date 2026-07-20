@@ -211,7 +211,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Content & Engagement**
 - `/whisper send @user <message>` — Send an anonymous whisper (recipient gets three guesses); also `optin`, `optout`, `sent`, `forget-me`
-- `/penpals join` / `/penpals leave` — Enter or exit the Pen Pals pool; also `status`, `new-question`, `end`, plus mod `pair <user1> <user2>` and `round`
+- `/penpals join` / `/penpals leave` — Get a pen pal (matched on the spot if someone's waiting) or exit the pool; also `status`, `new-question`, `end`, plus mod `pair <user1> <user2>` and `round`
 - `/bio` — Create or update your profile bio (wizard)
 - `/risky start` — Open a Risky Rolls round in this channel
 - `/guess submit` — Submit an image to start a Guess round; also `optin`, `confess`, `leaderboard`, `prompt`, `round` (mod), `delete`
