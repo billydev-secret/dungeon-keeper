@@ -11,17 +11,23 @@ invocation and a tar pipe, so there is no rsync dependency (rsync is not
 present on native Windows) and no assumption about the remote shell beyond
 `cd X && Y`, which cmd.exe, PowerShell, and bash all accept.
 
-Configuration is entirely environment-driven; absent `REMOTE_TEST_HOST`, this
-module is inert.
+Configuration comes from the process environment, falling back to the
+checkout's `.env` (which gate.py does not otherwise load). Absent
+`REMOTE_TEST_HOST`, this module is inert.
 
     REMOTE_TEST_HOST      user@host of the test runner. Unset ⇒ always local.
     REMOTE_TEST_DIR       Path to the repo checkout on that host.
     REMOTE_TEST_PYTHON    Python to run there (e.g. .venv/Scripts/python.exe).
     REMOTE_TEST_JOBS      xdist workers (default 12 — leaves a desktop usable).
+    REMOTE_TEST_LOCK      Lock file the remote installs from, when it needs its
+                          own (default requirements-dev.lock).
     REMOTE_TEST_CD        Override the `cd` template if the remote shell needs
                           it (e.g. "cd /d {dir} && {cmd}" for a cmd.exe remote
                           on a different drive letter).
     GATE_NO_REMOTE=1      Force local for one run.
+
+The real environment takes precedence over `.env`, so a one-off
+`GATE_NO_REMOTE=1 git commit ...` works without editing the file.
 
 The remote needs only a git clone — the suite reads no .env, no database, and
 no model files, so nothing secret is ever synced.
@@ -64,6 +70,11 @@ _UNSAFE = set(' \t\n"\'\\|&;<>()$`')
 DEFAULT_JOBS = 12
 DEFAULT_CD = "cd {dir} && {cmd}"
 
+# Which compiled pins the remote installs from. Overridable because a host may
+# need its own: the Windows runner requires onnxruntime 1.27, while the Linux
+# lock pins 1.26 (no cp314 Windows wheel for it).
+DEFAULT_LOCK = "requirements-dev.lock"
+
 
 @dataclass(frozen=True)
 class RemoteConfig:
@@ -72,6 +83,78 @@ class RemoteConfig:
     python: str
     jobs: int = DEFAULT_JOBS
     cd_template: str = DEFAULT_CD
+    lock: str = DEFAULT_LOCK
+
+
+def env_path(root: Path = ROOT) -> Path | None:
+    """Locate the .env holding this config, or None.
+
+    Prefers the current checkout. Project convention is to do edits in a git
+    worktree, and worktrees have no .env of their own — so fall back to the
+    main checkout, found via `git rev-parse --git-common-dir`. Without this,
+    dispatch would silently never fire for the majority of commits.
+    """
+    local = root / ".env"
+    if local.exists():
+        return local
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=root, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+
+    # --git-common-dir points at the main checkout's .git; its parent is the
+    # working tree that owns the .env.
+    candidate = (root / result.stdout.strip()).resolve().parent / ".env"
+    return candidate if candidate.exists() else None
+
+
+def env_file_values(root: Path = ROOT) -> dict[str, str]:
+    """Read REMOTE_TEST_* / GATE_NO_REMOTE settings out of the checkout's .env.
+
+    gate.py runs from a plain shell — often the pre-commit hook's, under a bare
+    system Python — so it never sees the bot's dotenv-loaded config. Parsing the
+    file directly (same approach as scripts/post_testing_docs.py) keeps this
+    config beside every other setting instead of in a shell profile, and .env is
+    gitignored so host-specific paths never reach the repo.
+
+    Deliberately no python-dotenv import: it may not exist in the interpreter
+    running the hook.
+    """
+    path = env_path(root)
+    if path is None:
+        return {}
+
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, raw = line.partition("=")
+        key = key.strip()
+        if not (key.startswith("REMOTE_TEST_") or key == "GATE_NO_REMOTE"):
+            continue
+
+        # A quoted value keeps everything inside the quotes (a '#' there is
+        # data); an unquoted one is truncated at an inline comment.
+        value = raw.strip()
+        if value[:1] in ("'", '"'):
+            closing = value.find(value[0], 1)
+            value = value[1:closing] if closing > 0 else value[1:]
+        else:
+            value = value.split("#")[0]
+        values[key] = value.strip()
+    return values
 
 
 class UnsafeArgument(ValueError):
@@ -86,7 +169,10 @@ def load_config(env: Mapping[str, str] | None = None) -> RemoteConfig | None:
     misconfiguration and raises, because silently running locally there would
     hide the fact that dispatch never happened.
     """
-    env = os.environ if env is None else env
+    # Real environment wins over .env, so `GATE_NO_REMOTE=1 git commit ...`
+    # still forces a local run without editing the file.
+    if env is None:
+        env = {**env_file_values(), **os.environ}
 
     if env.get("GATE_NO_REMOTE", "").strip() in ("1", "true", "yes"):
         return None
@@ -117,6 +203,7 @@ def load_config(env: Mapping[str, str] | None = None) -> RemoteConfig | None:
         python=python,
         jobs=jobs,
         cd_template=env.get("REMOTE_TEST_CD", "").strip() or DEFAULT_CD,
+        lock=env.get("REMOTE_TEST_LOCK", "").strip() or DEFAULT_LOCK,
     )
 
 
@@ -168,9 +255,10 @@ def pytest_command(cfg: RemoteConfig, args: Sequence[str]) -> list[str]:
     by check_args.
     """
     check_args(args)
+    check_args([cfg.lock])
     inner = (
-        f"{cfg.python} scripts/remote_test.py --bootstrap -n {cfg.jobs} "
-        + " ".join(args)
+        f"{cfg.python} scripts/remote_test.py --bootstrap --lock {cfg.lock} "
+        f"-n {cfg.jobs} " + " ".join(args)
     )
     return remote_command(cfg, inner.strip())
 
@@ -204,14 +292,18 @@ def needs_install(root: Path, expected: str) -> bool:
     return read_stamp(root) != expected
 
 
-def install_deps(python: str, root: Path) -> int:
+def install_deps(python: str, root: Path, lock: str = DEFAULT_LOCK) -> int:
     return subprocess.run(
-        [python, "-m", "pip", "install", "-r", "requirements-dev.lock"],
-        cwd=root,
+        [python, "-m", "pip", "install", "-r", lock], cwd=root
     ).returncode
 
 
-def bootstrap(args: Sequence[str], root: Path | None = None, python: str | None = None) -> int:
+def bootstrap(
+    args: Sequence[str],
+    root: Path | None = None,
+    python: str | None = None,
+    lock: str = DEFAULT_LOCK,
+) -> int:
     """Entry point executed **on the remote**: sync deps, then run pytest.
 
     Returns BOOTSTRAP_FAILED if the venv could not be brought up to date, so
@@ -224,7 +316,7 @@ def bootstrap(args: Sequence[str], root: Path | None = None, python: str | None 
     expected = lock_hash(root)
     if needs_install(root, expected):
         print("remote-test: dependency lock changed — reinstalling remote venv", flush=True)
-        if install_deps(python, root) != 0:
+        if install_deps(python, root, lock) != 0:
             print("remote-test: remote pip install failed", file=sys.stderr, flush=True)
             return BOOTSTRAP_FAILED
         write_stamp(root, expected)
@@ -304,6 +396,10 @@ def run(args: Sequence[str], env: Mapping[str, str] | None = None) -> int | None
 if __name__ == "__main__":
     # Only ever invoked on the remote, by pytest_command() above.
     if len(sys.argv) > 1 and sys.argv[1] == "--bootstrap":
-        sys.exit(bootstrap(sys.argv[2:]))
+        rest = sys.argv[2:]
+        lock = DEFAULT_LOCK
+        if len(rest) >= 2 and rest[0] == "--lock":
+            lock, rest = rest[1], rest[2:]
+        sys.exit(bootstrap(rest, lock=lock))
     print(__doc__)
     sys.exit(0)

@@ -175,7 +175,7 @@ def test_cards_module_imports_stdlib_only():
 
     import bot_modules.qa.cards as cards
 
-    tree = ast.parse(Path(cards.__file__).read_text())
+    tree = ast.parse(Path(cards.__file__).read_text(encoding="utf-8"))
     roots = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

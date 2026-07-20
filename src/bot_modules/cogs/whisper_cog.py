@@ -1,4 +1,4 @@
-﻿"""Whisper cog — anonymous-message guessing game (Whisper clone)."""
+"""Whisper cog — anonymous-message guessing game (Whisper clone)."""
 from __future__ import annotations
 
 import asyncio
