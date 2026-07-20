@@ -19,15 +19,18 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 # Run tests in parallel via pytest-xdist. Pass ``-n 0`` to disable for
 # debugging a single test (the last -n on the command line wins).
-# ``-m "not mobile"`` keeps the browser suite out of the default/full run; a
-# command-line ``-m mobile`` (gate --quick, nightly) overrides it (last wins).
-addopts = "-n auto -m 'not mobile'"
+# ``-m "not browser"`` keeps every Playwright suite out of the default/full run;
+# a command-line ``-m browser`` (gate --quick, nightly) overrides it (last wins).
+addopts = "-n auto -m 'not browser'"
 markers = [
-    # Real-browser dashboard layout checks (Playwright). Opt-in: excluded from
-    # the default run so the functional suite needs no browser. gate.py --quick
-    # runs them scoped to edited panels; nightly runs the full sweep. Auto-skips
-    # where Playwright or Chromium isn't installed.
-    "mobile: browser-driven responsive-layout checks (needs Playwright + Chromium)",
+    # Umbrella for every real-browser (Playwright) dashboard check. Opt-in:
+    # excluded from the default run so the functional suite needs no browser.
+    # gate.py runs these scoped to edited panels; nightly runs them fully. Each
+    # module auto-skips where Playwright / Chromium isn't installed.
+    "browser: real-browser dashboard checks (needs Playwright + Chromium)",
+    # Sub-tag on the layout suite so `-m mobile` can run just it. Every mobile
+    # test is also a browser test.
+    "mobile: responsive-layout subset of the browser suite",
 ]
 # Each test gets a fresh SQLite db under the tmp dir; the full suite writes
 # ~1-2 GB per run. Default retention keeps 3 whole sessions, so /tmp/pytest-of-ben

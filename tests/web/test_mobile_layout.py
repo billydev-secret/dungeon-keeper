@@ -14,14 +14,15 @@ Both signals, and the in-page audit script, are shared with
 disagree. The scanner is the tool for *measuring* noise across all panels; this
 file is the tool for *failing the build* when it regresses.
 
-Opt-in via the ``mobile`` marker (excluded from the default run in
-pyproject.toml). Auto-skips where Playwright or Chromium isn't installed, so the
-ordinary functional suite — and CI without a browser — is unaffected.
+Opt-in via the ``browser`` marker (excluded from the default run in
+pyproject.toml); also tagged ``mobile`` so `-m mobile` runs just this suite.
+Auto-skips where Playwright or Chromium isn't installed, so the ordinary
+functional suite — and CI without a browser — is unaffected.
 
 Scope:
-  * ``MOBILE_PANELS`` (comma-separated ids) limits the sweep — gate.py --quick
+  * ``PANEL_SCOPE`` (comma-separated ids) limits the sweep — gate.py --quick
     sets it to just the panels whose assets changed. Unset ⇒ every panel.
-  * ``MOBILE_VIEWPORTS`` (comma-separated of phone|tablet|desktop) limits widths.
+  * ``PANEL_VIEWPORTS`` (comma-separated of phone|tablet|desktop) limits widths.
     Unset ⇒ all three.
 """
 
@@ -35,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.mobile
+pytestmark = [pytest.mark.browser, pytest.mark.mobile]
 
 # ── availability guard — skip the whole module if the browser stack is absent ──
 
@@ -125,7 +126,7 @@ def browser(dashboard) -> Iterator[object]:
 # ── which panels / viewports ───────────────────────────────────────────────────
 
 def _selected_viewports() -> list[str]:
-    raw = os.environ.get("MOBILE_VIEWPORTS", "").strip()
+    raw = os.environ.get("PANEL_VIEWPORTS", "").strip()
     if not raw:
         return list(VIEWPORTS)
     picked = [v.strip() for v in raw.split(",") if v.strip() in VIEWPORTS]
@@ -138,7 +139,7 @@ def _panel_ids(browser, base: str) -> list[str]:
         ids = enumerate_panels(page, base)
     finally:
         page.close()
-    scope = os.environ.get("MOBILE_PANELS", "").strip()
+    scope = os.environ.get("PANEL_SCOPE", "").strip()
     if scope:
         wanted = {p.strip() for p in scope.split(",") if p.strip()}
         ids = [i for i in ids if i in wanted]

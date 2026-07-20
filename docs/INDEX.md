@@ -42,6 +42,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
 | [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
+| [web_testing.md](web_testing.md) | Dashboard test suite overview: authz sweep, snowflake-precision sweep, manual broken-link check, plus the browser suite (layout + panel-load health); marker/tiers/where-each-runs |
 | [mobile_layout_testing.md](mobile_layout_testing.md) | Browser-driven responsive-layout gate: overflow/clip checks across every panel at phone/tablet/desktop; scoped per-commit, full nightly |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
