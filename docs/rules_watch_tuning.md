@@ -738,6 +738,53 @@ context ≈ **0.61**, against 0.52 for the current 3B. Model choice bought ~+0.0
 prompt tuning bought ~+0.03. Real, but still far short of alert-grade on its own —
 §12's conclusion is unchanged.
 
+### 12.2 A feature classifier beats the 4060 LLM and ties the best one
+
+`scripts/rules_watch_features.py` extracts relational + lexical features per case
+(strictly pre-timestamp, no lookahead) and scores them on the **same 57 cases**,
+leave-one-out cross-validated. numpy-only logistic regression; there is no sklearn
+in this environment.
+
+| approach | BalAcc | TPR | TNR | cost |
+|---|---|---|---|---|
+| hand-set rule (my thresholds, no training) | 0.51 | 0.03 | 1.00 | free |
+| **logreg, 2 features** (`recip`, `days_known`) | **0.65** | 0.95 | 0.35 | **SQL, instant** |
+| logreg, 3 features | 0.61 | 0.92 | 0.30 | |
+| logreg, 10 features | 0.61 | 0.92 | 0.30 | (overfits) |
+| Nemo-12B Q4_K_M (best LLM anywhere) | 0.66 | | | 7.5 GB, no 4060 |
+| Nemo-12B IQ4_XS (best on a 4060) | 0.61 | | | 6.7 GB GPU |
+| Llama-3.2-3B (production today) | 0.52 | | | |
+
+**Two numbers match a 12B model.** Pair reciprocity and days-known tie the best LLM
+measured, beat everything a 4060 can host, and cost nothing.
+
+The learned weights recover the rapport curve without being told about it:
+`days_known` dominates at **−0.92** standardised (fewer days known → more likely a
+violation), ahead of `rate_24h` −0.41, `endearment` +0.32, `anatomy` +0.19. That is
+the owner's own "ahead of the rapport curve" as the top coefficient.
+
+Three caveats, all load-bearing:
+
+1. **Hand-set thresholds scored 0.51** — barely chance, TPR 0.03. Fitting beat my
+   inspection-tuned rule by 0.14. **Do not hard-code thresholds by eye**; fit them,
+   even on tiny data.
+2. **n=57, LOO CV, ~±0.07 CI.** 0.65 vs 0.66 is not a ranking. Fewer features scored
+   better, which is the expected overfitting signature at this sample size.
+3. **Both approaches over-flag at the message level** (classifier TNR 0.35). The
+   classifier's natural unit is the **user-week aggregate** where the §11 card lives,
+   and where it should pull ahead — but there are no labels at that granularity yet,
+   so this is untested.
+
+**Why prefer the classifier anyway**, given it only ties: it is free, instant,
+deterministic, and explainable. A card that says *"53 comments to 15 people, median
+6 days known"* can be sanity-checked before nudging a real member; an LLM verdict
+cannot. Under the §11 goal — where a wrong nudge costs a relationship — that
+auditability is worth more than a 0.01 score difference.
+
+**Not applicable: OpenClaw.** Checked, since it came up — it is a stateful Node.js
+*agent harness* (per-instance workspaces, tool deny-lists), not a classifier. No
+text-classification component; nothing to use here.
+
 **Conclusion.** The LLM cannot perform detection. It *can* rank and suppress:
 Nemo at `neutral+*` reaches TNR 0.90–0.95, and Qwen `neutral+full` TNR 0.85. So the
 supported architecture is deterministic detection (§7.6–7.8) with the LLM as a
