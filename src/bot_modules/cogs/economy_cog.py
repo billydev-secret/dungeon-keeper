@@ -94,6 +94,7 @@ from bot_modules.services.economy_rentals_service import (
     upsert_personal_role,
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
+from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -2458,11 +2459,40 @@ class EconomyCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
-        """Cancel a leaver's rentals and re-project every affected role."""
+        """Cancel a leaver's rentals, refund live wagers, re-project roles."""
         guild = member.guild
         settings = await asyncio.to_thread(self._load_settings, guild.id)
         if not settings.enabled:
             return
+
+        # Escrowed game stakes come back: the plan flagged a leaver's stake
+        # stranding forever (their id stays in the roster but they can never
+        # win). Refunding only their row leaves the rest of the pot intact
+        # for the players still in the game.
+        def _refund_wagers() -> int:
+            with self.ctx.open_db() as conn:
+                total = 0
+                for row in wager_svc.live_stakes_for_member(
+                    conn, guild.id, member.id
+                ):
+                    total += wager_svc.refund_player(
+                        conn, str(row["game_type"]), int(row["game_id"]),
+                        member.id,
+                    )
+                return total
+
+        try:
+            refunded = await asyncio.to_thread(_refund_wagers)
+            if refunded:
+                log.info(
+                    "econ: refunded %d staked to leaver %s in %s",
+                    refunded, member.id, guild.id,
+                )
+        except Exception:
+            log.exception(
+                "econ: wager refund failed for leaver %s in %s",
+                member.id, guild.id,
+            )
 
         def _cancel() -> list:
             with self.ctx.open_db() as conn:

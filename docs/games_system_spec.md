@@ -109,6 +109,19 @@ AMA carries a per-question lifecycle (pending → answered / passed / rejected /
 
 Every game's Close/End path opens a confirm popup ("Are you sure you want to end this game?" → Yes/No). On confirm: the view disables, the game's final payload is copied into the history archive, and the live-game row is freed. `/games end` (host or mod) and `/games config game-end` (mod only) both run this teardown; AMA runs its extra view/message cleanup first so nothing is orphaned. A 24-hour sweep runs the same path for orphans.
 
+## Coin wagers (duel + group games)
+
+All six duel/group games (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
+Group, Chicken, Musical Chairs) accept an optional `wager:` amount on their
+challenge/start command: equal ante from every player, winner takes the pot,
+**no rake**. Escrow lives in `econ_game_wagers` (economy side, migration 094)
+and settles through the shared terminal-state seam — see
+`docs/economy_spec.md` §6 and `docs/plans/economy-sinks-round-2.md` stage 4b.
+The rule that inverts this module's usual one: `pay_game_rewards` swallows
+every error because economy must never block game flow, but an escrow
+**debit** raises and refuses the join/accept — you cannot enter a wagered
+game you can't pay for.
+
 ## Economy integration
 
 Games are wired into the economy quest system. Quest-relevant actions call `fire_member_trigger` (`bot_modules.economy.game_rewards`) to credit a member's economy quest progress — for example AMA credits an `ama_ask` trigger when a question actually becomes visible (on submit in unfiltered mode, on host approval in screened mode; AI-seeded idle questions and rejected questions never pay). Photo Challenge payout is reaction-gated by the economy directly (`EconomyCog._on_photo_react`): a member's image post in the configured photo channel pays the `photo_react` quest once it earns enough distinct reactions — the card itself just sets the prompt. Several other game cogs (`ffa`, `clapback`, `mlt`, `price`, `rushmore`, `traditional`, `nhie`, `wyr`) import the same game-rewards path. Credit is best-effort: an economy failure never unwinds a game.

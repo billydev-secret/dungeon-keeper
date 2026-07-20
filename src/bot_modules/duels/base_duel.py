@@ -40,8 +40,14 @@ class BaseDuel(BaseGame):
         interaction: discord.Interaction,
         target: discord.Member,
         stakes_text: str | None,
+        wager: int | None = None,
     ) -> None:
-        """Run all pre-game checks and create a challenge embed. Called by subclass command."""
+        """Run all pre-game checks and create a challenge embed. Called by subclass command.
+
+        ``wager`` makes it a coin duel: the amount is *declared* now but no
+        money moves until the target accepts, so a decline or a timeout costs
+        nothing. Both antes are taken at accept, and the winner takes the pot.
+        """
         if not interaction.guild:
             await interaction.response.send_message(
                 "This command only works in a server.", ephemeral=True
@@ -112,6 +118,12 @@ class BaseDuel(BaseGame):
                 return
             stakes_text = stakes_result.value or None
 
+        if wager is not None:
+            err = await self._wager_precheck(guild.id, challenger.id, wager)
+            if err:
+                await interaction.response.send_message(err, ephemeral=True)
+                return
+
         game_id = await self._db_create_game(
             guild_id=guild.id,
             channel_id=interaction.channel_id,  # type: ignore[arg-type]
@@ -121,8 +133,13 @@ class BaseDuel(BaseGame):
         )
         self._record_challenge(challenger.id)
 
+        if wager is not None:
+            await self._declare_wager(guild.id, game_id, challenger.id, wager)
+
         accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
-        embed = self._build_challenge_embed(challenger, target, stakes_text, accent)  # type: ignore[arg-type]
+        embed = self._build_challenge_embed(
+            challenger, target, stakes_text, accent, wager=wager,  # type: ignore[arg-type]
+        )
         view = ChallengeView(
             game_id=game_id,
             target_id=target.id,
@@ -141,6 +158,8 @@ class BaseDuel(BaseGame):
         target: discord.Member,
         stakes: str | None,
         color: "discord.Color | None" = None,
+        *,
+        wager: int | None = None,
     ) -> discord.Embed:
         if color is None:
             color = discord.Color(COLOR_GOLD)
@@ -155,6 +174,15 @@ class BaseDuel(BaseGame):
             inline=False,
         )
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
+        if wager:
+            embed.add_field(
+                name="💰 Wager",
+                value=(
+                    f"**{wager:,}** each — winner takes **{wager * 2:,}**.\n"
+                    "_Nothing is charged unless the challenge is accepted._"
+                ),
+                inline=False,
+            )
         embed.set_footer(text="⏱️ 60 seconds to respond.")
         return embed
 
@@ -167,6 +195,34 @@ class BaseDuel(BaseGame):
                 "This challenge is no longer active.", ephemeral=True
             )
             return
+
+        ante = await self._game_ante(game_id)
+        if ante > 0:
+            # Both antes land at accept — no money moves while a challenge is
+            # merely pending, so a decline or a timeout needs no refund. If
+            # either side can't cover it now, the challenge is called off
+            # rather than started half-funded.
+            for uid, who in (
+                (game.target_id, "you"),
+                (game.challenger_id, "the challenger"),
+            ):
+                err = await self._take_stake(game.guild_id, game_id, uid, ante)
+                if err is None:
+                    continue
+                await self._db_set_state(game_id, "DECLINED")  # refunds + drops
+                note = err if who == "you" else (
+                    f"The challenger can no longer cover the {ante:,} wager — "
+                    "challenge called off."
+                )
+                await interaction.response.edit_message(
+                    embed=discord.Embed(
+                        title="❌ Challenge Called Off",
+                        description=note,
+                        color=COLOR_YELLOW,
+                    ),
+                    view=None,
+                )
+                return
 
         await self._db_set_state(game_id, "ACTIVE")
         await self.on_game_start(game)

@@ -379,11 +379,17 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     # ── Slash commands ────────────────────────────────────────────────────────
 
     @musicalchairs.command(name="start", description="Open a Musical Chairs lobby")
-    @app_commands.describe(stakes="Optional custom stakes text (max 200 chars)")
+    @app_commands.describe(
+        stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — every player antes this; winner takes the pot",
+    )
     async def mc_start(
-        self, interaction: discord.Interaction, stakes: str | None = None
+        self,
+        interaction: discord.Interaction,
+        stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        await self._base_lobby(interaction, stakes)
+        await self._base_lobby(interaction, stakes, wager)
 
 async def setup(bot: Bot) -> None:
     cog = MusicalChairsCog(bot)

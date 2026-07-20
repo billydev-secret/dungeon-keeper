@@ -25,6 +25,8 @@ import discord
 from discord.ext import commands, tasks
 
 from bot_modules.economy.game_rewards import pay_game_rewards
+from bot_modules.services import economy_wager_service as wager_svc
+from bot_modules.services.economy_service import get_balance, load_econ_settings
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
@@ -40,14 +42,18 @@ _RATE_LIMIT_MAX = 3
 
 # The states a game can end in. Every one of them must pass through
 # _db_set_state so _on_terminal_state observes it — that guarantee is what
-# stage 4b's wager escrow will settle/refund on. NICKED / NO_NICK_SET are
-# post-terminal cosmetic follow-ups to RESOLVED, not game ends; DECLINED
-# only needs adding if stakes are ever debited before a challenge is
-# accepted.
+# the wager escrow (stage 4b) settles and refunds on. NICKED / NO_NICK_SET
+# are post-terminal cosmetic follow-ups to RESOLVED, not game ends.
+# DECLINED joined the set with wagers: no money moves before an accept, but
+# the challenger's *declared* ante row has to be cleaned up.
 _TERMINAL_STATES = frozenset({
     "RESOLVED", "RESOLVED_NO_NICK", "ABANDONED", "VOID",
-    "EXPIRED_PENDING", "EXPIRED_LOBBY",
+    "EXPIRED_PENDING", "EXPIRED_LOBBY", "DECLINED",
 })
+
+# Terminal states that pay the winner. Everything else refunds every stake —
+# the pot never evaporates and never pays a half-finished game.
+_SETTLING_STATES = frozenset({"RESOLVED", "RESOLVED_NO_NICK"})
 
 
 class BaseGame(commands.Cog):
@@ -526,7 +532,12 @@ class BaseGame(commands.Cog):
         )
 
     def _render_lobby(
-        self, game: Any, guild: discord.Guild, min_players: int, max_players: int
+        self,
+        game: Any,
+        guild: discord.Guild,
+        min_players: int,
+        max_players: int,
+        ante: int = 0,
     ) -> discord.Embed:
         names = []
         for uid in game.roster:
@@ -546,13 +557,33 @@ class BaseGame(commands.Cog):
         )
         stakes = game.stakes_text or "Last one standing wins; the final loser surrenders their nickname for 24h."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
+        if ante > 0:
+            embed.add_field(
+                name="💰 Wager",
+                value=(
+                    f"**{ante:,}** to join — pot is **{ante * len(game.roster):,}** "
+                    f"and grows with each player.\n"
+                    "_Leaving the lobby refunds you._"
+                ),
+                inline=False,
+            )
         embed.set_footer(text=f"Host: {host_name} • Need {min_players}+ players to start.")
         return embed
 
     async def _base_lobby(
-        self, interaction: discord.Interaction, stakes_text: str | None
+        self,
+        interaction: discord.Interaction,
+        stakes_text: str | None,
+        wager: int | None = None,
     ) -> None:
-        """Open a join lobby for an N-player game. Called by a subclass /start command."""
+        """Open a join lobby for an N-player game. Called by a subclass /start command.
+
+        ``wager`` opens a coin-wagered lobby: the host antes immediately (they
+        are in the roster from creation, and their stake is what records the
+        ante every joiner must match), each joiner pays on join, and the pot
+        goes to the winner. Leaving refunds; so does a cancelled, expired or
+        abandoned game.
+        """
         if not interaction.guild:
             await interaction.response.send_message(
                 "This command only works in a server.", ephemeral=True
@@ -611,6 +642,12 @@ class BaseGame(commands.Cog):
                 return
             stakes_text = stakes_result.value or None
 
+        if wager is not None:
+            err = await self._wager_precheck(guild.id, host.id, wager)
+            if err:
+                await interaction.response.send_message(err, ephemeral=True)
+                return
+
         min_players, max_players, _timeout = await self.get_lobby_params(guild.id)
         game_id = await self._db_create_lobby(
             guild_id=guild.id,
@@ -620,8 +657,19 @@ class BaseGame(commands.Cog):
         )
         self._record_challenge(host.id)
 
+        if wager is not None:
+            # The host's own ante both funds the pot and records the amount
+            # every joiner has to match (_game_ante reads it back).
+            err = await self._take_stake(guild.id, game_id, host.id, wager)
+            if err:
+                await self._db_set_state(game_id, "EXPIRED_LOBBY")
+                await interaction.response.send_message(err, ephemeral=True)
+                return
+
         game = await self._db_get_game(game_id)
-        embed = self._render_lobby(game, guild, min_players, max_players)
+        embed = self._render_lobby(
+            game, guild, min_players, max_players, wager or 0
+        )
         view = self._build_lobby_view(game_id, host.id)
         await interaction.response.send_message(embed=embed, view=view)
         msg = await interaction.original_response()
@@ -665,12 +713,23 @@ class BaseGame(commands.Cog):
                     )
                     return
 
+            # Wagered lobby: the ante is taken on JOIN, so a player knows
+            # immediately whether they're in and the host can never be
+            # blocked at start by someone else's empty wallet. A failed
+            # debit refuses the join outright.
+            ante = await self._game_ante(game_id)
+            if ante > 0:
+                err = await self._take_stake(game.guild_id, game_id, uid, ante)
+                if err:
+                    await interaction.response.send_message(err, ephemeral=True)
+                    return
+
             new_roster = list(game.roster) + [uid]
             await self._db_set_state(
                 game_id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time()
             )
             game.roster = new_roster
-            embed = self._render_lobby(game, guild, min_players, max_players)
+            embed = self._render_lobby(game, guild, min_players, max_players, ante)
             await interaction.response.edit_message(
                 embed=embed, view=self._build_lobby_view(game_id, game.host_id)
             )
@@ -695,12 +754,19 @@ class BaseGame(commands.Cog):
                 return
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
             min_players, max_players, _ = await self.get_lobby_params(game.guild_id)
+            refunded = await self._return_stake(game_id, uid)
             new_roster = [u for u in game.roster if u != uid]
             await self._db_set_state(
                 game_id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time()
             )
+            if refunded:
+                log.info(
+                    "%s: refunded %d to %d on lobby leave (game %d)",
+                    self.GAME_KEY, refunded, uid, game_id,
+                )
             game.roster = new_roster
-            embed = self._render_lobby(game, guild, min_players, max_players)
+            ante = await self._game_ante(game_id)
+            embed = self._render_lobby(game, guild, min_players, max_players, ante)
             await interaction.response.edit_message(
                 embed=embed, view=self._build_lobby_view(game_id, game.host_id)
             )
@@ -957,20 +1023,31 @@ class BaseGame(commands.Cog):
     async def _on_terminal_state(self, game_id: int, state: str) -> None:
         """Economy hook fired on every game end.
 
-        RESOLVED / RESOLVED_NO_NICK pay the participation/win faucet (winner
-        may legitimately be None — wipeouts pay participation only). The other
-        terminal states pay nothing today but still land here so stage 4b's
-        escrow can refund on them. Failures are swallowed — economy must never
-        block game flow. Stage 4b's escrow *debit* must NOT inherit that: a
-        failed debit has to block the game from starting.
+        Two independent jobs, in order:
+
+        1. **Wager escrow.** A settling state pays the whole pot to the
+           winner; every other terminal state refunds each stake. Both are
+           exactly-once (``settled_at`` predicates), because this hook can
+           fire more than once for one game — the 1-minute sweep, the resume
+           path and a normal resolution all reach it. A winner of None (a
+           Chicken wipeout, a degenerate Musical Chairs round) refunds rather
+           than paying nobody.
+        2. **The faucet.** RESOLVED / RESOLVED_NO_NICK pay
+           participation/win rewards as before.
+
+        Failures are swallowed — economy must never block game flow. The
+        escrow *debit* deliberately does NOT inherit that rule: a failed
+        debit raises and stops the game from starting (see
+        ``economy_wager_service``).
         """
         try:
-            if state not in ("RESOLVED", "RESOLVED_NO_NICK"):
-                return
             game = await self._db_get_game(game_id)
+            winner_id = getattr(game, "winner_id", None) if game else None
+            await self._resolve_wagers(game_id, state, winner_id)
+            if state not in _SETTLING_STATES:
+                return
             if game is None:
                 return
-            winner_id = getattr(game, "winner_id", None)
             await pay_game_rewards(
                 self.bot,
                 game.guild_id,
@@ -984,6 +1061,154 @@ class BaseGame(commands.Cog):
                 "%s terminal-state hook failed for game %s (%s)",
                 self.GAME_DISPLAY_NAME, game_id, state,
             )
+
+    async def _resolve_wagers(
+        self, game_id: int, state: str, winner_id: int | None
+    ) -> None:
+        """Settle or refund this game's escrow, then announce the outcome."""
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return
+
+        def _work() -> tuple[int, dict[int, int], int]:
+            with ctx.open_db() as conn:
+                if wager_svc.pot_total(conn, self.GAME_KEY, game_id) == 0:
+                    wager_svc.drop_pending(conn, self.GAME_KEY, game_id)
+                    return 0, {}, 0
+                if state in _SETTLING_STATES and winner_id is not None:
+                    paid = wager_svc.settle(
+                        conn, self.GAME_KEY, game_id, winner_id
+                    )
+                    return paid, {}, winner_id or 0
+                refunds = wager_svc.refund_game(conn, self.GAME_KEY, game_id)
+                return 0, refunds, 0
+
+        paid, refunds, paid_to = await asyncio.to_thread(_work)
+        if paid > 0:
+            await self._announce_wager_result(
+                game_id, f"💰 <@{paid_to}> takes the pot — **{paid:,}**!"
+            )
+        elif refunds:
+            await self._announce_wager_result(
+                game_id,
+                f"↩️ Stakes refunded to {len(refunds)} player(s) — "
+                f"**{sum(refunds.values()):,}** returned.",
+            )
+
+    async def _wager_precheck(
+        self, guild_id: int, user_id: int, wager: int
+    ) -> str | None:
+        """Validate a requested wager before a game row exists.
+
+        Returns member-facing text on refusal. Amounts are deliberately
+        uncapped (2026-07-20 decision) — the only gates are a positive
+        whole number, the economy being on, and the member actually
+        holding it.
+        """
+        if wager < 1:
+            return "A wager has to be at least 1."
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return "Wagers aren't available right now."
+
+        def _check() -> str | None:
+            with ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    return "The economy isn't enabled here, so wagers can't run."
+                have = get_balance(conn, guild_id, user_id)
+                if have < wager:
+                    return (
+                        f"You need {wager:,} {settings.currency_plural} to "
+                        f"stake that — you have {have:,}."
+                    )
+            return None
+
+        return await asyncio.to_thread(_check)
+
+    async def _declare_wager(
+        self, guild_id: int, game_id: int, user_id: int, wager: int
+    ) -> None:
+        """Record a challenger's intended ante — no money moves yet."""
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return
+
+        def _work() -> None:
+            with ctx.open_db() as conn:
+                wager_svc.declare_stake(
+                    conn, guild_id, self.GAME_KEY, game_id, user_id, wager
+                )
+
+        await asyncio.to_thread(_work)
+
+    async def _game_ante(self, game_id: int) -> int:
+        """This game's per-player ante (0 = not a wagered game)."""
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return 0
+
+        def _read() -> int:
+            with ctx.open_db() as conn:
+                return wager_svc.game_ante(conn, self.GAME_KEY, game_id)
+
+        return await asyncio.to_thread(_read)
+
+    async def _take_stake(
+        self, guild_id: int, game_id: int, user_id: int, amount: int
+    ) -> str | None:
+        """Escrow one player's ante. Returns a member-facing error, or None.
+
+        The caller MUST refuse the join/start when this returns a message —
+        the whole point of the escrow debit is that it blocks game entry
+        (unlike the faucet, which never blocks game flow).
+        """
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None or amount < 1:
+            return None
+
+        def _work() -> str | None:
+            with ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    return "The economy isn't enabled here, so wagers can't run."
+                try:
+                    wager_svc.hold_stake(
+                        conn, guild_id, self.GAME_KEY, game_id, user_id, amount,
+                        currency_plural=settings.currency_plural,
+                    )
+                except ValueError as exc:
+                    return str(exc)
+            return None
+
+        return await asyncio.to_thread(_work)
+
+    async def _return_stake(self, game_id: int, user_id: int) -> int:
+        """Refund one player's escrow (they left a lobby, or left the guild)."""
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return 0
+
+        def _work() -> int:
+            with ctx.open_db() as conn:
+                return wager_svc.refund_player(
+                    conn, self.GAME_KEY, game_id, user_id
+                )
+
+        return await asyncio.to_thread(_work)
+
+    async def _announce_wager_result(self, game_id: int, text: str) -> None:
+        """Post the pot outcome to the game's channel (best-effort)."""
+        try:
+            game = await self._db_get_game(game_id)
+            if game is None or not getattr(game, "channel_id", None):
+                return
+            channel = self.bot.get_channel(int(game.channel_id))
+            if not isinstance(channel, discord.abc.Messageable):
+                return
+            await channel.send(text)
+        except (discord.Forbidden, discord.HTTPException, AttributeError):
+            pass
 
     def _game_participants(self, game: Any) -> list[int]:
         """Everyone who played: the roster for group games (bailed/eliminated

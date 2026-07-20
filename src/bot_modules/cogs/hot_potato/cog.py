@@ -367,14 +367,16 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     @app_commands.describe(
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — you both ante this; winner takes the pot",
     )
     async def hp_challenge(
         self,
         interaction: discord.Interaction,
         user: discord.Member,
         stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        await self._base_challenge(interaction, user, stakes)
+        await self._base_challenge(interaction, user, stakes, wager)
 
 async def setup(bot: Bot) -> None:
     cog = HotPotatoDuel(bot)

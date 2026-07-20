@@ -143,3 +143,137 @@ async def test_hook_failure_never_breaks_resolution(db, sync_db_path, monkeypatc
     game = await _climbing(db, [1, 2, 3])
     await cog._db_set_state(game.id, "RESOLVED_NO_NICK", winner_id=None)
     assert (await chdb.get_game(db, game.id)).state == "RESOLVED_NO_NICK"
+
+
+# ── Wager escrow rides the seam (stage 4b) ────────────────────────────────────
+
+
+def _fund(db_path: Path, user_id: int, amount: int) -> None:
+    from bot_modules.services.economy_service import apply_credit
+
+    with open_db(db_path) as conn:
+        apply_credit(conn, GUILD, user_id, amount, "grant")
+
+
+def _mute_faucet(db_path: Path) -> None:
+    """Zero the participation/win rewards so a balance shows the WAGER only.
+
+    The faucet still fires on a resolution (it is a separate concern from the
+    pot); these tests are about escrow, so they isolate it.
+    """
+    with open_db(db_path) as conn:
+        save_econ_settings(
+            conn, GUILD,
+            {"reward_game_participation": 0, "reward_game_win": 0},
+        )
+
+
+def _stake(db_path: Path, game_type: str, game_id: int, user_id: int, amount: int):
+    from bot_modules.services import economy_wager_service as wager_svc
+
+    with open_db(db_path) as conn:
+        wager_svc.hold_stake(conn, GUILD, game_type, game_id, user_id, amount)
+
+
+def _balances(db_path: Path, *users: int) -> list[int]:
+    with open_db(db_path) as conn:
+        return [get_balance(conn, GUILD, u) for u in users]
+
+
+async def test_resolution_pays_pot_to_winner(db, sync_db_path):
+    """A won game settles the escrow to the winner via the same hook."""
+    cog = _chicken(db, sync_db_path)
+    _mute_faucet(sync_db_path)
+    game = await _climbing(db, [1, 2, 3])
+    for uid in (1, 2, 3):
+        _fund(sync_db_path, uid, 100)
+        _stake(sync_db_path, cog.GAME_KEY, game.id, uid, 50)
+    assert _balances(sync_db_path, 1, 2, 3) == [50, 50, 50]
+
+    # Two bail, so player 3 is the last one holding and wins.
+    await cog._on_bail(_bail_interaction(1), game.id)
+    await cog._on_bail(_bail_interaction(2), game.id)
+    await cog._crash(game.id)
+
+    a, b, c = _balances(sync_db_path, 1, 2, 3)
+    # The pot (150) went to exactly one player; nothing was minted or lost.
+    assert a + b + c == 300
+    assert sorted([a, b, c]) == [50, 50, 200]
+
+
+async def test_abandoned_game_refunds_every_stake(db, sync_db_path):
+    cog = _chicken(db, sync_db_path)
+    game = await _climbing(db, [1, 2])
+    for uid in (1, 2):
+        _fund(sync_db_path, uid, 100)
+        _stake(sync_db_path, cog.GAME_KEY, game.id, uid, 50)
+
+    await cog._expire_active(game)  # ABANDONED — the plan's "silently vanishes"
+
+    assert _balances(sync_db_path, 1, 2) == [100, 100]
+
+
+async def test_wipeout_refunds_rather_than_paying_nobody(db, sync_db_path):
+    """Chicken total wipeout resolves with winner_id None."""
+    cog = _chicken(db, sync_db_path)
+    _mute_faucet(sync_db_path)
+    game = await _climbing(db, [1, 2, 3])
+    for uid in (1, 2, 3):
+        _fund(sync_db_path, uid, 100)
+        _stake(sync_db_path, cog.GAME_KEY, game.id, uid, 50)
+
+    await cog._crash(game.id)  # nobody bailed → RESOLVED_NO_NICK, no winner
+
+    assert _balances(sync_db_path, 1, 2, 3) == [100, 100, 100]
+
+
+async def test_quickdraw_void_refunds_both(db, sync_db_path):
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = RecordingQuickdraw(FakeEconGamesBot(db, sync_db_path, [1, 2]))  # type: ignore[arg-type]
+    gid = await qdb.create_game(db, GUILD, CH, 1, 2, None)
+    await qdb.set_game_state(db, gid, "ACTIVE", qd_state="DRAW", fired_at=time.time())
+    for uid in (1, 2):
+        _fund(sync_db_path, uid, 100)
+        _stake(sync_db_path, cog.GAME_KEY, gid, uid, 25)
+
+    await cog._fire_void(gid)  # nobody fired
+
+    assert _balances(sync_db_path, 1, 2) == [100, 100]
+
+
+async def test_lobby_cancel_refunds_the_pot(db, sync_db_path):
+    cog = _chicken(db, sync_db_path)
+    gid = await chdb.create_lobby(db, GUILD, CH, 1, None)
+    await chdb.set_game_state(db, gid, "LOBBY")
+    for uid in (1, 2):
+        _fund(sync_db_path, uid, 100)
+        _stake(sync_db_path, cog.GAME_KEY, gid, uid, 30)
+
+    interaction = fake_interaction()
+    interaction.user.id = 1
+    await cog._handle_lobby_cancel(interaction, gid)
+
+    assert _balances(sync_db_path, 1, 2) == [100, 100]
+
+
+async def test_replayed_terminal_hook_pays_once(db, sync_db_path):
+    """The sweep and the resume path can both re-fire a terminal state."""
+    cog = _chicken(db, sync_db_path)
+    game = await _climbing(db, [1, 2])
+    for uid in (1, 2):
+        _fund(sync_db_path, uid, 100)
+        _stake(sync_db_path, cog.GAME_KEY, game.id, uid, 50)
+
+    await cog._expire_active(game)
+    before = _balances(sync_db_path, 1, 2)
+    await cog._on_terminal_state(game.id, "ABANDONED")  # replay
+    await cog._on_terminal_state(game.id, "ABANDONED")  # and again
+
+    assert _balances(sync_db_path, 1, 2) == before == [100, 100]
+
+
+def _bail_interaction(user_id: int):
+    interaction = fake_interaction()
+    interaction.user.id = user_id
+    return interaction

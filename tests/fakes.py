@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
+
+from bot_modules.core.db_utils import open_db
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -132,7 +134,12 @@ class FakeEconGamesBot:
         with_channel: bool = False,
     ) -> None:
         self.games_db = games_db
-        self.ctx = SimpleNamespace(db_path=db_path)
+        # ``open_db`` matches AppContext's: the wager escrow (and anything
+        # else on the economy side) opens its own transaction through it.
+        self.ctx = SimpleNamespace(
+            db_path=db_path,
+            open_db=lambda: open_db(db_path),
+        )
         members = {
             uid: SimpleNamespace(
                 id=uid, bot=False, premium_since=None,

@@ -1,6 +1,6 @@
 # Economy sinks, round 2
 
-**Status:** in progress (2026-07-19) · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
+**Status:** all stages built (4b landed 2026-07-20) · **Owner:** economy · **Spec:** `docs/economy_spec.md` §6
 
 ## Why
 
@@ -202,7 +202,18 @@ one-file change.
 
 ## Stage 4b — coin wagers on the duel games
 
-Equal ante, winner takes the pot, no rake.
+**Built 2026-07-20.** Equal ante, winner takes the pot, no rake.
+
+Locked at build time (user Q&A 2026-07-20): lobby games debit **on join**
+(leaving refunds) so a host is never blocked at start by someone else's
+wallet; duels debit **both antes at accept**, so a declined or expired
+challenge needs no refund path at all; **no forfeit command** — quitting
+loses the game normally, and only a genuinely dead game (the abandon sweep)
+refunds; amounts are **player-chosen and uncapped**.
+
+Every refund path in the table below is covered and tested. `DECLINED` was
+added to `_TERMINAL_STATES` (the base-game comment predicted this) so a
+challenger's *declared* — never charged — ante row is cleaned up.
 
 Durability is fine: duel state (state, roster, alive, elimination_order,
 winner_id, phase timestamps) is all in SQL, resumable via `on_game_resume`, and
