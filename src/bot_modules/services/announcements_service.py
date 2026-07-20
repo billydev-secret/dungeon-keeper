@@ -5,6 +5,11 @@ Three layers live here (same shape as scheduled_games_service):
   * Sync CRUD over a sqlite3 connection — used by the web route via ``run_query``.
   * The async polling loop ``announcements_loop`` — registered as a bot startup task.
 
+An announcement may also carry up to five self-assign role buttons
+(``announcement_buttons``); the components themselves live in
+``bot_modules.announcements.buttons``, which owns the click path and its
+safety re-check.
+
 Wall-clock fields (``post_date``, ``post_time_min``) are the source of truth;
 ``post_at`` is a derived UTC-epoch cache the loop polls (guild-local per the fixed
 ``tz_offset_hours``, no DST). ``post_at IS NULL`` means draft — invisible to the loop.
@@ -27,6 +32,11 @@ from pathlib import Path
 
 import discord
 
+from bot_modules.announcements.buttons import (
+    DEFAULT_STYLE,
+    MAX_BUTTONS,
+    build_announcement_view,
+)
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.branding_service import DEFAULT_ACCENT
@@ -111,10 +121,42 @@ _UPDATABLE_COLS = {
 }
 
 # What a clone carries over — content only, never schedule/sent/error state.
+# (Role buttons ride along too, copied separately in clone_announcement.)
 _CLONE_COLS = (
     "channel_id", "title", "body", "image_url", "accent_hex",
     "plain_text", "mention_kind", "mention_role_id",
 )
+
+_BUTTON_COLS = ("role_id", "label", "emoji", "style", "position")
+
+
+def list_buttons(conn: sqlite3.Connection, ann_id: int) -> list[sqlite3.Row]:
+    """This announcement's role buttons, left to right."""
+    return conn.execute(
+        "SELECT * FROM announcement_buttons WHERE announcement_id = ? "
+        "ORDER BY position ASC, id ASC",
+        (ann_id,),
+    ).fetchall()
+
+
+def replace_buttons(
+    conn: sqlite3.Connection, ann_id: int, buttons: list[dict]
+) -> None:
+    """Swap in a whole button set; array order becomes ``position``.
+
+    Wholesale replacement (role menus' ``replace_options`` idiom) — the editor
+    always submits the full list, so diffing rows would only add ways to drift.
+    """
+    conn.execute("DELETE FROM announcement_buttons WHERE announcement_id = ?", (ann_id,))
+    for pos, btn in enumerate(buttons[:MAX_BUTTONS]):
+        conn.execute(
+            "INSERT INTO announcement_buttons "
+            f"(announcement_id, {', '.join(_BUTTON_COLS)}) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                ann_id, int(btn["role_id"]), btn.get("label", "") or "",
+                btn.get("emoji", "") or "", btn.get("style") or DEFAULT_STYLE, pos,
+            ),
+        )
 
 
 def create_announcement(conn: sqlite3.Connection, **fields) -> int:
@@ -160,9 +202,15 @@ def update_announcement(
 
 
 def delete_announcement(conn: sqlite3.Connection, ann_id: int, guild_id: int) -> None:
-    conn.execute(
+    cur = conn.execute(
         "DELETE FROM announcements WHERE id = ? AND guild_id = ?", (ann_id, guild_id)
     )
+    if cur.rowcount:
+        # Foreign keys aren't enforced on this connection, so the child rows go
+        # explicitly — and only once the guild-scoped delete actually matched.
+        conn.execute(
+            "DELETE FROM announcement_buttons WHERE announcement_id = ?", (ann_id,)
+        )
 
 
 def clone_announcement(
@@ -177,7 +225,11 @@ def clone_announcement(
         guild_id=guild_id, post_date=None, post_time_min=None, post_at=None,
         status="draft", created_by=created_by, created_at=now, updated_at=now,
     )
-    return create_announcement(conn, **fields)
+    new_id = create_announcement(conn, **fields)
+    replace_buttons(
+        conn, new_id, [dict(b) for b in list_buttons(conn, ann_id)]
+    )
+    return new_id
 
 
 def fetch_due(conn: sqlite3.Connection, now: float) -> list[sqlite3.Row]:
@@ -257,8 +309,14 @@ async def _process_due(bot, db_path: Path, row, now: float) -> None:
         accent = discord.Color(DEFAULT_ACCENT)
 
     content, embed, allowed = build_announcement_message(row, accent)
+    buttons = await asyncio.to_thread(_db_call, db_path, list_buttons, ann_id)
+    view = build_announcement_view(buttons, guild)
     try:
-        msg = await channel.send(content=content, embed=embed, allowed_mentions=allowed)
+        # view=None is what discord.py already means by "no components", so the
+        # no-buttons case needs no branch here.
+        msg = await channel.send(
+            content=content, embed=embed, allowed_mentions=allowed, view=view
+        )
     except (discord.Forbidden, discord.HTTPException) as e:
         log.warning("Announcement %s: send failed in channel %s: %s", ann_id, row["channel_id"], e)
         await asyncio.to_thread(_db_call, db_path, mark_error, ann_id, f"Send failed: {e}", now)

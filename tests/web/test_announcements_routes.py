@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -13,6 +15,36 @@ from web_server.server import create_app
 
 BASE = "/api/announcements"
 GUILD = 123  # fake_ctx default guild
+
+
+@dataclass(order=True)
+class _Role:
+    """Minimal role stand-in for the button safety checks (role-menus pattern)."""
+
+    position: int
+    id: int = field(compare=False)
+    name: str = field(default="Role", compare=False)
+    managed: bool = field(default=False, compare=False)
+    admin: bool = field(default=False, compare=False)
+
+    def __post_init__(self):
+        self.permissions = SimpleNamespace(administrator=self.admin)
+
+    def is_default(self):
+        return False
+
+
+class _Guild:
+    def __init__(self, guild_id, roles):
+        self.id = guild_id
+        self._by_id = {r.id: r for r in roles}
+        self.me = SimpleNamespace(top_role=_Role(position=100, id=1, name="DK"))
+
+    def get_role(self, rid):
+        return self._by_id.get(rid)
+
+    def get_channel(self, _cid):
+        return SimpleNamespace(id=_cid)  # channel guard is tested elsewhere
 
 
 def _body(**over):
@@ -176,6 +208,135 @@ def test_clone_sent_row_resets_to_draft(open_client, fake_ctx):
 
 def test_clone_missing_404(open_client):
     assert open_client.post(f"{BASE}/9999/clone").status_code == 404
+
+
+# ── role buttons ─────────────────────────────────────────────────────────────
+
+def _btn(role_id="555", **over):
+    btn = {"role_id": role_id, "label": "Movie Night", "emoji": "🎬", "style": "primary"}
+    btn.update(over)
+    return btn
+
+
+def _wire_guild(fake_ctx, roles):
+    """Attach a fake guild so the route can run its role-safety checks."""
+    guild = _Guild(fake_ctx.guild_id, roles)
+    fake_ctx.bot = SimpleNamespace(
+        get_guild=lambda gid: guild if gid == fake_ctx.guild_id else None,
+    )
+    return guild
+
+
+def test_buttons_round_trip(open_client):
+    open_client.post(BASE, json=_body(buttons=[_btn(), _btn("556", label="Books")]))
+    buttons = _items(open_client)[0]["buttons"]
+    assert [b["role_id"] for b in buttons] == ["555", "556"]  # stringified
+    assert buttons[0]["label"] == "Movie Night"
+    assert buttons[0]["emoji"] == "🎬"
+    assert buttons[1]["label"] == "Books"
+
+
+def test_announcement_without_buttons_lists_an_empty_set(open_client):
+    open_client.post(BASE, json=_body())
+    assert _items(open_client)[0]["buttons"] == []
+
+
+def test_put_replaces_the_whole_button_set(open_client):
+    ann_id = open_client.post(BASE, json=_body(buttons=[_btn()])).json()["id"]
+    open_client.put(f"{BASE}/{ann_id}", json=_body(buttons=[_btn("777", label="New")]))
+    buttons = _items(open_client)[0]["buttons"]
+    assert [b["role_id"] for b in buttons] == ["777"]
+
+
+def test_put_can_clear_every_button(open_client):
+    ann_id = open_client.post(BASE, json=_body(buttons=[_btn()])).json()["id"]
+    open_client.put(f"{BASE}/{ann_id}", json=_body())
+    assert _items(open_client)[0]["buttons"] == []
+
+
+def test_button_validation_errors(open_client):
+    checks = [
+        _body(buttons=[_btn() for _ in range(6)]),          # over the 5 limit
+        _body(buttons=[_btn(role_id="0")]),                 # unset role
+        _body(buttons=[_btn(role_id="nope")]),              # non-numeric role
+        _body(buttons=[_btn(), _btn()]),                    # same role twice
+        _body(buttons=[_btn(style="danger")]),              # style off the list
+        _body(buttons=[_btn(emoji="notanemoji")]),          # text, not an emoji
+        _body(buttons=[_btn(emoji=":shrug:")]),             # not the custom form
+    ]
+    for payload in checks:
+        assert open_client.post(BASE, json=payload).status_code == 400, payload
+
+
+def test_accepted_emoji_forms(open_client):
+    # Unicode (incl. ZWJ sequences and flags), Discord's custom form, or blank.
+    for emoji in ["🎬", "👩‍💻", "🇬🇧", "<:dk:123456789012345678>",
+                  "<a:spin:123456789012345678>", ""]:
+        resp = open_client.post(BASE, json=_body(buttons=[_btn(emoji=emoji)]))
+        assert resp.status_code == 200, emoji
+
+
+def test_button_max_is_advertised_to_the_panel(open_client):
+    assert open_client.get(BASE).json()["max_buttons"] == 5
+
+
+def test_clone_copies_the_buttons(open_client, fake_ctx):
+    ann_id = open_client.post(BASE, json=_body(buttons=[_btn()])).json()["id"]
+    _mark_sent(fake_ctx, ann_id)
+
+    new_id = open_client.post(f"{BASE}/{ann_id}/clone").json()["id"]
+
+    clone = next(i for i in _items(open_client) if i["id"] == new_id)
+    assert [b["role_id"] for b in clone["buttons"]] == ["555"]
+
+
+def test_deleting_an_announcement_takes_its_buttons(open_client, fake_ctx):
+    ann_id = open_client.post(BASE, json=_body(buttons=[_btn()])).json()["id"]
+    open_client.delete(f"{BASE}/{ann_id}")
+    with open_db(fake_ctx.db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM announcement_buttons WHERE announcement_id = ?", (ann_id,)
+        ).fetchall()
+    assert rows == []
+
+
+# ── role buttons: safety ─────────────────────────────────────────────────────
+
+def test_safe_role_is_accepted(open_client, fake_ctx):
+    _wire_guild(fake_ctx, [_Role(position=5, id=555, name="Movie Night")])
+    assert open_client.post(BASE, json=_body(buttons=[_btn()])).status_code == 200
+
+
+def test_dangerous_role_is_refused_outright(open_client, fake_ctx):
+    # No elevated override exists here, unlike role menus: an announcement is a
+    # public, permanent post, so a mod role simply can't ride one.
+    _wire_guild(fake_ctx, [_Role(position=5, id=555, name="Mod", admin=True)])
+    resp = open_client.post(BASE, json=_body(buttons=[_btn()]))
+    assert resp.status_code == 400
+    assert "elevated permissions" in resp.json()["detail"]
+
+
+def test_role_above_the_bot_is_refused(open_client, fake_ctx):
+    _wire_guild(fake_ctx, [_Role(position=500, id=555, name="Owner")])
+    resp = open_client.post(BASE, json=_body(buttons=[_btn()]))
+    assert resp.status_code == 400
+    assert "above my highest role" in resp.json()["detail"]
+
+
+def test_managed_role_is_refused(open_client, fake_ctx):
+    _wire_guild(fake_ctx, [_Role(position=5, id=555, name="Booster", managed=True)])
+    assert open_client.post(BASE, json=_body(buttons=[_btn()])).status_code == 400
+
+
+def test_role_missing_from_the_guild_is_refused(open_client, fake_ctx):
+    _wire_guild(fake_ctx, [])
+    assert open_client.post(BASE, json=_body(buttons=[_btn()])).status_code == 400
+
+
+def test_editing_is_gated_too_not_just_creating(open_client, fake_ctx):
+    ann_id = open_client.post(BASE, json=_body()).json()["id"]
+    _wire_guild(fake_ctx, [_Role(position=5, id=555, name="Mod", admin=True)])
+    assert open_client.put(f"{BASE}/{ann_id}", json=_body(buttons=[_btn()])).status_code == 400
 
 
 # ── list shape ────────────────────────────────────────────────────────────────

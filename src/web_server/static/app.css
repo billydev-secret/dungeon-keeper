@@ -3644,3 +3644,20 @@ select option { background: var(--bg-input); color: var(--ink); }
   border-radius: 3px; background: #5865f24d; color: #c9cdfb;
 }
 .ann-plain { font-size: 14px; color: var(--ink); margin-bottom: 8px; word-break: break-word; }
+
+/* Role-button editor rows + the preview pills that mirror them. */
+.ann-btn-row {
+  display: flex; gap: 6px; align-items: center; margin-bottom: 6px;
+}
+.ann-btn-row .filter-select { flex: 1 1 40%; min-width: 0; }
+.ann-btn-row input[data-b-label] { flex: 1 1 30%; min-width: 0; }
+.ann-btn-row input[data-b-emoji] { width: 56px; flex: none; text-align: center; }
+.ann-btn-row select { flex: none; }
+.ann-btns-preview { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ann-btn-pill {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 14px;
+  font-weight: 500; padding: 8px 16px; border-radius: 3px; color: #fff;
+}
+.ann-btn-pill.primary { background: #5865f2; }
+.ann-btn-pill.secondary { background: #4e5058; }
+.ann-btn-pill.success { background: #248046; }

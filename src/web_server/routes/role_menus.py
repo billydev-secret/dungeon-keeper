@@ -14,6 +14,7 @@ import discord
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from bot_modules.core.role_safety import is_dangerous
 from bot_modules.core.utils import get_bot_member
 from bot_modules.role_menus import db as menus_db
 from bot_modules.role_menus import sync as menus_sync
@@ -25,22 +26,11 @@ router = APIRouter()
 
 _MOD = Depends(require_perms({"moderator"}))
 
-# Permission bits that make a role dangerous to hand out via self-service.
-# Hidden in the picker unless the per-option "elevated" override is checked,
-# and refused server-side without it (spec §3.2: misconfiguration should be
-# nearly impossible, not merely handled).
-_DANGEROUS_PERMS = (
-    "administrator",
-    "manage_guild",
-    "manage_roles",
-    "manage_channels",
-    "manage_messages",
-    "manage_webhooks",
-    "kick_members",
-    "ban_members",
-    "moderate_members",
-    "mention_everyone",
-)
+# Which permission bits count as dangerous lives in core.role_safety — announcement
+# buttons enforce the same list, and two copies would drift. Dangerous roles are
+# hidden in the picker unless the per-option "elevated" override is checked, and
+# refused server-side without it (spec §3.2: misconfiguration should be nearly
+# impossible, not merely handled).
 
 
 class MenuCreateBody(BaseModel):
@@ -146,11 +136,6 @@ def _guild_or_none(ctx, guild_id: int) -> discord.Guild | None:
     return bot.get_guild(guild_id) if bot else None
 
 
-def _dangerous(role: discord.Role) -> bool:
-    perms = role.permissions
-    return any(getattr(perms, name, False) for name in _DANGEROUS_PERMS)
-
-
 # ── roles for the picker ────────────────────────────────────────────
 
 @router.get("/role-menus/roles")
@@ -172,7 +157,7 @@ async def list_assignable_roles(request: Request, _: AuthenticatedUser = _MOD):
                 "color": f"#{role.color.value:06x}" if role.color.value else "",
                 "position": role.position,
                 "assignable": top is not None and role < top,
-                "dangerous": _dangerous(role),
+                "dangerous": is_dangerous(role),
                 "member_count": len(role.members),
             }
         )
@@ -312,7 +297,7 @@ def _check_roles_against_guild(
                 status_code=400,
                 detail=f"“{role.name}” is above my highest role — I can't grant it.",
             )
-        if _dangerous(role):
+        if is_dangerous(role):
             if not opt["elevated"]:
                 raise HTTPException(
                     status_code=400,

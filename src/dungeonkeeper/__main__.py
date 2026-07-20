@@ -22,6 +22,7 @@ from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
+from bot_modules.announcements.buttons import AnnouncementRoleButton
 from bot_modules.chat_revive.actions import ReviveOptInButton
 from bot_modules.services.chat_revive_loop import chat_revive_loop
 from bot_modules.services.economy_loop import (
@@ -273,6 +274,10 @@ def main() -> None:
 
     # Register persistent Chat Revive opt-in buttons so they survive restarts.
     bot.add_dynamic_items(ReviveOptInButton)
+
+    # Register persistent announcement role buttons — posted announcements stay
+    # clickable indefinitely, long after their queue row is gone.
+    bot.add_dynamic_items(AnnouncementRoleButton)
 
     # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
     bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)

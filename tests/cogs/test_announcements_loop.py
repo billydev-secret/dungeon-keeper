@@ -160,6 +160,95 @@ async def test_send_forbidden_errors_and_never_retries(sync_db_path):
     assert _row(sync_db_path, row["id"])["status"] == "error"
 
 
+# ── role buttons ─────────────────────────────────────────────────────────────
+
+def _add_buttons(db_path, ann_id, buttons):
+    with open_db(db_path) as conn:
+        svc.replace_buttons(conn, ann_id, buttons)
+
+
+async def test_row_without_buttons_sends_no_view(sync_db_path):
+    bot = _make_bot()
+    row = _insert(sync_db_path)
+
+    await svc._process_due(bot, sync_db_path, row, NOW)
+
+    assert bot._channels[CHAN].sends[0]["view"] is None
+
+
+async def test_buttons_ride_along_on_the_post(sync_db_path):
+    bot = _make_bot()
+    row = _insert(sync_db_path)
+    _add_buttons(sync_db_path, row["id"], [
+        {"role_id": 555, "label": "Movie Night", "emoji": "🎬", "style": "primary"},
+        {"role_id": 556, "label": "Book Club", "emoji": "", "style": "success"},
+    ])
+
+    await svc._process_due(bot, sync_db_path, _row(sync_db_path, row["id"]), NOW)
+
+    view = bot._channels[CHAN].sends[0]["view"]
+    assert [c.custom_id for c in view.children] == ["ann_role:555", "ann_role:556"]
+    assert [c.item.label for c in view.children] == ["Movie Night", "Book Club"]
+
+
+async def test_buttons_keep_their_configured_order(sync_db_path):
+    bot = _make_bot()
+    row = _insert(sync_db_path)
+    _add_buttons(sync_db_path, row["id"], [
+        {"role_id": 900 + i, "label": f"R{i}"} for i in range(svc.MAX_BUTTONS)
+    ])
+
+    await svc._process_due(bot, sync_db_path, _row(sync_db_path, row["id"]), NOW)
+
+    view = bot._channels[CHAN].sends[0]["view"]
+    assert [c.item.label for c in view.children] == [f"R{i}" for i in range(svc.MAX_BUTTONS)]
+
+
+async def test_replace_buttons_swaps_the_whole_set(sync_db_path):
+    row = _insert(sync_db_path)
+    _add_buttons(sync_db_path, row["id"], [{"role_id": 555, "label": "Old"}])
+    _add_buttons(sync_db_path, row["id"], [{"role_id": 556, "label": "New"}])
+
+    with open_db(sync_db_path) as conn:
+        rows = svc.list_buttons(conn, row["id"])
+    assert [(r["role_id"], r["label"]) for r in rows] == [(556, "New")]
+
+
+async def test_deleting_an_announcement_drops_its_buttons(sync_db_path):
+    row = _insert(sync_db_path)
+    _add_buttons(sync_db_path, row["id"], [{"role_id": 555, "label": "Movie Night"}])
+
+    with open_db(sync_db_path) as conn:
+        svc.delete_announcement(conn, row["id"], GUILD)
+        assert svc.list_buttons(conn, row["id"]) == []
+
+
+async def test_delete_from_another_guild_leaves_buttons_alone(sync_db_path):
+    # The guild guard is on the parent row; the child delete must not run when
+    # the parent delete matched nothing.
+    row = _insert(sync_db_path)
+    _add_buttons(sync_db_path, row["id"], [{"role_id": 555, "label": "Movie Night"}])
+
+    with open_db(sync_db_path) as conn:
+        svc.delete_announcement(conn, row["id"], GUILD + 1)
+        assert len(svc.list_buttons(conn, row["id"])) == 1
+
+
+async def test_clone_copies_the_buttons(sync_db_path):
+    row = _insert(sync_db_path)
+    _add_buttons(sync_db_path, row["id"], [
+        {"role_id": 555, "label": "Movie Night", "emoji": "🎬", "style": "success"},
+    ])
+
+    with open_db(sync_db_path) as conn:
+        new_id = svc.clone_announcement(conn, row["id"], GUILD, 2001, NOW)
+        copied = svc.list_buttons(conn, new_id)
+
+    assert [(r["role_id"], r["label"], r["emoji"], r["style"]) for r in copied] == [
+        (555, "Movie Night", "🎬", "success")
+    ]
+
+
 # ── claim semantics ──────────────────────────────────────────────────────────
 
 async def test_claim_is_atomic(sync_db_path):

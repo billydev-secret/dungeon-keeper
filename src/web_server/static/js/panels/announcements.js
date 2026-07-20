@@ -76,6 +76,7 @@ export function mount(container) {
     tz: 0, defaultAccent: "5865F2",
     editingId: null,          // null | "new" | numeric id
     chPicker: null, rolePicker: null, previewTimer: null,
+    buttons: [], buttonPickers: [], maxButtons: 5,
   };
 
   function tickClock() {
@@ -143,6 +144,7 @@ export function mount(container) {
       state.items = data.items || [];
       state.tz = data.tz_offset_hours || 0;
       state.defaultAccent = data.default_accent_hex || "5865F2";
+      state.maxButtons = data.max_buttons || 5;
       tickClock();
       renderLists();
     } catch (err) {
@@ -158,6 +160,8 @@ export function mount(container) {
     state.editingId = null;
     state.chPicker = null;
     state.rolePicker = null;
+    state.buttons = [];
+    state.buttonPickers = [];
     editorWrap.style.display = "none";
     editorWrap.innerHTML = "";
   }
@@ -206,6 +210,14 @@ export function mount(container) {
             </div>
           </div>
           <div class="field">
+            <label>Role buttons (optional — members click to give themselves the role, click again to drop it)</label>
+            <div data-buttons-list></div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="act-btn ghost" data-action="add-button" type="button">Add role button</button>
+              <span class="field-hint" data-buttons-hint></span>
+            </div>
+          </div>
+          <div class="field">
             <label>Post at (server-local — leave blank to save as a draft)</label>
             <div style="display:flex;gap:8px">
               <input type="date" data-f-date value="${esc(item?.post_date || "")}">
@@ -233,7 +245,21 @@ export function mount(container) {
       { emptyLabel: "(pick a role)" },
     );
 
-    editorWrap.addEventListener("input", schedulePreview);
+    // Buttons are edited through `state.buttons`, not read back off the DOM —
+    // adding or removing a row re-mounts every role picker, which would drop
+    // unsaved text otherwise.
+    state.buttons = (item?.buttons || []).map((b) => ({
+      role_id: String(b.role_id || "0"),
+      label: b.label || "",
+      emoji: b.emoji || "",
+      style: b.style || "primary",
+    }));
+    renderButtonRows();
+
+    editorWrap.addEventListener("input", (ev) => {
+      syncButtonField(ev.target);
+      schedulePreview();
+    });
     field("[data-f-mention]").addEventListener("change", () => {
       field("[data-role-wrap]").style.display =
         field("[data-f-mention]").value === "role" ? "" : "none";
@@ -241,6 +267,73 @@ export function mount(container) {
     });
     renderPreviewNow();
     editorWrap.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // ── role buttons ──────────────────────────────────────────────────
+
+  // Re-render the whole list; each row's role picker is a fresh mount, so its
+  // value is read back into state.buttons before the rebuild (see addButton).
+  function renderButtonRows() {
+    const listEl = field("[data-buttons-list]");
+    if (!listEl) return;
+    listEl.innerHTML = state.buttons.map((b, i) => `
+      <div class="ann-btn-row" data-b-index="${i}">
+        <span data-b-role-slot></span>
+        <input type="text" data-b-label maxlength="80" placeholder="Button text (blank = role name)" value="${esc(b.label)}">
+        <input type="text" data-b-emoji maxlength="64" placeholder="🔔" value="${esc(b.emoji)}">
+        <select data-b-style>
+          <option value="primary"${b.style === "primary" ? " selected" : ""}>Blue</option>
+          <option value="secondary"${b.style === "secondary" ? " selected" : ""}>Grey</option>
+          <option value="success"${b.style === "success" ? " selected" : ""}>Green</option>
+        </select>
+        <button class="doc-x" data-action="remove-button" data-index="${i}" title="Remove" type="button">✕</button>
+      </div>`).join("");
+
+    state.buttonPickers = Array.from(listEl.querySelectorAll("[data-b-role-slot]"))
+      .map((slot, i) => mountRolePicker(slot, state.roles, state.buttons[i].role_id,
+        { emptyLabel: "(pick a role)" }));
+
+    const hint = field("[data-buttons-hint]");
+    const addBtn = editorWrap.querySelector('[data-action="add-button"]');
+    const full = state.buttons.length >= state.maxButtons;
+    if (addBtn) addBtn.disabled = full;
+    if (hint) {
+      hint.textContent = full
+        ? `That's the limit — ${state.maxButtons} buttons fit on one row.`
+        : "Roles with mod powers can't go on an announcement button.";
+    }
+    schedulePreview();
+  }
+
+  // Pull the current role-picker values back into state before any rebuild.
+  function captureButtonRoles() {
+    state.buttonPickers.forEach((p, i) => {
+      if (state.buttons[i]) state.buttons[i].role_id = p.getValue() || "0";
+    });
+  }
+
+  // Mirror a label/emoji/style edit into state (the role pickers self-report).
+  function syncButtonField(target) {
+    const row = target?.closest?.("[data-b-index]");
+    if (!row) return;
+    const b = state.buttons[Number(row.dataset.bIndex)];
+    if (!b) return;
+    if (target.matches("[data-b-label]")) b.label = target.value;
+    else if (target.matches("[data-b-emoji]")) b.emoji = target.value;
+    else if (target.matches("[data-b-style]")) b.style = target.value;
+  }
+
+  function addButton() {
+    if (state.buttons.length >= state.maxButtons) return;
+    captureButtonRoles();
+    state.buttons.push({ role_id: "0", label: "", emoji: "", style: "primary" });
+    renderButtonRows();
+  }
+
+  function removeButton(index) {
+    captureButtonRoles();
+    state.buttons.splice(index, 1);
+    renderButtonRows();
   }
 
   // ── live preview ──────────────────────────────────────────────────
@@ -269,13 +362,24 @@ export function mount(container) {
     const imageHtml = /^https?:/i.test(image)
       ? `<img class="dp-image" src="${esc(image)}" alt="" loading="lazy">` : "";
 
+    // Button pills sit below the embed, where Discord renders components.
+    // Labels mirror the bot's fallback: blank label → the role's own name.
+    const pills = state.buttons.map((b, i) => {
+      const roleId = state.buttonPickers[i]?.getValue() || b.role_id;
+      const label = b.label.trim() || (roleId && roleId !== "0"
+        ? roleName(state.roles, roleId) : "Get role");
+      const style = ["primary", "secondary", "success"].includes(b.style) ? b.style : "primary";
+      return `<span class="ann-btn-pill ${style}">${esc(b.emoji)} ${esc(label)}</span>`;
+    }).join("");
+
     previewEl.innerHTML = `
       ${contentLine}
       <div class="dp-embed" style="border-left-color:${esc(bar)}">
         ${title ? `<div class="dp-title">${esc(title)}</div>` : ""}
         ${body ? `<div class="dp-desc">${mdToHtml(body)}</div>` : ""}
         ${imageHtml}
-      </div>`;
+      </div>
+      ${pills ? `<div class="ann-btns-preview">${pills}</div>` : ""}`;
   }
 
   function schedulePreview() {
@@ -298,6 +402,17 @@ export function mount(container) {
     const time = field("[data-f-time]").value;
     if (!!date !== !!time) { toast("Set both a date and a time, or neither", "error"); return; }
 
+    captureButtonRoles();
+    if (state.buttons.some((b) => !b.role_id || b.role_id === "0")) {
+      toast("Pick a role for every button (or remove the empty one)", "error");
+      return;
+    }
+    const roleIds = state.buttons.map((b) => b.role_id);
+    if (new Set(roleIds).size !== roleIds.length) {
+      toast("Two buttons can't offer the same role", "error");
+      return;
+    }
+
     const payload = {
       channel_id: channelId,
       title,
@@ -309,6 +424,12 @@ export function mount(container) {
       mention_role_id: kind === "role" ? roleId : null,
       post_date: date || null,
       post_time: time || null,
+      buttons: state.buttons.map((b) => ({
+        role_id: b.role_id,
+        label: b.label.trim(),
+        emoji: b.emoji.trim(),
+        style: b.style,
+      })),
     };
     try {
       const res = state.editingId === "new"
@@ -374,6 +495,8 @@ export function mount(container) {
     else if (action === "post-now") postNow(id);
     else if (action === "delete") remove(id);
     else if (action === "clone") clone(id);
+    else if (action === "add-button") addButton();
+    else if (action === "remove-button") removeButton(Number(btn.dataset.index));
   });
 
   Promise.all([

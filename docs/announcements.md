@@ -17,6 +17,38 @@ Plan: [plans/timed-announcements.md](plans/timed-announcements.md).
   `discord.AllowedMentions`; nothing pings unless picked, regardless of what
   the text contains.
 
+## Role buttons
+
+An announcement may carry up to **5** self-assign role buttons
+(`MAX_BUTTONS`, one Discord action row). Click grants the role, click again
+sheds it; replies are always ephemeral.
+
+- **Persistence is custom-id-only.** `AnnouncementRoleButton` is a
+  `DynamicItem` templated `ann_role:(?P<role_id>\d+)` and registered once in
+  `__main__.py`. The role id is the entire state, so a posted announcement
+  keeps working across restarts *and* after its queue row is deleted — a
+  fire-and-forget post shouldn't die with its database row.
+- **Safety is checked twice**, and this is the point of the design. The web
+  route refuses a bad role up front (`_check_buttons_against_guild`); the
+  callback re-checks on **every click** (`role_block_reason`) because a post
+  stays clickable indefinitely and a role's permissions can change under it.
+  A role that gains `administrator` months later stops being grantable at the
+  next press, with no edit to the announcement.
+- **No elevated override.** Role menus let a mod tick a per-option override to
+  hand out a dangerous role; announcements deliberately don't — the post is
+  public and permanent. Blocked: missing, `@everyone`, integration-managed,
+  at-or-above DK's top role, or carrying any permission in
+  `core.role_safety._DANGEROUS_PERMS`.
+- **Shedding is never blocked.** Only the grant path is gated, so a member
+  holding a role that later turned dangerous can still drop it.
+- Refusals tell the member "that role isn't available anymore — ask a mod";
+  the real reason goes to the log, since it describes server configuration.
+- Blank `label` ⇒ the role's live name at post time, so renaming a role
+  relabels its button on the next post.
+
+`core/role_safety.py` is shared with role menus — one list of dangerous
+permissions, two callers, no drift.
+
 ## Lifecycle
 
 ```
@@ -58,7 +90,7 @@ draft ──(set time)──► scheduled ──(loop fires)──► sent
 
 | Endpoint | Behavior |
 |---|---|
-| `GET ""` | `{items, tz_offset_hours, default_accent_hex, guild_id}`; snowflakes stringified; sent rows carry `jump_url` |
+| `GET ""` | `{items, tz_offset_hours, default_accent_hex, max_buttons, guild_id}`; snowflakes stringified; sent rows carry `jump_url`; each item carries its `buttons` |
 | `POST ""` | Create; date+time both-or-neither; past time → 400; time ⇒ `scheduled`, else `draft` |
 | `PUT /{id}` | Full update; 404 missing, 409 sent; re-derives status/post_at |
 | `DELETE /{id}` | Any status |
@@ -68,19 +100,31 @@ draft ──(set time)──► scheduled ──(loop fires)──► sent
 Validation: numeric channel (+ live `_channel_in_guild` check), title or body
 required, kind `role` requires a role id, image URL must be http(s),
 accent hex normalized to 6 uppercase hex digits, `extra="forbid"` on the body.
+Buttons: ≤ `MAX_BUTTONS`, each needs a numeric role, no role twice on one
+announcement (two buttons would toggle each other), style in
+`primary|secondary|success`, plus the guild-side safety refusals above.
+`replace_buttons` swaps the whole set on create and update — the editor always
+submits the full list.
 
 ## Dashboard (`panels/announcements.js`, Config → Announcements)
 
 Queue (draft/scheduled/error rows: edit / post now / delete), inline editor
 with a debounced live preview (mention pill + plain line above a `dp-embed`
-with the accent bar), and a Sent history (guild-local sent time, "Open in
+with the accent bar, button pills below it), and a Sent history (guild-local sent time, "Open in
 Discord" jump link, clone, delete). A header line shows the server-local
-clock and offset; date/time inputs are server-local, sent as strings.
+clock and offset; date/time inputs are server-local, sent as strings. The
+button rows (role picker, label, emoji, color) are edited through
+`state.buttons` rather than read back off the DOM — adding or removing a row
+re-mounts every role picker, which would otherwise drop unsaved text.
 
 ## Storage
 
 `announcements` table (migration 089), index `(status, post_at)`. See the
 migration header for the wall-clock-vs-cache rationale.
+`announcement_buttons` (migration 095) holds one row per button, ordered by
+`position`; foreign keys aren't enforced on this connection, so
+`delete_announcement` drops the children explicitly — and only when the
+guild-scoped parent delete actually matched.
 
 ## Tests
 
@@ -89,7 +133,19 @@ migration header for the wall-clock-vs-cache rationale.
   flags per kind), embed fields, accent override/fallback.
 - `tests/cogs/test_announcements_loop.py` — send + mark-sent bookkeeping,
   late-window miss, 30-min-late fire, unreachable channel, Forbidden →
-  error with no re-send, claim atomicity, `fetch_due` filtering, post-now.
+  error with no re-send, claim atomicity, `fetch_due` filtering, post-now,
+  and the button set riding along (order, `view=None` when there are none,
+  wholesale replace, cascade delete, guild-scoped delete, clone copy).
+- `tests/unit/test_role_safety.py` — every dangerous permission, hierarchy
+  (`>=`, not `>`), managed/default/missing roles, the elevated override and
+  what it does *not* bypass.
+- `tests/unit/test_announcement_buttons.py` — view builder (cap, custom ids,
+  label fallback, styles) and the click path: grant, toggle off, deleted
+  role, non-guild click, HTTP failure, and the four re-check branches
+  (turned dangerous, rose above DK, became managed, shedding still allowed)
+  plus the refusal leaking no configuration.
 - `tests/web/test_announcements_routes.py` — draft/scheduled create, guild
   offset in `post_at`, the 400 matrix, 409s on sent rows, clone reset,
-  list shape (string snowflakes, `jump_url`, tz), non-admin 403.
+  list shape (string snowflakes, `jump_url`, tz), non-admin 403, plus the
+  button round-trip, replace/clear, the button 400 matrix, and each
+  guild-side safety refusal on both create and edit.
