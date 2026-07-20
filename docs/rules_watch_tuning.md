@@ -831,10 +831,43 @@ high intensity, low reciprocity — is structurally near-identical to *new perso
 normal enthusiasm*. velocibaker's bad week was his second week; so is every happy
 newcomer's. Absolute tenure cannot separate them.
 
-**The one principled fix not yet tried** is tenure-matched comparison: score a user
-against *others at the same point in their membership*, turning an absolute feature
-into a relative one. Until that is tested, treat detection as unsolved and keep
-human reporting primary.
+### 12.2c Tenure-matched comparison — tested, and it also fails
+
+The fix proposed above was tried under a pre-registered protocol, and did not work.
+
+**Declared before running:** success = ≥4 of 13 positives in the top 50 (chance
+expectation 0.55, so ~7× lift and 31% recall at ~2 cards/week). **Protocol:** whole
+*users* held out, not rows — when Ciccio is in the test fold, all three of his
+flagged weeks are scored by a model that never saw him. **Features:** nine ratios
+that are all defined for a first-week member (`directed_share`,
+`breadth_per_directed`, `msgs_per_recipient`, `reply_back_rate`, `onesided_share`,
+`nsfw_share`, and the three lexical rates), each z-scored **within the member's
+tenure bucket** (weeks since first message, capped at 8+) so newcomers are compared
+against newcomers.
+
+**Result: 1 of 13 in the top 50.** Median rank 257/1181, marginally better than the
+319–320 of the earlier attempts, but nowhere near the bar.
+
+A post-hoc check at *user* level (does it surface the right people, in any week?)
+does not rescue it either: the top 50 rows cover 25 distinct users, of whom **2 of
+14 are labelled — 8% against a 7.6% base rate. No lift.**
+
+**Conclusion: automated behavioural detection of this pattern does not work on this
+data, and three independent attempts now agree.** Keep human reporting primary. Two
+caveats worth carrying forward rather than treating as excuses:
+
+- **The week label is arguably arbitrary.** It marks when a complaint was *filed*,
+  but the behaviour is continuous — Ciccio has 10 qualifying weeks and only 3 are
+  labelled. The model repeatedly surfaced bigprop03 (5× in the top 15) and michael
+  (3×), both labelled users, but in their *unlabelled* weeks. A cleaner experiment
+  would label behaviour spans, not complaint dates.
+- **Labels, not compute, are the binding constraint.** 13 positive user-weeks cannot
+  support learning; no amount of GPU changes that. The §11 card's
+  `[Looks fine] [Keep watching] [I nudged]` buttons would generate exactly these
+  labels as a by-product of normal moderation — that is the cheapest path to a
+  dataset that could actually answer this.
+- Rows with `recipients=0` (no directed messages at all) are scorable and shouldn't
+  be; filter them before any future attempt.
 
 ### 12.3 Should we run both? Yes — as detect-then-veto, not as a vote
 

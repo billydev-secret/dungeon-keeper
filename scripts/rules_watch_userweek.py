@@ -65,6 +65,15 @@ FEATURES = ["msgs", "directed", "recipients", "nsfw_share", "new_pair_share",
             "anatomy_rate", "want_rate", "endear_rate", "tenure_days",
             "onesided_targets"]
 
+# Tenure-relative set. Every one of these is DEFINED for a first-week member
+# (unlike median_recip / median_days_known, which are 0 for everyone new and so
+# collapse into an "is new" detector -- see §12.2b). Each is z-scored within the
+# member's tenure bucket, so the question becomes "is this person more intense
+# than others at the same point in their membership", not "is this person new".
+REL_FEATURES = ["directed_share", "breadth_per_directed", "msgs_per_recipient",
+                "reply_back_rate", "onesided_share", "nsfw_share",
+                "anatomy_rate", "want_rate", "endear_rate"]
+
 
 def weekkey(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%W")
@@ -175,8 +184,13 @@ def build(min_msgs: int):
                 "anatomy_rate": len(ANATOMY.findall(text)) / nchars * 1000,
                 "want_rate": len(WANT.findall(text)) / nchars * 1000,
                 "endear_rate": len(ENDEAR.findall(text)) / nchars * 1000,
-                "tenure_days": (wk_start - first_seen[uid]) / 86400.0,
+                "tenure_days": max(0.0, (wk_start - first_seen[uid]) / 86400.0),
                 "onesided_targets": float(onesided),
+                # tenure-relative ratios (defined even with no pair history)
+                "directed_share": (len(outs) / len(ums)) if ums else 0.0,
+                "breadth_per_directed": (len(targets) / len(outs)) if outs else 0.0,
+                "msgs_per_recipient": (len(outs) / len(targets)) if targets else 0.0,
+                "onesided_share": (onesided / len(targets)) if targets else 0.0,
             })
     return out, con
 
@@ -197,6 +211,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-msgs", type=int, default=20)
     ap.add_argument("--features", default="")
+    ap.add_argument("--relative", action="store_true",
+                    help="tenure-matched z-scored features")
+    ap.add_argument("--group-cv", action="store_true",
+                    help="hold out whole users, not rows")
     a = ap.parse_args()
 
     rows, con = build(a.min_msgs)
@@ -210,11 +228,31 @@ def main():
 
     y = np.array([1.0 if (r["user"], r["week"]) in pos else 0.0 for r in rows])
     matched = {(r["user"], r["week"]) for r in rows if (r["user"], r["week"]) in pos}
-    feats = a.features.split(",") if a.features else FEATURES
+    if a.relative:
+        feats = a.features.split(",") if a.features else REL_FEATURES
+    else:
+        feats = a.features.split(",") if a.features else FEATURES
     X = np.array([[r[f] for f in feats] for r in rows])
-    mu, sd = X.mean(0), X.std(0)
-    sd[sd == 0] = 1.0
-    Xs = (X - mu) / sd
+
+    if a.relative:
+        # z-score each feature WITHIN the member's tenure bucket (weeks since
+        # first message, capped at 8+), so newcomers are compared to newcomers.
+        bucket = np.array([min(max(int(r["tenure_days"] // 7), 0), 8) for r in rows])
+        Xs = np.zeros_like(X)
+        for b in np.unique(bucket):
+            m = bucket == b
+            if m.sum() < 5:
+                Xs[m] = 0.0
+                continue
+            mu, sd = X[m].mean(0), X[m].std(0)
+            sd[sd == 0] = 1.0
+            Xs[m] = (X[m] - mu) / sd
+        print(f"tenure buckets: {len(np.unique(bucket))} "
+              f"(sizes {np.bincount(bucket).tolist()})")
+    else:
+        mu, sd = X.mean(0), X.std(0)
+        sd[sd == 0] = 1.0
+        Xs = (X - mu) / sd
 
     print(f"{len(rows)} user-weeks (>= {a.min_msgs} msgs), "
           f"{int(y.sum())} positive ({y.mean():.1%})")
@@ -229,13 +267,30 @@ def main():
     w_pos = float((y == 0).sum() / max((y == 1).sum(), 1))
     K, REPEATS = 10, 5
     acc = np.zeros(len(y))
+    users = np.array([r["user"] for r in rows])
     for rep in range(REPEATS):
         rng = np.random.default_rng(1234 + rep)
-        folds = np.empty(len(y), dtype=int)
-        for cls in (0.0, 1.0):
-            idx = np.where(y == cls)[0]
-            rng.shuffle(idx)
-            folds[idx] = np.arange(len(idx)) % K
+        if a.group_cv:
+            # hold out whole USERS: no model ever scores a week belonging to a
+            # user it trained on. Positive users are spread across folds first.
+            folds = np.empty(len(y), dtype=int)
+            pos_u = np.array(sorted({u for u, yy in zip(users, y) if yy == 1}))
+            neg_u = np.array(sorted(set(users.tolist()) - set(pos_u.tolist())))
+            rng.shuffle(pos_u)
+            rng.shuffle(neg_u)
+            assign = {}
+            for i, u in enumerate(pos_u):
+                assign[u] = i % K
+            for i, u in enumerate(neg_u):
+                assign[u] = i % K
+            for i, u in enumerate(users):
+                folds[i] = assign[u]
+        else:
+            folds = np.empty(len(y), dtype=int)
+            for cls in (0.0, 1.0):
+                idx = np.where(y == cls)[0]
+                rng.shuffle(idx)
+                folds[idx] = np.arange(len(idx)) % K
         for k in range(K):
             te = folds == k
             tr = ~te
