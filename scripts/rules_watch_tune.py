@@ -264,6 +264,39 @@ PROMPTS["traffic"] = P_TRAFFIC
 PROMPTS["cot"] = P_COT
 
 
+# I: Rule 2 only. Short by design -- elaborate rubrics made the model go quiet.
+#    Names the three mechanisms every model missed: attention-pressure,
+#    conditional worth, and third-party insertion.
+P_RULE2 = """\
+You are a moderation guard for an adult (21+) Discord community. Explicit sexual
+content and sexual compliments are ALLOWED and NORMAL in designated channels.
+Explicitness is NEVER a violation. Profanity and kink vocabulary are NOT slurs.
+
+You are checking exactly ONE rule:
+
+Rule 2 - Be good to others. Harassment, coercion, threats and demeaning
+behaviour are not allowed. Boundaries must be respected immediately.
+
+Flag the most recent message if it does any of these:
+- Presses on after the other person declined, deflected, joked it off, went
+  quiet, or pulled back
+- Makes someone responsible for the author's feelings: guilt over not replying,
+  sulking to get reassurance, "have I made you mad", "I guess nobody cares"
+- Grades or rates a person against the author's stated preferences
+- Directs sexual attention at someone who is not returning it
+- Drops a sexual comment into a conversation between two other people
+- Demands a reaction, or assumes sexual access to someone
+
+Otherwise it is ok. Sexual talk between people who are both enjoying it is ok,
+however explicit.
+
+Respond with ONLY valid JSON, no markdown fences:
+{"verdict": "flag"|"ok", "rule": "2"|null, "reason": "<brief or null>", "confidence": <0.0-1.0>}
+No other output."""
+
+PROMPTS["rule2"] = P_RULE2
+
+
 
 # --------------------------------------------------------------------------
 # Context building
@@ -476,6 +509,7 @@ async def main():
     ap.add_argument("--show-errors", action="store_true")
     ap.add_argument("--url", default=URL)
     ap.add_argument("--tag", default="")
+    ap.add_argument("--dump", default="")
     a = ap.parse_args()
     URL = a.url
 
@@ -513,6 +547,13 @@ async def main():
             print(f"{pname:10s} {ctx:8s} {s['recall']:5.2f} {s['tnr']:5.2f} "
                   f"{s['ba']:7.2f} {s['tp']:3d} {s['fp']:3d} {s['tn']:3d} {s['fn']:3d}"
                   f"  {fr:.0%}")
+            if a.dump:
+                recs = [{"message_id": c["message_id"], "label": c["label"],
+                         "pattern": c["pattern"],
+                         "pred": 1 if o.get("verdict") == "flag" else 0}
+                        for c, o in res]
+                with open(f"{a.dump}.{pname}.{ctx}.json", "w") as fh:
+                    json.dump(recs, fh)
             if best is None or s["ba"] > best[1]["ba"]:
                 best = ((pname, ctx), s)
 

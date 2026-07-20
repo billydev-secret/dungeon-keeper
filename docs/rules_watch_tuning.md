@@ -12,7 +12,7 @@ patterns look like, and what to change.
 | | |
 |---|---|
 | ✅ **Done** | §2.1 boundary-gate fix — 45.4 → **7.7 alerts/day** (−82.9%), `tests/test_rules_watch_scorer.py` |
-| 📊 **Measured** | §12 model/prompt/context sweep — ceiling **0.66** (Nemo-12B Q4_K_M); **0.61** on a 4060-sized build (Nemo-12B IQ4_XS + `baseline_plus`), vs 0.52 today. Noise floor ±0.02 |
+| 📊 **Measured** | §12 sweep — LLM ceiling **0.66**, **0.61** on a 4060 build, vs 0.52 today. A **2-feature classifier scores 0.65 for free** (§12.2). Ship **classifier detects → LLM vetoes** (§12.3): same accuracy, false alarms 13 → 7. Noise ±0.02 |
 | ⬜ **Not started** | everything in §7, the §11 card, and the §2.2 model decision |
 
 **Companions:** `tests/data/rules_watch_eval.jsonl` (57 labeled real messages — read
@@ -784,6 +784,49 @@ auditability is worth more than a 0.01 score difference.
 **Not applicable: OpenClaw.** Checked, since it came up — it is a stateful Node.js
 *agent harness* (per-instance workspaces, tool deny-lists), not a classifier. No
 text-classification component; nothing to use here.
+
+### 12.3 Should we run both? Yes — as detect-then-veto, not as a vote
+
+**Rule-2-focused prompting fails.** A short prompt naming only Rule 2 and the three
+mechanisms every model missed (attention-pressure, conditional worth, third-party
+insertion) scored **0.50–0.51**, against 0.61 for the general `baseline_plus`. That
+completes the pattern across six variants: **every attempt to give this model more
+explicit criteria makes it worse.** It cannot consume structured moderation rules;
+it only slides between over- and under-flagging.
+
+**The two systems fail differently.** Classifier and LLM agree on only 35/57 cases
+(61%). Both wrong on 7; classifier-only-right on 14; LLM-only-right on 8. An oracle
+picking the better one each time would score **0.82** against 0.61–0.65 individually
+— so the complementarity is real and large.
+
+**But naive voting cannot capture it:**
+
+| system | BalAcc | TPR | TNR | false alarms | precision |
+|---|---|---|---|---|---|
+| classifier alone | 0.65 | 0.95 | 0.35 | 13 | 0.73 |
+| LLM alone | 0.61 | 0.68 | 0.55 | 9 | 0.74 |
+| OR (either flags) | 0.62 | 1.00 | 0.25 | 15 | 0.71 |
+| **AND (classifier detects → LLM confirms)** | 0.64 | 0.62 | 0.65 | **7** | **0.77** |
+
+**Ship AND.** Not for the balanced accuracy — 0.64 vs 0.65 is inside the noise floor
+— but because **false alarms drop from 13 to 7**, a 46% cut in the one error that
+costs a relationship (§11).
+
+**Why the LLM earns its place in that arrangement:** 6 of its 8 unique wins are
+*negatives* — `"Aw you're sweet, I'm he/him"`, `"Not without consent, don't jinx my
+dice!"`, `"Stunning 😍 what a way to wake up"`, `"You look so fucking good.. as I am
+getting in the shower 😉"`. These are messages whose **text is plainly benign but
+whose relational features look bad**: the author is 8 days into the server with low
+reciprocity, so the classifier flags him whatever he says. The classifier cannot
+read "I'm he/him" as innocuous; the LLM can. That is the division of labour the
+whole document has been circling — *"is this text benign?"* is answerable by a small
+model, *"does this violate Rule 2?"* is not.
+
+**On the recall cost** (0.95 → 0.62): largely illusory at the level you act. Cards
+are user-week artifacts (§11) and velocibaker produced flaggable messages for five
+consecutive days — at 62% per-message recall a persistent pattern still surfaces
+within a day or two. False positives do not aggregate away; each is a separate
+chance to nudge someone who did nothing.
 
 **Conclusion.** The LLM cannot perform detection. It *can* rank and suppress:
 Nemo at `neutral+*` reaches TNR 0.90–0.95, and Qwen `neutral+full` TNR 0.85. So the
