@@ -6,9 +6,12 @@ lifecycle, the expiry/auto-revert sweep, the nickname-stake flow, rate limiting,
 the abstract hooks — lives in `BaseGame`.
 
 Two stake modes are supported on the duel path:
-  * **Nickname mode** (no custom stakes): the winner renames the loser for 24h.
+  * **Nickname mode** (no custom stakes, no wager): the winner renames the
+    loser for 24h.
   * **Custom stakes** (free-text stakes given): the loser owes the agreed-upon
-    stakes; the bot enforces nothing and never renames anyone.
+    stakes; the bot enforces nothing and never renames anyone. A coin wager
+    with no stakes text lands here too — the pot *is* the stake
+    (WAGER_STAKES_TEXT is recorded at creation), so no rename either.
 """
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
-from .base_game import _RATE_LIMIT_MAX, BaseGame
+from .base_game import _RATE_LIMIT_MAX, WAGER_STAKES_TEXT, BaseGame
 from .filters import validate_stakes
 from .views import ChallengeView, ResultView
 
@@ -84,10 +87,11 @@ class BaseDuel(BaseGame):
             )
             return
 
-        # Nickname-mode preflight only applies when no custom stakes are set;
-        # custom-stakes games never rename anyone, so they don't need the
+        # Nickname-mode preflight only applies when nicknames are the stake —
+        # no custom stakes text AND no wager (a wager becomes the stake below).
+        # Non-nickname games never rename anyone, so they don't need the
         # Manage Nicknames permission or a clear nickname slate.
-        if stakes_text is None:
+        if stakes_text is None and wager is None:
             perm_error = await self._check_bot_can_nick(guild, [challenger, target])  # type: ignore[list-item]
             if perm_error:
                 await interaction.response.send_message(perm_error, ephemeral=True)
@@ -123,6 +127,8 @@ class BaseDuel(BaseGame):
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
+            if stakes_text is None:
+                stakes_text = WAGER_STAKES_TEXT
 
         game_id = await self._db_create_game(
             guild_id=guild.id,
