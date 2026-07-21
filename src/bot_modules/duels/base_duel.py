@@ -23,8 +23,10 @@ import discord
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
+from bot_modules.services.economy_service import EconSettings
+
 from . import db as duels_db
-from .base_game import _RATE_LIMIT_MAX, BaseGame
+from .base_game import _RATE_LIMIT_MAX, BaseGame, _fmt_coins
 from .filters import resolve_stakes_text, validate_stakes
 from .views import ChallengeView, ResultView
 
@@ -145,8 +147,9 @@ class BaseDuel(BaseGame):
             await self._declare_wager(guild.id, game_id, challenger.id, wager)
 
         accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        settings = await self._econ_settings(guild.id) if wager is not None else None
         embed = self._build_challenge_embed(
-            challenger, target, stakes_text, accent, wager=wager,  # type: ignore[arg-type]
+            challenger, target, stakes_text, accent, wager=wager, settings=settings,  # type: ignore[arg-type]
         )
         view = ChallengeView(
             game_id=game_id,
@@ -168,6 +171,7 @@ class BaseDuel(BaseGame):
         color: "discord.Color | None" = None,
         *,
         wager: int | None = None,
+        settings: EconSettings | None = None,
     ) -> discord.Embed:
         if color is None:
             color = discord.Color(COLOR_GOLD)
@@ -183,10 +187,14 @@ class BaseDuel(BaseGame):
         )
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
         if wager:
+            each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
+            takes = (
+                _fmt_coins(settings, wager * 2) if settings else f"**{wager * 2:,}**"
+            )
             embed.add_field(
                 name="💰 Wager",
                 value=(
-                    f"**{wager:,}** each — winner takes **{wager * 2:,}**.\n"
+                    f"{each} each — winner takes {takes}.\n"
                     "_Nothing is charged unless the challenge is accepted._"
                 ),
                 inline=False,
