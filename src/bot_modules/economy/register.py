@@ -376,6 +376,14 @@ def render_memo(entry: RegisterEntry, resolve_name: Callable[[int], str]) -> str
     if kind in ("game_participation", "game_win"):
         return _KIND_DISPLAY[kind][1]
 
+    if kind == "wager_payout":
+        # The credited amount is already net of any rake; say where the
+        # difference went so the feed's arithmetic visibly adds up.
+        rake = int(meta.get("rake") or 0)
+        if rake:
+            return f"Game wager won — house kept {rake:,}"
+        return _KIND_DISPLAY[kind][1]
+
     if kind == "grant":
         reason = str(meta.get("reason") or "").strip()
         actor = resolve_name(entry.actor_id) if entry.actor_id else "staff"

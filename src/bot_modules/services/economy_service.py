@@ -149,6 +149,13 @@ class EconSettings:
     # switch — announce first.
     demurrage_rate_pct: int = 0
     demurrage_threshold: int = 500
+    # House cut on PvP wager pots (revises the sinks-round-2 no-rake stance):
+    # the winner takes pot minus rake%, and the rake evaporates. 0 (the
+    # dark-launch default) keeps wagers the original pure transfer; raking
+    # makes them a real sink at the cost of the clean "winner takes the pot"
+    # promise, so announce before setting it. Never raked: refunds, or a pot
+    # holding a single stake (the winner's own ante back is not a contest).
+    wager_rake_pct: int = 0
     # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);
     # readable via GET /economy/config but deliberately absent from the
     # dashboard's editable-field whitelist.

@@ -12,7 +12,11 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.economy_service import apply_credit, get_balance
+from bot_modules.services.economy_service import (
+    apply_credit,
+    get_balance,
+    save_econ_settings,
+)
 from bot_modules.services.economy_wager_service import (
     declare_stake,
     drop_pending,
@@ -130,8 +134,8 @@ def test_settle_pays_whole_pot_to_winner_and_conserves(db):
             hold_stake(conn, GUILD, GAME, GID, uid, 50)
         assert pot_total(conn, GAME, GID) == 150
 
-        paid = settle(conn, GAME, GID, A)
-        assert paid == 150
+        paid, rake = settle(conn, GAME, GID, A)
+        assert paid == 150 and rake == 0
         assert get_balance(conn, GUILD, A) == 200  # 50 left + 150 pot
         assert get_balance(conn, GUILD, B) == 50
         assert get_balance(conn, GUILD, C) == 50
@@ -147,10 +151,10 @@ def test_settle_is_exactly_once_under_replayed_hook(db):
             _fund(conn, uid, 100)
             hold_stake(conn, GUILD, GAME, GID, uid, 50)
 
-        assert settle(conn, GAME, GID, A) == 100
+        assert settle(conn, GAME, GID, A).paid == 100
         # The sweep, the resume path and the resolution can all reach the hook.
-        assert settle(conn, GAME, GID, A) == 0
-        assert settle(conn, GAME, GID, B) == 0
+        assert settle(conn, GAME, GID, A) == (0, 0)
+        assert settle(conn, GAME, GID, B) == (0, 0)
         assert get_balance(conn, GUILD, A) == 150
         assert get_balance(conn, GUILD, B) == 50
 
@@ -162,7 +166,7 @@ def test_settle_with_no_winner_refunds_everyone(db):
             _fund(conn, uid, 100)
             hold_stake(conn, GUILD, GAME, GID, uid, 50)
 
-        assert settle(conn, GAME, GID, None) == 0
+        assert settle(conn, GAME, GID, None) == (0, 0)
         assert get_balance(conn, GUILD, A) == 100
         assert get_balance(conn, GUILD, B) == 100
         assert pot_total(conn, GAME, GID) == 0
@@ -170,7 +174,7 @@ def test_settle_with_no_winner_refunds_everyone(db):
 
 def test_settle_on_unfunded_game_is_a_noop(db):
     with open_db(db) as conn:
-        assert settle(conn, GAME, GID, A) == 0
+        assert settle(conn, GAME, GID, A) == (0, 0)
         assert get_balance(conn, GUILD, A) == 0
 
 
@@ -202,7 +206,7 @@ def test_refund_player_covers_lobby_leave(db):
         assert staked_players(conn, GAME, GID) == [A]
         assert refund_player(conn, GAME, GID, B) == 0  # replay safe
         # The remaining player still settles normally.
-        assert settle(conn, GAME, GID, A) == 50
+        assert settle(conn, GAME, GID, A).paid == 50
 
 
 def test_refund_after_settle_pays_nothing(db):
@@ -252,3 +256,71 @@ def test_orphan_sweep_narrows_to_old_held_escrow(db):
         )
 
         assert orphaned_games(conn, older_than=NOW - 3600) == [(GAME, GID)]
+
+
+# ── house rake (wager_rake_pct) ────────────────────────────────────────
+
+
+def _set_rake(conn, pct):
+    save_econ_settings(conn, GUILD, {"wager_rake_pct": pct})
+
+
+def test_rake_comes_out_of_a_contested_pot(db):
+    with open_db(db) as conn:
+        _set_rake(conn, 10)
+        for uid in (A, B):
+            _fund(conn, uid, 100)
+            hold_stake(conn, GUILD, GAME, GID, uid, 50)
+
+        assert settle(conn, GAME, GID, A) == (90, 10)
+        assert get_balance(conn, GUILD, A) == 140  # 50 left + 90 net pot
+        # The 10 evaporated: 200 funded, 190 remain across both wallets.
+        assert get_balance(conn, GUILD, A) + get_balance(conn, GUILD, B) == 190
+        # The payout ledger row is net and names the cut in meta.
+        row = conn.execute(
+            "SELECT amount, meta FROM econ_ledger WHERE kind = 'wager_payout'",
+        ).fetchone()
+        import json
+
+        assert int(row["amount"]) == 90
+        assert json.loads(row["meta"])["rake"] == 10
+
+
+def test_rake_zero_default_preserves_winner_takes_all(db):
+    with open_db(db) as conn:  # no settings row at all — the shipped default
+        for uid in (A, B):
+            _fund(conn, uid, 100)
+            hold_stake(conn, GUILD, GAME, GID, uid, 50)
+        assert settle(conn, GAME, GID, A) == (100, 0)
+
+
+def test_rake_never_touches_refunds(db):
+    with open_db(db) as conn:
+        _set_rake(conn, 10)
+        for uid in (A, B):
+            _fund(conn, uid, 100)
+            hold_stake(conn, GUILD, GAME, GID, uid, 50)
+        assert settle(conn, GAME, GID, None) == (0, 0)
+        assert get_balance(conn, GUILD, A) == 100
+        assert get_balance(conn, GUILD, B) == 100
+
+
+def test_rake_skips_a_single_stake_pot(db):
+    """A winner reclaiming their own ante (everyone else refunded out)."""
+    with open_db(db) as conn:
+        _set_rake(conn, 10)
+        for uid in (A, B):
+            _fund(conn, uid, 100)
+            hold_stake(conn, GUILD, GAME, GID, uid, 50)
+        refund_player(conn, GAME, GID, B)  # lobby leave
+        assert settle(conn, GAME, GID, A) == (50, 0)
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_rake_floor_division_rounds_tiny_cuts_to_nothing(db):
+    with open_db(db) as conn:
+        _set_rake(conn, 10)
+        for uid in (A, B):
+            _fund(conn, uid, 100)
+            hold_stake(conn, GUILD, GAME, GID, uid, 4)  # pot 8 → 10% = 0.8 → 0
+        assert settle(conn, GAME, GID, A) == (8, 0)

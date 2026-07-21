@@ -102,6 +102,9 @@ class EconomyConfigUpdate(BaseModel):
     # wealth at the threshold (the floor is protected), so it's a real bound.
     demurrage_rate_pct: int | None = Field(default=None, ge=0, le=100)
     demurrage_threshold: int | None = Field(default=None, ge=0)
+    # Wager rake capped well under half: past that a "winner takes the pot"
+    # game stops being worth winning.
+    wager_rake_pct: int | None = Field(default=None, ge=0, le=50)
     price_quest_reroll: int | None = Field(default=None, ge=0)
     quest_reroll_daily_cap: int | None = Field(default=None, ge=0)
     price_streak_shield: int | None = Field(default=None, ge=0)

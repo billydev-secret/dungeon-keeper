@@ -40,6 +40,11 @@ the missing **status** surface, and puts the wallet in front of the PvP games.
 | QOTD charge timing | **Debit on submit**, auto-refund on deny/expire — a free queue invites spam |
 | QOTD approval surface | **Both** Discord card and dashboard, matching the quest sign-off idiom |
 
+> **Revised 2026-07-20:** an optional `wager_rake_pct` (default 0, Sinks
+> page, capped 50) now exists — at 0 the no-rake stance below still holds
+> verbatim; pricing it turns each settled pot into a partial burn. See the
+> spec's §6 wager row.
+
 ### Consequence of the no-rake decision, stated plainly
 
 Winner-takes-all wagering is a **transfer, not a sink**. Coins move sideways
@@ -202,7 +207,9 @@ one-file change.
 
 ## Stage 4b — coin wagers on the duel games
 
-**Built 2026-07-20.** Equal ante, winner takes the pot, no rake.
+**Built 2026-07-20.** Equal ante, winner takes the pot, no rake (an
+optional house rake was added later the same day — see the revision note
+above; 0 remains the default).
 
 Locked at build time (user Q&A 2026-07-20): lobby games debit **on join**
 (leaving refunds) so a host is never blocked at start by someone else's
