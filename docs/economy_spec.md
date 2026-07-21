@@ -348,7 +348,11 @@ filtered by personal boards, with per-member rows in `econ_community_contrib`
   `econ_community_tier_payouts` (tier 0 reserves the **top-contributor
   bonus**: `reward // 2` to the top 3 by contribution). Contribution and
   tier-payout rows reset at the next activation, so a re-run pays afresh;
-  idempotency only has to hold within a run.
+  idempotency only has to hold within a run. **Anonymous kinds**
+  (`quests.ANON_COMMUNITY_KINDS`: confession, confession_reply, whisper)
+  pay flat tiers only — no bonus, an empty top list in the settle summary,
+  and a name-free resolution beat sheet — because naming the most active
+  confessors/repliers/whisperers would deanonymize the feed.
 - **Beat sheets, not bot posts:** kickoff / tier-crossed / final-24h /
   resolution are **DMed to the community host**
   (`EconSettings.community_host_user_id`, 0 → guild owner) as numbers +

@@ -1234,6 +1234,66 @@ def test_community_weekly_settlement_tiers_and_bonus(db):
         assert int(get_quest(conn, GUILD, qid)["active"]) == 0
 
 
+def test_community_anonymous_kind_pays_tiers_but_never_a_bonus(db):
+    # A community weekly on an anonymous kind (confession_reply here) must
+    # not surface its top contributors anywhere: no bonus payment (the
+    # ledger row would name the most active repliers) and an empty top list
+    # in the settle summary the paste-ready beat sheet renders.
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+        get_quest,
+        settle_community_weekly,
+    )
+
+    with open_db(db) as conn:
+        qid = _community_kind(
+            conn, kind="confession_reply", target=10, reward=30, active=False
+        )
+        activate_community_weekly(conn, GUILD, qid, target=10, week="2026-W29")
+        conn.execute(
+            "UPDATE econ_community_progress SET current = 10 WHERE quest_id = ?",
+            (qid,),
+        )
+        conn.execute(
+            "INSERT INTO econ_community_contrib (quest_id, user_id, count) "
+            "VALUES (?, ?, 7), (?, ?, 3)",
+            (qid, USER, qid, USER_2),
+        )
+        summary = settle_community_weekly(
+            conn, SETTINGS, GUILD, get_quest(conn, GUILD, qid),
+            {USER: False, USER_2: False},
+        )
+        assert summary["anonymous"] is True
+        assert summary["tiers_crossed"] == 3
+        assert summary["contributors"] == 2  # aggregate count still fine
+        assert summary["top_contributors"] == []
+        assert summary["bonus"] == 0 and summary["bonus_paid"] == []
+        # All 3 tiers × 30 flat, and NOT a coin more.
+        assert get_balance(conn, GUILD, USER) == 90
+        assert get_balance(conn, GUILD, USER_2) == 90
+        assert conn.execute(
+            "SELECT 1 FROM econ_ledger WHERE kind = 'quest_community_bonus'"
+        ).fetchone() is None
+
+
+def test_beat_resolution_anonymous_carries_no_mentions(db):
+    from bot_modules.economy.quests import beat_resolution
+
+    summary = {
+        "title": "Voices from the Dark", "current": 10, "target": 10,
+        "tiers_crossed": 3, "reward_per_tier": 30, "paid_member_tiers": 6,
+        "contributors": 2, "top_contributors": [], "bonus": 0,
+        "bonus_paid": [], "anonymous": True,
+    }
+    text = beat_resolution(summary)
+    assert "<@" not in text  # paste-ready sheet must carry no names
+    assert "anonymous" in text.lower()
+    # The normal path still name-drops.
+    summary_named = {**summary, "anonymous": False,
+                     "top_contributors": [(USER, 7)], "bonus_paid": [USER]}
+    assert f"<@{USER}>" in beat_resolution(summary_named)
+
+
 def test_community_reactivation_resets_run_state(db):
     from bot_modules.services.economy_quests_service import (
         activate_community_weekly,

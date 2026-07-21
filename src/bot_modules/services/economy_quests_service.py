@@ -2042,8 +2042,14 @@ def settle_community_weekly(
                 )
             paid_members += 1
 
+    # Anonymous kinds pay flat tiers only: surfacing the top confessors /
+    # repliers / whisperers (in the bonus ledger or the paste-ready beat
+    # sheet) would deanonymize the feed the kind exists to protect.
+    anonymous = str(quest["trigger_kind"] or "") in quests.ANON_COMMUNITY_KINDS
     contributors, top = community_contrib_summary(conn, qid)
-    bonus = reward // 2
+    if anonymous:
+        top = []
+    bonus = 0 if anonymous else reward // 2
     bonus_paid: list[int] = []
     if crossed > 0 and bonus >= 1:
         for user_id, _count in top:
@@ -2087,6 +2093,7 @@ def settle_community_weekly(
         "top_contributors": top,
         "bonus": bonus,
         "bonus_paid": bonus_paid,
+        "anonymous": anonymous,
     }
 
 
