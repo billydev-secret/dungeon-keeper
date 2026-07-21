@@ -46,13 +46,13 @@ That is **18 `/games play` commands** (Anonymous AMA's two axes are one command)
 | `/games join [user]` · `/games leave [user]` | Self, or Host/Mod/Game-Host to move others | Add/remove yourself (or, with elevation, someone else) in a running game that has a roster. Open-submission games reply that there's nothing to join |
 | `/games config game-status` | Mod/Admin (Manage Server or Administrator) | Inspect the active game in the current channel |
 | `/games config game-end` | Mod/Admin | Force-close the active game and post a "Game Force-Closed" notice |
-| `/games track watch <channel> <bot>` | Mod/Admin | Watch a channel + bot and start banking its game-result messages (external Gamebot tracking) |
-| `/games track status` | Mod/Admin | Show tracking state, watched channel/bot, and messages banked |
-| `/games track disable` · `/games track enable` | Mod/Admin | Pause / resume banking (data is retained while paused) |
-| `/games track sample [channel] [count]` | Mod/Admin | Dump recent bot messages (raw content + embeds) as JSON to confirm the format |
+| `/games track watch <channel> <bot> <kind>` | Mod/Admin | Watch a channel + bot and start banking its game-result messages. `kind` (`Gamebot (Cards Against Humanity)` \| `Cat Bot`) selects the parser/payout. Several bots can be tracked per guild (one watch per bot) |
+| `/games track status` | Mod/Admin | List every tracked bot — its kind, watched channel, enabled/paused state, and messages banked |
+| `/games track disable [bot]` · `/games track enable [bot]` | Mod/Admin | Pause / resume banking for one bot (data retained while paused). `bot` is optional when only one is tracked |
+| `/games track sample [channel] [bot] [count]` | Mod/Admin | Dump recent bot messages (raw content + embeds) as JSON to confirm the format |
 | `/games dev fill` · `/games dev answer` | Dev/testing only | Populate a lobby with fake players / submit fake Clapback answers — a developer surface, not a player command |
 
-`/games track *` is a format-agnostic collector: an `on_message`/`on_message_edit` listener banks every message from the watched channel+bot RAW (keyed on message id, de-duplicated across restarts/edits) into `games_external_messages`. Nothing is parsed at ingest — metrics are derived later, so a format change never loses history. This is collection infrastructure toward our own leaderboards for games we don't run; there is no leaderboard surface yet.
+`/games track *` is a format-agnostic collector: an `on_message`/`on_message_edit` listener banks every message from a watched channel+bot RAW (keyed on message id, de-duplicated across restarts/edits) into `games_external_messages`. Nothing is parsed at ingest — metrics are derived later, so a format change never loses history. Each watch carries a `kind` (migration 097 generalised the one-bot-per-guild table to multiple `(channel, bot, kind)` rows, `UNIQUE(guild_id, bot_user_id)`) that selects a parser in a later stage; per the `docs/plans/external-game-economy.md` plan, parsed results reuse the `party_game` (participation) and `game_win` triggers for Gamebot CAH, and a tiered `cat_catch` trigger for Cat Bot. Collection is live; the parser + economy payout land in stages 2–3.
 
 ### Dashboard-managed configuration
 
@@ -186,7 +186,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 | Per-game `options` | empty | Free-form per-game knob bag (only a few games consume it, e.g. Photo's ping role) |
 | Audit channel | unset | Mirror anonymous submissions here with original authors visible |
 | Editor / Game Host role | unset | Role whose holders pass the Game Host check on the dashboard and can move other players |
-| External tracking watch | unset | Channel + bot whose result messages are banked (`/games track`) |
+| External tracking watches | unset | One or more (channel, bot, kind) whose result messages are banked (`/games track`) |
 
 ### Per-channel (dashboard)
 
@@ -201,7 +201,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 ### In-memory
 
-- The external-tracking watch cache (`guild → channel+bot`) is warmed on load and kept in sync by the `/games track` commands so the `on_message` hot path never touches the DB.
+- The external-tracking watch cache (`guild → {bot → (channel, kind)}`) is warmed on load and kept in sync by the `/games track` commands so the `on_message` hot path never touches the DB.
 - A per-game payload lock serialises mutations within one game; the lock is freed on game close.
 
 ## Stored data

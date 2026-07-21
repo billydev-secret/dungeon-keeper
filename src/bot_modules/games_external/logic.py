@@ -13,39 +13,69 @@ from typing import Any, Mapping
 import discord
 
 
-async def get_watch(db, guild_id: int) -> Mapping[str, Any] | None:
-    """Return the watch config row for a guild, or None if unset."""
-    return await db.fetchone(
-        "SELECT guild_id, channel_id, bot_user_id, enabled FROM games_external_watch "
-        "WHERE guild_id = ?",
+# Parser kinds a watch can carry — each selects a parser + economy mapping in
+# parser.py. Ordered for display; the first is the default a bare migration row
+# takes. Labels are what /games track shows.
+WATCH_KIND_LABELS: dict[str, str] = {
+    "gamebot_cah": "Gamebot (Cards Against Humanity)",
+    "catbot": "Cat Bot",
+}
+VALID_WATCH_KINDS: tuple[str, ...] = tuple(WATCH_KIND_LABELS)
+
+
+async def list_watches(db, guild_id: int) -> list[Mapping[str, Any]]:
+    """Every watch config for a guild (enabled or paused), newest first."""
+    rows = await db.fetchall(
+        "SELECT id, guild_id, channel_id, bot_user_id, kind, enabled "
+        "FROM games_external_watch WHERE guild_id = ? ORDER BY set_at DESC",
         (guild_id,),
+    )
+    return list(rows)
+
+
+async def get_watch_for_bot(
+    db, guild_id: int, bot_user_id: int
+) -> Mapping[str, Any] | None:
+    """The watch row for one (guild, bot), or None."""
+    return await db.fetchone(
+        "SELECT id, guild_id, channel_id, bot_user_id, kind, enabled "
+        "FROM games_external_watch WHERE guild_id = ? AND bot_user_id = ?",
+        (guild_id, bot_user_id),
     )
 
 
 async def set_watch(
-    db, guild_id: int, channel_id: int, bot_user_id: int, set_by: int
+    db, guild_id: int, channel_id: int, bot_user_id: int, kind: str, set_by: int
 ) -> None:
-    """Point a guild's collector at a channel + external bot (enabled)."""
+    """Point a guild's collector at a channel + external bot (enabled).
+
+    Idempotent per (guild, bot): re-running for the same bot repoints its
+    channel/kind rather than adding a duplicate. Different bots coexist.
+    """
     await db.execute(
         """
-        INSERT INTO games_external_watch (guild_id, channel_id, bot_user_id, enabled, set_by)
-        VALUES (?, ?, ?, 1, ?)
-        ON CONFLICT(guild_id) DO UPDATE SET
+        INSERT INTO games_external_watch
+            (guild_id, channel_id, bot_user_id, kind, enabled, set_by)
+        VALUES (?, ?, ?, ?, 1, ?)
+        ON CONFLICT(guild_id, bot_user_id) DO UPDATE SET
             channel_id  = excluded.channel_id,
-            bot_user_id = excluded.bot_user_id,
+            kind        = excluded.kind,
             enabled     = 1,
             set_by      = excluded.set_by,
             set_at      = CURRENT_TIMESTAMP
         """,
-        (guild_id, channel_id, bot_user_id, set_by),
+        (guild_id, channel_id, bot_user_id, kind, set_by),
     )
 
 
-async def set_watch_enabled(db, guild_id: int, enabled: bool) -> bool:
-    """Toggle collection on/off. Returns False if no watch config exists yet."""
+async def set_watch_enabled(
+    db, guild_id: int, bot_user_id: int, enabled: bool
+) -> bool:
+    """Toggle one bot's collection on/off. False if no such watch exists."""
     cur = await db.execute(
-        "UPDATE games_external_watch SET enabled = ? WHERE guild_id = ?",
-        (1 if enabled else 0, guild_id),
+        "UPDATE games_external_watch SET enabled = ? "
+        "WHERE guild_id = ? AND bot_user_id = ?",
+        (1 if enabled else 0, guild_id, bot_user_id),
     )
     return cur.rowcount > 0
 
@@ -53,7 +83,7 @@ async def set_watch_enabled(db, guild_id: int, enabled: bool) -> bool:
 async def load_all_watches(db) -> list[Mapping[str, Any]]:
     """All enabled watch configs, for warming the in-memory cache on startup."""
     rows = await db.fetchall(
-        "SELECT guild_id, channel_id, bot_user_id FROM games_external_watch "
+        "SELECT guild_id, channel_id, bot_user_id, kind FROM games_external_watch "
         "WHERE enabled = 1"
     )
     return list(rows)
@@ -96,10 +126,17 @@ async def store_message(db, message: discord.Message) -> None:
     )
 
 
-async def count_messages(db, guild_id: int) -> int:
-    """How many raw messages we've banked for a guild."""
-    r = await db.fetchone(
-        "SELECT COUNT(*) AS n FROM games_external_messages WHERE guild_id = ?",
-        (guild_id,),
-    )
+async def count_messages(db, guild_id: int, bot_user_id: int | None = None) -> int:
+    """How many raw messages we've banked for a guild (optionally one bot)."""
+    if bot_user_id is None:
+        r = await db.fetchone(
+            "SELECT COUNT(*) AS n FROM games_external_messages WHERE guild_id = ?",
+            (guild_id,),
+        )
+    else:
+        r = await db.fetchone(
+            "SELECT COUNT(*) AS n FROM games_external_messages "
+            "WHERE guild_id = ? AND author_id = ?",
+            (guild_id, bot_user_id),
+        )
     return int(r["n"]) if r else 0
