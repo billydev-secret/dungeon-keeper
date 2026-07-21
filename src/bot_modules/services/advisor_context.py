@@ -22,9 +22,13 @@ visibility gate is applied when the context is built, not when it's cached.
 
 from __future__ import annotations
 
+import dataclasses
+import importlib
 import logging
 import re
+import sqlite3
 import time
+from collections.abc import Callable
 
 import discord
 
@@ -102,50 +106,125 @@ _SECRET_KEY_RE = re.compile(
     re.I,
 )
 _CONFIG_VALUE_MAXLEN = 200
-_CONFIG_MAX_LINES = 80
+_CONFIG_MAX_LINES = 80  # per feature section
+_CONFIG_MAX_CHARS = 9000  # whole settings block
 
 
-def _resolve_config_value(guild, key: str, value):
-    """Make a raw config value human/AI-readable (ids → names, flags → on/off)."""
-    v = ("" if value is None else str(value)).strip()
-    if not v:
+def _fmt_value(guild, key: str, val):
+    """Render one setting value readably: ids → names, flags → on/off, else str."""
+    if val is None:
         return None
+    if isinstance(val, bool):
+        return "on" if val else "off"
     low = key.lower()
-    try:
-        if low.endswith(("channel_id", "channel")):
-            ch = guild.get_channel(int(v))
-            return f"#{ch.name}" if ch else f"channel {v}"
-        if low.endswith(("role_id", "role")):
-            r = guild.get_role(int(v))
-            return f"@{r.name}" if r else f"role {v}"
-    except (ValueError, TypeError, AttributeError):
-        pass
-    if v == "1":
-        return "on"
-    if v == "0":
-        return "off"
-    return v[:_CONFIG_VALUE_MAXLEN]
+    ival: int | None = None
+    if isinstance(val, int):
+        ival = val
+    elif isinstance(val, str) and val.strip().lstrip("-").isdigit():
+        ival = int(val.strip())
+    if ival is not None and ival != 0:
+        try:
+            if low.endswith(("channel_id", "channel")):
+                ch = guild.get_channel(ival)
+                return f"#{ch.name}" if ch else f"channel {ival}"
+            if low.endswith(("role_id", "role")):
+                r = guild.get_role(ival)
+                return f"@{r.name}" if r else f"role {ival}"
+        except (TypeError, AttributeError):
+            pass
+    if isinstance(val, str):
+        s = val.strip()
+        if s == "1":
+            return "on"
+        if s == "0":
+            return "off"
+        return s[:_CONFIG_VALUE_MAXLEN] or None
+    if isinstance(val, (int, float)):
+        return str(val)
+    if isinstance(val, (list, tuple, set, frozenset)):
+        return f"{len(val)} configured" if val else None
+    if isinstance(val, dict):
+        return f"{len(val)} configured" if val else None
+    return str(val)[:_CONFIG_VALUE_MAXLEN]
 
 
-def build_config_summary(conn, guild, member: discord.Member | None) -> str:
-    """A secret-filtered, name-resolved view of the guild's core (KV) settings.
+def _to_flat_dict(obj) -> dict | None:
+    """Coerce a loader's return (dataclass / Row / dict / list) to a flat dict."""
+    if obj is None:
+        return None
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        return dataclasses.asdict(obj)
+    if isinstance(obj, sqlite3.Row):
+        return dict(obj)
+    if isinstance(obj, dict):
+        return dict(obj)
+    if isinstance(obj, (list, tuple)):
+        return {"entries": len(obj)} if obj else None
+    d = getattr(obj, "__dict__", None)
+    return dict(d) if d else None
 
-    Only returned to admins. Covers the settings kept in the shared ``config``
-    table (moderation/community-ops); feature areas with their own tables
-    (economy, wellness, games, …) are NOT here — the system prompt tells the
-    model to defer to the dashboard for those instead of guessing.
-    """
-    if not _can_see_config(member):
+
+def _feature_section(guild, label: str, obj) -> str:
+    """One `[Label]` block of `key = value` lines for a feature's settings."""
+    d = _to_flat_dict(obj)
+    if not d:
         return ""
+    lines: list[str] = []
+    for key, val in d.items():
+        skey = str(key)
+        if _SECRET_KEY_RE.search(skey):
+            continue
+        fv = _fmt_value(guild, skey, val)
+        if fv is None:
+            continue
+        lines.append(f"{skey} = {fv}")
+        if len(lines) >= _CONFIG_MAX_LINES:
+            break
+    return f"[{label}]\n" + "\n".join(lines) if lines else ""
+
+
+def _mk_getter(module: str, func: str, kind: str) -> Callable:
+    """Lazily import a loader and adapt its call shape ('conn' vs 'dbpath')."""
+    def _get(conn, guild_id, db_path):
+        loader = getattr(importlib.import_module(module), func)
+        return loader(db_path, guild_id) if kind == "dbpath" else loader(conn, guild_id)
+    return _get
+
+
+# Feature settings that live in their own tables (not the shared config KV).
+# Each getter is (conn, guild_id, db_path) -> dataclass|Row|dict|list|None.
+# Failures are isolated per feature, so a bad loader just drops that section.
+_FEATURE_LOADERS: list[tuple[str, Callable]] = [
+    ("Economy", _mk_getter("bot_modules.services.economy_service", "load_econ_settings", "conn")),
+    ("XP", _mk_getter("bot_modules.core.xp_system", "load_xp_settings", "conn")),
+    ("QA rewards", _mk_getter("bot_modules.services.qa_service", "load_qa_settings", "conn")),
+    ("Voice Master", _mk_getter("bot_modules.services.voice_master_service", "load_voice_master_config", "conn")),
+    ("Wellness", _mk_getter("bot_modules.services.wellness_service", "get_wellness_config", "conn")),
+    ("Chat Revive", _mk_getter("bot_modules.services.chat_revive_service", "get_guild_config", "conn")),
+    ("Starboard", _mk_getter("bot_modules.services.starboard_service", "get_starboard_config", "conn")),
+    ("DM permissions", _mk_getter("bot_modules.services.dm_perms_service", "get_dms_config_with_conn", "conn")),
+    ("Whisper", _mk_getter("bot_modules.services.whisper_repo", "get_whisper_config", "conn")),
+    ("Guess", _mk_getter("bot_modules.services.guess_repo", "get_guess_config", "conn")),
+    ("Confessions", _mk_getter("bot_modules.services.confessions_service", "get_config_conn", "conn")),
+    ("Grant roles", _mk_getter("bot_modules.core.db_utils", "get_grant_roles", "conn")),
+    ("Booster roles", _mk_getter("bot_modules.services.booster_roles", "get_booster_roles", "conn")),
+    ("Auto-delete", _mk_getter("bot_modules.services.auto_delete_service", "list_auto_delete_rules_for_guild_with_conn", "conn")),
+    ("Auto-react", _mk_getter("bot_modules.services.auto_react_service", "list_auto_react_rules_for_guild_with_conn", "conn")),
+    ("Voice transcription", _mk_getter("bot_modules.services.voice_transcription_service", "get_config", "conn")),
+    ("Inactivity prune", _mk_getter("bot_modules.services.inactivity_prune_service", "get_prune_rule", "dbpath")),
+]
+
+
+def _kv_config_section(conn, guild) -> str:
+    """The shared config KV table (welcome, moderation, spoiler, …), secret-filtered."""
     try:
         rows = conn.execute(
             "SELECT key, value FROM config WHERE guild_id = ? ORDER BY key",
             (guild.id,),
         ).fetchall()
     except Exception:
-        log.exception("advisor config read failed for guild %s", getattr(guild, "id", "?"))
+        log.exception("advisor KV config read failed for guild %s", getattr(guild, "id", "?"))
         return ""
-
     lines: list[str] = []
     for row in rows:
         key = row["key"]
@@ -153,22 +232,53 @@ def build_config_summary(conn, guild, member: discord.Member | None) -> str:
             continue
         raw = row["value"]
         if raw is None or len(str(raw)) > _CONFIG_VALUE_MAXLEN:
-            continue  # skip long blobs (prompts / JSON) — noisy and large
-        resolved = _resolve_config_value(guild, key, raw)
-        if resolved is None:
+            continue  # skip long blobs (prompts / JSON)
+        fv = _fmt_value(guild, key, raw)
+        if fv is None:
             continue
-        lines.append(f"{key} = {resolved}")
+        lines.append(f"{key} = {fv}")
         if len(lines) >= _CONFIG_MAX_LINES:
             break
+    return "[General]\n" + "\n".join(lines) if lines else ""
 
-    if not lines:
+
+def build_config_summary(conn, guild, member: discord.Member | None, db_path=None) -> str:
+    """A secret-filtered, name-resolved view of the guild's settings across features.
+
+    Only returned to admins. Combines the shared `config` KV table with each
+    feature's own settings loader (economy, wellness, voice master, …). Values
+    are shown as raw `field = value` lines so the model reads them directly.
+    """
+    if not _can_see_config(member):
         return ""
-    return (
-        "Core saved settings (you can see these because the asker is an admin; "
-        "these are the shared/config-table settings only — economy, wellness, "
-        "games, and other feature settings are NOT shown here):\n"
-        + "\n".join(lines)
+
+    sections: list[str] = []
+    kv = _kv_config_section(conn, guild)
+    if kv:
+        sections.append(kv)
+
+    total = len(kv)
+    for label, getter in _FEATURE_LOADERS:
+        if total > _CONFIG_MAX_CHARS:
+            break
+        try:
+            sec = _feature_section(guild, label, getter(conn, guild.id, db_path))
+        except Exception:
+            log.debug("advisor config loader %s failed", label, exc_info=True)
+            continue
+        if sec:
+            sections.append(sec)
+            total += len(sec)
+
+    if not sections:
+        return ""
+    header = (
+        "Server settings — the asker is an admin, so you can see these. Only "
+        "what's listed here is visible to you; if a setting or feature isn't "
+        "here, say you can't see it and point to its dashboard panel. Values are "
+        "raw field names (e.g. welcome_channel_id = #welcome); read them sensibly.\n\n"
     )
+    return (header + "\n\n".join(sections))[: _CONFIG_MAX_CHARS + 500]
 
 
 def capability_summary(member: discord.Member | None) -> str:
@@ -301,7 +411,7 @@ def build_asker_context(
         with open_db(db_path) as conn:
             docs = list_docs(conn, guild.id)
             anns = list_announcements(conn, guild.id)
-            config_text = build_config_summary(conn, guild, viewer)
+            config_text = build_config_summary(conn, guild, viewer, db_path)
     except Exception:
         log.exception("advisor context DB read failed for guild %s", getattr(guild, "id", "?"))
         docs, anns = [], []
