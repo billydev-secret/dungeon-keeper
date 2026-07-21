@@ -88,7 +88,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 ### Setup & utilities
 - **`/setup`** — First-time setup in two phases: provision every bot channel and category, then walk a wizard for mod/admin roles, jail/ticket categories, and log/transcript channels. Get a server fully wired in minutes.
 - **`/help`** — A contextual command reference that only shows the sections your permissions unlock. Newcomers and mods each see exactly what's relevant to them.
-- **`/ask`** — **Billy-bot**, an AI helper that answers "how do I use X" questions in plain language, grounded in the server guide (so it won't invent commands). Replies privately in Discord; also available as an "Ask Billy-bot" box on every dashboard Help page.
+- **`/ask`** — **Billy-bot**, an AI helper that answers "how do I use X" questions in plain language, grounded in the server guide (so it won't invent commands). Optionally (admin toggle, off by default) it also uses live server context — channel topics, pins, announcements, dashboard docs — scoped to what the asker can *see* and tailored to what they can *do*. Model + toggle live under Config → Billy-bot (Haiku by default). Replies privately in Discord; also an "Ask Billy-bot" box on every dashboard Help page.
 - **`/invite` / `/support`** — Quick links to invite the bot and reach the support server.
 - **Owner tools** — `/reload_cog` hot-reloads an extension and `/spotify_authorize` runs the one-time Spotify auth flow.
 

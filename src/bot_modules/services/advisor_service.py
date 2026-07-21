@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -28,11 +29,51 @@ from typing import cast
 from anthropic import APIError, APITimeoutError
 from anthropic.types import MessageParam, TextBlock, TextBlockParam
 
+from bot_modules.core.db_utils import get_config_value, parse_bool, set_config_value
 from bot_modules.games.utils.ai_client import get_client
 
 log = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-5"
+MODEL = "claude-haiku-4-5"
+
+# Model is configurable per-guild from the dashboard "Billy-bot" panel.
+ADVISOR_MODEL_KEY = "advisor_model"
+ADVISOR_MODELS: list[dict[str, str]] = [
+    {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5 — fast & cheap (default)"},
+    {"id": "claude-sonnet-5", "label": "Claude Sonnet 5 — higher quality"},
+    {"id": "claude-opus-4-8", "label": "Claude Opus 4.8 — highest quality, priciest"},
+]
+_MODEL_IDS = {m["id"] for m in ADVISOR_MODELS}
+
+
+def get_advisor_model(conn: sqlite3.Connection, guild_id: int = 0) -> str:
+    """Return the guild's configured advisor model, or the default."""
+    val = get_config_value(conn, ADVISOR_MODEL_KEY, MODEL, guild_id)
+    return val if val in _MODEL_IDS else MODEL
+
+
+def set_advisor_model(conn: sqlite3.Connection, model: str, guild_id: int = 0) -> None:
+    """Persist the guild's advisor model. Raises ValueError on an unknown id."""
+    if model not in _MODEL_IDS:
+        raise ValueError(f"unknown advisor model: {model}")
+    set_config_value(conn, ADVISOR_MODEL_KEY, model, guild_id)
+
+
+# Live per-server context (channel topics, pins, announcements, server docs) is
+# opt-in per guild and OFF by default — until an admin enables it, Billy-bot
+# answers only from the static Dungeon Keeper manual.
+ADVISOR_CONTEXT_KEY = "advisor_server_context"
+
+
+def get_advisor_context_enabled(conn: sqlite3.Connection, guild_id: int = 0) -> bool:
+    """Whether live server context is enabled for the guild (default False)."""
+    return parse_bool(get_config_value(conn, ADVISOR_CONTEXT_KEY, "0", guild_id), False)
+
+
+def set_advisor_context_enabled(
+    conn: sqlite3.Connection, enabled: bool, guild_id: int = 0
+) -> None:
+    set_config_value(conn, ADVISOR_CONTEXT_KEY, "1" if enabled else "0", guild_id)
 MAX_QUESTION_CHARS = 500
 MAX_TOKENS = 800
 # History is untrusted client input on the web surface — cap turns and size.
@@ -54,16 +95,27 @@ _UNSURE_HINT = (
 )
 
 SYSTEM_INSTRUCTIONS = (
-    "You are Billy-bot, a friendly assistant that helps members, moderators, and "
-    "admins use the Dungeon Keeper Discord bot and its web dashboard.\n\n"
+    "You are Billy-bot, a friendly assistant for a Discord community. You help "
+    "members, moderators, and admins use the Dungeon Keeper Discord bot and its "
+    "web dashboard, and you answer questions about how THIS server is set up.\n\n"
+    "You are given up to two grounding sources:\n"
+    "- GUIDE: how the bot and dashboard work (commands, features, settings).\n"
+    "- THIS SERVER (optional): live context about the current server — who is "
+    "asking and what they can do, the channels they can see (with topics), "
+    "pinned messages, server docs, and recent announcements.\n\n"
     "Rules:\n"
-    "- Answer ONLY questions about using Dungeon Keeper. For anything else, "
-    "politely decline and steer back to the bot.\n"
-    "- Ground every answer in the GUIDE below. If the guide does not cover "
-    "something, say you're not sure and point them to the dashboard Help panel "
-    "or a moderator. NEVER guess or invent slash commands, buttons, or features.\n"
+    "- Answer using ONLY these sources. If neither covers something, say you're "
+    "not sure and point them to the Help panel or a moderator. NEVER guess or "
+    "invent slash commands, channels, rules, or features.\n"
+    "- Tailor to the asker's permissions shown in THIS SERVER: only suggest "
+    "actions and commands they can actually perform. If they ask about something "
+    "they lack access to, tell them plainly and say what role or permission it "
+    "needs.\n"
+    "- Only reference channels, pins, docs, and announcements that appear in THIS "
+    "SERVER — that list is already scoped to what the asker is allowed to see. "
+    "Do not speculate about channels or content that aren't listed.\n"
     "- Be concise and warm. Prefer short numbered steps. Name the exact slash "
-    "command (e.g. `/qotd`) or dashboard panel when the guide gives one.\n"
+    "command (e.g. `/qotd`) or dashboard panel when the source gives one.\n"
     "- The guide's headings are tagged like [economy-earning]. When useful, tell "
     "the reader which section to open for more, e.g. \"see the Economy → Earning "
     "section\".\n"
@@ -178,19 +230,30 @@ def load_manual_text(path: Path = _MANUAL_PATH) -> str:
     return text
 
 
-def build_system() -> list[dict]:
-    """Assemble the system prompt: stable instructions + prompt-cached corpus."""
+def build_system(guild_context: str | None = None) -> list[dict]:
+    """Assemble the system prompt.
+
+    Stable prefix (instructions + manual) is prompt-cached; the per-asker server
+    context, when present, is appended *after* the cache breakpoint so it stays
+    uncached (it changes every request) without disturbing the shared cache.
+    """
     corpus = load_manual_text()
     guide = corpus if corpus else "(guide unavailable)"
-    return [
+    blocks: list[dict] = [
         {"type": "text", "text": SYSTEM_INSTRUCTIONS},
         {
             "type": "text",
             "text": "=== DUNGEON KEEPER GUIDE ===\n\n" + guide,
-            # Both blocks are stable, so caching the last one caches both.
+            # Both stable blocks; caching the last one caches both.
             "cache_control": {"type": "ephemeral"},
         },
     ]
+    if guild_context:
+        blocks.append({
+            "type": "text",
+            "text": "=== THIS SERVER (live, scoped to the asker) ===\n\n" + guild_context,
+        })
+    return blocks
 
 
 def sanitize_history(history: list[dict] | None) -> list[dict]:
@@ -227,8 +290,14 @@ async def answer_advisor(
     history: list[dict] | None = None,
     *,
     model: str = MODEL,
+    guild_context: str | None = None,
 ) -> AdvisorResult:
-    """Answer one grounded question. Never raises — errors become a friendly reply."""
+    """Answer one grounded question. Never raises — errors become a friendly reply.
+
+    ``guild_context`` is the optional per-asker server context (see
+    ``advisor_context.build_asker_context``); when omitted, Billy-bot answers
+    from the manual alone.
+    """
     q = (question or "").strip()
     if not q:
         return AdvisorResult(False, _EMPTY_MSG)
@@ -241,7 +310,7 @@ async def answer_advisor(
         client = get_client()
         resp = await client.messages.create(
             model=model,
-            system=cast("list[TextBlockParam]", build_system()),
+            system=cast("list[TextBlockParam]", build_system(guild_context)),
             messages=cast("list[MessageParam]", messages),
             max_tokens=MAX_TOKENS,
             thinking={"type": "disabled"},

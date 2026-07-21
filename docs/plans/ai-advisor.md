@@ -1,6 +1,8 @@
 # AI Advisor — grounded "how do I use Dungeon Keeper" assistant
 
-**Status:** Stage 1 shipped (grounded Q&A, both surfaces). See INDEX.md → Design spec.
+**Status:** Stage 1 shipped (grounded Q&A, both surfaces). Stage 2 shipped
+(Billy-bot rebrand; context-aware per-asker grounding; configurable model + a
+dashboard config panel). See INDEX.md → Design spec.
 
 ## Goal
 
@@ -10,11 +12,22 @@ it can't invent commands or promise unbuilt features.
 
 ## Decisions (locked)
 
-- **Model:** `claude-sonnet-5` — near-Opus quality on grounded doc Q&A at ~half
-  the cost, sized for member-facing volume. Thinking is **disabled** (help
-  answers don't need multi-step reasoning; keeps latency low and the whole
-  `max_tokens` budget available for the answer). No sampling params (Sonnet 5
-  rejects non-default `temperature`/`top_p`/`top_k`).
+- **Model:** configurable per-guild from the Config → Billy-bot panel
+  (`advisor_model`), **default `claude-haiku-4-5`** — fast/cheap and plenty for
+  grounded help; Sonnet 5 / Opus 4.8 are the higher-quality options. Thinking is
+  **disabled** on all of them (help answers don't need multi-step reasoning;
+  keeps latency low and the whole `max_tokens` budget available for the answer).
+  No sampling params (the 4.x/5 models reject non-default `temperature`/`top_p`/
+  `top_k`).
+- **Server context is opt-in, default OFF** (`advisor_server_context`, admin
+  toggle). When on, `advisor_context.build_asker_context` adds live per-server
+  grounding — channel topics, pinned messages (snapshotted by `guild_pins_loop`,
+  ~30 min), recent announcements, and dashboard `docs` — as an uncached block
+  after the cached manual. **Privacy gate (enforced + tested):** every channel is
+  filtered by `can_view(channel, asker)` (the asker's `view_channel`, or
+  @everyone as the public fallback) and NSFW channels are always excluded, so an
+  open `/ask` can't surface content the asker can't see. Answers are also
+  tailored to the asker's permissions (`capability_summary`).
 - **Provider:** Anthropic (off-box), reusing the existing
   `ANTHROPIC_API_KEY` + `bot_modules.games.utils.ai_client.get_client()`
   singleton. The on-box/LAN llama stack is reserved for moderation (privacy
@@ -46,13 +59,12 @@ it can't invent commands or promise unbuilt features.
   call. It is the tested unit.
 - Both surfaces are thin glue over `answer_advisor`.
 
-## Follow-ups (not in stage 1)
+## Follow-ups (not yet built)
 
 - **Token streaming** on the dashboard via the `logs.py` SSE precedent
-  (perceived-latency win; MVP is non-streaming POST — answers are short).
-- **README + docs/ grounding** alongside the manual (broader coverage; MVP is
-  manual-only for a single non-drifting source).
-- **Per-guild model override** via a dashboard AI-config knob (MVP is a module
-  constant).
-- **Agentic mode** — tools to look up live member state ("what's my balance")
-  or take actions. Stage 1 is pure grounded Q&A.
+  (perceived-latency win; still non-streaming POST — answers are short).
+- **Member-scoped context on the web surface** currently resolves the asker via
+  `guild.get_member(user_id)` and falls back to @everyone-public when the member
+  isn't resolvable. Could tighten using the dashboard session's role set.
+- **Agentic mode** — tools to look up live member state ("what's my balance") or
+  take actions. Still pure grounded Q&A.
