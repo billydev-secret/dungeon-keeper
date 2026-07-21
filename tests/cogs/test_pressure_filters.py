@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from bot_modules.duels.filters import (
+    WAGER_STAKES_TEXT,
+    resolve_stakes_text,
     validate_nickname,
     validate_stakes,
 )
@@ -164,3 +166,27 @@ def test_stakes_empty_string_ok():
     # empty stakes is valid (means no custom stakes)
     r = validate_stakes("", max_length=200)
     assert r.ok
+
+
+# ── resolve_stakes_text ────────────────────────────────────────────────────────
+# A game is in nickname mode iff its persisted stakes_text is None. This helper
+# is what keeps a wagered game *out* of that mode: the loser forfeits coins, not
+# their nickname.
+
+def test_resolve_plain_game_stays_nick_mode():
+    # No custom stakes, no wager → None persists → nickname mode (the default).
+    assert resolve_stakes_text(None, None) is None
+
+
+def test_resolve_wager_becomes_a_stakes_label():
+    # A wager with no custom stakes gets the label, flipping it out of nick mode.
+    assert resolve_stakes_text(None, 100) == WAGER_STAKES_TEXT
+
+
+def test_resolve_custom_stakes_pass_through_without_wager():
+    assert resolve_stakes_text("Loser buys pizza", None) == "Loser buys pizza"
+
+
+def test_resolve_custom_stakes_win_over_wager():
+    # If the host typed real stakes, keep them even alongside a wager.
+    assert resolve_stakes_text("Loser buys pizza", 100) == "Loser buys pizza"

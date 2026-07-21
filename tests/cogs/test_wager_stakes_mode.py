@@ -23,7 +23,7 @@ from bot_modules.cogs.hot_potato.cog import HotPotatoDuel
 from bot_modules.cogs.hot_potato_group import db as hpgdb
 from bot_modules.cogs.hot_potato_group.cog import HotPotatoGroupGameCog
 from bot_modules.core.db_utils import open_db
-from bot_modules.duels.base_game import WAGER_STAKES_TEXT
+from bot_modules.duels.filters import WAGER_STAKES_TEXT
 from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,

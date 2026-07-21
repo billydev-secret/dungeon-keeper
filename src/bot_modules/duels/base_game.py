@@ -30,7 +30,7 @@ from bot_modules.services.economy_service import get_balance, load_econ_settings
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
-from .filters import validate_nickname, validate_stakes
+from .filters import resolve_stakes_text, validate_nickname, validate_stakes
 from .lobby import LobbyView
 from .modals import NicknameModal
 from .views import ResultView
@@ -54,12 +54,6 @@ _TERMINAL_STATES = frozenset({
 # Terminal states that pay the winner. Everything else refunds every stake —
 # the pot never evaporates and never pays a half-finished game.
 _SETTLING_STATES = frozenset({"RESOLVED", "RESOLVED_NO_NICK"})
-
-# A coin wager with no custom stakes text is its own stake: the pot replaces
-# the nickname forfeit. Recording this as the game's stakes_text at creation
-# is what routes every downstream consumer (nick preflights, the rename
-# button, per-cog embed fallbacks) into announce-only mode.
-WAGER_STAKES_TEXT = "Coins on the line — winner takes the pot."
 
 
 class BaseGame(commands.Cog):
@@ -654,8 +648,10 @@ class BaseGame(commands.Cog):
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
-            if stakes_text is None:
-                stakes_text = WAGER_STAKES_TEXT
+
+        # A wager stands in as the stake — record the label so the lobby is in
+        # announce-only mode (no rename, no nickname copy) everywhere downstream.
+        stakes_text = resolve_stakes_text(stakes_text, wager)
 
         min_players, max_players, _timeout = await self.get_lobby_params(guild.id)
         game_id = await self._db_create_lobby(

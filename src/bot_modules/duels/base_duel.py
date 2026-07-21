@@ -10,8 +10,8 @@ Two stake modes are supported on the duel path:
     loser for 24h.
   * **Custom stakes** (free-text stakes given): the loser owes the agreed-upon
     stakes; the bot enforces nothing and never renames anyone. A coin wager
-    with no stakes text lands here too — the pot *is* the stake
-    (WAGER_STAKES_TEXT is recorded at creation), so no rename either.
+    with no stakes text lands here too — the pot *is* the stake (a wager label
+    is recorded at creation via `resolve_stakes_text`), so no rename either.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
-from .base_game import _RATE_LIMIT_MAX, WAGER_STAKES_TEXT, BaseGame
-from .filters import validate_stakes
+from .base_game import _RATE_LIMIT_MAX, BaseGame
+from .filters import resolve_stakes_text, validate_stakes
 from .views import ChallengeView, ResultView
 
 
@@ -127,8 +127,10 @@ class BaseDuel(BaseGame):
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
-            if stakes_text is None:
-                stakes_text = WAGER_STAKES_TEXT
+
+        # A wager stands in as the stake — record the label so the duel is in
+        # announce-only mode (no rename, no nickname copy) everywhere downstream.
+        stakes_text = resolve_stakes_text(stakes_text, wager)
 
         game_id = await self._db_create_game(
             guild_id=guild.id,

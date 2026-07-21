@@ -102,3 +102,24 @@ def validate_stakes(
                 ok=False, value=raw, reason="Stakes text contains disallowed content."
             )
     return FilterResult(ok=True, value=cleaned, reason=None)
+
+
+# A coin wager with no custom stakes text is its own stake: the pot replaces
+# the nickname forfeit. Recording this as the game's stakes_text at creation
+# is what routes every downstream consumer (nick preflights, the rename
+# button, per-cog embed fallbacks) into announce-only mode.
+WAGER_STAKES_TEXT = "Coins on the line — winner takes the pot."
+
+
+def resolve_stakes_text(stakes_text: str | None, wager: int | None) -> str | None:
+    """The stakes string to persist for a game.
+
+    A wager *is* the stake — the loser forfeits their ante, not their nickname
+    — so a wagered game with no custom stakes gets the wager label, which flips
+    it out of nickname mode everywhere (nickname mode is exactly
+    ``stakes_text is None``). Custom stakes and plain (no-wager) games pass
+    through untouched, so a plain game still defaults to the nickname forfeit.
+    """
+    if stakes_text is None and wager is not None:
+        return WAGER_STAKES_TEXT
+    return stakes_text
