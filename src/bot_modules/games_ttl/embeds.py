@@ -59,17 +59,25 @@ def build_guess_embed(
     statements: list[str],
     votes: dict[int, int],
     closed: bool = False,
+    prompt: str | None = None,
 ) -> discord.Embed:
     """Build the per-round guessing embed (3 statements + live vote bars).
 
     ``closed`` flips the title from ``GUESS THE LIE`` to ``REVEAL`` and
     the color from PLAYING to RESULTS; the field layout is preserved so
     the existing message can be edited in place when the round ends.
+
+    ``prompt`` is repeated on every round so mid-game joiners (who never
+    saw the lobby embed) still know what the statements answer.
     """
     title = f"{GAME_ICONS['ttl']} GUESS THE LIE — {subject_name}'s turn"
     if closed:
         title = f"{GAME_ICONS['ttl']} REVEAL — {subject_name}"
-    embed = discord.Embed(title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING)
+    embed = discord.Embed(
+        title=title,
+        description=f"**Prompt:** {prompt}" if prompt else None,
+        color=PHASE_RESULTS if closed else PHASE_PLAYING,
+    )
 
     vote_counts = [0, 0, 0]
     for v in votes.values():
@@ -175,12 +183,17 @@ def build_recap_embed(
         )
 
     most_honest = stats.get("most_honest", [])
+    least_fooled_count = stats.get("least_fooled_count", 0)
     if most_honest:
         honest_names = [name_resolver(uid) for uid in most_honest]
         _collect_mentions(most_honest)
+        fooled_note = (
+            "fooled no one" if least_fooled_count == 0
+            else f"fooled only {least_fooled_count}"
+        )
         embed.add_field(
-            name="😇 Most Honest",
-            value=f"{', '.join(honest_names)}",
+            name="🪞 Open Book",
+            value=f"{', '.join(honest_names)} ({fooled_note})",
             inline=True,
         )
 

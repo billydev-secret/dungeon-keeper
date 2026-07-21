@@ -137,6 +137,8 @@ SCHEDULE_OPTION_SCHEMA = {
     ],
     'ttl': [
         {'name': 'prompt', 'label': 'Theme/prompt (optional)', 'type': 'str', 'default': ''},
+        {'name': 'vote_timer', 'label': 'Vote seconds (0 = host advances)', 'type': 'int',
+         'default': 0, 'min': 0, 'max': 300},
     ],
     'hottakes': [],
     'story': [
@@ -174,6 +176,9 @@ SCHEDULE_OPTION_SCHEMA = {
          'choices': [{'value': 'host', 'label': 'Host writes'},
                      {'value': 'ai', 'label': 'AI generated'},
                      {'value': 'bank', 'label': 'Question bank'}]},
+        {'name': 'mode', 'label': 'Draft mode', 'type': 'choice', 'default': 'snake',
+         'choices': [{'value': 'snake', 'label': 'Snake draft (one at a time)'},
+                     {'value': 'blitz', 'label': 'Blitz (everyone picks at once)'}]},
     ],
     'clapback': [
         {'name': 'rounds', 'label': 'Rounds', 'type': 'int', 'default': 5, 'min': 1, 'max': 15},

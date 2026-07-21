@@ -47,13 +47,17 @@ from bot_modules.games.utils.game_manager import (
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games_rushmore.logic import (
+    BACKFILL_SECONDS,
     DRAFT_ROUNDS,
     SKIPPED_MARKER,
+    apply_backfill,
     clamp_settings,
     compute_recap_stats,
     eligible_voters,
     find_who_picked,
+    first_skipped_slot,
     generate_snake_order,
+    players_with_skips,
     tally_votes,
 )
 from bot_modules.games_rushmore.embeds import (
@@ -117,19 +121,26 @@ class HostTopicModal(discord.ui.Modal, title="Choose a Topic"):
 
 
 class PickModal(discord.ui.Modal):
+    """Pick-entry modal shared by the draft (both modes) and backfill views.
+
+    The owning view supplies ``boards`` (for the duplicate check),
+    ``_closed`` (phase-over guard) and ``accept_pick(text, uid)`` (storage);
+    everything else here is presentation.
+    """
+
     pick = discord.ui.TextInput(
         label="Pick",
         required=True,
         max_length=100,
     )
 
-    def __init__(self, round_num: int, topic: str, draft_view: "RushmoreDraftView"):
+    def __init__(self, round_num: int, topic: str, owner_view):
         title = f"Your Pick — Round {round_num}"
         if len(title) > 45:
             title = f"Round {round_num} Pick"
         super().__init__(title=title)
         self.pick.placeholder = f"Enter your pick for Mt. Rushmore of {topic}"[:100]
-        self._draft_view = draft_view
+        self._owner_view = owner_view
 
     async def on_submit(self, interaction: discord.Interaction):
         log.info(
@@ -137,7 +148,7 @@ class PickModal(discord.ui.Modal):
             interaction.user.display_name,
             channel_name(interaction.channel),
         )
-        view = self._draft_view
+        view = self._owner_view
         if view._closed:
             await interaction.response.send_message("This draft has ended.", ephemeral=True)
             return
@@ -196,13 +207,14 @@ class RushmoreVoteSelect(discord.ui.Select):
 # ── Views ────────────────────────────────────────────────────────────────────
 
 class RushmoreJoinView(discord.ui.View):
-    def __init__(self, game_id: str, host_id: int, host_name: str, topic: str | None, source: str, db, bot, cog):
+    def __init__(self, game_id: str, host_id: int, host_name: str, topic: str | None, source: str, db, bot, cog, mode: str = "snake"):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
         self.host_name = host_name
         self.topic = topic
         self.source = source
+        self.mode = mode
         self.db = db
         self.bot = bot
         self.cog = cog
@@ -230,7 +242,7 @@ class RushmoreJoinView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _add)
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
-        embed = build_join_embed(self.host_name, names, self.topic)
+        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode)
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've joined!", ephemeral=True)
 
@@ -245,7 +257,7 @@ class RushmoreJoinView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _remove)
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
-        embed = build_join_embed(self.host_name, names, self.topic)
+        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode)
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("You've left.", ephemeral=True)
 
@@ -330,10 +342,11 @@ class RushmoreJoinView(discord.ui.View):
 
 
 class RushmoreDraftView(discord.ui.View):
-    """Persistent view during the snake draft."""
+    """Persistent view during the draft (snake or blitz mode)."""
 
     def __init__(self, game_id: str, host_id: int, host_name: str, topic: str,
-                 players: list[int], timer_secs: int, guild, db, bot, cog):
+                 players: list[int], timer_secs: int, guild, db, bot, cog,
+                 mode: str = "snake"):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
@@ -345,6 +358,7 @@ class RushmoreDraftView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
+        self.mode = mode
 
         # Draft state
         random.shuffle(self.players)
@@ -360,12 +374,28 @@ class RushmoreDraftView(discord.ui.View):
         self._pick_start: float = 0.0
         self._draft_start: float = _time.time()
         self._active_player_id: int | None = None
+        # Blitz-mode state: the current synced round and who still owes it a
+        # pick. Unused in snake mode.
+        self._blitz_round: int = 0
+        self._blitz_pending: set[int] = set()
 
     def _player_tuples(self) -> list[tuple[int, str]]:
         return [(uid, resolve_name(self.guild, uid)) for uid in self.players]
 
     def accept_pick(self, pick_text: str, user_id: int):
         """Called by PickModal when a valid pick is made."""
+        if self.mode == "blitz":
+            rnd = self._blitz_round
+            if user_id not in self._blitz_pending or rnd < 1:
+                return
+            self.boards[str(user_id)][rnd - 1] = pick_text
+            self.all_picks.append(pick_text)
+            self.pick_times[f"{user_id}_{rnd}"] = _time.time() - self._pick_start
+            self._blitz_pending.discard(user_id)
+            if not self._blitz_pending and self._pick_event:
+                self._pick_event.set()
+            return
+
         if self._active_player_id != user_id:
             return
         rnd, pid = self.draft_order[self.current_pick_index]
@@ -390,6 +420,12 @@ class RushmoreDraftView(discord.ui.View):
         return False
 
     def _build_embed(self) -> discord.Embed:
+        if self.mode == "blitz":
+            rnd = max(1, self._blitz_round)
+            return build_draft_embed(
+                self.host_name, self.topic, self._player_tuples(),
+                self.boards, None, None, rnd, self.timer_secs,
+            )
         if self.current_pick_index < len(self.draft_order):
             rnd, pid = self.draft_order[self.current_pick_index]
             name = resolve_name(self.guild, pid)
@@ -400,11 +436,22 @@ class RushmoreDraftView(discord.ui.View):
             self.boards, pid, name, rnd, self.timer_secs,
         )
 
-    @discord.ui.button(label="\U0001f5ff Make Your Pick", style=discord.ButtonStyle.success, custom_id="rushmore_pick", row=0)
-    async def make_pick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+    async def handle_pick_click(self, interaction: discord.Interaction):
+        """Shared click handler for the board button and turn-ping button."""
         if self._closed:
             await interaction.response.send_message("The draft is over.", ephemeral=True)
+            return
+        if self.mode == "blitz":
+            if interaction.user.id not in self._blitz_pending:
+                if str(interaction.user.id) not in self.boards:
+                    msg = "You're not in this draft."
+                else:
+                    msg = "You've already picked this round — wait for the next one!"
+                await interaction.response.send_message(msg, ephemeral=True)
+                return
+            await interaction.response.send_modal(
+                PickModal(self._blitz_round, self.topic, self)
+            )
             return
         if interaction.user.id != self._active_player_id:
             active_name = resolve_name(self.guild, self._active_player_id) if self._active_player_id else "someone"
@@ -415,6 +462,69 @@ class RushmoreDraftView(discord.ui.View):
             return
         rnd = self.draft_order[self.current_pick_index][0]
         await interaction.response.send_modal(PickModal(rnd, self.topic, self))
+
+    @discord.ui.button(label="\U0001f5ff Make Your Pick", style=discord.ButtonStyle.success, custom_id="rushmore_pick", row=0)
+    async def make_pick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        await self.handle_pick_click(interaction)
+
+
+class RushmorePingView(discord.ui.View):
+    """Pick button that rides on turn-ping messages.
+
+    The board message scrolls away as banter piles up mid-draft; putting the
+    button on the ping itself means the player never has to scroll. The ping
+    is sent with ``delete_after``, which also retires this view.
+    """
+
+    def __init__(self, draft_view: RushmoreDraftView):
+        super().__init__(timeout=None)
+        self._draft_view = draft_view
+
+    @discord.ui.button(label="\U0001f5ff Make Your Pick", style=discord.ButtonStyle.success, custom_id="rushmore_pick_ping", row=0)
+    async def make_pick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed '%s' (ping) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        await self._draft_view.handle_pick_click(interaction)
+
+
+class RushmoreBackfillView(discord.ui.View):
+    """Post-draft window where players fill their own skipped slots."""
+
+    def __init__(self, draft_view: RushmoreDraftView):
+        super().__init__(timeout=None)
+        self._draft_view = draft_view
+        self.boards = draft_view.boards
+        self._closed = False
+        self._done: asyncio.Event = asyncio.Event()
+
+    def accept_pick(self, pick_text: str, user_id: int):
+        """Fill the player's first skipped slot (PickModal contract)."""
+        slot = apply_backfill(
+            self._draft_view.boards, self._draft_view.skipped, user_id, pick_text,
+        )
+        if slot is None:
+            return
+        self._draft_view.all_picks.append(pick_text)
+        if not players_with_skips(self._draft_view.boards):
+            self._done.set()
+
+    @discord.ui.button(label="\U0001f5ff Fill a Skipped Pick", style=discord.ButtonStyle.success, custom_id="rushmore_backfill", row=0)
+    async def backfill(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if self._closed:
+            await interaction.response.send_message("The backfill window is over.", ephemeral=True)
+            return
+        board = self._draft_view.boards.get(str(interaction.user.id))
+        if board is None:
+            await interaction.response.send_message("You're not in this draft.", ephemeral=True)
+            return
+        slot = first_skipped_slot(board)
+        if slot is None:
+            await interaction.response.send_message("You have no skipped picks to fill!", ephemeral=True)
+            return
+        await interaction.response.send_modal(
+            PickModal(slot + 1, self._draft_view.topic, self)
+        )
 
 
 class RushmoreVoteView(discord.ui.View):
@@ -487,6 +597,7 @@ class RushmoreRecapView(discord.ui.View):
                 "timer": self._settings.get("timer", 30),
                 "source": self._settings.get("source", "host"),
                 "vote_timer": self._settings.get("vote_timer", 30),
+                "mode": self._settings.get("mode", "snake"),
             },
         )
 
@@ -538,7 +649,7 @@ class RushmoreCog(commands.Cog):
             view = RushmoreJoinView(
                 game_id, host_id, host_name,
                 payload.get("topic"), settings.get("source", "host"),
-                self.db, self.bot, self,
+                self.db, self.bot, self, mode=settings.get("mode", "snake"),
             )
             view.players = list(payload.get("players", []))
             view._msg = message
@@ -574,6 +685,7 @@ class RushmoreCog(commands.Cog):
     @app_commands.describe(
         topic="The topic (leave blank for AI/bank/manual entry)",
         source="Where topics come from",
+        mode="Snake draft (turns) or blitz (everyone picks at once)",
     )
     @app_commands.choices(
         source=[
@@ -581,12 +693,17 @@ class RushmoreCog(commands.Cog):
             app_commands.Choice(name="AI generated", value="ai"),
             app_commands.Choice(name="Question bank", value="bank"),
         ],
+        mode=[
+            app_commands.Choice(name="Snake draft (one at a time)", value="snake"),
+            app_commands.Choice(name="Blitz (everyone picks at once)", value="blitz"),
+        ],
     )
     async def rushmore_cmd(
         self,
         interaction: discord.Interaction,
         topic: str = "",
         source: str = "host",
+        mode: str = "",
     ):
         log.info(
             "%s used /games play rushmore in #%s",
@@ -604,12 +721,15 @@ class RushmoreCog(commands.Cog):
             return
 
         await interaction.response.defer()
+        options: dict = {"topic": topic, "source": source}
+        if mode:
+            options["mode"] = mode
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"topic": topic, "source": source},
+            options=options,
         )
         await finish_launch_response(interaction, game_id)
 
@@ -632,7 +752,13 @@ class RushmoreCog(commands.Cog):
             int(options.get("timer", game_opts.get("timer", 30))),
             int(options.get("vote_timer", game_opts.get("vote_timer", 30))),
         )
-        settings = {"timer": timer, "source": source, "vote_timer": vote_timer, "tags": options.get("tags") or []}
+        mode = options.get("mode") or game_opts.get("mode") or "snake"
+        if mode not in ("snake", "blitz"):
+            mode = "snake"
+        settings = {
+            "timer": timer, "source": source, "vote_timer": vote_timer,
+            "mode": mode, "tags": options.get("tags") or [],
+        }
 
         game_id = await create_game(
             self.db,
@@ -646,9 +772,9 @@ class RushmoreCog(commands.Cog):
 
         join_view = RushmoreJoinView(
             game_id, host_id, host_name,
-            topic, source, self.db, self.bot, self,
+            topic, source, self.db, self.bot, self, mode=mode,
         )
-        embed = build_join_embed(host_name, [], topic)
+        embed = build_join_embed(host_name, [], topic, mode=mode)
         try:
             msg = await channel.send(embed=embed, view=join_view)
         except discord.Forbidden:
@@ -681,9 +807,11 @@ class RushmoreCog(commands.Cog):
         payload["topic"] = topic
         await update_game_payload(self.db, game_id, payload)
 
+        mode = settings.get("mode", "snake")
         draft_view = RushmoreDraftView(
             game_id, host_id, host_name, topic,
             players, settings.get("timer", 30), guild, self.db, self.bot, self,
+            mode=mode,
         )
         self.bot.active_views[game_id] = draft_view
 
@@ -699,12 +827,18 @@ class RushmoreCog(commands.Cog):
             await update_game_message(self.db, game_id, msg.id)
 
         # Show draft order announcement
-        order_names = [resolve_name(guild, uid) for uid in draft_view.players]
-        rev_names = list(reversed(order_names))
-        await channel.send(
-            f"**Draft order:** {' → '.join(order_names)}\n"
-            f"(Round 2 reverses: {' → '.join(rev_names)})"
-        )
+        if mode == "blitz":
+            await channel.send(
+                "**⚡ Blitz draft:** everyone picks at the same time each round — "
+                "duplicates go to the fastest fingers!"
+            )
+        else:
+            order_names = [resolve_name(guild, uid) for uid in draft_view.players]
+            rev_names = list(reversed(order_names))
+            await channel.send(
+                f"**Draft order:** {' → '.join(order_names)}\n"
+                f"(Round 2 reverses: {' → '.join(rev_names)})"
+            )
 
         # Save draft state
         payload = await get_game_payload(self.db, game_id)
@@ -714,7 +848,10 @@ class RushmoreCog(commands.Cog):
         await update_game_payload(self.db, game_id, payload)
 
         # Run each pick
-        await self._run_draft_loop(draft_view, channel, guild, settings)
+        if mode == "blitz":
+            await self._run_blitz_loop(draft_view, channel, guild, settings)
+        else:
+            await self._run_draft_loop(draft_view, channel, guild, settings)
 
     async def _run_draft_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
         timer_secs = settings.get("timer", 30)
@@ -735,14 +872,17 @@ class RushmoreCog(commands.Cog):
             except discord.HTTPException:
                 pass
 
-            # Ping the player
+            # Ping the player — with its own pick button, so nobody has to
+            # scroll back up to the board message to act.
             member = guild.get_member(pid) if guild else None
             ping_text = (
                 f"{member.mention if member else player_name} It's your turn! "
                 f"Pick for Round {rnd} of your Mt. Rushmore of **{discord.utils.escape_markdown(draft_view.topic)}**!"
             )
             try:
-                await channel.send(ping_text, delete_after=timer_secs)
+                await channel.send(
+                    ping_text, view=RushmorePingView(draft_view), delete_after=timer_secs,
+                )
             except discord.HTTPException:
                 pass
 
@@ -759,7 +899,10 @@ class RushmoreCog(commands.Cog):
                     if not pick_event.is_set() and not draft_view._closed:
                         try:
                             m = member.mention if member else player_name
-                            await channel.send(f"{m} ⏰ 10 seconds left to pick!", delete_after=10)
+                            await channel.send(
+                                f"{m} ⏰ 10 seconds left to pick!",
+                                view=RushmorePingView(draft_view), delete_after=10,
+                            )
                         except discord.HTTPException:
                             pass
                 nudge_task = asyncio.create_task(_nudge())
@@ -813,12 +956,154 @@ class RushmoreCog(commands.Cog):
         except discord.HTTPException:
             pass
 
-        # Show final boards
+        # Backfill window for skipped slots, then final boards
+        await self._run_backfill(draft_view, channel, guild)
         await self._show_final_boards(draft_view, channel, guild, settings)
+
+    async def _run_blitz_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
+        """Blitz mode: every round, all players pick simultaneously."""
+        timer_secs = settings.get("timer", 30)
+        assert draft_view._msg  # set by _start_draft before this loop runs
+
+        for rnd in range(1, DRAFT_ROUNDS + 1):
+            if draft_view._closed:
+                return
+
+            pending = {
+                uid for uid in draft_view.players
+                if draft_view.boards[str(uid)][rnd - 1] is None
+            }
+            draft_view._blitz_round = rnd
+            draft_view._blitz_pending = pending
+
+            round_done = asyncio.Event()
+            draft_view._pick_event = round_done
+            draft_view._pick_start = _time.time()
+
+            embed = draft_view._build_embed()
+            try:
+                await draft_view._msg.edit(embed=embed, view=draft_view)
+            except discord.HTTPException:
+                pass
+
+            mentions = " ".join(
+                m.mention for uid in pending
+                if guild and (m := guild.get_member(uid))
+            )
+            try:
+                await channel.send(
+                    f"{mentions} ⚡ **Round {rnd}/{DRAFT_ROUNDS}** — everyone pick now! "
+                    f"First come, first served on duplicates.",
+                    view=RushmorePingView(draft_view), delete_after=timer_secs,
+                )
+            except discord.HTTPException:
+                pass
+
+            nudge_task = None
+            if timer_secs > 15:
+                async def _nudge():
+                    await asyncio.sleep(timer_secs - 10)
+                    if not round_done.is_set() and not draft_view._closed and draft_view._blitz_pending:
+                        stragglers = " ".join(
+                            m.mention for uid in draft_view._blitz_pending
+                            if guild and (m := guild.get_member(uid))
+                        )
+                        try:
+                            await channel.send(
+                                f"{stragglers} ⏰ 10 seconds left to pick!",
+                                view=RushmorePingView(draft_view), delete_after=10,
+                            )
+                        except discord.HTTPException:
+                            pass
+                nudge_task = asyncio.create_task(_nudge())
+
+            try:
+                await asyncio.wait_for(round_done.wait(), timeout=timer_secs)
+            except asyncio.TimeoutError:
+                pass
+
+            if nudge_task and not nudge_task.done():
+                nudge_task.cancel()
+
+            if draft_view._closed:
+                return
+
+            # Anyone still pending ran out the clock
+            for uid in sorted(draft_view._blitz_pending):
+                key = f"{uid}_{rnd}"
+                draft_view.boards[str(uid)][rnd - 1] = SKIPPED_MARKER
+                draft_view.skipped.append(key)
+                draft_view.pick_times[key] = None
+            draft_view._blitz_pending = set()
+
+            # Save progress to DB
+            payload = await get_game_payload(self.db, draft_view.game_id)
+            payload["boards"] = draft_view.boards
+            payload["all_picks"] = draft_view.all_picks
+            payload["pick_times"] = draft_view.pick_times
+            payload["skipped"] = draft_view.skipped
+            await update_game_payload(self.db, draft_view.game_id, payload)
+
+        draft_view._closed = True
+        disable_all_items(draft_view)
+        try:
+            await draft_view._msg.edit(embed=draft_view._build_embed(), view=draft_view)
+        except discord.HTTPException:
+            pass
+
+        await self._run_backfill(draft_view, channel, guild)
+        await self._show_final_boards(draft_view, channel, guild, settings)
+
+    async def _run_backfill(self, draft_view: RushmoreDraftView, channel, guild):
+        """Give players a short window to fill their own skipped slots."""
+        # Skip when the game was force-ended mid-draft.
+        if draft_view.game_id not in self.bot.active_views:
+            return
+        owed = players_with_skips(draft_view.boards)
+        if not owed:
+            return
+
+        view = RushmoreBackfillView(draft_view)
+        mentions = " ".join(
+            m.mention for uid_str in owed
+            if guild and (m := guild.get_member(int(uid_str)))
+        )
+        try:
+            msg = await channel.send(
+                f"{mentions} ⏭️ You have skipped picks! "
+                f"**{BACKFILL_SECONDS}s** to fill them before the boards are final.",
+                view=view,
+            )
+        except discord.HTTPException:
+            return
+
+        try:
+            await asyncio.wait_for(view._done.wait(), timeout=BACKFILL_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+        view._closed = True
+        disable_all_items(view)
+        try:
+            await msg.edit(view=view)
+        except discord.HTTPException:
+            pass
+
+        # Persist whatever got backfilled
+        payload = await get_game_payload(self.db, draft_view.game_id)
+        payload["boards"] = draft_view.boards
+        payload["all_picks"] = draft_view.all_picks
+        payload["skipped"] = draft_view.skipped
+        await update_game_payload(self.db, draft_view.game_id, payload)
 
     async def _show_final_boards(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
         game_id = draft_view.game_id
-        player_tuples = draft_view._player_tuples()
+        # All-skip boards are left off the final display (they're already
+        # excluded from the vote) — no sense parading an empty board.
+        with_picks = set(eligible_voters(draft_view.players, draft_view.boards))
+        player_tuples = [
+            (uid, name) for uid, name in draft_view._player_tuples()
+            if uid in with_picks
+        ]
 
         final_embed = build_final_boards_embed(
             draft_view.host_name, draft_view.topic, player_tuples, draft_view.boards,
@@ -929,7 +1214,9 @@ class RushmoreCog(commands.Cog):
         winner_boards_list = [draft_view.boards.get(str(uid), []) for uid in winner_uids]
 
         stats = compute_recap_stats(
-            draft_view.draft_order,
+            # Blitz has no meaningful "first overall pick" — everyone's round-1
+            # picks land at once — so the stat is suppressed by passing no order.
+            [] if draft_view.mode == "blitz" else draft_view.draft_order,
             draft_view.boards,
             draft_view.all_picks,
             draft_view.pick_times,
@@ -942,6 +1229,9 @@ class RushmoreCog(commands.Cog):
             draft_view.host_name, draft_view.topic, len(draft_view.players),
             duration, winner_names, max_votes, winner_boards_list, stats,
         )
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, recap_embed, guild.id, "rushmore")
         recap_view = RushmoreRecapView(game_id, draft_view.host_id, self, settings)
 
         try:

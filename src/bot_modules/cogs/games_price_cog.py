@@ -1065,6 +1065,9 @@ class PriceCog(commands.Cog):
             )
 
         recap_embed = build_recap_embed(host_name, rounds_played, len(all_players), awards, highlight)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, recap_embed, guild.id, "price")
         recap_view = PriceRecapView(game_id, host_id, self, settings)
 
         try:

@@ -452,6 +452,9 @@ class StoryCog(commands.Cog):
             sentence_count=len(sentences),
             color=color,
         )
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, complete_embed, guild.id, "story")
         await channel.send(embed=complete_embed)
 
         # Send attributed breakdown — split across messages if needed

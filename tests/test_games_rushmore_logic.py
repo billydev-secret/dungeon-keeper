@@ -27,12 +27,15 @@ from bot_modules.games_rushmore.embeds import (
 from bot_modules.games_rushmore.logic import (
     DRAFT_ROUNDS,
     SKIPPED_MARKER,
+    apply_backfill,
     clamp_settings,
     compute_recap_stats,
     eligible_voters,
     find_who_picked,
+    first_skipped_slot,
     generate_snake_order,
     is_duplicate,
+    players_with_skips,
     tally_votes,
 )
 
@@ -441,7 +444,7 @@ def test_build_join_embed_no_topic():
     assert embed.title is not None
     assert "MT. RUSHMORE DRAFT" in embed.title
     assert embed.description is not None
-    assert "snake draft" in embed.description
+    assert "snake draft" in embed.description.lower()
     # Players field present with count 0
     by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
     assert any("Players (0)" in n for n in by_name)
@@ -728,7 +731,7 @@ async def test_show_recap_pays_drafters(monkeypatch, sync_db_path):
     draft_view = SimpleNamespace(
         game_id=gid, _draft_start=_time_mod.time(), boards={}, draft_order=[],
         all_picks=[], pick_times={}, skipped=[], host_name="Host",
-        topic="Best X", players=[1, 2, 3], host_id=1,
+        topic="Best X", players=[1, 2, 3], host_id=1, mode="snake",
     )
     channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
     await cog._show_recap(draft_view, channel, None, {}, {}, [])  # type: ignore[arg-type]
@@ -736,3 +739,75 @@ async def test_show_recap_pays_drafters(monkeypatch, sync_db_path):
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [1, 2, 3]
     assert call.kwargs["bot"] is bot
+
+
+# ── backfill helpers ─────────────────────────────────────────────────
+
+
+def test_first_skipped_slot_finds_earliest():
+    board = ["A", SKIPPED_MARKER, None, SKIPPED_MARKER]
+    assert first_skipped_slot(board) == 1
+
+
+def test_first_skipped_slot_none_when_no_skips():
+    assert first_skipped_slot(["A", "B", None, "C"]) is None
+    assert first_skipped_slot([]) is None
+
+
+def test_players_with_skips_lists_only_skip_owners():
+    boards = {
+        "1": ["A", "B", "C", "D"],
+        "2": [SKIPPED_MARKER, "X", "Y", "Z"],
+        "3": [SKIPPED_MARKER] * 4,
+    }
+    assert players_with_skips(boards) == ["2", "3"]
+
+
+def test_apply_backfill_fills_first_slot_and_clears_skip_entry():
+    boards = {"7": ["A", SKIPPED_MARKER, SKIPPED_MARKER, "D"]}
+    skipped = ["7_2", "7_3", "9_1"]
+    slot = apply_backfill(boards, skipped, 7, "New Pick")
+    assert slot == 1
+    assert boards["7"] == ["A", "New Pick", SKIPPED_MARKER, "D"]
+    # Only the filled slot's skip entry is removed.
+    assert skipped == ["7_3", "9_1"]
+
+
+def test_apply_backfill_sequential_fills_advance_through_slots():
+    boards = {"7": [SKIPPED_MARKER, "B", SKIPPED_MARKER, "D"]}
+    skipped = ["7_1", "7_3"]
+    assert apply_backfill(boards, skipped, 7, "P1") == 0
+    assert apply_backfill(boards, skipped, 7, "P2") == 2
+    assert apply_backfill(boards, skipped, 7, "P3") is None  # nothing left
+    assert boards["7"] == ["P1", "B", "P2", "D"]
+    assert skipped == []
+
+
+def test_apply_backfill_unknown_player_is_noop():
+    boards = {"7": [SKIPPED_MARKER, None, None, None]}
+    skipped = ["7_1"]
+    assert apply_backfill(boards, skipped, 99, "Pick") is None
+    assert boards["7"][0] == SKIPPED_MARKER
+    assert skipped == ["7_1"]
+
+
+def test_backfilled_pick_makes_player_vote_eligible():
+    boards = {"7": [SKIPPED_MARKER] * 4}
+    assert eligible_voters([7], boards) == []
+    apply_backfill(boards, ["7_1"], 7, "Pick")
+    assert eligible_voters([7], boards) == [7]
+
+
+# ── join embed how-to lines ──────────────────────────────────────────
+
+
+def test_join_embed_snake_explains_turn_based_flow():
+    embed = build_join_embed("Billy", [], "Snacks")
+    assert "How it works" in (embed.description or "")
+    assert "when it's your turn" in embed.description.lower()
+
+
+def test_join_embed_blitz_explains_simultaneous_flow():
+    embed = build_join_embed("Billy", [], "Snacks", mode="blitz")
+    assert "everyone picks at once" in (embed.description or "").lower()
+    assert "fastest fingers" in embed.description.lower()

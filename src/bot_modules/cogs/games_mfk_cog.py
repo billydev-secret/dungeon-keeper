@@ -119,6 +119,9 @@ class MFKView(discord.ui.View):
 
         color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
         embed = build_assignments_embed(player_assignments, labels=self.labels, color=color)
+        if interaction.guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, interaction.guild.id, "mfk")
 
         self.stop()
         disable_all_items(self)

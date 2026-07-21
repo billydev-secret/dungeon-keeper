@@ -408,7 +408,11 @@ class MLTCog(commands.Cog):
             if not any(int(c) > 0 for c in crowns.values()):
                 return
             guild = getattr(channel, "guild", None)
-            await channel.send(embed=build_final_standings_embed(crowns, guild))
+            embed = build_final_standings_embed(crowns, guild)
+            if guild:
+                from bot_modules.economy.game_rewards import append_payout_footer
+                await append_payout_footer(self.bot, embed, guild.id, "mlt")
+            await channel.send(embed=embed)
         except Exception:
             log.exception("MLT: failed to emit final standings for %s", game_id)
 

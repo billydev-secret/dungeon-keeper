@@ -33,19 +33,53 @@ CH = 700
         ("nhie", {"guilt_scores": {}}, []),
         ("nhie", {}, []),
         ("nhie", {"guilt_scores": "broken"}, []),
-        # ttl — best liar (fooled the most).
+        # ttl — best liar (fooled the most) + best guesser, ties included.
         ("ttl", {"scores": {"1": {"fooled": 2}, "2": {"fooled": 4}}}, [2]),
         ("ttl", {"scores": {}}, []),
-        ("ttl", {"scores": {"9": {}}}, [9]),
+        # All-zero entry: nobody was fooled and nobody guessed — no payout.
+        ("ttl", {"scores": {"9": {}}}, []),
+        # Best guesser pays alongside the liar (guesser 3 never played a round).
+        ("ttl", {
+            "played": ["1", "2"],
+            "scores": {
+                "1": {"fooled": 3, "correct_guesses": 0, "total_guessers": 4},
+                "2": {"fooled": 1, "correct_guesses": 2, "total_guessers": 4},
+                "3": {"fooled": 0, "correct_guesses": 5, "total_guessers": 0},
+            },
+        }, [1, 3]),
+        # Liar tie → both pay (plus the top guesser).
+        ("ttl", {
+            "played": ["1", "2"],
+            "scores": {
+                "1": {"fooled": 3, "correct_guesses": 1, "total_guessers": 4},
+                "2": {"fooled": 3, "correct_guesses": 0, "total_guessers": 4},
+            },
+        }, [1, 2]),
         # hottakes — author of the highest-rated take.
         ("hottakes", {"results": [{"avg": 2.0, "author": 10}, {"avg": 3.5, "author": 20}]}, [20]),
         ("hottakes", {"results": [{"avg": 1.0}]}, []),  # author missing
         ("hottakes", {"results": []}, []),
+        # rushmore — most votes for best board (history stores str→str).
+        ("rushmore", {"votes": {"1": "7", "2": "7", "3": "8"}}, [7]),
+        ("rushmore", {"votes": {"1": "7", "2": "8"}}, [7, 8]),  # tie
+        ("rushmore", {"votes": {}}, []),
+        ("rushmore", {}, []),
+        # clapback — highest score; an all-zero board pays nobody.
+        ("clapback", {"scores": {"1": 325, "2": 300, "3": 125}}, [1]),
+        ("clapback", {"scores": {"1": 0, "2": 0}}, []),
+        ("clapback", {"scores": {"1": 100, "2": 100}}, [1, 2]),  # tie
+        # mlt — most round crowns.
+        ("mlt", {"crowns": {"5": 2, "6": 1}}, [5]),
+        ("mlt", {"crowns": {}}, []),
+        # price — Most Reasonable (overall): most reasonable-round wins.
+        ("price", {"scores": {"reasonable_wins": {"4": 2, "5": 1}, "unhinged_wins": {"5": 3}}}, [4]),
+        ("price", {"scores": {"reasonable_wins": {}}}, []),
+        ("price", {}, []),
         # wyr's "most divisive" is a question, not a player → no winner.
         ("wyr", {"rounds": {"1": {"a": [1], "b": [2]}}}, []),
         # unknown / no-winner types.
         ("mfk", {"anything": 1}, []),
-        ("price", {}, []),
+        ("story", {}, []),
     ],
 )
 def test_resolve_winners(game_type, payload, expected):
@@ -240,3 +274,58 @@ async def test_end_game_no_payout_when_disabled(db_path):
     await end_game(db, gid, payload=payload, bot=bot, player_ids=[1, 2])
     assert _bal(db_path, 1) == 0
     assert _bal(db_path, 2) == 0
+
+
+# ── append_payout_footer ──────────────────────────────────────────────────────
+
+def _embed():
+    import discord
+    return discord.Embed(title="RECAP")
+
+
+async def test_footer_noop_when_economy_disabled(db_path):
+    from bot_modules.economy.game_rewards import append_payout_footer
+    bot: Any = _Bot(db_path, [])
+    embed = _embed()
+    await append_payout_footer(bot, embed, GUILD, "ttl")
+    assert embed.footer.text is None
+
+
+async def test_footer_winner_game_lists_both_amounts(db_path):
+    from bot_modules.economy.game_rewards import append_payout_footer
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [])
+    embed = _embed()
+    await append_payout_footer(bot, embed, GUILD, "ttl")
+    assert embed.footer.text == "🪙 +20 to winners · +5 to everyone who played"
+
+
+async def test_footer_no_winner_game_lists_participation_only(db_path):
+    from bot_modules.economy.game_rewards import append_payout_footer
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [])
+    embed = _embed()
+    await append_payout_footer(bot, embed, GUILD, "story")
+    assert embed.footer.text == "🪙 +5 to everyone who played"
+
+
+async def test_footer_appends_below_existing_footer(db_path):
+    from bot_modules.economy.game_rewards import append_payout_footer
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [])
+    embed = _embed()
+    embed.set_footer(text="🗿 Mt. Rushmore Draft • Hosted by Billy")
+    await append_payout_footer(bot, embed, GUILD, "rushmore")
+    assert embed.footer.text == (
+        "🗿 Mt. Rushmore Draft • Hosted by Billy\n"
+        "🪙 +20 to winners · +5 to everyone who played"
+    )
+
+
+async def test_footer_respects_configured_amounts(db_path):
+    from bot_modules.economy.game_rewards import append_payout_footer
+    _enable(db_path, reward_game_win=50, reward_game_participation=0)
+    bot: Any = _Bot(db_path, [])
+    embed = _embed()
+    await append_payout_footer(bot, embed, GUILD, "rushmore")
+    assert embed.footer.text == "🪙 +50 to winners"

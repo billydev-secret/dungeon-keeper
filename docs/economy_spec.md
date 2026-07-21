@@ -185,9 +185,19 @@ XP earned that local day converts to currency.
 - **Game win +20:** paid for **both** game architectures in v1 (decided). Duel games
   read their explicit `winner_id` (chicken, hot potato, musical chairs, pressure
   cooker, quickdraw, …). Party games get a per-game-type winner resolver over the
-  `end_game` payload — the "best moment" extraction in `games_session/logic.py:85-118`
-  (NHIE guiltiest, TTL best-liar, hottakes hottest, …) is the template. Game types
-  with no meaningful winner pay participation only.
+  `end_game` payload (`economy/game_rewards.py::_WINNER_RESOLVERS`). Since the
+  2026-07-20 game-UX round, **every party game with a genuine winner resolves one**:
+  NHIE guiltiest, TTL Best Liar **and** Best Guesser (ties included; Open Book is a
+  booby prize and unpaid), Hot Takes hottest author, **Rushmore vote winner(s),
+  Clapback top score, MLT most crowns, Price "Most Reasonable (overall)"**. All-zero
+  scoreboards pay nobody (an everyone-ties-at-0 board must not pay the room). Game
+  types with no meaningful winner (story, AMA, MFK, compliment, traditional, WYR by
+  design) pay participation only.
+- **Payout visibility (2026-07-20):** every paying party game's recap embed gets a
+  footer via `append_payout_footer` — `🪙 +20 to winners · +5 to everyone who
+  played`, using the guild's configured amounts and currency emoji; winner line only
+  for game types with a resolver; suppressed entirely when the economy is disabled.
+  WYR has no recap embed, so it stays footer-less.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger.
 
@@ -385,7 +395,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `message_sent` | any member message (channel-scopable) | `events_cog._econ_work` (same txn as login/QOTD) | `message_sent:<message_id>` |
 | `reply_sent` | a Discord reply to someone ELSE's message (self-replies skipped; unresolvable references count) | `events_cog._econ_work` | `reply_sent:<message_id>` |
 | `reaction_given` | reaction-given XP newly awarded (inherits the farm guard: one per message+reactor ever, no self-reacts) | `events_cog.on_raw_reaction_add` | `reaction_given:<message_id>` |
-| `game_win` | winning a party game (only NHIE/TTL/Hot Takes resolve a winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
+| `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
 | `confession` | member submits an anonymous confession (posts to the feed) | `confessions_cog.ConfessModal.on_submit` → `_fire_confession_trigger` (both forum + text paths) | `confession:<message_id>` — silent claim keeps the feed anonymous; only trace is the ledger |

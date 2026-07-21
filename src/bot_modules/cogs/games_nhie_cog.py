@@ -440,6 +440,9 @@ class NHIECog(commands.Cog):
                                 guilt_scores=guilt_scores,
                                 guild=guild,
                             )
+                            if guild:
+                                from bot_modules.economy.game_rewards import append_payout_footer
+                                await append_payout_footer(self.bot, embed, guild.id, "nhie")
                             await channel.send(embed=embed)
                         else:
                             await channel.send(

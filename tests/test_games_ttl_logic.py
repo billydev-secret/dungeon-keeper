@@ -23,8 +23,11 @@ from bot_modules.games_ttl.embeds import (
 from bot_modules.games_ttl.logic import (
     add_submission,
     compute_recap_winners,
+    mark_played,
     parse_lie_index,
+    played_ids_from_payload,
     shuffle_statements,
+    submission_locked,
     tally_votes,
     update_scores,
 )
@@ -438,8 +441,8 @@ def test_build_recap_embed_with_typical_stats():
     assert "🤥 Best Liar" in by_name
     assert "Alice" in by_name["🤥 Best Liar"]
     assert "(3 fooled)" in by_name["🤥 Best Liar"]
-    assert "😇 Most Honest" in by_name
-    assert "Bob" in by_name["😇 Most Honest"]
+    assert "🪞 Open Book" in by_name
+    assert "Bob" in by_name["🪞 Open Book"]
     assert "🎯 Best Guesser" in by_name
     assert "(4 correct)" in by_name["🎯 Best Guesser"]
     assert mentions == {"<@1>", "<@2>"}
@@ -517,3 +520,124 @@ def test_build_recap_embed_de_dupes_mentions():
         mention_resolver=lambda u: f"<@{u}>",
     )
     assert mentions == {"<@1>", "<@2>"}
+
+
+# ── played tracking / resubmission lock ──────────────────────────────
+
+
+def test_mark_played_creates_list_and_is_idempotent():
+    payload = {}
+    mark_played(payload, 1)
+    mark_played(payload, 1)
+    mark_played(payload, "2")
+    assert payload["played"] == ["1", "2"]
+
+
+def test_played_ids_prefers_explicit_list_over_scores():
+    payload = {"played": ["1"], "scores": {"1": {}, "2": {}, "3": {}}}
+    assert played_ids_from_payload(payload) == {"1"}
+
+
+def test_played_ids_falls_back_to_scores_for_legacy_payloads():
+    payload = {"scores": {"1": {}, "2": {}}}
+    assert played_ids_from_payload(payload) == {"1", "2"}
+
+
+def test_played_ids_empty_payload():
+    assert played_ids_from_payload({}) == set()
+
+
+def test_submission_locked_only_after_reveal():
+    payload = {"submissions": {"1": {}, "2": {}}, "played": ["1"]}
+    assert submission_locked(payload, 1) is True
+    assert submission_locked(payload, 2) is False
+    # A player who hasn't even submitted isn't locked either.
+    assert submission_locked(payload, 3) is False
+
+
+# ── prompt on the guess embed ────────────────────────────────────────
+
+
+def test_guess_embed_repeats_prompt_for_late_joiners():
+    embed = build_guess_embed("mimi", ["a", "b", "c"], {}, prompt="Monday trauma?")
+    assert embed.description == "**Prompt:** Monday trauma?"
+
+
+def test_guess_embed_no_prompt_keeps_description_empty():
+    embed = build_guess_embed("mimi", ["a", "b", "c"], {})
+    assert embed.description is None
+
+
+# ── Open Book award rename ───────────────────────────────────────────
+
+
+def test_recap_open_book_shows_fooled_count():
+    stats = {
+        "best_liar": ["1"], "most_fooled_count": 5,
+        "most_honest": ["2"], "least_fooled_count": 1,
+        "best_guesser": ["3"], "max_correct": 4,
+    }
+    embed, _ = build_recap_embed(stats, lambda uid: f"U{uid}")
+    open_book = [f for f in embed.fields if f.name == "🪞 Open Book"]
+    assert len(open_book) == 1
+    assert open_book[0].value == "U2 (fooled only 1)"
+
+
+def test_recap_open_book_zero_fooled_reads_naturally():
+    stats = {
+        "best_liar": ["1"], "most_fooled_count": 5,
+        "most_honest": ["2"], "least_fooled_count": 0,
+        "best_guesser": ["3"], "max_correct": 4,
+    }
+    embed, _ = build_recap_embed(stats, lambda uid: f"U{uid}")
+    open_book = [f for f in embed.fields if f.name == "🪞 Open Book"]
+    assert open_book[0].value == "U2 (fooled no one)"
+
+
+def test_recap_no_most_honest_field_remains_absent():
+    embed, _ = build_recap_embed({}, lambda uid: uid)
+    assert all("Open Book" not in (f.name or "") for f in embed.fields)
+
+
+# ── submission modal (components v2) ─────────────────────────────────
+#
+# The modal is Discord glue, but its structure caused two live bugs
+# (truncated prompt, lobby-embed clobbering), so we pin the parts that
+# are testable without a gateway: prompt as static TextDisplay, prefill
+# of existing statements, and no fallback edit target.
+
+
+def _modal(**kwargs):
+    from bot_modules.cogs.games_ttl_cog import SubmitStatementsModal
+    return SubmitStatementsModal("game-1", db=None, **kwargs)
+
+
+def test_modal_shows_full_prompt_as_text_display():
+    import discord
+    prompt = "how are you gonna get over your Monday traumas?"
+    modal = _modal(prompt=prompt)
+    displays = [c for c in modal.children if isinstance(c, discord.ui.TextDisplay)]
+    assert len(displays) == 1
+    assert prompt in displays[0].content  # full text, not truncated to 45 chars
+    assert prompt not in modal.title
+
+
+def test_modal_without_prompt_has_no_text_display():
+    import discord
+    modal = _modal()
+    assert not any(isinstance(c, discord.ui.TextDisplay) for c in modal.children)
+
+
+def test_modal_prefills_existing_submission():
+    existing = {"statements": ["s1", "s2", "s3"], "lie": 2}
+    modal = _modal(existing=existing)
+    assert [ti.default for ti in modal._inputs] == ["s1", "s2", "s3"]
+    assert modal._lie_input.default == "3"  # 0-indexed lie → 1-indexed display
+
+
+def test_modal_never_edits_without_explicit_origin_message():
+    # The live bug: falling back to interaction.message clobbered the
+    # active guess embed's first field. The modal must only ever target
+    # the message explicitly handed to it.
+    modal = _modal()
+    assert modal._origin_message is None

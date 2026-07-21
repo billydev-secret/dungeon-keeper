@@ -1042,6 +1042,9 @@ class ClapbackCog(commands.Cog):
             config=config,
             name_resolver=lambda uid: resolve_name(guild, uid),
         )
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "clapback")
 
         rounds_played = len(payload.get("round_history", []))
         host_id = payload.get("host_id") or (players[0] if players else 0)

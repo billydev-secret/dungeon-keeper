@@ -37,6 +37,10 @@ DRAFT_ROUNDS: int = 4
 # stats logic agree on what counts as "real pick" vs "skipped".
 SKIPPED_MARKER: str = "⏭️ Skipped"
 
+# Length of the post-draft window in which players may fill their own
+# skipped slots before the final boards are shown.
+BACKFILL_SECONDS: int = 60
+
 
 def generate_snake_order(
     players: list[int], rounds: int = DRAFT_ROUNDS,
@@ -81,6 +85,56 @@ def find_who_picked(
             if p and p != SKIPPED_MARKER and p.strip().lower() == norm:
                 return uid_str
     return None
+
+
+def first_skipped_slot(board: list[Any]) -> int | None:
+    """Index of the first :data:`SKIPPED_MARKER` slot, or ``None``.
+
+    Backfill fills slots in board order, so "which slot am I fixing" is
+    always the first skipped one.
+    """
+    for i, pick in enumerate(board):
+        if pick == SKIPPED_MARKER:
+            return i
+    return None
+
+
+def players_with_skips(boards: dict[str, list[Any]]) -> list[str]:
+    """Uids (as str, board order) that still have at least one skipped slot."""
+    return [
+        uid for uid, board in boards.items()
+        if any(p == SKIPPED_MARKER for p in board)
+    ]
+
+
+def apply_backfill(
+    boards: dict[str, list[Any]],
+    skipped: list[str],
+    uid: int | str,
+    pick_text: str,
+) -> int | None:
+    """Fill ``uid``'s first skipped slot with ``pick_text``.
+
+    Mutates ``boards`` and ``skipped`` in place: the slot gets the pick and
+    the matching ``f"{uid}_{round}"`` entry leaves the skipped list (so the
+    recap's skip stats reflect what actually stayed empty). ``pick_times``
+    is deliberately untouched — backfills aren't turn-timed and must not
+    compete for fastest/slowest pick.
+
+    Returns the 0-indexed slot that was filled, or ``None`` when the player
+    has no board or no skipped slots (nothing changes).
+    """
+    board = boards.get(str(uid))
+    if not board:
+        return None
+    slot = first_skipped_slot(board)
+    if slot is None:
+        return None
+    board[slot] = pick_text
+    key = f"{uid}_{slot + 1}"
+    if key in skipped:
+        skipped.remove(key)
+    return slot
 
 
 def eligible_voters(

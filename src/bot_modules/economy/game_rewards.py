@@ -270,12 +270,44 @@ def _winners_nhie(payload: dict[str, Any]) -> list[int]:
 
 
 def _winners_ttl(payload: dict[str, Any]) -> list[int]:
-    """Best liar — fooled the most others."""
-    scores = payload.get("scores") or {}
-    if not scores:
+    """Best Liar + Best Guesser — both skill awards pay, ties included.
+
+    Delegates to the game's own recap logic so the paid winners always
+    match the names on the FINAL RESULTS embed. (Open Book — fooled the
+    fewest — is a booby prize and deliberately unpaid.)
+    """
+    from bot_modules.games_ttl.logic import (
+        compute_recap_winners,
+        played_ids_from_payload,
+    )
+
+    raw_scores = payload.get("scores") or {}
+    if not raw_scores:
         return []
-    best = max(scores.items(), key=lambda kv: (kv[1] or {}).get("fooled", 0))
-    return [int(best[0])]
+    # Normalize entries so a partial dict (hand-edited or legacy) can't
+    # KeyError inside the recap logic and void the whole payout.
+    scores = {
+        uid: {
+            "fooled": (s or {}).get("fooled", 0),
+            "correct_guesses": (s or {}).get("correct_guesses", 0),
+            "total_guessers": (s or {}).get("total_guessers", 0),
+        }
+        for uid, s in raw_scores.items()
+    }
+    stats = compute_recap_winners(scores, played_ids_from_payload(payload))
+    # A zero extremum means nobody actually earned the award (nobody was
+    # fooled / nobody guessed right) — an all-tie at 0 must not pay everyone.
+    liars = stats["best_liar"] if stats["most_fooled_count"] > 0 else []
+    guessers = stats["best_guesser"] if stats["max_correct"] > 0 else []
+    winners: list[int] = []
+    for uid in liars + guessers:
+        try:
+            iuid = int(uid)
+        except (TypeError, ValueError):
+            continue
+        if iuid not in winners:
+            winners.append(iuid)
+    return winners
 
 
 def _winners_hottakes(payload: dict[str, Any]) -> list[int]:
@@ -288,11 +320,95 @@ def _winners_hottakes(payload: dict[str, Any]) -> list[int]:
     return [int(author)] if author is not None else []
 
 
+def _top_scorers(scores: dict[str, Any]) -> list[int]:
+    """Uids tied for the highest positive numeric score.
+
+    Shared shape for clapback points, MLT crowns, and any future
+    ``{uid: count}`` scoreboard. An all-zero board returns ``[]`` —
+    "nobody scored" must not pay everyone.
+    """
+    numeric: dict[int, float] = {}
+    for uid, val in (scores or {}).items():
+        try:
+            numeric[int(uid)] = float(val)
+        except (TypeError, ValueError):
+            continue
+    if not numeric:
+        return []
+    top = max(numeric.values())
+    if top <= 0:
+        return []
+    return [uid for uid, v in numeric.items() if v == top]
+
+
+def _winners_rushmore(payload: dict[str, Any]) -> list[int]:
+    """Vote winner(s) — most votes for best Mt. Rushmore board."""
+    votes = payload.get("votes") or {}
+    tally: dict[str, int] = {}
+    for target in votes.values():
+        key = str(target)
+        tally[key] = tally.get(key, 0) + 1
+    return _top_scorers(tally)
+
+
+def _winners_clapback(payload: dict[str, Any]) -> list[int]:
+    """Highest score after the final round."""
+    return _top_scorers(payload.get("scores") or {})
+
+
+def _winners_mlt(payload: dict[str, Any]) -> list[int]:
+    """Most round crowns."""
+    return _top_scorers(payload.get("crowns") or {})
+
+
+def _winners_price(payload: dict[str, Any]) -> list[int]:
+    """Most Reasonable (overall) — most Most-Reasonable round wins."""
+    scores = payload.get("scores") or {}
+    return _top_scorers(scores.get("reasonable_wins") or {})
+
+
 _WINNER_RESOLVERS: dict[str, Callable[[dict[str, Any]], list[int]]] = {
     "nhie": _winners_nhie,
     "ttl": _winners_ttl,
     "hottakes": _winners_hottakes,
+    "rushmore": _winners_rushmore,
+    "clapback": _winners_clapback,
+    "mlt": _winners_mlt,
+    "price": _winners_price,
 }
+
+
+async def append_payout_footer(bot: "Bot", embed: discord.Embed, guild_id: int, game_type: str) -> None:
+    """Stamp a recap embed with what the game just paid out.
+
+    Adds a line like ``🪙 +20 to winners · +5 to everyone who played`` under
+    any existing footer text, using the guild's configured amounts. Silently
+    a no-op when the economy is disabled, amounts are zero, or settings can't
+    load — a recap must never fail over its footer. Game types with no winner
+    resolver only advertise the participation payout.
+    """
+    try:
+        db_path = bot.ctx.db_path
+
+        def _load() -> EconSettings:
+            with open_db(db_path) as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            return
+        parts: list[str] = []
+        if game_type in _WINNER_RESOLVERS and settings.reward_game_win:
+            parts.append(f"+{settings.reward_game_win} to winners")
+        if settings.reward_game_participation:
+            parts.append(f"+{settings.reward_game_participation} to everyone who played")
+        if not parts:
+            return
+        line = f"{settings.currency_emoji} {' · '.join(parts)}"
+        existing = embed.footer.text if embed.footer else None
+        embed.set_footer(text=f"{existing}\n{line}" if existing else line)
+    except Exception:
+        log.exception("payout footer failed for guild %s (%s)", guild_id, game_type)
 
 
 def resolve_winners(game_type: str, payload: dict) -> list[int]:

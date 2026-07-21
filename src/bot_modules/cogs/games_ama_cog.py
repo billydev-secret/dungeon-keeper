@@ -782,6 +782,9 @@ class AMAView(discord.ui.View):
 
         color = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
         embed = build_recap_embed(self.mode, stats, color=color)
+        if channel.guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, channel.guild.id, "ama")
 
         self.stop()
         disable_all_items(self)

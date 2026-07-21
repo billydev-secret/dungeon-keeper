@@ -115,6 +115,9 @@ class ComplimentView(discord.ui.View):
         guild = interaction.guild
         color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_pairings_embed(lines, color=color)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "compliment")
         # Ping all participants (preserve order from pairings dict)
         unique_mentions = [mention_lookup[uid] for uid in pairing_ids(pairings) if uid in mention_lookup]
 

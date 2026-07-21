@@ -292,6 +292,9 @@ class TraditionalHostView(discord.ui.View):
         guild = (interaction.guild if interaction else None) or getattr(channel, "guild", None)
         color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_recap_embed(payload, color=color)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "traditional")
 
         self.stop()
         disable_all_items(self)

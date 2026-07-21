@@ -280,6 +280,10 @@ class HotTakeVoteView(discord.ui.View):
         embed = build_recap_embed(results)
         if embed is None:
             return
+        guild = getattr(channel, "guild", None)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "hottakes")
         await channel.send(embed=embed)
 
 

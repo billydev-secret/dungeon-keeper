@@ -79,13 +79,15 @@ def build_join_embed(
     host_name: str,
     player_names: list[str],
     topic: str | None = None,
+    mode: str = "snake",
 ) -> discord.Embed:
     """Lobby embed shown while players are joining.
 
     When ``topic`` is set (host-supplied), the description teases the
-    upcoming draft topic; otherwise it explains the snake-draft rules.
-    The roster field renders with a count and a comma-joined list (or
-    a placeholder when nobody has joined yet).
+    upcoming draft topic. A one-line how-to always renders — the ❓ Help
+    button exists but live games showed nobody presses it, so the rules
+    ride in the embed itself. ``mode`` flips the line between snake
+    ("when it's your turn") and blitz ("everyone picks at once").
     """
     title = f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT"
     desc = f"Hosted by: **{discord.utils.escape_markdown(host_name)}**"
@@ -94,8 +96,18 @@ def build_join_embed(
             "\n\nBuild your Mt. Rushmore of "
             f"**{discord.utils.escape_markdown(topic)}**!"
         )
+    if mode == "blitz":
+        desc += (
+            "\n\n⚡ **How it works:** each round, everyone picks at once — hit "
+            "🗿 **Make Your Pick** and type one. Top 4, no duplicates "
+            "(fastest fingers win), then the room votes on the best board."
+        )
     else:
-        desc += "\n\nJoin up — snake draft, 4 rounds, no duplicate picks."
+        desc += (
+            "\n\n**How it works:** when it's your turn, hit 🗿 **Make Your "
+            "Pick** and type one. Snake draft, top 4, no duplicates, then "
+            "the room votes on the best board."
+        )
     embed = discord.Embed(title=title, description=desc, color=PHASE_JOINING)
     pool_str = ", ".join(player_names) if player_names else "(nobody yet)"
     embed.add_field(
