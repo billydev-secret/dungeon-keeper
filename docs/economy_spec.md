@@ -338,7 +338,12 @@ filtered by personal boards, with per-member rows in `econ_community_contrib`
   `last_run_week` ordering) activates with a **fully automatic target** —
   trailing 28 days of that kind's `econ_kind_activity` ÷ 4 ÷ 0.75
   (`community_auto_target`, floor 10), so a typical week lands ~75% and a
-  push clears it. No manual override by design (2026-07-18 decision).
+  push clears it. No manual override by design (2026-07-18 decision). A
+  **channel-scoped** community quest on a message-shaped kind
+  (`quests.CHANNEL_SHARE_KINDS`) scales the guild total by the channel's
+  message share first (`channel_message_share` over `processed_messages`) —
+  without it a 43%-of-traffic channel would be sized against 100% of the
+  activity and its top tiers would be mathematically unreachable.
 - **Tiers at 40/70/100%** (`quests.COMMUNITY_TIERS`): settlement at the
   closing week roll pays the quest's flat `reward` once per crossed tier to
   every 30d-active member — exactly-once per run via
@@ -665,7 +670,16 @@ active trailing periods of the kind fall back to the deterministic
 `(user, quest, period)`) — the cold-start behavior, and the entire behavior
 before migration 080's ledger accrued history. Sandbagging by going quiet
 floors out at `target_min` and is self-defeating (less activity is less
-income anyway).
+income anyway). **Channel-scoped band quests** on message-shaped kinds
+(`quests.CHANNEL_SHARE_KINDS`: message_sent, reply_sent, media_post) scale
+the member's median by *their own* share of traffic in the scoped channel
+(`channel_message_share` over `processed_messages`, trailing 28 days) —
+kind activity has no channel dimension, so "send N in #the-meadow" sizes
+to their meadow pace, not their whole-server pace. The Gaussian fallback
+is never scaled (the author wrote the band for the channel already).
+Thread messages archive under the thread's id while scoped fires credit
+the parent, so shares read slightly low in thready channels — targets err
+forgiving.
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.

@@ -188,6 +188,13 @@ _REWARD_BANDS: dict[str, tuple[int, int]] = {
 }
 
 
+# Kinds whose occurrences are messages landing in a channel, so a
+# channel-scoped quest can be sized fairly by scaling kind activity with the
+# channel's share of `processed_messages` (media_post rides the same proxy —
+# close enough, and errs low for media-heavy channels, the forgiving
+# direction). Scoped quests on other kinds keep unscaled sizing.
+CHANNEL_SHARE_KINDS = frozenset({"message_sent", "reply_sent", "media_post"})
+
 # Kinds whose per-member counts must never surface as "top contributors":
 # naming the most active confessors/repliers/whisperers would deanonymize an
 # anonymous feed. A community weekly on these kinds pays flat tiers only —

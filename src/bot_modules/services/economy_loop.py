@@ -393,7 +393,11 @@ def _roll_community_weekly(
     if nxt is None:
         return beats, community_week  # library has no community weeklies
     kind = str(nxt["trigger_kind"])
-    target = auto_size_community_target(conn, guild_id, kind, local_day)
+    scope = nxt["trigger_channel_id"]
+    target = auto_size_community_target(
+        conn, guild_id, kind, local_day,
+        channel_id=int(scope) if scope is not None else None,
+    )
     activate_community_weekly(
         conn, guild_id, int(nxt["id"]), target=target, week=new_week
     )

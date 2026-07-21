@@ -1073,12 +1073,23 @@ def resolve_member_target(
 
     import statistics as _stats
 
+    kind = str(quest["trigger_kind"])
     counts = _trailing_period_counts(
-        conn, guild_id, user_id, str(quest["trigger_kind"]),
-        str(quest["qtype"]), local_day,
+        conn, guild_id, user_id, kind, str(quest["qtype"]), local_day,
     )
     if sum(1 for c in counts if c > 0) >= 2:
-        target = quests.dynamic_target(_stats.median(counts), tmin, tmax)
+        median = float(_stats.median(counts))
+        # Channel-scoped quest on a message-shaped kind: the member's kind
+        # activity is all-channel, so scale their median by THEIR share of
+        # traffic in the scoped channel — "send N messages in #the-meadow"
+        # sizes to their meadow pace, not their whole-server pace. The band
+        # clamp below still bounds the result either way.
+        scope = quest["trigger_channel_id"]
+        if scope is not None and kind in quests.CHANNEL_SHARE_KINDS:
+            median *= channel_message_share(
+                conn, guild_id, int(scope), local_day, user_id=user_id
+            )
+        target = quests.dynamic_target(median, tmin, tmax)
     else:
         target = quests.effective_target(
             target_count, tmin, tmax,
@@ -1889,14 +1900,67 @@ def next_community_weekly(
     ).fetchone()
 
 
+def channel_message_share(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    local_day: str,
+    *,
+    user_id: int | None = None,
+) -> float:
+    """The channel's fraction of messages over the trailing 28 days.
+
+    Guild-wide by default; pass ``user_id`` for the member's own share.
+    Read from ``processed_messages`` (the permanent archive — kind activity
+    has no channel dimension). Zero traffic in the window returns 1.0: no
+    data means no scaling, and the band/floor clamps still protect. Soft
+    edge: thread messages archive under the thread's id while scoped fires
+    credit the parent, so thready channels read slightly LOW — targets err
+    forgiving, never impossible.
+    """
+    from datetime import date, timezone
+    from datetime import datetime as dt
+
+    end_d = date.fromisoformat(local_day)
+    end_ts = dt(end_d.year, end_d.month, end_d.day, tzinfo=timezone.utc).timestamp()
+    start_ts = end_ts - 28 * 86400
+    member_clause = "AND user_id = ?" if user_id is not None else ""
+    member_args: tuple = (user_id,) if user_id is not None else ()
+    total = conn.execute(
+        f"SELECT COUNT(*) AS n FROM processed_messages "
+        f"WHERE guild_id = ? {member_clause} "
+        f"AND created_at >= ? AND created_at < ?",
+        (guild_id, *member_args, start_ts, end_ts),
+    ).fetchone()
+    if int(total["n"]) == 0:
+        return 1.0
+    in_channel = conn.execute(
+        f"SELECT COUNT(*) AS n FROM processed_messages "
+        f"WHERE guild_id = ? AND channel_id = ? {member_clause} "
+        f"AND created_at >= ? AND created_at < ?",
+        (guild_id, channel_id, *member_args, start_ts, end_ts),
+    ).fetchone()
+    return int(in_channel["n"]) / int(total["n"])
+
+
 def auto_size_community_target(
-    conn: sqlite3.Connection, guild_id: int, kind: str, local_day: str
+    conn: sqlite3.Connection,
+    guild_id: int,
+    kind: str,
+    local_day: str,
+    *,
+    channel_id: int | None = None,
 ) -> int:
     """Target from the guild's trailing 28 full days of this kind's activity.
 
     Fully automatic by design decision (2026-07-18 Q&A) — no manual override.
     Cold kinds fall to the floor target (quests.community_auto_target), which
-    keeps a first-week goal achievable rather than impossible.
+    keeps a first-week goal achievable rather than impossible. A
+    channel-scoped quest on a message-shaped kind
+    (quests.CHANNEL_SHARE_KINDS) scales the guild total by the channel's
+    message share first — kind activity has no channel dimension, and an
+    unscaled target would make the top tiers mathematically unreachable
+    (e.g. a 43%-of-traffic channel sized against 100% of the activity).
     """
     from datetime import date, timedelta
 
@@ -1909,7 +1973,12 @@ def auto_size_community_target(
         """,
         (guild_id, kind, start.isoformat(), end.isoformat()),
     ).fetchone()
-    return quests.community_auto_target(int(row["total"]))
+    total = int(row["total"])
+    if channel_id is not None and kind in quests.CHANNEL_SHARE_KINDS:
+        total = round(
+            total * channel_message_share(conn, guild_id, channel_id, local_day)
+        )
+    return quests.community_auto_target(total)
 
 
 def activate_community_weekly(

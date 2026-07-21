@@ -1813,6 +1813,111 @@ def test_resolve_target_clamps_to_band(db):
         ) == 10  # median ~1 × 1.15 floored at band min
 
 
+def _seed_messages(conn, *, channel_id, count, user_id=USER, ts=1783000000.0):
+    """Archive rows for the channel-share window (2026-06-14..07-12 UTC)."""
+    base = conn.execute(
+        "SELECT COALESCE(MAX(message_id), 0) FROM processed_messages"
+    ).fetchone()[0]
+    conn.executemany(
+        "INSERT INTO processed_messages "
+        "(guild_id, message_id, channel_id, user_id, created_at, processed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (GUILD, base + i + 1, channel_id, user_id, ts, ts)
+            for i in range(count)
+        ],
+    )
+
+
+def test_channel_message_share_guild_and_member(db):
+    from bot_modules.services.economy_quests_service import channel_message_share
+
+    with open_db(db) as conn:
+        # No traffic at all → 1.0 (no data means no scaling).
+        assert channel_message_share(conn, GUILD, 111, "2026-07-12") == 1.0
+        _seed_messages(conn, channel_id=111, count=30, user_id=USER)
+        _seed_messages(conn, channel_id=222, count=70, user_id=USER_2)
+        assert channel_message_share(conn, GUILD, 111, "2026-07-12") == 0.3
+        # Member share is their own split, not the guild's.
+        assert channel_message_share(
+            conn, GUILD, 111, "2026-07-12", user_id=USER
+        ) == 1.0
+        assert channel_message_share(
+            conn, GUILD, 111, "2026-07-12", user_id=USER_2
+        ) == 0.0
+        # Outside the 28-day window → not counted.
+        assert channel_message_share(conn, GUILD, 111, "2026-01-01") == 1.0
+
+
+def test_auto_size_scales_scoped_message_kinds_only(db):
+    from bot_modules.services.economy_quests_service import (
+        auto_size_community_target,
+        record_kind_activity,
+    )
+
+    with open_db(db) as conn:
+        # 400 message_sent occurrences over the window → unscoped target
+        # 400/4/0.75 ≈ 133.
+        for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):
+            for _ in range(100):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        _seed_messages(conn, channel_id=111, count=40)
+        _seed_messages(conn, channel_id=222, count=60)
+        unscoped = auto_size_community_target(
+            conn, GUILD, "message_sent", "2026-07-12"
+        )
+        scoped = auto_size_community_target(
+            conn, GUILD, "message_sent", "2026-07-12", channel_id=111
+        )
+        assert unscoped == 133
+        assert scoped == 53  # 400 × 0.4 share → 160/4/0.75 ≈ 53
+        # Non-message-shaped kind: scope never scales.
+        for day in ("2026-06-17", "2026-07-01"):
+            for _ in range(60):
+                record_kind_activity(conn, GUILD, USER, "voice_session", day)
+        assert auto_size_community_target(
+            conn, GUILD, "voice_session", "2026-07-12", channel_id=111
+        ) == auto_size_community_target(
+            conn, GUILD, "voice_session", "2026-07-12"
+        )
+
+
+def test_resolve_target_scoped_quest_scales_by_member_channel_share(db):
+    # "Send N messages in #the-meadow" must size to the member's MEADOW
+    # pace: their kind activity is all-channel, so an unscaled median would
+    # hand a busy-elsewhere member an impossible in-channel target.
+    from bot_modules.economy.quests import dynamic_target
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        scoped = _make(
+            conn, qtype="weekly", trigger_kind="message_sent",
+            target_min=2, target_max=60, trigger_channel_id=111,
+            title="meadow-band",
+        )
+        quest = conn.execute(
+            "SELECT * FROM econ_quests WHERE id = ?", (scoped,)
+        ).fetchone()
+        # All-channel weekly pace: 20/20/30/40 → median 25.
+        for day, n in (
+            ("2026-06-17", 20), ("2026-06-24", 20),
+            ("2026-07-01", 30), ("2026-07-08", 40),
+        ):
+            for _ in range(n):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        # But only 20% of their messages land in channel 111.
+        _seed_messages(conn, channel_id=111, count=20, user_id=USER)
+        _seed_messages(conn, channel_id=222, count=80, user_id=USER)
+        target = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        assert target == dynamic_target(25 * 0.2, 2, 60)  # 5 × 1.15 → 6
+        assert target < dynamic_target(25, 2, 60)  # meaningfully below unscoped
+
+
 def test_resolve_target_gaussian_fallback_without_history(db):
     from bot_modules.services.economy_quests_service import resolve_member_target
 
