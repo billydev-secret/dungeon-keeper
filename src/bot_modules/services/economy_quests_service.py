@@ -399,15 +399,33 @@ def board_sizes(settings: EconSettings) -> dict[str, int]:
     }
 
 
+# Ledger kinds that count as "a shop purchase" for the shop_purchase setup
+# quest: voluntary member spends only. Renewal billing shares the "rental"
+# kind, which is fine here — nobody's FIRST purchase is a renewal. Deliberate
+# omissions: quest_reroll (board mechanics), wager stakes (not a purchase),
+# transfers/gifts, admin adjustments.
+PURCHASE_LEDGER_KINDS: tuple[str, ...] = (
+    "rental",
+    "streak_shield",
+    "emoji_sponsor",
+    "qotd_sponsor",
+    "raffle_ticket",
+)
+
+
 def _setup_underlying_done(
     conn: sqlite3.Connection, guild_id: int, user_id: int, kind: str
 ) -> bool:
     """Whether the member has already done a one-time setup kind's real action.
 
     A direct existence check against the owning feature's table — a bio row
-    means they filled one out, a birthday row means they set it. Kept as
-    inline SQL (rather than importing the bios/birthday modules) so quest
-    assignment stays self-contained; these are stable core tables.
+    means they filled one out, a birthday row means they set it, a role-menu
+    grant or purchase-kind ledger row means they've picked/bought. Kept as
+    inline SQL (rather than importing the owning modules) so quest assignment
+    stays self-contained; these are stable core tables. role_pick has a known
+    soft edge: announcement-button grants aren't recorded in
+    ``role_menu_grants``, so those pickers stay visible until the paid-claim
+    backstop in ``_setup_quest_done`` catches them.
     """
     if kind == "bio_set":
         row = conn.execute(
@@ -419,6 +437,19 @@ def _setup_underlying_done(
             "SELECT 1 FROM member_birthdays WHERE guild_id = ? AND user_id = ? "
             "LIMIT 1",
             (guild_id, user_id),
+        ).fetchone()
+    elif kind == "role_pick":
+        row = conn.execute(
+            "SELECT 1 FROM role_menu_grants "
+            "WHERE guild_id = ? AND user_id = ? AND action = 'grant' LIMIT 1",
+            (guild_id, user_id),
+        ).fetchone()
+    elif kind == "shop_purchase":
+        placeholders = ",".join("?" * len(PURCHASE_LEDGER_KINDS))
+        row = conn.execute(
+            "SELECT 1 FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+            f"AND kind IN ({placeholders}) LIMIT 1",
+            (guild_id, user_id, *PURCHASE_LEDGER_KINDS),
         ).fetchone()
     else:
         return False
@@ -1059,15 +1090,28 @@ def resolve_member_target(
 
     import statistics as _stats
 
+    kind = str(quest["trigger_kind"])
     counts = _trailing_period_counts(
-        conn, guild_id, user_id, str(quest["trigger_kind"]),
-        str(quest["qtype"]), local_day,
+        conn, guild_id, user_id, kind, str(quest["qtype"]), local_day,
     )
     if sum(1 for c in counts if c > 0) >= 2:
-        if str(quest["trigger_kind"]) in quests.PERSONAL_P25_KINDS:
+        if kind in quests.PERSONAL_P25_KINDS:
             target = quests.p25_target(counts, tmin, tmax)
         else:
-            target = quests.dynamic_target(_stats.median(counts), tmin, tmax)
+            median = float(_stats.median(counts))
+            # Channel-scoped quest on a message-shaped kind: the member's
+            # kind activity is all-channel, so scale their median by THEIR
+            # share of traffic in the scoped channel — "send N messages in
+            # #the-meadow" sizes to their meadow pace, not their
+            # whole-server pace. The band clamp still bounds the result.
+            # (PERSONAL_P25_KINDS and CHANNEL_SHARE_KINDS are disjoint, so
+            # the p25 branch never needs the scaling.)
+            scope = quest["trigger_channel_id"]
+            if scope is not None and kind in quests.CHANNEL_SHARE_KINDS:
+                median *= channel_message_share(
+                    conn, guild_id, int(scope), local_day, user_id=user_id
+                )
+            target = quests.dynamic_target(median, tmin, tmax)
     else:
         target = quests.effective_target(
             target_count, tmin, tmax,
@@ -1878,14 +1922,67 @@ def next_community_weekly(
     ).fetchone()
 
 
+def channel_message_share(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    local_day: str,
+    *,
+    user_id: int | None = None,
+) -> float:
+    """The channel's fraction of messages over the trailing 28 days.
+
+    Guild-wide by default; pass ``user_id`` for the member's own share.
+    Read from ``processed_messages`` (the permanent archive — kind activity
+    has no channel dimension). Zero traffic in the window returns 1.0: no
+    data means no scaling, and the band/floor clamps still protect. Soft
+    edge: thread messages archive under the thread's id while scoped fires
+    credit the parent, so thready channels read slightly LOW — targets err
+    forgiving, never impossible.
+    """
+    from datetime import date, timezone
+    from datetime import datetime as dt
+
+    end_d = date.fromisoformat(local_day)
+    end_ts = dt(end_d.year, end_d.month, end_d.day, tzinfo=timezone.utc).timestamp()
+    start_ts = end_ts - 28 * 86400
+    member_clause = "AND user_id = ?" if user_id is not None else ""
+    member_args: tuple = (user_id,) if user_id is not None else ()
+    total = conn.execute(
+        f"SELECT COUNT(*) AS n FROM processed_messages "
+        f"WHERE guild_id = ? {member_clause} "
+        f"AND created_at >= ? AND created_at < ?",
+        (guild_id, *member_args, start_ts, end_ts),
+    ).fetchone()
+    if int(total["n"]) == 0:
+        return 1.0
+    in_channel = conn.execute(
+        f"SELECT COUNT(*) AS n FROM processed_messages "
+        f"WHERE guild_id = ? AND channel_id = ? {member_clause} "
+        f"AND created_at >= ? AND created_at < ?",
+        (guild_id, channel_id, *member_args, start_ts, end_ts),
+    ).fetchone()
+    return int(in_channel["n"]) / int(total["n"])
+
+
 def auto_size_community_target(
-    conn: sqlite3.Connection, guild_id: int, kind: str, local_day: str
+    conn: sqlite3.Connection,
+    guild_id: int,
+    kind: str,
+    local_day: str,
+    *,
+    channel_id: int | None = None,
 ) -> int:
     """Target from the guild's trailing 28 full days of this kind's activity.
 
     Fully automatic by design decision (2026-07-18 Q&A) — no manual override.
     Cold kinds fall to the floor target (quests.community_auto_target), which
-    keeps a first-week goal achievable rather than impossible.
+    keeps a first-week goal achievable rather than impossible. A
+    channel-scoped quest on a message-shaped kind
+    (quests.CHANNEL_SHARE_KINDS) scales the guild total by the channel's
+    message share first — kind activity has no channel dimension, and an
+    unscaled target would make the top tiers mathematically unreachable
+    (e.g. a 43%-of-traffic channel sized against 100% of the activity).
     """
     from datetime import date, timedelta
 
@@ -1898,7 +1995,12 @@ def auto_size_community_target(
         """,
         (guild_id, kind, start.isoformat(), end.isoformat()),
     ).fetchone()
-    return quests.community_auto_target(int(row["total"]))
+    total = int(row["total"])
+    if channel_id is not None and kind in quests.CHANNEL_SHARE_KINDS:
+        total = round(
+            total * channel_message_share(conn, guild_id, channel_id, local_day)
+        )
+    return quests.community_auto_target(total)
 
 
 def activate_community_weekly(
@@ -2011,8 +2113,14 @@ def settle_community_weekly(
                 )
             paid_members += 1
 
+    # Anonymous kinds pay flat tiers only: surfacing the top confessors /
+    # repliers / whisperers (in the bonus ledger or the paste-ready beat
+    # sheet) would deanonymize the feed the kind exists to protect.
+    anonymous = str(quest["trigger_kind"] or "") in quests.ANON_COMMUNITY_KINDS
     contributors, top = community_contrib_summary(conn, qid)
-    bonus = reward // 2
+    if anonymous:
+        top = []
+    bonus = 0 if anonymous else reward // 2
     bonus_paid: list[int] = []
     if crossed > 0 and bonus >= 1:
         for user_id, _count in top:
@@ -2056,6 +2164,7 @@ def settle_community_weekly(
         "top_contributors": top,
         "bonus": bonus,
         "bonus_paid": bonus_paid,
+        "anonymous": anonymous,
     }
 
 

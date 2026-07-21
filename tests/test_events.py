@@ -1280,3 +1280,157 @@ async def test_econ_hook_failure_never_breaks_on_message(
         await cog.on_message(_make_message())
     mock_econ.assert_awaited_once()
     mock_activity.assert_called_once()  # normal processing still completed
+
+
+# ── economy: greeting_answered + birthday_wish community kinds ────────────
+
+
+def _community_message(**kwargs):
+    """An _econ_message whose channel survives the SQL-facing kind detectors
+    (a bare MagicMock parent_id can't be bound as a query parameter)."""
+    msg = _econ_message(**kwargs)
+    msg.channel.parent_id = None
+    return msg
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_greeting_answered_fires_on_mention_of_pending_greeter(
+    mock_notify, econ_db
+):
+    from bot_modules.services.greeting_watch_service import record_greeting
+
+    _enable_econ(econ_db)
+    greeter = 501
+    with open_db(econ_db) as conn:
+        record_greeting(
+            conn, ECON_GUILD, 9001, ECON_CHANNEL, greeter, created_ts=0
+        )
+    msg = _community_message(message_id=1)
+    msg.mentions = [SimpleNamespace(id=greeter, bot=False)]
+    await _econ_cog(econ_db)._process_economy_message(msg)
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE guild_id = ? "
+            "AND user_id = ? AND kind = 'greeting_answered'",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row is not None
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_greeting_answered_skips_resolved_greeting(mock_notify, econ_db):
+    from bot_modules.services.greeting_watch_service import (
+        mark_resolved,
+        record_greeting,
+    )
+
+    _enable_econ(econ_db)
+    greeter = 501
+    with open_db(econ_db) as conn:
+        record_greeting(
+            conn, ECON_GUILD, 9001, ECON_CHANNEL, greeter, created_ts=0
+        )
+        mark_resolved(conn, ECON_GUILD, 9001, "unanswered", now_ts=1)
+    msg = _community_message(message_id=1)
+    msg.mentions = [SimpleNamespace(id=greeter, bot=False)]
+    await _econ_cog(econ_db)._process_economy_message(msg)
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE kind = 'greeting_answered'"
+        ).fetchone()
+    assert row is None
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_birthday_wish_targeted_and_phrase_paths(mock_notify, econ_db):
+    from bot_modules.services.birthday_service import mark_announced, upsert_birthday
+
+    _enable_econ(econ_db)
+    bday_member = 502
+    with open_db(econ_db) as conn:
+        upsert_birthday(conn, ECON_GUILD, bday_member, 1, 1, bday_member)
+        mark_announced(conn, ECON_GUILD, bday_member, _today())
+
+    # Targeted path: mentioning the announced birthday member fires with the
+    # member-keyed occurrence.
+    msg = _community_message(message_id=1)
+    msg.mentions = [SimpleNamespace(id=bday_member, bot=False)]
+    await _econ_cog(econ_db)._process_economy_message(msg)
+
+    # Phrase path: a bare "happy birthday!!" with no target fires day-keyed.
+    other_wisher = 503
+    msg2 = _community_message(
+        message_id=2, user_id=other_wisher, content="happy birthday!! 🎂"
+    )
+    await _econ_cog(econ_db)._process_economy_message(msg2)
+
+    with open_db(econ_db) as conn:
+        fired_for = {
+            int(r["user_id"])
+            for r in conn.execute(
+                "SELECT user_id FROM econ_kind_activity "
+                "WHERE guild_id = ? AND kind = 'birthday_wish'",
+                (ECON_GUILD,),
+            )
+        }
+    assert fired_for == {ECON_USER, other_wisher}
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_birthday_wish_never_fires_for_the_birthday_member(
+    mock_notify, econ_db
+):
+    # The only announced birthday is the author's own: neither the phrase nor
+    # a (self-filtered) mention can turn their birthday into their own quest.
+    from bot_modules.services.birthday_service import mark_announced, upsert_birthday
+
+    _enable_econ(econ_db)
+    with open_db(econ_db) as conn:
+        upsert_birthday(conn, ECON_GUILD, ECON_USER, 1, 1, ECON_USER)
+        mark_announced(conn, ECON_GUILD, ECON_USER, _today())
+    msg = _community_message(message_id=1, content="happy birthday to me!")
+    await _econ_cog(econ_db)._process_economy_message(msg)
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE kind = 'birthday_wish'"
+        ).fetchone()
+    assert row is None
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_birthday_wish_needs_an_announcement(mock_notify, econ_db):
+    # A set-but-never-announced (quiet) birthday is not quest bait.
+    from bot_modules.services.birthday_service import upsert_birthday
+
+    _enable_econ(econ_db)
+    quiet = 504
+    with open_db(econ_db) as conn:
+        upsert_birthday(conn, ECON_GUILD, quiet, 1, 1, quiet)
+    msg = _community_message(message_id=1, content="happy birthday!")
+    msg.mentions = [SimpleNamespace(id=quiet, bot=False)]
+    await _econ_cog(econ_db)._process_economy_message(msg)
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE kind = 'birthday_wish'"
+        ).fetchone()
+    assert row is None

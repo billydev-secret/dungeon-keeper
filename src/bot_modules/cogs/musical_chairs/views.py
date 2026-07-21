@@ -26,7 +26,7 @@ class SitView(discord.ui.View):
         self._on_press = on_press
 
         btn = discord.ui.Button(
-            label="SIT",
+            label="Sit",
             style=discord.ButtonStyle.primary,
             emoji="🪑",
             custom_id=f"mc_sit:{game_id}",
@@ -45,4 +45,4 @@ class SitView(discord.ui.View):
     ) -> None:
         log.exception("SitView error (game %d)", self.game_id, exc_info=error)
         if not interaction.response.is_done():
-            await interaction.response.send_message("Something went wrong.", ephemeral=True)
+            await interaction.response.send_message("❌ Something went wrong.", ephemeral=True)

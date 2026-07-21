@@ -57,8 +57,10 @@ from bot_modules.commands.jail_commands import (
     _is_mod,
     _post_audit,
     _ts_str,
+    jail_channel_deny_sweep,
     jail_expiry_loop,
     policy_vote_timeout_loop,
+    stamp_channel_jail_deny,
     ticket_autodelete_loop,
 )
 from bot_modules.services.moderation import (
@@ -368,6 +370,12 @@ class JailCog(commands.Cog):
         bot.startup_task_factories.append(
             lambda: ticket_autodelete_loop(bot, ctx)
         )
+        # Backfill the @Jailed view-deny on any channel that leaked (created
+        # while offline, or before this backstop shipped). The listener below
+        # covers channels created while the bot is running.
+        bot.startup_task_factories.append(
+            lambda: jail_channel_deny_sweep(bot, ctx)
+        )
 
     async def cog_unload(self) -> None:
         if hasattr(self, "_jail_context_menu"):
@@ -382,6 +390,31 @@ class JailCog(commands.Cog):
             self.bot.tree.remove_command(
                 "Warn User (Message)", type=discord.AppCommandType.message
             )
+
+    # ── Keep jailed members out of newly-created channels ────────────────
+    @commands.Cog.listener("on_guild_channel_create")
+    async def _deny_jailed_on_new_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        """Stamp the @Jailed view-deny on any channel/category as it's created.
+
+        Jailed members keep @everyone, so a channel without an explicit
+        ``@Jailed → view_channel=False`` overwrite is visible to them. Categories
+        fire this event too, so a channel created inside a freshly-stamped
+        category inherits the deny by syncing. Best-effort: a channel we lack
+        permission on is logged and skipped, exactly like the initial sweep.
+        """
+        ctx = self.ctx
+        guild = channel.guild
+        if guild is None or guild.id != ctx.guild_id:
+            return
+        jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=guild.id)
+        if not jailed_role_id:
+            return
+        role = guild.get_role(jailed_role_id)
+        if role is None:
+            return
+        await stamp_channel_jail_deny(channel, role)
 
     # ── /jail ─────────────────────────────────────────────────────────────
     # Note: the /setup command lives in cogs/setup_cog.py, which runs both

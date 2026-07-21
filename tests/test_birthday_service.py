@@ -8,7 +8,9 @@ from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
 from bot_modules.services.birthday_service import (
     MAX_DAYS,
+    announced_birthday_ids,
     delete_birthday,
+    is_birthday_wish,
     list_all_birthdays,
     mark_announced,
     todays_unannounced,
@@ -200,3 +202,52 @@ def test_mark_announced_allows_same_user_different_dates(db):
         upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD)
         assert mark_announced(conn, GUILD, USER_A, "2025-07-15") is True
         assert mark_announced(conn, GUILD, USER_A, "2026-07-15") is True
+
+
+# ── birthday_wish quest detector helpers ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "happy birthday!",
+        "HAPPY BIRTHDAY 🎂🎂🎂",
+        "happppy birthdayyyy",
+        "happy bday",
+        "happy b-day!!",
+        "hbd",
+        "hope you have a great one — happy cake day",
+        "feliz cumpleaños",
+        "joyeux anniversaire",
+    ],
+)
+def test_is_birthday_wish_positive(text):
+    assert is_birthday_wish(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "happy monday everyone",
+        "my birthday is next week",
+        "it's their birthday today",  # stating a fact, not wishing
+        "hbdx",  # word boundary
+        "so happy! birthday plans later",  # split across punctuation
+    ],
+)
+def test_is_birthday_wish_negative(text):
+    assert is_birthday_wish(text) is False
+
+
+def test_announced_birthday_ids_reads_todays_rows_only(db):
+    with open_db(db) as conn:
+        upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD)
+        upsert_birthday(conn, GUILD, USER_B, 7, 15, MOD)
+        mark_announced(conn, GUILD, USER_A, "2026-07-15")
+        mark_announced(conn, GUILD, USER_B, "2026-07-14")  # yesterday
+        assert announced_birthday_ids(conn, GUILD, "2026-07-15") == {USER_A}
+        assert announced_birthday_ids(conn, GUILD, "2026-07-13") == set()
+        # A quiet birthday (never announced) is never in the set — the
+        # privacy gate for the birthday_wish quest.
+        assert announced_birthday_ids(conn, 999, "2026-07-15") == set()

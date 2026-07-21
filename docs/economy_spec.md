@@ -341,14 +341,23 @@ filtered by personal boards, with per-member rows in `econ_community_contrib`
   `last_run_week` ordering) activates with a **fully automatic target** —
   trailing 28 days of that kind's `econ_kind_activity` ÷ 4 ÷ 0.75
   (`community_auto_target`, floor 10), so a typical week lands ~75% and a
-  push clears it. No manual override by design (2026-07-18 decision).
+  push clears it. No manual override by design (2026-07-18 decision). A
+  **channel-scoped** community quest on a message-shaped kind
+  (`quests.CHANNEL_SHARE_KINDS`) scales the guild total by the channel's
+  message share first (`channel_message_share` over `processed_messages`) —
+  without it a 43%-of-traffic channel would be sized against 100% of the
+  activity and its top tiers would be mathematically unreachable.
 - **Tiers at 40/70/100%** (`quests.COMMUNITY_TIERS`): settlement at the
   closing week roll pays the quest's flat `reward` once per crossed tier to
   every 30d-active member — exactly-once per run via
   `econ_community_tier_payouts` (tier 0 reserves the **top-contributor
   bonus**: `reward // 2` to the top 3 by contribution). Contribution and
   tier-payout rows reset at the next activation, so a re-run pays afresh;
-  idempotency only has to hold within a run.
+  idempotency only has to hold within a run. **Anonymous kinds**
+  (`quests.ANON_COMMUNITY_KINDS`: confession, confession_reply, whisper)
+  pay flat tiers only — no bonus, an empty top list in the settle summary,
+  and a name-free resolution beat sheet — because naming the most active
+  confessors/repliers/whisperers would deanonymize the feed.
 - **Beat sheets, not bot posts:** kickoff / tier-crossed / final-24h /
   resolution are **DMed to the community host**
   (`EconSettings.community_host_user_id`, 0 → guild owner) as numbers +
@@ -474,6 +483,22 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `thread_deep` | member posts in a thread at ≥ `THREAD_DEEP_MIN` (20) messages (`Thread.message_count` at ingest — no storage) | `events_cog._econ_work` | `thread_deep:<thread_id>` — once per thread; everyone posting after the crossing gets credit |
 | `welcome` | member replies to someone who joined within `WELCOME_WINDOW_SECONDS` (7 days) | `events_cog._econ_work` | `welcome:<newcomer_id>` — counted = "welcome N new faces"; the retention quest |
 | `conversation_starter` | member's message draws replies from `CONVERSATION_STARTER_REPLIERS` (3) distinct humans — distinct-replier rows accrue in `econ_msg_replies` (migration 085, ingest-derived since content is never stored; pruned to 14 days on the day roll) and the fire happens exactly on the crossing | `events_cog._econ_work` reply path, fired for the target author | `conversation_starter:<message_id>` |
+| `greeting_answered` | member replies to / @mentions someone whose greeting is still pending in Greeting Watch, same channel (pending ≈ inside the window — the loop resolves rows right after it closes). Self-gates on the feature: no watched channels, no fires | `events_cog._econ_work` via `greeting_watch_service.pending_greetings_for` | `greeting_answered:<greeting_message_id>` — one hello credits an answerer once |
+| `birthday_wish` | member wishes a happy birthday on a day a birthday was **announced** (`birthday_announcements` row — quiet/unset birthdays never become quest bait; pre-09:00 wishes miss, documented soft edge): a reply/mention of the birthday member, or a wish phrase (`birthday_service.is_birthday_wish`) anywhere when no target resolved. One fire per message; the wisher can't be the birthday member | `events_cog._econ_work` | `birthday_wish:<target_id>:<local_day>` (phrase fallback: `birthday_wish:day:<local_day>`) |
+| `drop_claim` | member wins a coin-drop Claim race — pays beside the drop's own credit (the `cat_catch` double-pay pattern); drop cadence is the natural rate limit | `economy_drops_service.try_claim_drop` after the credit | `drop_claim:<drop_id>` |
+| `role_pick` | member self-assigns a role via a role menu **grant** (removals never fire) or an announcement role button grant. Setup kind (see below) | `role_menus/views._apply_outcome` + `announcements/buttons._apply` | `role_pick:set` (once ever) |
+| `confession_reply` | member posts an anonymous reply to someone ELSE's confession (OP self-replies never fire; both thread and channel reply paths). Same privacy contract as `confession` — silent claim, no channel noise | `confessions_cog.ReplyModal.on_submit` → `_fire_confession_trigger(kind="confession_reply")` | `confession_reply:<reply_message_id>` — use daily/weekly with a target count |
+| `shop_purchase` | member makes a voluntary shop purchase: perk rent (voucher-covered counts — the quest rewards shop engagement, not the spend), streak shield, emoji sponsorship, QOTD sponsorship, raffle tickets. Renewal billing (`bill_rental`) deliberately never fires. Setup kind (see below) | each purchase service beside its `apply_debit` | `shop_purchase:set` (once ever) |
+
+**One-time setup kinds** (`SETUP_QUEST_KINDS`): `bio_set`, `birthday_set`,
+`role_pick`, `shop_purchase`. Board-cadence quests on these kinds claim once
+ever on a constant period (occurrence `set`), pay on completion even when not
+drawn on the member's board, and drop off the board once the underlying thing
+is done (`_setup_underlying_done`: bio row / birthday row / any
+`role_menu_grants` grant row / any `econ_ledger` row with a purchase kind —
+`PURCHASE_LEDGER_KINDS`). Known soft edge: announcement-button grants aren't
+recorded in `role_menu_grants`, so those pickers stay board-visible until the
+paid-claim backstop catches them.
 
 **Kind activity ledger.** Every `fire_trigger_quests` call — before the
 income-source switch and the personal-board filter — bumps
@@ -663,6 +688,18 @@ active trailing periods of the kind fall back to the deterministic
 `(user, quest, period)`) — the cold-start behavior, and the entire behavior
 before migration 080's ledger accrued history. Sandbagging by going quiet
 floors out at `target_min` and is self-defeating (less activity is less
+<<<<<<< HEAD
+income anyway). **Channel-scoped band quests** on message-shaped kinds
+(`quests.CHANNEL_SHARE_KINDS`: message_sent, reply_sent, media_post) scale
+the member's median by *their own* share of traffic in the scoped channel
+(`channel_message_share` over `processed_messages`, trailing 28 days) —
+kind activity has no channel dimension, so "send N in #the-meadow" sizes
+to their meadow pace, not their whole-server pace. The Gaussian fallback
+is never scaled (the author wrote the band for the channel already).
+Thread messages archive under the thread's id while scoped fires credit
+the parent, so shares read slightly low in thready channels — targets err
+forgiving.
+=======
 income anyway).
 
 Kinds in `quests.PERSONAL_P25_KINDS` (currently `reaction_given`) resolve
@@ -672,6 +709,7 @@ one-click acts with a heavy-tailed distribution, so the target means "at
 least your own quiet-week level" — stretching past typical pace would turn
 the anti-freebie fix into a grind on a heavy reactor's off week. Zeros
 still count in the quantile, same as the median path.
+>>>>>>> main
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.

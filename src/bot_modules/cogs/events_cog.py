@@ -20,8 +20,16 @@ from bot_modules.services.auto_delete_service import (
     should_track_auto_delete_message,
     track_auto_delete_message,
 )
+from bot_modules.services.birthday_service import (
+    announced_birthday_ids,
+    is_birthday_wish,
+)
 from bot_modules.services.discord_scan import collect_messageable_channels
-from bot_modules.services.greeting_watch_service import is_greeting, record_greeting
+from bot_modules.services.greeting_watch_service import (
+    is_greeting,
+    pending_greetings_for,
+    record_greeting,
+)
 from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from bot_modules.services.message_store import (
@@ -834,6 +842,21 @@ class EventsCog(commands.Cog):
                     time.time() - joined.timestamp()
                     < quest_rules.WELCOME_WINDOW_SECONDS
                 )
+        # Directed targets for the community kinds (greeting_answered /
+        # birthday_wish): the reply partner plus real non-bot @mentions,
+        # never the author themself. Resolved on-loop like the partner facts.
+        mention_target_ids = tuple(
+            u.id
+            for u in message.mentions
+            if u.id != user_id and not u.bot
+        )
+        directed_targets = tuple(
+            dict.fromkeys(
+                ([partner_id] if partner_id is not None else [])
+                + list(mention_target_ids)
+            )
+        )
+        wish_phrase = is_birthday_wish(content)
         # Thread depth check: message_count is on the thread object at
         # ingest — approximate per Discord, exact enough for a threshold.
         thread_deep_id: int | None = None
@@ -985,6 +1008,53 @@ class EventsCog(commands.Cog):
                                 occurrence=str(target_msg_id),
                                 booster=partner_booster,
                                 channel_ids=channel_ids,
+                            )
+                # greeting_answered: this reply/mention lands on a member
+                # whose greeting is still pending in Greeting Watch (same
+                # channel). Occurrence = the greeting message, so one hello
+                # credits an answerer once. Self-gates on the feature: no
+                # watched channels → no pending rows → no fires.
+                if directed_targets:
+                    for g_msg_id, _greeter in pending_greetings_for(
+                        conn, guild_id, channel_ids, directed_targets
+                    ):
+                        fire_trigger_quests(
+                            conn, settings, guild_id, "greeting_answered",
+                            user_id, local_day=today,
+                            occurrence=str(g_msg_id),
+                            booster=booster, channel_ids=channel_ids,
+                        )
+                # birthday_wish: only birthdays the bot publicly announced
+                # today count (quiet birthdays never become quest bait).
+                # A directed reply/mention of the birthday member wins; a
+                # bare "happy birthday!" (no target) falls back to a
+                # per-day occurrence. One fire per message.
+                if directed_targets or wish_phrase:
+                    announced = announced_birthday_ids(conn, guild_id, today)
+                    if announced:
+                        wished = False
+                        for t in directed_targets:
+                            if t in announced:
+                                fire_trigger_quests(
+                                    conn, settings, guild_id,
+                                    "birthday_wish", user_id,
+                                    local_day=today,
+                                    occurrence=f"{t}:{today}",
+                                    booster=booster,
+                                    channel_ids=channel_ids,
+                                )
+                                wished = True
+                        if (
+                            not wished
+                            and wish_phrase
+                            and announced - {user_id}
+                        ):
+                            fire_trigger_quests(
+                                conn, settings, guild_id,
+                                "birthday_wish", user_id,
+                                local_day=today,
+                                occurrence=f"day:{today}",
+                                booster=booster, channel_ids=channel_ids,
                             )
                 if outcome is None:
                     return None

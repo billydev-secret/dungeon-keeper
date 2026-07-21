@@ -17,11 +17,15 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING, cast
 
 import discord
 
 from bot_modules.core.role_safety import role_block_reason
 from bot_modules.core.utils import get_bot_member
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.announcements")
 
@@ -175,3 +179,13 @@ class AnnouncementRoleButton(
             else f"✅ Removed **@{role.name}**.",
             ephemeral=True,
         )
+        if grant:
+            # role_pick quest trigger — same setup kind the role-menu path
+            # fires; constant occurrence, so a button and a menu can't
+            # both pay.
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                cast("Bot", interaction.client), member.guild.id, member.id,
+                "role_pick", occurrence="set",
+            )

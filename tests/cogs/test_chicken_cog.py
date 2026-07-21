@@ -4,13 +4,17 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import discord
 import pytest_asyncio
 
 from bot_modules.cogs.chicken import db as chdb
 from bot_modules.cogs.chicken.cog import ChickenCog
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import get_balance, save_econ_settings
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 from bot_modules.services.games_db import GamesDb
 from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
 
@@ -216,3 +220,68 @@ async def test_lobby_start_begins_climb(cog, db):
         assert g.climb_started_at is not None
     finally:
         cog._cancel_timers(gid)
+
+
+# ── embed colors (accent + win=green / loss=red) ───────────────────────────────
+
+async def test_active_card_uses_guild_accent(cog, db, monkeypatch):
+    """The live climb card follows the resolved guild accent."""
+    accent = discord.Color(0x5865F2)
+    from bot_modules.cogs.chicken import cog as chicken_cog
+    monkeypatch.setattr(
+        chicken_cog, "resolve_accent_color", AsyncMock(return_value=accent)
+    )
+    # The bare FakeBot has no ``ctx``; give it one so accent resolution runs.
+    cog.bot.ctx = SimpleNamespace(db_path=Path("unused.db"))
+    game = await _climbing(db, alive=[1, 2, 3])
+
+    resolved = await cog._resolve_accent(FakeGuild())
+    assert resolved == accent
+    embed = cog.render_game_state(game, FakeGuild(), resolved)
+    assert embed.color == accent
+
+
+async def test_active_card_falls_back_to_yellow_without_context(cog, db):
+    """No ctx / branding hiccup → the old warning yellow, never a crash."""
+    game = await _climbing(db, alive=[1, 2, 3])
+    # FakeBot exposes no ``ctx`` → helper short-circuits to COLOR_YELLOW.
+    assert await cog._resolve_accent(FakeGuild()) == COLOR_YELLOW
+    embed = cog.render_game_state(game, FakeGuild())
+    assert embed.color.value == COLOR_YELLOW
+
+
+async def test_winner_embed_is_green(cog, db):
+    """Everyone-blinked winner card is a WIN → green."""
+    game = await _climbing(
+        db,
+        alive=[],
+        bail_log=[{"player_id": 1, "bail_ts": time.time(), "meter_pct": 80.0}],
+        roster=[1, 2],
+    )
+    game.winner_id = 1
+    game.loser_id = None
+    embed = cog.render_result_state(game, FakeGuild())
+    assert embed.color.value == COLOR_GREEN
+
+
+async def test_crash_embed_stays_red(cog, db):
+    """A crash with a nick loser is a genuine LOSS → red."""
+    game = await _climbing(
+        db,
+        alive=[1],
+        bail_log=[{"player_id": 2, "bail_ts": time.time(), "meter_pct": 60.0}],
+        roster=[1, 2],
+    )
+    game.loser_id = 1
+    game.winner_id = 2
+    embed = cog.render_result_state(game, FakeGuild())
+    assert embed.color.value == COLOR_RED
+
+
+async def test_total_wipeout_stays_red(cog, db):
+    """Total wipeout — nobody wins → red."""
+    game = await _climbing(db, alive=[1, 2, 3], bail_log=[], roster=[1, 2, 3])
+    game.winner_id = None
+    game.loser_id = None
+    embed = cog.render_result_state(game, FakeGuild())
+    assert embed.color.value == COLOR_RED

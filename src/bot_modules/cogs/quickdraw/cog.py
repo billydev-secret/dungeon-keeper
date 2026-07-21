@@ -14,6 +14,7 @@ import time
 import discord
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
@@ -33,6 +34,31 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
     def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
+        # Guild accent resolved once per game (in on_game_start / on_game_resume)
+        # and reused across every message edit. Absent → embeds fall back to
+        # their old hard-coded color, so a resolve failure never breaks a game.
+        self._accents: dict[int, discord.Color] = {}
+
+    async def _resolve_accent(
+        self, game_id: int, guild: discord.Guild | None
+    ) -> discord.Color | None:
+        """Resolve + cache the guild's brand accent for a game.
+
+        Returns None (callers fall back to their old color) when there's no
+        guild, no bot context, or the resolve errors — never crash a game.
+        """
+        if guild is None:
+            return None
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return None
+        try:
+            accent = await resolve_accent_color(ctx.db_path, guild)
+        except Exception:
+            log.debug("quickdraw accent resolve failed for %s", game_id, exc_info=True)
+            return None
+        self._accents[game_id] = accent
+        return accent
 
     quickdraw = app_commands.Group(
         name="quickdraw",
@@ -145,13 +171,14 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             if game.qd_state == "DRAW":
                 # Nobody fired in time — void, no consequence.
                 await self._db_set_state(game_id, "VOID")
+                accent = await self._resolve_accent(game_id, guild)
                 void_embed = discord.Embed(
                     title="🌵 Nobody Drew",
                     description=(
                         "Both players took too long to fire. "
                         "Round voided — no nickname penalty."
                     ),
-                    color=COLOR_YELLOW,
+                    color=accent or COLOR_YELLOW,
                 )
                 if guild:
                     p1 = guild.get_member(game.challenger_id)
@@ -203,10 +230,12 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
 
         self._cancel_timer(game_id)
         self._game_locks.pop(game_id, None)
+        self._accents.pop(game_id, None)
 
     # ── Game hooks ────────────────────────────────────────────────────────────
 
     async def on_game_start(self, game: QuickdrawGame) -> None:
+        await self._resolve_accent(game.id, self.bot.get_guild(game.guild_id))
         cfg = await qdb.get_config(self.db, game.guild_id)
         delay = random.uniform(cfg["min_delay"], cfg["max_delay"])
         draw_window = cfg["draw_window"]
@@ -222,6 +251,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
 
     async def on_game_resume(self, game: QuickdrawGame) -> None:
         """Called on cog_load for each ACTIVE game. Resume timers."""
+        await self._resolve_accent(game.id, self.bot.get_guild(game.guild_id))
         cfg = await qdb.get_config(self.db, game.guild_id)
         draw_window = cfg["draw_window"]
 
@@ -257,6 +287,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
 
     async def on_game_resolved(self, game_id: int) -> None:
         self._cancel_timer(game_id)
+        self._accents.pop(game_id, None)
 
     async def _send_restart_notice(self, game: QuickdrawGame) -> None:
         channel = self.bot.get_channel(game.channel_id)
@@ -277,18 +308,20 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         p2 = guild.get_member(game.target_id)
         p1_name = p1.display_name if p1 else str(game.challenger_id)
         p2_name = p2.display_name if p2 else str(game.target_id)
+        accent = self._accents.get(game.id)
 
         if game.qd_state in ("DRAW", "WINNER_FIRED"):
             # WINNER_FIRED renders identically to DRAW: the first shooter has
             # already fired, but we don't reveal that — the opponent must stay
-            # blind so their click is a genuine reaction we can time.
+            # blind so their click is a genuine reaction we can time. Active
+            # phase, not a win/loss → follow the guild accent (old red fallback).
             embed = discord.Embed(
-                title="🔫 DRAW!!!",
+                title="🔫 Draw!!!",
                 description=(
                     f"**{p1_name}** vs **{p2_name}**\n\n"
                     "**FIRE NOW — first to click wins!**"
                 ),
-                color=COLOR_RED,
+                color=accent or COLOR_RED,
             )
         elif game.qd_state == "COMPLETE":
             winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -310,14 +343,14 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                     color=COLOR_GREEN,
                 )
         else:
-            # WAITING
+            # WAITING — countdown/ready phase → guild accent (old gold fallback).
             embed = discord.Embed(
                 title="🤠 Quickdraw",
                 description=(
                     f"**{p1_name}** vs **{p2_name}**\n\n"
                     "⏳ Waiting for the draw signal... **Don't fire early!**"
                 ),
-                color=COLOR_GOLD,
+                color=accent or COLOR_GOLD,
             )
 
         stakes = game.stakes_text or "Loser surrenders their nickname."
@@ -365,7 +398,10 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             else:
                 loser_field = f"{loser_name} — *didn't draw*"
 
-        embed = discord.Embed(title=title, description=desc, color=COLOR_RED)
+        # A false start is framed as a loss (red); a clean draw announces a
+        # winner (green). Both are the sanctioned win/loss semantic colors.
+        result_color = COLOR_RED if game.fired_at is None else COLOR_GREEN
+        embed = discord.Embed(title=title, description=desc, color=result_color)
         embed.add_field(name="🏆 Winner", value=winner_field, inline=True)
         embed.add_field(name="💀 Loser", value=loser_field, inline=True)
 
@@ -399,7 +435,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         player_id = interaction.user.id
 
         if player_id not in (game.challenger_id, game.target_id):
-            await interaction.followup.send("You're not in this game.", ephemeral=True)
+            await interaction.followup.send("❌ You're not in this game.", ephemeral=True)
             return ("rejected", None)
 
         if game.qd_state == "WAITING":
@@ -465,7 +501,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         if game.qd_state == "WINNER_FIRED":
             if player_id == game.winner_id:
                 await interaction.followup.send(
-                    "You already drew — waiting on your opponent.", ephemeral=True
+                    "❌ You already drew — waiting on your opponent.", ephemeral=True
                 )
                 return ("rejected", None)
 
@@ -489,7 +525,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             return ("done", game.loser_id)
 
         # qd_state == "COMPLETE" — round already fully resolved
-        await interaction.followup.send("Too slow — this round is already over.", ephemeral=True)
+        await interaction.followup.send("❌ Too slow — this round is already over.", ephemeral=True)
         return ("rejected", None)
 
     # ── Slash commands ────────────────────────────────────────────────────────

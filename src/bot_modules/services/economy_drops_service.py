@@ -147,7 +147,7 @@ def try_claim_drop(
     row = conn.execute(
         "SELECT amount FROM econ_drops WHERE id = ?", (drop_id,)
     ).fetchone()
-    return apply_credit(
+    credited = apply_credit(
         conn,
         guild_id,
         user_id,
@@ -157,6 +157,22 @@ def try_claim_drop(
         booster=booster,
         multiplier=settings.booster_multiplier,
     )
+    # drop_claim quest trigger, beside the drop's own credit (the cat_catch
+    # double-pay pattern). Deferred import: the quests service pulls in the
+    # wider economy machinery this module otherwise doesn't need.
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    fire_trigger_inline(
+        conn,
+        guild_id,
+        "drop_claim",
+        user_id,
+        occurrence=str(drop_id),
+        booster=booster,
+    )
+    return credited
 
 
 def expire_due_drops(conn: sqlite3.Connection, now_ts: float) -> list[sqlite3.Row]:

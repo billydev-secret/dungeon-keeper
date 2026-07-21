@@ -32,7 +32,7 @@ def test_fire_view_custom_id_encodes_game_id():
 def test_fire_view_label():
     view = FireView(game_id=1, on_fire=AsyncMock())
     btn = view.children[0]
-    assert "FIRE" in btn.label
+    assert "Fire" in btn.label
 
 
 def test_fire_view_style_is_danger():

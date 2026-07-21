@@ -14,10 +14,11 @@ import time
 import discord
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
-from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
 from . import db as chdb
 from .game import ChickenGame, bravest_bailer, meter_pct, resolve_crash
@@ -99,6 +100,9 @@ class ChickenCog(BaseGame, name="ChickenCog"):
 
     async def _run_ticker(self, game_id: int, interval: float, total: float) -> None:
         elapsed = 0.0
+        # Resolve the guild accent once (lazily, when we first have a guild) and
+        # reuse it across every meter edit rather than re-resolving each tick.
+        accent: int | discord.Color | None = None
         try:
             while elapsed < total:
                 await asyncio.sleep(interval)
@@ -109,11 +113,13 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                         return
                     guild = self.bot.get_guild(game.guild_id)
                     if guild and game.message_id:
+                        if accent is None:
+                            accent = await self._resolve_accent(guild)
                         # Embed-only edit: never re-send the view mid-climb, or an
                         # in-flight BAIL click can be invalidated ("interaction failed").
                         await self._edit_embed_silent(
                             game.channel_id, game.message_id,
-                            self.render_game_state(game, guild),
+                            self.render_game_state(game, guild, accent),
                         )
         except asyncio.CancelledError:
             return
@@ -144,8 +150,10 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         if guild and game.message_id:
             dv = self.build_game_view(game.id)
             dv.disable()
+            accent = await self._resolve_accent(guild)
             await self._edit_message_silent(
-                game.channel_id, game.message_id, self.render_game_state(game, guild), dv
+                game.channel_id, game.message_id,
+                self.render_game_state(game, guild, accent), dv,
             )
 
         result_message_id = None
@@ -211,8 +219,9 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                 resolved = True
             else:
                 guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+                accent = await self._resolve_accent(guild)
                 await interaction.edit_original_response(
-                    embed=self.render_game_state(game, guild)
+                    embed=self.render_game_state(game, guild, accent)
                 )
         if resolved:
             self._cancel_timers(game_id)
@@ -269,7 +278,26 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         m = guild.get_member(uid)
         return m.display_name if m else str(uid)
 
-    def render_game_state(self, game: ChickenGame, guild: discord.Guild) -> discord.Embed:
+    async def _resolve_accent(
+        self, guild: discord.Guild | None
+    ) -> int | discord.Color:
+        """Guild accent for the live climb card. Any branding hiccup — no
+        guild, no app context, or a resolution error — falls back to
+        COLOR_YELLOW so a color lookup can never crash a running game."""
+        ctx = getattr(self.bot, "ctx", None)
+        if guild is None or ctx is None:
+            return COLOR_YELLOW
+        try:
+            return await resolve_accent_color(ctx.db_path, guild)
+        except Exception:
+            return COLOR_YELLOW
+
+    def render_game_state(
+        self,
+        game: ChickenGame,
+        guild: discord.Guild,
+        accent: int | discord.Color | None = None,
+    ) -> discord.Embed:
         holders = ", ".join(self._name(guild, u) for u in game.alive) or "—"
         bailed = ", ".join(
             f"{self._name(guild, b['player_id'])} ({b['meter_pct']:.0f}%)"
@@ -280,7 +308,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         embed = discord.Embed(
             title="🐔 Chicken",
             description="First to bail is safe — but ride to 100% and you **crash**.",
-            color=COLOR_YELLOW,
+            color=accent if accent is not None else COLOR_YELLOW,
         )
         embed.add_field(name="Still holding", value=holders, inline=False)
         embed.add_field(name="Bailed", value=bailed, inline=False)
@@ -349,7 +377,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             embed = discord.Embed(
                 title="🐔 Everyone blinked!",
                 description=f"🏆 **{self._name(guild, game.winner_id)}** held longest. No nicknames today.",
-                color=COLOR_GOLD,
+                color=COLOR_GREEN,
             )
             if lines:
                 embed.add_field(name="Chicken ranking", value="\n".join(lines), inline=False)

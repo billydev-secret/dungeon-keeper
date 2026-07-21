@@ -190,6 +190,13 @@ def submit_sponsorship(
         # The partial unique indexes (per-member, per-name) close the race the
         # SELECT-based guards above can lose.
         raise ValueError("That emoji name is already taken here.") from exc
+    # shop_purchase quest trigger (one-time setup kind); deferred import —
+    # the quests service imports the wider economy machinery.
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
     return EmojiSubmitOutcome(submission_id=int(cur.lastrowid or 0), price=price)
 
 

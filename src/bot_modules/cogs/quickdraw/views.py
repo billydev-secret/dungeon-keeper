@@ -12,7 +12,7 @@ class FireView(discord.ui.View):
     def __init__(self, game_id: int, on_fire: Callable) -> None:
         super().__init__(timeout=None)
         btn = discord.ui.Button(
-            label="🔫 FIRE",
+            label="🔫 Fire",
             style=discord.ButtonStyle.danger,
             custom_id=f"fire:{game_id}",
         )

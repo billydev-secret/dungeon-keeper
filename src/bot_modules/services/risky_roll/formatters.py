@@ -3,10 +3,31 @@ from collections.abc import Callable
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.embeds import COLOR_GREEN
 from . import state as app_state
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
 log = logging.getLogger(__name__)
+
+
+async def resolve_embed_accent(guild: "discord.Guild | None") -> "discord.Color | None":
+    """Resolve the guild's branding accent for a game embed, guarding failures.
+
+    Returns ``None`` when there's no guild, no store/db_path yet, or the
+    resolution errors — the caller then falls back to the old state color.
+    Never raises: a game embed must render even if branding lookup fails.
+    """
+    if guild is None:
+        return None
+    db_path = getattr(app_state.store, "db_path", None)
+    if db_path is None:
+        return None
+    try:
+        return await resolve_accent_color(db_path, guild)
+    except Exception:
+        log.debug("risky_roll: accent resolve failed; using fallback color", exc_info=True)
+        return None
 
 # A NameFn turns a user id into embed-ready text: a cached display name (escaped)
 # or, for a user we can't resolve, a raw <@id> mention as a last resort.
@@ -130,12 +151,23 @@ def _add_reroll_field(
     embed.add_field(name="⚔️ Reroll", value=reroll_text, inline=False)
 
 
-def build_embed(state: RiskyRollState, guild: "discord.Guild | None" = None) -> discord.Embed:
+def build_embed(
+    state: RiskyRollState,
+    guild: "discord.Guild | None" = None,
+    accent: "discord.Color | None" = None,
+) -> discord.Embed:
     name = make_name_resolver(guild)
-    if state.is_open:
+    # The embed color tracks game STATE, so it follows the guild accent — the
+    # one exception is a decided winner with no loser (the old gold state),
+    # which marks a win and is therefore always green. When no accent is
+    # supplied (no guild / resolution failed) we fall back to the old
+    # state-specific colors so the game never renders color-less.
+    if not state.is_open and state.highest_user is not None and state.lowest_user is None:
+        color = discord.Color(COLOR_GREEN)
+    elif accent is not None:
+        color = accent
+    elif state.is_open:
         color = discord.Color(0xFF9800) if state.reroll_user_ids else discord.Color(0xDC3545)
-    elif state.highest_user is not None and state.lowest_user is None:
-        color = discord.Color(0xFFD700)
     else:
         color = discord.Color(0x546E7A)
 
@@ -299,10 +331,19 @@ async def post_rolloff_embed(
     channel_id: int,
     title: str = "Tie Rolloff",
     pick_lowest: bool = False,
+    accent: "discord.Color | None" = None,
 ) -> None:
     try:
         if channel is not None and isinstance(channel, (discord.TextChannel, discord.Thread)):
-            await channel.send(embed=build_rolloff_embed(tied_user_ids, rolloff_rounds, winner_id, title, pick_lowest))
+            # A tie rolloff is a game state, so its embed follows the accent;
+            # build_rolloff_embed falls back to its old orange when accent is None.
+            if accent is None:
+                accent = await resolve_embed_accent(getattr(channel, "guild", None))
+            await channel.send(
+                embed=build_rolloff_embed(
+                    tied_user_ids, rolloff_rounds, winner_id, title, pick_lowest, color=accent
+                )
+            )
     except discord.Forbidden:
         log.exception("Missing access posting rolloff embed in #%s.", getattr(channel, "name", channel_id))
     except (AttributeError, discord.HTTPException):

@@ -57,6 +57,8 @@ from bot_modules.jail.embeds import (
 )
 from bot_modules.jail.logic import (
     SETUP_FINAL_STEP,
+    channel_needs_jail_deny,
+    channels_needing_jail_deny,
     merge_setup_selection,
     paginate_setup_options,
     setup_button_label,
@@ -1768,6 +1770,89 @@ async def check_jail_rejoin(ctx: AppContext, member: discord.Member) -> bool:
             f"⚠️ {member.mention} left and rejoined. Jail has been re-applied."
         )
     return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# JAILED-ROLE CHANNEL VISIBILITY
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The Jailed role's per-channel view-deny is only stamped when the role is
+# first created. Channels created afterward have no deny, so a jailed member
+# (who keeps @everyone) can see them. ``stamp_channel_jail_deny`` closes one
+# channel; the cog calls it from ``on_guild_channel_create`` for new channels,
+# and ``jail_channel_deny_sweep`` backfills any that already leaked at startup.
+
+
+async def stamp_channel_jail_deny(
+    channel: discord.abc.GuildChannel,
+    role: discord.Role,
+) -> bool:
+    """Deny ``@Jailed`` view+send on *channel* unless it already denies view.
+
+    Returns True if an overwrite was written. Uses the same
+    ``view_channel=False, send_messages=False`` shape as the initial stamp in
+    ``jail/apply.py`` so categories, text, and voice channels are all hidden.
+    A missing-permission failure is logged and swallowed — best-effort, matching
+    the original creation-time sweep.
+    """
+    if not channel_needs_jail_deny(channel.overwrites_for(role).view_channel):
+        return False
+    try:
+        await channel.set_permissions(
+            role,
+            view_channel=False,
+            send_messages=False,
+            reason="Dungeon Keeper: hide channel from jailed members",
+        )
+        return True
+    except discord.Forbidden:
+        log.warning(
+            "Missing permission to deny @Jailed on channel %s (%s)",
+            channel.id,
+            getattr(channel, "name", "?"),
+        )
+        return False
+    except discord.HTTPException:
+        log.exception("Failed to deny @Jailed on channel %s", channel.id)
+        return False
+
+
+async def jail_channel_deny_sweep(bot: discord.Client, ctx: AppContext) -> None:
+    """One-shot startup backfill: stamp the Jailed deny on every exposed channel.
+
+    Backstops the ``on_guild_channel_create`` listener for the case it can't
+    cover — channels created while the bot was offline (including the very
+    channels that leaked before this fix shipped). Runs once after the gateway
+    is ready and exits; no-ops cleanly when no Jailed role is configured yet.
+    """
+    await bot.wait_until_ready()
+    guild = bot.get_guild(ctx.guild_id)
+    if guild is None:
+        return
+    jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=guild.id)
+    role = guild.get_role(jailed_role_id) if jailed_role_id else None
+    if role is None:
+        return
+
+    states = [
+        (ch.id, ch.overwrites_for(role).view_channel) for ch in guild.channels
+    ]
+    exposed = channels_needing_jail_deny(states)
+    if not exposed:
+        return
+
+    stamped = 0
+    for cid in exposed:
+        ch = guild.get_channel(cid)
+        if ch is None:
+            continue
+        if await stamp_channel_jail_deny(ch, role):
+            stamped += 1
+    if stamped:
+        log.info(
+            "Jail channel sweep: stamped @Jailed view-deny on %d channel(s).",
+            stamped,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

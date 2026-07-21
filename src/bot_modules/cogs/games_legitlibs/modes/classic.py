@@ -8,6 +8,7 @@ import discord
 
 from bot_modules.core.utils import disable_all_items
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.game_manager import (
     create_game, update_game_message, update_game_state,
     modify_payload, get_game_payload, end_game, update_session,
@@ -61,6 +62,14 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
     """Entry point for a Classic-mode LegitLibs round (interaction-free)."""
     db = cog.db
 
+    # Resolve the guild accent once; every embed below follows it. Guard so a
+    # branding/ctx hiccup falls back to each builder's phase color (via
+    # ``color=None``), never crashing the game.
+    try:
+        accent = await resolve_accent_color(cog.bot.ctx.db_path, guild)
+    except Exception:
+        accent = None
+
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)
     tier, clamped = cl_clamp_tier(tier, max_tier)
@@ -101,7 +110,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
     # ── Join phase ──────────────────────────────────────────────────────────
     join_embed = build_join_embed(
         host_name, template["title"], tier, "classic",
-        1, template["player_min"],
+        1, template["player_min"], color=accent,
     )
 
     async def handle_join_action(action_interaction: discord.Interaction, action: str):
@@ -124,7 +133,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
 
             new_embed = build_join_embed(
                 host_name, template["title"], tier, "classic",
-                len(payload["players"]), template["player_min"],
+                len(payload["players"]), template["player_min"], color=accent,
             )
             assert action_interaction.message is not None
             try:
@@ -151,7 +160,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
 
             new_embed = build_join_embed(
                 host_name, template["title"], tier, "classic",
-                len(payload["players"]), template["player_min"],
+                len(payload["players"]), template["player_min"], color=accent,
             )
             assert action_interaction.message is not None
             try:
@@ -195,7 +204,10 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         cog.bot.active_views.pop(game_id, None)
         try:
             await action_interaction.response.edit_message(
-                embed=discord.Embed(title="📝 LegitLibs — Cancelled", color=0x99AAB5),
+                embed=discord.Embed(
+                    title="📝 LegitLibs — Cancelled",
+                    color=accent if accent is not None else 0x99AAB5,
+                ),
                 view=join_view,
             )
         except Exception:
@@ -227,7 +239,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             host_name, template["title"], tier,
             len(player_ids),
             players_done_count(assignments, payload.get("fills", {}), player_ids),
-            deadline,
+            deadline, color=accent,
         )
         fill_view = ClassicFillView(
             game_id, host_id, db, cog.bot,
@@ -256,7 +268,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             done = players_done_count(assignments, cur_fills, player_ids)
             new_embed = build_classic_fill_embed(
                 host_name, template["title"], tier,
-                len(player_ids), done, deadline,
+                len(player_ids), done, deadline, color=accent,
             )
             try:
                 await sent_msg.edit(embed=new_embed)
@@ -346,7 +358,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 )
                 new_embed = build_classic_fill_embed(
                     host_name, template["title"], tier,
-                    len(cur_player_ids), done, fill_deadline,
+                    len(cur_player_ids), done, fill_deadline, color=accent,
                 )
                 try:
                     await fill_msg.edit(embed=new_embed)
@@ -370,7 +382,10 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             disable_all_items(view)
         try:
             await cancel_interaction.response.edit_message(
-                embed=discord.Embed(title="📝 LegitLibs — Cancelled", color=0x99AAB5),
+                embed=discord.Embed(
+                    title="📝 LegitLibs — Cancelled",
+                    color=accent if accent is not None else 0x99AAB5,
+                ),
                 view=None,
             )
         except Exception:
@@ -389,7 +404,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         deadline = payload["rescue"]["claim_deadline"]
 
         rescue_embed = build_classic_rescue_embed(
-            template["title"], tier, len(unfilled), [], deadline,
+            template["title"], tier, len(unfilled), [], deadline, color=accent,
         )
         rescue_view = ClassicRescueView(
             game_id, host_id, db, cog.bot,
@@ -413,7 +428,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             vols = cur_payload.get("rescue", {}).get("volunteers", [])
             new_embed = build_classic_rescue_embed(
                 template["title"], tier, len(unfilled),
-                resolve_names(guild, vols), deadline,
+                resolve_names(guild, vols), deadline, color=accent,
             )
             try:
                 await claim_msg.edit(embed=new_embed)
@@ -490,7 +505,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             template["title"], tier,
             cl_rescuers_done_count(rescue_assignments, payload.get("fills", {}), rescuers),
             len(rescuers),
-            deadline,
+            deadline, color=accent,
         )
         rescue_fill_view = ClassicRescueFillView(
             game_id, host_id, db, cog.bot,
@@ -515,7 +530,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 rescue_assignments, cur_payload.get("fills", {}), rescuers,
             )
             new_embed = build_classic_rescue_fill_embed(
-                template["title"], tier, done, len(rescuers), deadline,
+                template["title"], tier, done, len(rescuers), deadline, color=accent,
             )
             try:
                 await rfill_msg.edit(embed=new_embed)
@@ -596,7 +611,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             contrib_names = resolve_names(guild, contrib_ids)
 
             embed = build_classic_reveal_embed(
-                template["title"], tier, filled_body, contrib_names,
+                template["title"], tier, filled_body, contrib_names, color=accent,
             )
             await channel.send(embed=embed)
 

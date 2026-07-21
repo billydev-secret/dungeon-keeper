@@ -13,7 +13,7 @@ from bot_modules.games.utils.game_manager import (
     modify_payload, get_game_payload, end_game, update_session,
     resolve_name,
 )
-from bot_modules.games.constants import GAME_ICONS
+from bot_modules.games.constants import GAME_ICONS, PHASE_RESULTS
 from bot_modules.core.branding import resolve_accent_color
 from ..data import (
     pick_template, mark_template_used, get_prompts, get_channel_max_tier,
@@ -50,6 +50,14 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
     """Entry point for a Quiplash-mode LegitLibs round (interaction-free)."""
     db = cog.db
 
+    # Resolve the guild accent once; every embed below follows it. Guard so a
+    # branding/ctx hiccup falls back to each builder's phase color (via
+    # ``color=None``), never crashing the game.
+    try:
+        accent = await resolve_accent_color(cog.bot.ctx.db_path, guild)
+    except Exception:
+        accent = None
+
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)
     tier, clamped = ql_clamp_tier(tier, max_tier)
@@ -80,7 +88,9 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
     cog._game_canceled.discard(game_id)
 
     # ── Join phase ──────────────────────────────────────────────────────────
-    join_embed = build_join_embed(host_name, template["title"], tier, "quiplash", 1, template["player_min"])
+    join_embed = build_join_embed(
+        host_name, template["title"], tier, "quiplash", 1, template["player_min"], color=accent,
+    )
 
     async def handle_join_action(action_interaction: discord.Interaction, action: str):
         payload = await get_game_payload(db, game_id)
@@ -100,7 +110,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
             new_embed = build_join_embed(
                 host_name, template["title"], tier, "quiplash",
-                len(payload["players"]), template["player_min"],
+                len(payload["players"]), template["player_min"], color=accent,
             )
             assert action_interaction.message is not None
             try:
@@ -141,7 +151,10 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         cog.bot.active_views.pop(game_id, None)
         try:
             await action_interaction.response.edit_message(
-                embed=discord.Embed(title=f"{_GAME_ICONS_LL} LegitLibs — Cancelled", color=0x99AAB5),
+                embed=discord.Embed(
+                    title=f"{_GAME_ICONS_LL} LegitLibs — Cancelled",
+                    color=accent if accent is not None else 0x99AAB5,
+                ),
                 view=join_view,
             )
         except Exception:
@@ -174,7 +187,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         fill_embed = build_fill_embed(
             host_name, template["title"], tier,
             len(player_ids), 0, deadline,
-            redacted_body=redacted,
+            redacted_body=redacted, color=accent,
         )
         fill_view = QuiplashFillView(game_id, host_id, db, cog.bot, _handle_submit_press, _handle_fill_cancel)
         cog.bot.active_views[game_id] = fill_view
@@ -200,7 +213,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             new_embed = build_fill_embed(
                 host_name, template["title"], tier,
                 len(player_ids), submitted, deadline,
-                redacted_body=redacted,
+                redacted_body=redacted, color=accent,
             )
             try:
                 await fill_msg.edit(embed=new_embed)
@@ -263,7 +276,10 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             disable_all_items(view)
         try:
             await cancel_interaction.response.edit_message(
-                embed=discord.Embed(title="📝 LegitLibs — Cancelled", color=0x99AAB5),
+                embed=discord.Embed(
+                    title="📝 LegitLibs — Cancelled",
+                    color=accent if accent is not None else 0x99AAB5,
+                ),
                 view=None,
             )
         except Exception:
@@ -282,7 +298,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
         try:
             if not complete:
-                await channel.send(embed=build_no_submissions_embed(template["title"], tier))
+                await channel.send(embed=build_no_submissions_embed(template["title"], tier, color=accent))
                 return
 
             await update_game_state(db, game_id, "revealing")
@@ -298,7 +314,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 fills = complete[uid]["fills"]
                 name = resolve_name(guild, int(uid))
                 filled = render_filled_body(template["body"], blanks, fills)
-                embed = build_reveal_embed(template["title"], tier, filled, 1, 1)
+                embed = build_reveal_embed(template["title"], tier, filled, 1, 1, color=accent)
                 embed.set_footer(text=f"📝 LegitLibs • by {name}")
                 await channel.send(embed=embed)
             else:
@@ -306,7 +322,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 for i, uid in enumerate(uid_list, 1):
                     fills = complete[uid]["fills"]
                     filled = render_filled_body(template["body"], blanks, fills)
-                    embed = build_reveal_embed(template["title"], tier, filled, i, total)
+                    embed = build_reveal_embed(template["title"], tier, filled, i, total, color=accent)
                     await channel.send(embed=embed)
                     await asyncio.sleep(3)
 
@@ -318,7 +334,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 cast_embed = discord.Embed(
                     title=f"{_GAME_ICONS_LL} Who Wrote What",
                     description="\n".join(cast_lines),
-                    color=await resolve_accent_color(cog.bot.ctx.db_path, guild),
+                    color=accent if accent is not None else PHASE_RESULTS,
                 )
                 await channel.send(embed=cast_embed)
 

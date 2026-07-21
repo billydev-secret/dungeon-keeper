@@ -1234,6 +1234,66 @@ def test_community_weekly_settlement_tiers_and_bonus(db):
         assert int(get_quest(conn, GUILD, qid)["active"]) == 0
 
 
+def test_community_anonymous_kind_pays_tiers_but_never_a_bonus(db):
+    # A community weekly on an anonymous kind (confession_reply here) must
+    # not surface its top contributors anywhere: no bonus payment (the
+    # ledger row would name the most active repliers) and an empty top list
+    # in the settle summary the paste-ready beat sheet renders.
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+        get_quest,
+        settle_community_weekly,
+    )
+
+    with open_db(db) as conn:
+        qid = _community_kind(
+            conn, kind="confession_reply", target=10, reward=30, active=False
+        )
+        activate_community_weekly(conn, GUILD, qid, target=10, week="2026-W29")
+        conn.execute(
+            "UPDATE econ_community_progress SET current = 10 WHERE quest_id = ?",
+            (qid,),
+        )
+        conn.execute(
+            "INSERT INTO econ_community_contrib (quest_id, user_id, count) "
+            "VALUES (?, ?, 7), (?, ?, 3)",
+            (qid, USER, qid, USER_2),
+        )
+        summary = settle_community_weekly(
+            conn, SETTINGS, GUILD, get_quest(conn, GUILD, qid),
+            {USER: False, USER_2: False},
+        )
+        assert summary["anonymous"] is True
+        assert summary["tiers_crossed"] == 3
+        assert summary["contributors"] == 2  # aggregate count still fine
+        assert summary["top_contributors"] == []
+        assert summary["bonus"] == 0 and summary["bonus_paid"] == []
+        # All 3 tiers × 30 flat, and NOT a coin more.
+        assert get_balance(conn, GUILD, USER) == 90
+        assert get_balance(conn, GUILD, USER_2) == 90
+        assert conn.execute(
+            "SELECT 1 FROM econ_ledger WHERE kind = 'quest_community_bonus'"
+        ).fetchone() is None
+
+
+def test_beat_resolution_anonymous_carries_no_mentions(db):
+    from bot_modules.economy.quests import beat_resolution
+
+    summary = {
+        "title": "Voices from the Dark", "current": 10, "target": 10,
+        "tiers_crossed": 3, "reward_per_tier": 30, "paid_member_tiers": 6,
+        "contributors": 2, "top_contributors": [], "bonus": 0,
+        "bonus_paid": [], "anonymous": True,
+    }
+    text = beat_resolution(summary)
+    assert "<@" not in text  # paste-ready sheet must carry no names
+    assert "anonymous" in text.lower()
+    # The normal path still name-drops.
+    summary_named = {**summary, "anonymous": False,
+                     "top_contributors": [(USER, 7)], "bonus_paid": [USER]}
+    assert f"<@{USER}>" in beat_resolution(summary_named)
+
+
 def test_community_reactivation_resets_run_state(db):
     from bot_modules.services.economy_quests_service import (
         activate_community_weekly,
@@ -1790,6 +1850,111 @@ def test_resolve_target_clamps_to_band(db):
         assert resolve_member_target(
             conn, GUILD, USER_2, quest, period="2026-W29", local_day="2026-07-14"
         ) == 10  # median ~1 × 1.15 floored at band min
+
+
+def _seed_messages(conn, *, channel_id, count, user_id=USER, ts=1783000000.0):
+    """Archive rows for the channel-share window (2026-06-14..07-12 UTC)."""
+    base = conn.execute(
+        "SELECT COALESCE(MAX(message_id), 0) FROM processed_messages"
+    ).fetchone()[0]
+    conn.executemany(
+        "INSERT INTO processed_messages "
+        "(guild_id, message_id, channel_id, user_id, created_at, processed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (GUILD, base + i + 1, channel_id, user_id, ts, ts)
+            for i in range(count)
+        ],
+    )
+
+
+def test_channel_message_share_guild_and_member(db):
+    from bot_modules.services.economy_quests_service import channel_message_share
+
+    with open_db(db) as conn:
+        # No traffic at all → 1.0 (no data means no scaling).
+        assert channel_message_share(conn, GUILD, 111, "2026-07-12") == 1.0
+        _seed_messages(conn, channel_id=111, count=30, user_id=USER)
+        _seed_messages(conn, channel_id=222, count=70, user_id=USER_2)
+        assert channel_message_share(conn, GUILD, 111, "2026-07-12") == 0.3
+        # Member share is their own split, not the guild's.
+        assert channel_message_share(
+            conn, GUILD, 111, "2026-07-12", user_id=USER
+        ) == 1.0
+        assert channel_message_share(
+            conn, GUILD, 111, "2026-07-12", user_id=USER_2
+        ) == 0.0
+        # Outside the 28-day window → not counted.
+        assert channel_message_share(conn, GUILD, 111, "2026-01-01") == 1.0
+
+
+def test_auto_size_scales_scoped_message_kinds_only(db):
+    from bot_modules.services.economy_quests_service import (
+        auto_size_community_target,
+        record_kind_activity,
+    )
+
+    with open_db(db) as conn:
+        # 400 message_sent occurrences over the window → unscoped target
+        # 400/4/0.75 ≈ 133.
+        for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):
+            for _ in range(100):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        _seed_messages(conn, channel_id=111, count=40)
+        _seed_messages(conn, channel_id=222, count=60)
+        unscoped = auto_size_community_target(
+            conn, GUILD, "message_sent", "2026-07-12"
+        )
+        scoped = auto_size_community_target(
+            conn, GUILD, "message_sent", "2026-07-12", channel_id=111
+        )
+        assert unscoped == 133
+        assert scoped == 53  # 400 × 0.4 share → 160/4/0.75 ≈ 53
+        # Non-message-shaped kind: scope never scales.
+        for day in ("2026-06-17", "2026-07-01"):
+            for _ in range(60):
+                record_kind_activity(conn, GUILD, USER, "voice_session", day)
+        assert auto_size_community_target(
+            conn, GUILD, "voice_session", "2026-07-12", channel_id=111
+        ) == auto_size_community_target(
+            conn, GUILD, "voice_session", "2026-07-12"
+        )
+
+
+def test_resolve_target_scoped_quest_scales_by_member_channel_share(db):
+    # "Send N messages in #the-meadow" must size to the member's MEADOW
+    # pace: their kind activity is all-channel, so an unscaled median would
+    # hand a busy-elsewhere member an impossible in-channel target.
+    from bot_modules.economy.quests import dynamic_target
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        scoped = _make(
+            conn, qtype="weekly", trigger_kind="message_sent",
+            target_min=2, target_max=60, trigger_channel_id=111,
+            title="meadow-band",
+        )
+        quest = conn.execute(
+            "SELECT * FROM econ_quests WHERE id = ?", (scoped,)
+        ).fetchone()
+        # All-channel weekly pace: 20/20/30/40 → median 25.
+        for day, n in (
+            ("2026-06-17", 20), ("2026-06-24", 20),
+            ("2026-07-01", 30), ("2026-07-08", 40),
+        ):
+            for _ in range(n):
+                record_kind_activity(conn, GUILD, USER, "message_sent", day)
+        # But only 20% of their messages land in channel 111.
+        _seed_messages(conn, channel_id=111, count=20, user_id=USER)
+        _seed_messages(conn, channel_id=222, count=80, user_id=USER)
+        target = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        assert target == dynamic_target(25 * 0.2, 2, 60)  # 5 × 1.15 → 6
+        assert target < dynamic_target(25, 2, 60)  # meaningfully below unscoped
 
 
 def test_resolve_target_reaction_kind_uses_own_p25(db):
@@ -2417,6 +2582,75 @@ def test_birthday_setup_daily_behaves_like_bio(db):
             local_day="2026-08-01", occurrence="set", booster=False,
         )
         assert get_balance(conn, GUILD, USER) == 12
+
+
+def test_role_pick_setup_drops_off_board_with_menu_grant(db):
+    # role_pick hides once the member has any menu GRANT on record; a
+    # removal-only history (they shed a role) never counts as "picked".
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="role_pick", reward=10)
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        conn.execute(
+            "INSERT INTO role_menu_grants "
+            "(menu_id, guild_id, user_id, role_id, action, created_at) "
+            "VALUES (1, ?, ?, 42, 'remove', 0)",
+            (GUILD, USER),
+        )
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        conn.execute(
+            "INSERT INTO role_menu_grants "
+            "(menu_id, guild_id, user_id, role_id, action, created_at) "
+            "VALUES (1, ?, ?, 42, 'grant', 0)",
+            (GUILD, USER),
+        )
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        # Another member without a grant keeps seeing it.
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER_2, "daily", "2026-07-12", SETTINGS
+        )
+
+
+def test_shop_purchase_setup_drops_off_board_after_purchase(db):
+    # shop_purchase hides on any purchase-kind ledger row; non-purchase
+    # debits (a paid quest reroll here) never count.
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, created_at) "
+            "VALUES (?, ?, -5, 'quest_reroll', 0)",
+            (GUILD, USER),
+        )
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, created_at) "
+            "VALUES (?, ?, -50, 'rental', 0)",
+            (GUILD, USER),
+        )
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+
+
+def test_shop_purchase_setup_claims_once_ever(db):
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=15)
+        for day in ("2026-07-12", "2026-07-12", "2026-08-01"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "shop_purchase", USER,
+                local_day=day, occurrence="set", booster=False,
+            )
+        assert get_balance(conn, GUILD, USER) == 15
 
 
 def test_setup_daily_excluded_from_clear_the_board_bonus(db):

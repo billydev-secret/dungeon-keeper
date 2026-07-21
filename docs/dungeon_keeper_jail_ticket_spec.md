@@ -76,7 +76,7 @@ the channel-side effects.
 
 ### First-run setup
 
-`/setup` walks an admin through a short interactive wizard with role and channel pickers: mod roles, admin roles, jail category, ticket category, log channel, transcript channel (with a "same as log" shortcut), then a confirmation summary. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel by `/ticket panel`.
+`/setup` walks an admin through a short interactive wizard with role and channel pickers: mod roles, admin roles, jail category, ticket category, log channel, transcript channel (with a "same as log" shortcut), then a confirmation summary. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Because a jailed member keeps `@everyone`, those per-channel denies are what actually hide the server; the bot keeps them current after setup too. Every channel or category created while the bot is online is stamped with the `@Jailed` view+send deny as it appears (an `on_guild_channel_create` listener), and a one-shot sweep at startup backfills any channel that leaked while the bot was offline. Without this, a channel created after the `@Jailed` role existed would carry no deny and stay visible to jailed members. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel by `/ticket panel`.
 
 ### Jail flow
 
