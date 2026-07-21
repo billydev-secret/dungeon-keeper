@@ -71,20 +71,36 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "qotd": ("💬", "Question of the day"),
     "drop": ("🪂", "Coin drop claimed"),
     "photo_post": ("📸", "Photo Challenge post"),
+    "quest_community_bonus": ("🤝", "Community quest bonus"),
     "game_participation": ("🎲", "Game participation"),
     "game_win": ("🥇", "Game win"),
+    "cat_catch": ("🐱", "Cat caught"),
     "grant": ("🎁", "Staff grant"),
-    "quest_reroll": ("🎲", "Quest reroll"),
+    "quest_reroll": ("🔁", "Quest reroll"),
+    "qa_reward": ("🧪", "QA testing reward"),
     "streak_shield": ("🛡️", "Streak shield"),
     "emoji_sponsor": ("😀", "Emoji sponsorship"),
     "raffle_ticket": ("🎟️", "Raffle tickets"),
     "wager_stake": ("⚔️", "Game wager staked"),
-    "wager_payout": ("🏆", "Game wager won"),
+    "wager_payout": ("🎰", "Game wager won"),
     "wager_refund": ("↩️", "Game wager refunded"),
     "emoji_sponsor_refund": ("↩️", "Emoji sponsorship refund"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
+
+
+def kind_display(kind: str) -> tuple[str, str]:
+    """A ledger kind's (glyph, human label) — the register's shared vocabulary.
+
+    Any surface that lists ledger rows (the register feed, ``/bank wallet``)
+    routes ``kind`` through this so one map owns the icons and wording. An
+    unmapped kind degrades to the coin glyph plus a title-cased kind name
+    (``qa_void`` → ``Qa void``), never a raw snake_case token.
+    """
+    if kind in _KIND_DISPLAY:
+        return _KIND_DISPLAY[kind]
+    return _FALLBACK_DISPLAY[0], kind.replace("_", " ").capitalize()
 
 # Human labels for the rentable perks (rentals_service._PERKS). gift_color
 # stays although the kind retired in migration 091: ledger meta was not

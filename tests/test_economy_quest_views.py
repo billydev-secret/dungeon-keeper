@@ -12,8 +12,10 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.logic import local_day_for
+from bot_modules.cogs.economy_cog import _quest_line_status
 from bot_modules.economy.quest_views import (
     QUEST_BOARD_CUSTOM_ID,
+    QUEST_STATE_LABEL,
     QuestApproveButton,
     QuestBoardView,
     QuestClaimView,
@@ -23,6 +25,7 @@ from bot_modules.economy.quest_views import (
     QuestSignoffView,
     ShowMyQuestsButton,
     can_manage_economy,
+    render_signoff_card_embed,
 )
 from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
@@ -138,6 +141,38 @@ def _button_interaction(bot, *, user, card=None) -> MagicMock:
     i.user = user
     i.message = card
     return i
+
+
+# ── glyph vocabulary: detail labels agree with the one-line board ─────────────
+
+
+def test_quest_state_glyphs_match_the_board():
+    """✅ must mean "done" and 🔶 "claimable" on BOTH the detail labels and the
+    one-line board — the two surfaces must not disagree on what ✅ means."""
+    assert QUEST_STATE_LABEL["done"].startswith("✅")
+    assert QUEST_STATE_LABEL["claimable"].startswith("🔶")
+    assert QUEST_STATE_LABEL["pending"].startswith("⏳")
+    assert _quest_line_status({"state": "done"}).startswith("✅")
+    assert _quest_line_status({"state": "claimable"}).startswith("🔶")
+    assert _quest_line_status({"state": "pending"}).startswith("⏳")
+
+
+def test_signoff_card_fields_carry_glyphs():
+    embed = render_signoff_card_embed(
+        discord.Color.blurple(),
+        EconSettings(currency_emoji="💎"),
+        claimant_mention="<@1>",
+        quest_title="Say hi",
+        reward=15,
+        criteria="Post in general",
+        deny_count=0,
+        state="pending",
+    )
+    names = [f.name for f in embed.fields]
+    assert "👤 Member" in names
+    assert "🎯 Quest" in names
+    assert "💰 Reward" in names
+    assert "📋 Criteria" in names
 
 
 # ── permission gate ───────────────────────────────────────────────────────────

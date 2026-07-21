@@ -501,12 +501,12 @@ def build_leaderboard_embed(
     else:
         earner_lines = ["Nobody has earned yet this week — be the first!"]
     _add_section(
-        f"Top earners (last {ROLLING_DAYS} days)", "\n".join(earner_lines)
+        f"🏆 Top earners (last {ROLLING_DAYS} days)", "\n".join(earner_lines)
     )
 
     if data.community:
         _add_section(
-            "Community goals — everyone gets paid when we hit them",
+            "🎯 Community goals — everyone gets paid when we hit them",
             "\n".join(_community_block(g) for g in data.community),
         )
 
@@ -582,12 +582,12 @@ def build_leaderboard_embed(
             board = "No quests running right now — check back soon."
     else:
         board = "No quests running right now — check back soon."
-    _add_section("Quest board", board)
+    _add_section("📋 Quest board", board)
 
     _add_section("📰 Live feed — today", _feed_lines(data))
 
     embed.add_field(
-        name="Your progress",
+        name="👤 Your progress",
         value=(
             "`/quests` shows your own quest progress and claims, and "
             f"`/bank wallet` your {plural} balance and recent earnings — "

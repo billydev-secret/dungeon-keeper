@@ -45,7 +45,7 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert "Coins — how it works" in (embed.title or "")
     assert embed.color == discord.Color(0x123456)
     fields = {f.name: f.value or "" for f in embed.fields}
-    earning = fields["Earning"]
+    earning = fields["💰 Earning"]
     # what-pays-what rows are aligned: label in a code cell (padded to the
     # widest row), payment outside it — so match the label and pay separately
     # rather than pin the exact padding, which shifts as rows are added.
@@ -53,7 +53,7 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert "🪙 5" in earning  # text login base
     assert "🪙 15" in earning  # voice-first login base
     assert "/bank quests" in earning
-    spending = fields["Spending"]
+    spending = fields["🛍️ Spending"]
     assert "/bank shop" in spending
     assert "color, name, gradient, icon" in spending  # perks named, not priced
     assert "prices in the shop" in spending  # specifics deferred to the shop
@@ -67,13 +67,13 @@ def test_guide_embed_conversion_line_gated_on_rate():
     # The XP→coin faucet ships off (rate 0): the guide must not promise a
     # nightly conversion that no longer happens.
     off = build_guide_embed(EconSettings())  # default xp_per_coin == 0.0
-    off_earning = {f.name: f.value or "" for f in off.fields}["Earning"]
+    off_earning = {f.name: f.value or "" for f in off.fields}["💰 Earning"]
     assert "converts into" not in off_earning
     assert "/bank quests" in off_earning  # quests are still surfaced
 
     # Re-enabled (a positive rate): the conversion copy comes back.
     on = build_guide_embed(EconSettings(xp_per_coin=15.0))
-    on_earning = {f.name: f.value or "" for f in on.fields}["Earning"]
+    on_earning = {f.name: f.value or "" for f in on.fields}["💰 Earning"]
     assert "converts into" in on_earning
 
 
@@ -82,7 +82,7 @@ def test_guide_embed_offers_notifications_not_channel_access():
         f.name: f.value or ""
         for f in build_guide_embed(EconSettings()).fields
     }
-    notifications = fields["Notifications"]
+    notifications = fields["🔔 Notifications"]
     assert "Notifications" in notifications  # names the button to click
     assert "DM" in notifications
     # The role is a DM preference, so the panel must not promise access — and
@@ -101,14 +101,14 @@ def test_guide_embed_uses_guild_branding():
 
     fields = {f.name: f.value or "" for f in embed.fields}
     assert "Gems" in (embed.title or "")
-    assert "💎" in fields["Earning"]  # emoji flows into the earn lines
-    assert "Gems" in fields["Spending"]  # plural flows into the /bank pay line
+    assert "💎" in fields["💰 Earning"]  # emoji flows into the earn lines
+    assert "Gems" in fields["🛍️ Spending"]  # plural flows into the /bank pay line
     assert embed.thumbnail.url == "https://cdn.example/gem.png"
 
 
 def test_guide_embed_hides_pay_when_transfers_disabled():
     embed = build_guide_embed(EconSettings(transfers_enabled=False))
-    spending = {f.name: f.value or "" for f in embed.fields}["Spending"]
+    spending = {f.name: f.value or "" for f in embed.fields}["🛍️ Spending"]
     assert "/bank pay" not in spending
 
 
