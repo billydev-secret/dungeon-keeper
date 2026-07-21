@@ -1,6 +1,6 @@
 # Quest round: community hooks (7 new trigger kinds)
 
-**Status:** in progress 2026-07-21 · **Owner:** economy · **Spec:** `docs/economy_spec.md` §4.5
+**Status:** built + seeded 2026-07-21 · **Owner:** economy · **Spec:** `docs/economy_spec.md` §4.5
 
 ## Goal
 
@@ -71,5 +71,23 @@ construction (the `confession` kind precedent).
 3. Spec §4.5 rows + this plan doc; tests per hook (service-layer where the
    logic lives, per the testing standard).
 
-Seeding/activating library quests on these kinds is a follow-up (the
-2026-07-13-style calibrated seed), decided with the user once live.
+## Seeding (done 2026-07-21, main guild)
+
+Library ids 51–57, calibrated on trailing 28–35d prod data (guess ~5
+submissions/wk, confession replies ~10/28d, birthdays ~1/mo announced):
+
+| id | title | qtype | reward | kind | state |
+|---|---|---|---|---|---|
+| 51 | Hello Back | daily | 12 | greeting_answered | **dark** — Greeting Watch has no watched channels; activate after configuring it |
+| 52 | Cake Day Cheer | event | 15 | birthday_wish | active |
+| 53 | Pouch Snatcher | event | 5 | drop_claim | active (pays once drops get a channel) |
+| 54 | Feed the Pool | weekly | 40 | guess_submit | active |
+| 55 | Echo in the Dark | weekly | 35 | confession_reply | active |
+| 56 | Pick Your Colors | daily setup | 25 | role_pick | **dark** — only a "test" role menu exists; activate with a real menu |
+| 57 | First Purchase | daily setup | 25 | shop_purchase | active |
+
+Also repaired quest 47 "Round Master": its `guess_post` trigger kind never
+existed in `TRIGGER_KINDS` (dead since seeding); now `guess_submit`, still
+dark with the 47–50 paired-dailies batch. Seed script in the session
+scratchpad (`seed_round3_quests.py`). Rewards follow library conventions
+(setup 25 like birthday_set; weeklies 35–40; events 5–15).
