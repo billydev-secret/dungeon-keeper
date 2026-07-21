@@ -43,6 +43,17 @@ const RAFFLE_FIELDS = [
   }],
 ];
 
+// Sponsored QOTD: a member pays to queue their own question; refunded if a mod
+// denies it or it expires unreviewed. Charged once at submit (not a rental).
+const QOTD_FIELDS = [
+  ["price_qotd_sponsor", "Sponsored question", {
+    hint: "Charged when a member submits a paid question; refunded on denial or if it expires unreviewed. 0 makes sponsoring free.",
+  }],
+  ["qotd_sponsor_expire_days", "Review timeout (days)", {
+    hint: "A pending sponsored question nobody reviews refunds itself after this many days.",
+  }],
+];
+
 // Sponsored emojis: weekly rentals opened by mod approval (queue below).
 const EMOJI_FIELDS = [
   ["price_emoji", "Emoji / week", {
@@ -59,6 +70,7 @@ const EMOJI_FIELDS = [
 
 const ALL_NUM_FIELDS = [
   ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
+  ...QOTD_FIELDS,
 ];
 
 function numField(key, label, { hint } = {}, pricing) {
@@ -160,6 +172,10 @@ function render(container, cfg, pricing, icons) {
         <div class="section-label" style="margin-top:16px;">Sponsored emojis</div>
         <div class="field-row" style="flex-wrap:wrap;">
           ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+        </div>
+        <div class="section-label" style="margin-top:16px;">Sponsored QOTD</div>
+        <div class="field-row" style="flex-wrap:wrap;">
+          ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
           <button type="submit" class="btn btn-primary">Save prices</button>
