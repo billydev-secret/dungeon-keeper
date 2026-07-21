@@ -68,6 +68,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "milestone": ("🏆", "Streak milestone"),
     "conversion": ("✨", "XP conversion"),
     "qotd": ("💬", "Question of the day"),
+    "drop": ("🪂", "Coin drop claimed"),
     "photo_post": ("📸", "Photo Challenge post"),
     "game_participation": ("🎲", "Game participation"),
     "game_win": ("🥇", "Game win"),

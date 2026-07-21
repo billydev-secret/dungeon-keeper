@@ -73,6 +73,14 @@ class EconomyConfigUpdate(BaseModel):
     reward_game_participation: int | None = Field(default=None, ge=0)
     reward_photo_post: int | None = Field(default=None, ge=0)
     reward_game_win: int | None = Field(default=None, ge=0)
+    # Coin Drops. The channel picker is the toggle (0 = off). Cadence is an
+    # average — the loop jitters each gap; 48/day (one per ~30 min) is
+    # already spammy, so the cap is a guard-rail, not a target.
+    drops_channel_id: int | None = Field(default=None, ge=0)
+    drops_min_coins: int | None = Field(default=None, ge=0)
+    drops_max_coins: int | None = Field(default=None, ge=0)
+    drops_per_day: int | None = Field(default=None, ge=0, le=48)
+    drops_expire_minutes: int | None = Field(default=None, ge=1)
     # 0 = cadence off for this guild; above POOL_CAP is meaningless (the pool
     # can't exceed it, and a board >= the pool is just "the whole pool").
     quest_board_daily: int | None = Field(default=None, ge=0, le=POOL_CAP)
