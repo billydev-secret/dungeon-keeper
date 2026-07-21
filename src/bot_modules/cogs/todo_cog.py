@@ -7,6 +7,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo
 
 if TYPE_CHECKING:
@@ -24,6 +25,15 @@ class TodoCog(commands.Cog):
     async def todo(self, interaction: discord.Interaction, task: str) -> None:
         if not interaction.guild:
             await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+        # The todo list is a mod worklist, curated from the dashboard — only
+        # moderators may add to it (the web endpoints are mod-gated too).
+        if not isinstance(
+            interaction.user, discord.Member
+        ) or not has_mod_or_admin_permissions(interaction.user.guild_permissions):
+            await interaction.response.send_message(
+                "Only moderators can add to the todo list.", ephemeral=True
+            )
             return
         task = task.strip()
         if not task:

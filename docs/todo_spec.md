@@ -6,13 +6,13 @@ Shared per-guild todo list. Two Discord entry points (a slash command and a mess
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/todo task:<text>` | Slash | Everyone (server only) | Add a free-form task to the guild's todo list |
-| `Add to Todo` | Message context menu | Everyone (server only) | Capture a Discord message as a todo entry with optional notes |
+| `/todo task:<text>` | Slash | Moderator (server only) | Add a free-form task to the guild's todo list |
+| `Add to Todo` | Message context menu | Moderator (server only) | Capture a Discord message as a todo entry with optional notes |
 | Web `GET /api/todos?status=pending\|completed` | Web (dashboard) | Mod | List todos (newest first, capped at 200) |
 | Web `POST /api/todos` | Web (dashboard) | Mod | Create a free-form todo as the authenticated user |
 | Web `POST /api/todos/{id}/complete` | Web (dashboard) | Mod | Mark a todo complete |
 
-Both Discord entry points are open to every member; mod gating happens on the web side only.
+The todo list is a moderator worklist end to end: the Discord entry points and the web endpoints are all gated to moderators. `/todo` uses the same `has_mod_or_admin_permissions` rule as the other mod-tier commands (administrator, manage_guild, or manage_channels).
 
 ## Behavior
 
@@ -38,7 +38,7 @@ The dashboard shows pending and completed lists for the active guild. Names are 
 
 ## Permissions
 
-- Discord: open. `/todo` and `Add to Todo` work for any guild member; both reject DMs.
+- Discord: moderator-gated. `/todo` and `Add to Todo` require administrator, manage_guild, or manage_channels; both reject DMs.
 - Web: every endpoint requires the `moderator` perm.
 
 ## User-visible errors
@@ -46,6 +46,7 @@ The dashboard shows pending and completed lists for the active guild. Names are 
 | When | The user sees |
 |---|---|
 | Used in DMs | "Server only." |
+| Used by a non-moderator | "Only moderators can add to the todo list." |
 | Task is empty after stripping | "Task cannot be empty." |
 | Task is longer than 500 characters | "Task must be 500 characters or fewer." |
 | Web completion targets a missing or already-completed row | HTTP 404: "Todo not found or already completed." |

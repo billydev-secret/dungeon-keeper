@@ -79,7 +79,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 - **Booster role buttons** — Persistent click-to-claim buttons for booster perks that survive restarts. Set them up once and they keep working.
 - **Birthday** — Members record their birthday with `/birthday set`, and the bot posts a daily celebration in a configured channel. The message template is customizable and the dashboard previews the next 90 days.
 - **DM permissions** — A full opt-in DM consent system: members pick Open/Ask/Closed modes, requests route through a panel and DM buttons, and acceptance records a bidirectional consent pair. Either side can revoke at any time with mutual notification.
-- **Server todo** — Add tasks to a shared list with `/todo` or the "Add to Todo" message context menu. Mods curate, complete, and filter the list from the dashboard.
+- **Server todo** — Mods add tasks to a shared list with `/todo` or the "Add to Todo" message context menu, then curate, complete, and filter the list from the dashboard.
 - **Watch list** — `/watch add @user` quietly forwards a member's public posts to your DMs. A lightweight tool for keeping an eye on a situation without a heavy moderation footprint.
 
 ### Wellness
@@ -171,7 +171,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/invite` — Get a link to invite this bot
 - `/support` — Get a link to the support Discord
 - `/xp_leaderboards [timescale]` — Top XP earners by source and your standing
-- `/todo <task>` — Add a task to the shared server todo list
+- `/todo <task>` — Add a task to the shared server todo list (moderators only)
 - `/birthday set` — Record your birthday
 - `/confess` — Post an anonymous confession (modal)
 - `/dmrequest` — Send moderators a private DM request

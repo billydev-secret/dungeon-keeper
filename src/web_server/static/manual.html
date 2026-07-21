@@ -507,7 +507,7 @@
         <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels. 24/7 mode with autoplay.</td></tr>
         <tr><td><strong><a href="#wellness">Wellness</a></strong></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong><a href="#dm-perms">DM Permissions</a></strong></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
-        <tr><td><strong><a href="#self-service">Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, todo list, birthday registration, data self-erasure.</td></tr>
+        <tr><td><strong><a href="#self-service">Self-Service</a></strong></td><td>Help dropdown, support link, bot invite, birthday registration, data self-erasure.</td></tr>
         <tr><td><strong><a href="#bios">Member Bios</a></strong></td><td>Wizard-driven member profiles: a private step-by-step channel walks you through admin-authored fields plus icebreaker questions, then posts a styled bio embed.</td></tr>
         <tr><td><strong><a href="#emoji-stealer">Emoji Stealer</a></strong></td><td>Right-click a message (or paste an image URL) to add its custom emoji to a server you manage.</td></tr>
         <tr><td><strong><a href="#moderation">Moderation Core</a></strong></td><td>Jail, warnings, purge, mod profile, right-click context menus.</td></tr>
@@ -1165,7 +1165,7 @@
         <tr><td><code>/help</code></td><td>Browse all commands by category in an interactive ephemeral dropdown</td></tr>
         <tr><td><code>/support</code></td><td>Ephemeral link to the support Discord server</td></tr>
         <tr><td><code>/invite</code></td><td>Generate a Discord OAuth invite link for adding the bot to another server</td></tr>
-        <tr><td><code>/todo task:&lt;text&gt;</code></td><td>Add a task to the server's shared todo list. <strong>task</strong> — up to 500 characters.</td></tr>
+        <tr><td><code>/todo task:&lt;text&gt;</code></td><td>Add a task to the server's shared todo list (moderators only). <strong>task</strong> — up to 500 characters.</td></tr>
         <tr><td><code>/bio</code></td><td>Create or update your member bio — see <a href="#bios">Member Bios</a> below.</td></tr>
         <tr><td><code>/birthday set</code> / <code>remove</code></td><td>Register your birthday (month + day) for daily announcements, or remove it.</td></tr>
       </tbody>
@@ -1912,7 +1912,7 @@
         <tr><td><a href="#emoji-stealer"><code>/steal_emoji url: name:</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Add an emoji from an image URL (or right-click → Steal Emoji)</td></tr>
         <tr><td><a href="#hidden-channels"><code>/hidden hide</code> / <code>restore</code> / <code>list</code></a></td><td><span class="perm perm-admin">Admin</span></td><td>Hide a channel from everyone, restore it exactly as it was</td></tr>
         <tr><td><a href="#confess"><code>/confess</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
-        <tr><td><a href="#self-service-cmds"><code>/todo</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
+        <tr><td><a href="#self-service-cmds"><code>/todo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Add to the server's shared todo list</td></tr>
         <tr><td><a href="#self-service-cmds"><code>/help</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
         <tr><td><a href="#ai-tools"><code>/ai review</code> / <code>scan</code> / <code>channel</code> / <code>query</code></a></td><td><span class="perm perm-admin">Admin</span></td><td>AI-assisted member/channel investigation</td></tr>
       </tbody>
