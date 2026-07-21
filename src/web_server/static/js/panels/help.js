@@ -4,6 +4,73 @@
 // nav so the sidebar can't drift from the manual).
 
 import { HELP_PAGES } from "./help-sections.js?v=24";
+import { apiPost, esc } from "../api.js";
+
+// Render the advisor's plaintext answer with a safe markdown-lite pass. `esc`
+// runs first, so the tag substitutions below can only ever produce our own tags.
+function renderAnswerHtml(text) {
+  return esc(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+?)`/g, "<code>$1</code>")
+    .replace(/\n/g, "<br>");
+}
+
+// The "Ask the Guide" box: a grounded chat over the manual (POST /api/help/advisor).
+function buildAskBox() {
+  const box = document.createElement("div");
+  box.className = "dk-help-ask";
+  box.style.cssText =
+    "margin:12px 0 4px;padding:12px;border:1px solid var(--rule);border-radius:var(--r-sm);background:var(--surface,transparent);";
+
+  const form = document.createElement("form");
+  form.style.cssText = "display:flex;gap:8px;align-items:center;";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Ask the guide — e.g. “How do I start a game?”";
+  input.setAttribute("aria-label", "Ask the guide a question");
+  input.maxLength = 500;
+  input.style.cssText = "flex:1;min-width:0;";
+
+  const btn = document.createElement("button");
+  btn.type = "submit";
+  btn.className = "btn";
+  btn.textContent = "Ask";
+
+  form.append(input, btn);
+
+  const answer = document.createElement("div");
+  answer.className = "dk-help-answer";
+  answer.hidden = true;
+  answer.style.cssText =
+    "margin-top:10px;padding:10px 12px;border-radius:var(--r-sm);background:var(--code-bg,rgba(127,127,127,0.08));line-height:1.55;white-space:normal;";
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (!q) return;
+    btn.disabled = true;
+    input.disabled = true;
+    answer.hidden = false;
+    answer.textContent = "Thinking…";
+    try {
+      const res = await apiPost("/api/help/advisor", { question: q });
+      answer.innerHTML = renderAnswerHtml(res.answer || "");
+    } catch (err) {
+      answer.textContent =
+        err && /429/.test(String(err.message))
+          ? "You're asking a lot quickly — give it a few seconds and try again."
+          : "Couldn't reach the guide just now — try again in a moment.";
+    } finally {
+      btn.disabled = false;
+      input.disabled = false;
+      input.focus();
+    }
+  });
+
+  box.append(form, answer);
+  return box;
+}
 
 let _manualPromise = null;
 function loadManual() {
@@ -230,6 +297,8 @@ export async function mount(container, params = {}) {
   header.appendChild(titleBox);
   header.appendChild(tools);
   panel.appendChild(header);
+
+  panel.appendChild(buildAskBox());
 
   const body = document.createElement("div");
   body.className = "dk-help";

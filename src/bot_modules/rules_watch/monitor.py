@@ -15,7 +15,7 @@ import discord
 from discord.ext import commands
 
 from bot_modules.core.db_utils import get_config_value
-from bot_modules.rules_watch import service
+from bot_modules.rules_watch import ledger, service
 from bot_modules.rules_watch.scorer import (
     Signals,
     TargetResult,
@@ -90,6 +90,87 @@ class RulesWatchMonitor(commands.Cog):
             self._process(message),
             name=f"rules_watch:{message.id}",
         )
+        # The ledger runs independently of the guard pipeline: a concrete act is
+        # worth recording whether or not the sentiment pre-filter would have let
+        # the message through, and it never calls the model.
+        asyncio.create_task(
+            self._record_ledger(message),
+            name=f"rules_ledger:{message.id}",
+        )
+
+    # ------------------------------------------------------------------
+    # Ledger (§7.3, §7.4) — records concrete acts, posts nothing
+    # ------------------------------------------------------------------
+
+    async def _record_ledger(self, message: discord.Message) -> None:
+        """Record DM-consent and cross-platform acts for later human review.
+
+        Deliberately silent: no Discord alert, no priority score, no label
+        prompt. These rows exist so that when somebody is already being
+        reviewed, prior acts are on record with dates instead of being
+        reconstructed from memory.
+        """
+        content = message.content or ""
+        if not content:
+            return
+
+        guild_id = message.guild.id  # type: ignore[union-attr]
+        channel_id = message.channel.id
+        author_id = message.author.id
+        message_id = message.id
+        created_ts = message.created_at.timestamp()
+        mention_ids = [m.id for m in message.mentions if not m.bot]
+        reply_to_id = (
+            message.reference.message_id
+            if message.reference and message.reference.message_id
+            else None
+        )
+
+        def _do_ledger() -> None:
+            with self.ctx.open_db() as conn:
+                dm_hit = ledger.detect_dm_consent(
+                    conn, guild_id, channel_id, author_id, content, created_ts
+                )
+                # Only resolve a target if something might actually fire —
+                # identify_target runs several queries.
+                needs_target = dm_hit is not None or (
+                    ledger.names_platform(content) is not None
+                    and not ledger.is_intake_ritual(content)
+                    and ledger.demonstrates_observation(content)
+                )
+                if not needs_target:
+                    return
+
+                target = identify_target(
+                    conn, guild_id, channel_id, author_id, reply_to_id, mention_ids
+                )
+
+                if dm_hit is not None:
+                    ledger.record_hit(
+                        conn, guild_id=guild_id, hit=dm_hit,
+                        message_id=message_id, channel_id=channel_id,
+                        author_id=author_id, target_id=target.target_id,
+                        target_confidence=target.confidence,
+                        detected_at=created_ts,
+                    )
+
+                xp_hit = ledger.detect_cross_platform(
+                    conn, guild_id, channel_id, author_id, target.target_id,
+                    content, created_ts,
+                )
+                if xp_hit is not None:
+                    ledger.record_hit(
+                        conn, guild_id=guild_id, hit=xp_hit,
+                        message_id=message_id, channel_id=channel_id,
+                        author_id=author_id, target_id=target.target_id,
+                        target_confidence=target.confidence,
+                        detected_at=created_ts,
+                    )
+
+        try:
+            await asyncio.to_thread(_do_ledger)
+        except Exception:
+            log.exception("rules_watch ledger failed for message %s", message.id)
 
     # ------------------------------------------------------------------
     # Pipeline

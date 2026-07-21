@@ -23,7 +23,7 @@ export function mount(container) {
         <form class="form" data-form>
           <div class="field">
             <label><input type="checkbox" name="enabled" ${rw.enabled ? "checked" : ""} /> Enable monitoring</label>
-            <div class="field-hint">When on, public messages are screened and flagged events appear under Moderation → Rules Watch for you to label as violation / false positive. Enabling alone populates the queue — an alert channel is optional.</div>
+            <div class="field-hint">When on, public messages are screened and flagged events appear under Moderation → Rules Watch for you to label as violation / false positive. Enabling alone populates the queue — an alert channel is optional. This also runs the <strong>Ledger</strong> (concrete DM-consent and cross-platform acts, recorded silently for review), which needs no AI model.</div>
           </div>
           <div class="field">
             <label>Immediate Alert Channel</label>

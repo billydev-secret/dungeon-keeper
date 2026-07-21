@@ -125,6 +125,41 @@ function renderStatsTab(stats) {
     </div>`;
 }
 
+const LEDGER_KIND = {
+  dm_consent:     '<span class="badge badge-dim">DM consent</span>',
+  cross_platform: '<span class="badge badge-dim">Cross-platform</span>',
+};
+
+function renderLedgerTab(rows) {
+  if (!rows.length) {
+    return renderEmpty("Nothing on the ledger yet. These fire rarely by design — roughly once a month between them.");
+  }
+  const body = rows.map(r => `
+    <tr>
+      <td class="rw-row__ts">${esc(fmtTs(r.detected_at))}</td>
+      <td>${LEDGER_KIND[r.kind] || esc(r.kind)}</td>
+      <td>${r.platform ? esc(r.platform) : "—"}</td>
+      <td>
+        <div class="rw-ledger__excerpt">${esc(r.excerpt || "")}</div>
+        ${r.matched_phrase ? `<span class="rw-ledger__match">matched: ${esc(r.matched_phrase)}</span>` : ""}
+      </td>
+    </tr>`).join("");
+  return `<div class="rw-ledger-scroll"><table class="rw-ledger-tbl">
+    <thead><tr><th>When</th><th>Kind</th><th>Platform</th><th>What was said</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+
+function renderLedgerRepeats(rows) {
+  if (!rows.length) return "";
+  const items = rows.map(r =>
+    `<li>User <code>${esc(r.author_id)}</code> — ${esc(String(r.distinct_targets))} different people, ${esc(String(r.hits))} entries</li>`
+  ).join("");
+  return `<div class="rw-ledger-repeats">
+    <h4>Same entry against more than one person</h4>
+    <ul style="margin:0; padding-left:18px">${items}</ul>
+  </div>`;
+}
+
 export function mount(container) {
   container.innerHTML = `
     <div class="panel">
@@ -135,6 +170,7 @@ export function mount(container) {
 
       <div class="ctrl-group" role="group" aria-label="Views" data-tabs style="margin-bottom:16px">
         <button class="active" data-tab="queue">Alert Queue</button>
+        <button data-tab="ledger">Ledger</button>
         <button data-tab="stats">Label Stats</button>
       </div>
 
@@ -157,6 +193,21 @@ export function mount(container) {
             <div class="empty">Select an event to review.</div>
           </div>
         </div>
+      </div>
+
+      <div data-tab-content="ledger" style="display:none">
+        <div class="rw-ledger-note">
+          A record of specific things that were said — not an assessment of anyone.
+          Nothing here has been flagged, scored, or judged, and no alert was sent.
+          It exists so that if someone is being reviewed, the dates are already on hand.
+        </div>
+        <div class="ctrl-group" role="group" aria-label="Filter ledger" data-ledger-filter style="margin-bottom:12px">
+          <button class="active" data-kind="">All</button>
+          <button data-kind="dm_consent">DM consent</button>
+          <button data-kind="cross_platform">Cross-platform</button>
+        </div>
+        <div data-ledger-repeats></div>
+        <div data-ledger-content>${renderLoading("Loading…")}</div>
       </div>
 
       <div data-tab-content="stats" style="display:none">
@@ -192,6 +243,24 @@ export function mount(container) {
       .rw-table { border-collapse:collapse; font-size:13px; }
       .rw-table th, .rw-table td { padding:4px 12px; border:1px solid var(--border); }
       .rw-pending-toggle { font-size:13px; display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+      .rw-ledger-note { font-size:13px; color:var(--dim, #888); border-left:3px solid var(--border);
+                        padding:8px 12px; margin-bottom:14px; line-height:1.5; }
+      .rw-ledger-tbl { border-collapse:collapse; font-size:13px; width:100%; }
+      .rw-ledger-tbl th { text-align:left; font-weight:600; color:var(--dim, #888); font-size:12px;
+                          padding:6px 10px; border-bottom:1px solid var(--border); }
+      .rw-ledger-tbl td { padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+      .rw-ledger-tbl tr:last-child td { border-bottom:none; }
+      .rw-ledger__excerpt { color:var(--fg, #ddd); word-break:break-word; }
+      .rw-ledger__match { display:inline-block; font-size:11px; padding:1px 6px; border-radius:3px;
+                          background:var(--surface2, #3a3d42); margin-top:4px; }
+      .rw-ledger-repeats { border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+                           margin-bottom:14px; font-size:13px; }
+      .rw-ledger-repeats h4 { margin:0 0 6px; font-size:13px; }
+      .rw-ledger-scroll { overflow-x:auto; }
+      @media (max-width: 700px) {
+        .rw-ledger-tbl { font-size:12px; }
+        .rw-ledger-tbl th:nth-child(3), .rw-ledger-tbl td:nth-child(3) { display:none; }
+      }
       .badge-ok { background:#1e4620; color:#7ecb7f; }
       .rw-back { display:none; }
 
@@ -219,7 +288,11 @@ export function mount(container) {
   `;
 
   const queuePane = container.querySelector('[data-tab-content="queue"]');
+  const ledgerPane = container.querySelector('[data-tab-content="ledger"]');
   const statsPane = container.querySelector('[data-tab-content="stats"]');
+  const ledgerContent = container.querySelector("[data-ledger-content]");
+  const ledgerRepeatsEl = container.querySelector("[data-ledger-repeats]");
+  const ledgerFilter = container.querySelector("[data-ledger-filter]");
   const filterGroup = container.querySelector("[data-filter-group]");
   const pendingOnlyEl = container.querySelector("[data-pending-only]");
   const layoutEl = container.querySelector(".rw-layout");
@@ -232,14 +305,23 @@ export function mount(container) {
   let currentTier = "";
   let pendingOnly = true;
   let activeTab = "queue";
+  let ledgerKind = "";
 
   // --- Tab switching ---
   makeFilterStrip(container.querySelector("[data-tabs]"), (tab) => {
     activeTab = tab;
     queuePane.style.display = activeTab === "queue" ? "" : "none";
+    ledgerPane.style.display = activeTab === "ledger" ? "" : "none";
     statsPane.style.display = activeTab === "stats" ? "" : "none";
     if (activeTab === "stats") loadStats();
+    if (activeTab === "ledger") loadLedger();
   }, { attr: "data-tab" });
+
+  // --- Ledger kind filter ---
+  makeFilterStrip(ledgerFilter, (kind) => {
+    ledgerKind = kind;
+    loadLedger();
+  }, { attr: "data-kind" });
 
   // --- Tier filter ---
   makeFilterStrip(filterGroup, (tier) => {
@@ -349,6 +431,25 @@ export function mount(container) {
       }
     } catch {
       listEl.innerHTML = '<div class="empty" style="padding:16px">Failed to load events.</div>';
+    }
+  }
+
+  async function loadLedger() {
+    ledgerContent.innerHTML = renderLoading("Loading…");
+    const params = { limit: 200 };
+    if (ledgerKind) params.kind = ledgerKind;
+    try {
+      const rows = await api("/api/rules-watch/ledger", params);
+      ledgerContent.innerHTML = renderLedgerTab(rows);
+    } catch {
+      ledgerContent.innerHTML = '<div class="empty">Failed to load ledger.</div>';
+      return;
+    }
+    try {
+      const repeats = await api("/api/rules-watch/ledger/repeats");
+      ledgerRepeatsEl.innerHTML = renderLedgerRepeats(repeats);
+    } catch {
+      ledgerRepeatsEl.innerHTML = "";
     }
   }
 

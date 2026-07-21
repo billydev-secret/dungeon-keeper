@@ -478,6 +478,14 @@
       <li><strong><a href="#quickref">Quick Reference</a></strong> — every command in one table, most-used first.</li>
     </ul>
 
+    <h3 id="ask-guide">Ask the Guide (AI helper)</h3>
+    <p>If you'd rather just ask, there's an AI helper that answers "how do I…" questions in plain language, grounded in this guide:</p>
+    <ul>
+      <li><strong>In Discord</strong> — run <code>/ask</code> with your question (e.g. <code>/ask how do I start a game?</code>). The reply is private (only you see it).</li>
+      <li><strong>On the dashboard</strong> — use the <strong>Ask the Guide</strong> box at the top of any Help page.</li>
+    </ul>
+    <p>It only knows what's written in this guide, so it won't invent commands — if it's not sure, it'll say so and point you here or to a moderator.</p>
+
     <!-- ══════════════════════════════════════════════════════════
          2. FEATURE MAP
     ═══════════════════════════════════════════════════════════ -->
@@ -1523,6 +1531,25 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/">web dashboard</a></strong>
         <p>The Rules Watch config panel toggles monitoring on/off and sets which channel receives immediate-tier alerts (each alert includes the flagged message, the matched rule, and Confirm / False-positive buttons that keep working across bot restarts). The retired <code>/rules-watch enable</code>, <code>/rules-watch disable</code>, and <code>/rules-watch set-channel</code> commands are no longer needed.</p>
+      </div>
+    </div>
+
+    <h3>The Ledger</h3>
+    <p>The dashboard panel's <strong>Ledger</strong> tab is a separate thing from the alert queue, and it works differently on purpose. Where the queue holds the AI's opinion that a message <em>might</em> break a rule, the ledger records only that a specific, narrowly-defined thing was said. It makes no judgement, sends no alert, and has no Confirm / False-positive buttons — there is nothing to agree or disagree with. It exists so that if you are already reviewing someone, the relevant dates are on hand rather than reconstructed from memory.</p>
+
+    <p>Two entries are recorded:</p>
+    <ul>
+      <li><strong>DM consent</strong> — someone says the consent bot is broken or that they don't know how to use it, <em>and</em> expresses intent to DM a particular person. Asking publicly before DMing is encouraged and never recorded; what lands here is the claim that the bot can't be used.</li>
+      <li><strong>Cross-platform</strong> — someone shows they have already looked at another member's content on Reddit, Instagram, OnlyFans, Snapchat, Telegram or TikTok. Asking someone for their handle, or recognising them from another platform, is ordinary and is not recorded — only demonstrating you went and looked. If the person raised that platform themselves in the last month, nothing is recorded.</li>
+    </ul>
+
+    <p>Both are deliberately rare — measured across fifteen months of server history they fire about once a month between them. If the ledger starts filling up, something has been widened and should be looked at.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>The ledger runs even when the AI doesn't</strong>
+        <p>Unlike the alert queue, the ledger needs no AI model — it is plain text matching, so it keeps working if the AI service is unavailable. It still requires Rules Watch to be enabled.</p>
       </div>
     </div>
 

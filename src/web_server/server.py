@@ -69,6 +69,7 @@ _RATE_TIERS: dict[str, tuple[int, float]] = {
 # Map path prefixes to tiers
 _TIER_ROUTES: list[tuple[str, str]] = [
     ("/api/messages/ai-query", "ai"),
+    ("/api/help/advisor",      "ai"),
     ("/api/messages/search",   "search"),
     ("/login",                 "auth"),
     ("/callback",              "auth"),
@@ -240,6 +241,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
     app.include_router(rules_watch_routes.router, prefix="/api", tags=["rules-watch"])
+
+    from web_server.routes import advisor as advisor_routes
+
+    app.include_router(advisor_routes.router, prefix="/api", tags=["advisor"])
 
     from web_server.routes import todo as todo_routes
 
