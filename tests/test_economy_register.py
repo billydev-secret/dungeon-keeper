@@ -418,6 +418,15 @@ def test_memo_unknown_kind_degrades_gracefully():
     assert render_memo(entry, _names) == "Mystery bonus"
 
 
+def test_quest_board_clear_bonus_has_its_own_glyph_and_memo():
+    """The full-board bonus is a mapped kind, not the generic coin fallback."""
+    entry = _entry(kind="quest_bonus", meta={"qtype": "daily", "period": "2026-07-21"})
+    assert render_memo(entry, _names) == "Quest board clear"
+    embed = build_register_embed(entry, DEFAULT_ECON_SETTINGS, _names)
+    assert "🎉" in (embed.description or "")
+    assert "Quest board clear" in (embed.description or "")
+
+
 # ── embed ──────────────────────────────────────────────────────────────
 
 
