@@ -1075,23 +1075,26 @@ class BaseGame(commands.Cog):
         if ctx is None:
             return
 
-        def _work() -> tuple[int, dict[int, int], int]:
+        def _work() -> tuple[int, int, dict[int, int], int]:
             with ctx.open_db() as conn:
                 if wager_svc.pot_total(conn, self.GAME_KEY, game_id) == 0:
                     wager_svc.drop_pending(conn, self.GAME_KEY, game_id)
-                    return 0, {}, 0
+                    return 0, 0, {}, 0
                 if state in _SETTLING_STATES and winner_id is not None:
-                    paid = wager_svc.settle(
+                    paid, rake = wager_svc.settle(
                         conn, self.GAME_KEY, game_id, winner_id
                     )
-                    return paid, {}, winner_id or 0
+                    return paid, rake, {}, winner_id or 0
                 refunds = wager_svc.refund_game(conn, self.GAME_KEY, game_id)
-                return 0, refunds, 0
+                return 0, 0, refunds, 0
 
-        paid, refunds, paid_to = await asyncio.to_thread(_work)
+        paid, rake, refunds, paid_to = await asyncio.to_thread(_work)
         if paid > 0:
+            # The house cut is named right where the pot is paid — a raked
+            # wager must never look like the full pot arrived.
+            note = f" *(house kept {rake:,})*" if rake else ""
             await self._announce_wager_result(
-                game_id, f"💰 <@{paid_to}> takes the pot — **{paid:,}**!"
+                game_id, f"💰 <@{paid_to}> takes the pot — **{paid:,}**!{note}"
             )
         elif refunds:
             await self._announce_wager_result(

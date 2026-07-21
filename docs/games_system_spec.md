@@ -1,6 +1,6 @@
 # Games System — Feature Spec
 
-An 18-mode party-games suite. Every mode is one subcommand under a single top-level `/games` command group: players start a game with `/games play <slug>` (e.g. `/games play ffa`), which spins up a public embed with buttons; players join and play in-place. Games share a per-channel session window for the `/recap` highlight reel, a per-channel allowlist and per-guild enable/disable matrix (both managed from the web dashboard), an optional audit channel for anonymous content, a question bank with AI-generation fallback for prompts, and a dashboard for content authoring. Bank draws are round-robin (least-recently-served row first, so a small pool doesn't repeat until every row has been served once — see **Question-bank / AI-augmented games**). Games also feed the economy — completing quest-relevant actions credits economy quest triggers (see **Economy integration**).
+A 17-mode party-games suite. Every mode is one subcommand under a single top-level `/games` command group: players start a game with `/games play <slug>` (e.g. `/games play ffa`), which spins up a public embed with buttons; players join and play in-place. Games share a per-channel session window for the `/recap` highlight reel, a per-channel allowlist and per-guild enable/disable matrix (both managed from the web dashboard), an optional audit channel for anonymous content, a question bank with AI-generation fallback for prompts, and a dashboard for content authoring. Bank draws are round-robin (least-recently-served row first, so a small pool doesn't repeat until every row has been served once — see **Question-bank / AI-augmented games**). Games also feed the economy — completing quest-relevant actions credits economy quest triggers (see **Economy integration**).
 
 The companion 1-v-1 nickname duel **Pressure Cooker** and the dice game **Risky Rolls** appear in the shared game registry (`GAME_ICONS`/`GAME_NAMES`) but are **separate features** with their own entry points and specs — they are not part of this suite. See [[pressure-cooker-spec]].
 
@@ -16,7 +16,7 @@ All party games launch with `/games play <slug>`. Params below are the actual sl
 |---|---|---|---|
 | Anonymous Truth or Dare | `/games play ffa kind:[truth\|dare\|random] tags:[csv] prompt:[str]` | Everyone | Drops a T-or-D prompt; players reply anonymously via modal, posted by the bot |
 | Truth or Dare Card | `/games play ffa_banner kind:[truth\|dare\|random] tags:[csv] prompt:[str]` | Everyone | Card-only variant of FFA — just posts a prompt card for open chat, no interactive state |
-| Photo Challenge | *(no command — standalone)* | — | **Moved out of the games menu + shared scheduler.** Now a standalone dashboard feature (**Photo Challenge** nav → Setup & Schedule): one dedicated channel, its own recurring schedule, a ping role, an enabled toggle. Auto-posts a photo-prompt card on schedule; members post their shots in the channel. Prompts come from the shared bank (`game_type='photo'`); a post that earns enough distinct reactions feeds the economy photo-react quest. Config/schedule via `/api/photo-challenge` |
+| Photo Challenge | *(no command — standalone)* | — | **Moved out of the games menu + shared scheduler.** Now a standalone dashboard feature (**Photo Challenge** nav → Setup & Schedule): one dedicated channel, its own recurring schedule, a ping role, an enabled toggle. Auto-posts a photo-prompt card on schedule; members post their shots in the channel. Prompts come from the shared bank (`game_type='photo'`); a member's image post in the channel pays the economy `photo_post` faucet on the post itself (no reaction threshold). Config/schedule via `/api/photo-challenge` |
 | Truth or Dare | `/games play traditional single_choice:[bool]` | Everyone | SFW/NSFW Truth & Dare opt-in pools; `single_choice:true` makes each player pick exactly one category (radio-style) |
 | Spin the Compliment | `/games play compliment` | Everyone | Derangement-paired giver → receiver |
 | Marry, Fornicate, Kiss | `/games play mfk options:[csv]` | Everyone | `options:` overrides the three default labels |
@@ -33,7 +33,7 @@ All party games launch with `/games play <slug>`. Params below are the actual sl
 | Clapback | `/games play clapback start_in:[1-60]` | Everyone | Head-to-head matchups; `start_in` shows a lobby countdown (host still clicks Start). Unanimous winners get a CLAPBACK bonus |
 | LegitLibs | `/games play legitlibs mode:[classic\|quiplash] tier:[1-4] template_id:[str] tag:[str]` | Everyone | Mad-Libs template fill; tiers 1 Flirty / 2 Spicy / 3 Filthy / 4 Unhinged, default tier 2 |
 
-That is **18 `/games play` commands** (Anonymous AMA's two axes are one command). `ffa_banner` is a card-only variant of FFA, so counting distinct games it is 17 plus the banner variant.
+That is **17 `/games play` commands** (Anonymous AMA's two axes are one command; Photo Challenge is standalone with no command). `ffa_banner` is a card-only variant of FFA, so counting distinct games it is 16 plus the banner variant.
 
 ### Meta & admin commands
 
@@ -113,8 +113,11 @@ Every game's Close/End path opens a confirm popup ("Are you sure you want to end
 
 All six duel/group games (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
 Group, Chicken, Musical Chairs) accept an optional `wager:` amount on their
-challenge/start command: equal ante from every player, winner takes the pot,
-**no rake**. Escrow lives in `econ_game_wagers` (economy side, migration 094)
+challenge/start command: equal ante from every player, winner takes the pot
+minus an **optional house rake** (`wager_rake_pct`, default 0 — ships dark;
+when priced, the cut is named on the payout announcement so the arithmetic
+visibly adds up; refunds and single-stake pots are never raked). Escrow lives
+in `econ_game_wagers` (economy side, migration 094)
 and settles through the shared terminal-state seam — see
 `docs/economy_spec.md` §6 and `docs/plans/economy-sinks-round-2.md` stage 4b.
 The rule that inverts this module's usual one: `pay_game_rewards` swallows
@@ -206,7 +209,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 ## Stored data
 
-Per-guild content (the seeded question bank, LegitLibs templates and their revision history, AI-prompt overrides) plus per-game runtime state (the live game's payload, the session window, audit channel and editor-role settings, allowlisted channels) and an archive of every finished game's final payload. External-tracking config and raw banked bot messages are stored per guild. User ids appear inside game payloads and the history archive. Photo Challenge registers card metadata for the economy photo-reply quest.
+Per-guild content (the seeded question bank, LegitLibs templates and their revision history, AI-prompt overrides) plus per-game runtime state (the live game's payload, the session window, audit channel and editor-role settings, allowlisted channels) and an archive of every finished game's final payload. External-tracking config and raw banked bot messages are stored per guild. User ids appear inside game payloads and the history archive. Photo Challenge registers card metadata for the economy `photo_post` payout.
 
 LegitLibs additionally stores a small vocabulary table (parts of speech, domains, forms) and per-blank prompt text used to render fill modals, plus an anti-repeat window of the last few templates used per guild, channel tier caps, and user-submitted abuse reports on filled-in answers.
 

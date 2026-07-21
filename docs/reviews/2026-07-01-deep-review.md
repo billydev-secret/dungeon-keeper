@@ -229,12 +229,14 @@ Games and duels persist nothing to the XP economy (`xp_system.py:120-124` source
 
 ## Remediation backlog (ranked by impact ÷ effort)
 
+> Status annotations added 2026-07-21; unannotated items remain open.
+
 Each item traces to pinned findings above. Grouped by tier; within a tier, cheaper-first.
 
 ### Do first — S1, low/medium effort
 1. **Decide consent policy, then make code+copy agree** (M1a–d, M2-ama-a, M4c). Either re-arm `check_consent`/`format_name` + restrict AMA hot-seat to volunteers, or remove the UI/manual promises. *This is the single highest-value fix — safety + truth-in-advertising in one.*
 2. **Reconcile NSFW toggle** (M4-nsfw, M4d): thread one `allow_nsfw` value end-to-end, unify the `nsfw`/`allow_nsfw` key, and fix help/manual copy to match the chosen default. *Low effort, closes a safety+honesty gap.*
-3. **Rate-limit `/guess submit`** (M8-b) and **apply the nick denylist to free-text question/confession fields** (M7-c, M8-e); switch nick filter to NFKC (M0-base-e). *Small, contained.*
+3. **Rate-limit `/guess submit`** (M8-b) and **apply the nick denylist to free-text question/confession fields** (M7-c, M8-e); switch nick filter to NFKC (M0-base-e). *Small, contained.* *(M8-b ✅ done — 842302e, dashboard-configurable submission flood cap + per-round cap; the denylist/NFKC parts unverified.)*
 4. **Guard concurrent duel sentences** (M0-base-b) and **re-apply nick on rejoin** (M0-base-d). *Prevents durable griefing + data corruption.*
 5. **Fix `/games help` command strings** (M4a, M4b) — mechanical, removes "command not found" for every game.
 
@@ -245,16 +247,16 @@ Each item traces to pinned findings above. Grouped by tier; within a tier, cheap
 9. **Remove/deflag dead & phantom game modes** (M2-ll-a/b, M2-photo-a): drop LegitLibs Hot Seat choice, implement or remove the killswitch, alert on empty photo bank.
 10. **Add missing `default_permissions`** to mod/admin commands (Cmd-perms).
 11. **MLT final standings embed** (M2-mlt-a) + queue-flood caps on Pose Question/Prompt (M2-wyr-b, M2-mlt-b) + self-vote guards (M2-fan-a, M2-price-a).
-12. **Accessibility core**: `aria-live` toasts, dialog/modal roles+focus trap, `makeTabStrip()` with ARIA (U1a–e, U3e). *One shared-widget pass fixes many panels at once.*
+12. **Accessibility core**: `aria-live` toasts, dialog/modal roles+focus trap, `makeTabStrip()` with ARIA (U1a–e, U3e). *One shared-widget pass fixes many panels at once.* *(U3e ✅ done — 617c855 shared tab-strip; the toast/dialog ARIA scope unverified.)*
 13. **iOS quick wins**: 16px inputs, `100dvh`, `.data-table` scroll rule generalized (U2a–c).
 
 ### Docs & cleanup — S2/S3, low effort
 14. **Fix README** (game count, `/consent`, Pen Pals, `/rename`, drop "progression suite" framing per M3).
-15. **Add `docs/INDEX.md`** + mark the 3 aspirational specs (`wellness_guardian`, `games_system`, `dk_pvp_games_suite`) as design-spec/not-yet-implemented; move root specs into `docs/`.
-16. **Delete dead code**: unused `register_*` command functions (Cmd-dead), dead error handler (S3-deadhandler), `escText`/duplicate `esc` (U3d/h).
+15. **Add `docs/INDEX.md`** + mark the 3 aspirational specs (`wellness_guardian`, `games_system`, `dk_pvp_games_suite`) as design-spec/not-yet-implemented; move root specs into `docs/`. ✅ done — `docs/INDEX.md` exists and classifies every spec (aspirational specs flagged; 2026-07-15 correction pass folded in).
+16. **Delete dead code**: unused `register_*` command functions (Cmd-dead), dead error handler (S3-deadhandler), `escText`/duplicate `esc` (U3d/h). ✅ done — eeb52b6 (dead-code removal); `esc` convergence in e782b4b.
 
 ### Backlog — S3/S4
-17. Config-model unification (S2-config3), `GameRuntime` typing (S2-god), narrow broad excepts (S3-swallow), migration transactions (S3-migrate), extension-registry assert (S3-extdrift), command naming/nesting consistency (Cmd-naming/nesting), design-system utility classes (U3a), fetch-wrapper consolidation (U3b/c), remaining per-game clarity nits.
+17. Config-model unification (S2-config3), `GameRuntime` typing (S2-god), narrow broad excepts (S3-swallow), migration transactions (S3-migrate), extension-registry assert (S3-extdrift), command naming/nesting consistency (Cmd-naming/nesting), design-system utility classes (U3a), fetch-wrapper consolidation (U3b/c), remaining per-game clarity nits. *(S2-config3 ✅ done — 88d81d6 + 2e85a52; S2-god ✅ done — typed-Bot refactor, `plans/typed-bot-refactor.md` stages 1–3 complete; U3a/U3b/c ✅ done — 894987b, e782b4b, 617c855. The rest of this item remains open.)*
 
 ### Explicitly deferred
 - **Games↔XP progression** (M3): keep ephemeral by design; revisit only after consent/NSFW gaps close, as a scoped capped participation-XP.
@@ -262,6 +264,8 @@ Each item traces to pinned findings above. Grouped by tier; within a tier, cheap
 ---
 
 ## Coverage ledger
+
+> Point-in-time snapshot as of the 2026-07-01 review — not maintained since.
 
 **Independently confirmed by the author (re-read live):** the consent no-op (M1a–d); the gitignored DB/`.env` (non-finding); and, on the adversarial spot-check pass, the three headline S1s — the AMA forced hot-seat (M2-ama-a), the concurrent-duel-sentence corruption chain (M0-base-b), and a sampled hot-path blocking DB call (`events_cog.py:381`).
 

@@ -1,5 +1,8 @@
 # Implementation plan — QA Tracker (volunteer testing crew + currency rewards)
 
+**Status:** stages 0–4 shipped (0–3 merged 2026-07-16, migration 077; stage-4
+auto-archive sweep landed after); stage-4 polish + the bounty idea still open.
+
 Replaces the plain-text `#testing-queue` mirror with interactive **QA cards**:
 one embed per test entry, Pass / Fail / Blocked buttons, verdicts recorded in
 SQLite, testers paid in economy currency, admin oversight on the dashboard.
@@ -18,9 +21,10 @@ Decisions locked with Billy 2026-07-16:
   access to it; no new channel.
 
 Commits reference stages as `QA Tracker (stage N): …`. Each stage: built in a
-worktree, `scripts/gate.py` green, `docs/INDEX.md` + `docs/TESTING_QUEUE.md`
-updated in the same commit, merged to main for live testing before the next
-stage starts. Stages 1–2 only go live after a bot restart (user pushes that
+worktree, `scripts/gate.py` green, `docs/INDEX.md` updated in the same commit,
+merged to main for live testing before the next stage starts. QA cards post
+automatically from the commit's Testing: section (TESTING_QUEUE.md retired
+2026-07-18 — see the addendum below). Stages 1–2 only go live after a bot restart (user pushes that
 button).
 
 ## Layout

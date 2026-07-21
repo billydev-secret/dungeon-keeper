@@ -35,7 +35,7 @@ There's a configured **consent role** (`guess_role_id`). It gates submitting (`/
 
 ### `/guess submit` — the crop pipeline
 
-The submitter uploads an image (via `/guess submit <image>`, or via the sticky prompt's URL-paste modal). Per-user submissions are also rate-limited in-memory to 5 per rolling hour; past that the bot replies "You've hit the submission limit (5 per hour). Please wait a bit before submitting again." (resets on bot restart). The bot then:
+The submitter uploads an image (via `/guess submit <image>`, or via the sticky prompt's URL-paste modal). Per-user submissions are also rate-limited in-memory to `guess_submit_max_per_window` per rolling `guess_submit_window_seconds` (defaults: 5 per hour); past that the bot replies "You've hit the submission limit (N per window). Please wait a bit before submitting again." — the message templates the configured values (resets on bot restart). The bot then:
 
 1. Validates MIME, dimensions (≥ configured min), and file size (≤ configured cap).
 2. Saves the original to an on-disk cache, keyed by round id, retained **only** until first correct solve.
@@ -48,7 +48,7 @@ The submitter uploads an image (via `/guess submit <image>`, or via the sticky p
 
 Clicking **Guess** first checks that the round hasn't been flagged `answer_optout` and that the clicker isn't the submitter, then opens an ephemeral string-select dropdown of opted-in members, paginated 25 per page (◀/▶ buttons appear when there's more than one page). A **🔍 Filter** button opens a modal for a text query; matches are scored (exact name match, then prefix, then substring, then subsequence) and the same select is rebuilt with the filtered/reordered results, with a **✕ Clear** button to reset. Submitters cannot guess on their own rounds.
 
-Guesses are capped per (user, round) at 5 total — past that the bot replies "You're out of guesses on this round (cap: 5)." Below that cap, there's also a per-(user, round) cooldown, configurable (default 60 s; 0 disables it). On cooldown, the guesser sees "⏳ On cooldown — you can guess again <t:...:R>." (a Discord relative timestamp). A wrong guess gets "❌ Not it. Keep trying!".
+Guesses are capped per (user, round) at `guess_max_guesses_per_round` total (default 5) — past that the bot replies "You're out of guesses on this round (cap: N)." with the configured cap. Below that cap, there's also a per-(user, round) cooldown, configurable (default 60 s; 0 disables it). On cooldown, the guesser sees "⏳ On cooldown — you can guess again <t:...:R>." (a Discord relative timestamp). A wrong guess gets "❌ Not it. Keep trying!".
 
 On a **correct first solve**, the bot edits the round's message: the original image (the full submission, not the crop) is attached as a spoiler-prefixed file (click-to-reveal blur), and the embed updates to show "✅ Round #N — Solved!" with the answer, submitter, and "Solved by {user} in N guesses (across M guessers)". The on-disk original is deleted at this point. The Guess button stays live (now labeled "Guess late") for late correct guesses, which get a generic ephemeral "✅ Correct — but someone already solved this one." (it does not name the first solver).
 
@@ -77,12 +77,12 @@ On a **correct first solve**, the bot edits the round's message: the original im
 |---|---|
 | `/guess submit` / `/guess confess` with the Guess role unconfigured | "Guess role is not configured. Ask an admin to set it in the web dashboard." (confess: "Guess is not fully configured...", since it also requires the channel) |
 | `/guess submit` without the consent role | "You need the Guess role to submit." |
-| Submission rate limit hit (>5/hour, per user, in-memory) | "You've hit the submission limit (5 per hour). Please wait a bit before submitting again." |
+| Submission rate limit hit (per user, in-memory, config-backed) | "You've hit the submission limit (N per window). Please wait a bit before submitting again." — templates `guess_submit_max_per_window` / `guess_submit_window_seconds` |
 | Image not an image / too small / too large | "Please submit an image file.", "Image too small. Minimum dimension is Npx.", or "Image too large. Maximum is N MB." |
 | No detections found in the image | **Not an error** — the crop editor opens with a manual default box: "No detections found — manually frame your crop, then ✓ Post." |
 | Submitter clicks Guess on their own round | "You can't guess on your own round." |
 | Guess on a round the answer opted out of | "This round is no longer solvable — the answer opted out." |
-| Guess cap hit (>5 guesses on one round by one user) | "You're out of guesses on this round (cap: 5)." |
+| Guess cap hit (one user exhausts `guess_max_guesses_per_round` on one round) | "You're out of guesses on this round (cap: N)." — templates the configured cap |
 | Guess on cooldown | "⏳ On cooldown — you can guess again <t:...:R>." |
 | Wrong guess | "❌ Not it. Keep trying!" |
 | Late correct guess (already solved) | "✅ Correct — but someone already solved this one." (does not name the first solver) |
@@ -108,6 +108,9 @@ On a **correct first solve**, the bot edits the round's message: the original im
 | `guess_role_id` | unset | Consent / eligibility role. Unlike some other guild features, unset does **not** open submit/confess to Everyone — it blocks both until an admin configures it |
 | `guess_channel_id` | unset | Where crops post and modals launch from |
 | `guess_guess_cooldown_seconds` | `60` | Per-user, per-round cooldown between guesses (`0` disables it) |
+| `guess_max_guesses_per_round` | `5` | Per-user, per-round total guess cap |
+| `guess_submit_max_per_window` | `5` | Per-user submission rate limit — max submissions per rolling window (in-memory, resets on restart) |
+| `guess_submit_window_seconds` | `3600` | Length of the submission rate-limit window |
 | `guess_crop_difficulty` | `medium` | `easy` / `medium` / `hard` — controls crop editor padding, not a per-round choice |
 | `guess_min_image_dimension_px` | `400` | Reject submissions smaller than this on either axis |
 | `guess_max_image_size_mb` | `10` | Hard cap on upload size |

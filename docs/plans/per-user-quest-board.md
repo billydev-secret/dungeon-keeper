@@ -1,6 +1,6 @@
 # Per-user quest board
 
-**Status:** in progress · **Owner:** economy · **Spec:** `docs/economy_spec.md` §4
+**Status:** code shipped (54ac666 board core 2026-07-13; 39e382b, d8f18e4 follow-ups 2026-07-18); prod data rollout still pending · **Owner:** economy · **Spec:** `docs/economy_spec.md` §4
 
 ## Goal
 

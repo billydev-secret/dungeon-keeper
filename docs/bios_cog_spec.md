@@ -1,8 +1,7 @@
 # Dungeon Keeper — Bios Cog Specification
 
-**Target:** Claude Code implementation handoff
-**Stack:** Python · discord.py · aiosqlite · existing DK web dashboard (Discord OAuth)
-**Status:** Functional spec — describes behavior, not implementation. No code.
+**Stack:** Python · discord.py · sync `sqlite3` via `ctx.open_db` · existing DK web dashboard (Discord OAuth)
+**Status:** Reference — describes the built feature's behavior (verified against the code), not its implementation details.
 
 ---
 
@@ -28,7 +27,7 @@ Profile fields and the icebreaker pool are not hardcoded — they are managed en
 
 ## 3. Data model
 
-All tables are guild-aware. Use the existing `dungeonkeeper.db` and `aiosqlite`. Foreign keys reference for clarity; enforce in application logic if PRAGMA foreign_keys is not enabled project-wide.
+All tables are guild-aware, in the existing `dungeonkeeper.db` (accessed with the project's sync `sqlite3` helper, `ctx.open_db`). Foreign keys are referenced for clarity; enforcement is in application logic, as PRAGMA foreign_keys is not enabled project-wide.
 
 ### 3.1 `bio_templates`
 One template per guild, versioned. The active version defines the current field set.
@@ -255,7 +254,7 @@ Slots into the existing self-hosted DK dashboard (Discord OAuth, admin-gated). T
 
 ---
 
-## 11. Implementation defaults (proposed, override as needed)
+## 11. Implementation defaults (as built)
 
 - **Headline mechanism:** explicit `is_headline` flag (chosen over positional convention).
 - **Choice control threshold:** ≤5 choices → buttons; >5 → select menu.

@@ -19,7 +19,9 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 | `/watch list` | Slash | Mod | Show everyone you're currently watching |
 | `/rules-watch digest` | Slash | Mod | Post a summary of all unlabeled digest-tier events |
 | `/rules-watch stats` | Slash | Mod | Show event counts, false-positive rate, and signal firing rates |
-| `/rules-watch label <event_id> <verdict>` | Slash | Mod | Manually label a digest-tier event |
+| `/rules-watch status` | Slash | Mod | Show whether the monitor is enabled and which alert channel is configured (no parameters) |
+| `/rules-watch label <event_id> <verdict> [corrected_rule]` | Slash | Mod | Manually label an event. `verdict` is free text: a leading "v" means confirmed violation, anything else is a false positive. `corrected_rule` optionally records the right rule number when the guard guessed wrong |
+| `Report Rule Violation` | Message context menu | Mod | Modal (optional rule number + note) that inserts a manual `immediate`-tier event for the message and pre-labels it a confirmed violation |
 | Rules Watch enable/disable + alert channel | Web | Admin | Toggle passive monitoring and set the immediate-alert channel (dashboard's Rules Watch config panel — replaced the retired `/rules-watch enable`/`disable`/`set-channel` commands) |
 | AI config (models / prompts / clear) | Web | Admin | Read or override the per-guild model and system prompt for each command |
 | AI prompt test | Web | Admin | Run the current prompt + model against arbitrary input |
@@ -70,11 +72,11 @@ Enabled per guild from the web dashboard's Rules Watch config panel. Fires on ev
 #### Pre-filter gate
 The LLM is only called when at least one cheap heuristic fires:
 - VADER compound score (already computed by the events listener) < −0.25
-- Message content contains a boundary-token keyword
+- A boundary crossing is detected **relationally** (`detect_boundary_crossing`): the *target* signalled stop *to this author* — a direct reply, or following something the author said in-channel within a 6-hour window. Not a lexical keyword match on the message's own text; see §4 of `rules_watch_cog.md`
 - A slur or identity attack is detected lexically
 - The author has sent 3+ consecutive directed messages to the same user with no reply
 
-This gate is hardcoded in the first implementation and will be tuned against historical data in a future pass (see §5a of `rules_watch_cog.md`).
+The gate shipped hardcoded and was then tuned against historical data on 2026-07-20 — see `docs/reviews/2026-07-20-rules-watch-tuning.md` (and §5a of `rules_watch_cog.md` for the protocol).
 
 #### Guard model
 A recall-leaning conversation window prompt — the opposite disposition from the watch-check prompt. The guard model is *meant* to flag generously; false positives cost a moderator glance, false negatives cost a missed violation. It receives the last 8 messages in the channel (oldest first) and returns structured JSON:
@@ -95,7 +97,7 @@ When the guard flags a message, the scorer computes up to eight context signals 
 
 **Up-weights (additive):**
 - Slur or identity attack detected lexically
-- Boundary token in message (`stop`, `no`, `not interested`, recognized safewords)
+- Boundary crossing — the target told this author to stop ("stop", "not interested", "leave me alone"; a bare "no" counts only as a whole-message refusal in a direct reply, and "red"/"yellow" are deliberately **not** treated as safewords — see §4 of `rules_watch_cog.md`)
 - DM-consent pairing recently revoked (within 72 h) followed by directed content
 - Persistence — consecutive directed messages to a target with no reply
 - Target withdrawal — target goes quiet or leaves after the flagged exchange
@@ -123,8 +125,10 @@ For `immediate` and `digest` events with an identified target, a background task
 #### Label capture
 When a moderator clicks **✅ Confirmed violation** or **❌ False positive** on an alert embed, or runs `/rules-watch label`, or confirms/dismisses through the web dashboard:
 - A row is written to `rules_labels` with the verdict, the labeling moderator's ID, and a timestamp.
-- Corrected rule numbers can be supplied via the web dashboard.
+- Corrected rule numbers can be supplied via the web dashboard or `/rules-watch label`'s optional `corrected_rule` parameter.
 - The alert embed's buttons are disabled after labeling.
+
+The mod-only **Report Rule Violation** message context menu is the reverse path: instead of labeling an event the monitor raised, it *creates* one — a manual `immediate`-tier event for the reported message, pre-labeled as a confirmed violation, with an optional rule number and note captured in a modal. These are high-value positive training examples and the primary human-reporting capture path (see §12.4 of `rules_watch_cog.md`).
 
 These labels are the primary long-term output of the system. As confirmed and dismissed events accumulate, the label set describes *this* community's consent norms in a form no public dataset can provide.
 
@@ -235,6 +239,7 @@ Note that `LLAMA_N_CTX` must accommodate the largest prompt any command can buil
 | `watched_users` | (guild_id, watched_user_id, watcher_user_id) — one row per mod/member pair. Persists when watchers leave the guild. |
 | `rules_events` | One row per message that passed the pre-filter and was stored. Columns: all content signals (guard verdict, rule, reason, confidence; slur flag; VADER compound and trajectory), all context signals (mutual count, reciprocity, consent state, DM tier mismatch, thread reciprocity, persistence count, boundary-token flag, withdrawal flag, tenure), priority score, tier, human-readable reason, and the Discord message ID of any posted alert. |
 | `rules_labels` | One row per labeled event: is_violation (bool), corrected rule, labeling mod ID, timestamp, optional notes. |
+| `rules_ledger` | (migration 095) One row per concrete recorded act — matched pattern, matched phrase, 240-char excerpt, date. No score, tier, or verdict; never posts to Discord. Written by the ledger recorder independently of the guard pipeline and surfaced on the dashboard's Rules Watch → Ledger tab. See §12 of `rules_watch_cog.md`. |
 
 **Per guild, in the shared config table:** model defaults, per-command model overrides, per-command prompt overrides, `rules_watch_enabled`, `rules_watch_channel_id`. The wellness prompt/model entries are co-owned with [[wellness-guardian-spec]].
 

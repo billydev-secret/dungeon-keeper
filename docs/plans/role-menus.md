@@ -1,6 +1,6 @@
 # Role Menus
 
-**Status:** in progress · **Owner:** role_menus · **Spec:** `docs/role_menus_spec.md`
+**Status:** built (2026-07-14: 2a75737 routes, 65b5717 panel, 6c62514 tests, 3ffb5b5 nav) · **Owner:** role_menus · **Spec:** `docs/role_menus_spec.md`
 
 ## Goal
 
@@ -93,7 +93,8 @@ voice_master pattern — regex `template` custom_ids, re-registered with
 8. **Tests + docs** — pure-logic tables for the mode engine; db round-trip;
    route tests on `tests/web` fixtures (list/create/update/duplicate/roles
    endpoint/audit rows); health + sync unit tests with fakes. INDEX.md entry
-   (Design spec), TESTING_QUEUE.md live checklist, `scripts/gate.py` green.
+   (Design spec), `scripts/gate.py` green. QA cards post automatically from the
+   commit's Testing: section (TESTING_QUEUE.md retired 2026-07-18).
 
 ## Decisions inherited from the product spec
 

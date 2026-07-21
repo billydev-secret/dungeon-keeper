@@ -81,6 +81,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "streak_shield": ("🛡️", "Streak shield"),
     "emoji_sponsor": ("😀", "Emoji sponsorship"),
     "raffle_ticket": ("🎟️", "Raffle tickets"),
+    "demurrage": ("🐉", "Hoard tax"),
     "wager_stake": ("⚔️", "Game wager staked"),
     "wager_payout": ("🎰", "Game wager won"),
     "wager_refund": ("↩️", "Game wager refunded"),
@@ -391,6 +392,14 @@ def render_memo(entry: RegisterEntry, resolve_name: Callable[[int], str]) -> str
         return "Answered the question of the day"
 
     if kind in ("game_participation", "game_win"):
+        return _KIND_DISPLAY[kind][1]
+
+    if kind == "wager_payout":
+        # The credited amount is already net of any rake; say where the
+        # difference went so the feed's arithmetic visibly adds up.
+        rake = int(meta.get("rake") or 0)
+        if rake:
+            return f"Game wager won — house kept {rake:,}"
         return _KIND_DISPLAY[kind][1]
 
     if kind == "grant":

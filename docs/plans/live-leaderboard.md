@@ -74,8 +74,9 @@ gains "until `<t:R>`") → live feed → "Your progress". Footer becomes
 ## Stage 3 — docs
 
 `economy_spec.md` leaderboard bullet rewritten (live cadence + content),
-manual.html `/bank post-leaderboard` row + cog reply copy, TESTING_QUEUE
-entry, this plan marked built.
+manual.html `/bank post-leaderboard` row + cog reply copy, this plan marked
+built. QA cards post automatically from the commit's Testing: section
+(TESTING_QUEUE.md retired 2026-07-18).
 
 ## Risks
 

@@ -1,6 +1,6 @@
 # XP — Feature Spec
 
-A leveling system for Discord activity. Four independent sources push positive XP into a single per-member ledger: text messages (with a reply bonus), voice-channel participation, reactions received on image posts, and reactions *given* to other members' messages. A handful of anti-grind multipliers attenuate text XP before it lands. Level is a quadratic function of total XP. XP only goes up — there is no decay.
+A leveling system for Discord activity. Five independent sources push positive XP into a single per-member ledger: text messages (with a reply bonus), voice-channel participation, reactions received on image posts, reactions *given* to other members' messages, and economy quest rewards (a quest's `reward_xp` lands as ledger source `quest` — flat, no multipliers, driven by the economy module). A handful of anti-grind multipliers attenuate text XP before it lands. Level is a quadratic function of total XP. XP only goes up — there is no decay.
 
 ## Commands
 
@@ -79,7 +79,7 @@ Crossing level 5 (the configured role-grant level) grants the level-5 role and p
 
 Per-guild settings, all editable from the dashboard XP panel:
 
-- **Algorithm coefficients** — per-word XP, reply bonus, image-reaction stipend, reaction-given stipend, the three cooldown thresholds and their multipliers, duplicate-message multiplier, pair-streak threshold and multiplier, voice-award amount, voice-interval seconds, voice-minimum-humans, manual-grant amount, level-curve factor.
+- **Algorithm coefficients** — per-word XP, reply bonus, image-reaction stipend, reaction-given stipend, the three cooldown thresholds and their multipliers, duplicate-message multiplier, pair-streak threshold and multiplier, voice-award amount, voice-interval seconds, voice-minimum-humans, manual-grant amount, level-curve factor. (Quest-reward XP is not tuned here — each quest's `reward_xp` is set on the economy dashboard and credited flat, no multipliers.)
 - **Level-5 role** — the role granted on reaching level 5.
 - **Level-up log channel** — where per-level-up embeds post.
 - **Level-5 log channel** — where the level-5 milestone embed posts (can match the level-up channel; the role-grant level then de-duplicates).
@@ -90,4 +90,4 @@ Two internal knobs — the voice-tick poll period and the role-grant level itsel
 
 ## Stored data
 
-Per-guild and per-member: a totals row (total XP, cached level, the highest level actually announced, last-message timestamp and fingerprint for the cooldown / duplicate multipliers), an append-only event ledger tagged by source (text, reply, voice, image-react, reaction-given, grant) with optional channel id, a per-(message, reactor) dedup table backing the once-ever reaction-given award, live voice-session state (current channel, qualifying-since timestamp, intervals already paid), a last-activity row for inactivity reports, a processed-messages ledger for backfill idempotency, an append-only role-event audit (every grant and removal the bot sees, not just XP rewards), and a `pending_promotion_posts` row per member whose level-5 post is waiting out the tenure minimum (cleared by the recheck sweep). The pair-streak state lives only in memory and resets on bot restart. No DM data is ever stored.
+Per-guild and per-member: a totals row (total XP, cached level, the highest level actually announced, last-message timestamp and fingerprint for the cooldown / duplicate multipliers), an append-only event ledger tagged by source (text, reply, voice, image-react, reaction-given, grant, quest) with optional channel id, a per-(message, reactor) dedup table backing the once-ever reaction-given award, live voice-session state (current channel, qualifying-since timestamp, intervals already paid), a last-activity row for inactivity reports, a processed-messages ledger for backfill idempotency, an append-only role-event audit (every grant and removal the bot sees, not just XP rewards), and a `pending_promotion_posts` row per member whose level-5 post is waiting out the tenure minimum (cleared by the recheck sweep). The pair-streak state lives only in memory and resets on bot restart. No DM data is ever stored.

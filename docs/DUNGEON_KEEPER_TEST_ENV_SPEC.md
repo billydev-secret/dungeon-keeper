@@ -93,6 +93,12 @@ Every relevant PR carries a short manual-test checklist in the description cover
 
 ## Status
 
+> **Historical snapshot (pre-2026, pre-dates the current test regime).** The
+> tiers below describe the state when this spec was written. For the current
+> testing setup see [web_testing.md](web_testing.md) (dashboard sweeps + browser
+> suite) and the gate description in the repo root `CLAUDE.md`
+> (`scripts/gate.py` — scoped pre-commit tier, full suite in CI/nightly).
+
 - **Implemented** — environment config loader, startup safety rails, banner, dev-only hot reload, the prod-snapshot export script, the remap table and helper, and Tiers 1–2 across the active cogs. The dev-only Beta Tools sidecar (puppets, ghosts, ambient sim, scenarios, historical seed) builds on top — see [[beta-tools-spec]].
 - **Not committed** — the snapshot JSON itself. It must be regenerated against the live prod guild and placed in the repo before dev-side remapping can resolve anything; until then the remap helper logs warnings and returns nothing, which the code handles gracefully.
 - **Not built** — the fixture loader. The flag exists; the loader does not.

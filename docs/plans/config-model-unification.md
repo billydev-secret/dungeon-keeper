@@ -1,6 +1,7 @@
 # Config-model unification — guild_config becomes the single source of truth
 
-Review finding S2-config3 / #12. Status: **planned (2026-07-02).**
+Review finding S2-config3 / #12. Status: **implemented (2026-07-02)** — both
+stages shipped (88d81d6 stage 1, 2e85a52 stage 2).
 
 ## 1. Context & goal
 
