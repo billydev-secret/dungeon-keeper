@@ -19,8 +19,10 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [README.md](../README.md) | Feature overview + slash-command reference — moved to the repo root (currency pass 2026-07-21; broad-strokes accurate, verify individual command signatures against `/help` when it matters) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
+| [auto_role_spec.md](auto_role_spec.md) | Auto-role on join: dashboard-configured role set applied to new human members (apply-time hierarchy/managed filtering; jailed rejoiners skipped) |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
+| [booster_roles_spec.md](booster_roles_spec.md) | Booster cosmetic roles: swatch-synced gradient color roles, persistent claim buttons (boosters only, mutually exclusive), dashboard panel posting |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
 | [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders) |
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
@@ -37,6 +39,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [mod_spec.md](mod_spec.md) | Mod cog (`/help`, `/purge`) — distinct from tools_spec.md |
 | [needle_spec.md](needle_spec.md) | Needle auto-threading (`/close`, `/title`) |
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
+| [photo_challenge_spec.md](photo_challenge_spec.md) | Photo Challenge — standalone scheduled photo prompt (own channel/schedule, `/api/photo-challenge`, card via quote renderer) + post-gated economy payout (flat `reward_photo_post` + stacking `photo_post` quest) |
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
 | [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
@@ -51,6 +54,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo (`/todo` + context menu) |
+| [watch_spec.md](watch_spec.md) | Watch list: `/watch add\|remove\|list` relays a watched member's posts to the mod's DMs, AI-filtered to flagged posts when the local model is up (fail-open on AI error) |
 | [voice_master_spec.md](voice_master_spec.md) | Voice Master (hubs, profiles, trust/block) |
 | [voice_transcription_spec.md](voice_transcription_spec.md) | Voice-clip transcription listener (faster_whisper) — distinct from whisper_spec.md |
 | [whisper_spec.md](whisper_spec.md) | Whisper (anon send, 3-guess reveal) |
