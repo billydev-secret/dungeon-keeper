@@ -21,9 +21,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
-from bot_modules.games_external import logic
+from bot_modules.games_external import logic, parser
 
 log = logging.getLogger(__name__)
 
@@ -64,34 +65,93 @@ class GamesExternalCog(commands.Cog):
             log.exception("External game tracking: failed to warm watch cache")
 
     # ── collection ────────────────────────────────────────────────────────
-    def _is_watched(self, message: discord.Message) -> bool:
+    def _watched_kind(self, message: discord.Message) -> str | None:
+        """The parser kind for a message's (channel, bot), or None if unwatched."""
         if message.guild is None:
-            return False
+            return None
         watches = self._watch.get(message.guild.id)
         if not watches:
-            return False
+            return None
         cfg = watches.get(message.author.id)
-        return cfg is not None and message.channel.id == cfg[0]
+        if cfg is None or message.channel.id != cfg[0]:
+            return None
+        return cfg[1]
 
-    async def _capture(self, message: discord.Message) -> None:
+    async def _capture(self, message: discord.Message, kind: str) -> None:
         try:
             await logic.store_message(self.db, message)
         except Exception:
             log.exception("External game tracking: failed to store message %s", message.id)
+            return
+        # Bank first, then pay: the payout reads the just-banked window back out.
+        if kind == "gamebot_cah" and parser.is_game_over(
+            [e.to_dict() for e in message.embeds]
+        ):
+            await self._pay_cah_game(message)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        if self._is_watched(message):
-            await self._capture(message)
+        kind = self._watched_kind(message)
+        if kind is not None:
+            await self._capture(message, kind)
 
     @commands.Cog.listener()
     async def on_message_edit(
         self, before: discord.Message, after: discord.Message
     ) -> None:
         # Gamebot posts "Loading…" then edits in the real embed — re-capture so
-        # we keep the final content, not the placeholder.
-        if self._is_watched(after):
-            await self._capture(after)
+        # we keep the final content, not the placeholder (and the real Game
+        # over! embed only appears on this edit, so payout fires here).
+        kind = self._watched_kind(after)
+        if kind is not None:
+            await self._capture(after, kind)
+
+    async def _pay_cah_game(self, message: discord.Message) -> None:
+        """Pay participation + a win bonus for a finished Gamebot CAH game.
+
+        Idempotent: ``claim_payout`` reserves the game (keyed on the Game over!
+        message id) before any credit, so a re-captured edit or a restart never
+        double-pays. Reuses ``pay_game_rewards`` so external games pay exactly
+        like native ones (faucet + party_game/game_win quest triggers).
+        """
+        guild = message.guild
+        if guild is None:
+            return
+        try:
+            first = await logic.claim_payout(
+                self.db, message.id, guild.id, "gamebot_cah"
+            )
+            if not first:
+                return
+            rows = await logic.recent_channel_messages(
+                self.db, guild.id, message.channel.id, message.author.id,
+                message.created_at.isoformat(),
+            )
+            parsed = [
+                {"embeds": json.loads(r["embeds_json"] or "[]")} for r in rows
+            ]
+            idx = next(
+                (i for i, r in enumerate(rows) if int(r["message_id"]) == message.id),
+                len(parsed) - 1,
+            )
+            roster, winner = parser.extract_cah_game(
+                parser.current_game_window(parsed, idx)
+            )
+            if not roster:
+                await logic.mark_parsed(self.db, message.id, "skip")
+                return
+            await pay_game_rewards(
+                self.bot, guild.id, sorted(roster),
+                [winner] if winner is not None else [], "cah",
+                occurrence=str(message.id),
+            )
+            await logic.mark_parsed(self.db, message.id, "ok")
+            log.info(
+                "CAH payout: guild %s game %s — %d players, winner %s",
+                guild.id, message.id, len(roster), winner,
+            )
+        except Exception:
+            log.exception("CAH payout failed for message %s", message.id)
 
     # ── config commands: /games track … ───────────────────────────────────
     track = app_commands.Group(

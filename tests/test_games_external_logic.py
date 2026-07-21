@@ -83,3 +83,32 @@ def test_valid_kinds_expose_labels():
     assert "gamebot_cah" in logic.VALID_WATCH_KINDS
     assert "catbot" in logic.VALID_WATCH_KINDS
     assert logic.WATCH_KIND_LABELS["catbot"] == "Cat Bot"
+
+
+@pytest.mark.asyncio
+async def test_claim_payout_is_first_only(gdb):
+    assert await logic.claim_payout(gdb, 555, GUILD, "gamebot_cah") is True
+    # A second claim on the same terminal message never re-pays.
+    assert await logic.claim_payout(gdb, 555, GUILD, "gamebot_cah") is False
+
+
+@pytest.mark.asyncio
+async def test_recent_channel_messages_oldest_first_and_scoped(gdb):
+    async def bank(mid, chan, bot, ts):
+        await gdb.execute(
+            "INSERT INTO games_external_messages "
+            "(message_id, guild_id, channel_id, author_id, created_at, embeds_json) "
+            "VALUES (?, ?, ?, ?, ?, '[]')",
+            (mid, GUILD, chan, bot, ts),
+        )
+
+    await bank(1, CHAN_A, GAMEBOT, "2026-07-21T01:00:00")
+    await bank(2, CHAN_A, GAMEBOT, "2026-07-21T01:00:05")
+    await bank(3, CHAN_A, CATBOT, "2026-07-21T01:00:06")   # other bot
+    await bank(4, CHAN_B, GAMEBOT, "2026-07-21T01:00:07")  # other channel
+    await bank(5, CHAN_A, GAMEBOT, "2026-07-21T01:00:09")  # after the cutoff
+
+    rows = await logic.recent_channel_messages(
+        gdb, GUILD, CHAN_A, GAMEBOT, "2026-07-21T01:00:05"
+    )
+    assert [int(r["message_id"]) for r in rows] == [1, 2]  # scoped + oldest-first

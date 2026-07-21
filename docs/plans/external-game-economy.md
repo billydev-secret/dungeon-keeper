@@ -27,7 +27,7 @@ this is purely the shared plumbing, and it's what lets a mod run
 `/games track watch #cat-bot @Cat Bot kind:catbot` and then `/games track
 sample` to capture a **real Cat Bot catch** for Stage 3.
 
-**Stage 2 — Gamebot CAH parser + payout (#70).** A `parser.py` keyed on
+**Stage 2 — Gamebot CAH parser + payout (#70). SHIPPED.** A `parser.py` keyed on
 `kind`. For `gamebot_cah`, from the confirmed sample:
 - roster = union of member mentions in *Current Standings* (`<@id>: N`) and
   *Submission status* (`✅ <@id> Submitted!`) embeds of the game;

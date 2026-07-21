@@ -126,6 +126,44 @@ async def store_message(db, message: discord.Message) -> None:
     )
 
 
+async def claim_payout(db, message_id: int, guild_id: int, kind: str) -> bool:
+    """Reserve the one-time payout for a terminal message. True on first claim.
+
+    Backs the "pay each external game exactly once" guarantee independently of
+    ``parse_status`` (which edits reset). A second caller for the same message
+    gets False and must not pay.
+    """
+    cur = await db.execute(
+        "INSERT OR IGNORE INTO games_external_payouts (message_id, guild_id, kind) "
+        "VALUES (?, ?, ?)",
+        (message_id, guild_id, kind),
+    )
+    return cur.rowcount > 0
+
+
+async def recent_channel_messages(
+    db, guild_id: int, channel_id: int, author_id: int, before_iso: str, limit: int = 300
+) -> list[Mapping[str, Any]]:
+    """Banked messages for one (guild, channel, bot) at//before a timestamp,
+    oldest-first — the window a parser walks to reconstruct a finished game."""
+    rows = await db.fetchall(
+        "SELECT message_id, created_at, content, embeds_json FROM games_external_messages "
+        "WHERE guild_id = ? AND channel_id = ? AND author_id = ? AND created_at <= ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (guild_id, channel_id, author_id, before_iso, limit),
+    )
+    return list(reversed(list(rows)))
+
+
+async def mark_parsed(db, message_id: int, status: str) -> None:
+    """Stamp a banked message's parse outcome ('ok' | 'skip' | 'error')."""
+    await db.execute(
+        "UPDATE games_external_messages SET parse_status = ?, "
+        "parsed_at = CURRENT_TIMESTAMP WHERE message_id = ?",
+        (status, message_id),
+    )
+
+
 async def count_messages(db, guild_id: int, bot_user_id: int | None = None) -> int:
     """How many raw messages we've banked for a guild (optionally one bot)."""
     if bot_user_id is None:
