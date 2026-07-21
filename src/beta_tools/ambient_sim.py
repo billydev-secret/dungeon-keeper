@@ -6,15 +6,26 @@ import logging
 import random
 import time
 from collections import deque
-from typing import Optional
+from typing import Optional, Protocol
 
 import discord
 
 from beta_tools.config import BetaConfig
-from beta_tools.markov import MarkovChain
 from beta_tools.puppet_manager import PuppetHandle, PuppetManager
 
 log = logging.getLogger("beta_tools.ambient_sim")
+
+
+class TextSource(Protocol):
+    """Duck type for an ambient-message generator (MarkovChain, SillyTextSource)."""
+
+    @property
+    def corpus_size(self) -> int: ...
+
+    @property
+    def vocab_size(self) -> int: ...
+
+    def generate(self, length_bias: str = ...) -> str: ...
 
 _BASE_INTERVAL: float = 15.0
 _BURST_INTERVAL: float = 5.0
@@ -27,7 +38,7 @@ _LOOP_ERROR_SLEEP: float = 30.0
 class AmbientSim:
     def __init__(
         self,
-        chain: MarkovChain,
+        chain: TextSource,
         puppet_manager: PuppetManager,
         guild: discord.Guild,
         beta_cfg: BetaConfig,
