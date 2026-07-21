@@ -379,7 +379,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
-| `photo_react` | a member's image post in the configured Photo Challenge channel draws `react_threshold` distinct human reactions (default 5; the author and bots never count) | `EconomyCog._on_photo_react` (raw-reaction listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_react:<local_day>` (once/day by construction) |
+| `photo_post` | a member posts an image in the configured Photo Challenge channel (the post itself pays — no reactions needed) | `EconomyCog._on_photo_post` (on_message listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_post:<local_day>` (once/day by construction) |
 | `party_game` | party game completes with the member in the roster | `pay_game_rewards` via `game_manager.end_game` | `party_game:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
@@ -621,24 +621,20 @@ in code yet —, invite retention, counted quests, monthly cadence; confessions
 rejected for anonymity). JS labels shared with the quest form via
 `economy-sources-shared.js`.
 
-**Photo plumbing:** payout is reaction-gated on member posts, not replies to the
-card. `EconomyCog._on_photo_react` (a `on_raw_reaction_add` listener) fires when
-an image post in the configured photo channel has drawn `react_threshold`
-distinct non-bot reactors other than the author. The expensive reactor fetch is
-guarded: a TTL-cached channel check, a DB eligibility pre-check (economy on,
-`photo_react` source on, ≥1 active `photo_react` quest), a raw-total prune, and a
-per-process `_photo_paid` set that stops recounting a post once it has crossed.
-The occurrence key is the guild-local day, so a member earns at most once per day
-regardless of how many photos cross. The image check is content-type with a
-filename-extension fallback. The channel is the standalone Photo Challenge
-feature's dedicated channel — `channel_id` in `games_game_config.options` (game
-type `photo`), owned by the **Photo Challenge → Setup** panel (`/api/photo-
-challenge/config`); payouts and auto-react are dormant until it's set. This
-feature adds two options to that same panel/blob: **`react_threshold`** (distinct
-reactors, default 5) and **`auto_react`** (an emoji the bot seeds on each photo so
-members can one-tap pile on — the bot's own reaction never counts). *(The old
-reply model and its `econ_photo_cards` registry are retired; migration 079
-renames existing `photo_reply` quests and income-source rows to `photo_react`.)*
+**Photo plumbing:** payout fires on the post itself, not on replies to the card
+and not on reactions. `EconomyCog._on_photo_post` (an `on_message` listener) fires
+when a member posts an image in the configured photo channel. Guards are
+cheapest-first: a guild/bot check, an image check (content-type with a
+filename-extension fallback), a TTL-cached channel check, then a DB eligibility
+pre-check (economy on, `photo_post` source on, ≥1 active `photo_post` quest). The
+occurrence key is the guild-local day, so a member earns at most once per day
+regardless of how many photos they post — the claim collision dedups. The channel
+is the standalone Photo Challenge feature's dedicated channel — `channel_id` in
+`games_game_config.options` (game type `photo`), owned by the **Photo Challenge →
+Setup** panel (`/api/photo-challenge/config`); the payout is dormant until it's
+set. *(The old reaction-gated model and its `react_threshold`/`auto_react` knobs
+are retired; migration 099 renames existing `photo_react` quests and income-source
+rows to `photo_post`.)*
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered

@@ -34,8 +34,6 @@ def test_config_default(open_client):
         "enabled": True,
         "channel_id": "",
         "ping_role_id": "",
-        "react_threshold": 5,
-        "auto_react": "",
     }
 
 
@@ -46,8 +44,6 @@ def test_config_roundtrip(open_client):
             "channel_id": "555",
             "ping_role_id": "777",
             "enabled": False,
-            "react_threshold": 3,
-            "auto_react": "📸",
         },
     )
     assert resp.status_code == 200
@@ -56,8 +52,6 @@ def test_config_roundtrip(open_client):
         "enabled": False,
         "channel_id": "555",
         "ping_role_id": "777",
-        "react_threshold": 3,
-        "auto_react": "📸",
     }
 
 

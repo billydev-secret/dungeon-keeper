@@ -58,10 +58,10 @@ PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2, "monthly": 2}
 # dashboard describes it). On an *event* quest the trigger pays per
 # occurrence (period "<kind>:<occurrence>", no time gate); on a daily/weekly
 # quest it auto-claims the ordinary calendar period — "do it once today/this
-# week". The firing side lives with each module: the photo-reply listener in
+# week". The firing side lives with each module: the photo-post listener in
 # EconomyCog, the game-completion hooks in economy/game_rewards.py.
 TRIGGER_KINDS: dict[str, str] = {
-    "photo_react": "Post a photo in the Photo Challenge channel that earns reactions",
+    "photo_post": "Post a photo in the Photo Challenge channel",
     "party_game": "Finish a party game",
     "duel": "Finish a duel / PvP challenge",
     "risky_roll": "Take a Risky Roll dare",
@@ -111,7 +111,7 @@ TRIGGER_KINDS: dict[str, str] = {
 # Longer per-kind copy for the Income Sources page: what fires it and what
 # the event-quest occurrence key means for repeat payouts.
 TRIGGER_KIND_INFO: dict[str, str] = {
-    "photo_react": "An image posted in the configured Photo Challenge channel that draws the required distinct reactions (default 5, author + bots excluded). Event cadence: once per guild-local day.",
+    "photo_post": "Posting an image in the configured Photo Challenge channel — the post itself pays, no reactions needed. Event cadence: once per guild-local day.",
     "party_game": "Any party game completing with the member in the roster. Event cadence: once per game.",
     "duel": "A duel/PvP game resolving (chicken, hot potato, musical chairs, pressure cooker, quickdraw). Event cadence: once per match.",
     "risky_roll": "Pressing Roll in a Risky Rolls round. Event cadence: once per round.",

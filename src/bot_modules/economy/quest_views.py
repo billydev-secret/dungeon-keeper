@@ -68,7 +68,7 @@ QUEST_STATE_LABEL = {
     "pending": "⏳ Awaiting sign-off",
     "done": "☑️ Completed this period",
     "trigger": "🗣️ Completes automatically when you say its trigger phrase",
-    "photo_react": "📸 Completes automatically when your Photo Challenge post earns enough reactions",
+    "photo_post": "📸 Completes automatically when you post a photo in the Photo Challenge channel",
     "party_game": "🎲 Completes automatically when you finish a party game",
     "duel": "⚔️ Completes automatically when you finish a 1v1 duel",
     "risky_roll": "🎰 Completes automatically when you take a Risky Roll dare",

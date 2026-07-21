@@ -1268,14 +1268,10 @@ class EconomyCog(commands.Cog):
         self._guide_ref: dict[int, tuple[float, int, int]] = {}
         self._restick_tasks: dict[int, asyncio.Task[None]] = {}
         self._guide_locks: dict[int, asyncio.Lock] = {}
-        # Photo Challenge game options, TTL-cached so the reaction/auto-react
-        # listeners cost a dict lookup, not a DB read, per event:
-        # guild_id → (monotonic expiry, (channel_id, threshold, auto_react)).
-        self._photo_opts: dict[int, tuple[float, tuple[int, int, str]]] = {}
-        # message_ids we've already paid a photo_react for this process — bounds
-        # the (Discord-API-heavy) distinct-reactor recount once a post has paid.
-        # The DB claim collision is the durable guard; this just avoids re-work.
-        self._photo_paid: set[int] = set()
+        # Photo Challenge channel id, TTL-cached so the on_message listener
+        # costs a dict lookup, not a DB read, for every message in the guild:
+        # guild_id → (monotonic expiry, channel_id).
+        self._photo_opts: dict[int, tuple[float, int]] = {}
         super().__init__()
 
     async def cog_unload(self) -> None:
@@ -2851,21 +2847,17 @@ class EconomyCog(commands.Cog):
         except discord.HTTPException:
             log.debug("econ trigger: failed to react", exc_info=True)
 
-    # ── photo-react event quest (a Photo Challenge post that earns reactions) ──
+    # ── photo-post event quest (posting a photo in the Photo Challenge channel) ──
 
-    _PHOTO_OPTS_TTL = 60.0  # game-option cache staleness bound (seconds)
-    _PHOTO_THRESHOLD_DEFAULT = 5  # distinct human reactors, when unconfigured
+    _PHOTO_OPTS_TTL = 60.0  # channel-id cache staleness bound (seconds)
 
-    def _read_photo_opts(self, guild_id: int) -> tuple[int, int, str]:
-        """(channel_id, react_threshold, auto_react_emoji) from config.
+    def _read_photo_channel(self, guild_id: int) -> int:
+        """The configured Photo Challenge channel id, or 0 when unset.
 
-        ``channel_id`` is 0 when the admin hasn't picked a Photo Challenge
-        channel — both listeners no-op then, so the mechanic is dormant until
-        one is set. The threshold clamps to a floor of 1; ``auto_react`` is ''
-        (off) unless set. Read from ``games_game_config`` (game_type 'photo'),
-        the same options blob the standalone Photo Challenge Setup panel owns:
-        ``channel_id`` is its dedicated channel; ``react_threshold`` and
-        ``auto_react`` are this feature's additions to that panel.
+        0 means the admin hasn't picked a Photo Challenge channel — the
+        listener no-ops then, so the mechanic is dormant until one is set.
+        Read from ``games_game_config`` (game_type 'photo'), the same
+        ``channel_id`` the standalone Photo Challenge Setup panel owns.
         """
         with self.ctx.open_db() as conn:
             row = conn.execute(
@@ -2879,114 +2871,65 @@ class EconomyCog(commands.Cog):
                 opts = json.loads(row[0])
             except (ValueError, TypeError):
                 opts = {}
+        try:
+            return int(str(opts.get("channel_id")).strip() or 0)
+        except (ValueError, TypeError):
+            return 0
 
-        def _as_int(val: object) -> int:
-            try:
-                return int(str(val).strip() or 0)
-            except (ValueError, TypeError):
-                return 0
+    async def _photo_channel(self, guild_id: int) -> int:
+        """TTL-cached ``_read_photo_channel`` — one DB read per guild per TTL.
 
-        channel_id = _as_int(opts.get("channel_id"))
-        threshold = max(
-            1, _as_int(opts.get("react_threshold")) or self._PHOTO_THRESHOLD_DEFAULT
-        )
-        emoji = str(opts.get("auto_react") or "").strip()
-        return channel_id, threshold, emoji
-
-    async def _photo_options(self, guild_id: int) -> tuple[int, int, str]:
-        """TTL-cached ``_read_photo_opts`` — one DB read per guild per TTL.
-
-        Keeps the reaction listener (which fires for every reaction anywhere)
-        and the auto-react listener from touching the DB on each event.
+        Keeps the on_message listener (which fires for every message in the
+        guild) off the DB on each event; only image posts in the configured
+        channel go past this to the eligibility check.
         """
         now = time.monotonic()
         cached = self._photo_opts.get(guild_id)
         if cached is not None and cached[0] > now:
             return cached[1]
         try:
-            opts = await asyncio.to_thread(self._read_photo_opts, guild_id)
+            channel_id = await asyncio.to_thread(self._read_photo_channel, guild_id)
         except Exception:
-            log.exception("econ photo: options read failed in guild %s", guild_id)
-            return 0, self._PHOTO_THRESHOLD_DEFAULT, ""
-        self._photo_opts[guild_id] = (now + self._PHOTO_OPTS_TTL, opts)
-        return opts
+            log.exception("econ photo: channel read failed in guild %s", guild_id)
+            return 0
+        self._photo_opts[guild_id] = (now + self._PHOTO_OPTS_TTL, channel_id)
+        return channel_id
 
     @commands.Cog.listener("on_message")
-    async def _on_photo_autoreact(self, message: discord.Message) -> None:
-        """Seed the configured reaction on image posts in the photo channel.
+    async def _on_photo_post(self, message: discord.Message) -> None:
+        """Pay the photo-post event quest when a member posts an image.
 
-        A one-tap target so members can pile on toward the react threshold.
-        The bot's own reaction never counts (the distinct-reactor tally
-        excludes bots), so this only lowers friction — it can't inflate a
-        member's own count.
+        Eligibility: an image attachment posted by a real member in the
+        configured Photo Challenge channel — no reactions required, the post
+        itself earns it. Fires once per member per guild-local day (occurrence
+        ``photo_post:<local_day>``, like voice_session/boost); the claim
+        collision dedups, so posting several photos in a day still pays once.
+        Guards cheapest-first: guild/bot check, image check, TTL-cached channel
+        gate, then a DB eligibility pre-check (economy on, source on, ≥1 active
+        photo_post quest).
         """
         if message.guild is None or message.author.bot:
             return
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return
         if not _has_image_attachment(message):
             return
-        channel_id, _threshold, emoji = await self._photo_options(message.guild.id)
-        if not emoji or message.channel.id != channel_id:
+        channel_id = await self._photo_channel(message.guild.id)
+        if channel_id == 0 or message.channel.id != channel_id:
             return
+
+        guild_id = message.guild.id
         try:
-            await message.add_reaction(emoji)
-        except discord.HTTPException:
-            log.debug("econ photo: auto-react failed", exc_info=True)
-
-    @commands.Cog.listener("on_raw_reaction_add")
-    async def _on_photo_react(self, payload: discord.RawReactionActionEvent) -> None:
-        """Pay the photo-react event quest when a post earns enough reactors.
-
-        Eligibility: an image post by a real member in the configured Photo
-        Challenge channel that has drawn ``react_threshold`` distinct human
-        reactors (the author and bots never count). Fires once per member per
-        guild-local day (occurrence ``photo_react:<local_day>``, like
-        voice_session/boost); the claim collision dedups. The distinct count
-        is Discord-API-heavy, so it runs only behind a cheap cached channel
-        gate, a DB eligibility pre-check, a raw-total prune, and a per-process
-        ``_photo_paid`` skip once the post has crossed and paid.
-        """
-        if payload.guild_id is None:
-            return
-        channel_id, threshold, _emoji = await self._photo_options(payload.guild_id)
-        if channel_id == 0 or payload.channel_id != channel_id:
-            return
-        if payload.message_id in self._photo_paid:
-            return
-
-        # Cheap DB gate before the expensive reactor fetch: economy on, source
-        # on, and at least one active photo_react quest to pay.
-        try:
-            eligible = await asyncio.to_thread(self._photo_eligible, payload.guild_id)
+            eligible = await asyncio.to_thread(self._photo_eligible, guild_id)
         except Exception:
             log.exception(
-                "econ photo: eligibility check failed in guild %s", payload.guild_id
+                "econ photo: eligibility check failed in guild %s", guild_id
             )
             return
         if not eligible:
             return
 
-        channel = self.bot.get_channel(payload.channel_id)
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            return
-        try:
-            message = await channel.fetch_message(payload.message_id)
-        except discord.HTTPException:
-            return
-        author = message.author
-        if author.bot or not _has_image_attachment(message):
-            return
-        # Distinct reactors can't exceed the raw total — prune before fetching
-        # per-emoji reactor lists.
-        if sum(r.count for r in message.reactions) < threshold:
-            return
-        if await self._distinct_reactors(message, exclude_id=author.id) < threshold:
-            return
-
-        guild = self.bot.get_guild(payload.guild_id)
-        member = guild.get_member(author.id) if guild is not None else None
-        if member is None:
-            return
-        guild_id = payload.guild_id
         booster = member.premium_since is not None
 
         def _claim():
@@ -3000,7 +2943,7 @@ class EconomyCog(commands.Cog):
                     conn,
                     settings,
                     guild_id,
-                    "photo_react",
+                    "photo_post",
                     member.id,
                     local_day=day,
                     occurrence=day,
@@ -3014,9 +2957,6 @@ class EconomyCog(commands.Cog):
         except Exception:
             log.exception("econ photo: claim failed in guild %s", guild_id)
             return
-        # Crossed the threshold with a quest live — no more reactions can change
-        # the outcome for this post today, so stop recounting it this process.
-        self._photo_paid.add(payload.message_id)
         if result is None:
             return
         settings, fired = result
@@ -3024,44 +2964,24 @@ class EconomyCog(commands.Cog):
             await self._announce_quest_claim(message, member, settings, outcome)
 
     def _photo_eligible(self, guild_id: int) -> bool:
-        """True when a photo-react payout is possible in this guild right now.
+        """True when a photo-post payout is possible in this guild right now.
 
-        Economy enabled, the photo_react income source on, and ≥1 active
-        photo_react quest. Gates the expensive distinct-reactor fetch so a
-        channel with no quest configured never triggers reactor lookups.
+        Economy enabled, the photo_post income source on, and ≥1 active
+        photo_post quest. Gates the per-post claim so a channel with no quest
+        configured never opens a DB write transaction.
         """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             if not settings.enabled:
                 return False
-            if not source_enabled(conn, guild_id, "photo_react"):
+            if not source_enabled(conn, guild_id, "photo_post"):
                 return False
             row = conn.execute(
                 "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
-                " AND trigger_kind = 'photo_react' LIMIT 1",
+                " AND trigger_kind = 'photo_post' LIMIT 1",
                 (guild_id,),
             ).fetchone()
             return row is not None
-
-    async def _distinct_reactors(
-        self, message: discord.Message, *, exclude_id: int
-    ) -> int:
-        """Count distinct non-bot reactors on a message, minus ``exclude_id``.
-
-        Unions the reactor sets across every emoji, so five different people
-        with five different emoji count as five (and one person spamming five
-        emoji counts as one). ``exclude_id`` drops the author's own reaction.
-        """
-        seen: set[int] = set()
-        for reaction in message.reactions:
-            try:
-                async for user in reaction.users():
-                    if user.bot or user.id == exclude_id:
-                        continue
-                    seen.add(user.id)
-            except discord.HTTPException:
-                log.debug("econ photo: reactor fetch failed", exc_info=True)
-        return len(seen)
 
     @commands.Cog.listener("on_member_update")
     async def _on_boost_started(
