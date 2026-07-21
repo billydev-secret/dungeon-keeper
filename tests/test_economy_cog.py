@@ -17,6 +17,7 @@ from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     create_quest,
+    set_income_source,
     set_quest_active,
 )
 from bot_modules.cogs.economy_cog import _NICK_FORBIDDEN, _custom_name_confirmation
@@ -2105,34 +2106,73 @@ def _photo_msg(
     return msg
 
 
+def _disable_photo_source(db) -> None:
+    with open_db(db) as conn:
+        set_income_source(conn, GUILD_ID, "photo_post", False)
+        conn.commit()
+
+
 @pytest.mark.asyncio
-async def test_photo_post_pays_once_per_day(ctx, db):
-    _enable(db)
+async def test_photo_post_participation_pays_without_quest(ctx, db):
+    # The flat participation award pays on the post itself — no quest needed.
+    _enable(db)  # reward_photo_post defaults to 5
+    _set_photo_config(db)
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    msg = _photo_msg(author=member)
+    await cog._on_photo_post(msg)
+    assert _balance(db, 501) == 5
+    msg.add_reaction.assert_awaited_once_with("✅")
+
+    # A second photo the same day pays nothing more — once per local day.
+    await cog._on_photo_post(_photo_msg(author=member, message_id=9200))
+    assert _balance(db, 501) == 5
+
+
+@pytest.mark.asyncio
+async def test_photo_post_quest_stacks_on_participation(ctx, db):
+    # Participation (5) + an active photo_post quest (10) both pay = 15.
+    _enable(db)  # reward_photo_post 5
     _set_photo_config(db)
     _mk_quest(db, qtype="event", trigger_kind="photo_post", reward=10, title="Snap it")
     cog = _make_cog(ctx)
     member = _member(member_id=501)
 
-    # An image post in the channel pays on its own — no reactions needed.
     msg = _photo_msg(author=member)
     await cog._on_photo_post(msg)
-    assert _balance(db, 501) == 10
+    assert _balance(db, 501) == 15
+    # The quest outcome carries the ✅ (participation doesn't add a second one).
     msg.add_reaction.assert_awaited_once_with("✅")
 
-    # A second photo the same day pays nothing more — the day is the key.
-    another = _photo_msg(author=member, message_id=9200)
-    await cog._on_photo_post(another)
-    assert _balance(db, 501) == 10
+    # A second photo the same day pays nothing more — both sides cap per day.
+    await cog._on_photo_post(_photo_msg(author=member, message_id=9200))
+    assert _balance(db, 501) == 15
 
 
 @pytest.mark.asyncio
-async def test_photo_post_gated_by_channel_image_and_active_quest(ctx, db):
-    _enable(db)
+async def test_photo_post_no_payout_when_source_disabled(ctx, db):
+    # The photo_post income-source toggle gates both payouts.
+    _enable(db)  # participation 5
+    _set_photo_config(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_post", reward=10)
+    _disable_photo_source(db)
+    cog = _make_cog(ctx)
+    msg = _photo_msg(author=_member(member_id=501))
+    await cog._on_photo_post(msg)
+    assert _balance(db, 501) == 0
+    msg.add_reaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_photo_post_gated_by_channel_and_image(ctx, db):
+    # Participation off so this isolates the channel/image/quest gating.
+    _enable(db, reward_photo_post=0)
     _set_photo_config(db)
     cog = _make_cog(ctx)
     member = _member(member_id=501)
 
-    # No active photo_post quest yet → the eligibility gate short-circuits.
+    # No active photo_post quest and no participation → the gate short-circuits.
     await cog._on_photo_post(_photo_msg(author=member))
     assert _balance(db, 501) == 0
 
@@ -2151,19 +2191,20 @@ async def test_photo_post_gated_by_channel_image_and_active_quest(ctx, db):
     )
     assert _balance(db, 501) == 0
 
-    # A real image post in the channel pays.
+    # A real image post in the channel pays the quest (participation off).
     await cog._on_photo_post(_photo_msg(author=member, message_id=9402))
     assert _balance(db, 501) == 10
 
 
 @pytest.mark.asyncio
 async def test_photo_post_ignores_bot_author(ctx, db):
-    _enable(db)
+    _enable(db)  # participation on
     _set_photo_config(db)
     _mk_quest(db, qtype="event", trigger_kind="photo_post", reward=10)
     cog = _make_cog(ctx)
 
-    # A bot posting an image never earns (the author.bot guard).
+    # A bot posting an image never earns (the author.bot guard) — neither the
+    # participation award nor the quest.
     bot_author = _member(member_id=777, is_bot=True)
     await cog._on_photo_post(_photo_msg(author=bot_author))
     assert _balance(db, 777) == 0
@@ -2182,7 +2223,8 @@ async def test_photo_post_noop_when_economy_disabled(ctx, db):
 
 @pytest.mark.asyncio
 async def test_photo_post_signoff_files_pending_claim(ctx, db):
-    _enable(db)
+    # Participation off so the balance isolates the sign-off gating.
+    _enable(db, reward_photo_post=0)
     qid = _mk_quest(
         db, qtype="event", trigger_kind="photo_post", reward=10, signoff=1
     )

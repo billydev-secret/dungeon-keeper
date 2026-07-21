@@ -19,6 +19,7 @@ const FAUCET_FIELDS = [
   ["reward_qotd", "QOTD reply (flat award)"],
   ["reward_game_participation", "Game participation"],
   ["reward_game_win", "Game win bonus"],
+  ["reward_photo_post", "Photo Challenge post (flat award)"],
   ["xp_per_coin", "XP → coin conversion (XP per coin)"],
 ];
 const FLOAT_FAUCETS = new Set(["xp_per_coin"]);

@@ -97,6 +97,7 @@ def test_put_partial_update_roundtrips(authed_client, fake_ctx):
             "bank_channel_id": 555,
             "manager_role_id": 777,
             "reward_qotd": 25,
+            "reward_photo_post": 8,
         },
     )
     assert resp.status_code == 200
@@ -111,6 +112,7 @@ def test_put_partial_update_roundtrips(authed_client, fake_ctx):
     assert cfg.bank_channel_id == 555
     assert cfg.manager_role_id == 777
     assert cfg.reward_qotd == 25
+    assert cfg.reward_photo_post == 8
     # Untouched fields keep their defaults.
     assert cfg.wallet_name == "Wallet"
 

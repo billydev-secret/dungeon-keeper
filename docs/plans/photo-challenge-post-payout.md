@@ -5,29 +5,38 @@
 ## Goal
 
 Reward members for *posting* photos in a dedicated Photo Challenge channel. The
-post itself pays — no replies to the card, no reactions required. Capped once per
-guild-local day per member.
+post itself pays — no replies to the card, no reactions required. Two stacking
+payouts, each capped once per guild-local day per member: a **flat participation
+award** for showing up, plus the **`photo_post` quest** bonus on top.
 
 ## Decisions (from the requester)
 
 - **Trigger:** an image post (an attachment Discord recognises as an image) in the
   configured photo channel. Reactions and replies are irrelevant.
-- **Cap:** **once per guild-local day** per member (occurrence key is the day,
-  like `voice_session` / `boost`); the claim collision dedups, so several photos
-  in a day still pay once.
+- **Two payouts:** a flat participation award (default **5**, no quest required)
+  **plus** the `photo_post` quest reward if a quest is active — they stack.
+- **Cap:** each side pays **once per guild-local day** per member; posting several
+  photos in a day pays each side once.
 - **Channel:** the standalone Photo Challenge feature's **dedicated channel**
   (`channel_id`) — the payout is dormant until it's set.
 
 ## Mechanism
 
-Reuses the event-quest engine. Trigger kind `photo_post`.
+Two independent payouts in one `on_message` listener, `EconomyCog._on_photo_post`.
+Guards, cheapest first: guild/bot check → image check (content-type with a
+filename-extension fallback) → TTL-cached channel check → DB eligibility pre-check
+(economy on, `photo_post` source on, and something to pay). Then:
 
-- `EconomyCog._on_photo_post` — `on_message` listener. Guards, cheapest first:
-  guild/bot check → image check (content-type with a filename-extension fallback)
-  → TTL-cached channel check → DB eligibility pre-check (economy on, `photo_post`
-  source on, ≥1 active `photo_post` quest) → `fire_trigger_quests` with
-  `occurrence = local_day`, scoped to the photo channel. Announces ✅ (paid) or 📝
-  (sign-off filed) on the member's photo.
+1. **Flat participation award** — `EconSettings.reward_photo_post` (default 5,
+   0 = off) via `apply_credit(kind="photo_post")`, deduped once per local day by
+   an `INSERT OR IGNORE INTO econ_photo_rewards (guild_id, user_id, local_day)`
+   anchor riding the credit's transaction (mirrors the login faucet).
+2. **Quest bonus** — `fire_trigger_quests(..., "photo_post", occurrence=day)`,
+   scoped to the photo channel, deduped on `econ_quest_claims`.
+
+The `photo_post` income-source toggle gates both. Announces ✅ (paid) or 📝
+(sign-off filed) on the member's photo — the quest outcome carries the react, or
+the flat award adds a ✅ when no quest fired.
 - Retired from the previous model: the `on_raw_reaction_add` listener
   (`_on_photo_react`), the distinct-reactor count (`_distinct_reactors`), the
   `_photo_paid` recount-guard, the auto-react seeder (`_on_photo_autoreact`), and
@@ -36,16 +45,23 @@ Reuses the event-quest engine. Trigger kind `photo_post`.
 
 ## Config surface
 
-Standalone **Photo Challenge → Setup** panel (`photo-challenge.js` +
-`photo_challenge.py`, storing into `games_game_config.options`, game_type
-`photo`). The dedicated **`channel_id`** is all this mechanic reads; the reward
-itself stays a `photo_post` quest in the Economy Quests studio.
+- **Photo Challenge → Setup** panel (`photo-challenge.js` + `photo_challenge.py`,
+  `games_game_config.options`, game_type `photo`) — owns the dedicated
+  **`channel_id`**, all this mechanic reads for *where*.
+- **Economy → Income Sources** page — the flat **`reward_photo_post`** rate is
+  edited here alongside the other faucets (admin-gated `PUT /economy/config`),
+  and the `photo_post` on/off source toggle lives on the same page.
+- **Economy → Quests** studio — the optional stacking bonus stays a `photo_post`
+  quest with its own reward.
 
-## Migration
+## Migrations
 
-`099_photo_post_trigger.sql` rewrites `econ_quests.trigger_kind` and
-`econ_income_sources.source` from `photo_react` to `photo_post`, so the live quest
-(main guild id 17, "Picture This") keeps working under the new name. Idempotent.
+- `099_photo_post_trigger.sql` rewrites `econ_quests.trigger_kind` and
+  `econ_income_sources.source` from `photo_react` to `photo_post`, so the live
+  quest (main guild id 17, "Picture This") keeps working under the new name.
+  Idempotent.
+- `101_econ_photo_rewards.sql` adds the `econ_photo_rewards` once-per-day dedup
+  anchor for the flat participation award.
 
 ## History
 

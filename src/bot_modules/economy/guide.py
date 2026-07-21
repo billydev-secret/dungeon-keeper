@@ -97,6 +97,7 @@ def build_guide_embed(
         ("Play a server game", f"{emoji} {settings.reward_game_participation}"),
         ("Win it", f"{emoji} {settings.reward_game_win}"),
         ("Answer the QOTD", f"{emoji} {settings.reward_qotd}"),
+        ("Post in the Photo Challenge", f"{emoji} {settings.reward_photo_post}"),
     ]
     width = max(len(label) for label, _ in earn_rows)
     earn_lines = [

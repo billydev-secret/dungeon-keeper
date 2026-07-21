@@ -2960,16 +2960,18 @@ class EconomyCog(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _on_photo_post(self, message: discord.Message) -> None:
-        """Pay the photo-post event quest when a member posts an image.
+        """Pay for an image posted in the Photo Challenge channel.
 
-        Eligibility: an image attachment posted by a real member in the
-        configured Photo Challenge channel — no reactions required, the post
-        itself earns it. Fires once per member per guild-local day (occurrence
-        ``photo_post:<local_day>``, like voice_session/boost); the claim
-        collision dedups, so posting several photos in a day still pays once.
-        Guards cheapest-first: guild/bot check, image check, TTL-cached channel
-        gate, then a DB eligibility pre-check (economy on, source on, ≥1 active
-        photo_post quest).
+        Two independent payouts, both once per guild-local day:
+        - a flat **participation award** (``reward_photo_post``) on the post
+          itself — no quest required; and
+        - the **photo_post quest** bonus on top, if one is active.
+        The post itself earns — no reactions needed. Guards cheapest-first:
+        guild/bot check, image check, TTL-cached channel gate, then a DB
+        eligibility pre-check (economy on, source on, and something to pay).
+        The flat award dedups on ``econ_photo_rewards``; the quest dedups on
+        its own claim (occurrence ``photo_post:<local_day>``), so posting
+        several photos in a day still pays each side once.
         """
         if message.guild is None or message.author.bot:
             return
@@ -3000,8 +3002,32 @@ class EconomyCog(commands.Cog):
                 settings = load_econ_settings(conn, guild_id)
                 if not settings.enabled:
                     return None
+                if not source_enabled(conn, guild_id, "photo_post"):
+                    return None
                 offset = get_tz_offset_hours(conn, guild_id)
                 day = local_day_for(time.time(), offset)
+                # Flat participation award — once per local day. The
+                # INSERT OR IGNORE anchor rides this transaction, so concurrent
+                # posts pay it at most once (mirrors the login faucet).
+                participation = 0
+                if settings.reward_photo_post > 0:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO econ_photo_rewards"
+                        " (guild_id, user_id, local_day) VALUES (?, ?, ?)",
+                        (guild_id, member.id, day),
+                    )
+                    if (cur.rowcount or 0) == 1:
+                        participation = apply_credit(
+                            conn,
+                            guild_id,
+                            member.id,
+                            settings.reward_photo_post,
+                            "photo_post",
+                            meta={"day": day},
+                            booster=booster,
+                        )
+                # The photo_post quest bonus stacks on top (once/day by
+                # occurrence; fire_trigger_quests re-checks the source toggle).
                 fired = fire_trigger_quests(
                     conn,
                     settings,
@@ -3013,7 +3039,7 @@ class EconomyCog(commands.Cog):
                     booster=booster,
                     channel_ids=(channel_id,),
                 )
-                return settings, fired
+                return settings, participation, fired
 
         try:
             result = await asyncio.to_thread(_claim)
@@ -3022,16 +3048,25 @@ class EconomyCog(commands.Cog):
             return
         if result is None:
             return
-        settings, fired = result
-        for _quest, outcome in fired:
-            await self._announce_quest_claim(message, member, settings, outcome)
+        settings, participation, fired = result
+        if fired:
+            # A quest outcome carries its own ✅ (paid) / 📝 (sign-off) react.
+            for _quest, outcome in fired:
+                await self._announce_quest_claim(message, member, settings, outcome)
+        elif participation:
+            # Flat award only (no quest fired) — acknowledge the post.
+            try:
+                await message.add_reaction("✅")
+            except discord.HTTPException:
+                log.debug("econ photo: participation react failed", exc_info=True)
 
     def _photo_eligible(self, guild_id: int) -> bool:
-        """True when a photo-post payout is possible in this guild right now.
+        """True when a photo payout is possible in this guild right now.
 
-        Economy enabled, the photo_post income source on, and ≥1 active
-        photo_post quest. Gates the per-post claim so a channel with no quest
-        configured never opens a DB write transaction.
+        Economy enabled and the photo_post income source on, plus at least one
+        thing to pay: a positive flat participation award (``reward_photo_post``)
+        or ≥1 active photo_post quest. Gates the per-post write so a channel
+        with nothing to pay never opens a DB transaction.
         """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
@@ -3039,6 +3074,8 @@ class EconomyCog(commands.Cog):
                 return False
             if not source_enabled(conn, guild_id, "photo_post"):
                 return False
+            if settings.reward_photo_post > 0:
+                return True
             row = conn.execute(
                 "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
                 " AND trigger_kind = 'photo_post' LIMIT 1",

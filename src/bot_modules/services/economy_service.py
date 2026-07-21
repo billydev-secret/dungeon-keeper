@@ -64,6 +64,12 @@ class EconSettings:
     reward_qotd: int = 10
     reward_game_participation: int = 5
     reward_game_win: int = 20
+    # Flat participation award for posting an image in the Photo Challenge
+    # channel — paid on the post itself, once per guild-local day, on top of
+    # any active photo_post quest (which stacks). 0 turns the flat award off
+    # (the quest, if any, still pays). Gated by the photo_post income-source
+    # toggle like the quest is.
+    reward_photo_post: int = 5
     # How many quests of each cadence a member is shown (and can be paid for)
     # per period — their "personal board", drawn from that cadence's active
     # pool. Tuning these down is how a guild makes the board feel smaller

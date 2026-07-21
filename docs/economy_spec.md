@@ -627,18 +627,29 @@ rejected for anonymity). JS labels shared with the quest form via
 
 **Photo plumbing:** payout fires on the post itself, not on replies to the card
 and not on reactions. `EconomyCog._on_photo_post` (an `on_message` listener) fires
-when a member posts an image in the configured photo channel. Guards are
-cheapest-first: a guild/bot check, an image check (content-type with a
+when a member posts an image in the configured photo channel, and pays **two
+independent, stacking amounts**, each capped once per guild-local day:
+
+1. a **flat participation award** (`EconSettings.reward_photo_post`, default 5,
+   ledger kind `photo_post`) on the post itself — no quest required. Dedup rides
+   an `INSERT OR IGNORE INTO econ_photo_rewards (guild_id, user_id, local_day)`
+   anchor in the credit's transaction (mirrors the login faucet). 0 turns the
+   flat award off; and
+2. the **`photo_post` quest** bonus on top, if one is active (occurrence
+   `photo_post:<local_day>`, dedup on `econ_quest_claims`).
+
+Guards are cheapest-first: a guild/bot check, an image check (content-type with a
 filename-extension fallback), a TTL-cached channel check, then a DB eligibility
-pre-check (economy on, `photo_post` source on, ≥1 active `photo_post` quest). The
-occurrence key is the guild-local day, so a member earns at most once per day
-regardless of how many photos they post — the claim collision dedups. The channel
-is the standalone Photo Challenge feature's dedicated channel — `channel_id` in
-`games_game_config.options` (game type `photo`), owned by the **Photo Challenge →
-Setup** panel (`/api/photo-challenge/config`); the payout is dormant until it's
-set. *(The old reaction-gated model and its `react_threshold`/`auto_react` knobs
-are retired; migration 099 renames existing `photo_react` quests and income-source
-rows to `photo_post`.)*
+pre-check (economy on, `photo_post` source on, and something to pay — a positive
+participation award *or* ≥1 active `photo_post` quest). The `photo_post`
+income-source toggle gates **both** payouts. The channel is the standalone Photo
+Challenge feature's dedicated channel — `channel_id` in `games_game_config.options`
+(game type `photo`), owned by the **Photo Challenge → Setup** panel
+(`/api/photo-challenge/config`); the payout is dormant until it's set. The flat
+rate is edited on the **Income Sources** page alongside the other faucets. *(The
+old reaction-gated model and its `react_threshold`/`auto_react` knobs are retired;
+migration 099 renames existing `photo_react` quests and income-source rows to
+`photo_post`; migration 101 adds `econ_photo_rewards`.)*
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered

@@ -472,6 +472,7 @@ async def list_income_sources(
                     "reward_qotd": settings.reward_qotd,
                     "reward_game_participation": settings.reward_game_participation,
                     "reward_game_win": settings.reward_game_win,
+                    "reward_photo_post": settings.reward_photo_post,
                     "xp_per_coin": settings.xp_per_coin,
                 },
             }

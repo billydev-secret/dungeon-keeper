@@ -71,6 +71,7 @@ class EconomyConfigUpdate(BaseModel):
     milestone_per_100: int | None = Field(default=None, ge=0)
     reward_qotd: int | None = Field(default=None, ge=0)
     reward_game_participation: int | None = Field(default=None, ge=0)
+    reward_photo_post: int | None = Field(default=None, ge=0)
     reward_game_win: int | None = Field(default=None, ge=0)
     # 0 = cadence off for this guild; above POOL_CAP is meaningless (the pool
     # can't exceed it, and a board >= the pool is just "the whole pool").
