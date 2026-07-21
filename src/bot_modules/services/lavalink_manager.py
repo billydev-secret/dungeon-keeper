@@ -35,7 +35,11 @@ _JAR_PATH = _LAVALINK_DIR / "Lavalink.jar"
 _LOG_DIR = _LAVALINK_DIR / "logs"
 
 _PORT_POLL_INTERVAL_S = 0.5
-_STARTUP_TIMEOUT_S = 30.0
+# A healthy boot on the prod box takes ~28s (2-core JVM startup), so 30s was a
+# coin flip whenever a bot restart competed with everything else spinning up.
+# The port poll returns as soon as Lavalink binds; the ceiling only bounds a
+# genuinely stuck boot.
+_STARTUP_TIMEOUT_S = 120.0
 _SHUTDOWN_GRACE_S = 10.0
 
 
@@ -191,7 +195,7 @@ class LavalinkManager:
         w.close()
         try:
             await w.wait_closed()
-        except Exception:
+        except OSError:
             pass
         return True
 
@@ -210,7 +214,7 @@ class LavalinkManager:
                 writer.close()
                 try:
                     await writer.wait_closed()
-                except Exception:
+                except OSError:
                     pass
                 return
             except (OSError, asyncio.TimeoutError):
@@ -274,7 +278,7 @@ class LavalinkManager:
         if self._log_handle is not None:
             try:
                 self._log_handle.close()
-            except Exception:
+            except OSError:
                 pass
             self._log_handle = None
 

@@ -2,9 +2,25 @@
 from __future__ import annotations
 
 from bot_modules.duels.filters import (
+    WAGER_STAKES_TEXT,
+    contains_disallowed_content,
+    resolve_stakes_text,
     validate_nickname,
     validate_stakes,
 )
+
+
+# ── contains_disallowed_content (free-text guard: RR question/reply, confess) ──
+
+
+def test_contains_disallowed_content_passes_clean_text():
+    assert contains_disallowed_content("what's your favorite dessert?") is False
+
+
+def test_contains_disallowed_content_flags_caller_denylist_case_insensitively():
+    # Uses a caller-supplied pattern so no real slur is needed in the test.
+    assert contains_disallowed_content("please frobnicate", denylist=["frobnicate"]) is True
+    assert contains_disallowed_content("FROBNICATE now", denylist=["frobnicate"]) is True
 
 
 # ── validate_nickname ────────────────────────────────────────────────────────
@@ -164,3 +180,27 @@ def test_stakes_empty_string_ok():
     # empty stakes is valid (means no custom stakes)
     r = validate_stakes("", max_length=200)
     assert r.ok
+
+
+# ── resolve_stakes_text ────────────────────────────────────────────────────────
+# A game is in nickname mode iff its persisted stakes_text is None. This helper
+# is what keeps a wagered game *out* of that mode: the loser forfeits coins, not
+# their nickname.
+
+def test_resolve_plain_game_stays_nick_mode():
+    # No custom stakes, no wager → None persists → nickname mode (the default).
+    assert resolve_stakes_text(None, None) is None
+
+
+def test_resolve_wager_becomes_a_stakes_label():
+    # A wager with no custom stakes gets the label, flipping it out of nick mode.
+    assert resolve_stakes_text(None, 100) == WAGER_STAKES_TEXT
+
+
+def test_resolve_custom_stakes_pass_through_without_wager():
+    assert resolve_stakes_text("Loser buys pizza", None) == "Loser buys pizza"
+
+
+def test_resolve_custom_stakes_win_over_wager():
+    # If the host typed real stakes, keep them even alongside a wager.
+    assert resolve_stakes_text("Loser buys pizza", 100) == "Loser buys pizza"

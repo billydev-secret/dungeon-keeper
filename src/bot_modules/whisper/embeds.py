@@ -49,7 +49,7 @@ def build_reply_audit_embed(
     fields surface the participants and the whisper id for cross-reference.
     """
     embed = discord.Embed(
-        title="Whisper Reply",
+        title="💬 Whisper Reply",
         description=safe_codefence_content(content),
         timestamp=now or datetime.now(timezone.utc),
     )
@@ -80,7 +80,7 @@ def build_report_audit_embed(
     supplied reason, and the whisper id.
     """
     embed = discord.Embed(
-        title="Whisper Reported",
+        title="🚨 Whisper Reported",
         description=safe_codefence_content(whisper.message),
         color=discord.Color.red(),
         timestamp=now or datetime.now(timezone.utc),
@@ -113,7 +113,7 @@ def build_reply_report_audit_embed(
     recipient), the reason, and both the reply and whisper ids.
     """
     embed = discord.Embed(
-        title="Whisper Reply Reported",
+        title="🚨 Whisper Reply Reported",
         description=safe_codefence_content(reply.content),
         color=discord.Color.red(),
         timestamp=now or datetime.now(timezone.utc),
@@ -137,7 +137,9 @@ def build_reply_report_audit_embed(
 # ── Shared-whisper feed embed ────────────────────────────────────────────────
 
 
-def build_send_feed_embed(target_id: int) -> discord.Embed:
+def build_send_feed_embed(
+    target_id: int, color: "discord.Color | None" = None
+) -> discord.Embed:
     """The public feed announcement posted when a Whisper is sent.
 
     Replaces the old plain-text ``📬 Someone sent @x an anonymous message``
@@ -146,14 +148,18 @@ def build_send_feed_embed(target_id: int) -> discord.Embed:
     since the recipient is already notified by the DM that carries the actual
     message. The feed post is posted with no content ping at all.
     """
+    if color is None:
+        color = discord.Color.blurple()
     return discord.Embed(
         title="\U0001f4ec Someone sent a Whisper",
         description=f"Someone sent <@{target_id}> an anonymous message.",
-        color=discord.Color.blurple(),
+        color=color,
     )
 
 
-def build_share_feed_embed(whisper: Whisper) -> discord.Embed:
+def build_share_feed_embed(
+    whisper: Whisper, color: "discord.Color | None" = None
+) -> discord.Embed:
     """The public "a fresh whisper was shared" feed post, as a styled embed.
 
     Replaces the old plain-text + code-fence body with an embed (accent bar,
@@ -162,6 +168,8 @@ def build_share_feed_embed(whisper: Whisper) -> discord.Embed:
     quote while still preventing anonymous content from injecting headers,
     blockquotes, links, or other formatting into the public feed.
     """
+    if color is None:
+        color = discord.Color.blurple()
     safe = discord.utils.escape_markdown(whisper.message)
     embed = discord.Embed(
         title="\U0001f4ec A fresh Whisper was shared",
@@ -169,7 +177,7 @@ def build_share_feed_embed(whisper: Whisper) -> discord.Embed:
             f"Someone sent <@{whisper.target_id}> an anonymous message!\n\n"
             f"“{safe}”"
         ),
-        color=discord.Color.blurple(),
+        color=color,
     )
     return embed
 
@@ -187,6 +195,7 @@ def build_inbox_embed(
     selected: Whisper | None,
     mode: str,
     now: float | None = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the embed shown above the whisper-inbox dropdown view.
 
@@ -196,9 +205,11 @@ def build_inbox_embed(
       - selected populated: header (with sender/target depending on mode),
         codefenced body, and a status-aware footer.
     """
+    if color is None:
+        color = discord.Color.blurple()
     embed = discord.Embed(
         title=f"{_inbox_title(mode)} ({len(whispers)})",
-        color=discord.Color.blurple(),
+        color=color,
     )
     if not whispers:
         embed.description = (

@@ -1,17 +1,20 @@
 """Pressure Cooker cog — slash commands and BaseDuel implementation."""
 from __future__ import annotations
 
-import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import logging
 import random
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
-from bot_modules.services.embeds import COLOR_GREEN, COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
 from . import db as pdb
 from .game import PressureGame, apply_pump
@@ -57,7 +60,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
     ) -> PressureGame | None:
         return await pdb.get_pending_game_for_challenger(self.db, guild_id, channel_id, user_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await pdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_fetch_active_games(self) -> list[PressureGame]:
@@ -73,7 +76,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
 
     async def on_game_start(self, game: PressureGame) -> None:
         first_player = random.choice([game.challenger_id, game.target_id])
-        await pdb.set_game_state(self.db, game.id, "ACTIVE", active_player=first_player)
+        await self._db_set_state(game.id, "ACTIVE", active_player=first_player)
 
     def render_game_state(
         self, game: PressureGame, guild: discord.Guild
@@ -119,6 +122,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -139,7 +143,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:
@@ -194,179 +198,19 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
     @app_commands.describe(
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — you both ante this; winner takes the pot",
     )
     async def pressure_challenge(
         self,
         interaction: discord.Interaction,
         user: discord.Member,
         stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        await self._base_challenge(interaction, user, stakes)
+        await self._base_challenge(interaction, user, stakes, wager)
 
-    @pressure.command(name="cancel", description="Cancel your pending challenge in this channel")
-    async def pressure_cancel(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        game = await pdb.get_pending_game_for_challenger(
-            self.db,
-            interaction.guild.id,
-            interaction.channel_id,  # type: ignore[arg-type]
-            interaction.user.id,
-        )
-        if not game:
-            await interaction.response.send_message(
-                "You don't have a pending challenge in this channel.", ephemeral=True
-            )
-            return
-        await pdb.set_game_state(self.db, game.id, "EXPIRED_PENDING")
-        await self._edit_message_silent(
-            game.channel_id,
-            game.message_id,
-            embed=discord.Embed(
-                title="🚫 Challenge Cancelled",
-                description=f"{interaction.user.mention} cancelled the challenge.",
-                color=COLOR_YELLOW,
-            ),
-            view=None,
-        )
-        await interaction.response.send_message("Challenge cancelled.", ephemeral=True)
-
-    @pressure.command(name="stats", description="View Pressure Cooker stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def pressure_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await pdb.get_stats(self.db, interaction.guild.id, target.id)
-        embed = discord.Embed(
-            title=f"🔥 Pressure Cooker — {target.display_name}",
-            color=COLOR_GOLD,
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Total Games", value=str(stats["total_games"]), inline=True)
-        if stats["highest_gauge_win"] is not None:
-            embed.add_field(
-                name="Highest Gauge (Win)", value=f"{stats['highest_gauge_win']}/100", inline=True
-            )
-        await interaction.response.send_message(embed=embed)
-
-    @pressure.command(name="revert", description="Request early revert of your Pressure Cooker nickname")
-    async def pressure_revert(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        cfg = await pdb.get_config(self.db, interaction.guild.id)
-        if not cfg.get("allow_early_revert"):
-            await interaction.response.send_message(
-                "Early revert isn't enabled on this server. Ask a mod.", ephemeral=True
-            )
-            return
-        nick = await pdb.get_active_nick_for_user(
-            self.db, interaction.guild.id, interaction.user.id
-        )
-        if not nick:
-            await interaction.response.send_message(
-                "You don't have an active nickname sentence.", ephemeral=True
-            )
-            return
-        member = interaction.guild.get_member(interaction.user.id)
-        if member:
-            try:
-                await member.edit(nick=nick["original_nick"], reason="Early revert requested by user")
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "I couldn't revert your nickname — I may not have permission.", ephemeral=True
-                )
-                return
-        await pdb.mark_nick_reverted(self.db, nick["id"], "early_revert")
-        await interaction.response.send_message(
-            "Your nickname has been restored early.", ephemeral=True
-        )
-
-    @pressure.command(name="config", description="Configure Pressure Cooker (mods only)")
-    @app_commands.describe(
-        cooldown_hours="Hours before the same pair can play again (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        allow_early_revert="Allow losers to request early nick revert: 0=no, 1=yes",
-        channel_allowlist="JSON array of allowed channel IDs, or '[]' for all channels",
-        max_nick_length="Maximum nickname character count (default 32)",
-        max_stakes_length="Maximum stakes text character count (default 200)",
-    )
-    async def pressure_config(
-        self,
-        interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        allow_early_revert: int | None = None,
-        channel_allowlist: str | None = None,
-        max_nick_length: int | None = None,
-        max_stakes_length: int | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure Pressure Cooker.",
-                ephemeral=True,
-            )
-            return
-
-        updates: dict = {}
-        if cooldown_hours is not None:
-            updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            updates["sentence_hours"] = max(1, sentence_hours)
-        if allow_early_revert is not None:
-            updates["allow_early_revert"] = 1 if allow_early_revert else 0
-        if channel_allowlist is not None:
-            try:
-                json.loads(channel_allowlist)
-                updates["channel_allowlist"] = channel_allowlist
-            except json.JSONDecodeError:
-                await interaction.response.send_message(
-                    "channel_allowlist must be a valid JSON array, e.g. `[123456789, 987654321]`",
-                    ephemeral=True,
-                )
-                return
-        if max_nick_length is not None:
-            updates["max_nick_length"] = max(1, min(32, max_nick_length))
-        if max_stakes_length is not None:
-            updates["max_stakes_length"] = max(1, min(2000, max_stakes_length))
-
-        if not updates:
-            cfg = await pdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Pressure Cooker Config", color=COLOR_GOLD)
-            for k, v in cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        await pdb.upsert_config(self.db, interaction.guild.id, **updates)
-        lines = [f"**{k}** → `{v}`" for k, v in updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = PressureCookerDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "revert", "stats", "config"):
-        cog.pressure.remove_command(name)
     bot.tree.remove_command("pressure")
     games.add_command(cog.pressure)

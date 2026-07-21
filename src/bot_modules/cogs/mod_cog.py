@@ -7,9 +7,12 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.settings import AUTO_DELETE_SETTINGS
 
@@ -36,8 +39,11 @@ def _get_cog_commands(cog: commands.Cog) -> list[tuple[str, str]]:
     return sorted(result)
 
 
-def _build_cog_pages(bot: "Bot") -> list[discord.Embed]:
+def _build_cog_pages(
+    bot: "Bot", color: "discord.Color | None" = None
+) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
+    page_color = color if color is not None else discord.Color.greyple()
     for cog in sorted(bot.cogs.values(), key=lambda c: c.qualified_name.lower()):
         cmds = _get_cog_commands(cog)
         if not cmds:
@@ -50,7 +56,7 @@ def _build_cog_pages(bot: "Bot") -> list[discord.Embed]:
             discord.Embed(
                 title=f"📦  {display}",
                 description=body,
-                color=discord.Color.greyple(),
+                color=page_color,
             )
         )
     return pages
@@ -60,6 +66,7 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "General": ("🌿", discord.Color.from_str("#5865F2")),
     "Role Grants": ("🎭", discord.Color.from_str("#57F287")),
     "XP Grant": ("⭐", discord.Color.from_str("#FEE75C")),
+    "Moderation": ("🛡️", discord.Color.from_str("#ED4245")),
     "Voice": ("🔊", discord.Color.from_str("#2ECC71")),
     "Music": ("🎵", discord.Color.from_str("#E74C3C")),
     "Whisper": ("🤫", discord.Color.from_str("#E67E22")),
@@ -78,7 +85,9 @@ def _page(name: str, body: str) -> discord.Embed:
 
 
 def _build_help_pages(
-    ctx: AppContext, interaction: discord.Interaction
+    ctx: AppContext,
+    interaction: discord.Interaction,
+    color: "discord.Color | None" = None,
 ) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
 
@@ -108,10 +117,15 @@ def _build_help_pages(
                     ("/dm_set_mode", "Set your DM preference (open / ask / closed)."),
                     ("/dm_status @user", "Check whether mutual DM permission exists."),
                     ("/dm_revoke @user", "Revoke a DM permission relationship."),
+                    ("/penpals join", "Enter the Pen Pals pool — you'll be matched into a private 2-person channel with a conversation starter."),
+                    ("/penpals leave", "Leave the pool before you're matched."),
+                    ("/penpals status", "Check your current Pen Pals status."),
+                    ("/penpals new-question", "Swap in a fresh conversation-starter question."),
+                    ("/penpals end", "End your current pen pal chat early."),
                     ("/todo task:...", "Add a task to the server's shared todo list."),
                     ("/support", "Get a link to the support Discord server."),
                     ("/invite", "Get a bot invite link to add DungeonKeeper to another server."),
-                    ("/delete_me", "Permanently delete your data from this server."),
+                    ("/delete_me", "Delete your messages from Discord — your XP and profile stay."),
                 ]
             ),
         )
@@ -139,6 +153,20 @@ def _build_help_pages(
                 "XP Grant",
                 "Award XP for contributions outside normal chat — events, art, helpful DMs, etc.\n\n"
                 + _fmt([("/xp_give member:@user", "Award 20 XP to a member.")]),
+            )
+        )
+
+    if ctx.is_mod(interaction):
+        pages.append(
+            _page(
+                "Moderation",
+                "Moderator-only tools.\n\n"
+                + _fmt(
+                    [
+                        ("/purge count:... after:...", "Bulk-delete messages in this channel by count and/or time."),
+                        ("/rename target:@user new_name:...", "Change a member's nickname (leave blank to reset to their username). Requires Manage Nicknames."),
+                    ]
+                ),
             )
         )
 
@@ -227,43 +255,49 @@ def _build_help_pages(
             "**Vote / react games**\n"
             + _fmt(
                 [
-                    ("/wyr", "Would You Rather."),
-                    ("/nhie", "Never Have I Ever."),
-                    ("/mfk", "Marry, Fornicate, Kiss — pick from three members."),
-                    ("/mlt", "Most Likely To."),
-                    ("/twotruths", "Two Truths and a Lie."),
-                    ("/traditional", "Traditional Truth or Dare."),
+                    ("/games play wyr", "Would You Rather."),
+                    ("/games play nhie", "Never Have I Ever."),
+                    ("/games play mfk", "Marry, Fornicate, Kiss — pick from three members."),
+                    ("/games play mlt", "Most Likely To."),
+                    ("/games play twotruths", "Two Truths and a Lie."),
+                    ("/games play traditional", "Traditional Truth or Dare."),
                 ]
             )
             + "\n\n**Anonymous & themed**\n"
             + _fmt(
                 [
-                    ("/fantasies", "Fantasies & Dealbreakers — anonymous matching."),
-                    ("/ama", "Anonymous Ask Me Anything."),
-                    ("/hottakes", "Hot Takes / Unpopular Opinions debate."),
-                    ("/compliment", "Spin the Compliment — random anonymous pairing."),
+                    ("/games play fantasies", "Fantasies & Dealbreakers — anonymous matching."),
+                    ("/games play ama", "Anonymous Ask Me Anything."),
+                    ("/games play hottakes", "Hot Takes / Unpopular Opinions debate."),
+                    ("/games play compliment", "Spin the Compliment — random anonymous pairing."),
                 ]
             )
             + "\n\n**Creative & strategy**\n"
             + _fmt(
                 [
-                    ("/story", "Story Builder (Exquisite Corpse) — collaborative writing."),
-                    ("/price", "Name Your Price — bidding game."),
-                    ("/rushmore", "Mt. Rushmore Draft — pick your top 4."),
-                    ("/clapback", "Clapback comedy head-to-head."),
+                    ("/games play story", "Story Builder (Exquisite Corpse) — collaborative writing."),
+                    ("/games play price", "Name Your Price — bidding game."),
+                    ("/games play rushmore", "Mt. Rushmore Draft — pick your top 4."),
+                    ("/games play clapback", "Clapback comedy head-to-head."),
                     ("/risky start", "Open a Risky Rolls round — dice-based dare ladder."),
                 ]
             )
             + "\n\n**Settings & help**\n"
             + _fmt(
                 [
-                    ("/consent", "Configure which game modes can pull you in."),
-                    ("/games-help", "Full game-mode browser."),
-                    ("/games-support", "Link to the support server."),
+                    ("/games help", "Full game-mode browser."),
+                    ("/games support", "Link to the support server."),
                 ]
             ),
         )
     )
+
+    # Collapse the decorative per-section colors to the shared guild accent
+    # when one is available; the per-section palette in ``_page`` stays as the
+    # fallback for contexts without a resolvable guild (e.g. DMs).
+    if color is not None:
+        for page in pages:
+            page.color = color
 
     return pages
 
@@ -309,8 +343,7 @@ class CogPager(discord.ui.View):
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
     async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True  # type: ignore[union-attr]
+        disable_all_items(self)
 
 
 class HelpSelect(discord.ui.Select):
@@ -338,10 +371,17 @@ class HelpSelect(discord.ui.Select):
 
 
 class HelpView(discord.ui.View):
-    def __init__(self, pages: list[discord.Embed], invoker_id: int, bot: "Bot"):
+    def __init__(
+        self,
+        pages: list[discord.Embed],
+        invoker_id: int,
+        bot: "Bot",
+        color: "discord.Color | None" = None,
+    ):
         super().__init__(timeout=120)
         self.bot = bot
         self.invoker_id = invoker_id
+        self._accent = color
         self.select = HelpSelect(pages, invoker_id)
         self.add_item(self.select)
 
@@ -355,7 +395,7 @@ class HelpView(discord.ui.View):
         if interaction.user.id != self.invoker_id:
             await interaction.response.defer()
             return
-        cog_pages = _build_cog_pages(self.bot)
+        cog_pages = _build_cog_pages(self.bot, self._accent)
         if not cog_pages:
             await interaction.response.send_message("No modules found.", ephemeral=True)
             return
@@ -377,8 +417,13 @@ class ModCog(commands.Cog):
         name="help", description="Browse all available commands organized by category."
     )
     async def help_command(self, interaction: discord.Interaction) -> None:
-        pages = _build_help_pages(self.ctx, interaction)
-        view = HelpView(pages, invoker_id=interaction.user.id, bot=self.bot)
+        accent = None
+        if interaction.guild is not None:
+            accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        pages = _build_help_pages(self.ctx, interaction, accent)
+        view = HelpView(
+            pages, invoker_id=interaction.user.id, bot=self.bot, color=accent
+        )
         await interaction.response.send_message(
             embed=view.current_embed(), view=view, ephemeral=True
         )
@@ -405,8 +450,13 @@ class ModCog(commands.Cog):
             )
             return
 
-        with ctx.open_db() as conn:
-            tz_hours = get_tz_offset_hours(conn, interaction.guild_id or 0)
+        guild_id_val = interaction.guild_id or 0
+
+        def _do_get_tz() -> float:
+            with ctx.open_db() as conn:
+                return get_tz_offset_hours(conn, guild_id_val)
+
+        tz_hours = await asyncio.to_thread(_do_get_tz)
 
         after_dt: datetime | None = None
         if after is not None:

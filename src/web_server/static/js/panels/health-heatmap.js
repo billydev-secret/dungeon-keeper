@@ -1,6 +1,5 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 

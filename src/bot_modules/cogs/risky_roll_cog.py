@@ -47,15 +47,17 @@ class RiskyRollCog(commands.Cog):
         if swept:
             log.info("Swept %d old posted questions.", swept)
 
-        ping_roles, min_times, active_rounds, pending_questions, posted_questions = await asyncio.gather(
+        ping_roles, min_times, max_games, active_rounds, pending_questions, posted_questions = await asyncio.gather(
             rr_state.store.load_ping_roles(),
             rr_state.store.load_min_game_times(),
+            rr_state.store.load_max_games_per_channel(),
             rr_state.store.load_active_rounds(),
             rr_state.store.load_pending_questions(),
             rr_state.store.load_posted_questions(),
         )
         rr_state.ping_roles.update(ping_roles)
         rr_state.min_game_seconds.update(min_times)
+        rr_state.max_games_per_channel.update(max_games)
 
         now = time.time()
         for state in active_rounds:
@@ -94,6 +96,7 @@ class RiskyRollCog(commands.Cog):
         rr_state.posted_questions.clear()
         rr_state.ping_roles.clear()
         rr_state.min_game_seconds.clear()
+        rr_state.max_games_per_channel.clear()
 
     async def cog_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
@@ -190,9 +193,12 @@ class RiskyRollCog(commands.Cog):
                 1 for s in rr_state.active_games.values()
                 if s.channel_id == interaction.channel.id
             )
-            if active_in_channel >= MAX_GAMES_PER_CHANNEL:
+            max_games = rr_state.max_games_per_channel.get(
+                interaction.guild.id, MAX_GAMES_PER_CHANNEL
+            )
+            if active_in_channel >= max_games:
                 await interaction.response.send_message(
-                    f"This channel already has {MAX_GAMES_PER_CHANNEL} active games. "
+                    f"This channel already has {max_games} active games. "
                     "Close one before starting another.",
                     ephemeral=True,
                 )
@@ -224,7 +230,7 @@ class RiskyRollCog(commands.Cog):
             try:
                 await interaction.response.send_message(
                     content=content,
-                    embed=build_embed(state),
+                    embed=build_embed(state, interaction.guild),
                     view=view,
                     allowed_mentions=allowed_mentions,
                 )
@@ -254,7 +260,7 @@ class RiskyRollCog(commands.Cog):
                         try:
                             await message.edit(
                                 content="Risky Rolls could not finish setup. Start a new round.",
-                                embed=build_embed(state),
+                                embed=build_embed(state, interaction.guild),
                                 view=failed_view,
                                 allowed_mentions=discord.AllowedMentions.none(),
                             )
@@ -320,7 +326,7 @@ class RiskyRollCog(commands.Cog):
             view = RiskyRollView(state.game_id)
             try:
                 msg = await channel.send(
-                    embed=build_embed(state),
+                    embed=build_embed(state, channel.guild),
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -412,5 +418,5 @@ class RiskyRollCog(commands.Cog):
 async def setup(bot: Bot) -> None:
     cog = RiskyRollCog(bot, bot.ctx)
     await bot.add_cog(cog)
-    bot.game_launchers["risky_roll"] = cog.launch  # type: ignore[attr-defined]
-    bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round  # type: ignore[attr-defined]
+    bot.game_launchers["risky_roll"] = cog.launch
+    bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round

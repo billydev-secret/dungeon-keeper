@@ -9,25 +9,45 @@ from pathlib import Path
 import discord
 from dotenv import load_dotenv
 
-from bot_modules.core.app_context import AppContext, Bot, load_runtime_config
+from bot_modules.core.app_context import AppContext, Bot, resolve_guild_id
 from bot_modules.core.config import load_config
 from bot_modules.core.id_remap import build_remap
 from migrations import apply_migrations_sync
 from bot_modules.core.safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
 from bot_modules.services.watch_service import load_watched_users
-from bot_modules.core.db_utils import migrate_grant_roles, open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, migrate_grant_roles, open_db
+from bot_modules.services.announcements_service import announcements_loop
 from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
+from bot_modules.services.role_grant_audit_service import grant_audit_card_loop
+from bot_modules.announcements.buttons import AnnouncementRoleButton
+from bot_modules.chat_revive.actions import ReviveOptInButton
+from bot_modules.services.chat_revive_loop import chat_revive_loop
+from bot_modules.services.economy_drops_loop import (
+    DropClaimButton,
+    economy_drops_loop,
+)
+from bot_modules.services.economy_loop import (
+    economy_loop,
+    leaderboard_live_loop,
+    register_loop,
+)
+from bot_modules.services.greeting_watch_loop import greeting_watch_loop
 from bot_modules.services.voice_xp_service import voice_xp_loop
 from bot_modules.services.wellness_partners import (
     WellnessPartnerAcceptButton,
     WellnessPartnerDeclineButton,
 )
 from bot_modules.services.db_backup import db_backup_loop
-from bot_modules.services.xp_service import handle_level_progress
+from bot_modules.services.advisor_context import guild_pins_loop
+from bot_modules.services.xp_service import (
+    handle_level_progress,
+    nsfw_grant_role_id,
+    promotion_review_recheck_loop,
+)
 from bot_modules.core.utils import format_guild_for_log
 from bot_modules.services.games_db import GamesDb
 
@@ -79,6 +99,36 @@ def _setup_logging() -> None:
     _log_queue_listener = listener
 
 
+def _record_deploy(log: logging.Logger) -> None:
+    """Move the `deployed` git tag to the booted commit so `git describe`
+    always answers "what's running in prod". Best-effort: never blocks boot."""
+    import subprocess
+
+    try:
+        desc = subprocess.run(
+            ["git", "describe", "--always", "--dirty"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if desc.returncode != 0:
+            return
+        rev = desc.stdout.strip()
+        subprocess.run(
+            ["git", "tag", "-f", "deployed"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            timeout=10,
+        )
+        if rev.endswith("-dirty"):
+            log.warning("Booted at %s — WORKING TREE IS DIRTY (uncommitted changes are live)", rev)
+        else:
+            log.info("Booted at %s (tag 'deployed' moved)", rev)
+    except Exception:
+        log.warning("Could not record deploy tag", exc_info=True)
+
+
 def main() -> None:
     load_dotenv(override=True)
 
@@ -89,6 +139,8 @@ def main() -> None:
     _setup_logging()
 
     log = logging.getLogger("dungeonkeeper.bot")
+
+    _record_deploy(log)
 
     boot_cfg = load_config()
     check_db_path(boot_cfg)
@@ -103,81 +155,53 @@ def main() -> None:
     # ==============================
     # Runtime config + context
     # ==============================
-    cfg = load_runtime_config(db_path, debug=args.debug, default_guild_id=boot_cfg.guild_id)
+    guild_id = resolve_guild_id(db_path, default_guild_id=boot_cfg.guild_id)
 
     intents = discord.Intents.default()
     intents.members = True
     intents.presences = True
     intents.message_content = True
 
-    bot = Bot(intents=intents, debug=cfg["debug"], guild_id=cfg["guild_id"])
+    bot = Bot(intents=intents, debug=args.debug, guild_id=guild_id)
 
     ctx = AppContext(
         bot=bot,
         log=log,
         db_path=db_path,
-        guild_id=cfg["guild_id"],
-        debug=cfg["debug"],
-        mod_channel_id=cfg["mod_channel_id"],
-        spoiler_required_channels=cfg["spoiler_required_channels"],
-        bypass_role_ids=cfg["bypass_role_ids"],
-        xp_grant_allowed_user_ids=cfg["xp_grant_allowed_user_ids"],
-        xp_excluded_channel_ids=cfg["xp_excluded_channel_ids"],
-        recorded_bot_user_ids=cfg["recorded_bot_user_ids"],
-        level_5_role_id=cfg["xp_level_5_role_id"],
-        level_5_log_channel_id=cfg["xp_level_5_log_channel_id"],
-        level_up_log_channel_id=cfg["xp_level_up_log_channel_id"],
-        greeter_role_id=cfg["greeter_role_id"],
-        greeter_chat_channel_id=cfg["greeter_chat_channel_id"],
-        join_leave_log_channel_id=cfg["join_leave_log_channel_id"],
-        welcome_channel_id=cfg["welcome_channel_id"],
-        welcome_message=cfg["welcome_message"],
-        welcome_ping_role_id=cfg["welcome_ping_role_id"],
-        leave_channel_id=cfg["leave_channel_id"],
-        leave_message=cfg["leave_message"],
-        tz_offset_hours=cfg["tz_offset_hours"],
+        guild_id=guild_id,
+        debug=args.debug,
     )
 
     # ==============================
     # Populate runtime state from DB
     # ==============================
     with open_db(db_path) as conn:
-        migrate_grant_roles(conn, cfg["guild_id"])
-        ctx.watched_users = load_watched_users(conn, cfg["guild_id"])
-
-    ctx.reload_grant_roles()
-    ctx.reload_xp_settings()
-    ctx.reload_permission_roles()
+        migrate_grant_roles(conn, guild_id)
+        ctx.watched_users = load_watched_users(conn, guild_id)
 
     # ==============================
     # Cog extensions
     # ==============================
     bot.ctx = ctx
-    bot.games_db = GamesDb(db_path)  # type: ignore[attr-defined]
-    bot.active_views: dict = {}  # type: ignore[attr-defined]
-    # Registry of interaction-free game launchers, keyed by game_type. Each party
-    # game cog registers its launch() here in setup(); the scheduler calls them.
-    bot.game_launchers: dict = {}  # type: ignore[attr-defined]
-    # Registry of crash-recovery handlers, keyed by game_type. Each party game
-    # cog registers its recover_game() here in setup(); the startup recovery
-    # task re-registers in-flight games' views/timers after a restart.
-    bot.game_recoverers: dict = {}  # type: ignore[attr-defined]
-    # Registry of optional "channel busy" checks, keyed by game_type. Games that
-    # track active rounds outside the games_active_games table (e.g. risky_roll,
-    # in-memory) register an async check(channel_id) -> bool here so the scheduler
-    # can see they're busy and skip the occurrence instead of pinging then failing.
-    bot.game_busy_checks: dict = {}  # type: ignore[attr-defined]
+    bot.games_db = GamesDb(db_path)
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.role_grant_cog",
         "bot_modules.cogs.invite_cog",
         "bot_modules.cogs.support_cog",
         "bot_modules.cogs.jail_cog",
+        "bot_modules.cogs.inactive_cog",
         "bot_modules.cogs.mod_cog",
+        "bot_modules.cogs.hidden_channels_cog",
+        "bot_modules.cogs.rename_cog",
         "bot_modules.cogs.privacy_cog",
         "bot_modules.cogs.reports_cog",
         "bot_modules.cogs.todo_cog",
+        "bot_modules.cogs.docs_cog",
+        "bot_modules.cogs.qa_cog",
+        "bot_modules.cogs.role_menus_cog",
         "bot_modules.cogs.ai_mod_cog",
+        "bot_modules.cogs.advisor_cog",
         "bot_modules.cogs.watch_cog",
         "bot_modules.cogs.rules_watch_cog",
         "bot_modules.rules_watch.monitor",
@@ -206,9 +230,9 @@ def main() -> None:
         "bot_modules.cogs.musical_chairs",
         "bot_modules.cogs.chicken",
         "bot_modules.cogs.bios_cog",
+        "bot_modules.cogs.economy_cog",
         # ── Party Games (PoppyBot) ────────────────────────────────
         "bot_modules.cogs.games_session_cog",
-        "bot_modules.cogs.games_consent_cog",
         "bot_modules.cogs.games_config_cog",
         "bot_modules.cogs.games_help_cog",
         "bot_modules.cogs.games_ffa_cog",
@@ -231,6 +255,7 @@ def main() -> None:
         "bot_modules.cogs.pen_pals_cog",
         "bot_modules.cogs.voice_transcription_cog",
         "bot_modules.cogs.games_dev_cog",
+        "bot_modules.cogs.games_external_cog",
     ]
 
     # ==============================
@@ -252,11 +277,21 @@ def main() -> None:
                     await build_remap(remap_db, guild)
 
     # Register persistent booster-role buttons so they survive restarts.
-    bot._booster_ctx = ctx  # type: ignore[attr-defined]
     bot.add_dynamic_items(BoosterRoleDynamicButton)
+
+    # Register persistent Chat Revive opt-in buttons so they survive restarts.
+    bot.add_dynamic_items(ReviveOptInButton)
+
+    # Register persistent announcement role buttons — posted announcements stay
+    # clickable indefinitely, long after their queue row is gone.
+    bot.add_dynamic_items(AnnouncementRoleButton)
 
     # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
     bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)
+
+    # Register the persistent coin-drop Claim button — a pouch posted before a
+    # restart stays claimable after it.
+    bot.add_dynamic_items(DropClaimButton)
 
     # Register persistent Rules Watch label buttons for unlabeled events
     from bot_modules.rules_watch.alert import register_persistent_views as _rw_register_views
@@ -275,6 +310,8 @@ def main() -> None:
             level_up_log_channel_id=cfg.level_up_log_channel_id,
             level_5_log_channel_id=cfg.level_5_log_channel_id,
             settings=cfg.xp_settings,
+            db_path=db_path,
+            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
         )
 
     bot.startup_task_factories.append(
@@ -286,15 +323,37 @@ def main() -> None:
         )
     )
 
+    bot.startup_task_factories.append(
+        lambda: promotion_review_recheck_loop(bot, db_path, ctx.guild_config)
+    )
+
     bot.startup_task_factories.append(lambda: auto_delete_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: bulk_cleanup_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
 
+    bot.startup_task_factories.append(lambda: announcements_loop(bot, db_path))
+
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 
+    bot.startup_task_factories.append(lambda: grant_audit_card_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: economy_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: register_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: leaderboard_live_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: economy_drops_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: chat_revive_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: greeting_watch_loop(bot, db_path))
+
     bot.startup_task_factories.append(lambda: db_backup_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: guild_pins_loop(bot, db_path))
 
     # ==============================
     # Games — crash recovery (re-register in-flight views/timers on boot)
@@ -507,7 +566,8 @@ def main() -> None:
                     from bot_modules.services.reports_data import MemberSnapshot
 
                     gid = guild.id
-                    tz = getattr(ctx, "tz_offset_hours", 0.0)
+                    with open_db(db_path) as conn:
+                        tz = get_tz_offset_hours(conn, gid)
                     nsfw_ids: list[int] = [
                         ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
                     ]
@@ -627,7 +687,9 @@ def main() -> None:
     if os.getenv("DASHBOARD_ENABLED") == "1":
         from web_server.server import serve_forever as _dashboard_serve_forever
 
-        _dashboard_host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+        # Default to loopback — public access should go through the Cloudflare
+        # tunnel, and open-auth on 0.0.0.0 would expose a full-admin dashboard.
+        _dashboard_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
         _dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
         bot.startup_task_factories.append(
             lambda: _dashboard_serve_forever(ctx, _dashboard_host, _dashboard_port)

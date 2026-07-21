@@ -18,6 +18,16 @@ from bot_modules.services.voice_master_service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "web_server.routes.voice_master.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
+
 def _config_payload(**overrides):
     """Build a complete config payload with reasonable defaults."""
     base = {

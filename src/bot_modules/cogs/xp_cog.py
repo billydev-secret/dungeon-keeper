@@ -10,8 +10,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.services.embeds import XP_PRIMARY
-from bot_modules.services.xp_service import handle_level_progress
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.xp_service import handle_level_progress, nsfw_grant_role_id
 from bot_modules.core.xp_system import (
     XP_SOURCE_GRANT,
     XP_SOURCE_IMAGE_REACT,
@@ -64,35 +64,21 @@ async def _collect_backfill_channels(
 
 def _resolve_leaderboard_timescale(
     timescale: str,
-) -> tuple[str, str, discord.Color, float | None]:
+) -> tuple[str, str, float | None]:
+    """(window label, subtitle, cutoff_ts) for a leaderboard window.
+
+    Color is intentionally *not* returned — the leaderboard embed follows the
+    guild accent like every other info surface (see embed_style_guide.md); the
+    window is conveyed by the title and subtitle, not by a decorative tint.
+    """
     now_ts = time.time()
-    mapping = {
-        "hour": (
-            "Hourly",
-            "Last 60 minutes",
-            discord.Color.dark_teal(),
-            now_ts - 60 * 60,
-        ),
-        "day": ("Daily", "Last 24 hours", discord.Color.blue(), now_ts - 24 * 60 * 60),
-        "week": (
-            "Weekly",
-            "Last 7 days",
-            discord.Color.teal(),
-            now_ts - 7 * 24 * 60 * 60,
-        ),
-        "month": (
-            "Monthly",
-            "Last 30 days",
-            discord.Color.orange(),
-            now_ts - 30 * 24 * 60 * 60,
-        ),
-        "year": (
-            "Yearly",
-            "Last 365 days",
-            discord.Color.brand_green(),
-            now_ts - 365 * 24 * 60 * 60,
-        ),
-        "alltime": ("All-Time", "Since tracking began", discord.Color.gold(), None),
+    mapping: dict[str, tuple[str, str, float | None]] = {
+        "hour": ("Hourly", "Last 60 minutes", now_ts - 60 * 60),
+        "day": ("Daily", "Last 24 hours", now_ts - 24 * 60 * 60),
+        "week": ("Weekly", "Last 7 days", now_ts - 7 * 24 * 60 * 60),
+        "month": ("Monthly", "Last 30 days", now_ts - 30 * 24 * 60 * 60),
+        "year": ("Yearly", "Last 365 days", now_ts - 365 * 24 * 60 * 60),
+        "alltime": ("All-Time", "Since tracking began", None),
     }
     return mapping[timescale]
 
@@ -141,7 +127,7 @@ def _build_xp_leaderboard_embed(
     cutoff: float | None,
 ) -> discord.Embed:
     embed = discord.Embed(
-        title=f"{window_name} XP Leaders",
+        title=f"🏆 {window_name} XP Leaders",
         description=subtitle,
         color=color,
     )
@@ -225,7 +211,8 @@ class XpCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        window_name, subtitle, color, cutoff = _resolve_leaderboard_timescale(timescale)
+        window_name, subtitle, cutoff = _resolve_leaderboard_timescale(timescale)
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         def _check_xp():
             with ctx.open_db() as conn:
@@ -243,9 +230,9 @@ class XpCog(commands.Cog):
                 else "No XP recorded yet."
             )
             embed = discord.Embed(
-                title="XP Leaderboards",
+                title="🏆 XP Leaderboards",
                 description=description,
-                color=XP_PRIMARY,
+                color=accent,
             )
             embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
             embed.add_field(
@@ -270,7 +257,7 @@ class XpCog(commands.Cog):
             caller,
             window_name,
             subtitle,
-            color,
+            accent,
             cutoff,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -308,16 +295,23 @@ class XpCog(commands.Cog):
             return
 
         now_ts = time.time()
-        with ctx.open_db() as conn:
-            award = apply_xp_award(
-                conn,
-                guild.id,
-                member.id,
-                cfg.xp_settings.manual_grant_xp,
-                event_source=XP_SOURCE_GRANT,
-                event_timestamp=now_ts,
-                settings=cfg.xp_settings,
-            )
+        guild_id = guild.id
+        member_id = member.id
+        xp_settings = cfg.xp_settings
+
+        def _do_xp():
+            with ctx.open_db() as conn:
+                return apply_xp_award(
+                    conn,
+                    guild_id,
+                    member_id,
+                    xp_settings.manual_grant_xp,
+                    event_source=XP_SOURCE_GRANT,
+                    event_timestamp=now_ts,
+                    settings=xp_settings,
+                )
+
+        award = await asyncio.to_thread(_do_xp)
 
         await handle_level_progress(
             member,
@@ -326,6 +320,9 @@ class XpCog(commands.Cog):
             level_5_role_id=cfg.level_5_role_id,
             level_up_log_channel_id=cfg.level_up_log_channel_id,
             level_5_log_channel_id=cfg.level_5_log_channel_id,
+            settings=xp_settings,
+            db_path=ctx.db_path,
+            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
         )
 
         await interaction.response.send_message(

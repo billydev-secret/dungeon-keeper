@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.confessions.logic import (
     HELP_TEXT,
     build_dm_notification_text,
@@ -33,8 +34,8 @@ from bot_modules.services.confessions_service import (
     anon_circle_from_index,
     anon_name_from_index,
     build_anon_reply,
+    build_confession_embed,
     check_and_bump_limits,
-    defang_everyone_here,
     get_config,
     get_discord_thread_id,
     get_ephemeral_anon_identity,
@@ -55,6 +56,31 @@ if TYPE_CHECKING:
     from bot_modules.services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)
+
+
+async def _fire_confession_trigger(
+    interaction: discord.Interaction, *, occurrence: str
+) -> None:
+    """Credit the confessor's ``confession`` economy quest trigger — privately.
+
+    Trigger-kind claims make no channel noise, so the confession stays
+    anonymous in the feed; the payout surfaces only in the member's own
+    /quests log (the sole remaining trace is the staff-side ledger). Guarded
+    and non-raising by ``fire_member_trigger`` — a no-op when the economy is
+    off. ``occurrence`` is the posted message/thread id so each confession
+    pays at most once.
+    """
+    from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+    if interaction.guild is None:
+        return
+    await fire_member_trigger(
+        cast("Bot", interaction.client),
+        interaction.guild.id,
+        interaction.user.id,
+        "confession",
+        occurrence=occurrence,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +160,9 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         except discord.HTTPException:
             return
 
+        accent = await resolve_accent_color(self.cog.ctx.db_path, interaction.guild)
+        confession_embed = build_confession_embed(content, color=accent)
+
         if isinstance(dest_channel, discord.ForumChannel):
             tag_kwargs: dict = {}
             if dest_channel.flags.require_tag and dest_channel.available_tags:
@@ -141,7 +170,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             try:
                 forum_result = await dest_channel.create_thread(
                     name=thread_name_from_content(content),
-                    content=defang_everyone_here(content),
+                    embed=confession_embed,
                     allowed_mentions=discord.AllowedMentions.none(),
                     auto_archive_duration=10080,
                     **tag_kwargs,
@@ -168,12 +197,13 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             except discord.HTTPException:
                 pass
             await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
+            await _fire_confession_trigger(interaction, occurrence=str(root_message_id))
             await self.cog._safe_complete(interaction)
             return
 
         try:
             sent = await dest_channel.send(
-                content=defang_everyone_here(content),
+                embed=confession_embed,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:
@@ -201,6 +231,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         except discord.HTTPException:
             pass
         await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
+        await _fire_confession_trigger(interaction, occurrence=str(sent.id))
         await self.cog._safe_complete(interaction)
 
 
@@ -591,14 +622,14 @@ class ConfessionsCog(commands.Cog):
                 await interaction.followup.send(message, ephemeral=True)
             else:
                 await interaction.response.send_message(message, ephemeral=True)
-        except Exception:
+        except discord.HTTPException:
             pass
 
     async def _safe_complete(self, interaction: discord.Interaction) -> None:
         if interaction.response.is_done():
             try:
                 await interaction.delete_original_response()
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     def is_valid_reply_target_message(self, guild_id: int, msg: discord.Message) -> bool:

@@ -3,7 +3,10 @@ import logging
 import uuid
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from bot_modules.games.constants import HOW_TO_PLAY, GAME_ICONS
+from bot_modules.games.utils.game_manager import channel_name
 
 log = logging.getLogger(__name__)
 _ICON = GAME_ICONS["legitlibs"]
@@ -12,7 +15,7 @@ _ICON = GAME_ICONS["legitlibs"]
 def _is_host_or_mod(interaction: discord.Interaction, host_id: int) -> bool:
     if interaction.user.id == host_id:
         return True
-    if interaction.guild:
+    if interaction.guild and isinstance(interaction.user, discord.Member):
         perms = interaction.user.guild_permissions
         return perms.administrator or perms.manage_guild
     return False
@@ -28,11 +31,10 @@ class _CancelConfirmView(discord.ui.View):
     @discord.ui.button(label="Yes, cancel round", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         try:
             await interaction.response.edit_message(content="🛑 Cancelling…", view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         await self._on_confirm(interaction)
 
@@ -56,17 +58,17 @@ class JoinView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="ml_join", row=0)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._on_start(interaction, action="join")
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="ml_leave", row=0)
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._on_start(interaction, action="leave")
 
-    @discord.ui.button(label="▶ Start", style=discord.ButtonStyle.primary, custom_id="ml_start", row=0)
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ml_start", row=0)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start the round.", ephemeral=True)
             return
@@ -74,7 +76,7 @@ class JoinView(discord.ui.View):
 
     @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_lobby", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
             return
@@ -84,9 +86,9 @@ class JoinView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ml_htp_lobby", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ml_htp_lobby", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY.get("legitlibs", ""), ephemeral=True)
 
 
@@ -104,12 +106,12 @@ class QuiplashFillView(discord.ui.View):
 
     @discord.ui.button(label="📝 Submit Fills", style=discord.ButtonStyle.primary, custom_id="ml_submit_fills", row=0)
     async def submit_fills(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._on_submit(interaction)
 
     @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
             return
@@ -119,9 +121,9 @@ class QuiplashFillView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ml_htp_fill", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ml_htp_fill", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY.get("legitlibs", ""), ephemeral=True)
 
 
@@ -142,25 +144,25 @@ class ClassicFillView(discord.ui.View):
                        custom_id="ml_cl_submit", row=0)
     async def submit_fills(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         await self._on_submit(interaction)
 
     @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary,
                        custom_id="ml_cl_cancel_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
             return
         await self._on_cancel(interaction)
 
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary,
-                       custom_id="ml_cl_htp_fill", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary,
+                       custom_id="ml_cl_htp_fill", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         await interaction.response.send_message(
             HOW_TO_PLAY.get("legitlibs", ""), ephemeral=True)
 
@@ -182,14 +184,14 @@ class ClassicRescueView(discord.ui.View):
                        custom_id="ml_cl_volunteer", row=0)
     async def volunteer(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         await self._on_volunteer(interaction)
 
     @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary,
                        custom_id="ml_cl_cancel_rescue", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
@@ -214,14 +216,14 @@ class ClassicRescueFillView(discord.ui.View):
                        custom_id="ml_cl_rescue_submit", row=0)
     async def submit_fills(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         await self._on_submit(interaction)
 
     @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary,
                        custom_id="ml_cl_cancel_rescue_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
                 "Only the host or a mod can cancel.", ephemeral=True)
@@ -241,7 +243,7 @@ class ReportView(discord.ui.View):
 
     @discord.ui.button(label="⚠️ Report", style=discord.ButtonStyle.secondary)
     async def report(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_modal(_ReportModal(self.db, self.game_id, self.snapshot))
 
 

@@ -18,16 +18,33 @@ from typing import Any
 # Only used for public-text detection; not a complete list.
 # ---------------------------------------------------------------------------
 
+# Explicit stop-signals. These are unambiguous enough to count on their own.
+#
+# NOT here, deliberately:
+#   "no"     — bare "no" is ordinary speech ("no worries", "oh no", "no milk").
+#              It drove 71.5% of all historical guard evaluations. It is still
+#              honoured, but only as a whole-message refusal in a direct reply
+#              (see _SOLO_NO_RE / detect_boundary_crossing).
+#   "red"/"yellow" — intended as safewords, but they match colour words. In the
+#              photo channels "The red and black combo 😍" was logged as a
+#              "slur and identity attack". 6.3% of historical events.
 _BOUNDARY_TOKENS: frozenset[str] = frozenset({
-    "stop", "no", "please stop", "not interested", "leave me alone",
+    "stop", "please stop", "not interested", "leave me alone",
     "back off", "stop it", "cut it out", "i said no", "go away",
-    "red", "yellow",   # common safewords
+    "not comfortable", "i'd rather not",
 })
 
 _BOUNDARY_RE = re.compile(
     r"\b(" + "|".join(re.escape(t) for t in sorted(_BOUNDARY_TOKENS, key=len, reverse=True)) + r")\b",
     re.IGNORECASE,
 )
+
+# A message that is *only* "no" (or a variant) — a terse refusal rather than
+# the word appearing mid-sentence. Only meaningful as a direct reply.
+_SOLO_NO_RE = re.compile(r"^\s*(no+|nope|nah)[\s.!]*$", re.IGNORECASE)
+
+# How far back to look for the target's stop-signal.
+_BOUNDARY_LOOKBACK_SECS = 6 * 3600
 
 # How far back (seconds) to look for a recent consent-pair revocation.
 _REVOCATION_WINDOW_SECS = 72 * 3600
@@ -109,7 +126,95 @@ def identify_target(
 # ---------------------------------------------------------------------------
 
 def check_boundary_token(content: str) -> bool:
-    return bool(_BOUNDARY_RE.search(content))
+    """True if `content` contains an explicit stop-signal.
+
+    Pure-text helper. This says nothing about *who* said it — a boundary event
+    requires the **target** to have said it to **this author**, which is what
+    `detect_boundary_crossing` determines. Do not gate on this alone.
+    """
+    return bool(_BOUNDARY_RE.search(content or ""))
+
+
+def _author_spoke_between(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    since_ts: float,
+    before_ts: float,
+) -> bool:
+    """True if the author said anything in this channel in the given window."""
+    row = conn.execute(
+        """
+        SELECT 1 FROM messages
+        WHERE guild_id = ? AND channel_id = ? AND author_id = ?
+          AND ts >= ? AND ts < ?
+        LIMIT 1
+        """,
+        (guild_id, channel_id, author_id, since_ts, before_ts),
+    ).fetchone()
+    return row is not None
+
+
+def detect_boundary_crossing(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    target_id: int | None,
+    before_ts: float,
+    lookback_secs: int = _BOUNDARY_LOOKBACK_SECS,
+) -> bool:
+    """True if the TARGET recently signalled a boundary to THIS author.
+
+    A refusal is only a refusal if there was a request: the target's stop-signal
+    must either reply directly to the author, or follow something the author
+    said in this channel within the lookback window. A stop-signal that replies
+    to somebody else is attributed to that person, not to the author.
+
+    This replaces the previous behaviour of matching boundary tokens in the
+    author's *own* message, which fired on the author saying "no".
+    """
+    if target_id is None:
+        return False
+
+    since_ts = before_ts - lookback_secs
+    rows = conn.execute(
+        """
+        SELECT content, ts, reply_to_id FROM messages
+        WHERE guild_id = ? AND channel_id = ? AND author_id = ?
+          AND ts >= ? AND ts <= ?
+          AND content IS NOT NULL AND content != ''
+        ORDER BY ts
+        """,
+        (guild_id, channel_id, target_id, since_ts, before_ts),
+    ).fetchall()
+
+    for row in rows:
+        content = row["content"]
+        strong = check_boundary_token(content)
+        solo_no = bool(_SOLO_NO_RE.match(content))
+        if not (strong or solo_no):
+            continue
+
+        if row["reply_to_id"]:
+            parent = conn.execute(
+                "SELECT author_id FROM messages WHERE message_id = ?",
+                (row["reply_to_id"],),
+            ).fetchone()
+            # Directed at someone else — not this author's boundary to cross.
+            if not parent or parent["author_id"] != author_id:
+                continue
+            return True
+
+        # No reply target: attribute only if the author was actually talking
+        # here first, and only for unambiguous stop-signals.
+        if strong and _author_spoke_between(
+            conn, guild_id, channel_id, author_id, since_ts, float(row["ts"])
+        ):
+            return True
+
+    return False
 
 
 def detect_slur(content: str) -> bool:
@@ -128,11 +233,14 @@ _slur_re_cache: re.Pattern[str] | None = None
 def _get_slur_re() -> re.Pattern[str]:
     global _slur_re_cache
     if _slur_re_cache is None:
-        # Seed list — identity attacks that are violations regardless of consent.
+        # Hard slurs — identity attacks that are violations regardless of consent.
         # Deliberately short; the guard model handles the broader taxonomy.
+        # NOTE: "slut", "whore", "cunt" are intentionally NOT here — on this
+        # kink-positive community they are consensual vocabulary (and appear in
+        # GIF/Tenor URLs), so gating the guard model on them produced almost all
+        # of the historical false positives. Context is left to the guard model.
         terms = [
-            r"f[a4]gg[o0]t", r"\btr[a4]nn[y]?\b", r"\bsl[u]t\b",
-            r"\bwh[o0]re\b", r"\bc[u]nt\b", r"\bret[a4]rd\b",
+            r"f[a4]gg[o0]t", r"\btr[a4]nn[y]?\b", r"\bret[a4]rd\b",
             r"\bn[i1]gg[a4e3]r\b", r"\bch[i1]nk\b", r"\bsp[i1]c\b",
             r"\bk[i1]ke\b", r"\bb[e3]aner\b",
         ]

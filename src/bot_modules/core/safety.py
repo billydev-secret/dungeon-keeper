@@ -105,7 +105,7 @@ async def check_guild_membership(cfg: Config, bot: discord.Client) -> None:
             )
             try:
                 await g.leave()
-            except Exception:
+            except discord.HTTPException:
                 pass
         sys.exit(1)
     for g in wrong:

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import discord
-from discord import app_commands
 
 from bot_modules.core.utils import format_user_for_log, get_bot_member
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import AppContext
 
 log = logging.getLogger("dungeonkeeper.role_grant")
 
@@ -133,9 +134,21 @@ async def _execute_grant(
         return
 
     from bot_modules.core.xp_system import log_role_event
+    from bot_modules.services.role_grant_audit_service import mark_restored
 
-    with ctx.open_db() as db_conn:
-        log_role_event(db_conn, guild.id, member.id, role.name, "grant")
+    guild_id = guild.id
+    member_id = member.id
+    role_name = role.name
+    granted_role_id = role.id
+
+    def _do_log() -> None:
+        with ctx.open_db() as db_conn:
+            log_role_event(db_conn, guild_id, member_id, role_name, "grant")
+            # A re-grant closes any open prune event so the grant-audit panel
+            # stops listing this member as stripped-but-not-restored.
+            mark_restored(db_conn, guild_id, member_id, granted_role_id, time.time())
+
+    await asyncio.to_thread(_do_log)
 
     log.info(
         "%s granted %s to %s.",
@@ -170,50 +183,125 @@ async def _execute_grant(
             )
 
 
-def register_role_grant_commands(bot: Bot, ctx: AppContext) -> None:
+# The old /grant_missing audit view moved to the web dashboard's Grant Audit
+# panel (GET /api/reports/grant-audit), backed by
+# bot_modules.services.role_grant_audit_service. /grant_audit below posts the
+# same buckets as an auto-updating channel card.
 
-    async def _role_autocomplete(
-        interaction: discord.Interaction,
-        current: str,
-    ) -> list[app_commands.Choice[str]]:
-        choices: list[app_commands.Choice[str]] = []
-        for key, cfg in ctx.guild_config(interaction.guild_id or 0).grant_roles.items():
-            if (
-                current.lower() in key.lower()
-                or current.lower() in cfg["label"].lower()
-            ):
-                choices.append(app_commands.Choice(name=cfg["label"], value=key))
-        return choices[:25]
 
-    @bot.tree.command(
-        name="grant", description="Give a configured community role to a member."
+async def _execute_grant_audit_post(
+    interaction: discord.Interaction,
+    role_key: str,
+    min_level: int,
+    channel: discord.TextChannel | None,
+    ctx: AppContext,
+) -> None:
+    """Post (or refresh/move) the auto-updating grant-audit card.
+
+    Same channel-id/message-id pattern as the economy leaderboard panel:
+    posting again in the same channel edits in place, posting elsewhere moves
+    the card (deleting the stale one when reachable), and the hourly
+    ``grant_audit_card_loop`` keeps whichever message is stored fresh.
+    """
+    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.services.role_grant_audit_service import (
+        build_grant_audit_embed,
+        gather_grant_audit,
+        load_card_ref,
+        resolve_grant_audit_buckets,
+        save_card_ref,
     )
-    @app_commands.describe(
-        role="Role to grant (from your configured grant roles).",
-        member="Member to receive the role.",
-    )
-    @app_commands.autocomplete(role=_role_autocomplete)
-    async def grant_cmd(
-        interaction: discord.Interaction, role: str, member: discord.Member
-    ) -> None:
-        if not ctx.can_use_grant_role(interaction, role):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-        cfg = ctx.guild_config(interaction.guild_id or 0).grant_roles.get(role)
-        if cfg is None:
-            await interaction.response.send_message(
-                "This grant role is not configured.", ephemeral=True
-            )
-            return
-        await _execute_grant(
-            interaction,
-            member,
-            role_id=cfg["role_id"],
-            log_channel_id=cfg["log_channel_id"],
-            announce_channel_id=cfg["announce_channel_id"],
-            grant_message=cfg["grant_message"],
-            ctx=ctx,
-            required_role_id=cfg.get("required_role_id", 0),
+
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "This command only works in a server.", ephemeral=True
         )
+        return
+
+    cfg = ctx.guild_config(guild.id).grant_roles.get(role_key)
+    if cfg is None or cfg["role_id"] <= 0:
+        await interaction.response.send_message(
+            "This grant role is not configured.", ephemeral=True
+        )
+        return
+
+    role = guild.get_role(cfg["role_id"])
+    if role is None:
+        await interaction.response.send_message(
+            "The configured role no longer exists.", ephemeral=True
+        )
+        return
+
+    if min_level < 1:
+        await interaction.response.send_message(
+            "min_level must be at least 1.", ephemeral=True
+        )
+        return
+
+    target = channel or interaction.channel
+    if not isinstance(target, discord.TextChannel):
+        await interaction.response.send_message(
+            "Pick a regular text channel for the card.", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    import time as _time
+
+    guild_id = guild.id
+    role_id = role.id
+    role_name = role.name
+    now_ts = _time.time()
+
+    def _load():
+        with ctx.open_db() as conn:
+            return (
+                load_card_ref(conn, guild_id),
+                gather_grant_audit(conn, guild_id, role_id, min_level, role_name),
+            )
+
+    ref, gathered = await asyncio.to_thread(_load)
+    snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, now_ts)
+    accent = await resolve_accent_color(ctx.db_path, guild)
+    embed = build_grant_audit_embed(cfg["label"], snap, now_ts=now_ts, color=accent)
+
+    message: discord.Message | None = None
+    if ref.message_id and ref.channel_id == target.id:
+        try:
+            old = await target.fetch_message(ref.message_id)
+            await old.edit(embed=embed)
+            message = old
+        except discord.HTTPException:
+            pass  # gone or unreachable — fall through to a fresh post
+
+    if message is None:
+        if ref.message_id and ref.channel_id and ref.channel_id != target.id:
+            old_channel = guild.get_channel(ref.channel_id)
+            if isinstance(old_channel, discord.TextChannel):
+                try:
+                    stale = await old_channel.fetch_message(ref.message_id)
+                    await stale.delete()
+                except discord.HTTPException:
+                    pass
+        try:
+            message = await target.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                f"I can't post in {target.mention}.", ephemeral=True
+            )
+            return
+
+    message_id = message.id
+
+    def _save() -> None:
+        with ctx.open_db() as conn:
+            save_card_ref(conn, guild_id, target.id, message_id, role_key, min_level)
+
+    await asyncio.to_thread(_save)
+    await interaction.followup.send(
+        f"Grant-audit card for **{cfg['label']}** is live in {target.mention} — "
+        "it refreshes hourly; delete the message to retire it.",
+        ephemeral=True,
+    )

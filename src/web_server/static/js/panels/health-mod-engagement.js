@@ -1,7 +1,6 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeHorizontalBarChart, ROLE_COLORS } from "../charts.js";
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 const INTERVALS = [
   { value: "7",  label: "Last 7 days" },

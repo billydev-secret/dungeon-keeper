@@ -185,6 +185,14 @@ def test_build_starboard_embed_carries_content_and_count():
     assert "alice" in embed.author.name
 
 
+def test_build_starboard_embed_custom_emoji_falls_back_in_footer():
+    """A custom star emoji renders as raw text in a footer; fall back to ⭐."""
+    msg = _make_message(content="starred")
+    embed = build_starboard_embed(msg, star_count=7, emoji="<:gold_star:123>")
+    assert embed.footer.text == "⭐ 7"
+    assert "<:gold_star:123>" not in (embed.footer.text or "")
+
+
 def test_build_starboard_embed_truncates_long_content_to_2000_chars():
     msg = _make_message(content="x" * 5000)
     embed = build_starboard_embed(msg, star_count=3, emoji="⭐")

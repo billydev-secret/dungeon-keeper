@@ -13,8 +13,15 @@ from __future__ import annotations
 import math
 import random
 
+import discord
 import pytest
 
+from bot_modules.games.constants import (
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
 from bot_modules.games_hottakes.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -381,6 +388,67 @@ def test_build_recap_embed_dedupes_total_voters():
     assert by_name["Total Takes"] == "2"
 
 
+# ── accent color migration (2026-07-21 ruling) ──────────────────────
+#
+# Hot Takes is a voting game: lobby / playing / results / recap are NOT
+# win/loss, so every phase honors the passed guild accent. With no color
+# passed, each builder falls back to its old PHASE_* constant.
+
+
+ACCENT = discord.Color(0x123456)
+
+
+def test_build_lobby_embed_honors_passed_accent():
+    embed = build_lobby_embed("Alice", color=ACCENT)
+    assert embed.color == ACCENT
+
+
+def test_build_lobby_embed_falls_back_to_phase_joining():
+    embed = build_lobby_embed("Alice")
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_build_vote_embed_open_honors_passed_accent():
+    embed = build_vote_embed(
+        "t", take_num=1, total_takes=1, votes_by_user={}, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_vote_embed_closed_honors_passed_accent():
+    embed = build_vote_embed(
+        "t", take_num=1, total_takes=1, votes_by_user={1: 4},
+        closed=True, color=ACCENT,
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_vote_embed_falls_back_to_phase_playing_when_open():
+    embed = build_vote_embed("t", take_num=1, total_takes=1, votes_by_user={})
+    assert embed.color == discord.Color(PHASE_PLAYING)
+
+
+def test_build_vote_embed_falls_back_to_phase_results_when_closed():
+    embed = build_vote_embed(
+        "t", take_num=1, total_takes=1, votes_by_user={1: 4}, closed=True
+    )
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_build_recap_embed_honors_passed_accent():
+    results = [{"text": "x", "avg": 3.0, "std": 0.0, "voters": [1]}]
+    embed = build_recap_embed(results, color=ACCENT)
+    assert embed is not None
+    assert embed.color == ACCENT
+
+
+def test_build_recap_embed_falls_back_to_phase_recap():
+    results = [{"text": "x", "avg": 3.0, "std": 0.0, "voters": [1]}]
+    embed = build_recap_embed(results)
+    assert embed is not None
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
 # ── parametrized: tally_votes covers the full scale ─────────────────
 
 
@@ -389,3 +457,60 @@ def test_tally_votes_single_vote_avg_equals_scale_value(idx, expected_avg):
     counts, avg, _std = tally_votes({1: idx})
     assert counts[idx] == 1
     assert avg == expected_avg
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_hottakes_cog as hottakes_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_run_voting_pays_voters_and_authors(monkeypatch, sync_db_path):
+    """Roster = voters plus take authors; the winning take's author may not have
+    voted, so a voters-only set would drop their participation + win credit."""
+    spy = AsyncMock()
+    monkeypatch.setattr(hottakes_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {"takes": [{"text": "t1", "user_id": 9}], "results": []}
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", payload=payload)
+    bot.active_views[gid] = object()  # placeholder so the loop's entry guard passes
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(
+        id=100, guild=None,
+        send=AsyncMock(return_value=SimpleNamespace(id=999, edit=AsyncMock())),
+    )
+    task = asyncio.ensure_future(cog._run_voting(None, gid, 1, "Host", channel))
+    try:
+        view = None
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            candidate = bot.active_views.get(gid)
+            if isinstance(candidate, hottakes_cog.HotTakeVoteView):
+                view = candidate
+                break
+        assert view is not None, "vote view was never created"
+        view.votes = {1: 0, 2: 3}  # author 9 never voted
+        await view.advance_callback(SimpleNamespace(edit=AsyncMock()))
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        if not task.done():
+            task.cancel()
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 9]
+    assert call.kwargs["bot"] is bot

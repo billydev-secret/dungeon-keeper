@@ -27,46 +27,10 @@ class FakeCtx:
         self.db_path = db_path
         self.guild_id = guild_id
         self.bot = None
-        self.tz_offset_hours = 0.0
-        self.mod_channel_id = 0
-        self.bypass_role_ids: set[int] = set()
-        self.recorded_bot_user_ids: set[int] = set()
-        self.spoiler_required_channels: set[int] = set()
-        self.level_5_role_id = 0
-        self.level_5_log_channel_id = 0
-        self.level_up_log_channel_id = 0
-        self.xp_grant_allowed_user_ids: set[int] = set()
-        self.xp_excluded_channel_ids: set[int] = set()
-        self.welcome_channel_id = 0
-        self.welcome_message = ""
-        self.welcome_ping_role_id = 0
-        self.leave_channel_id = 0
-        self.leave_message = ""
-        self.greeter_role_id = 0
-        self.greeter_chat_channel_id = 0
-        self.join_leave_log_channel_id = 0
-        self.mod_role_ids: set[int] = set()
-        self.admin_role_ids: set[int] = set()
-        self._xp_reload_count = 0
         self._guild_config_cache: dict = {}
 
     def open_db(self):
         return open_db(self.db_path)
-
-    def reload_xp_settings(self) -> None:
-        self._xp_reload_count += 1
-
-    def reload_grant_roles(self) -> None:
-        pass
-
-    def reload_permission_roles(self) -> None:
-        from bot_modules.core.db_utils import get_config_value
-
-        with self.open_db() as conn:
-            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
-            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
-        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
-        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
 
     def guild_config(self, guild_id: int):
         from bot_modules.core.app_context import GuildConfig

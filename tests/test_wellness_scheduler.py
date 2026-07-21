@@ -163,11 +163,11 @@ def test_format_minute_wraps_with_zero_padding():
     assert _format_minute(7 * 60 + 5) == "07:05"
 
 
-def test_badge_rank_recognises_seed():
+def test_badge_rank_recognizes_seed():
     assert _badge_rank("🌱") == 0
 
 
-def test_badge_rank_recognises_top_tier():
+def test_badge_rank_recognizes_top_tier():
     assert _badge_rank("👑") == 4
 
 

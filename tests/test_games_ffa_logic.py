@@ -66,12 +66,21 @@ def test_label_for_kind_defaults_to_truth():
 
 class _FakeDB:
     def __init__(self, rows):
-        # rows: (game_type, tags_list, question_text)
+        # rows: (game_type, tags_list, question_text[, last_served_at])
         self._rows = rows
+        self.served: list[int] = []
 
     async def fetchall(self, sql, params):
         (game_type,) = params
-        return [(r[2], json.dumps(r[1])) for r in self._rows if r[0] == game_type]
+        return [
+            (qid, r[2], json.dumps(r[1]), r[3] if len(r) > 3 else None)
+            for qid, r in enumerate(self._rows)
+            if r[0] == game_type
+        ]
+
+    async def execute(self, sql, params):
+        (qid,) = params
+        self.served.append(qid)
 
 
 def _run(coro):
@@ -87,14 +96,26 @@ def test_get_ffa_prompt_kind_drives_label():
     assert _run(get_ffa_prompt(db, kind="dare")) == (DARE, "A dare.")
 
 
-def test_get_ffa_prompt_excludes_nsfw_unless_opted_in():
+def test_get_ffa_prompt_excludes_nsfw_unless_allow_nsfw():
+    """NSFW is gated on the channel's age-restriction flag (``allow_nsfw``);
+    requesting the 'nsfw' tag cannot re-enable it."""
     db = _FakeDB([
         ("ffa", ["truth"], "Tame truth."),
         ("ffa", ["truth", "nsfw"], "Spicy truth."),
     ])
+    # Default (no channel opt-in) → nsfw rows are excluded.
     seen = {_run(get_ffa_prompt(db, kind="truth"))[1] for _ in range(40)}
     assert seen == {"Tame truth."}
+    # Requesting the 'nsfw' tag without allow_nsfw doesn't re-enable NSFW —
+    # only tame content comes back.
     seen = {_run(get_ffa_prompt(db, kind="truth", tags=["nsfw"]))[1] for _ in range(40)}
+    assert seen == {"Tame truth."}
+    # An nsfw-only pool with the tag requested but no channel opt-in is a
+    # filtered miss (no code-bank fallback when a tag filter was supplied).
+    nsfw_only = _FakeDB([("ffa", ["truth", "nsfw"], "Spicy truth.")])
+    assert _run(get_ffa_prompt(nsfw_only, kind="truth", tags=["nsfw"])) is None
+    # Channel opt-in (allow_nsfw=True) → both pools are candidates.
+    seen = {_run(get_ffa_prompt(db, kind="truth", allow_nsfw=True))[1] for _ in range(40)}
     assert seen == {"Tame truth.", "Spicy truth."}
 
 
@@ -107,3 +128,40 @@ def test_get_ffa_prompt_empty_bank_falls_back_to_code():
     db = _FakeDB([])
     label, text = _run(get_ffa_prompt(db, kind="truth"))
     assert label == TRUTH and isinstance(text, str) and text
+
+
+# ── exclude (the Next button's seen-set) ──────────────────────────────────────
+
+def test_get_ffa_prompt_exclude_skips_seen():
+    db = _FakeDB([
+        ("ffa", ["truth"], "First truth."),
+        ("ffa", ["truth"], "Second truth."),
+    ])
+    # With one shown, only the other can come back.
+    seen = {_run(get_ffa_prompt(db, kind="truth", exclude=["First truth."]))[1] for _ in range(30)}
+    assert seen == {"Second truth."}
+
+
+def test_get_ffa_prompt_exclude_exhausted_returns_none():
+    """When every match is excluded the set is exhausted → None (no code fallback,
+    even unfiltered), signalling the caller to reset the seen-set."""
+    db = _FakeDB([("ffa", ["truth"], "Only truth.")])
+    assert _run(get_ffa_prompt(db, kind="truth", exclude=["Only truth."])) is None
+
+
+# ── round-robin: least-recently-served wins over pure randomness ─────
+
+
+def test_get_ffa_prompt_prefers_never_served_row():
+    db = _FakeDB([
+        ("ffa", ["truth"], "Served already.", "2026-07-01 00:00:00"),
+        ("ffa", ["truth"], "Never served.", None),
+    ])
+    for _ in range(25):
+        assert _run(get_ffa_prompt(db, kind="truth"))[1] == "Never served."
+
+
+def test_get_ffa_prompt_marks_the_served_row():
+    db = _FakeDB([("ffa", ["truth"], "Only truth.")])
+    _run(get_ffa_prompt(db, kind="truth"))
+    assert db.served == [0]

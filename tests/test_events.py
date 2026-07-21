@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +12,15 @@ import pytest
 from discord import app_commands
 
 from bot_modules.cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
+from bot_modules.core.db_utils import open_db
 from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS
+from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_quests_service import create_quest, set_quest_active
+from bot_modules.services.economy_service import (
+    get_balance,
+    save_econ_settings,
+)
+from migrations import apply_migrations_sync
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -122,7 +131,7 @@ async def test_dm_message_ignored(mock_spoiler, mock_award, mock_activity, cog):
 
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.record_member_activity")
-@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
 @patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_spoiler_violation_stops_processing(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, cog):
@@ -134,7 +143,7 @@ async def test_spoiler_violation_stops_processing(mock_spoiler, mock_award, mock
 
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.record_member_activity")
-@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
 @patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_normal_message_records_activity(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, cog):
@@ -147,7 +156,7 @@ async def test_normal_message_records_activity(mock_spoiler, mock_award, mock_ru
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.track_auto_delete_message")
 @patch("bot_modules.cogs.events_cog.record_member_activity")
-@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=True)
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=True)
 @patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_message_tracked_when_rule_exists(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_track, mock_level, cog):
@@ -162,7 +171,7 @@ async def test_message_tracked_when_rule_exists(mock_spoiler, mock_award, mock_r
 
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.record_member_activity")
-@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
 @patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_xp_award_triggers_level_progress(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, cog):
@@ -179,7 +188,7 @@ async def test_xp_award_triggers_level_progress(mock_spoiler, mock_award, mock_r
 
 @patch("bot_modules.cogs.events_cog.store_message")
 @patch("bot_modules.cogs.events_cog.record_member_activity")
-@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
 @patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_system_message_archives_system_content_without_activity_or_xp(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_store, cog):
@@ -451,9 +460,14 @@ class _StubGuildConfig:
         level_5_role_id: int = 0,
         level_5_log_channel_id: int = 0,
         level_up_log_channel_id: int = 0,
+        grant_roles: Any = None,
         xp_settings: Any = DEFAULT_XP_SETTINGS,
         message_storage_level: str = "none",
         auto_role_ids: Any = None,
+        greeting_watch_enabled: bool = False,
+        greeting_watch_channel_ids: Any = None,
+        greeting_watch_notify_user_id: int = 0,
+        greeting_watch_window_minutes: int = 10,
     ):
         self.welcome_channel_id = welcome_channel_id
         self.welcome_message = welcome_message
@@ -479,11 +493,20 @@ class _StubGuildConfig:
         self.level_5_role_id = level_5_role_id
         self.level_5_log_channel_id = level_5_log_channel_id
         self.level_up_log_channel_id = level_up_log_channel_id
+        self.grant_roles = {} if grant_roles is None else grant_roles
         self.xp_settings = xp_settings
         self.message_storage_level = message_storage_level
         self.auto_role_ids = (
             frozenset() if auto_role_ids is None else frozenset(auto_role_ids)
         )
+        self.greeting_watch_enabled = greeting_watch_enabled
+        self.greeting_watch_channel_ids = (
+            frozenset()
+            if greeting_watch_channel_ids is None
+            else frozenset(greeting_watch_channel_ids)
+        )
+        self.greeting_watch_notify_user_id = greeting_watch_notify_user_id
+        self.greeting_watch_window_minutes = greeting_watch_window_minutes
 
     @property
     def retains_content(self) -> bool:
@@ -518,6 +541,11 @@ def _patch_join_deps():
             return_value=(None, None),
         ),
         patch("bot_modules.cogs.events_cog.build_welcome_embed", return_value="<embed>"),
+        patch(
+            "bot_modules.cogs.events_cog.resolve_accent_color",
+            new_callable=AsyncMock,
+            return_value=discord.Color.blurple(),
+        ),
     ]
 
 
@@ -526,6 +554,11 @@ def _patch_leave_deps():
         patch("bot_modules.cogs.events_cog.mark_member_left"),
         patch("bot_modules.cogs.events_cog.record_member_event"),
         patch("bot_modules.cogs.events_cog.build_leave_embed", return_value="<embed>"),
+        patch(
+            "bot_modules.cogs.events_cog.resolve_accent_color",
+            new_callable=AsyncMock,
+            return_value=discord.Color.blurple(),
+        ),
     ]
 
 
@@ -801,3 +834,447 @@ async def test_on_member_remove_skips_when_channel_unset():
         await cog.on_member_remove(member)
 
     member.guild.get_channel.assert_not_called()
+
+
+# ── economy: text login + QOTD hooks in _process_economy_message ──────────
+
+ECON_GUILD = 4242
+ECON_USER = 77
+ECON_CHANNEL = 88
+
+
+@pytest.fixture
+def econ_db(tmp_path):
+    db_path = tmp_path / "econ.db"
+    apply_migrations_sync(db_path)
+    return db_path
+
+
+def _econ_cog(econ_db) -> EventsCog:
+    ctx: Any = SimpleNamespace(db_path=econ_db, open_db=lambda: open_db(econ_db))
+    return EventsCog(_make_bot(), ctx)
+
+
+def _enable_econ(econ_db, **overrides) -> None:
+    values: dict[str, object] = {"enabled": True}
+    values.update(overrides)
+    with open_db(econ_db) as conn:
+        save_econ_settings(conn, ECON_GUILD, values)
+
+
+def _seed_streak(
+    econ_db, *, streak: int, last_login_day: str, last_grace_day=None, shields=0
+) -> None:
+    with open_db(econ_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_streaks
+                (guild_id, user_id, current_streak, longest_streak,
+                 last_login_day, last_grace_day, shields)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ECON_GUILD, ECON_USER, streak, streak, last_login_day,
+                last_grace_day, shields,
+            ),
+        )
+
+
+def _econ_message(
+    *,
+    booster: bool = False,
+    user_id: int = ECON_USER,
+    message_id: int | None = None,
+    reply_to: int | None = None,
+    content: str = "",
+    role_mentions: tuple[int, ...] = (),
+    admin: bool = False,
+    manager_role_id: int | None = None,
+) -> MagicMock:
+    msg = MagicMock(spec=discord.Message)
+    guild = MagicMock()
+    guild.id = ECON_GUILD
+    msg.guild = guild
+    author = MagicMock(spec=discord.Member)
+    author.id = user_id
+    author.premium_since = object() if booster else None
+    author.guild_permissions = SimpleNamespace(administrator=admin)
+    author.roles = (
+        [SimpleNamespace(id=manager_role_id)] if manager_role_id is not None else []
+    )
+    msg.author = author
+    channel = MagicMock()
+    channel.id = ECON_CHANNEL
+    msg.channel = channel
+    if message_id is not None:
+        msg.id = message_id
+    msg.content = content
+    msg.role_mentions = [SimpleNamespace(id=r) for r in role_mentions]
+    # Default to "not a reply" — a bare MagicMock reference would read as a
+    # reply to a mock message id and reach the QOTD lookup as a non-integer.
+    msg.reference = (
+        SimpleNamespace(message_id=reply_to, resolved=None)
+        if reply_to is not None
+        else None
+    )
+    return msg
+
+
+def _seed_qotd(econ_db, *, message_id: int, local_day: str | None = None) -> None:
+    with open_db(econ_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_qotd
+                (guild_id, channel_id, message_id, question, posted_by, local_day, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ECON_GUILD, ECON_CHANNEL, message_id, "Q?", 1, local_day or _today(), 0.0),
+        )
+
+
+def _days_ago(n: int) -> str:
+    import time as _t
+
+    return local_day_for(_t.time() - n * 86400, 0.0)
+
+
+def _today() -> str:
+    import time as _t
+
+    return local_day_for(_t.time(), 0.0)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_disabled_is_noop(mock_notify, econ_db):
+    cog = _econ_cog(econ_db)  # economy left disabled
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_not_awaited()
+    with open_db(econ_db) as conn:
+        rows = conn.execute("SELECT COUNT(*) c FROM econ_logins").fetchone()
+    assert rows["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    # Every login now DMs a streak + quest digest (opt-in gated by
+    # notify_member's require_game_role, mocked out here).
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert "day" in (embed.description or "").lower()
+    with open_db(econ_db) as conn:
+        assert get_balance(conn, ECON_GUILD, ECON_USER) > 0
+        row = conn.execute(
+            "SELECT current_streak FROM econ_streaks WHERE guild_id=? AND user_id=?",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row["current_streak"] == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_repeat_same_day_no_second_login(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        first = get_balance(conn, ECON_GUILD, ECON_USER)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        second = get_balance(conn, ECON_GUILD, ECON_USER)
+    assert first == second  # process_login returns None on the same local day
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_milestone_dms(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    _seed_streak(econ_db, streak=6, last_login_day=_days_ago(1))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert any("milestone" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_grace_dms(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # Missed exactly one day, no grace used in the window → grace bridges it.
+    _seed_streak(econ_db, streak=4, last_login_day=_days_ago(2))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert any("saved" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_shield_consumed_dms_shield_copy(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # One missed day, but grace was burned inside the rolling window — only
+    # the held shield saves the streak, and the digest must say so.
+    _seed_streak(
+        econ_db, streak=4, last_login_day=_days_ago(2),
+        last_grace_day=_days_ago(4), shields=1,
+    )
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    saved = next(f for f in embed.fields if "saved" in f.name.lower())
+    assert "shield" in saved.value.lower()
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT current_streak, shields FROM econ_streaks "
+            "WHERE guild_id=? AND user_id=?",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row["current_streak"] == 5  # streak survived
+    assert row["shields"] == 0  # shield burned
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_grace_plus_shield_two_day_save(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # Two missed days: grace + shield burn together, one combined callout.
+    _seed_streak(econ_db, streak=6, last_login_day=_days_ago(3), shields=1)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    embed = mock_notify.await_args.kwargs["embed"]
+    saved = next(f for f in embed.fields if "saved" in f.name.lower())
+    assert "two missed days" in saved.value.lower()
+    assert sum(1 for f in embed.fields if "saved" in f.name.lower()) == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_reset_below_three_omits_reset_field(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # A short 2-day streak that breaks (3-day gap) resets — too trivial to
+    # call out with its own field, but the daily digest still DMs.
+    _seed_streak(econ_db, streak=2, last_login_day=_days_ago(3))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert not any("reset" in f.name.lower() for f in embed.fields)
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT current_streak FROM econ_streaks WHERE guild_id=? AND user_id=?",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row["current_streak"] == 1  # it did reset, just no dedicated field
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # A meaningful streak (>=3) that breaks earns a "streak reset" DM.
+    _seed_streak(econ_db, streak=8, last_login_day=_days_ago(4))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert any("reset" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_login_dm_includes_quest_recap(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    with open_db(econ_db) as conn:
+        quest_id = create_quest(
+            conn,
+            ECON_GUILD,
+            title="Say hello",
+            description="Chat a bit today.",
+            qtype="daily",
+            reward=25,
+            signoff=0,
+            criteria="",
+            starts_at=None,
+            ends_at=None,
+            rotate_tag="",
+            community_target=None,
+            created_by=None,
+        )
+        set_quest_active(conn, ECON_GUILD, quest_id, True)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    quest_field = next(f for f in embed.fields if "quest" in f.name.lower())
+    assert "Say hello" in quest_field.value
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
+    _enable_econ(econ_db, reward_qotd=10)
+    _seed_qotd(econ_db, message_id=999)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message(reply_to=999))
+    with open_db(econ_db) as conn:
+        rewarded = conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"]
+    assert rewarded == 1
+    # A second reply to the same question must not re-reward it.
+    await cog._process_economy_message(_econ_message(reply_to=999))
+    with open_db(econ_db) as conn:
+        rewarded2 = conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"]
+    assert rewarded2 == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_plain_message_earns_nothing(mock_notify, econ_db):
+    """Talking in the channel isn't answering — only a reply pays."""
+    _enable_econ(econ_db, reward_qotd=10)
+    _seed_qotd(econ_db, message_id=999)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_stale_question_earns_nothing(mock_notify, econ_db):
+    """Yesterday's question is closed — replying to it late can't be farmed."""
+    _enable_econ(econ_db, reward_qotd=10)
+    _seed_qotd(econ_db, message_id=999, local_day=_days_ago(1))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message(reply_to=999))
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_mod_tag_opens_the_question(mock_notify, econ_db):
+    _enable_econ(econ_db, reward_qotd=10, qotd_ping_role_id=77)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(
+        _econ_message(
+            message_id=555,
+            content="<@&77> what's your comfort food?",
+            role_mentions=(77,),
+            admin=True,
+        )
+    )
+    with open_db(econ_db) as conn:
+        row = conn.execute("SELECT message_id, question, local_day FROM econ_qotd").fetchone()
+    assert row is not None
+    assert row["message_id"] == 555
+    assert row["question"] == "what's your comfort food?"
+    assert row["local_day"] == _today()
+    # …and a member replying to it gets paid.
+    await cog._process_economy_message(_econ_message(user_id=ECON_USER + 1, reply_to=555))
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"] == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_tag_from_non_mod_opens_nothing(mock_notify, econ_db):
+    """The manager gate is the security boundary — anyone can type the tag."""
+    _enable_econ(econ_db, reward_qotd=10, qotd_ping_role_id=77)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(
+        _econ_message(message_id=555, content="<@&77> free coins?", role_mentions=(77,))
+    )
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Color(0x123456)),
+)
+async def test_econ_qotd_tag_registers_once(mock_notify, econ_db):
+    """An edit/retry replaying the same message must not open a second QOTD."""
+    _enable_econ(econ_db, reward_qotd=10, qotd_ping_role_id=77)
+    cog = _econ_cog(econ_db)
+    msg = _econ_message(
+        message_id=555, content="<@&77> question?", role_mentions=(77,), admin=True
+    )
+    await cog._process_economy_message(msg)
+    await cog._process_economy_message(msg)
+    with open_db(econ_db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 1
+
+
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_econ_hook_failure_never_breaks_on_message(
+    mock_spoiler, mock_award, mock_track, mock_activity, mock_level, cog
+):
+    """A raising economy branch must be swallowed so message/XP processing survives."""
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    with patch.object(
+        EventsCog,
+        "_process_economy_message",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    ) as mock_econ:
+        # Should not raise despite the economy hook blowing up.
+        await cog.on_message(_make_message())
+    mock_econ.assert_awaited_once()
+    mock_activity.assert_called_once()  # normal processing still completed

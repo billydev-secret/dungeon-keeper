@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dungeonkeeper"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 
 [project.scripts]
 dungeonkeeper = "dungeonkeeper.__main__:main"
@@ -19,7 +19,26 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 # Run tests in parallel via pytest-xdist. Pass ``-n 0`` to disable for
 # debugging a single test (the last -n on the command line wins).
-addopts = "-n auto"
+# ``-m "not browser"`` keeps every Playwright suite out of the default/full run;
+# a command-line ``-m browser`` (gate --quick, nightly) overrides it (last wins).
+addopts = "-n auto -m 'not browser'"
+markers = [
+    # Umbrella for every real-browser (Playwright) dashboard check. Opt-in:
+    # excluded from the default run so the functional suite needs no browser.
+    # gate.py runs these scoped to edited panels; nightly runs them fully. Each
+    # module auto-skips where Playwright / Chromium isn't installed.
+    "browser: real-browser dashboard checks (needs Playwright + Chromium)",
+    # Sub-tag on the layout suite so `-m mobile` can run just it. Every mobile
+    # test is also a browser test.
+    "mobile: responsive-layout subset of the browser suite",
+]
+# Each test gets a fresh SQLite db under the tmp dir; the full suite writes
+# ~1-2 GB per run. Default retention keeps 3 whole sessions, so /tmp/pytest-of-ben
+# accumulates until a run hits a transient "disk I/O error" at fixture setup.
+# Keep only the most recent session (pruned at startup by the main process —
+# this works under xdist; the per-test `retention_policy` does not, so we don't
+# rely on it). If mass sqlite setup errors ever recur: rm -rf /tmp/pytest-of-ben.
+tmp_path_retention_count = 1
 
 [tool.coverage.run]
 # Required for --cov to work under pytest-xdist: each worker writes its own
@@ -27,21 +46,24 @@ addopts = "-n auto"
 parallel = true
 source = ["src"]
 
+[tool.coverage.report]
+# Regression floor, set just under the measured 50% (2026-07-02, 4316 tests).
+# Raise it as coverage grows; don't lower it to make a failing build pass.
+fail_under = 49
+
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["E402"]
 "tests/conftest.py" = ["E402"]
 "tests/web/conftest.py" = ["E402"]
+# Section-organized test: imports intentionally grouped with their test block.
+"tests/test_games_ffa_logic.py" = ["E402"]
 
 [tool.pyright]
-pythonVersion = "3.10"
+pythonVersion = "3.14"
 include = ["src"]
 extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 useLibraryCodeForTypes = false
 reportMissingModuleSource = "none"
-exclude = [
-  "src/bot_modules/cogs/games_*",
-  "src/bot_modules/cogs/games_legitlibs",
-  "src/bot_modules/games",
-]
+ignore = []

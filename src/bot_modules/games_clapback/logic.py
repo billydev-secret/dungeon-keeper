@@ -145,7 +145,7 @@ def calculate_matchup_score(
     - ``vote_counts``: raw counts per player.
 
     The 50/50 fallback for the zero-votes case matches the cog's
-    intentional "show up and play" behaviour from before extraction.
+    intentional "show up and play" behavior from before extraction.
     """
     total_votes = len(votes)
 

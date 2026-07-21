@@ -13,7 +13,7 @@ There are no starboard slash commands — all configuration lives on the web das
 
 Bot perms required: **Send Messages** + **Embed Links** in the starboard channel; **Read Message History** in source channels for embed building; **Attach Files** in the channel where Quote cards post.
 
-## Behaviour
+## Behavior
 
 ### Starboard: reaction → repost
 
@@ -27,7 +27,7 @@ Reactions in the exclusion list, reactions on the starboard's own posts, and rea
 
 ### Quote: context menu → card → post
 
-Right-click a non-empty, non-system message and pick **Quote**. The bot shows an ephemeral picker (theme select, font select, **Generate** / **Cancel**) for 120 s. On Generate, the bot fetches the author's avatar, renders the quote card (text laid over a colour-graded avatar with vignette), and shows a preview with **Post** / **Cancel**. On Post, the card goes to the channel publicly, then the bot auto-reacts to its own post with the guild's starboard emoji — so a beloved quote can itself reach the starboard.
+Right-click a non-empty, non-system message and pick **Quote**. The bot shows an ephemeral picker (theme select, font select, border select, **Generate** / **Cancel**) for 120 s. On Generate, the bot fetches the author's avatar, renders the quote card (text laid over a color-graded avatar with vignette), and shows a preview with **Post** / **Cancel**. On Post, the card goes to the channel publicly, then the bot auto-reacts to its own post with the guild's starboard emoji — so a beloved quote can itself reach the starboard.
 
 Each quote post writes an audit row (who quoted whom, where, theme/font used).
 
@@ -51,7 +51,7 @@ Each quote post writes an audit row (who quoted whom, where, theme/font used).
 - **Per-channel thresholds.** One threshold per guild. Channels are binary in/out via the exclusion list.
 - **Multiple trigger emojis.** Exactly one per guild. Mods can swap; old reactions under the previous emoji become inert.
 - **Stat leaderboards.** Starboard does not track "most-starred user" or "most-starred channel".
-- **Custom quote themes.** Themes and fonts are fixed; mods cannot add new ones.
+- **Custom quote themes.** Themes and fonts are fixed; mods cannot add new ones. (Borders are the exception — guilds can upload custom borders; see `quote_renderer_spec.md`.)
 - **Quote dedup.** The same message can be quoted again — cards are creative artifacts, not records.
 
 ## Configuration

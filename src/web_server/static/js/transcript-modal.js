@@ -1,15 +1,9 @@
-import { api, fmtTs } from "./api.js";
+import { api, fmtTs, esc } from "./api.js";
 
 let backdrop = null;
 let modal = null;
 let loading = false;
-
-function esc(s) {
-  if (!s) return "";
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
+let _prevFocus = null;
 
 const TYPE_LABELS = {
   ticket: "Ticket",
@@ -28,10 +22,14 @@ function buildDom() {
   modal = document.createElement("div");
   modal.className = "transcript-modal";
   modal.style.display = "none";
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.setAttribute("aria-labelledby", "transcript-title");
+  modal.setAttribute("tabindex", "-1");
   modal.innerHTML = `
     <div class="transcript-header">
-      <h3 data-title></h3>
-      <button class="transcript-close" data-close>&times;</button>
+      <h3 data-title id="transcript-title"></h3>
+      <button class="transcript-close" data-close aria-label="Close transcript">&times;</button>
     </div>
     <div class="transcript-meta-bar" data-meta></div>
     <div class="transcript-body" data-body>
@@ -45,14 +43,33 @@ function buildDom() {
 }
 
 function onKeyDown(e) {
-  if (e.key === "Escape") close();
+  if (e.key === "Escape") { close(); return; }
+  if (e.key !== "Tab" || !modal) return;
+  const items = Array.from(
+    modal.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter(el => el.offsetParent !== null && !el.disabled);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 function open() {
   buildDom();
+  _prevFocus = document.activeElement;
   backdrop.style.display = "";
   modal.style.display = "";
   document.addEventListener("keydown", onKeyDown);
+  const closeBtn = modal.querySelector("[data-close]");
+  (closeBtn || modal).focus();
 }
 
 function close() {
@@ -61,6 +78,10 @@ function close() {
   modal.style.display = "none";
   document.removeEventListener("keydown", onKeyDown);
   loading = false;
+  if (_prevFocus && typeof _prevFocus.focus === "function") {
+    _prevFocus.focus();
+    _prevFocus = null;
+  }
 }
 
 function renderMessages(messages) {

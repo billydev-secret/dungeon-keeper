@@ -17,6 +17,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from bot_modules.services.voice_master_service import (
+    ACCESS_LOCKED,
+    ACCESS_NSFW,
+    ACCESS_OPEN,
+    ACCESS_SPECTATE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Claim eligibility
@@ -608,6 +615,22 @@ def select_effective_bitrate(
     return chosen
 
 
+def style_lease_blocks(
+    *, economy_enabled: bool, price: int, entitled: bool
+) -> bool:
+    """Whether the voice-style lease blocks rename/limit for this member.
+
+    Economy sinks round 3, stage 3 (spec §6): rename and user-limit are leased
+    controls, but the paywall arms only while the guild's economy is enabled
+    AND ``price_voice_style`` is above zero — price 0 is the shipped-dark
+    default where every member keeps the controls free, and it doubles as the
+    per-guild opt-out. An armed paywall passes members entitled to the
+    ``voice_style`` perk (beneficiary-based, so a gifted lease counts). The
+    access dial, invite/kick/transfer, and reset are never gated.
+    """
+    return economy_enabled and price > 0 and not entitled
+
+
 def build_skipped_payload(
     *, name_fell_back: bool, missing_target_count: int
 ) -> list[str]:
@@ -894,6 +917,36 @@ def format_spectator_result(*, spectator: bool, gated: bool = False) -> str:
     )
 
 
+def format_access_result(*, state: str, gated: bool = False) -> str:
+    """Confirmation reply after setting the single access-state dial.
+
+    ``gated`` only matters for the spectator state (whether a gate role narrows
+    the audience).
+    """
+    if state == ACCESS_LOCKED:
+        return (
+            "Access set to **NSFW — locked**: age-gated, hidden from the list, "
+            "and invite-only. People you invite can still see and join."
+        )
+    if state == ACCESS_SPECTATE:
+        if gated:
+            return (
+                "Access set to **Spectator** (gated, age-gated): role-holders "
+                "join muted, no camera, read-only in chat. Others can't join. "
+                "Invite people to let them speak."
+            )
+        return (
+            "Access set to **Spectator** (age-gated): anyone can join muted, no "
+            "camera, read-only in chat. Invite people to let them speak."
+        )
+    if state == ACCESS_NSFW:
+        return (
+            "Access set to **NSFW — open**: age-gated, but anyone can still see "
+            "and join."
+        )
+    return "Access set to **Open**: anyone can see and join, no age gate."
+
+
 def format_rename_result(*, new_name: str) -> str:
     """Confirmation reply after a rename."""
     return f"Renamed to **{new_name}**."
@@ -1084,26 +1137,41 @@ def user_picker_labels(mode: str) -> UserPickerLabels:
 
 @dataclass(frozen=True)
 class PanelButtonMeta:
-    """Pure description of one panel action — its dropdown label + emoji."""
+    """Pure description of one panel action — its dropdown label + emoji.
+
+    ``description`` is an optional second line shown under the option in the
+    select menu (used by the access-state picker, where each state needs a word
+    of explanation); it is empty for the plain action buttons.
+    """
     action: str
     label: str
     emoji: str
+    description: str = ""
 
 
 PANEL_BUTTON_ORDER: tuple[str, ...] = (
-    "lock", "unlock", "spectator", "unspectator", "hide", "unhide",
+    ACCESS_OPEN, ACCESS_NSFW, ACCESS_LOCKED, ACCESS_SPECTATE,
     "rename", "limit", "invite", "kick",
     "transfer", "reset",
 )
 
 
 _PANEL_BUTTON_META: dict[str, PanelButtonMeta] = {
-    "lock":        PanelButtonMeta("lock",        "Lock",        "🔒"),
-    "unlock":      PanelButtonMeta("unlock",      "Unlock",      "🔓"),
-    "spectator":   PanelButtonMeta("spectator",   "Spectate",    "🎭"),
-    "unspectator": PanelButtonMeta("unspectator", "Un-spectate", "🎤"),
-    "hide":        PanelButtonMeta("hide",        "Hide",        "👁️"),
-    "unhide":      PanelButtonMeta("unhide",      "Unhide",      "👀"),
+    ACCESS_OPEN: PanelButtonMeta(
+        ACCESS_OPEN, "Open", "🔓", "Anyone can see and join."
+    ),
+    ACCESS_NSFW: PanelButtonMeta(
+        ACCESS_NSFW, "NSFW — open", "🔞",
+        "Age-gated, but anyone can see and join.",
+    ),
+    ACCESS_LOCKED: PanelButtonMeta(
+        ACCESS_LOCKED, "NSFW — locked", "🔒",
+        "Age-gated, hidden, invite-only.",
+    ),
+    ACCESS_SPECTATE: PanelButtonMeta(
+        ACCESS_SPECTATE, "Spectator", "🎭",
+        "Age-gated audience: join muted, read-only.",
+    ),
     "rename":      PanelButtonMeta("rename",      "Rename",      "✏️"),
     "limit":       PanelButtonMeta("limit",       "Limit",       "🔢"),
     "invite":      PanelButtonMeta("invite",      "Invite",      "👋"),
@@ -1134,15 +1202,15 @@ def all_panel_button_metas() -> list[PanelButtonMeta]:
 # PANEL_BUTTON_ORDER so an action can never silently fall off the panel.
 
 _GROUP_ACTIONS: dict[str, tuple[str, ...]] = {
-    "settings": ("rename", "limit", "hide", "unhide", "reset"),
-    "permissions": (
-        "lock", "unlock", "spectator", "unspectator", "invite", "kick", "transfer",
-    ),
+    "access": (ACCESS_OPEN, ACCESS_NSFW, ACCESS_LOCKED, ACCESS_SPECTATE),
+    "settings": ("rename", "limit", "reset"),
+    "permissions": ("invite", "kick", "transfer"),
 }
 
 PANEL_GROUP_ORDER: tuple[str, ...] = tuple(_GROUP_ACTIONS)
 
 _GROUP_PLACEHOLDER: dict[str, str] = {
+    "access": "Set who can see and join",
     "settings": "Change channel settings",
     "permissions": "Change channel permissions",
 }

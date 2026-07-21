@@ -6,6 +6,7 @@ import time
 
 import discord
 
+from bot_modules.duels.filters import contains_disallowed_content
 from . import state as app_state
 from .formatters import (
     build_embed,
@@ -64,7 +65,7 @@ async def auto_close_round(client: discord.Client, game_id: str) -> None:
         if state.message_id is not None and channel is not None:
             try:
                 await channel.get_partial_message(state.message_id).edit(
-                    embed=build_embed(state), view=closed_view
+                    embed=build_embed(state, getattr(channel, "guild", None)), view=closed_view
                 )
             except discord.Forbidden:
                 channel_forbidden = True
@@ -301,6 +302,9 @@ class RiskyRollView(BaseRiskyRollView):
 
             roll = random.randint(1, 100)
             state.add_roll(interaction.user.id, roll)
+            # Cache the roller's name so the roster embed can show it as text
+            # instead of a <@id> mention that some viewers can't resolve.
+            app_state.display_names[interaction.user.id] = interaction.user.display_name
             if app_state.store is not None:
                 await app_state.store.save_single_roll(state.game_id, interaction.user.id, roll)
 
@@ -311,7 +315,7 @@ class RiskyRollView(BaseRiskyRollView):
                 roll,
             )
 
-            await interaction.edit_original_response(embed=build_embed(state), view=self)
+            await interaction.edit_original_response(embed=build_embed(state, interaction.guild), view=self)
 
             if state.auto_close_players and len(state.rolls) == state.auto_close_players:
                 task = app_state.auto_close_tasks.pop(self.game_id, None)
@@ -323,9 +327,22 @@ class RiskyRollView(BaseRiskyRollView):
                 app_state.auto_close_tasks[self.game_id] = asyncio.create_task(
                     schedule_auto_close(interaction.client, self.game_id, delay)
                 )
+            guild_id = state.guild_id
+
+        # Quest trigger, outside the game lock — the roll itself is the
+        # qualifying act, so it fires here rather than at round close.
+        from typing import cast
+
+        from bot_modules.core.app_context import Bot
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            cast(Bot, interaction.client), guild_id, interaction.user.id,
+            "risky_roll", occurrence=str(self.game_id),
+        )
 
     @discord.ui.button(
-        label="How to Play",
+        label="Help",
         style=discord.ButtonStyle.secondary,
         custom_id="rr:help",
         emoji="❓",
@@ -399,7 +416,7 @@ class RiskyRollView(BaseRiskyRollView):
             closed_view.disable_all_items()
 
             try:
-                await interaction.response.edit_message(embed=build_embed(state), view=closed_view)
+                await interaction.response.edit_message(embed=build_embed(state, interaction.guild), view=closed_view)
             except discord.HTTPException:
                 log.exception("Failed to close round in #%s.", getattr(interaction.channel, "name", state.channel_id))
                 await interaction.response.send_message(
@@ -453,6 +470,13 @@ class SixtyNineQuestionModal(discord.ui.Modal, title="Ask A Question"):
             if not question_text:
                 await interaction.response.send_message(
                     "Enter a question before sending it.",
+                    ephemeral=True,
+                )
+                return
+
+            if contains_disallowed_content(question_text):
+                await interaction.response.send_message(
+                    "That question contains disallowed content. Please rephrase.",
                     ephemeral=True,
                 )
                 return
@@ -644,6 +668,15 @@ class QuestionReplyModal(discord.ui.Modal, title="Reply"):
                 await interaction.response.send_message("Enter a reply before sending it.", ephemeral=True)
                 return
 
+            # The reply is posted publicly, so it needs the same slur/abuse
+            # guard the question already gets — this was the unfiltered half.
+            if contains_disallowed_content(reply_text):
+                await interaction.response.send_message(
+                    "That reply contains disallowed content. Please rephrase.",
+                    ephemeral=True,
+                )
+                return
+
             await interaction.response.defer(ephemeral=True)
 
             reply_content = build_question_reply_content(state, interaction.user.id, reply_text)
@@ -715,7 +748,7 @@ async def disable_round_message(
     view.disable_all_items()
 
     try:
-        await channel.get_partial_message(state.message_id).edit(embed=build_embed(state), view=view)
+        await channel.get_partial_message(state.message_id).edit(embed=build_embed(state, channel.guild), view=view)
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         return
 

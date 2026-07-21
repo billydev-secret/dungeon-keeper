@@ -83,6 +83,42 @@ def add_submission(
     payload["submission_count"] = len(submissions)
 
 
+def mark_played(payload: dict[str, Any], subject_id: int | str) -> None:
+    """Record that a subject's round has been revealed.
+
+    Mutates ``payload`` in place, appending to the ``played`` list (created
+    lazily). Idempotent — re-marking a subject is a no-op, so the advance
+    path can call this unconditionally.
+    """
+    uid_str = str(subject_id)
+    played: list[str] = payload.setdefault("played", [])
+    if uid_str not in played:
+        played.append(uid_str)
+
+
+def played_ids_from_payload(payload: dict[str, Any]) -> set[str]:
+    """The set of subjects whose rounds have been revealed.
+
+    Prefers the explicit ``played`` list; payloads persisted before that
+    list existed fall back to the ``scores`` keys (which over-approximates —
+    guessers appear there too — matching the old resume behavior).
+    """
+    played = payload.get("played")
+    if played is not None:
+        return set(played)
+    return set(payload.get("scores", {}) or {})
+
+
+def submission_locked(payload: dict[str, Any], user_id: int | str) -> bool:
+    """Whether a player's statements can no longer be (re)submitted.
+
+    Statements lock the moment the player's own round is revealed —
+    before that, resubmission just overwrites (fixing "I didn't see the
+    prompt" without host intervention).
+    """
+    return str(user_id) in played_ids_from_payload(payload)
+
+
 def shuffle_statements(
     statements: list[str],
     lie_index: int,

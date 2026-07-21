@@ -22,6 +22,7 @@ THREAD_METADATA_TTL_SECONDS = 7 * 24 * 60 * 60
 MIN_REPLY_COOLDOWN_SECONDS = 30
 CONFESSION_HEADER_LENGTH = 2
 MAX_DISCORD_MESSAGE_LENGTH = 2000
+MAX_EMBED_DESCRIPTION_LENGTH = 4096
 
 ERROR_NOT_CONFIGURED = "Bot is not configured. Ask an admin to set destination/log channels."
 ERROR_CONFIG_INVALID = "Bot configuration is invalid. Contact an administrator."
@@ -165,6 +166,20 @@ def get_ephemeral_anon_identity(db_path: Path, guild_id: int, root_message_id: i
         name_idx = pop_pool_index(conn, guild_id, root_message_id, "name", _NAME_POOL_SIZE)
         emoji_idx = pop_pool_index(conn, guild_id, root_message_id, "color", _COLOR_POOL_SIZE)
     return name_idx, emoji_idx
+
+
+def build_confession_embed(content: str, *, color: "discord.Color") -> "discord.Embed":
+    """Build the public embed for a posted confession.
+
+    Titled a plain ``Anonymous Confession`` (no sequential number). The
+    body is rendered as-is (no blockquote) so the user's own formatting
+    is preserved. ``@everyone``/``@here`` are defanged for safety even
+    though embed descriptions can't ping.
+    """
+    safe = defang_everyone_here(content)
+    if len(safe) > MAX_EMBED_DESCRIPTION_LENGTH:
+        safe = safe[:MAX_EMBED_DESCRIPTION_LENGTH - 1].rstrip() + "…"
+    return discord.Embed(title="🤫 Anonymous Confession", description=safe, color=color)
 
 
 def build_anon_reply(

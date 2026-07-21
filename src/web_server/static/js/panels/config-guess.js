@@ -105,6 +105,22 @@ export function mount(container) {
     form.appendChild(mkField("Min Image Dimension (px)", mkNum("min_image_dimension_px", 1, v.min_image_dimension_px)));
     form.appendChild(mkField("Max Image Size (MB)", mkNum("max_image_size_mb", 1, v.max_image_size_mb)));
 
+    form.appendChild(mkField(
+      "Submission Flood Cap",
+      mkNum("submit_max_per_window", 1, v.submit_max_per_window),
+      "Max images a member can submit within the flood-protection window below.",
+    ));
+    form.appendChild(mkField(
+      "Flood Window (seconds)",
+      mkNum("submit_window_seconds", 1, v.submit_window_seconds),
+      "Rolling window the submission flood cap applies over.",
+    ));
+    form.appendChild(mkField(
+      "Guesses Per Round Cap",
+      mkNum("max_guesses_per_round", 1, v.max_guesses_per_round),
+      "Max guesses a single member can make on one round (anti brute-force).",
+    ));
+
     const row = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
@@ -125,6 +141,9 @@ export function mount(container) {
           guess_cooldown_seconds: parseInt(fd.get("guess_cooldown_seconds")) || 0,
           min_image_dimension_px: parseInt(fd.get("min_image_dimension_px")) || 1,
           max_image_size_mb: parseInt(fd.get("max_image_size_mb")) || 1,
+          submit_max_per_window: parseInt(fd.get("submit_max_per_window")) || 1,
+          submit_window_seconds: parseInt(fd.get("submit_window_seconds")) || 1,
+          max_guesses_per_round: parseInt(fd.get("max_guesses_per_round")) || 1,
         });
         showStatus(statusEl, true);
       } catch (err) {

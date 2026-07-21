@@ -14,6 +14,16 @@ function mkOpt(value, text, selected) {
   return o;
 }
 
+function mkNum(name, value, min) {
+  const i = document.createElement("input");
+  i.type = "number";
+  i.name = name;
+  i.value = value;
+  i.min = String(min);
+  i.style.maxWidth = "90px";
+  return i;
+}
+
 function mkField(labelText, ctrl, hint) {
   const d = document.createElement("div");
   d.className = "field";
@@ -89,6 +99,13 @@ export function mount(container) {
     }
     form.appendChild(mkField("Log Channel", logSel, "Moderator-visible audit log of whisper authors. \"(disabled)\" turns logging off."));
 
+    // Rate limits
+    const cooldownInput = mkNum("cooldown_seconds", w.cooldown_seconds ?? 30, 0);
+    form.appendChild(mkField("Send Cooldown (seconds)", cooldownInput, "How long a member must wait between sending whispers. 0 disables the cooldown."));
+
+    const hourlyCapInput = mkNum("hourly_cap_per_target", w.hourly_cap_per_target ?? 5, 1);
+    form.appendChild(mkField("Hourly Cap Per Recipient", hourlyCapInput, "Max whispers a member can send to the same recipient within an hour."));
+
     const row = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
@@ -106,6 +123,8 @@ export function mount(container) {
           channel_id: fd.get("channel_id"),
           role_id: fd.get("role_id"),
           log_channel_id: fd.get("log_channel_id"),
+          cooldown_seconds: Number(fd.get("cooldown_seconds")),
+          hourly_cap_per_target: Number(fd.get("hourly_cap_per_target")),
         });
         showStatus(statusEl, true);
       } catch (err) {

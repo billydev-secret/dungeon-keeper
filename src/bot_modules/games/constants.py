@@ -9,15 +9,12 @@ PHASE_PLAYING  = 0x4E9AF1   # blue       — active round
 PHASE_RESULTS  = 0x57F287   # green      — round results
 PHASE_RECAP    = 0xB8860B   # dark gold  — final recap / game over
 
-# Clapback-specific colors
-CLAPBACK_COLOR = 0xFF4500       # Orange-red (main game)
-CLAPBACK_VOTE_COLOR = 0x5865F2  # Blurple (voting phase)
-CLAPBACK_WIN_COLOR = 0xFFD700   # Gold (winner / CLAPBACK moments)
-CLAPBACK_TIE_COLOR = 0x99AAB5   # Grey (ties)
-
 GAME_ICONS = {
     'ffa': '🎭',
-    'photo': '📸',
+    'ffa_banner': '🃏',
+    # 'photo' is intentionally absent — Photo Challenge left the games menu and
+    # the /games help list (it's scheduled-only now). GAME_NAMES keeps its
+    # display name for logs/scheduler lookups.
     'traditional': '🎲',
     'compliment': '💛',
     'mfk': '💍',
@@ -39,7 +36,8 @@ GAME_ICONS = {
 }
 
 GAME_NAMES = {
-    'ffa': 'Truth or Dare Cards',
+    'ffa': 'Anonymous Truth or Dare',
+    'ffa_banner': 'Truth or Dare Card',
     'photo': 'Photo Challenge',
     'traditional': 'Truth or Dare',
     'compliment': 'Spin the Compliment',
@@ -68,11 +66,24 @@ GAME_NAMES = {
 # challenge/opponent flow. Adding a game here REQUIRES registering a launcher
 # in its cog setup() (see bot.game_launchers); the startup coverage check warns
 # on drift.
+# NOTE: 'photo' is intentionally NOT here — Photo Challenge is its own
+# standalone dashboard feature (/api/photo-challenge, own channel + schedule),
+# not part of the shared games menu/scheduler. Its schedule rows still ride
+# the games_scheduled table + this loop (game-type-agnostic), but they're
+# created via the dedicated routes and hidden from the shared scheduler UI.
 SCHEDULABLE_GAME_TYPES = [
-    'ffa', 'photo', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
+    'ffa', 'ffa_banner', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
     'hottakes', 'story', 'ama', 'fantasies', 'price', 'rushmore', 'clapback',
     'legitlibs', 'risky_roll',
 ]
+
+# Some schedulable types are display variants of a base game — they share the
+# question bank, history rows, and the base game's enable/disable toggle. Map a
+# variant to its base so a single games-config toggle governs both. Used by the
+# scheduler's enable check (see scheduled_games_service).
+SCHEDULE_BASE_GAME_TYPE = {
+    'ffa_banner': 'ffa',
+}
 
 # Per-game option fields the scheduler/web UI can collect. Each field:
 #   name    — key in the options dict passed to launch()
@@ -88,14 +99,19 @@ SCHEDULE_OPTION_SCHEMA = {
          'choices': [{'value': 'random', 'label': 'Random'},
                      {'value': 'truth', 'label': 'Truth'},
                      {'value': 'dare', 'label': 'Dare'}]},
-        {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
         {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
     ],
-    'photo': [
-        {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
-        {'name': 'prompt', 'label': 'Custom challenge (optional)', 'type': 'str', 'default': ''},
+    'ffa_banner': [
+        {'name': 'kind', 'label': 'Prompt type', 'type': 'choice', 'default': 'random',
+         'choices': [{'value': 'random', 'label': 'Random'},
+                     {'value': 'truth', 'label': 'Truth'},
+                     {'value': 'dare', 'label': 'Dare'}]},
+        {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
     ],
-    'traditional': [],
+    'traditional': [
+        {'name': 'single_choice', 'label': 'One category per player (radio-style)',
+         'type': 'bool', 'default': False},
+    ],
     'compliment': [],
     'mfk': [
         {'name': 'options', 'label': 'Custom categories (comma-separated, optional)',
@@ -115,6 +131,8 @@ SCHEDULE_OPTION_SCHEMA = {
     ],
     'ttl': [
         {'name': 'prompt', 'label': 'Theme/prompt (optional)', 'type': 'str', 'default': ''},
+        {'name': 'vote_timer', 'label': 'Vote seconds (0 = host advances)', 'type': 'int',
+         'default': 0, 'min': 0, 'max': 300},
     ],
     'hottakes': [],
     'story': [
@@ -129,6 +147,9 @@ SCHEDULE_OPTION_SCHEMA = {
         {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'unfiltered',
          'choices': [{'value': 'unfiltered', 'label': 'Unfiltered (post immediately)'},
                      {'value': 'screened', 'label': 'Screened (host approves)'}]},
+        {'name': 'format', 'label': 'Format', 'type': 'choice', 'default': 'hot_seat',
+         'choices': [{'value': 'hot_seat', 'label': 'Hot Seat (one at a time)'},
+                     {'value': 'panel', 'label': 'Open Panel (ask anyone opted in)'}]},
     ],
     'fantasies': [],
     'price': [
@@ -149,22 +170,21 @@ SCHEDULE_OPTION_SCHEMA = {
          'choices': [{'value': 'host', 'label': 'Host writes'},
                      {'value': 'ai', 'label': 'AI generated'},
                      {'value': 'bank', 'label': 'Question bank'}]},
+        {'name': 'mode', 'label': 'Draft mode', 'type': 'choice', 'default': 'snake',
+         'choices': [{'value': 'snake', 'label': 'Snake draft (one at a time)'},
+                     {'value': 'blitz', 'label': 'Blitz (everyone picks at once)'}]},
     ],
     'clapback': [
         {'name': 'rounds', 'label': 'Rounds', 'type': 'int', 'default': 5, 'min': 1, 'max': 15},
         {'name': 'timer', 'label': 'Answer seconds', 'type': 'int', 'default': 120, 'min': 15, 'max': 180},
         {'name': 'vote_timer', 'label': 'Vote seconds/matchup', 'type': 'int', 'default': 40, 'min': 10, 'max': 60},
-        {'name': 'source', 'label': 'Prompt source', 'type': 'choice', 'default': 'ai',
-         'choices': [{'value': 'ai', 'label': 'AI generated'},
-                     {'value': 'bank', 'label': 'Question bank'},
-                     {'value': 'both', 'label': 'Both'}]},
         {'name': 'anonymous', 'label': 'Hide authors until recap', 'type': 'bool', 'default': False},
+        {'name': 'tags', 'label': 'Prompt tags (comma-separated, optional)', 'type': 'str', 'default': ''},
     ],
     'legitlibs': [
         {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'classic',
          'choices': [{'value': 'classic', 'label': 'Classic (sequential fill)'},
-                     {'value': 'quiplash', 'label': 'Quiplash (all fill, all revealed)'},
-                     {'value': 'hotseat', 'label': 'Hot Seat (author picks best)'}]},
+                     {'value': 'quiplash', 'label': 'Quiplash (all fill, all revealed)'}]},
         {'name': 'tier', 'label': 'Heat tier (1-4)', 'type': 'int', 'default': 2, 'min': 1, 'max': 4},
     ],
     'risky_roll': [
@@ -177,26 +197,28 @@ SCHEDULE_OPTION_SCHEMA = {
 
 HOW_TO_PLAY = {
     'ffa': (
-        "🎭 **Truth or Dare Cards**\n"
-        "The host drops a Truth or Dare card and a thread opens for replies.\n\n"
-        "1. Read the prompt on the card (TRUTH or DARE)\n"
-        "2. Reply right in the thread — or use the thread's buttons:\n"
-        "   • **🎭 Reply Anonymously** — same anon nickname all thread\n"
-        "   • **🎲 Reply Super Anonymously** — a fresh nickname each time\n"
-        "3. Anonymous replies are posted into the thread with no attribution "
-        "(mods can still see who sent them)\n\n"
-        "💡 The host picks Truth/Dare/random, can toggle the spicier (NSFW) bank, "
-        "or write their own prompt — and can schedule an automated series from the dashboard."
+        "🎭 **Truth or Dare**\n"
+        "The host drops a Truth or Dare prompt in two flavors:\n\n"
+        "• **/games play ffa** — posts an embed with anonymous reply buttons; "
+        "replies land back in the channel and a live counter tracks them:\n"
+        "   • **🎭 Reply Anonymously** — same anon nickname the whole time\n"
+        "   • **🎲 Reply as Someone New** — a fresh nickname each time\n"
+        "   Replies are posted with no attribution (mods can still see who sent them).\n"
+        "• **/games play ffa_banner** — just drops the prompt card in the channel "
+        "for open discussion (no anonymous replies)\n\n"
+        "💡 The host picks Truth/Dare/random or writes their own prompt — and can schedule "
+        "an automated series from the dashboard. Spicier (NSFW) prompts appear only in "
+        "channels marked age-restricted in Discord."
     ),
     'photo': (
         "📸 **Photo Challenge**\n"
-        "The host drops a Photo Challenge card and a thread opens for everyone's shots.\n\n"
+        "The host drops a Photo Challenge card in the channel.\n\n"
         "1. Read the challenge on the card\n"
-        "2. Reply right in the thread with your photo\n"
+        "2. Post your photo right in the channel\n"
         "3. Browse everyone else's takes as they roll in\n\n"
         "💡 Challenges are curated in the **Games Studio** (web dashboard). The host "
-        "can toggle the spicier (NSFW) bank, write their own challenge, or schedule "
-        "an automated series."
+        "can write their own challenge or schedule an automated series. Spicier (NSFW) "
+        "challenges appear only in channels marked age-restricted in Discord."
     ),
     'traditional': (
         "🎲 **Truth or Dare**\n"
@@ -206,12 +228,17 @@ HOW_TO_PLAY = {
         "2. The host clicks **Ask Question**, the bot picks a player from the pool, "
         "and the host writes a custom question for them\n"
         "3. Each player gets one question per category they opted into\n\n"
-        "💡 Players who haven't been asked yet are picked first to keep things fair."
+        "💡 Players who haven't been asked yet are picked first to keep things fair.\n"
+        "💡 **Bank Round** deals everyone a question from the web question bank. It "
+        "counts toward the one-per-category limit, so pressing it again only serves "
+        "players who haven't been asked yet — perfect for late joiners.\n"
+        "💡 Host tip: pass **single_choice** when starting the game to make each "
+        "player pick just one category (the buttons act like radio buttons)."
     ),
     'compliment': (
         "💛 **Spin the Compliment**\n"
         "Random pairings — everyone gives one person a compliment.\n\n"
-        "1. Click **Add Me!** to join the pool\n"
+        "1. Click **Join** to enter the pool\n"
         "2. The host clicks **Close & Generate** when the pool is ready\n"
         "3. Pairings are revealed publicly — each player sees who they're giving to\n"
         "4. Reply in the channel with a compliment for your assigned partner\n\n"
@@ -220,7 +247,7 @@ HOW_TO_PLAY = {
     'mfk': (
         "💍 **Marry, Fornicate, Kiss**\n"
         "Join the pool, get assigned three names, slot them into the categories.\n\n"
-        "1. Click **Join the Pool** to enter\n"
+        "1. Click **Join** to enter the pool\n"
         "2. The host clicks **Close & Assign** when ready (need 4+ players)\n"
         "3. Each player is given 3 random names from the pool — never themselves\n"
         "4. Reply in the channel saying who you'd Marry, Fornicate, and Kiss\n\n"
@@ -287,11 +314,15 @@ HOW_TO_PLAY = {
 
     'ama': (
         "🎙️ **Anonymous AMA**\n"
-        "One player takes the hot seat and answers anonymous questions from the room.\n\n"
-        "1. A player volunteers for (or is assigned) the **hot seat**\n"
-        "2. Anyone else clicks **Ask Anonymously** to send a question via popup\n"
-        "3. The hot-seat player replies — replies are signed, questions are not\n"
-        "4. The hot seat rotates after a number of questions, or when handed off\n\n"
+        "Players answer anonymous questions from the room.\n\n"
+        "1. Players **Volunteer** to take questions\n"
+        "2. Anyone clicks **Ask a Question** to send one via popup\n"
+        "3. The person asked replies — replies are signed, questions are not\n\n"
+        "🎭 **Formats:**\n"
+        "• **Hot Seat** — one player at a time; the seat rotates after a few "
+        "questions or when handed off (default)\n"
+        "• **Open Panel** — everyone who volunteers is listed at once; pick who "
+        "to ask from a dropdown\n\n"
         "🛡️ **Modes:**\n"
         "• **Unfiltered** — questions post immediately (default)\n"
         "• **Screened** — the host approves each question before it's shown\n\n"

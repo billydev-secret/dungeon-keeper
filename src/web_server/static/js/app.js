@@ -76,6 +76,7 @@ const SECTIONS = [
         { id: "inactive-role",        label: "Inactive Role",        module: "./panels/inactive-role.js" },
         { id: "inactive",             label: "Inactive Members",     module: "./panels/inactive.js" },
         { id: "oldest-sfw",           label: "Oldest SFW",           module: "./panels/oldest-sfw.js" },
+        { id: "grant-audit",          label: "Grant Audit",          module: "./panels/grant-audit.js" },
       ]},
     ],
   },
@@ -106,34 +107,75 @@ const SECTIONS = [
     // Most Config pages load at moderator level but every save requires admin,
     // so they're marked adminOnly to hide them from moderators who can't use
     // them. Exceptions: Birthday Calendar is genuinely moderator-level (read
-    // only), and Wellness config is gated on manage_server, not admin.
+    // only), Wellness config is gated on manage_server, not admin, and
+    // Docs / Role Menus / Chat Revive are fully moderator-level features.
+    groups: [
+      { heading: "Server", items: [
+        { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
+        { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
+        { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true },
+      ]},
+      { heading: "Roles", items: [
+        { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
+        { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
+        { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
+        { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js" },
+      ]},
+      { heading: "Members", items: [
+        { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
+        { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
+        { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
+        { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
+        { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
+        { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
+        { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"] },
+        { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true },
+        { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true },
+      ]},
+      { heading: "Moderation & Safety", items: [
+        { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
+        { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true },
+        { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true },
+        { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
+        { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
+        { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
+        { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
+      ]},
+      { heading: "Channels & Messages", items: [
+        { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
+        { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true },
+        { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
+        { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
+        { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js" },
+        { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true },
+      ]},
+      { heading: "Voice", items: [
+        { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
+        { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
+      ]},
+      { heading: "AI & Maintenance", items: [
+        { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
+        { id: "config-advisor",    label: "Billy-bot",         module: "./panels/config-advisor.js", adminOnly: true },
+        { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
+      ]},
+    ],
+  },
+  {
+    // Shown to admins OR holders of the economy manager role (econManagerRole,
+    // mirroring gameHostRole). Manager-visible items carry NO adminOnly/perms
+    // so a manager-role holder who isn't an admin keeps them after
+    // item-filtering; Settings is adminOnly (its endpoints require admin).
+    id: "economy", label: "Economy", perms: ["admin"], econManagerRole: true,
     items: [
-      { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
-      { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
-      { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
-      { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
-      { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
-      { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
-      { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true },
-      { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
-      { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js", adminOnly: true },
-      { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
-      { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
-      { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
-      { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true },
-      { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
-      { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
-      { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
-      { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
-      { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
-      { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
-      { id: "config-pen-pals",  label: "Pen Pals",          module: "./panels/config-pen-pals.js", adminOnly: true },
-      { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
-      { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
-      { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
-      { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"] },
-      { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
-      { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
+      { id: "economy-bank-manager", label: "Operations", module: "./panels/economy-bank-manager.js" },
+      { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js" },
+      { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js" },
+      { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js" },
+      { id: "economy-sinks", label: "Sinks", module: "./panels/economy-sinks.js", adminOnly: true },
+      { id: "economy-qotd", label: "QOTD", module: "./panels/economy-qotd.js", adminOnly: true },
+      { id: "economy-qotd-submissions", label: "Sponsored QOTD", module: "./panels/economy-qotd-submissions.js" },
+      { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js" },
+      { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true },
     ],
   },
   {
@@ -158,6 +200,24 @@ const SECTIONS = [
     groups: [
       { heading: "Risky Roller", items: [
         { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js", adminOnly: true },
+      ]},
+      { heading: "Pressure Cooker", items: [
+        { id: "config-games-pressure", label: "Config", module: "./panels/config-games-pressure.js", adminOnly: true },
+      ]},
+      { heading: "Quickdraw", items: [
+        { id: "config-games-quickdraw", label: "Config", module: "./panels/config-games-quickdraw.js", adminOnly: true },
+      ]},
+      { heading: "Hot Potato", items: [
+        { id: "config-games-hotpotato", label: "Config", module: "./panels/config-games-hotpotato.js", adminOnly: true },
+      ]},
+      { heading: "Hot Potato (Group)", items: [
+        { id: "config-games-hotpotatogroup", label: "Config", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
+      ]},
+      { heading: "Chicken", items: [
+        { id: "config-games-chicken", label: "Config", module: "./panels/config-games-chicken.js", adminOnly: true },
+      ]},
+      { heading: "Musical Chairs", items: [
+        { id: "config-games-musicalchairs", label: "Config", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
       ]},
       { heading: "Would You Rather", items: [
         { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },
@@ -187,12 +247,11 @@ const SECTIONS = [
         { id: "games-ama",        label: "Questions",  module: "./panels/games-ama.js" },
         { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
       ]},
-      { heading: "Photo Challenge", items: [
-        { id: "games-photo",        label: "Questions",  module: "./panels/games-photo.js" },
-        { id: "games-photo-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "photo" },
-      ]},
       { heading: "FFA / Truth or Dare", items: [
         { id: "games-ffa", label: "Questions", module: "./panels/games-ffa.js" },
+      ]},
+      { heading: "Traditional Truth or Dare", items: [
+        { id: "games-traditional", label: "Questions", module: "./panels/games-traditional.js" },
       ]},
       { heading: "Guess Who", items: [
         { id: "config-guess", label: "Config",     module: "./panels/config-guess.js", perms: ["moderator"] },
@@ -203,6 +262,20 @@ const SECTIONS = [
       { heading: "Confessions", items: [
         { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js", adminOnly: true },
       ]},
+      { heading: "Pen Pals", items: [
+        { id: "config-pen-pals",  label: "Config",     module: "./panels/config-pen-pals.js", adminOnly: true },
+        { id: "games-pen-pals",   label: "Questions",  module: "./panels/games-pen-pals.js" },
+        { id: "games-pen-pals-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "pen_pals" },
+      ]},
+    ],
+  },
+  {
+    // Standalone feature — pulled out of the Games menu/scheduler. Same
+    // game-host/admin gating as Games (endpoints use require_game_host).
+    id: "photo-challenge", label: "Photo Challenge", perms: ["admin"], gameHostRole: true,
+    items: [
+      { id: "photo-challenge",        label: "Setup & Schedule", module: "./panels/photo-challenge.js" },
+      { id: "photo-challenge-studio", label: "Prompts & AI",     module: "./panels/games-studio.js", gt: "photo" },
     ],
   },
   HELP_NAV_SECTION,
@@ -212,6 +285,7 @@ const SECTIONS = [
       { id: "help-owner",    label: "Developer Tools", module: "./panels/help.js" },
       { id: "live-log",      label: "Live Log",        module: "./panels/live-log.js" },
       { id: "system-stats",  label: "System Stats",    module: "./panels/system-stats.js" },
+      { id: "qa-tracker",    label: "QA Tracker",      module: "./panels/qa-tracker.js" },
     ],
   },
 ];
@@ -246,6 +320,15 @@ function rebuildIndex() {
       return !!(hostRoleId && userRoleIds.has(hostRoleId));
     }
 
+    // Economy manager role: show the Economy section to admins OR the configured
+    // manager-role holders (every endpoint is gated by require_economy_manager,
+    // which excludes plain moderators — same reasoning as gameHostRole).
+    if (sec.econManagerRole) {
+      if (userPerms.has("admin")) return true;
+      const mgrRoleId = window.__dk_user?.economy_manager_role_id;
+      return !!(mgrRoleId && userRoleIds.has(mgrRoleId));
+    }
+
     const permOk = !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
     if (!permOk) return false;
     if (sec.roles && sec.roles.length > 0) {
@@ -259,13 +342,22 @@ function rebuildIndex() {
   // those marked `primaryOnly` (genuinely-global settings like the AI models,
   // which live under guild_id=0 and apply bot-wide).
   if (isNonPrimaryGuild) {
+    const dropPrimaryOnly = (items) => (items || []).filter((it) => !it.primaryOnly);
     visibleSections = visibleSections
       .map((sec) =>
         sec.id === "config"
-          ? { ...sec, items: (sec.items || []).filter((it) => !it.primaryOnly) }
+          ? {
+              ...sec,
+              items: dropPrimaryOnly(sec.items),
+              groups: sec.groups
+                ? sec.groups
+                    .map((g) => ({ ...g, items: dropPrimaryOnly(g.items) }))
+                    .filter((g) => g.items.length > 0)
+                : sec.groups,
+            }
           : sec
       )
-      .filter((sec) => sec.id !== "config" || (sec.items && sec.items.length > 0));
+      .filter((sec) => sec.id !== "config" || allPages(sec).length > 0);
   }
 
   // Per-item permission gating. An item shows only if the user satisfies the
@@ -465,17 +557,25 @@ function renderNav(activeId) {
     const group = document.createElement("div");
     group.className = "nav-group";
     group.textContent = sec.label;
+    group.setAttribute("role", "button");
+    group.tabIndex = 0;
     // Collapse by default, except the group containing the active page
     const startCollapsed = !activeSection || sec.id !== activeSection.id;
     if (startCollapsed) group.classList.add("collapsed");
-    group.addEventListener("click", () => {
+    group.setAttribute("aria-expanded", String(!startCollapsed));
+    const toggleGroup = () => {
       group.classList.toggle("collapsed");
       const hidden = group.classList.contains("collapsed");
+      group.setAttribute("aria-expanded", String(!hidden));
       let n = group.nextElementSibling;
       while (n && !n.matches(".nav-group")) {
         n.classList.toggle("group-hidden", hidden);
         n = n.nextElementSibling;
       }
+    };
+    group.addEventListener("click", toggleGroup);
+    group.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroup(); }
     });
     sidebarItemsEl.appendChild(group);
 
@@ -495,19 +595,27 @@ function renderNav(activeId) {
         const subLabel = document.createElement("div");
         subLabel.className = "nav-subgroup";
         subLabel.textContent = g.heading;
+        subLabel.setAttribute("role", "button");
+        subLabel.tabIndex = 0;
 
         const subgroupActive = g.items.some((item) => item.id === activeId);
         if (!subgroupActive) subLabel.classList.add("collapsed");
+        subLabel.setAttribute("aria-expanded", String(subgroupActive));
 
-        subLabel.addEventListener("click", (ev) => {
-          ev.stopPropagation();
+        const toggleSub = (ev) => {
+          if (ev) ev.stopPropagation();
           subLabel.classList.toggle("collapsed");
           const hidden = subLabel.classList.contains("collapsed");
+          subLabel.setAttribute("aria-expanded", String(!hidden));
           let n = subLabel.nextElementSibling;
           while (n && !n.matches(".nav-subgroup, .nav-group")) {
             n.classList.toggle("subgroup-hidden", hidden);
             n = n.nextElementSibling;
           }
+        };
+        subLabel.addEventListener("click", toggleSub);
+        subLabel.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSub(e); }
         });
 
         sidebarItemsEl.appendChild(subLabel);
@@ -552,7 +660,7 @@ async function mountPanel() {
     // it, dynamically-imported panels (a variable specifier the import-rewrite
     // regex can't see) would stay immutable-cached forever and never pick up
     // changes to their module graph.
-    const mod = await import(`${page.module}?v=1`);
+    const mod = await import(`${page.module}?v=3`);
     currentPanel = mod.mount(rootEl, params) || null;
   } catch (err) {
     rootEl.innerHTML = `<div class="panel"><div class="error">Failed to load ${esc(page.label)}: ${esc(err.message)}</div></div>`;
@@ -576,6 +684,7 @@ function applyMeData(me) {
     guild_id: me.guild_id,
     primary_guild_id: primaryGuildId,
     games_editor_role_id: me.games_editor_role_id || null,
+    economy_manager_role_id: me.economy_manager_role_id || null,
   };
 
   // Recompute visible nav (Config pages are filtered per primary/non-primary)
@@ -587,12 +696,14 @@ function populateGuildPicker(guilds, activeId) {
   const sigilEl = guildSelectEl.querySelector("[data-guild-sigil]");
   const menuEl = guildSelectEl.querySelector(".guild-picker__menu");
   menuEl.innerHTML = "";
+  menuEl.setAttribute("role", "listbox");
+  menuEl.setAttribute("aria-label", "Switch server");
   const active = guilds.find((g) => g.id === activeId) || guilds[0];
   if (active) {
     nameEl.textContent = active.name;
     if (sigilEl) {
       if (active.icon) {
-        sigilEl.innerHTML = `<img class="guild-sigil-img" src="${escText(active.icon)}" alt="">`;
+        sigilEl.innerHTML = `<img class="guild-sigil-img" src="${esc(active.icon)}" alt="">`;
       } else {
         sigilEl.textContent = active.name.charAt(0).toUpperCase();
       }
@@ -603,12 +714,34 @@ function populateGuildPicker(guilds, activeId) {
     li.className = "guild-picker__item" + (g.id === activeId ? " active" : "");
     li.textContent = g.name;
     li.dataset.id = g.id;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", g.id === activeId ? "true" : "false");
+    li.tabIndex = -1;
     li.addEventListener("click", () => {
       guildSelectEl.classList.remove("open");
       if (g.id !== activeId) switchGuild(g.id);
     });
     menuEl.appendChild(li);
   }
+  // Keyboard operation: arrows move focus, Enter/Space select, Escape closes.
+  menuEl.addEventListener("keydown", (e) => {
+    const items = Array.from(menuEl.querySelectorAll(".guild-picker__item"));
+    if (!items.length) return;
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? idx + 1 : idx - 1;
+      items[(next + items.length) % items.length].focus();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (idx >= 0) items[idx].click();
+    } else if (e.key === "Escape") {
+      guildSelectEl.classList.remove("open");
+      const toggle = guildSelectEl.querySelector(".guild-picker__toggle");
+      toggle?.setAttribute("aria-expanded", "false");
+      toggle?.focus();
+    }
+  });
   // Always show the guild bar — it doubles as the sidebar head.
   // If only one guild, suppress the dropdown but keep the bar visible.
   guildSelectEl.style.display = "";
@@ -621,22 +754,16 @@ function renderUserBar(me) {
   const status = isGuest ? "offline" : (me.status || "online");
   const statusLabel = isGuest ? "guest" : status;
   const avatarInner = (!isGuest && me.avatar_url)
-    ? `<img class="user-avatar-img" src="${escText(me.avatar_url)}" alt="">`
-    : escText(initial);
+    ? `<img class="user-avatar-img" src="${esc(me.avatar_url)}" alt="">`
+    : esc(initial);
   meEl.innerHTML = `
-    <div class="user-avatar status-${escText(status)}">${avatarInner}</div>
+    <div class="user-avatar status-${esc(status)}">${avatarInner}</div>
     <div class="user-meta">
-      <b>${escText(me.username || "")}</b>
-      <small>${escText(statusLabel)}</small>
+      <b>${esc(me.username || "")}</b>
+      <small>${esc(statusLabel)}</small>
     </div>
     ${!isGuest ? `<a class="logout-link" href="/logout">Logout</a>` : ""}
   `;
-}
-
-function escText(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  })[c]);
 }
 
 async function switchGuild(newGuildId) {
@@ -667,20 +794,44 @@ async function boot() {
     // Guild picker
     if (me.guilds && me.guilds.length > 0) {
       populateGuildPicker(me.guilds, me.guild_id);
-      guildSelectEl.querySelector(".guild-picker__toggle").addEventListener("click", (e) => {
+      const toggle = guildSelectEl.querySelector(".guild-picker__toggle");
+      toggle.setAttribute("aria-haspopup", "listbox");
+      toggle.setAttribute("aria-expanded", "false");
+      const setOpen = (open) => {
+        guildSelectEl.classList.toggle("open", open);
+        toggle.setAttribute("aria-expanded", String(open));
+        if (open) {
+          // Move focus into the list so arrow keys work immediately.
+          const first =
+            guildSelectEl.querySelector(".guild-picker__item.active") ||
+            guildSelectEl.querySelector(".guild-picker__item");
+          first?.focus();
+        }
+      };
+      toggle.addEventListener("click", (e) => {
         // Only open the dropdown if there's more than one guild
         if (me.guilds.length <= 1) return;
         e.stopPropagation();
-        guildSelectEl.classList.toggle("open");
+        setOpen(!guildSelectEl.classList.contains("open"));
+      });
+      toggle.addEventListener("keydown", (e) => {
+        if (me.guilds.length <= 1) return;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setOpen(true);
+        }
       });
       document.addEventListener("click", (e) => {
-        if (!guildSelectEl.contains(e.target)) guildSelectEl.classList.remove("open");
+        if (!guildSelectEl.contains(e.target)) {
+          guildSelectEl.classList.remove("open");
+          toggle.setAttribute("aria-expanded", "false");
+        }
       });
     }
 
     renderUserBar(me);
   } catch (err) {
-    meEl.innerHTML = `<div class="user-meta"><small style="color:var(--red)">auth error: ${escText(err.message)}</small></div>`;
+    meEl.innerHTML = `<div class="user-meta"><small style="color:var(--red)">auth error: ${esc(err.message)}</small></div>`;
   }
   window.addEventListener("hashchange", mountPanel);
   mountPanel();

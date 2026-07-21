@@ -1,5 +1,6 @@
 import { loadConfig, loadChannels, channelSelect, channelName, apiPut, apiDelete, showStatus } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { esc } from "../api.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -32,12 +33,6 @@ const VALID_DELETE_BEHAVIORS = new Set(DELETE_BEHAVIORS.map(t => t.value));
 const VALID_REPLY_TYPES    = new Set(REPLY_TYPES.map(t => t.value));
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function esc(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-}
 
 function safeOf(set, v, fallback) {
   return set.has(v) ? v : fallback;

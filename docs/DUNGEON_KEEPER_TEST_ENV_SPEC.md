@@ -30,9 +30,11 @@ Checks that run at startup, before the bot starts handling events. Any failure l
 
 - **Token identity** — fetch the bot's own user from Discord, compare against the expected bot ID for the active environment. If the prod token was set with `BOT_ENV=dev`, the mismatch fails the check.
 - **DB path matches env** — dev path must contain `"dev"`; prod path must not. Catches a swapped path before any write happens.
-- **Guild identity** — if the bot finds itself in a guild whose ID doesn't match the configured one, it leaves that guild and shuts down. Prevents the prod bot from operating against the test guild if someone misinvites it.
+- **Guild identity** — the bot must be in its configured home guild (`GUILD_ID_<ENV>`); if it isn't, it exits. Behavior on *additional* guilds is environment-specific:
+  - **dev** is single-guild: any guild other than the configured test guild is left immediately and the bot shuts down, so a misinvited dev bot can never act in the wrong server.
+  - **prod (Dungeon Keeper) is multi-guild**: additional guilds are legitimate and are only logged, never left. The check still requires membership in the configured home guild. (The `beta_tools` / puppet bots are a separate, deliberately single-guild application — their `on_guild_join` leaves anything but the dev server; that is intended, not a bug.)
 - **One-way refresh** — the dev-DB refresh script hard-codes source = prod and destination = dev. It refuses any override that would reverse them.
-- **Startup banner** — on `on_ready`, the bot prints (and posts to the dev audit channel) the active env, the bot user, the guild, and the DB path. Prod's banner is colour-coded red in the terminal.
+- **Startup banner** — on `on_ready`, the bot prints (and posts to the dev audit channel) the active env, the bot user, the guild, and the DB path. Prod's banner is color-coded red in the terminal.
 
 ## ID remapping
 
@@ -82,7 +84,7 @@ What the four tiers can't reach, and what every PR touching a user-facing surfac
 - Embed rendering on desktop **and** mobile clients (the layouts differ).
 - Modal UX feel — popup latency, field tab order.
 - Real Discord API shape — event payloads and any new fields after a `discord.py` upgrade.
-- Rate-limit behaviour under real load.
+- Rate-limit behavior under real load.
 - Gateway reconnect and resume.
 - Permission cache freshness when roles change mid-operation.
 - Integration with Discord's server-side AutoMod (the bot links to it, doesn't control it).
@@ -90,6 +92,12 @@ What the four tiers can't reach, and what every PR touching a user-facing surfac
 Every relevant PR carries a short manual-test checklist in the description covering the affected flow.
 
 ## Status
+
+> **Historical snapshot (pre-2026, pre-dates the current test regime).** The
+> tiers below describe the state when this spec was written. For the current
+> testing setup see [web_testing.md](web_testing.md) (dashboard sweeps + browser
+> suite) and the gate description in the repo root `CLAUDE.md`
+> (`scripts/gate.py` — scoped pre-commit tier, full suite in CI/nightly).
 
 - **Implemented** — environment config loader, startup safety rails, banner, dev-only hot reload, the prod-snapshot export script, the remap table and helper, and Tiers 1–2 across the active cogs. The dev-only Beta Tools sidecar (puppets, ghosts, ambient sim, scenarios, historical seed) builds on top — see [[beta-tools-spec]].
 - **Not committed** — the snapshot JSON itself. It must be regenerated against the live prod guild and placed in the repo before dev-side remapping can resolve anything; until then the remap helper logs warnings and returns nothing, which the code handles gracefully.

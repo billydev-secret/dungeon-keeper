@@ -24,7 +24,20 @@ class FilterResult:
 
 def _clean(text: str) -> str:
     text = _ZERO_WIDTH.sub("", text)
-    return unicodedata.normalize("NFC", text).strip()
+    # NFKC (compatibility) folds fullwidth/homoglyph/combining forms so the
+    # denylist can't be bypassed with lookalike Unicode.
+    return unicodedata.normalize("NFKC", text).strip()
+
+
+def contains_disallowed_content(text: str, denylist: list[str] | None = None) -> bool:
+    """True if the cleaned text matches the slur/abuse denylist.
+
+    Reusable for free-text fields beyond nicknames/stakes (e.g. game question
+    prompts, confessions) so they share one guard.
+    """
+    cleaned = _clean(text)
+    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
+    return any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in effective_denylist)
 
 
 def validate_nickname(
@@ -89,3 +102,24 @@ def validate_stakes(
                 ok=False, value=raw, reason="Stakes text contains disallowed content."
             )
     return FilterResult(ok=True, value=cleaned, reason=None)
+
+
+# A coin wager with no custom stakes text is its own stake: the pot replaces
+# the nickname forfeit. Recording this as the game's stakes_text at creation
+# is what routes every downstream consumer (nick preflights, the rename
+# button, per-cog embed fallbacks) into announce-only mode.
+WAGER_STAKES_TEXT = "Coins on the line — winner takes the pot."
+
+
+def resolve_stakes_text(stakes_text: str | None, wager: int | None) -> str | None:
+    """The stakes string to persist for a game.
+
+    A wager *is* the stake — the loser forfeits their ante, not their nickname
+    — so a wagered game with no custom stakes gets the wager label, which flips
+    it out of nickname mode everywhere (nickname mode is exactly
+    ``stakes_text is None``). Custom stakes and plain (no-wager) games pass
+    through untouched, so a plain game still defaults to the nickname forfeit.
+    """
+    if stakes_text is None and wager is not None:
+        return WAGER_STAKES_TEXT
+    return stakes_text

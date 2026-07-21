@@ -1,6 +1,8 @@
 import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
 import { toast, promptDialog, confirmDialog } from "../ui.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
 
@@ -57,9 +59,43 @@ function ticketSubject(t) {
   return `Ticket #${t.id}`;
 }
 
-function renderList(tickets, activeId) {
+// Build a lowercased blob of every searchable field — the visible text
+// (description, names, channel) plus metadata that never renders (raw IDs,
+// status, reasons) so a query can match on either.
+function ticketHaystack(t) {
+  return [
+    t.id,
+    `#${t.id}`,
+    t.description,
+    t.user_name,
+    t.user_id,
+    t.claimer_name,
+    t.claimer_id,
+    t.closer_name,
+    t.closed_by,
+    t.close_reason,
+    t.channel_name,
+    t.channel_id,
+    t.status,
+    t.escalated ? "escalated" : "",
+  ]
+    .filter((v) => v != null && v !== "")
+    .join(" ")
+    .toLowerCase();
+}
+
+// Every whitespace-separated term must appear somewhere in the haystack, so
+// "escalated #42" or "alice spam" narrow instead of widen.
+function matchesSearch(t, query) {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const hay = ticketHaystack(t);
+  return terms.every((term) => hay.includes(term));
+}
+
+function renderList(tickets, activeId, searching) {
   if (!tickets.length) {
-    return '<div class="empty">No tickets match this filter.</div>';
+    return renderEmpty(searching ? "No tickets match your search." : "No tickets match this filter.");
   }
   return tickets.map((t) => {
     const cls = priorityClass(t) + (t.id === activeId ? " active" : "");
@@ -287,20 +323,25 @@ export function mount(container) {
         <div class="ticket-list-wrap">
           <div class="ticket-list-head">
             <h3>Queue</h3>
-            <div class="ctrl-group" role="tablist" data-filter-group>
+            <div class="ctrl-group" role="group" aria-label="Filter tickets" data-filter-group>
               <button class="active" data-filter="open">Open</button>
               <button data-filter="mine">Mine</button>
               <button data-filter="closed">Closed</button>
               <button data-filter="all">All</button>
             </div>
           </div>
+          <div class="ticket-search">
+            <input type="search" data-search autocomplete="off"
+              placeholder="Search text, member, channel, ID…"
+              aria-label="Search tickets" />
+          </div>
           <div class="ticket-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading…")}
           </div>
         </div>
 
         <div class="ticket-detail" data-detail>
-          <div class="empty">Loading…</div>
+          ${renderLoading("Loading…")}
         </div>
       </section>
     </div>
@@ -310,11 +351,13 @@ export function mount(container) {
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const filterGroup = container.querySelector("[data-filter-group]");
+  const searchEl = container.querySelector("[data-search]");
 
   const state = {
     tickets: [],
     closedTickets: null,
     filter: "open",
+    search: "",
     activeId: null,
     detailCache: new Map(),
     fetchToken: 0,
@@ -322,6 +365,44 @@ export function mount(container) {
 
   function currentTicketSource() {
     return state.filter === "closed" ? (state.closedTickets || []) : state.tickets;
+  }
+
+  // A search spans every ticket regardless of the active tab: merge the default
+  // (open + non-deleted-closed) set with the separately-fetched closed/deleted
+  // history, deduped by id, newest first.
+  function unionTickets() {
+    const map = new Map();
+    for (const t of state.tickets) map.set(t.id, t);
+    for (const t of state.closedTickets || []) if (!map.has(t.id)) map.set(t.id, t);
+    return [...map.values()].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  }
+
+  function findTicket(id) {
+    return state.tickets.find((t) => t.id === id)
+      || (state.closedTickets || []).find((t) => t.id === id)
+      || null;
+  }
+
+  let closedInFlight = false;
+  // Load the closed/deleted history once, then re-render. Guarded so rapid
+  // typing can't fire overlapping fetches.
+  async function ensureClosed() {
+    if (state.closedTickets !== null || closedInFlight) {
+      render();
+      return;
+    }
+    closedInFlight = true;
+    listEl.innerHTML = renderLoading("Searching…");
+    try {
+      const data = await api("/api/moderation/tickets?status=closed");
+      state.closedTickets = data.tickets || [];
+    } catch (err) {
+      console.error("Failed to load closed tickets for search:", err);
+      state.closedTickets = [];
+    } finally {
+      closedInFlight = false;
+      render();
+    }
   }
 
   function setFilterBadge(filter, label, count) {
@@ -373,12 +454,15 @@ export function mount(container) {
   }
 
   function render() {
-    const source = currentTicketSource();
-    const filtered = source.filter(FILTERS[state.filter]);
+    const searching = state.search.trim() !== "";
+    const source = searching ? unionTickets() : currentTicketSource();
+    const filtered = searching
+      ? source.filter((t) => matchesSearch(t, state.search))
+      : source.filter(FILTERS[state.filter]);
     if (!filtered.find((t) => t.id === state.activeId)) {
       state.activeId = filtered[0]?.id ?? null;
     }
-    listEl.innerHTML = renderList(filtered, state.activeId);
+    listEl.innerHTML = renderList(filtered, state.activeId, searching);
     const active = source.find((t) => t.id === state.activeId) || null;
     const detail = active ? state.detailCache.get(active.id) : null;
     detailEl.innerHTML = renderDetail(active, detail);
@@ -406,6 +490,8 @@ export function mount(container) {
       renderStats();
       if (state.filter === "closed") {
         await refreshClosed();
+      } else if (state.search.trim()) {
+        await ensureClosed();
       } else {
         render();
       }
@@ -416,7 +502,7 @@ export function mount(container) {
   }
 
   async function refreshClosed() {
-    listEl.innerHTML = '<div class="empty">Loading…</div>';
+    listEl.innerHTML = renderLoading("Loading…");
     try {
       const data = await api("/api/moderation/tickets?status=closed");
       state.closedTickets = data.tickets || [];
@@ -426,14 +512,21 @@ export function mount(container) {
     }
   }
 
-  filterGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-filter]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
-    state.filter = btn.dataset.filter;
+  makeFilterStrip(filterGroup, (value) => {
+    state.filter = value;
     state.activeId = null;
     if (state.filter === "closed" && state.closedTickets === null) {
       refreshClosed();
+    } else {
+      render();
+    }
+  });
+
+  searchEl.addEventListener("input", () => {
+    state.search = searchEl.value;
+    state.activeId = null;
+    if (state.search.trim()) {
+      ensureClosed();
     } else {
       render();
     }
@@ -527,7 +620,7 @@ export function mount(container) {
       return;
     }
 
-    const t = state.tickets.find((x) => x.id === state.activeId);
+    const t = findTicket(state.activeId);
     if (!t) return;
 
     btn.disabled = true;

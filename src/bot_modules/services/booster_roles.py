@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import discord
 
 from bot_modules.core.db_utils import get_config_value, open_db
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
@@ -196,9 +200,14 @@ class BoosterRoleDynamicButton(
             )
             return
 
-        ctx = interaction.client._booster_ctx  # type: ignore[attr-defined]
-        with ctx.open_db() as conn:
-            roles = get_booster_roles(conn, guild.id)
+        ctx = cast("Bot", interaction.client).ctx
+        guild_id = guild.id
+
+        def _do_roles():
+            with ctx.open_db() as conn:
+                return get_booster_roles(conn, guild_id)
+
+        roles = await asyncio.to_thread(_do_roles)
 
         target = next((r for r in roles if r["role_key"] == self.key), None)
         if target is None:
@@ -379,7 +388,7 @@ def _parse_swatch_filename(filename: str) -> tuple[str, str, str] | None:
 def _hex_sort_key(hex1: str, hex2: str) -> int:
     """Return an integer sort key: hue of hex1 primary, hue of hex2 secondary.
 
-    Uses HSV hue (0-359) so colours order by visual gradient.
+    Uses HSV hue (0-359) so colors order by visual gradient.
     """
     import colorsys
 

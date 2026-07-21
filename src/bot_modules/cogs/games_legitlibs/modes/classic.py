@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 from bot_modules.games.utils.game_manager import (
     create_game, update_game_message, update_game_state,
     modify_payload, get_game_payload, end_game, update_session,
@@ -124,9 +126,10 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 host_name, template["title"], tier, "classic",
                 len(payload["players"]), template["player_min"],
             )
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         elif action == "leave":
@@ -150,9 +153,10 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 host_name, template["title"], tier, "classic",
                 len(payload["players"]), template["player_min"],
             )
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         elif action == "start":
@@ -174,21 +178,20 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 return
             await action_interaction.response.defer()
             join_view.stop()
-            for item in join_view.children:
-                item.disabled = True
+            disable_all_items(join_view)
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(view=join_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
             await _run_fill_phase(payload)
 
-    async def handle_join_cancel(action_interaction: discord.Interaction):
+    async def handle_join_cancel(action_interaction: discord.Interaction) -> None:
         cog._game_canceled.add(game_id)
         await end_game(db, game_id)
         cog._game_canceled.discard(game_id)
         join_view.stop()
-        for item in join_view.children:
-            item.disabled = True
+        disable_all_items(join_view)
         cog.bot.active_views.pop(game_id, None)
         try:
             await action_interaction.response.edit_message(
@@ -232,8 +235,9 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         )
         cog.bot.active_views[game_id] = fill_view
 
-        fill_msg = await channel.send(embed=fill_embed, view=fill_view)
-        await update_game_message(db, game_id, fill_msg.id)
+        # Local alias: pyright can't narrow the nonlocal `fill_msg` binding.
+        fill_msg = sent_msg = await channel.send(embed=fill_embed, view=fill_view)
+        await update_game_message(db, game_id, sent_msg.id)
 
         await update_session(db, channel.id, game_id, player_ids)
 
@@ -255,8 +259,8 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 len(player_ids), done, deadline,
             )
             try:
-                await fill_msg.edit(embed=new_embed)
-            except Exception:
+                await sent_msg.edit(embed=new_embed)
+            except discord.HTTPException:
                 pass
 
             if done >= len(player_ids):
@@ -266,11 +270,10 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             return
 
         fill_view.stop()
-        for item in fill_view.children:
-            item.disabled = True
+        disable_all_items(fill_view)
         try:
-            await fill_msg.edit(view=fill_view)
-        except Exception:
+            await sent_msg.edit(view=fill_view)
+        except discord.HTTPException:
             pass
 
         cur_payload = await get_game_payload(db, game_id)
@@ -347,7 +350,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 )
                 try:
                     await fill_msg.edit(embed=new_embed)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         modal = make_fill_modal(
@@ -364,8 +367,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         view = cog.bot.active_views.pop(game_id, None)
         if view:
             view.stop()
-            for item in view.children:
-                item.disabled = True
+            disable_all_items(view)
         try:
             await cancel_interaction.response.edit_message(
                 embed=discord.Embed(title="📝 LegitLibs — Cancelled", color=0x99AAB5),
@@ -394,8 +396,9 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             _handle_volunteer, _handle_rescue_cancel,
         )
         cog.bot.active_views[game_id] = rescue_view
-        rescue_claim_msg = await channel.send(embed=rescue_embed, view=rescue_view)
-        await update_game_message(db, game_id, rescue_claim_msg.id)
+        # Local alias: pyright can't narrow the nonlocal `rescue_claim_msg` binding.
+        rescue_claim_msg = claim_msg = await channel.send(embed=rescue_embed, view=rescue_view)
+        await update_game_message(db, game_id, claim_msg.id)
 
         elapsed = 0
         while elapsed < CLAIM_TIMEOUT:
@@ -413,19 +416,18 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 resolve_names(guild, vols), deadline,
             )
             try:
-                await rescue_claim_msg.edit(embed=new_embed)
-            except Exception:
+                await claim_msg.edit(embed=new_embed)
+            except discord.HTTPException:
                 pass
 
         if game_id in cog._game_canceled:
             return
 
         rescue_view.stop()
-        for item in rescue_view.children:
-            item.disabled = True
+        disable_all_items(rescue_view)
         try:
-            await rescue_claim_msg.edit(view=rescue_view)
-        except Exception:
+            await claim_msg.edit(view=rescue_view)
+        except discord.HTTPException:
             pass
 
         cur_payload = await get_game_payload(db, game_id)
@@ -495,8 +497,9 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             _handle_rescue_submit, _handle_rescue_cancel,
         )
         cog.bot.active_views[game_id] = rescue_fill_view
-        rescue_fill_msg = await channel.send(embed=fill_embed, view=rescue_fill_view)
-        await update_game_message(db, game_id, rescue_fill_msg.id)
+        # Local alias: pyright can't narrow the nonlocal `rescue_fill_msg` binding.
+        rescue_fill_msg = rfill_msg = await channel.send(embed=fill_embed, view=rescue_fill_view)
+        await update_game_message(db, game_id, rfill_msg.id)
 
         elapsed = 0
         while elapsed < RESCUE_TIMEOUT:
@@ -515,8 +518,8 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 template["title"], tier, done, len(rescuers), deadline,
             )
             try:
-                await rescue_fill_msg.edit(embed=new_embed)
-            except Exception:
+                await rfill_msg.edit(embed=new_embed)
+            except discord.HTTPException:
                 pass
             if done >= len(rescuers):
                 break
@@ -525,11 +528,10 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             return
 
         rescue_fill_view.stop()
-        for item in rescue_fill_view.children:
-            item.disabled = True
+        disable_all_items(rescue_fill_view)
         try:
-            await rescue_fill_msg.edit(view=rescue_fill_view)
-        except Exception:
+            await rfill_msg.edit(view=rescue_fill_view)
+        except discord.HTTPException:
             pass
 
         await _run_reveal_phase()
@@ -602,7 +604,8 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         finally:
             await end_game(db, game_id,
                            player_count=len(player_ids),
-                           round_count=1)
+                           round_count=1,
+                           bot=cog.bot, player_ids=player_ids)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
 

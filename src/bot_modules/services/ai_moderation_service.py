@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -226,7 +227,13 @@ async def ai_rules_watch_check(
     )
 
     try:
-        data = json.loads(raw or "{}")
+        # Small local models sometimes wrap the JSON in ```fences``` or emit a
+        # short reasoning blob before it. Bare json.loads() would raise and the
+        # except-branch below defaults to "ok" — silently dropping a real flag.
+        # Strip fences and take the LAST flat {...} object in the text.
+        text = re.sub(r"```[a-zA-Z]*", "", raw or "").strip()
+        objs = re.findall(r"\{[^{}]*\}", text, re.DOTALL)
+        data = json.loads(objs[-1]) if objs else json.loads(text or "{}")
         verdict = str(data.get("verdict", "ok")).lower()
         if verdict not in ("flag", "ok"):
             verdict = "ok"

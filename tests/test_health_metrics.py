@@ -270,6 +270,20 @@ def test_compute_heatmap_records_slot_values(db_conn):
     assert len(out["per_channel"]) >= 1
 
 
+def test_compute_heatmap_shifts_by_utc_offset(db_conn):
+    now = 1_700_000_000.0  # 2023-11-14 22:13:20 UTC -> UTC hour-of-day bucket 22
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=int(now - 60))
+    db_conn.commit()
+
+    out_utc = hm.compute_heatmap(db_conn, GUILD, now=now)
+    assert out_utc["grid"][1][22] > 0  # Tue (dow=1), 22:00 UTC
+
+    # Eastern (-5h): the same message should land 5 hours earlier, at 17:00.
+    out_local = hm.compute_heatmap(db_conn, GUILD, now=now, utc_offset_hours=-5.0)
+    assert out_local["grid"][1][17] > 0
+    assert out_local["grid"][1][22] == 0
+
+
 # ── compute_channel_health ───────────────────────────────────────────
 
 
@@ -530,6 +544,19 @@ def test_compute_mod_workload_counts_audit_and_messages(db_conn):
     assert {10, 20}.issubset(actors)
     # Escalation rate: 1 warned, 1 escalated → 100%
     assert out["escalation_rate"] == 100.0
+
+
+def test_compute_mod_workload_excludes_voice_master_self_service(db_conn):
+    """A mod using their own Voice Master channel isn't moderation work."""
+    now = 1_700_000_000.0
+    _seed_audit(db_conn, action="kick", actor=10, ts=now - 60)
+    _seed_audit(db_conn, action="vm_channel_create", actor=10, ts=now - 90)
+    _seed_audit(db_conn, action="vm_claim", actor=10, ts=now - 120)
+    db_conn.commit()
+    out = hm.compute_mod_workload(db_conn, GUILD, now=now, mod_ids=[10])
+    assert out["total_actions_7d"] == 1
+    assert out["mod_actions"][0]["actions"] == 1
+    assert not any(t["action"].startswith("vm_") for t in out["action_types"])
 
 
 # ── compute_composite_health ─────────────────────────────────────────

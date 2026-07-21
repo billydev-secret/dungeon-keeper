@@ -1,10 +1,19 @@
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
+
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
@@ -12,8 +21,8 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_names,
+    channel_name,
 )
 from bot_modules.games_mfk.embeds import (
     build_assignments_embed,
@@ -42,14 +51,14 @@ class MFKView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="Join the Pool", style=discord.ButtonStyle.success, custom_id="mfk_join")
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="mfk_join")
     async def join_pool(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         user_id = interaction.user.id
         action_holder: dict[str, str] = {}
 
@@ -58,14 +67,16 @@ class MFKView(discord.ui.View):
 
         payload = await modify_payload(self.db, self.game_id, _toggle)
         action = action_holder["action"]
-        log.info("%s %s game %s in #%s", interaction.user.display_name, action, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s %s game %s in #%s", interaction.user.display_name, action, self.game_id, channel_name(interaction.channel))
 
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         names = resolve_names(interaction.guild, payload.get("participants", []))
+        color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
         embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
             labels=self.labels,
+            color=color,
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(
@@ -74,7 +85,7 @@ class MFKView(discord.ui.View):
 
     @discord.ui.button(label="Close & Assign", style=discord.ButtonStyle.primary, custom_id="mfk_assign")
     async def close_assign(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can assign roles.", ephemeral=True)
             return
@@ -106,11 +117,14 @@ class MFKView(discord.ui.View):
                 target_names.append(m.display_name if m else str(uid))
             player_assignments.append((player_str, target_names))
 
-        embed = build_assignments_embed(player_assignments, labels=self.labels)
+        color = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild) if interaction.guild else None
+        embed = build_assignments_embed(player_assignments, labels=self.labels, color=color)
+        if interaction.guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, interaction.guild.id, "mfk")
 
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
 
         await interaction.edit_original_response(view=self)
 
@@ -126,41 +140,19 @@ class MFKView(discord.ui.View):
             self.game_id,
             player_count=len(participants),
             payload={"assignments": serialize_assignments(assignments)},
+            bot=self.bot, player_ids=list(participants),
         )
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="mfk_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        game_msg = interaction.message
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(content="Game cancelled.", view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to cancel this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="mfk_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mfk_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["mfk"], ephemeral=True)
 
 
 class MFKCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -172,7 +164,7 @@ class MFKCog(commands.Cog):
         options='Custom categories (comma-separated, exactly 3). e.g. "Cruise, Wedding, Vacation"',
     )
     async def mfk(self, interaction: discord.Interaction, options: str | None = None):
-        log.info("%s used /games play mfk in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play mfk in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -194,15 +186,7 @@ class MFKCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"options": options},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -226,7 +210,9 @@ class MFKCog(commands.Cog):
         )
 
         log.info("Game %s (mfk) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
-        embed = build_lobby_embed(host_name, [], labels=labels)
+        guild = getattr(channel, "guild", None)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, [], labels=labels, color=color)
         view = MFKView(game_id, host_id, self.db, self.bot, labels=labels)
         self.bot.active_views[game_id] = view
 
@@ -251,10 +237,10 @@ class MFKCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = MFKCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("mfk")
-    play.add_command(cog.mfk)
+    play.add_command(cog.mfk, override=True)
     bot.game_launchers["mfk"] = cog.launch
     bot.game_recoverers["mfk"] = cog.recover_game

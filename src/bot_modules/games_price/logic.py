@@ -12,7 +12,7 @@ High-leverage pieces:
   ("500"/"$1,000"/"5k"/"1.5M"/"2B") into an integer clamped to
   ``[0, 999_999_999]``.
 * :func:`format_price` / :func:`price_label` — human-readable rendering
-  with optional flavour for extremes (``"$0 (free?!)"`` /
+  with optional flavor for extremes (``"$0 (free?!)"`` /
   ``"$999.0M (absolutely not)"``).
 * :func:`build_ladder` — sorts ``user_id -> amount`` into the reveal
   ladder; pure so the reveal embed builder can call it.
@@ -40,7 +40,7 @@ from typing import Any
 MIN_PRICE: int = 0
 MAX_PRICE: int = 999_999_999
 
-# Suffix multipliers recognised by :func:`parse_price`. Order matters
+# Suffix multipliers recognized by :func:`parse_price`. Order matters
 # only when one suffix is a prefix of another (none currently are), but
 # we keep "million"/"billion" before "m"/"b" so a literal "billion"
 # input doesn't get stripped to "billio" and misread.
@@ -56,7 +56,7 @@ _SUFFIX_MULTIPLIERS: list[tuple[str, int]] = [
 def parse_price(raw: str) -> int | None:
     """Parse user input into an integer dollar amount in ``[0, 999_999_999]``.
 
-    Strips ``$`` and ``,`` separators, then recognises ``k``/``m``/``b``
+    Strips ``$`` and ``,`` separators, then recognizes ``k``/``m``/``b``
     (or ``million``/``billion``) suffixes case-insensitively, then falls
     back to a plain ``float()``-then-truncate parse. Returns ``None`` on
     empty or unparseable input. Out-of-range values are clamped, not
@@ -105,7 +105,7 @@ def format_price(amount: int) -> str:
 
 
 def price_label(amount: int) -> str:
-    """Decorated price string: appends flavour for extremes.
+    """Decorated price string: appends flavor for extremes.
 
     ``0`` → ``"$0 (free?!)"``; anything ``>= 999_000_000`` →
     ``"$999.0M (absolutely not)"``; everything else falls through to
@@ -270,7 +270,7 @@ def compute_highlight(
     Returns ``(round_num_str, min_amount, max_amount)`` or ``None`` when
     no round had 2+ submissions. The cog formats this into the recap's
     Highlight field; keeping the picker pure lets tests assert tie-
-    breaking behaviour without spinning up Discord.
+    breaking behavior without spinning up Discord.
 
     Tie-break: when multiple rounds share the same spread, the first one
     encountered while iterating ``rounds_data.values()`` wins — matching

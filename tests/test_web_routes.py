@@ -15,6 +15,7 @@ from bot_modules.core.db_utils import (
     get_config_value,
     get_grant_permissions,
     get_grant_roles,
+    get_tz_offset_hours,
     init_config_db,
     init_grant_role_tables,
     open_db,
@@ -41,46 +42,10 @@ class _TestCtx:
         self.db_path = db_path
         self.guild_id = guild_id
         self.bot: Any = None
-        self.tz_offset_hours = 0.0
-        self.mod_channel_id = 0
-        self.bypass_role_ids: set[int] = set()
-        self.recorded_bot_user_ids: set[int] = set()
-        self.spoiler_required_channels: set[int] = set()
-        self.level_5_role_id = 0
-        self.level_5_log_channel_id = 0
-        self.level_up_log_channel_id = 0
-        self.xp_grant_allowed_user_ids: set[int] = set()
-        self.xp_excluded_channel_ids: set[int] = set()
-        self.welcome_channel_id = 0
-        self.welcome_message = ""
-        self.welcome_ping_role_id = 0
-        self.leave_channel_id = 0
-        self.leave_message = ""
-        self.greeter_role_id = 0
-        self.greeter_chat_channel_id = 0
-        self.join_leave_log_channel_id = 0
-        self.mod_role_ids: set[int] = set()
-        self.admin_role_ids: set[int] = set()
-        self.reload_xp_settings_calls = 0
         self._guild_config_cache: dict = {}
 
     def open_db(self):
         return open_db(self.db_path)
-
-    def reload_xp_settings(self) -> None:
-        self.reload_xp_settings_calls += 1
-
-    def reload_grant_roles(self) -> None:
-        pass
-
-    def reload_permission_roles(self) -> None:
-        from bot_modules.core.db_utils import get_config_value
-
-        with self.open_db() as conn:
-            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
-            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
-        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
-        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
 
     def guild_config(self, guild_id: int):
         from bot_modules.core.app_context import GuildConfig
@@ -103,7 +68,13 @@ class _TestCtx:
 
 @pytest.fixture
 def ctx(tmp_path):
+    from migrations import apply_migrations_sync
+
     db_path = tmp_path / "test.db"
+    # GET /api/config now aggregates sections (needle, auto-react, bump
+    # tracker, ...) that query their tables directly, so build the full
+    # canonical schema instead of hand-picking table-init helpers.
+    apply_migrations_sync(db_path)
     init_config_db(db_path)
     with open_db(db_path) as conn:
         init_grant_role_tables(conn)
@@ -269,10 +240,11 @@ def test_update_global_persists_fields_and_updates_context(ctx, make_client):
         assert get_config_value(conn, "booster_swatch_dir", "", ctx.guild_id) == "C:/swatches"
         assert get_config_id_set(conn, "bypass_role_ids", ctx.guild_id) == {1, 2}
         assert get_config_id_set(conn, "recorded_bot_user_ids", ctx.guild_id) == {9}
-    assert ctx.tz_offset_hours == -4.5
-    assert ctx.mod_channel_id == 111
-    assert ctx.bypass_role_ids == {1, 2}
-    assert ctx.recorded_bot_user_ids == {9}
+        assert get_tz_offset_hours(conn, ctx.guild_id) == -4.5
+    cfg = ctx.guild_config(ctx.guild_id)
+    assert cfg.mod_channel_id == 111
+    assert cfg.bypass_role_ids == {1, 2}
+    assert cfg.recorded_bot_user_ids == {9}
 
 
 def _seed_message(ctx, message_id: int, content: str) -> None:
@@ -373,14 +345,15 @@ def test_update_welcome_persists_and_updates_live_context(ctx, make_client):
         assert get_config_value(conn, "greeter_role_id", "", ctx.guild_id) == "503"
         assert get_config_value(conn, "greeter_chat_channel_id", "", ctx.guild_id) == "504"
         assert get_config_value(conn, "join_leave_log_channel_id", "", ctx.guild_id) == "505"
-    assert ctx.welcome_channel_id == 500
-    assert ctx.welcome_message == "Hello there"
-    assert ctx.welcome_ping_role_id == 501
-    assert ctx.leave_channel_id == 502
-    assert ctx.leave_message == "Goodbye"
-    assert ctx.greeter_role_id == 503
-    assert ctx.greeter_chat_channel_id == 504
-    assert ctx.join_leave_log_channel_id == 505
+    cfg = ctx.guild_config(ctx.guild_id)
+    assert cfg.welcome_channel_id == 500
+    assert cfg.welcome_message == "Hello there"
+    assert cfg.welcome_ping_role_id == 501
+    assert cfg.leave_channel_id == 502
+    assert cfg.leave_message == "Goodbye"
+    assert cfg.greeter_role_id == 503
+    assert cfg.greeter_chat_channel_id == 504
+    assert cfg.join_leave_log_channel_id == 505
 
 
 def test_update_xp_persists_coefficients_and_reloads_context(ctx, make_client):
@@ -410,12 +383,13 @@ def test_update_xp_persists_coefficients_and_reloads_context(ctx, make_client):
         assert get_config_value(conn, "xp_coeff_message_word_xp", "", ctx.guild_id) == "1.5"
         assert get_config_value(conn, "xp_coeff_cooldown_thresholds_seconds", "", ctx.guild_id) == "10,20"
         assert get_config_value(conn, "xp_coeff_voice_interval_seconds", "", ctx.guild_id) == "600"
-    assert ctx.level_5_role_id == 10
-    assert ctx.level_5_log_channel_id == 11
-    assert ctx.level_up_log_channel_id == 12
-    assert ctx.xp_grant_allowed_user_ids == {13, 14}
-    assert ctx.xp_excluded_channel_ids == {15}
-    assert ctx.reload_xp_settings_calls == 1
+    cfg = ctx.guild_config(ctx.guild_id)
+    assert cfg.level_5_role_id == 10
+    assert cfg.level_5_log_channel_id == 11
+    assert cfg.level_up_log_channel_id == 12
+    assert cfg.xp_grant_allowed_user_ids == {13, 14}
+    assert cfg.xp_excluded_channel_ids == {15}
+    assert cfg.xp_settings.message_word_xp == 1.5
 
 
 def test_update_role_grant_creates_row_and_permissions(ctx, make_client):
@@ -798,3 +772,31 @@ def test_post_bot_identity_400_on_bad_avatar_url(ctx, make_client):
         MockClient.return_value = instance
         resp = client.post("/api/config/bot-identity", data={"avatar_url": "https://bad.example.com/img.png"})
     assert resp.status_code == 400
+
+
+# ── auth backend selection fails closed (deep-review #5) ──────────────────────
+
+from web_server.server import _auto_detect_auth  # noqa: E402
+
+
+def test_auto_detect_auth_uses_oauth_when_configured(monkeypatch):
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "cid")
+    monkeypatch.setenv("SESSION_SECRET", "secret")
+    monkeypatch.delenv("DASHBOARD_OPEN_AUTH", raising=False)
+    assert isinstance(_auto_detect_auth(123), DiscordOAuthAuth)
+
+
+def test_auto_detect_auth_open_only_with_explicit_optin(monkeypatch):
+    monkeypatch.delenv("DISCORD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.setenv("DASHBOARD_OPEN_AUTH", "1")
+    assert isinstance(_auto_detect_auth(123), OpenAuth)
+
+
+def test_auto_detect_auth_fails_closed_when_unconfigured(monkeypatch):
+    # A dropped OAuth secret must NOT silently serve admin-to-everyone.
+    monkeypatch.delenv("DISCORD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.delenv("DASHBOARD_OPEN_AUTH", raising=False)
+    with pytest.raises(RuntimeError, match="Refusing to start"):
+        _auto_detect_auth(123)

@@ -121,7 +121,7 @@ def main() -> None:
         greeter_role_id=greeter_role_id,
     )
 
-    # Import after env is loaded so matplotlib etc. can honour any configuration.
+    # Import after env is loaded so matplotlib etc. can honor any configuration.
     from web_server.server import create_app
 
     host = os.getenv("DASHBOARD_HOST", "127.0.0.1")

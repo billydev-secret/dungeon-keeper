@@ -1,3 +1,5 @@
+import { esc } from "../api.js";
+
 export function mount(container) {
   container.innerHTML = `
     <div class="panel" style="display:flex;flex-direction:column;">
@@ -45,14 +47,10 @@ export function mount(container) {
     // Highlight the level keyword
     for (const [level, color] of Object.entries(LEVEL_COLORS)) {
       if (text.includes(` ${level} `) || text.includes(` ${level}  `)) {
-        return `<span style="color:${color}">${escHtml(text)}</span>`;
+        return `<span style="color:${color}">${esc(text)}</span>`;
       }
     }
-    return escHtml(text);
-  }
-
-  function escHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return esc(text);
   }
 
   function appendLine(raw) {

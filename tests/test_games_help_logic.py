@@ -23,7 +23,7 @@ from bot_modules.games_help.logic import (
 # ── alignment guarantees ─────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("key", [k for k in GAME_ICONS if k != "pressure"])
+@pytest.mark.parametrize("key", list(GAME_ICONS))
 def test_every_game_icon_has_a_command(key):
     """Each entry in GAME_ICONS (except the internal-only ``pressure``
     key) must have a slash-command listed — otherwise the help embed
@@ -31,7 +31,7 @@ def test_every_game_icon_has_a_command(key):
     assert key in GAME_COMMANDS, f"GAME_COMMANDS missing entry for {key!r}"
 
 
-@pytest.mark.parametrize("key", [k for k in GAME_ICONS if k != "pressure"])
+@pytest.mark.parametrize("key", list(GAME_ICONS))
 def test_every_game_icon_has_a_description(key):
     """Each entry in GAME_ICONS (except ``pressure``) must have a
     description so the help embed never renders a blank tail."""
@@ -60,11 +60,39 @@ def test_support_invite_url_is_discord_link():
     assert SUPPORT_INVITE_URL.startswith("https://discord.gg/")
 
 
-def test_other_commands_value_references_session_recap():
+def test_other_commands_value_references_recap():
     """A sanity check that the static other-commands block hasn't been
     silently truncated."""
-    assert "/session-recap" in OTHER_COMMANDS_VALUE
-    assert "/consent" in OTHER_COMMANDS_VALUE
+    assert "/recap" in OTHER_COMMANDS_VALUE
+    assert "/games support" in OTHER_COMMANDS_VALUE
+
+
+# ── doc-count tripwires ──────────────────────────────────────────────
+# The README and web manual advertise the party-game count in prose. These
+# numbers have drifted twice (16 → 17 → 18); fail loudly when a game is
+# added to GAME_ICONS without updating the docs.
+
+_PARTY_GAME_KEYS = [k for k in GAME_ICONS if k not in ("pressure", "risky_roll")]
+_DOCS_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+
+
+def test_readme_party_game_count_matches_code():
+    readme = (_DOCS_ROOT / "README.md").read_text(encoding="utf-8")
+    expected = f"{len(_PARTY_GAME_KEYS)}-game"
+    assert expected in readme, (
+        f"README.md should say '{expected}' (GAME_ICONS has "
+        f"{len(_PARTY_GAME_KEYS)} party games) — update the count."
+    )
+
+
+def test_manual_party_game_count_matches_code():
+    manual = (
+        _DOCS_ROOT / "src" / "web_server" / "static" / "manual.html"
+    ).read_text(encoding="utf-8")
+    expected = f"{len(_PARTY_GAME_KEYS)} party games"
+    assert expected in manual, (
+        f"manual.html's Feature Map should say '{expected}' — update the count."
+    )
 
 
 # ── build_help_embed ─────────────────────────────────────────────────
@@ -75,7 +103,7 @@ def test_build_help_embed_has_title_and_description():
     assert embed.title is not None
     assert "Community Games" in embed.title
     assert embed.description is not None
-    assert "slash command" in embed.description.lower()
+    assert "/games play" in embed.description.lower()
 
 
 def test_build_help_embed_lists_every_game():
@@ -91,7 +119,7 @@ def test_build_help_embed_includes_other_commands_section():
     embed = build_help_embed()
     by_name = {f.name: f.value or "" for f in embed.fields}
     assert "⚙️ Other Commands" in by_name
-    assert "/session-recap" in by_name["⚙️ Other Commands"]
+    assert "/recap" in by_name["⚙️ Other Commands"]
 
 
 def test_build_help_embed_renders_command_and_description_inline():
@@ -100,14 +128,14 @@ def test_build_help_embed_renders_command_and_description_inline():
     # Pick a known game — FFA — and check the value embeds both the
     # command and description.
     ffa_field = by_name[f"{GAME_ICONS['ffa']} {GAME_NAMES['ffa']}"]
-    assert "/ffa" in ffa_field
+    assert "/games play ffa" in ffa_field
     assert GAME_DESCRIPTIONS["ffa"] in ffa_field
 
 
 def test_build_help_embed_has_footer():
     embed = build_help_embed()
     assert embed.footer.text is not None
-    assert "/games-help" in embed.footer.text
+    assert "/games help" in embed.footer.text
 
 
 def test_build_help_embed_uses_golden_meadow_color():
@@ -136,7 +164,7 @@ def test_build_support_embed_includes_invite_url():
 def test_build_support_embed_has_footer():
     embed = build_support_embed()
     assert embed.footer.text is not None
-    assert "/games-support" in embed.footer.text
+    assert "/games support" in embed.footer.text
 
 
 def test_build_support_embed_uses_golden_meadow_color():

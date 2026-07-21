@@ -17,6 +17,8 @@ class WhisperConfig:
     channel_id: int = 0
     log_channel_id: int = 0
     launcher_message_id: int = 0
+    cooldown_seconds: int = 30
+    hourly_cap_per_target: int = 5
 
 
 @dataclass

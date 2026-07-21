@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.jail.embeds import (
     build_adopted_policies_embed,
     build_modinfo_embed,
@@ -29,22 +30,25 @@ from bot_modules.jail.embeds import (
 from bot_modules.jail.logic import sanitize_channel_name
 
 from bot_modules.commands.jail_commands import (
-    CLR_INFO,
     CLR_POLICY,
-    CLR_TICKET,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
+    TICKET_STATUS_CLOSED,
+    TICKET_STATUS_ESCALATED,
+    TICKET_STATUS_OPEN,
     TicketCloseButton,
     TicketDeleteButton,
     TicketPanelButton,
     TicketReopenButton,
     _JailModal,
     _TicketFromMessageModal,
+    _apply_ticket_status,
     _collect_and_post_transcript,
     _dm_user,
     _do_jail,
     _do_unjail,
+    _finalize_ticket_delete,
     _get_admin_role_ids,
     _add_ticket_panel,
     _get_config,
@@ -55,6 +59,7 @@ from bot_modules.commands.jail_commands import (
     _ts_str,
     jail_expiry_loop,
     policy_vote_timeout_loop,
+    ticket_autodelete_loop,
 )
 from bot_modules.services.moderation import (
     add_ticket_participant,
@@ -64,7 +69,6 @@ from bot_modules.services.moderation import (
     create_policy_ticket,
     create_ticket,
     create_warning,
-    delete_ticket,
     escalate_ticket,
     get_active_jail,
     get_active_warning_count,
@@ -83,7 +87,11 @@ from bot_modules.services.moderation import (
     write_audit,
 )
 from bot_modules.core.db_utils import get_config_value, get_tz_offset_hours
-from bot_modules.services.activity_graphs import query_message_activity, render_activity_chart
+from bot_modules.services.activity_graphs import (
+    query_message_activity,
+    query_xp_activity_with_breakdown,
+    render_activity_chart,
+)
 
 
 # Discord caps the embed *title* at 256 chars; we trim our policy titles
@@ -118,15 +126,22 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
             return
 
         vote_text_val = self.vote_text.value.strip()
-        with ctx.open_db() as conn:
-            start_policy_vote(conn, self.policy_id, vote_text=vote_text_val)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="policy_vote_started",
-                actor_id=member.id,
-                extra={"policy_id": self.policy_id, "vote_text": vote_text_val},
-            )
+        pv_guild_id = guild.id
+        pv_policy_id = self.policy_id
+        pv_member_id = member.id
+
+        def _start_vote():
+            with ctx.open_db() as conn:
+                start_policy_vote(conn, pv_policy_id, vote_text=vote_text_val)
+                write_audit(
+                    conn,
+                    guild_id=pv_guild_id,
+                    action="policy_vote_started",
+                    actor_id=pv_member_id,
+                    extra={"policy_id": pv_policy_id, "vote_text": vote_text_val},
+                )
+
+        await asyncio.to_thread(_start_vote)
 
         mod_role_ids = _get_mod_role_ids(ctx, guild.id)
         admin_role_ids = _get_admin_role_ids(ctx, guild.id)
@@ -202,29 +217,39 @@ class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Conte
         if notes_text:
             full_reason = f"{reason_text}\n\n**Mod notes:** {notes_text}"
 
-        with ctx.open_db() as conn:
-            warning_id = create_warning(
-                conn,
-                guild_id=guild.id,
-                user_id=target.id,
-                moderator_id=member.id,
-                reason=full_reason,
-            )
-            count = get_active_warning_count(conn, guild.id, target.id)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="warning_issue",
-                actor_id=member.id,
-                target_id=target.id,
-                extra={
-                    "warning_id": warning_id,
-                    "reason": full_reason,
-                    "count": count,
-                    "source_message_id": self.source_message.id,
-                    "source_channel_id": self.source_message.channel.id,
-                },
-            )
+        wfm_guild_id = guild.id
+        wfm_target_id = target.id
+        wfm_member_id = member.id
+        wfm_source_msg_id = self.source_message.id
+        wfm_source_ch_id = self.source_message.channel.id
+
+        def _issue_warning():
+            with ctx.open_db() as conn:
+                wid = create_warning(
+                    conn,
+                    guild_id=wfm_guild_id,
+                    user_id=wfm_target_id,
+                    moderator_id=wfm_member_id,
+                    reason=full_reason,
+                )
+                cnt = get_active_warning_count(conn, wfm_guild_id, wfm_target_id)
+                write_audit(
+                    conn,
+                    guild_id=wfm_guild_id,
+                    action="warning_issue",
+                    actor_id=wfm_member_id,
+                    target_id=wfm_target_id,
+                    extra={
+                        "warning_id": wid,
+                        "reason": full_reason,
+                        "count": cnt,
+                        "source_message_id": wfm_source_msg_id,
+                        "source_channel_id": wfm_source_ch_id,
+                    },
+                )
+            return wid, cnt
+
+        warning_id, count = await asyncio.to_thread(_issue_warning)
 
         await interaction.response.send_message(
             f"⚠️ Warning issued to {target.mention}. They now have **{count}** active warning(s).",
@@ -241,8 +266,11 @@ class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Conte
         )
         await _post_audit(ctx, guild, audit_embed)
 
-        with ctx.open_db() as conn:
-            threshold = int(get_config_value(conn, "warning_threshold", "3"))
+        def _get_wfm_threshold():
+            with ctx.open_db() as conn:
+                return int(get_config_value(conn, "warning_threshold", "3"))
+
+        threshold = await asyncio.to_thread(_get_wfm_threshold)
         if count >= threshold and (count - 1) < threshold:
             alert = build_warning_threshold_embed(
                 target_mention=target.mention,
@@ -266,9 +294,6 @@ class JailCog(commands.Cog):
     async def cog_load(self) -> None:
         bot = self.bot
         ctx = self.ctx
-
-        # Store ctx on bot so persistent view callbacks can reach it
-        bot._mod_ctx = ctx  # type: ignore[attr-defined]
 
         # Register persistent dynamic items
         bot.add_dynamic_items(TicketPanelButton)
@@ -337,6 +362,10 @@ class JailCog(commands.Cog):
         # Resolve policy votes whose 72h (or configured) window has passed.
         bot.startup_task_factories.append(
             lambda: policy_vote_timeout_loop(bot, ctx)
+        )
+        # Permanently delete tickets left closed for 24h (archives first).
+        bot.startup_task_factories.append(
+            lambda: ticket_autodelete_loop(bot, ctx)
         )
 
     async def cog_unload(self) -> None:
@@ -430,7 +459,8 @@ class JailCog(commands.Cog):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
 
-        embed = build_ticket_panel_embed()
+        accent = await resolve_accent_color(ctx.db_path, guild)
+        embed = build_ticket_panel_embed(color=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
         msg = await channel.send(embed=embed, view=view)
@@ -463,6 +493,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{sanitize_channel_name(user.name)[:16]}-{ts}"
@@ -499,26 +530,33 @@ class JailCog(commands.Cog):
             name, category=category, overwrites=overwrites  # type: ignore[arg-type]
         )
 
-        with ctx.open_db() as conn:
-            ticket_id = create_ticket(
-                conn,
-                guild_id=guild.id,
-                user_id=user.id,
-                channel_id=channel.id,
-                description=desc_text,
-            )
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_open",
-                actor_id=user.id,
-                extra={"ticket_id": ticket_id, "description": desc_text},
-            )
+        to_guild_id = guild.id
+
+        def _create_ticket():
+            with ctx.open_db() as conn:
+                tid = create_ticket(
+                    conn,
+                    guild_id=to_guild_id,
+                    user_id=user.id,
+                    channel_id=channel.id,
+                    description=desc_text,
+                )
+                write_audit(
+                    conn,
+                    guild_id=to_guild_id,
+                    action="ticket_open",
+                    actor_id=user.id,
+                    extra={"ticket_id": tid, "description": desc_text},
+                )
+            return tid
+
+        ticket_id = await asyncio.to_thread(_create_ticket)
 
         embed = build_ticket_open_embed(
             ticket_id=ticket_id,
             description=desc_text,
             opener_mention=user.mention,
+            color=accent,
         )
         view = discord.ui.View(timeout=None)
         view.add_item(TicketCloseButton(ticket_id))
@@ -531,14 +569,14 @@ class JailCog(commands.Cog):
             user,
             embed=discord.Embed(
                 description=f"Your ticket has been created → [Go to ticket]({channel.jump_url})",
-                color=CLR_TICKET,
+                color=accent,
             ),
         )
 
         audit_embed = discord.Embed(
             title="📩 Ticket Opened",
             description=f"**Ticket #{ticket_id}** by {user.mention} in {channel.mention}",
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -554,8 +592,11 @@ class JailCog(commands.Cog):
                 "Only moderators can close tickets.", ephemeral=True
             )
             return
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_close_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        ticket = await asyncio.to_thread(_fetch_close_ticket)
         if not ticket or ticket["status"] != "open":
             await interaction.response.send_message(
                 "This is not an open ticket channel.", ephemeral=True
@@ -566,17 +607,23 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
+        accent = await resolve_accent_color(ctx.db_path, guild)
+        tc_guild_id = guild.id
+        tc_ticket_user_id = ticket["user_id"]
 
-        with ctx.open_db() as conn:
-            close_ticket(conn, tid, closed_by=member.id, reason=reason_text)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_close",
-                actor_id=member.id,
-                target_id=ticket["user_id"],
-                extra={"ticket_id": tid, "reason": reason_text},
-            )
+        def _close_ticket():
+            with ctx.open_db() as conn:
+                close_ticket(conn, tid, closed_by=member.id, reason=reason_text)
+                write_audit(
+                    conn,
+                    guild_id=tc_guild_id,
+                    action="ticket_close",
+                    actor_id=member.id,
+                    target_id=tc_ticket_user_id,
+                    extra={"ticket_id": tid, "reason": reason_text},
+                )
+
+        await asyncio.to_thread(_close_ticket)
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
@@ -600,7 +647,12 @@ class JailCog(commands.Cog):
 
             async for msg in channel.history(limit=5, oldest_first=True):
                 if msg.author == guild.me and msg.embeds:
-                    await msg.edit(view=view)
+                    await msg.edit(
+                        embed=_apply_ticket_status(
+                            msg.embeds[0], TICKET_STATUS_CLOSED
+                        ),
+                        view=view,
+                    )
                     break
 
             if creator:
@@ -610,7 +662,7 @@ class JailCog(commands.Cog):
                         description=f"Your ticket in **{guild.name}** has been closed."
                         + (f"\n**Reason:** {reason_text}" if reason_text else "")
                         + "\nYou can still view the channel.",
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                     fallback_channel=channel,
                 )
@@ -624,8 +676,11 @@ class JailCog(commands.Cog):
                 "Only moderators can reopen tickets.", ephemeral=True
             )
             return
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_reopen_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        ticket = await asyncio.to_thread(_fetch_reopen_ticket)
         if not ticket or ticket["status"] != "closed":
             await interaction.response.send_message(
                 "This is not a closed ticket channel.", ephemeral=True
@@ -635,16 +690,22 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
+        accent = await resolve_accent_color(ctx.db_path, guild)
         tid = ticket["id"]
-        with ctx.open_db() as conn:
-            reopen_ticket(conn, tid)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_reopen",
-                actor_id=member.id,
-                extra={"ticket_id": tid},
-            )
+        tr_guild_id = guild.id
+
+        def _reopen_ticket():
+            with ctx.open_db() as conn:
+                reopen_ticket(conn, tid)
+                write_audit(
+                    conn,
+                    guild_id=tr_guild_id,
+                    action="ticket_reopen",
+                    actor_id=member.id,
+                    extra={"ticket_id": tid},
+                )
+
+        await asyncio.to_thread(_reopen_ticket)
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
@@ -659,9 +720,19 @@ class JailCog(commands.Cog):
                 )
             view = discord.ui.View(timeout=None)
             view.add_item(TicketCloseButton(tid))
+            # Restore the Status field — keep the ⚠️ marker if the ticket was
+            # escalated (that flag survives reopen), else back to 🟢 Open.
+            reopen_status = (
+                TICKET_STATUS_ESCALATED
+                if ticket.get("escalated")
+                else TICKET_STATUS_OPEN
+            )
             async for msg in channel.history(limit=5, oldest_first=True):
                 if msg.author == guild.me and msg.embeds:
-                    await msg.edit(view=view)
+                    await msg.edit(
+                        embed=_apply_ticket_status(msg.embeds[0], reopen_status),
+                        view=view,
+                    )
                     break
             await interaction.response.send_message(
                 f"🔓 Ticket reopened by {member.mention}.",
@@ -672,7 +743,7 @@ class JailCog(commands.Cog):
                     creator,
                     embed=discord.Embed(
                         description=f"Your ticket in **{guild.name}** has been reopened.",
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                 )
 
@@ -688,8 +759,11 @@ class JailCog(commands.Cog):
                 "Only moderators can delete tickets.", ephemeral=True
             )
             return
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_delete_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        ticket = await asyncio.to_thread(_fetch_delete_ticket)
         if not ticket or ticket["status"] != "closed":
             await interaction.response.send_message(
                 "Ticket must be closed before deleting.", ephemeral=True
@@ -700,36 +774,9 @@ class JailCog(commands.Cog):
         channel = interaction.channel
         if not guild or not isinstance(channel, discord.TextChannel):
             return
-        tid = ticket["id"]
 
         await interaction.response.defer(ephemeral=True)
-        creator = guild.get_member(ticket["user_id"]) or interaction.user
-        await _collect_and_post_transcript(
-            ctx,
-            channel,
-            record_type="ticket",
-            record_id=tid,
-            user=creator,
-            extra_meta={"close_reason": ticket.get("close_reason", "")},
-        )
-        with ctx.open_db() as conn:
-            delete_ticket(conn, tid)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_delete",
-                actor_id=member.id,
-                target_id=ticket["user_id"],
-                extra={"ticket_id": tid},
-            )
-
-        audit_embed = discord.Embed(
-            title="🗑️ Ticket Deleted",
-            description=f"**Ticket #{tid}** deleted by {member.mention}",
-            color=CLR_TICKET,
-        )
-        await _post_audit(ctx, guild, audit_embed)
-        await channel.delete(reason=f"Ticket #{tid} deleted")
+        await _finalize_ticket_delete(ctx, channel, ticket, actor_id=member.id)
 
     @ticket.command(
         name="claim",
@@ -741,20 +788,28 @@ class JailCog(commands.Cog):
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_claim_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        ticket = await asyncio.to_thread(_fetch_claim_ticket)
         if not ticket:
             await interaction.response.send_message("Not a ticket channel.", ephemeral=True)
             return
-        with ctx.open_db() as conn:
-            claim_ticket(conn, ticket["id"], member.id)
-            write_audit(
-                conn,
-                guild_id=interaction.guild_id or 0,
-                action="ticket_claim",
-                actor_id=member.id,
-                extra={"ticket_id": ticket["id"]},
-            )
+        claim_ticket_id = ticket["id"]
+
+        def _claim_ticket():
+            with ctx.open_db() as conn:
+                claim_ticket(conn, claim_ticket_id, member.id)
+                write_audit(
+                    conn,
+                    guild_id=interaction.guild_id or 0,
+                    action="ticket_claim",
+                    actor_id=member.id,
+                    extra={"ticket_id": claim_ticket_id},
+                )
+
+        await asyncio.to_thread(_claim_ticket)
         await interaction.response.send_message(
             f"✅ {member.mention} claimed this ticket. You'll get DM notifications for new activity.",
             allowed_mentions=discord.AllowedMentions.none(),
@@ -777,8 +832,11 @@ class JailCog(commands.Cog):
         ):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_esc_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        ticket = await asyncio.to_thread(_fetch_esc_ticket)
         if not ticket:
             await interaction.response.send_message("Not a ticket channel.", ephemeral=True)
             return
@@ -806,15 +864,21 @@ class JailCog(commands.Cog):
                 )
                 pings.append(role.mention)
 
-        with ctx.open_db() as conn:
-            escalate_ticket(conn, ticket["id"])
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_escalate",
-                actor_id=member.id,
-                extra={"ticket_id": ticket["id"], "reason": reason or ""},
-            )
+        esc_guild_id = guild.id
+        esc_ticket_id = ticket["id"]
+
+        def _escalate_ticket():
+            with ctx.open_db() as conn:
+                escalate_ticket(conn, esc_ticket_id)
+                write_audit(
+                    conn,
+                    guild_id=esc_guild_id,
+                    action="ticket_escalate",
+                    actor_id=member.id,
+                    extra={"ticket_id": esc_ticket_id, "reason": reason or ""},
+                )
+
+        await asyncio.to_thread(_escalate_ticket)
 
         msg = f"⚠️ **Ticket escalated** by {member.mention}."
         if reason:
@@ -822,6 +886,19 @@ class JailCog(commands.Cog):
         if pings:
             msg += f"\n{' '.join(pings)}"
         await interaction.response.send_message(msg)
+
+        # Flip the ticket embed's Status field to Escalated. Done after the
+        # interaction reply so the extra REST calls don't risk the 3 s response
+        # window; the embed carries no view change, so edit only the embed and
+        # leave the existing buttons intact.
+        async for hist_msg in channel.history(limit=5, oldest_first=True):
+            if hist_msg.author == guild.me and hist_msg.embeds:
+                await hist_msg.edit(
+                    embed=_apply_ticket_status(
+                        hist_msg.embeds[0], TICKET_STATUS_ESCALATED
+                    )
+                )
+                break
 
     # ── /policy ───────────────────────────────────────────────────────────
 
@@ -901,22 +978,28 @@ class JailCog(commands.Cog):
             name, category=category, overwrites=overwrites  # type: ignore[arg-type]
         )
 
-        with ctx.open_db() as conn:
-            policy_id = create_policy_ticket(
-                conn,
-                guild_id=guild.id,
-                creator_id=user.id,
-                channel_id=channel.id,
-                title=title,
-                description=desc_text,
-            )
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="policy_open",
-                actor_id=user.id,
-                extra={"policy_id": policy_id, "title": title},
-            )
+        po_guild_id = guild.id
+
+        def _create_policy():
+            with ctx.open_db() as conn:
+                pid = create_policy_ticket(
+                    conn,
+                    guild_id=po_guild_id,
+                    creator_id=user.id,
+                    channel_id=channel.id,
+                    title=title,
+                    description=desc_text,
+                )
+                write_audit(
+                    conn,
+                    guild_id=po_guild_id,
+                    action="policy_open",
+                    actor_id=user.id,
+                    extra={"policy_id": pid, "title": title},
+                )
+            return pid
+
+        policy_id = await asyncio.to_thread(_create_policy)
 
         embed = build_policy_proposal_embed(
             policy_id=policy_id,
@@ -965,8 +1048,11 @@ class JailCog(commands.Cog):
             )
             return
 
-        with ctx.open_db() as conn:
-            policy = get_policy_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_vote_policy():
+            with ctx.open_db() as conn:
+                return get_policy_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        policy = await asyncio.to_thread(_fetch_vote_policy)
         if not policy:
             await interaction.response.send_message(
                 "This is not an active policy proposal channel.", ephemeral=True
@@ -1001,8 +1087,11 @@ class JailCog(commands.Cog):
             )
             return
 
-        with ctx.open_db() as conn:
-            policy = get_policy_ticket_by_channel(conn, interaction.channel_id or 0)
+        def _fetch_close_policy():
+            with ctx.open_db() as conn:
+                return get_policy_ticket_by_channel(conn, interaction.channel_id or 0)
+
+        policy = await asyncio.to_thread(_fetch_close_policy)
         if not policy:
             await interaction.response.send_message(
                 "This is not an active policy proposal channel.", ephemeral=True
@@ -1011,16 +1100,21 @@ class JailCog(commands.Cog):
 
         policy_id = policy["id"]
         reason_text = reason or "Closed without vote"
+        accent = await resolve_accent_color(ctx.db_path, guild)
+        pc_guild_id = guild.id
 
-        with ctx.open_db() as conn:
-            close_policy_ticket(conn, policy_id)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="policy_closed",
-                actor_id=member.id,
-                extra={"policy_id": policy_id, "reason": reason_text},
-            )
+        def _close_policy():
+            with ctx.open_db() as conn:
+                close_policy_ticket(conn, policy_id)
+                write_audit(
+                    conn,
+                    guild_id=pc_guild_id,
+                    action="policy_closed",
+                    actor_id=member.id,
+                    extra={"policy_id": policy_id, "reason": reason_text},
+                )
+
+        await asyncio.to_thread(_close_policy)
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
@@ -1028,11 +1122,15 @@ class JailCog(commands.Cog):
                 title=policy["title"],
                 moderator_mention=member.mention,
                 reason=reason_text,
+                color=accent,
             )
             await interaction.response.send_message(embed=close_embed)
 
-            with ctx.open_db() as conn:
-                adopted_policies = get_policies_by_ticket_id(conn, policy_id)
+            def _get_adopted_policies():
+                with ctx.open_db() as conn:
+                    return get_policies_by_ticket_id(conn, policy_id)
+
+            adopted_policies = await asyncio.to_thread(_get_adopted_policies)
             if adopted_policies:
                 adopted_embed = build_adopted_policies_embed(adopted_policies)
                 await channel.send(embed=adopted_embed)
@@ -1077,7 +1175,7 @@ class JailCog(commands.Cog):
             title="📋 Policy Proposal Closed",
             description=f"**{policy['title']}** closed by {member.mention}"
             + (f"\nReason: {reason_text}" if reason_text else ""),
-            color=CLR_INFO,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1096,8 +1194,13 @@ class JailCog(commands.Cog):
             )
             return
 
-        with ctx.open_db() as conn:
-            policies_list = get_policies(conn, guild.id)
+        pl_guild_id = guild.id
+
+        def _get_policies():
+            with ctx.open_db() as conn:
+                return get_policies(conn, pl_guild_id)
+
+        policies_list = await asyncio.to_thread(_get_policies)
 
         if not policies_list:
             await interaction.response.send_message(
@@ -1135,9 +1238,16 @@ class JailCog(commands.Cog):
             )
             return
 
-        with ctx.open_db() as conn:
-            jail = get_jail_by_channel(conn, channel.id)
-            ticket = get_ticket_by_channel(conn, channel.id)
+        pull_ch_id = channel.id
+
+        def _fetch_pull_records():
+            with ctx.open_db() as conn:
+                return (
+                    get_jail_by_channel(conn, pull_ch_id),
+                    get_ticket_by_channel(conn, pull_ch_id),
+                )
+
+        jail, ticket = await asyncio.to_thread(_fetch_pull_records)
         if not jail and not ticket:
             await interaction.response.send_message(
                 "This is not a jail or ticket channel.", ephemeral=True
@@ -1155,18 +1265,28 @@ class JailCog(commands.Cog):
         record_type = "jail" if jail else "ticket"
         record_id = jail["id"] if jail else ticket["id"]  # type: ignore[index]
         if ticket:
-            with ctx.open_db() as conn:
-                add_ticket_participant(conn, ticket["id"], user.id, member.id)
+            pull_ticket_id = ticket["id"]
 
-        with ctx.open_db() as conn:
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="channel_pull",
-                actor_id=member.id,
-                target_id=user.id,
-                extra={"channel_type": record_type, "record_id": record_id},
-            )
+            def _add_participant():
+                with ctx.open_db() as conn:
+                    add_ticket_participant(conn, pull_ticket_id, user.id, member.id)
+
+            await asyncio.to_thread(_add_participant)
+
+        pull_guild_id = guild.id
+
+        def _audit_pull():
+            with ctx.open_db() as conn:
+                write_audit(
+                    conn,
+                    guild_id=pull_guild_id,
+                    action="channel_pull",
+                    actor_id=member.id,
+                    target_id=user.id,
+                    extra={"channel_type": record_type, "record_id": record_id},
+                )
+
+        await asyncio.to_thread(_audit_pull)
 
         await interaction.response.send_message(
             f"{user.mention} has been added by {member.mention}.",
@@ -1198,9 +1318,16 @@ class JailCog(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             return
 
-        with ctx.open_db() as conn:
-            jail = get_jail_by_channel(conn, channel.id)
-            ticket = get_ticket_by_channel(conn, channel.id)
+        rm_ch_id = channel.id
+
+        def _fetch_rm_records():
+            with ctx.open_db() as conn:
+                return (
+                    get_jail_by_channel(conn, rm_ch_id),
+                    get_ticket_by_channel(conn, rm_ch_id),
+                )
+
+        jail, ticket = await asyncio.to_thread(_fetch_rm_records)
         if not jail and not ticket:
             await interaction.response.send_message(
                 "Not a jail or ticket channel.", ephemeral=True
@@ -1219,18 +1346,28 @@ class JailCog(commands.Cog):
         record_type = "jail" if jail else "ticket"
         record_id = jail["id"] if jail else ticket["id"]  # type: ignore[index]
         if ticket:
-            with ctx.open_db() as conn:
-                remove_ticket_participant(conn, ticket["id"], user.id)
+            rm_ticket_id = ticket["id"]
 
-        with ctx.open_db() as conn:
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="channel_remove",
-                actor_id=member.id,
-                target_id=user.id,
-                extra={"channel_type": record_type, "record_id": record_id},
-            )
+            def _rm_participant():
+                with ctx.open_db() as conn:
+                    remove_ticket_participant(conn, rm_ticket_id, user.id)
+
+            await asyncio.to_thread(_rm_participant)
+
+        rm_guild_id = guild.id
+
+        def _audit_rm():
+            with ctx.open_db() as conn:
+                write_audit(
+                    conn,
+                    guild_id=rm_guild_id,
+                    action="channel_remove",
+                    actor_id=member.id,
+                    target_id=user.id,
+                    extra={"channel_type": record_type, "record_id": record_id},
+                )
+
+        await asyncio.to_thread(_audit_rm)
 
         await interaction.response.send_message(
             f"{user.mention} has been removed by {member.mention}.",
@@ -1263,23 +1400,29 @@ class JailCog(commands.Cog):
             return
 
         reason_text = reason or ""
-        with ctx.open_db() as conn:
-            warning_id = create_warning(
-                conn,
-                guild_id=guild.id,
-                user_id=user.id,
-                moderator_id=member.id,
-                reason=reason_text,
-            )
-            count = get_active_warning_count(conn, guild.id, user.id)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="warning_issue",
-                actor_id=member.id,
-                target_id=user.id,
-                extra={"warning_id": warning_id, "reason": reason_text, "count": count},
-            )
+        warn_guild_id = guild.id
+
+        def _issue_warn():
+            with ctx.open_db() as conn:
+                wid = create_warning(
+                    conn,
+                    guild_id=warn_guild_id,
+                    user_id=user.id,
+                    moderator_id=member.id,
+                    reason=reason_text,
+                )
+                cnt = get_active_warning_count(conn, warn_guild_id, user.id)
+                write_audit(
+                    conn,
+                    guild_id=warn_guild_id,
+                    action="warning_issue",
+                    actor_id=member.id,
+                    target_id=user.id,
+                    extra={"warning_id": wid, "reason": reason_text, "count": cnt},
+                )
+            return wid, cnt
+
+        warning_id, count = await asyncio.to_thread(_issue_warn)
 
         await interaction.response.send_message(
             f"⚠️ Warning issued to {user.mention}. They now have **{count}** active warning(s).",
@@ -1294,8 +1437,11 @@ class JailCog(commands.Cog):
         )
         await _post_audit(ctx, guild, audit_embed)
 
-        with ctx.open_db() as conn:
-            threshold = int(get_config_value(conn, "warning_threshold", "3"))
+        def _get_warn_threshold():
+            with ctx.open_db() as conn:
+                return int(get_config_value(conn, "warning_threshold", "3"))
+
+        threshold = await asyncio.to_thread(_get_warn_threshold)
         # Fire the threshold alert when this warning is the one that crosses
         # the line — i.e. count was below threshold before, and is at or
         # above it now. Equality-only comparison would miss bulk additions.
@@ -1327,8 +1473,13 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
-        with ctx.open_db() as conn:
-            warns = get_warnings(conn, guild.id, user.id)
+        warns_guild_id = guild.id
+
+        def _get_warns():
+            with ctx.open_db() as conn:
+                return get_warnings(conn, warns_guild_id, user.id)
+
+        warns = await asyncio.to_thread(_get_warns)
 
         if not warns:
             await interaction.response.send_message(
@@ -1370,46 +1521,59 @@ class JailCog(commands.Cog):
             return
 
         reason_text = reason or ""
-        with ctx.open_db() as conn:
+        rw_guild_id = guild.id
+        rw_member_id = member.id
+
+        def _revoke() -> tuple[str, int]:
             # Verify the warning belongs to this user in this guild before
             # touching the row — services.revoke_warning looks up by id only.
-            warns = get_warnings(conn, guild.id, user.id)
-            match = next((w for w in warns if w["id"] == warning_id), None)
-            if match is None:
-                await interaction.response.send_message(
-                    f"Warning #{warning_id} doesn't belong to {user.mention} "
-                    f"in this server.",
-                    ephemeral=True,
+            with ctx.open_db() as conn:
+                warns = get_warnings(conn, rw_guild_id, user.id)
+                match = next((w for w in warns if w["id"] == warning_id), None)
+                if match is None:
+                    return ("not_found", 0)
+                if match["revoked"]:
+                    return ("already_revoked", 0)
+                revoked = revoke_warning(
+                    conn, warning_id, revoked_by=rw_member_id, reason=reason_text
                 )
-                return
-            if match["revoked"]:
-                await interaction.response.send_message(
-                    f"Warning #{warning_id} is already revoked.", ephemeral=True
+                if not revoked:
+                    return ("race", 0)
+                count = get_active_warning_count(conn, rw_guild_id, user.id)
+                write_audit(
+                    conn,
+                    guild_id=rw_guild_id,
+                    action="warning_revoke",
+                    actor_id=rw_member_id,
+                    target_id=user.id,
+                    extra={
+                        "warning_id": warning_id,
+                        "reason": reason_text,
+                        "count": count,
+                    },
                 )
-                return
-            revoked = revoke_warning(
-                conn, warning_id, revoked_by=member.id, reason=reason_text
+            return ("ok", count)
+
+        rw_status, count = await asyncio.to_thread(_revoke)
+        if rw_status == "not_found":
+            await interaction.response.send_message(
+                f"Warning #{warning_id} doesn't belong to {user.mention} "
+                f"in this server.",
+                ephemeral=True,
             )
-            if not revoked:
-                await interaction.response.send_message(
-                    "Couldn't revoke that warning — it may have just been "
-                    "revoked by someone else.",
-                    ephemeral=True,
-                )
-                return
-            count = get_active_warning_count(conn, guild.id, user.id)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="warning_revoke",
-                actor_id=member.id,
-                target_id=user.id,
-                extra={
-                    "warning_id": warning_id,
-                    "reason": reason_text,
-                    "count": count,
-                },
+            return
+        if rw_status == "already_revoked":
+            await interaction.response.send_message(
+                f"Warning #{warning_id} is already revoked.", ephemeral=True
             )
+            return
+        if rw_status == "race":
+            await interaction.response.send_message(
+                "Couldn't revoke that warning — it may have just been "
+                "revoked by someone else.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.send_message(
             f"✅ Warning #{warning_id} revoked. {user.mention} now has "
@@ -1449,6 +1613,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         since_30d = datetime.now(timezone.utc).timestamp() - 30 * 86400
 
@@ -1463,6 +1628,15 @@ class JailCog(commands.Cog):
                     "SELECT total_xp, level FROM member_xp WHERE guild_id = ? AND user_id = ?",
                     (guild.id, user.id),
                 ).fetchone()
+
+                # All-time XP split by source (reconciles with total_xp above).
+                xp_by_source = dict(
+                    conn.execute(
+                        "SELECT source, SUM(amount) FROM xp_events "
+                        "WHERE guild_id = ? AND user_id = ? GROUP BY source",
+                        (guild.id, user.id),
+                    ).fetchall()
+                )
 
                 watcher_count = conn.execute(
                     "SELECT COUNT(*) FROM watched_users WHERE guild_id = ? AND watched_user_id = ?",
@@ -1484,31 +1658,43 @@ class JailCog(commands.Cog):
                     (guild.id, user.id, since_30d),
                 ).fetchall()
 
-                labels, msg_counts, member_counts = query_message_activity(
+                tz_off = get_tz_offset_hours(conn, guild.id)
+                # Message total (drives the "N msgs (30d)" header) — counts only.
+                _, msg_counts, _ = query_message_activity(
                     conn, guild.id, "day", user_id=user.id,
-                    utc_offset_hours=get_tz_offset_hours(conn, guild.id),
+                    utc_offset_hours=tz_off,
+                )
+                # 30-day XP split by source for the stacked-bar chart.
+                xp_labels, xp_totals, _, xp_series = (
+                    query_xp_activity_with_breakdown(
+                        conn, guild.id, "day", user_id=user.id,
+                        utc_offset_hours=tz_off,
+                    )
                 )
 
             return (
                 active_jail, jail_hist, warns, tickets,
-                xp_row, watcher_count, last_ts, top_channels,
-                labels, msg_counts, member_counts,
+                xp_row, xp_by_source, watcher_count, last_ts, top_channels,
+                msg_counts, xp_labels, xp_totals, xp_series,
             )
 
         (
             active_jail, jail_hist, warns, tickets,
-            xp_row, watcher_count, last_ts, top_channels,
-            labels, msg_counts, member_counts,
+            xp_row, xp_by_source, watcher_count, last_ts, top_channels,
+            msg_counts, xp_labels, xp_totals, xp_series,
         ) = await asyncio.to_thread(_fetch)
 
         chart_bytes = await asyncio.to_thread(
             render_activity_chart,
-            labels,
-            msg_counts,
-            member_counts,
-            f"{user.display_name} — 30-Day Activity",
+            xp_labels,
+            xp_totals,
+            [],
+            f"{user.display_name} — 30-Day XP by Source",
             "day",
             show_members=False,
+            y_label="XP",
+            bar_label="XP",
+            by_source=xp_series,
         )
 
         embed = build_modinfo_embed(
@@ -1518,6 +1704,7 @@ class JailCog(commands.Cog):
             account_age_days=(datetime.now(timezone.utc) - user.created_at).days,
             joined_at=user.joined_at,
             xp_row=xp_row,
+            xp_by_source=xp_by_source,
             watcher_count=watcher_count,
             active_jail=active_jail,
             jail_history=jail_hist,
@@ -1527,6 +1714,7 @@ class JailCog(commands.Cog):
             top_channels=top_channels,
             msgs_30d_total=sum(msg_counts),
             ts_formatter=_ts_str,
+            color=accent,
         )
 
         await interaction.followup.send(

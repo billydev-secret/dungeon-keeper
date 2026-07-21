@@ -7,7 +7,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 from collections.abc import Callable, Coroutine
 
 import discord
@@ -27,7 +27,11 @@ from bot_modules.core.db_utils import (
     remove_config_id,
     set_config_value as _db_set_config_value,
 )
-from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
+from bot_modules.core.xp_system import XpSettings, load_xp_settings
+
+if TYPE_CHECKING:
+    from bot_modules.games.utils.recovery import RecoverySentinel
+    from bot_modules.services.games_db import GamesDb
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -46,128 +50,67 @@ def _parse_int_config(raw_value: str, *, key: str, default: int = 0) -> int:
         return default
 
 
-def _parse_float_config(raw_value: str, *, key: str, default: float = 0.0) -> float:
-    """Parse float config values safely with fallback."""
-    normalized = raw_value.strip()
-    if not normalized:
-        return default
-    try:
-        return float(normalized)
-    except ValueError:
-        logging.warning(
-            "Invalid float config for %s: %r; using %s.", key, raw_value, default
-        )
-        return default
-
-
-class RuntimeConfig(TypedDict):
-    guild_id: int
-    mod_channel_id: int
-    debug: bool
-    xp_level_5_role_id: int
-    xp_level_5_log_channel_id: int
-    xp_level_up_log_channel_id: int
-    greeter_role_id: int
-    greeter_chat_channel_id: int
-    join_leave_log_channel_id: int
-    spoiler_required_channels: set[int]
-    bypass_role_ids: set[int]
-    xp_grant_allowed_user_ids: set[int]
-    xp_excluded_channel_ids: set[int]
-    recorded_bot_user_ids: set[int]
-    welcome_channel_id: int
-    welcome_message: str
-    welcome_ping_role_id: int
-    leave_channel_id: int
-    leave_message: str
-    tz_offset_hours: float
-
-
-def load_runtime_config(db_path: Path, *, debug: bool, default_guild_id: int = 0) -> RuntimeConfig:
-    from bot_modules.services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
-
+def resolve_guild_id(db_path: Path, *, default_guild_id: int = 0) -> int:
+    """Resolve the home guild id: config-table row, then caller default,
+    then the ``GUILD_ID`` environment variable."""
     with open_db(db_path) as conn:
         guild_id = _parse_int_config(
             get_config_value(conn, "guild_id", "0"), key="guild_id"
         )
-        if guild_id == 0:
-            guild_id = default_guild_id or _parse_int_config(
-                os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
-            )
-        leave_channel_id = _parse_int_config(
-            get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
+    if guild_id == 0:
+        guild_id = default_guild_id or _parse_int_config(
+            os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
         )
+    return guild_id
 
-        return {
-            "guild_id": guild_id,
-            "debug": debug,
-            "mod_channel_id": _parse_int_config(
-                get_config_value(conn, "mod_channel_id", "0"), key="mod_channel_id"
-            ),
-            "xp_level_5_role_id": _parse_int_config(
-                get_config_value(conn, "xp_level_5_role_id", "0"),
-                key="xp_level_5_role_id",
-            ),
-            "xp_level_5_log_channel_id": _parse_int_config(
-                get_config_value(conn, "xp_level_5_log_channel_id", "0"),
-                key="xp_level_5_log_channel_id",
-            ),
-            "xp_level_up_log_channel_id": _parse_int_config(
-                get_config_value(conn, "xp_level_up_log_channel_id", "0"),
-                key="xp_level_up_log_channel_id",
-            ),
-            "greeter_role_id": _parse_int_config(
-                get_config_value(conn, "greeter_role_id", "0"), key="greeter_role_id"
-            ),
-            "greeter_chat_channel_id": _parse_int_config(
-                get_config_value(conn, "greeter_chat_channel_id", "0"),
-                key="greeter_chat_channel_id",
-            ),
-            "join_leave_log_channel_id": _parse_int_config(
-                get_config_value(
-                    conn,
-                    "join_leave_log_channel_id",
-                    str(leave_channel_id),
-                ),
-                key="join_leave_log_channel_id",
-                default=leave_channel_id,
-            ),
-            "spoiler_required_channels": get_config_id_set(
-                conn, "spoiler_required_channels"
-            ),
-            "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
-            "xp_grant_allowed_user_ids": get_config_id_set(
-                conn, "xp_grant_allowed_user_ids"
-            ),
-            "xp_excluded_channel_ids": get_config_id_set(
-                conn, "xp_excluded_channel_ids"
-            ),
-            "recorded_bot_user_ids": get_config_id_set(
-                conn, "recorded_bot_user_ids"
-            ),
-            "welcome_channel_id": _parse_int_config(
-                get_config_value(conn, "welcome_channel_id", "0"),
-                key="welcome_channel_id",
-            ),
-            "welcome_message": get_config_value(
-                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE
-            ),
-            "welcome_ping_role_id": _parse_int_config(
-                get_config_value(conn, "welcome_ping_role_id", "0"),
-                key="welcome_ping_role_id",
-            ),
-            "leave_channel_id": leave_channel_id,
-            "leave_message": get_config_value(
-                conn, "leave_message", DEFAULT_LEAVE_MESSAGE
-            ),
-            "tz_offset_hours": _parse_float_config(
-                get_config_value(conn, "tz_offset_hours", "0"), key="tz_offset_hours"
-            ),
-        }
+
+# ---------------------------------------------------------------------------
+# Game runtime registry types
+# ---------------------------------------------------------------------------
+# Value stored in ``Bot.active_views``: the live top-level View for a game, or
+# a RecoverySentinel placeholder while a crashed game is being re-driven.
+ActiveGameView: TypeAlias = "discord.ui.View | RecoverySentinel"
+
+
+class GameLauncher(Protocol):
+    """Interaction-free game launcher, registered per game_type in cog setup().
+
+    Called by the scheduler and /games start. Returns the new game_id, or
+    ``None`` when the launch was refused (missing perms, channel busy, ...).
+    ``channel`` is deliberately ``Any``: channel-union narrowing is an
+    explicit follow-up outside this refactor.
+    """
+
+    def __call__(
+        self,
+        *,
+        channel: Any,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict[str, Any],
+    ) -> Coroutine[Any, Any, str | None]: ...
+
+
+# Crash-recovery handler: (games_active_games row, decoded JSON payload,
+# resolved anchor channel, anchor message or None) -> True if re-armed.
+GameRecoverer: TypeAlias = Callable[
+    [sqlite3.Row, dict[str, Any], Any, discord.Message | None],
+    Coroutine[Any, Any, bool],
+]
+# Optional "channel busy" check for games that track active rounds outside
+# the games_active_games table (e.g. risky_roll, in-memory).
+GameBusyCheck: TypeAlias = Callable[[int], Coroutine[Any, Any, bool]]
+# Mid-game roster handler: (channel, game_id, member) -> (ok, user_message).
+GameRosterHandler: TypeAlias = Callable[
+    [Any, str, discord.Member],
+    Coroutine[Any, Any, tuple[bool, str]],
+]
 
 
 class Bot(commands.Bot):
     ctx: AppContext  # set by the entry point before bot.run()
+    games_db: GamesDb  # set by the entry point before bot.run() (needs db_path)
 
     def __init__(self, *, intents: discord.Intents, debug: bool, guild_id: int | str):
         super().__init__(intents=intents, command_prefix=commands.when_mentioned)
@@ -176,12 +119,43 @@ class Bot(commands.Bot):
         self.startup_task_factories: list[Callable[[], Coroutine[Any, Any, None]]] = []
         self.startup_tasks: list[asyncio.Task[None]] = []
         self.extension_names: list[str] = []
+        # Game runtime registries. Created here (not injected by the entry
+        # point) so they exist before setup_hook() loads extensions — cog
+        # setup() functions write into them.
+        # Live views (or RecoverySentinel placeholders) for in-flight games,
+        # keyed by game_id.
+        self.active_views: dict[str, ActiveGameView] = {}
+        # Interaction-free launchers, keyed by game_type. Each party game cog
+        # registers its launch() here in setup(); the scheduler calls them.
+        self.game_launchers: dict[str, GameLauncher] = {}
+        # Crash-recovery handlers, keyed by game_type. Each party game cog
+        # registers its recover_game() here in setup(); the startup recovery
+        # task re-registers in-flight games' views/timers after a restart.
+        self.game_recoverers: dict[str, GameRecoverer] = {}
+        # Optional "channel busy" checks, keyed by game_type. Games that track
+        # active rounds outside the games_active_games table (e.g. risky_roll,
+        # in-memory) register an async check(channel_id) -> bool here so the
+        # scheduler can see they're busy and skip the occurrence instead of
+        # pinging then failing.
+        self.game_busy_checks: dict[str, GameBusyCheck] = {}
+        # Mid-game roster handlers, keyed by game_type. Roster-based games
+        # register async add/remove callbacks here in setup(); /games join and
+        # /games leave dispatch to them so people can join or leave a game
+        # that's already running.
+        self.game_joiners: dict[str, GameRosterHandler] = {}
+        self.game_leavers: dict[str, GameRosterHandler] = {}
 
     async def setup_hook(self) -> None:
         from bot_modules.services.command_sync import sync_if_changed
 
+        self._warn_on_extension_drift()
         for ext in self.extension_names:
             await self.load_extension(ext)
+
+        # Launch background loops *after* the extensions load: cogs register
+        # their own factories from cog_load(), so anything started earlier
+        # would silently skip every cog-owned loop.
+        self._start_background_tasks()
 
         if self.debug:
             if self.guild_id <= 0:
@@ -239,6 +213,42 @@ class Bot(commands.Bot):
                         f"WARNING: could not clear guild commands for {self.guild_id}: {exc}"
                     )
 
+    def _warn_on_extension_drift(self) -> None:
+        """Fail loud (in the logs) when a cog exists on disk but isn't in the
+        hand-maintained ``extension_names`` list — otherwise a new cog is
+        silently never loaded."""
+        _log = logging.getLogger("dungeonkeeper.startup")
+        try:
+            import bot_modules.cogs as _cogs_pkg
+
+            cogs_dir = Path(next(iter(_cogs_pkg.__path__)))
+        except Exception:
+            return
+        discovered: set[str] = set()
+        for f in cogs_dir.glob("*_cog.py"):
+            discovered.add(f"bot_modules.cogs.{f.stem}")
+        for d in cogs_dir.iterdir():
+            init = d / "__init__.py"
+            if d.is_dir() and init.exists() and "async def setup" in init.read_text(
+                encoding="utf-8", errors="ignore"
+            ):
+                discovered.add(f"bot_modules.cogs.{d.name}")
+        missing = sorted(discovered - set(self.extension_names))
+        if missing:
+            _log.error(
+                "Extension drift: %d cog(s) on disk are NOT in extension_names "
+                "and will not load: %s — add them in dungeonkeeper/__main__.py",
+                len(missing),
+                ", ".join(missing),
+            )
+
+    def _start_background_tasks(self) -> None:
+        """Spawn every registered background loop under the restart supervisor.
+
+        Called once from ``setup_hook`` after the extensions are loaded, so it
+        sees both the factories the entry point registers up front and the ones
+        cogs append from their ``cog_load``.
+        """
         for factory in self.startup_task_factories:
             self.startup_tasks.append(asyncio.create_task(
                 self._resilient_task(factory)
@@ -305,6 +315,7 @@ class GuildConfig:
     welcome_ping_member: bool
     welcome_trigger: str
     unverified_role_id: int
+    greeter_role_id: int
     greeter_chat_channel_id: int
     leave_channel_id: int
     leave_message: str
@@ -313,6 +324,11 @@ class GuildConfig:
     mod_channel_id: int
     mod_role_ids: frozenset[int]
     admin_role_ids: frozenset[int]
+    # greeting watch — flag unanswered "good morning"/"hello" in watched chats
+    greeting_watch_enabled: bool
+    greeting_watch_channel_ids: frozenset[int]
+    greeting_watch_notify_user_id: int
+    greeting_watch_window_minutes: int
     # message archival / spoiler enforcement
     spoiler_required_channels: frozenset[int]
     bypass_role_ids: frozenset[int]
@@ -376,6 +392,7 @@ class GuildConfig:
             welcome_ping_member=parse_bool(_val("welcome_ping_member", "false")),
             welcome_trigger=_val("welcome_trigger", "join"),
             unverified_role_id=_int("unverified_role_id"),
+            greeter_role_id=_int("greeter_role_id"),
             greeter_chat_channel_id=_int("greeter_chat_channel_id"),
             leave_channel_id=leave_channel_id,
             leave_message=_val("leave_message", DEFAULT_LEAVE_MESSAGE),
@@ -387,6 +404,16 @@ class GuildConfig:
             mod_channel_id=_int("mod_channel_id"),
             mod_role_ids=_parse_id_csv(_val("mod_role_ids")),
             admin_role_ids=_parse_id_csv(_val("admin_role_ids")),
+            greeting_watch_enabled=parse_bool(
+                _val("greeting_watch_enabled", "false")
+            ),
+            greeting_watch_channel_ids=_parse_id_csv(
+                _val("greeting_watch_channel_ids")
+            ),
+            greeting_watch_notify_user_id=_int("greeting_watch_notify_user_id"),
+            greeting_watch_window_minutes=_int(
+                "greeting_watch_window_minutes", 10
+            ),
             spoiler_required_channels=_ids("spoiler_required_channels"),
             bypass_role_ids=_ids("bypass_role_ids"),
             recorded_bot_user_ids=_ids("recorded_bot_user_ids"),
@@ -431,35 +458,16 @@ class GuildConfig:
 
 @dataclass
 class AppContext:
+    """Process-global runtime state. All guild-scoped config is read via
+    :meth:`guild_config`; there are deliberately no per-guild fields here."""
+
     bot: Bot
     log: logging.Logger
     db_path: Path
     guild_id: int
     debug: bool
-    mod_channel_id: int
-    spoiler_required_channels: set[int]
-    bypass_role_ids: set[int]
-    xp_grant_allowed_user_ids: set[int]
-    xp_excluded_channel_ids: set[int]
-    recorded_bot_user_ids: set[int]
-    level_5_role_id: int
-    level_5_log_channel_id: int
-    level_up_log_channel_id: int
-    greeter_role_id: int
-    greeter_chat_channel_id: int
-    join_leave_log_channel_id: int
-    welcome_channel_id: int
-    welcome_message: str
-    welcome_ping_role_id: int
-    leave_channel_id: int
-    leave_message: str
-    tz_offset_hours: float = 0.0
-    xp_settings: XpSettings = field(default_factory=lambda: DEFAULT_XP_SETTINGS)
-    grant_roles: dict[str, GrantRoleConfig] = field(default_factory=dict)
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
-    mod_role_ids: set[int] = field(default_factory=set)
-    admin_role_ids: set[int] = field(default_factory=set)
     _guild_config_cache: dict[int, GuildConfig] = field(default_factory=dict)
 
     def open_db(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
@@ -489,24 +497,6 @@ class AppContext:
         """
         self._guild_config_cache.pop(guild_id, None)
 
-    def reload_xp_settings(self) -> None:
-        """Reload XP algorithm coefficients from the config DB."""
-        with self.open_db() as conn:
-            self.xp_settings = load_xp_settings(conn, self.guild_id)
-
-    def reload_permission_roles(self) -> None:
-        """Reload the home guild's mod/admin role ID caches from the config DB.
-
-        Scoped to ``self.guild_id`` (with legacy ``guild_id=0`` fallback) so the
-        flat caches agree with ``guild_config(self.guild_id)``; other guilds are
-        resolved per-event via ``guild_config``.
-        """
-        with self.open_db() as conn:
-            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
-            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
-        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
-        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
-
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
             add_config_id(conn, bucket, value, self.guild_id)
@@ -533,28 +523,19 @@ class AppContext:
     ) -> str:
         """Write a config value for ``guild_id`` (defaults to the home guild).
 
-        Keeps the home flat caches consistent and invalidates the per-guild
-        snapshot so ``guild_config()`` readers see the write.
+        Invalidates the per-guild snapshot so ``guild_config()`` readers see
+        the write.
         """
         gid = self.guild_id if guild_id is None else guild_id
         with self.open_db() as conn:
             _db_set_config_value(conn, key, value, gid)
             result = get_config_value(conn, key, value, gid)
-        if gid == self.guild_id:
-            if key == "mod_role_ids":
-                self.mod_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
-            elif key == "admin_role_ids":
-                self.admin_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
         self.invalidate_guild_config(gid)
         return result
 
     def delete_config_value(self, key: str) -> None:
         with self.open_db() as conn:
             delete_config_value(conn, key, self.guild_id)
-        if key == "mod_role_ids":
-            self.mod_role_ids = set()
-        elif key == "admin_role_ids":
-            self.admin_role_ids = set()
         self.invalidate_guild_config(self.guild_id)
 
     def get_interaction_member(
@@ -608,10 +589,6 @@ class AppContext:
         if member is None or interaction.guild_id is None:
             return False
         return self.guild_config(interaction.guild_id).member_is_admin(member)
-
-    def reload_grant_roles(self) -> None:
-        with self.open_db() as conn:
-            self.grant_roles = get_grant_roles(conn, self.guild_id)
 
     def can_grant_any_role(self, interaction: discord.Interaction) -> bool:
         """Returns True if user can grant ANY configured grant role."""

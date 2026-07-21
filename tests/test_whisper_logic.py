@@ -467,7 +467,7 @@ def test_reply_audit_embed_basic_fields():
         content="hello",
         now=pinned,
     )
-    assert emb.title == "Whisper Reply"
+    assert emb.title == "💬 Whisper Reply"
     assert emb.description == "hello"
     assert emb.timestamp == pinned
     assert emb.fields[0].name == "From"
@@ -505,7 +505,7 @@ def test_reply_audit_embed_now_defaults_to_utcnow_when_omitted():
 def test_report_audit_embed_basic_fields():
     w = _whisper(id=9, sender_id=10, target_id=20, message="bad msg")
     emb = build_report_audit_embed(whisper=w, reason="spam")
-    assert emb.title == "Whisper Reported"
+    assert emb.title == "🚨 Whisper Reported"
     assert emb.description == "bad msg"
     assert emb.color == discord.Color.red()
     assert emb.fields[0].name == "Sender"
@@ -550,7 +550,7 @@ def test_reply_report_audit_embed_basic_fields():
     emb = build_reply_report_audit_embed(
         reply=_reply(), reporter_id=200, reason="harassment",
     )
-    assert emb.title == "Whisper Reply Reported"
+    assert emb.title == "🚨 Whisper Reply Reported"
     assert emb.description == "rude reply"
     assert emb.color == discord.Color.red()
     assert emb.fields[0].name == "Sender (anonymous)"

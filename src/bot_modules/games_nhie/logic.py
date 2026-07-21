@@ -10,7 +10,7 @@ Three reusable spines are extracted:
 
 * :func:`apply_vote` — the guilty/innocent toggle, including the
   "switching sides" bookkeeping and the lazy "register this player in
-  the lives tracker on their first vote" behaviour. Mirrors the
+  the lives tracker on their first vote" behavior. Mirrors the
   ``vote_guilty``/``vote_innocent`` button callbacks.
 * :func:`apply_round_lives` — at round-advance time, deduct a heart
   from each guilty voter, mark new eliminations, and lazily register
@@ -51,7 +51,7 @@ def apply_vote(
     button callback handles the ephemeral "you've been eliminated"
     reply before calling this).
 
-    Behaviour:
+    Behavior:
 
     * If the user is on the opposite list, they're moved off it
       (the "changed sides" path) and the returned flag is ``True``.

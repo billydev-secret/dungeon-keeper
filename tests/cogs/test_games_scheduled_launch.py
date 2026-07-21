@@ -96,9 +96,47 @@ async def test_ama_headless_launch(sync_db_path):
     await _assert_active_row(db, channel.id, "ama")
 
 
-async def test_clapback_headless_launch(sync_db_path):
-    # Empty bank → source 'both' falls back to 'ai' (no user to prompt headless).
+async def test_ama_panel_format_launch(sync_db_path):
+    # Open-panel format: the game stores format=panel and the hot-seat-only
+    # host controls are pruned from both the main view and the bottom bar.
     db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = AMACog(bot)  # type: ignore[arg-type]
+    channel = _FakeChannel()
+
+    game_id = await cog.launch(
+        channel=channel, host_id=2001, host_name="Tester",
+        guild_id=9001, options={"mode": "unfiltered", "format": "panel"},
+    )
+    assert game_id is not None
+
+    import json
+
+    row = await db.fetchone(
+        "SELECT payload FROM games_active_games WHERE channel_id = ?", (channel.id,)
+    )
+    assert json.loads(row["payload"])["format"] == "panel"
+
+    main_view = bot.active_views[game_id]
+    assert main_view.game_format == "panel"
+    custom_ids = {getattr(c, "custom_id", None) for c in main_view.children}
+    assert "ama_skip" not in custom_ids
+    assert "ama_new_hs" not in custom_ids
+    assert "ama_volunteer" in custom_ids and "ama_ask" in custom_ids
+
+    bottom_view = bot.active_views[f"{game_id}_bottom"]
+    bottom_ids = {getattr(c, "custom_id", None) for c in bottom_view.children}
+    assert "ama_notify_toggle" not in bottom_ids
+    assert "ama_bottom_ask" in bottom_ids and "ama_bottom_volunteer" in bottom_ids
+
+
+async def test_clapback_headless_launch(sync_db_path):
+    # Clapback is bank-only: launch() refuses when the bank is empty, so seed
+    # one prompt first (mirrors the /games play clapback slash pre-check).
+    db = GamesDb(sync_db_path)
+    await db.execute(
+        "INSERT INTO games_question_bank (game_type, question_text) VALUES ('clapback', 'Roast me')",
+    )
     bot = _FakeBot(db)
     cog = ClapbackCog(bot)  # type: ignore[arg-type]
     channel = _FakeChannel()

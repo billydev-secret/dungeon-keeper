@@ -1,4 +1,10 @@
-"""Integration tests for /api/games/* endpoints."""
+"""Integration tests for /api/games/* endpoints.
+
+Migration 054 seeds a starter 'ffa' bank into ``games_question_bank`` (51
+rows, 24 nsfw-tagged), so a freshly-migrated DB is never empty. Tests that
+need an empty bank call :func:`_clear_bank` first; count assertions either
+clear the seed or scope by game_type.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +29,13 @@ def _seed_question(db_path, game_type="wyr", category="sfw", text="Test?", tags=
             (game_type, json.dumps(tags), text),
         )
         return cur.lastrowid
+
+
+def _clear_bank(db_path):
+    """Delete the migration-seeded question bank so 'empty' endpoints can be
+    exercised (migration 054 seeds a starter 'ffa' bank)."""
+    with open_db(db_path) as conn:
+        conn.execute("DELETE FROM games_question_bank")
 
 
 def _seed_history(db_path, game_type="wyr", player_count=3, round_count=5):
@@ -70,7 +83,8 @@ def test_unauthenticated_request_returns_401(fake_ctx):
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 
-def test_stats_empty_db(open_client):
+def test_stats_empty_db(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/stats")
     assert resp.status_code == 200
     data = resp.json()
@@ -82,6 +96,7 @@ def test_stats_empty_db(open_client):
 
 
 def test_stats_counts_questions_and_history(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", "sfw", "Q1?")
     _seed_question(fake_ctx.db_path, "wyr", "nsfw", "Q2?")
     _seed_history(fake_ctx.db_path, "wyr", player_count=4, round_count=10)
@@ -148,7 +163,63 @@ def test_bank_create_invalid_game_type(open_client):
     assert resp.status_code == 400
 
 
-def test_bank_list_empty(open_client):
+# ── Traditional Truth-or-Dare: one-of-four category tag enforcement ───────────
+
+
+def test_bank_create_traditional_requires_a_category(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": [], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_traditional_rejects_unknown_category(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": ["spicy"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_traditional_rejects_extra_tags(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": ["sfw_truth", "extra"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_traditional_accepts_single_category(open_client, fake_ctx):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": ["nsfw_dare"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 200
+    qid = resp.json()["question_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["nsfw_dare"]
+
+
+def test_bank_bulk_traditional_requires_a_category(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank/bulk",
+        json={"game_type": "traditional", "tags": [], "lines": ["a", "b"]},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_update_traditional_rejects_bad_category(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "traditional", tags=["sfw_truth"], text="Q?")
+    resp = open_client.put(f"{BASE}/bank/{qid}", json={"tags": ["nope"]})
+    assert resp.status_code == 400
+
+
+def test_bank_list_empty(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/bank")
     assert resp.status_code == 200
     data = resp.json()
@@ -158,6 +229,7 @@ def test_bank_list_empty(open_client):
 
 
 def test_bank_list_with_questions(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", "sfw", "Q1?")
     _seed_question(fake_ctx.db_path, "nhie", "nsfw", "Q2?")
 
@@ -180,6 +252,9 @@ def test_bank_list_filter_by_game_type(open_client, fake_ctx):
 
 
 def test_bank_list_filter_by_tag(open_client, fake_ctx):
+    # Seeded 'ffa' rows include nsfw-tagged ones — clear so the tag filter
+    # result is exactly the row seeded below.
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", text="Safe?", tags=["calm"])
     _seed_question(fake_ctx.db_path, "wyr", text="Spicy?", tags=["nsfw"])
 
@@ -317,6 +392,7 @@ def test_bank_bulk_invalid_game_type(open_client):
 
 
 def test_bank_export_all(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", "sfw", "Q1?")
     _seed_question(fake_ctx.db_path, "nhie", "nsfw", "Q2?")
 
@@ -339,7 +415,8 @@ def test_bank_export_filtered_by_game_type(open_client, fake_ctx):
     assert items[0]["game_type"] == "wyr"
 
 
-def test_bank_export_empty_returns_list(open_client):
+def test_bank_export_empty_returns_list(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/bank/export")
     assert resp.status_code == 200
     assert resp.json() == []
@@ -387,6 +464,177 @@ def test_bank_import_empty_texts_skipped(open_client):
     resp = open_client.post(f"{BASE}/bank/import", json=payload)
     assert resp.status_code == 200
     assert resp.json()["imported"] == 0
+
+
+# ── Global pool ───────────────────────────────────────────────────────────────
+
+
+def _pool_rows(db_path):
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT question_id, tags, question_text FROM games_question_bank"
+            " WHERE game_type = 'global' ORDER BY question_id",
+        ).fetchall()
+
+
+def test_send_to_pool_copies_question_and_tags(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "wyr", text="Fly or swim?", tags=["funny", "nsfw"])
+    resp = open_client.post(f"{BASE}/bank/{qid}/pool")
+    assert resp.status_code == 200
+    assert resp.json() == {"sent": True, "duplicate": False}
+
+    rows = _pool_rows(fake_ctx.db_path)
+    assert len(rows) == 1
+    assert rows[0]["question_text"] == "Fly or swim?"
+    assert json.loads(rows[0]["tags"]) == ["funny", "nsfw"]
+    # The original stays in its own bank.
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT game_type FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert row["game_type"] == "wyr"
+
+
+def test_send_to_pool_duplicate_text_not_readded(open_client, fake_ctx):
+    q1 = _seed_question(fake_ctx.db_path, "wyr", text="Same?")
+    q2 = _seed_question(fake_ctx.db_path, "nhie", text="  Same?  ")
+    assert open_client.post(f"{BASE}/bank/{q1}/pool").json()["sent"] is True
+    resp = open_client.post(f"{BASE}/bank/{q2}/pool")
+    assert resp.status_code == 200
+    assert resp.json() == {"sent": False, "duplicate": True}
+    assert len(_pool_rows(fake_ctx.db_path)) == 1
+
+
+def test_send_to_pool_traditional_translates_category_tags(open_client, fake_ctx):
+    nsfw_q = _seed_question(fake_ctx.db_path, "traditional", text="Spicy?", tags=["nsfw_dare"])
+    sfw_q = _seed_question(fake_ctx.db_path, "traditional", text="Mild?", tags=["sfw_truth"])
+    assert open_client.post(f"{BASE}/bank/{nsfw_q}/pool").status_code == 200
+    assert open_client.post(f"{BASE}/bank/{sfw_q}/pool").status_code == 200
+
+    rows = {r["question_text"]: json.loads(r["tags"]) for r in _pool_rows(fake_ctx.db_path)}
+    assert rows["Spicy?"] == ["nsfw"]   # category dropped, nsfw preserved
+    assert rows["Mild?"] == []          # sfw category just dropped
+
+
+def test_send_to_pool_missing_question_404(open_client):
+    assert open_client.post(f"{BASE}/bank/999999/pool").status_code == 404
+
+
+def test_send_to_pool_pool_row_rejected(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "global", text="Already pooled?")
+    assert open_client.post(f"{BASE}/bank/{qid}/pool").status_code == 400
+
+
+def test_pool_import_copies_with_tags_carried_over(open_client, fake_ctx):
+    p1 = _seed_question(fake_ctx.db_path, "global", text="Pooled A?", tags=["funny"])
+    p2 = _seed_question(fake_ctx.db_path, "global", text="Pooled B?", tags=["nsfw"])
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": [p1, p2]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 2, "skipped": 0}
+
+    with open_db(fake_ctx.db_path) as conn:
+        rows = conn.execute(
+            "SELECT tags, question_text FROM games_question_bank"
+            " WHERE game_type = 'wyr' ORDER BY question_id",
+        ).fetchall()
+    got = {r["question_text"]: json.loads(r["tags"]) for r in rows}
+    assert got == {"Pooled A?": ["funny"], "Pooled B?": ["nsfw"]}
+    # Pool keeps its copies.
+    assert len(_pool_rows(fake_ctx.db_path)) == 2
+
+
+def test_pool_import_skips_texts_already_in_target(open_client, fake_ctx):
+    _seed_question(fake_ctx.db_path, "wyr", text="Dup?")
+    p1 = _seed_question(fake_ctx.db_path, "global", text="Dup?")
+    p2 = _seed_question(fake_ctx.db_path, "global", text="Fresh?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": [p1, p2]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 1, "skipped": 1}
+
+
+def test_pool_import_ignores_non_pool_and_unknown_ids(open_client, fake_ctx):
+    wyr_q = _seed_question(fake_ctx.db_path, "wyr", text="Not pooled?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "nhie", "question_ids": [wyr_q, 999999]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 0, "skipped": 0}
+
+
+def test_pool_import_tags_override_replaces_pool_tags(open_client, fake_ctx):
+    pid = _seed_question(fake_ctx.db_path, "global", text="Override me?", tags=["funny"])
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": [pid], "tags": ["deep"]},
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE game_type = 'wyr'"
+            " AND question_text = 'Override me?'",
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["deep"]
+
+
+def test_pool_import_traditional_requires_category(open_client, fake_ctx):
+    pid = _seed_question(fake_ctx.db_path, "global", text="Where to?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "traditional", "question_ids": [pid]},
+    )
+    assert resp.status_code == 400
+
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "traditional", "question_ids": [pid], "tags": ["sfw_truth"]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 1, "skipped": 0}
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE game_type = 'traditional'"
+            " AND question_text = 'Where to?'",
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["sfw_truth"]
+
+
+def test_pool_import_rejects_pool_as_target_and_empty_selection(open_client, fake_ctx):
+    pid = _seed_question(fake_ctx.db_path, "global", text="Loop?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "global", "question_ids": [pid]},
+    )
+    assert resp.status_code == 400
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": []},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_and_export_roundtrip_includes_pool(open_client, fake_ctx):
+    """POST /bank accepts the reserved 'global' type, and a full export
+    containing pool rows re-imports cleanly."""
+    _clear_bank(fake_ctx.db_path)
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "global", "tags": ["funny"], "question_text": "Pooled?"},
+    )
+    assert resp.status_code == 200
+
+    exported = open_client.get(f"{BASE}/bank/export").json()
+    assert exported == [{"game_type": "global", "tags": ["funny"], "question_text": "Pooled?"}]
+
+    resp = open_client.post(f"{BASE}/bank/import", json=exported)
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 1
 
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
@@ -671,6 +919,35 @@ def test_channels_add_and_appear_in_list(open_client, fake_ctx):
     channels = resp.json()["channels"]
     assert len(channels) == 1
     assert channels[0]["channel_id"] == 123456789
+    assert channels[0]["legitlibs_max_tier"] == 4
+
+
+def test_set_legitlibs_max_tier_persists(open_client, fake_ctx):
+    open_client.post(f"{BASE}/config/channels", json={"channel_id": "123456789"})
+
+    resp = open_client.put(
+        f"{BASE}/config/channels/123456789/legitlibs-max-tier", json={"max_tier": 2}
+    )
+    assert resp.status_code == 200
+
+    channels = open_client.get(f"{BASE}/config/channels").json()["channels"]
+    assert channels[0]["legitlibs_max_tier"] == 2
+
+    # Updating again overwrites rather than duplicating.
+    resp2 = open_client.put(
+        f"{BASE}/config/channels/123456789/legitlibs-max-tier", json={"max_tier": 3}
+    )
+    assert resp2.status_code == 200
+    channels = open_client.get(f"{BASE}/config/channels").json()["channels"]
+    assert channels[0]["legitlibs_max_tier"] == 3
+
+
+def test_set_legitlibs_max_tier_rejects_out_of_range(open_client, fake_ctx):
+    open_client.post(f"{BASE}/config/channels", json={"channel_id": "123456789"})
+    resp = open_client.put(
+        f"{BASE}/config/channels/123456789/legitlibs-max-tier", json={"max_tier": 5}
+    )
+    assert resp.status_code == 422
 
 
 def test_channels_remove(open_client, fake_ctx):

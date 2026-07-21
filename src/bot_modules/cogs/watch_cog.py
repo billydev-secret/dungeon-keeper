@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -64,8 +65,11 @@ class WatchCog(commands.Cog):
         watcher_id = interaction.user.id
         watched_id = user.id
 
-        with ctx.open_db() as conn:
-            add_watched_user(conn, guild_id, watched_id, watcher_id)
+        def _do_add_watched():
+            with ctx.open_db() as conn:
+                add_watched_user(conn, guild_id, watched_id, watcher_id)
+
+        await asyncio.to_thread(_do_add_watched)
 
         ctx.watched_users.setdefault(watched_id, set()).add(watcher_id)
 
@@ -101,8 +105,11 @@ class WatchCog(commands.Cog):
         watcher_id = interaction.user.id
         watched_id = user.id
 
-        with ctx.open_db() as conn:
-            remove_watched_user(conn, guild_id, watched_id, watcher_id)
+        def _do_remove_watched():
+            with ctx.open_db() as conn:
+                remove_watched_user(conn, guild_id, watched_id, watcher_id)
+
+        await asyncio.to_thread(_do_remove_watched)
 
         if watched_id in ctx.watched_users:
             ctx.watched_users[watched_id].discard(watcher_id)

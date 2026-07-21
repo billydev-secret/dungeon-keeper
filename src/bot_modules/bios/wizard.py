@@ -627,6 +627,19 @@ class WizardSession:
                 field_rows=field_rows,
                 answer_rows=answer_rows,
             )
+            # Bio quest trigger. Constant occurrence → an event quest pays
+            # once ever ("introduce yourself"); daily/weekly re-fires on
+            # each period's first save/update.
+            from bot_modules.services.economy_quests_service import fire_trigger_inline
+
+            fire_trigger_inline(
+                conn,
+                guild_id,
+                "bio_set",
+                user_id,
+                occurrence="set",
+                booster=self.member.premium_since is not None,
+            )
 
     # ── Embed builders for the in-wizard prompts ─────────────────────
 

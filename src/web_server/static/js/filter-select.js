@@ -1,6 +1,6 @@
 // Searchable, mobile-friendly select widgets shared across the dashboard.
 //
-// Two flavours, both driven by a text input + filtered dropdown (no native
+// Two flavors, both driven by a text input + filtered dropdown (no native
 // <select>, which is clumsy for multi-pick and long lists on touch devices):
 //   - filterSelect:      single value, clears to an "empty" sentinel
 //   - multiFilterSelect: many values, rendered as removable chips
@@ -11,6 +11,8 @@
 // Styling lives in app.css under .filter-select / .filter-chip (theme-variable
 // based, so it inherits the active theme).
 import { esc } from "./api.js";
+
+let _fsSeq = 0;
 
 function styleInput(input, placeholder) {
   input.type = "text";
@@ -50,6 +52,7 @@ function attachPopover(input, list) {
       return;
     }
     list.showPopover();
+    input.setAttribute("aria-expanded", "true");
     position();
     window.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
@@ -58,6 +61,8 @@ function attachPopover(input, list) {
   function close() {
     if (!list.matches(":popover-open")) return;
     list.hidePopover();
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
     window.removeEventListener("scroll", reposition, true);
     window.removeEventListener("resize", reposition);
   }
@@ -85,17 +90,27 @@ export function filterSelect(placeholder, options, opts = {}) {
   const wrap = document.createElement("div");
   wrap.className = "filter-select";
 
+  const uid = `fs-${++_fsSeq}`;
+
   const input = document.createElement("input");
   styleInput(input, placeholder);
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-haspopup", "listbox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-controls", `${uid}-list`);
   wrap.appendChild(input);
 
   const list = document.createElement("div");
   list.className = "filter-select-list";
+  list.id = `${uid}-list`;
+  list.setAttribute("role", "listbox");
   wrap.appendChild(list);
   const popover = attachPopover(input, list);
 
   let selectedId = emptyValue;
   let selectedLabel = "";
+  let hi = -1; // index of the keyboard-highlighted option
 
   function visible() {
     return predicate ? items.filter(predicate) : items;
@@ -108,13 +123,46 @@ export function filterSelect(placeholder, options, opts = {}) {
       ? base.filter((o) => o.label.toLowerCase().includes(lc))
       : base;
     const show = lc ? matches : matches.slice(0, 300);
-    list.innerHTML =
-      `<div class="filter-select-item" data-id="${esc(emptyValue)}">
-         <em style="color:var(--ink-dim)">${esc(emptyLabel)}</em>
-       </div>` +
-      show
-        .map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`)
-        .join("");
+    const rows = [{ id: emptyValue, label: emptyLabel, empty: true }, ...show];
+    list.innerHTML = rows
+      .map((o, i) => {
+        const sel = String(o.id) === String(selectedId);
+        const inner = o.empty
+          ? `<em style="color:var(--ink-dim)">${esc(emptyLabel)}</em>`
+          : esc(o.label);
+        return `<div class="filter-select-item" role="option" id="${uid}-opt-${i}" data-id="${esc(String(o.id))}" aria-selected="${sel}">${inner}</div>`;
+      })
+      .join("");
+    hi = -1;
+    input.removeAttribute("aria-activedescendant");
+  }
+
+  function optionEls() {
+    return Array.from(list.querySelectorAll(".filter-select-item"));
+  }
+
+  function highlight(idx) {
+    const els = optionEls();
+    if (!els.length) return;
+    hi = (idx + els.length) % els.length;
+    els.forEach((el, i) => el.classList.toggle("active", i === hi));
+    const cur = els[hi];
+    input.setAttribute("aria-activedescendant", cur.id);
+    cur.scrollIntoView({ block: "nearest" });
+  }
+
+  function selectItem(item) {
+    const id = item.dataset.id;
+    if (id === emptyValue) {
+      selectedId = emptyValue;
+      selectedLabel = "";
+      input.value = "";
+    } else {
+      selectedId = id;
+      selectedLabel = item.textContent.trim();
+      input.value = selectedLabel;
+    }
+    popover.close();
   }
 
   input.addEventListener("focus", () => {
@@ -131,23 +179,23 @@ export function filterSelect(placeholder, options, opts = {}) {
     // mousedown (not click) so it fires before the input's blur hides the list.
     const item = e.target.closest(".filter-select-item");
     if (!item) return;
-    const id = item.dataset.id;
-    if (id === emptyValue) {
-      selectedId = emptyValue;
-      selectedLabel = "";
-      input.value = "";
-    } else {
-      selectedId = id;
-      selectedLabel = item.textContent.trim();
-      input.value = selectedLabel;
-    }
-    popover.close();
+    selectItem(item);
   });
   input.addEventListener("blur", () => {
     setTimeout(() => { popover.close(); }, 150);
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { popover.close(); input.blur(); }
+    if (e.key === "Escape") { popover.close(); input.blur(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!popover.isOpen()) { render(input.value); popover.open(); }
+      highlight(hi + (e.key === "ArrowDown" ? 1 : -1));
+      return;
+    }
+    if (e.key === "Enter" && popover.isOpen() && hi >= 0) {
+      const el = optionEls()[hi];
+      if (el) { e.preventDefault(); selectItem(el); }
+    }
   });
 
   function setValue(id) {
@@ -203,16 +251,26 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   chipsRow.className = "filter-select-chips";
   wrap.appendChild(chipsRow);
 
+  const uid = `mfs-${++_fsSeq}`;
+
   const input = document.createElement("input");
   styleInput(input, placeholder);
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-haspopup", "listbox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-controls", `${uid}-list`);
   wrap.appendChild(input);
 
   const list = document.createElement("div");
   list.className = "filter-select-list";
+  list.id = `${uid}-list`;
+  list.setAttribute("role", "listbox");
   wrap.appendChild(list);
   const popover = attachPopover(input, list);
 
   const selected = new Map();
+  let hi = -1; // index of the keyboard-highlighted option
 
   function renderChips() {
     while (chipsRow.firstChild) chipsRow.removeChild(chipsRow.firstChild);
@@ -243,15 +301,45 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
       : base;
     const show = lc ? matches : matches.slice(0, 300);
     while (list.firstChild) list.removeChild(list.firstChild);
-    for (const o of show) {
+    show.forEach((o, i) => {
       const item = document.createElement("div");
       item.className = "filter-select-item";
       item.dataset.id = o.id;
+      item.setAttribute("role", "option");
+      item.id = `${uid}-opt-${i}`;
       const taken = selected.has(o.id);
+      item.setAttribute("aria-selected", taken ? "true" : "false");
       item.textContent = taken ? `${o.label} ✓` : o.label;
       if (taken) item.classList.add("taken");
       list.appendChild(item);
-    }
+    });
+    hi = -1;
+    input.removeAttribute("aria-activedescendant");
+  }
+
+  function optionEls() {
+    return Array.from(list.querySelectorAll(".filter-select-item"));
+  }
+
+  function highlight(idx) {
+    const els = optionEls();
+    if (!els.length) return;
+    hi = (idx + els.length) % els.length;
+    els.forEach((el, i) => el.classList.toggle("active", i === hi));
+    const cur = els[hi];
+    input.setAttribute("aria-activedescendant", cur.id);
+    cur.scrollIntoView({ block: "nearest" });
+  }
+
+  function selectItem(item) {
+    const id = item.dataset.id;
+    if (!id || selected.has(id)) return;
+    const opt = items.find((o) => o.id === id);
+    selected.set(id, opt ? opt.label : id);
+    input.value = "";
+    renderChips();
+    renderList("");
+    popover.open();
   }
 
   input.addEventListener("focus", () => {
@@ -265,14 +353,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   list.addEventListener("mousedown", (e) => {
     const item = e.target.closest(".filter-select-item");
     if (!item) return;
-    const id = item.dataset.id;
-    if (!id || selected.has(id)) return;
-    const opt = items.find((o) => o.id === id);
-    selected.set(id, opt ? opt.label : id);
-    input.value = "";
-    renderChips();
-    renderList("");
-    popover.open();
+    selectItem(item);
   });
   chipsRow.addEventListener("click", (e) => {
     const x = e.target.closest(".filter-chip-x");
@@ -287,7 +368,17 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     setTimeout(() => { popover.close(); }, 150);
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { popover.close(); input.blur(); }
+    if (e.key === "Escape") { popover.close(); input.blur(); return; }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!popover.isOpen()) { renderList(input.value); popover.open(); }
+      highlight(hi + (e.key === "ArrowDown" ? 1 : -1));
+      return;
+    }
+    if (e.key === "Enter" && popover.isOpen() && hi >= 0) {
+      const el = optionEls()[hi];
+      if (el) { e.preventDefault(); selectItem(el); }
+    }
   });
 
   function setValues(ids) {

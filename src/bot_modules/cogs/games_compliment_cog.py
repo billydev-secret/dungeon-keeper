@@ -1,12 +1,19 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
@@ -14,9 +21,10 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_names,
+    channel_name,
 )
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_compliment.embeds import (
     build_lobby_embed,
     build_pairings_embed,
@@ -43,14 +51,14 @@ class ComplimentView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="Add Me!", style=discord.ButtonStyle.success, custom_id="comp_addme")
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="comp_addme")
     async def add_me(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         user_id = interaction.user.id
         action_holder: dict[str, str] = {}
 
@@ -59,13 +67,16 @@ class ComplimentView(discord.ui.View):
 
         payload = await modify_payload(self.db, self.game_id, _toggle)
         action = action_holder["action"]
-        log.info("%s %s game %s in #%s", interaction.user.display_name, action.split()[0], self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s %s game %s in #%s", interaction.user.display_name, action.split()[0], self.game_id, channel_name(interaction.channel))
 
         names = resolve_names(interaction.guild, payload.get("participants", []))
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
+        guild = interaction.guild
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
+            color=color,
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(
@@ -74,7 +85,7 @@ class ComplimentView(discord.ui.View):
 
     @discord.ui.button(label="Close & Generate", style=discord.ButtonStyle.primary, custom_id="comp_generate")
     async def close_generate(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can generate pairings.", ephemeral=True)
             return
@@ -101,13 +112,17 @@ class ComplimentView(discord.ui.View):
             lines.append(format_pairing_line(giver_str, receiver_str))
             mention_lookup[giver_id] = giver_str
             mention_lookup[receiver_id] = receiver_str
-        embed = build_pairings_embed(lines)
+        guild = interaction.guild
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_pairings_embed(lines, color=color)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "compliment")
         # Ping all participants (preserve order from pairings dict)
         unique_mentions = [mention_lookup[uid] for uid in pairing_ids(pairings) if uid in mention_lookup]
 
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
 
         await interaction.edit_original_response(view=self)
         if unique_mentions:
@@ -127,41 +142,19 @@ class ComplimentView(discord.ui.View):
             self.game_id,
             player_count=len(participants),
             payload={"pairings": serialize_pairings(pairings)},
+            bot=self.bot, player_ids=list(participants),
         )
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="comp_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        game_msg = interaction.message
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(content="Game cancelled.", view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to cancel this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="comp_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="comp_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["compliment"], ephemeral=True)
 
 
 class ComplimentCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -180,7 +173,7 @@ class ComplimentCog(commands.Cog):
 
     @app_commands.command(name="compliment", description="Start Spin the Compliment — random anonymous pairing!")
     async def compliment(self, interaction: discord.Interaction):
-        log.info("%s used /games play compliment in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play compliment in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -196,15 +189,7 @@ class ComplimentCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -225,7 +210,9 @@ class ComplimentCog(commands.Cog):
         )
 
         log.info("Game %s (compliment) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
-        embed = build_lobby_embed(host_name, [])
+        guild = getattr(channel, "guild", None)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, [], color=color)
         view = ComplimentView(game_id, host_id, self.db, self.bot)
         self.bot.active_views[game_id] = view
 
@@ -241,9 +228,9 @@ class ComplimentCog(commands.Cog):
         return game_id
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = ComplimentCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("compliment")
-    play.add_command(cog.compliment)
+    play.add_command(cog.compliment, override=True)
     bot.game_launchers["compliment"] = cog.launch

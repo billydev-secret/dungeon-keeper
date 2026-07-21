@@ -18,6 +18,8 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_channel_id": "0",
     "whisper_log_channel_id": "0",
     "whisper_launcher_message_id": "0",
+    "whisper_cooldown_seconds": "30",
+    "whisper_hourly_cap_per_target": "5",
 }
 
 
@@ -31,6 +33,8 @@ def get_whisper_config(conn: sqlite3.Connection, guild_id: int) -> WhisperConfig
         channel_id=int(_get("whisper_channel_id") or 0),
         log_channel_id=int(_get("whisper_log_channel_id") or 0),
         launcher_message_id=int(_get("whisper_launcher_message_id") or 0),
+        cooldown_seconds=int(_get("whisper_cooldown_seconds") or 30),
+        hourly_cap_per_target=int(_get("whisper_hourly_cap_per_target") or 5),
     )
 
 

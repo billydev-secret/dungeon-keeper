@@ -1,6 +1,11 @@
 """Hot Potato cog — pass-the-bomb nickname duel."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -9,13 +14,11 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
-from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
-from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
 
 from . import db as hpdb
 from .game import HotPotatoGame, compute_style_points
@@ -29,7 +32,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     GAME_KEY = "hot_potato"
     GAME_DISPLAY_NAME = "Hot Potato"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
 
@@ -65,7 +68,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     ) -> HotPotatoGame | None:
         return await hpdb.get_pending_game_for_challenger(self.db, guild_id, channel_id, user_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await hpdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_fetch_active_games(self) -> list[HotPotatoGame]:
@@ -134,7 +137,10 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                     disabled_view,
                 )
 
-            result_view = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
+            # Same two stake modes as _finalize_result: nickname (no custom
+            # stakes → rename button) vs announce-only. The timer path used to
+            # skip this gate and always post the rename view.
+            nick_mode = game.stakes_text is None
             channel = self.bot.get_channel(game.channel_id)
             result_message_id = None
             if channel and guild:
@@ -143,16 +149,24 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
                 result_embed = self.render_result_state(game, guild)
                 try:
-                    result_msg = await channel.send(  # type: ignore[union-attr]
-                        content=ping_content, embed=result_embed, view=result_view
-                    )
-                    self.bot.add_view(result_view, message_id=result_msg.id)
+                    if nick_mode:
+                        result_view = ResultView(
+                            game.id, winner_id, loser_id, self._handle_set_nick
+                        )
+                        result_msg = await channel.send(  # type: ignore[union-attr]
+                            content=ping_content, embed=result_embed, view=result_view
+                        )
+                        self.bot.add_view(result_view, message_id=result_msg.id)
+                    else:
+                        result_msg = await channel.send(  # type: ignore[union-attr]
+                            content=ping_content, embed=result_embed
+                        )
                     result_message_id = result_msg.id
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
-            await hpdb.set_game_state(
-                self.db, game_id, "RESOLVED",
+            await self._db_set_state(
+                game_id, "RESOLVED" if nick_mode else "RESOLVED_NO_NICK",
                 winner_id=winner_id,
                 loser_id=loser_id,
                 pass_log=json.dumps(new_log),
@@ -174,8 +188,8 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         initial_log = json.dumps(
             [{"holder_id": game.challenger_id, "received_at": now, "passed_at": None}]
         )
-        await hpdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             holder_id=game.challenger_id,
             timer_seconds=timer,
             started_at=now,
@@ -255,6 +269,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -305,7 +320,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:
@@ -347,8 +362,8 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             new_log[-1] = {**new_log[-1], "passed_at": now}
         new_log.append({"holder_id": new_holder, "received_at": now, "passed_at": None})
 
-        await hpdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             holder_id=new_holder,
             pass_log=json.dumps(new_log),
             last_action_at=now,
@@ -363,144 +378,19 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     @app_commands.describe(
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — you both ante this; winner takes the pot",
     )
     async def hp_challenge(
         self,
         interaction: discord.Interaction,
         user: discord.Member,
         stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        await self._base_challenge(interaction, user, stakes)
+        await self._base_challenge(interaction, user, stakes, wager)
 
-    @hot_potato.command(name="cancel", description="Cancel your pending Hot Potato challenge")
-    async def hp_cancel(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        game = await hpdb.get_pending_game_for_challenger(
-            self.db,
-            interaction.guild.id,
-            interaction.channel_id,  # type: ignore[arg-type]
-            interaction.user.id,
-        )
-        if not game:
-            await interaction.response.send_message(
-                "You don't have a pending challenge in this channel.", ephemeral=True
-            )
-            return
-        await hpdb.set_game_state(self.db, game.id, "EXPIRED_PENDING")
-        await self._edit_message_silent(
-            game.channel_id,
-            game.message_id,
-            embed=discord.Embed(
-                title="🚫 Challenge Cancelled",
-                description=f"{interaction.user.mention} cancelled the challenge.",
-                color=COLOR_YELLOW,
-            ),
-            view=None,
-        )
-        await interaction.response.send_message("Challenge cancelled.", ephemeral=True)
-
-    @hot_potato.command(name="stats", description="View Hot Potato stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def hp_stats(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await hpdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        embed = discord.Embed(
-            title=f"🥔 Hot Potato — {target.display_name}",
-            color=COLOR_GOLD,
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Total Games", value=str(stats["total_games"]), inline=True)
-        embed.add_field(name="✨ Style Points", value=str(stats["style_points"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
-    @hot_potato.command(name="config", description="Configure Hot Potato (mods only)")
-    @app_commands.describe(
-        cooldown_hours="Hours before the same pair can play again (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        allow_early_revert="Allow losers to request early nick revert: 0=no, 1=yes",
-        min_timer="Minimum seconds before explosion (default 10.0)",
-        max_timer="Maximum seconds before explosion (default 45.0)",
-    )
-    async def hp_config(
-        self,
-        interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        allow_early_revert: int | None = None,
-        min_timer: float | None = None,
-        max_timer: float | None = None,
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure Hot Potato.",
-                ephemeral=True,
-            )
-            return
-
-        shared_updates: dict = {}
-        game_updates: dict = {}
-
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if allow_early_revert is not None:
-            shared_updates["allow_early_revert"] = 1 if allow_early_revert else 0
-        if min_timer is not None:
-            game_updates["min_timer"] = max(5.0, min_timer)
-        if max_timer is not None:
-            game_updates["max_timer"] = max(10.0, max_timer)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await hpdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Hot Potato Config", color=COLOR_GOLD)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(
-                self.db, interaction.guild.id, self.GAME_KEY, **shared_updates
-            )
-        if game_updates:
-            await hpdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = HotPotatoDuel(bot)
     await bot.add_cog(cog)
-    for name in ("cancel", "stats", "config"):
-        cog.hot_potato.remove_command(name)
     bot.tree.remove_command("hotpotato")
     games.add_command(cog.hot_potato)

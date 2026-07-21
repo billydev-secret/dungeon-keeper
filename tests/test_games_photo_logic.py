@@ -5,8 +5,10 @@ Photo Challenge prompts live in the DB question bank (``games_question_bank``,
 static prompt bank. The only standalone pure logic is
 ``get_photo_prompt`` (bank-only, no AI fallback), exercised here against a
 fake db. Questions carry a JSON ``tags`` array; the reserved ``nsfw`` tag is
-excluded unless a caller opts in. The card rendering and thread flow reuse the
-same helpers covered by the FFA/confessions tests.
+excluded unless the caller passes ``allow_nsfw=True`` (driven by the Discord
+channel's age-restriction flag — a requested tag cannot re-enable it). The
+card rendering and thread flow reuse the same helpers covered by the
+FFA/confessions tests.
 """
 
 from __future__ import annotations
@@ -18,20 +20,26 @@ from bot_modules.games.utils.question_source import get_photo_prompt
 
 
 class _FakeDB:
-    """Minimal async db stub matching the fetchall surface used by
-    ``_get_bank_question`` (now selects ``question_text, tags``)."""
+    """Minimal async db stub matching the fetchall/execute surface used by
+    ``_get_bank_question`` (selects question_id, question_text, tags,
+    last_served_at; marks the served row via execute)."""
 
     def __init__(self, rows: list[tuple[str, list[str], str]]):
         # rows: (game_type, tags_list, question_text)
         self._rows = rows
+        self.served: list[int] = []
 
     async def fetchall(self, sql: str, params: tuple):
         (game_type,) = params
         return [
-            (r[2], json.dumps(r[1]))
-            for r in self._rows
+            (qid, r[2], json.dumps(r[1]), None)
+            for qid, r in enumerate(self._rows)
             if r[0] == game_type
         ]
+
+    async def execute(self, sql: str, params: tuple):
+        (qid,) = params
+        self.served.append(qid)
 
 
 def _run(coro):
@@ -44,18 +52,30 @@ def test_empty_bank_returns_none():
     assert _run(get_photo_prompt(db, tags=["nsfw"])) is None
 
 
-def test_excludes_nsfw_unless_opted_in():
+def test_excludes_nsfw_unless_allow_nsfw():
+    """NSFW is gated on the channel's age-restriction flag (``allow_nsfw``);
+    requesting the 'nsfw' tag cannot re-enable it."""
     db = _FakeDB([
         ("photo", [], "Show us your desk right now."),
         ("photo", ["nsfw"], "Spicy challenge."),
         ("wyr", [], "Not a photo prompt."),
     ])
-    # No tag filter → only the non-nsfw prompt.
+    # Default (no channel opt-in) → only the non-nsfw prompt.
     for _ in range(25):
         assert _run(get_photo_prompt(db)) == "Show us your desk right now."
-    # Opt into nsfw → only the nsfw-tagged prompt qualifies under ANY-match.
+    # Requesting the 'nsfw' tag without allow_nsfw → nsfw rows stay excluded,
+    # and the remaining row doesn't carry the tag → filtered miss.
     for _ in range(25):
-        assert _run(get_photo_prompt(db, tags=["nsfw"])) == "Spicy challenge."
+        assert _run(get_photo_prompt(db, tags=["nsfw"])) is None
+    # Channel opt-in → the nsfw-tagged prompt qualifies under ANY-match.
+    for _ in range(25):
+        assert (
+            _run(get_photo_prompt(db, tags=["nsfw"], allow_nsfw=True))
+            == "Spicy challenge."
+        )
+    # Channel opt-in with no tag filter → both prompts are candidates.
+    seen = {_run(get_photo_prompt(db, allow_nsfw=True)) for _ in range(40)}
+    assert seen == {"Show us your desk right now.", "Spicy challenge."}
 
 
 def test_tag_filter_any_match():

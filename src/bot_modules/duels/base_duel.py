@@ -6,9 +6,12 @@ lifecycle, the expiry/auto-revert sweep, the nickname-stake flow, rate limiting,
 the abstract hooks — lives in `BaseGame`.
 
 Two stake modes are supported on the duel path:
-  * **Nickname mode** (no custom stakes): the winner renames the loser for 24h.
+  * **Nickname mode** (no custom stakes, no wager): the winner renames the
+    loser for 24h.
   * **Custom stakes** (free-text stakes given): the loser owes the agreed-upon
-    stakes; the bot enforces nothing and never renames anyone.
+    stakes; the bot enforces nothing and never renames anyone. A coin wager
+    with no stakes text lands here too — the pot *is* the stake (a wager label
+    is recorded at creation via `resolve_stakes_text`), so no rename either.
 """
 from __future__ import annotations
 
@@ -17,11 +20,14 @@ from typing import Any, Awaitable, Callable
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
+from bot_modules.services.economy_service import EconSettings
+
 from . import db as duels_db
-from .base_game import _RATE_LIMIT_MAX, BaseGame
-from .filters import validate_stakes
+from .base_game import _RATE_LIMIT_MAX, BaseGame, _fmt_coins
+from .filters import resolve_stakes_text, validate_stakes
 from .views import ChallengeView, ResultView
 
 
@@ -39,8 +45,14 @@ class BaseDuel(BaseGame):
         interaction: discord.Interaction,
         target: discord.Member,
         stakes_text: str | None,
+        wager: int | None = None,
     ) -> None:
-        """Run all pre-game checks and create a challenge embed. Called by subclass command."""
+        """Run all pre-game checks and create a challenge embed. Called by subclass command.
+
+        ``wager`` makes it a coin duel: the amount is *declared* now but no
+        money moves until the target accepts, so a decline or a timeout costs
+        nothing. Both antes are taken at accept, and the winner takes the pot.
+        """
         if not interaction.guild:
             await interaction.response.send_message(
                 "This command only works in a server.", ephemeral=True
@@ -77,10 +89,11 @@ class BaseDuel(BaseGame):
             )
             return
 
-        # Nickname-mode preflight only applies when no custom stakes are set;
-        # custom-stakes games never rename anyone, so they don't need the
+        # Nickname-mode preflight only applies when nicknames are the stake —
+        # no custom stakes text AND no wager (a wager becomes the stake below).
+        # Non-nickname games never rename anyone, so they don't need the
         # Manage Nicknames permission or a clear nickname slate.
-        if stakes_text is None:
+        if stakes_text is None and wager is None:
             perm_error = await self._check_bot_can_nick(guild, [challenger, target])  # type: ignore[list-item]
             if perm_error:
                 await interaction.response.send_message(perm_error, ephemeral=True)
@@ -111,6 +124,16 @@ class BaseDuel(BaseGame):
                 return
             stakes_text = stakes_result.value or None
 
+        if wager is not None:
+            err = await self._wager_precheck(guild.id, challenger.id, wager)
+            if err:
+                await interaction.response.send_message(err, ephemeral=True)
+                return
+
+        # A wager stands in as the stake — record the label so the duel is in
+        # announce-only mode (no rename, no nickname copy) everywhere downstream.
+        stakes_text = resolve_stakes_text(stakes_text, wager)
+
         game_id = await self._db_create_game(
             guild_id=guild.id,
             channel_id=interaction.channel_id,  # type: ignore[arg-type]
@@ -120,7 +143,14 @@ class BaseDuel(BaseGame):
         )
         self._record_challenge(challenger.id)
 
-        embed = self._build_challenge_embed(challenger, target, stakes_text)  # type: ignore[arg-type]
+        if wager is not None:
+            await self._declare_wager(guild.id, game_id, challenger.id, wager)
+
+        accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        settings = await self._econ_settings(guild.id) if wager is not None else None
+        embed = self._build_challenge_embed(
+            challenger, target, stakes_text, accent, wager=wager, settings=settings,  # type: ignore[arg-type]
+        )
         view = ChallengeView(
             game_id=game_id,
             target_id=target.id,
@@ -138,11 +168,17 @@ class BaseDuel(BaseGame):
         challenger: discord.Member,
         target: discord.Member,
         stakes: str | None,
+        color: "discord.Color | None" = None,
+        *,
+        wager: int | None = None,
+        settings: EconSettings | None = None,
     ) -> discord.Embed:
+        if color is None:
+            color = discord.Color(COLOR_GOLD)
         stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
         embed = discord.Embed(
             title=f"⚔️ {self.GAME_DISPLAY_NAME.upper()} CHALLENGE",
-            color=COLOR_GOLD,
+            color=color,
         )
         embed.add_field(
             name="Challenge",
@@ -150,6 +186,19 @@ class BaseDuel(BaseGame):
             inline=False,
         )
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
+        if wager:
+            each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
+            takes = (
+                _fmt_coins(settings, wager * 2) if settings else f"**{wager * 2:,}**"
+            )
+            embed.add_field(
+                name="💰 Wager",
+                value=(
+                    f"{each} each — winner takes {takes}.\n"
+                    "_Nothing is charged unless the challenge is accepted._"
+                ),
+                inline=False,
+            )
         embed.set_footer(text="⏱️ 60 seconds to respond.")
         return embed
 
@@ -162,6 +211,34 @@ class BaseDuel(BaseGame):
                 "This challenge is no longer active.", ephemeral=True
             )
             return
+
+        ante = await self._game_ante(game_id)
+        if ante > 0:
+            # Both antes land at accept — no money moves while a challenge is
+            # merely pending, so a decline or a timeout needs no refund. If
+            # either side can't cover it now, the challenge is called off
+            # rather than started half-funded.
+            for uid, who in (
+                (game.target_id, "you"),
+                (game.challenger_id, "the challenger"),
+            ):
+                err = await self._take_stake(game.guild_id, game_id, uid, ante)
+                if err is None:
+                    continue
+                await self._db_set_state(game_id, "DECLINED")  # refunds + drops
+                note = err if who == "you" else (
+                    f"The challenger can no longer cover the {ante:,} wager — "
+                    "challenge called off."
+                )
+                await interaction.response.edit_message(
+                    embed=discord.Embed(
+                        title="❌ Challenge Called Off",
+                        description=note,
+                        color=COLOR_YELLOW,
+                    ),
+                    view=None,
+                )
+                return
 
         await self._db_set_state(game_id, "ACTIVE")
         await self.on_game_start(game)
@@ -261,16 +338,26 @@ class BaseDuel(BaseGame):
         loser_m = guild.get_member(loser_id) if guild else None
         ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
 
+        # winner/loser ride along with the terminal write: the economy hook
+        # re-reads the row, and not every cog persists them before this point.
         if nick_mode:
             result_view = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
             result_msg = await send(
                 content=ping_content, embed=result_embed, view=result_view
             )
             self.bot.add_view(result_view, message_id=result_msg.id)
-            await self._db_set_state(game.id, "RESOLVED", result_message_id=result_msg.id)
+            await self._db_set_state(
+                game.id, "RESOLVED",
+                result_message_id=result_msg.id,
+                winner_id=winner_id,
+                loser_id=loser_id,
+            )
         else:
             # Custom stakes: announce only — no rename button, no expiry sweep.
             result_msg = await send(content=ping_content, embed=result_embed)
             await self._db_set_state(
-                game.id, "RESOLVED_NO_NICK", result_message_id=result_msg.id
+                game.id, "RESOLVED_NO_NICK",
+                result_message_id=result_msg.id,
+                winner_id=winner_id,
+                loser_id=loser_id,
             )

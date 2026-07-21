@@ -18,5 +18,6 @@ export function renderTile(el, d) {
     ${modRow(d.active_jails, "jailed", "home-mod-danger", d.latest_jail, "reason")}
     ${modRow(d.open_tickets, "tickets", "home-mod-info", d.latest_ticket, "description")}
     ${modRow(d.active_warnings, "warnings", "home-mod-warn", d.latest_warning, "reason")}
+    ${modRow(d.pending_claims ?? 0, "claims", "home-mod-info", d.latest_claim, "quest_title")}
   `;
 }

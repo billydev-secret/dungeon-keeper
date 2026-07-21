@@ -14,6 +14,18 @@ SENDER, TARGET, OTHER_TARGET = 1001, 2001, 3003
 NOW = time.time()
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    import discord
+
+    monkeypatch.setattr(
+        "bot_modules.cogs.whisper_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
+
 def _w(
     *,
     wid: int = 42,

@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.whisper_models import (
     STATE_PENDING,
@@ -416,6 +417,7 @@ class WhisperShareButton(
             _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_SHARED
         )
 
+        feed_jump_url: str | None = None
         guild = interaction.guild or self.bot.get_guild(whisper.guild_id)
         if guild:
             cfg = await asyncio.to_thread(
@@ -423,6 +425,7 @@ class WhisperShareButton(
             )
             feed_channel = guild.get_channel(cfg.channel_id)
             if isinstance(feed_channel, discord.TextChannel):
+                accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
                 if whisper.channel_msg_id:
                     try:
                         old = await feed_channel.fetch_message(whisper.channel_msg_id)
@@ -431,9 +434,10 @@ class WhisperShareButton(
                         log.warning("Failed to delete original announcement on share")
                 try:
                     new_msg = await feed_channel.send(
-                        embed=build_share_feed_embed(whisper),
+                        embed=build_share_feed_embed(whisper, color=accent),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
+                    feed_jump_url = new_msg.jump_url
                     await asyncio.to_thread(
                         _do_set_message_ids,
                         self.bot.ctx.db_path,
@@ -462,9 +466,10 @@ class WhisperShareButton(
             except discord.HTTPException:
                 log.warning("Failed to edit DM view after share")
 
-        await interaction.response.send_message(
-            "Shared to the whisper feed.", ephemeral=True
-        )
+        confirm = "Shared to the whisper feed."
+        if feed_jump_url:
+            confirm = f"[Shared to the whisper feed.]({feed_jump_url})"
+        await interaction.response.send_message(confirm, ephemeral=True)
 
 
 class WhisperDeleteButton(
@@ -1088,6 +1093,16 @@ async def _handle_guess_outcome(
     if outcome.correct:
         guild = interaction.guild or bot.get_guild(whisper.guild_id)
         await interaction.response.edit_message(content="You solved it!", view=None)
+
+        # Quest hook: solving the guessing game. Fires only after the
+        # race-consumed check, so a two-tab solve pays once. The solved feed
+        # post already names the target, so this leaks nothing new.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            bot, whisper.guild_id, interaction.user.id, "whisper_guess",
+            occurrence=str(whisper.id),
+        )
         cfg = await asyncio.to_thread(_load_config, bot.ctx.db_path, whisper.guild_id)
         if guild:
             feed_channel = guild.get_channel(cfg.channel_id)
@@ -1361,6 +1376,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
     feed_channel = guild.get_channel(cfg.channel_id)
     if not isinstance(feed_channel, discord.TextChannel):
         return
+    accent = await resolve_accent_color(bot.ctx.db_path, guild)
     if whisper.channel_msg_id:
         try:
             old = await feed_channel.fetch_message(whisper.channel_msg_id)
@@ -1369,7 +1385,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
             log.warning("Failed to delete original announcement on share")
     try:
         new_msg = await feed_channel.send(
-            embed=build_share_feed_embed(whisper),
+            embed=build_share_feed_embed(whisper, color=accent),
             allowed_mentions=discord.AllowedMentions.none(),
         )
         await asyncio.to_thread(
@@ -1428,11 +1444,13 @@ class WhisperInboxSelectView(discord.ui.View):
         *,
         invoker_id: int,
         mode: str = "received",
+        accent: "discord.Color | None" = None,
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
         self._invoker_id = invoker_id
         self._mode = mode
+        self._accent = accent
         self._all: list[Whisper] = list(whispers)
         self._display: list[Whisper] = list(whispers)
         self._filter_query = ""
@@ -1467,6 +1485,7 @@ class WhisperInboxSelectView(discord.ui.View):
             whispers=self._all,
             selected=self._selected(),
             mode=self._mode,
+            color=self._accent,
         )
 
     # ── view building ──────────────────────────────────────────────────────
@@ -1952,8 +1971,10 @@ class WhisperFeedView(discord.ui.View):
             target_id=interaction.user.id,
             states=[STATE_PENDING, STATE_SHARED],
         )
+        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
         view = WhisperInboxSelectView(
-            self.bot, whispers, invoker_id=interaction.user.id, mode="received"
+            self.bot, whispers, invoker_id=interaction.user.id, mode="received",
+            accent=accent,
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -1968,8 +1989,10 @@ class WhisperFeedView(discord.ui.View):
             sender_id=interaction.user.id,
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
+        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
         view = WhisperInboxSelectView(
-            self.bot, active, invoker_id=interaction.user.id, mode="sent"
+            self.bot, active, invoker_id=interaction.user.id, mode="sent",
+            accent=accent,
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -2083,6 +2106,9 @@ class WhisperOptinConfirmView(discord.ui.View):
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
+# Fallbacks matching WhisperConfig's defaults; actual enforcement reads
+# cfg.cooldown_seconds / cfg.hourly_cap_per_target, configurable per-guild
+# from the dashboard's Whisper config panel.
 SEND_COOLDOWN_SECONDS = 30
 SEND_PER_TARGET_HOURLY_CAP = 5
 
@@ -2299,8 +2325,10 @@ class WhisperCog(commands.Cog):
             sender_id=interaction.user.id,
         )
         active = [w for w in whispers if not is_terminal_for_sender(w)]
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
         view = WhisperInboxSelectView(
-            self.bot, active, invoker_id=interaction.user.id, mode="sent"
+            self.bot, active, invoker_id=interaction.user.id, mode="sent",
+            accent=accent,
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -2336,7 +2364,7 @@ class WhisperCog(commands.Cog):
         remaining = check_send_cooldown(
             self._last_send_at.get(interaction.user.id),
             now=now,
-            cooldown_seconds=SEND_COOLDOWN_SECONDS,
+            cooldown_seconds=cfg.cooldown_seconds,
         )
         if remaining is not None:
             await interaction.response.send_message(
@@ -2348,9 +2376,9 @@ class WhisperCog(commands.Cog):
         recent = prune_recent_target_sends(
             self._target_sends.get(rate_key, []), now=now,
         )
-        if len(recent) >= SEND_PER_TARGET_HOURLY_CAP:
+        if len(recent) >= cfg.hourly_cap_per_target:
             await interaction.response.send_message(
-                format_hourly_cap_message(SEND_PER_TARGET_HOURLY_CAP),
+                format_hourly_cap_message(cfg.hourly_cap_per_target),
                 ephemeral=True,
             )
             return
@@ -2398,8 +2426,9 @@ class WhisperCog(commands.Cog):
             # awaited and rolls back on failure), so the feed post doesn't need
             # to ping. Post the embed only — it names the recipient visibly,
             # once, without firing a redundant channel notification.
+            accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
             feed_msg = await feed_channel.send(
-                embed=build_send_feed_embed(target.id),
+                embed=build_send_feed_embed(target.id, color=accent),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))
@@ -2417,6 +2446,15 @@ class WhisperCog(commands.Cog):
         await interaction.response.send_message(
             "Whisper delivered.",
             ephemeral=True,
+        )
+
+        # Credit the sender's ``whisper`` economy quest trigger — one payout
+        # per delivered whisper. Guarded/non-raising when the economy is off.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, interaction.guild.id, interaction.user.id, "whisper",
+            occurrence=str(whisper_id),
         )
 
     async def _open_send_picker(self, interaction: discord.Interaction) -> None:

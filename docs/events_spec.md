@@ -1,16 +1,16 @@
 # Events — Feature Spec
 
-The events module is the bot ' s central Discord gateway router. It owns no slash commands; instead it listens to every gateway event the bot cares about and dispatches the work to feature services. Most of what runs here belongs to other specs — this document is the dispatch overview that keeps cross-links honest.
+The events module is the bot's central Discord gateway router. It owns no slash commands; instead it listens to every gateway event the bot cares about and dispatches the work to feature services. Most of what runs here belongs to other specs — this document is the dispatch overview that keeps cross-links honest.
 
 Three concerns live entirely here and have no dedicated spec elsewhere: the **permanent message archive** populated on every non-DM message, **sentiment scoring** that runs alongside the archive, and the **on-ready backfill** that catches up the archive after the bot was offline.
 
 ## Commands
 
-No slash commands. The surface is gateway listeners. The behavioural map for each listener is in Behaviour; cross-links point at the spec that owns the dispatched work.
+No slash commands. The surface is gateway listeners. The behavioral map for each listener is in Behavior; cross-links point at the spec that owns the dispatched work.
 
 The bot needs **View Channels** + **Read Message History** in every text channel it should listen to. Welcome / leave / greeter posts require **Send Messages** + **Embed Links** in their configured channels; missing perms are best-effort warnings DMed to the guild owner.
 
-## Behaviour
+## Behavior
 
 ### On ready
 
@@ -18,7 +18,7 @@ When the gateway becomes ready, the bot upserts every visible member into the hi
 
 ### Message backfill
 
-Per channel the bot can read, the backfill pulls only messages newer than the most recent already-archived message for that channel (oldest-first so insertion order matches Discord order), batching writes every 200 messages. Each message goes through sentiment scoring and is mirrored to the archive idempotently — a re-run never duplicates a row. If the channel has an auto-delete rule active, backfilled messages are also tracked so the sweep doesn ' t miss anything posted while the bot was offline. Channels the bot can ' t read are skipped silently; other per-channel errors flush the partial batch and continue.
+Per channel the bot can read, the backfill pulls only messages newer than the most recent already-archived message for that channel (oldest-first so insertion order matches Discord order), batching writes every 200 messages. Each message goes through sentiment scoring and is mirrored to the archive idempotently — a re-run never duplicates a row. If the channel has an auto-delete rule active, backfilled messages are also tracked so the sweep doesn't miss anything posted while the bot was offline. Channels the bot can't read are skipped silently; other per-channel errors flush the partial batch and continue.
 
 ### New messages
 
@@ -29,11 +29,11 @@ Three paths, picked from `(guild presence, author bot flag, message type)`:
 - **System / join / boost / pin message** — archived with the system-rendered text so the audit captures the line, but no XP, no wellness, no interactions.
 - **Default or reply by a member** — the full pipeline runs: spoiler enforcement ([[post-monitoring-spec]]), wellness check ([[wellness-guardian-spec]]), sentiment + archive write + last-activity update + interaction-graph record + velocity-tracker tick ([[reporting-spec]]), then message XP award and level progression ([[xp-spec]]).
 
-Spoiler and wellness short-circuit — if either deletes or handles the message, the rest of the pipeline doesn ' t run.
+Spoiler and wellness short-circuit — if either deletes or handles the message, the rest of the pipeline doesn't run.
 
 ### Reactions
 
-On reaction add (guild only), the bot awards image-reaction XP to the message author when the message has a qualifying image, with up to 30 seconds of retries on transient Discord 5xx errors. Then in one database transaction it bumps the per-message reaction count and, if the reactor isn ' t the author, records the giver-receiver pair for [[reporting-spec]]. On reaction remove, the per-message count decrements; there is no XP refund.
+On reaction add (guild only), the bot awards image-reaction XP to the message author when the message has a qualifying image, with up to 30 seconds of retries on transient Discord 5xx errors. Then in one database transaction it bumps the per-message reaction count and, if the reactor isn't the author, records the giver-receiver pair for [[reporting-spec]]. On reaction remove, the per-message count decrements; there is no XP refund.
 
 ### Message deletes
 
@@ -70,15 +70,15 @@ This module has no user-facing permission gates — it reacts to gateway events.
 | Slash command not found (e.g. command tree updated) | "That command is out of date on this server. Please try again in a moment." |
 | Slash command raised an unhandled error | "Command failed. Please try again." |
 
-All other gateway-listener failures are silent to users by design — backfill skips a channel the bot can ' t read, invite detection degrades to "no inviter", level-up posts that get rejected by Discord log without re-raising, and so on. The only owner-visible failure is a DM warning when welcome / leave / greeter posts can ' t be sent due to missing channel permissions.
+All other gateway-listener failures are silent to users by design — backfill skips a channel the bot can't read, invite detection degrades to "no inviter", level-up posts that get rejected by Discord log without re-raising, and so on. The only owner-visible failure is a DM warning when welcome / leave / greeter posts can't be sent due to missing channel permissions.
 
 ## Non-goals
 
-- **No deletion of archive rows.** Discord deletes don ' t propagate to the local archive. Mod review and historical sentiment depend on this.
-- **No edit tracking.** Edits are not listened to; the archive row reflects original content only.
+- **No deletion of archive rows.** Discord deletes don't propagate to the local archive. Mod review and historical sentiment depend on this.
+- **No edit tracking in this module.** The events router doesn't listen to edits; the archive row reflects original content only. (The games external-tracking cog registers its own `on_message_edit` listener — that's outside this module.)
 - **No DM archival.** Any DM-context event short-circuits.
 - **No re-pull of already-archived messages on backfill.** The backfill resumes from the newest already-archived message per channel.
-- **No per-guild listener toggle.** Every listener fires for every guild; per-guild behaviour is selected by the consumer service.
+- **No per-guild listener toggle.** Every listener fires for every guild; per-guild behavior is selected by the consumer service.
 
 ## Configuration
 

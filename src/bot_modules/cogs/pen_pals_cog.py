@@ -2,33 +2,35 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import random
 import time
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.ai_client import generate_text
+from bot_modules.games.utils.question_source import get_ai_config, _pick_least_recently_served
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.pen_pals")
 
-_SESSION_SECS = 72 * 3600       # 72-hour session
+_SESSION_SECS = 24 * 3600       # 24-hour session
 _Q_INTERVAL = 24 * 3600         # auto-question every 24 h
 _WARN_SECS = 3600                # post 1-h warning when this much time remains
 _Q_SUPPRESS_SECS = 2 * 3600     # skip auto-question if fewer than 2 h remain
 _MAX_SWAPS = 3
 _TICK_SECS = 300                 # background loop tick every 5 min
 _RECENT_LIMIT = 10               # past pairings to check for repeats
+_MATCH_COOLDOWN_SECS = 30 * 86400  # only re-match a member once they've had no pen pal for a month
 _GAME_TYPE = "pen_pals"
 
 
@@ -50,18 +52,37 @@ def _set_config(
     opt_in_role_id: int,
     question_category: str,
     log_channel_id: int,
-    auto_round_dow: int,
-    auto_round_hour: int,
     panel_channel_id: int,
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET enabled=?, category_id=?, opt_in_role_id=?, question_category=?,
-               log_channel_id=?, auto_round_dow=?, auto_round_hour=?, panel_channel_id=?
+               log_channel_id=?, panel_channel_id=?
            WHERE guild_id=?""",
         (int(enabled), category_id, opt_in_role_id, question_category,
-         log_channel_id, auto_round_dow, auto_round_hour, panel_channel_id, guild_id),
+         log_channel_id, panel_channel_id, guild_id),
+    )
+
+
+def _set_timers(
+    conn,
+    guild_id: int,
+    *,
+    session_seconds: int,
+    match_cooldown_seconds: int,
+    max_question_swaps: int,
+    warn_seconds: int,
+    question_suppress_seconds: int,
+) -> None:
+    conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
+    conn.execute(
+        """UPDATE pen_pals_config
+           SET session_seconds=?, match_cooldown_seconds=?, max_question_swaps=?,
+               warn_seconds=?, question_suppress_seconds=?
+           WHERE guild_id=?""",
+        (session_seconds, match_cooldown_seconds, max_question_swaps,
+         warn_seconds, question_suppress_seconds, guild_id),
     )
 
 
@@ -79,10 +100,10 @@ def _in_pool(conn, guild_id: int, user_id: int) -> bool:
     ).fetchone() is not None
 
 
-def _add_to_pool(conn, guild_id: int, user_id: int) -> None:
+def _add_to_pool(conn, guild_id: int, user_id: int, joined_at: float | None = None) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO pen_pals_pool (guild_id, user_id, joined_at) VALUES (?, ?, ?)",
-        (guild_id, user_id, time.time()),
+        (guild_id, user_id, joined_at if joined_at is not None else time.time()),
     )
 
 
@@ -95,9 +116,99 @@ def _remove_from_pool(conn, guild_id: int, user_id: int) -> None:
 
 def _get_pool(conn, guild_id: int) -> list:
     return conn.execute(
-        "SELECT user_id FROM pen_pals_pool WHERE guild_id = ? ORDER BY joined_at ASC",
+        "SELECT user_id, joined_at FROM pen_pals_pool WHERE guild_id = ? ORDER BY joined_at ASC",
         (guild_id,),
     ).fetchall()
+
+
+# ── Block list / separations ──────────────────────────────────────────────────
+#
+# One table, two sources (see migration 096). Members manage their own
+# directional blocks via /penpals block; admins manage symmetric separations on
+# the dashboard. Matching treats every row as symmetric — a pairing is excluded
+# when any row connects the two members in either direction.
+
+
+def _is_blocked_pair(conn, guild_id: int, a: int, b: int) -> bool:
+    """True if these two must never be matched (either side, either source)."""
+    return conn.execute(
+        """
+        SELECT 1 FROM pen_pals_blocks
+        WHERE guild_id = ?
+          AND ((user_id = ? AND blocked_user_id = ?)
+            OR (user_id = ? AND blocked_user_id = ?))
+        LIMIT 1
+        """,
+        (guild_id, a, b, b, a),
+    ).fetchone() is not None
+
+
+def _add_block(conn, guild_id: int, user_id: int, blocked_user_id: int) -> None:
+    """Add a member's self-service block (blocker → blockee), idempotent."""
+    conn.execute(
+        """INSERT OR IGNORE INTO pen_pals_blocks
+               (guild_id, user_id, blocked_user_id, source, created_at)
+           VALUES (?, ?, ?, 'member', ?)""",
+        (guild_id, user_id, blocked_user_id, time.time()),
+    )
+
+
+def _remove_block(conn, guild_id: int, user_id: int, blocked_user_id: int) -> None:
+    """Remove one of a member's own blocks (leaves admin separations alone)."""
+    conn.execute(
+        """DELETE FROM pen_pals_blocks
+           WHERE guild_id = ? AND user_id = ? AND blocked_user_id = ? AND source = 'member'""",
+        (guild_id, user_id, blocked_user_id),
+    )
+
+
+def _get_member_blocks(conn, guild_id: int, user_id: int) -> list[int]:
+    """The members this member has blocked, most recent first."""
+    rows = conn.execute(
+        """SELECT blocked_user_id FROM pen_pals_blocks
+           WHERE guild_id = ? AND user_id = ? AND source = 'member'
+           ORDER BY created_at DESC""",
+        (guild_id, user_id),
+    ).fetchall()
+    return [r["blocked_user_id"] for r in rows]
+
+
+def _get_admin_separations(conn, guild_id: int) -> list[tuple[int, int]]:
+    """All mod-enforced separations as (user_a, user_b) pairs (a < b)."""
+    rows = conn.execute(
+        """SELECT user_id, blocked_user_id FROM pen_pals_blocks
+           WHERE guild_id = ? AND source = 'admin'
+           ORDER BY created_at DESC""",
+        (guild_id,),
+    ).fetchall()
+    return [(r["user_id"], r["blocked_user_id"]) for r in rows]
+
+
+def _set_admin_separations(conn, guild_id: int, pairs: list[tuple[int, int]]) -> None:
+    """Replace the guild's admin separations with *pairs* (member blocks untouched).
+
+    Pairs are normalized to (min, max) so each separated couple is one row
+    regardless of the order they were entered; self-pairs are dropped.
+    """
+    conn.execute(
+        "DELETE FROM pen_pals_blocks WHERE guild_id = ? AND source = 'admin'",
+        (guild_id,),
+    )
+    now = time.time()
+    seen: set[tuple[int, int]] = set()
+    for a, b in pairs:
+        if a == b:
+            continue
+        lo, hi = (a, b) if a < b else (b, a)
+        if (lo, hi) in seen:
+            continue
+        seen.add((lo, hi))
+        conn.execute(
+            """INSERT INTO pen_pals_blocks
+                   (guild_id, user_id, blocked_user_id, source, created_at)
+               VALUES (?, ?, ?, 'admin', ?)""",
+            (guild_id, lo, hi, now),
+        )
 
 
 def _get_active_session(conn, guild_id: int, user_id: int):
@@ -126,8 +237,9 @@ def _get_all_active_sessions(conn) -> list:
 def _create_session(
     conn, session_id: str, guild_id: int, channel_id: int,
     user1_id: int, user2_id: int, now: float,
+    *, session_seconds: int = _SESSION_SECS,
 ) -> None:
-    expiry = now + _SESSION_SECS
+    expiry = now + session_seconds
     conn.execute(
         """
         INSERT INTO pen_pals_sessions
@@ -210,16 +322,114 @@ def _recent_partners(conn, guild_id: int, user_id: int) -> set[int]:
     return {r[0] for r in rows}
 
 
-def _draw_from_bank(conn, category: str, exclude: list[str]) -> str | None:
+def _last_matched_at(conn, guild_id: int, user_id: int) -> float | None:
+    """When *user_id* was last paired in this guild, or None if never.
+
+    Any session (active or closed) counts — the cooldown is about how long
+    since a member last *had* a pen pal, not whether that pairing is still open.
+    """
+    row = conn.execute(
+        """
+        SELECT MAX(started_at) FROM pen_pals_sessions
+        WHERE guild_id = ? AND (user1_id = ? OR user2_id = ?)
+        """,
+        (guild_id, user_id, user_id),
+    ).fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def _eligible_pool(conn, guild_id: int, now: float, cooldown_seconds: int) -> list[int]:
+    """Pool members who can be matched right now, oldest signup first.
+
+    Two rules, both hard: nobody already in an active session (one pen pal at a
+    time — a stale pool row must never hand someone a second channel), and
+    nobody inside the re-match cooldown. Ineligible members stay in the pool
+    untouched and become eligible on their own.
+    """
+    return [
+        r["user_id"]
+        for r in _get_pool(conn, guild_id)
+        if not _get_active_session(conn, guild_id, r["user_id"])
+        and (
+            (last := _last_matched_at(conn, guild_id, r["user_id"])) is None
+            or now - last >= cooldown_seconds
+        )
+    ]
+
+
+def _pick_partner(candidates: list[int], recent: set[int]) -> int | None:
+    """Best partner from *candidates* (FIFO): first non-recent, else the oldest.
+
+    Avoiding a repeat is a preference, not a gate — when the only person
+    waiting is a past partner, pairing them beats leaving both alone.
+    """
+    if not candidates:
+        return None
+    return next((u for u in candidates if u not in recent), candidates[0])
+
+
+def _find_instant_match(conn, guild_id: int, user_id: int) -> int | None:
+    """Partner for *user_id* to be paired with on the spot, or None to wait."""
+    cfg = _get_config(conn, guild_id)
+    cooldown = cfg["match_cooldown_seconds"] if cfg else _MATCH_COOLDOWN_SECS
+    now = time.time()
+    if _get_active_session(conn, guild_id, user_id):
+        return None
+    if (last := _last_matched_at(conn, guild_id, user_id)) is not None and now - last < cooldown:
+        return None
+    candidates = [
+        u
+        for u in _eligible_pool(conn, guild_id, now, cooldown)
+        if u != user_id and not _is_blocked_pair(conn, guild_id, user_id, u)
+    ]
+    return _pick_partner(candidates, _recent_partners(conn, guild_id, user_id))
+
+
+def _cfg_allows_nsfw(cfg) -> bool:
+    """True when the guild's configured question pool includes NSFW prompts."""
+    return cfg is not None and (cfg["question_category"] or "sfw") == "all"
+
+
+def _parse_tags(tags_json) -> set[str]:
+    """Parse a bank row's JSON tags column into a set, tolerating bad data."""
+    try:
+        return set(json.loads(tags_json or "[]"))
+    except (json.JSONDecodeError, TypeError):
+        return set()
+
+
+def _draw_from_bank(conn, allow_nsfw: bool, exclude: list[str]) -> str | None:
+    """Round-robin unshown bank question; rows tagged 'nsfw' need *allow_nsfw*.
+
+    Prefers the least-recently-served matching row (see
+    ``question_source._pick_least_recently_served``) and marks it served, so
+    the small pen_pals pool doesn't repeat a question across separate
+    sessions until every row has been served once.
+    """
     rows = conn.execute(
-        "SELECT question_text FROM games_question_bank WHERE game_type = ? AND category = ?",
-        (_GAME_TYPE, category),
+        "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
+        (_GAME_TYPE,),
     ).fetchall()
-    candidates = [r[0] for r in rows if r[0] not in exclude]
-    return random.choice(candidates) if candidates else None
+    seen = set(exclude)
+    candidates = [
+        (r["question_id"], r["question_text"], r["last_served_at"])
+        for r in rows
+        if r["question_text"] not in seen
+        and (allow_nsfw or "nsfw" not in _parse_tags(r["tags"]))
+    ]
+    picked = _pick_least_recently_served(candidates)
+    if picked is None:
+        return None
+    qid, text = picked
+    conn.execute(
+        "UPDATE games_question_bank SET last_served_at = CURRENT_TIMESTAMP WHERE question_id = ?",
+        (qid,),
+    )
+    return text
 
 
-def _update_last_auto_round(conn, guild_id: int) -> None:
+def _update_last_sweep(conn, guild_id: int) -> None:
+    """Stamp when the pool was last drained (column kept from the old auto-round)."""
     conn.execute(
         "UPDATE pen_pals_config SET last_auto_round_at = ? WHERE guild_id = ?",
         (time.time(), guild_id),
@@ -229,28 +439,31 @@ def _update_last_auto_round(conn, guild_id: int) -> None:
 # ── Question draw ─────────────────────────────────────────────────────────────
 
 
-async def _draw_question(db_path: Path, session_id: str, category: str) -> str:
+_FALLBACK_QUESTION = "What's something about you that most people in this server don't know?"
+
+
+async def _draw_question(db_path: Path, session_id: str, allow_nsfw: bool) -> str:
     def _from_bank():
         with open_db(db_path) as conn:
             shown = _get_shown_questions(conn, session_id)
-            return _draw_from_bank(conn, category, shown)
+            return _draw_from_bank(conn, allow_nsfw, shown)
 
     question = await asyncio.to_thread(_from_bank)
     if question:
         return question
 
-    ai_text = await generate_text(
-        "You write one short, engaging conversation-starter question for two community "
-        "members getting to know each other. Return only the question, nothing else.",
-        "Write exactly one question under 150 characters.",
-        max_tokens=80,
-    )
-    if ai_text:
-        line = ai_text.strip().splitlines()[0].strip()
-        if line:
-            return line
+    # Bank exhausted (or empty): AI fallback via the shared per-game prompt
+    # config. Always SFW — NSFW prompts come only from the curated bank.
+    ai_cfg = get_ai_config(_GAME_TYPE, "sfw")
+    if ai_cfg:
+        system, user, max_tokens = ai_cfg
+        ai_text = await generate_text(system, user, max_tokens=max_tokens)
+        if ai_text:
+            line = ai_text.strip().splitlines()[0].strip()
+            if line:
+                return line
 
-    return "What's something about you that most people in this server don't know?"
+    return _FALLBACK_QUESTION
 
 
 # ── Channel helpers ───────────────────────────────────────────────────────────
@@ -269,6 +482,8 @@ async def _create_channel(
     category: discord.CategoryChannel,
     user1: discord.Member,
     user2: discord.Member,
+    *,
+    nsfw: bool = False,
 ) -> discord.TextChannel:
     overwrites: dict[discord.Role | discord.Member | discord.Object, discord.PermissionOverwrite] = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -283,10 +498,13 @@ async def _create_channel(
             manage_messages=True, manage_channels=True,
         ),
     }
+    # NSFW-flagged when the guild's question pool includes NSFW prompts, so the
+    # channel age-gate matches the content that can appear in it.
     return await guild.create_text_channel(
         _channel_name(user1.display_name, user2.display_name),
         category=category,
         overwrites=overwrites,
+        nsfw=nsfw,
         reason="Pen Pals session",
     )
 
@@ -297,8 +515,11 @@ async def _post_intro(
     user2: discord.Member,
     expiry_at: float,
     question: str,
+    color: "discord.Color | None" = None,
 ) -> None:
-    embed = discord.Embed(title="🖊️ Pen Pals", color=discord.Color.blurple())
+    if color is None:
+        color = discord.Color.blurple()
+    embed = discord.Embed(title="🖊️ Pen Pals", color=color)
     embed.add_field(
         name="Matched with",
         value=f"{user1.mention} × {user2.mention}",
@@ -345,40 +566,33 @@ async def _do_pair(
 
     def _load_cfg():
         with open_db(db_path) as conn:
-            return _get_config(conn, guild_id)
+            return _get_config(conn, guild_id), _is_blocked_pair(conn, guild_id, user1_id, user2_id)
 
-    cfg = await asyncio.to_thread(_load_cfg)
-    if cfg is None or not cfg["category_id"]:
+    cfg, blocked = await asyncio.to_thread(_load_cfg)
+    if cfg is None or not cfg["enabled"] or not cfg["category_id"]:
         return False
+    # Final safety net: no path — instant match, sweep, admin force-pair, or a
+    # race where a block landed mid-pairing — ever opens a channel for a pair
+    # that must stay apart.
+    if blocked:
+        log.info("pen_pals: refused blocked pairing %d ↔ %d in guild %d", user1_id, user2_id, guild_id)
+        return False
+    session_seconds = cfg["session_seconds"]
 
     category = guild.get_channel(cfg["category_id"])
     if not isinstance(category, discord.CategoryChannel):
         return False
 
-    q_category = cfg["question_category"] or "sfw"
+    allow_nsfw = _cfg_allows_nsfw(cfg)
     session_id = str(uuid.uuid4())
     now = time.time()
 
     # Draw question before the channel exists so we can post it immediately
-    def _first_q():
-        with open_db(db_path) as conn:
-            return _draw_from_bank(conn, q_category, [])
-
-    question = await asyncio.to_thread(_first_q)
-    if question is None:
-        ai_text = await generate_text(
-            "You write one short conversation-starter question for two community members "
-            "getting to know each other. Return only the question, nothing else.",
-            "Write exactly one question under 150 characters.",
-            max_tokens=80,
-        )
-        question = (
-            (ai_text.strip().splitlines()[0].strip() if ai_text else None)
-            or "What's something about you that most people in this server don't know?"
-        )
+    # (the session has no shown-question history yet).
+    question = await _draw_question(db_path, session_id, allow_nsfw)
 
     try:
-        channel = await _create_channel(guild, category, user1, user2)
+        channel = await _create_channel(guild, category, user1, user2, nsfw=allow_nsfw)
     except discord.Forbidden:
         log.warning("pen_pals: missing permission to create channel in guild %d", guild_id)
         return False
@@ -386,18 +600,52 @@ async def _do_pair(
         log.error("pen_pals: channel creation failed in guild %d: %s", guild_id, exc)
         return False
 
-    def _save():
+    def _save() -> bool:
         with open_db(db_path) as conn:
-            _create_session(conn, session_id, guild_id, channel.id, user1_id, user2_id, now)
+            # Guard against a concurrent pairing that won the race while the
+            # channel was being created: never give a user two sessions.
+            if (
+                _get_active_session(conn, guild_id, user1_id)
+                or _get_active_session(conn, guild_id, user2_id)
+            ):
+                return False
+            _create_session(
+                conn, session_id, guild_id, channel.id, user1_id, user2_id, now,
+                session_seconds=session_seconds,
+            )
             _record_question(conn, session_id, question)
             _remove_from_pool(conn, guild_id, user1_id)
             _remove_from_pool(conn, guild_id, user2_id)
+            # Pen-pal quest trigger for both matched members, keyed to the
+            # session so one pairing pays each side once.
+            from bot_modules.services.economy_quests_service import fire_trigger_inline
 
-    await asyncio.to_thread(_save)
+            for m in (user1, user2):
+                fire_trigger_inline(
+                    conn,
+                    guild_id,
+                    "pen_pal",
+                    m.id,
+                    occurrence=session_id,
+                    booster=m.premium_since is not None,
+                )
+            return True
 
-    expiry_at = now + _SESSION_SECS
+    if not await asyncio.to_thread(_save):
+        log.warning(
+            "pen_pals: aborted duplicate pairing %d ↔ %d in guild %d",
+            user1_id, user2_id, guild_id,
+        )
+        try:
+            await channel.delete(reason="Pen Pals: duplicate pairing aborted")
+        except discord.HTTPException:
+            pass
+        return False
+
+    expiry_at = now + session_seconds
+    accent = await resolve_accent_color(db_path, guild)
     try:
-        await _post_intro(channel, user1, user2, expiry_at, question)
+        await _post_intro(channel, user1, user2, expiry_at, question, color=accent)
     except discord.HTTPException as exc:
         log.error("pen_pals: failed to post intro in channel %d: %s", channel.id, exc)
 
@@ -417,32 +665,51 @@ async def _do_pair(
 
 
 async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[int, int]:
-    """Drain the pool for a guild. Returns (pairs_made, left_over)."""
-    def _load_and_stamp():
-        with open_db(db_path) as conn:
-            pool = [r["user_id"] for r in _get_pool(conn, guild_id)]
-            _update_last_auto_round(conn, guild_id)
-            return pool
+    """Drain the pool for a guild. Returns (pairs_made, still_waiting).
 
-    user_ids = await asyncio.to_thread(_load_and_stamp)
-    remaining = list(user_ids)
+    Pairing normally happens the moment someone joins (see ``_handle_join``);
+    this is the sweeper for whoever is left over — the odd one out, members who
+    were on cooldown when they joined, and anyone a failed pairing put back.
+    Ineligible members are left untouched in the pool. ``still_waiting`` is the
+    pool size once the round settles, so it counts cooled-down members, the odd
+    one out, and any failed pairs alike.
+    """
+    def _load_eligible_and_stamp():
+        with open_db(db_path) as conn:
+            cfg = _get_config(conn, guild_id)
+            match_cooldown_seconds = cfg["match_cooldown_seconds"] if cfg else _MATCH_COOLDOWN_SECS
+            eligible = _eligible_pool(conn, guild_id, time.time(), match_cooldown_seconds)
+            _update_last_sweep(conn, guild_id)
+            return eligible
+
+    remaining = await asyncio.to_thread(_load_eligible_and_stamp)
     pairs_made = 0
 
     while len(remaining) >= 2:
         u1 = remaining.pop(0)
 
-        def _recent(uid: int = u1):
+        def _recent_and_allowed(uid: int = u1, pool: list[int] = remaining):
             with open_db(db_path) as conn:
-                return _recent_partners(conn, guild_id, uid)
+                recent = _recent_partners(conn, guild_id, uid)
+                allowed = [u for u in pool if not _is_blocked_pair(conn, guild_id, uid, u)]
+                return recent, allowed
 
-        recent = await asyncio.to_thread(_recent)
-        partner = next((u for u in remaining if u not in recent), remaining[0])
+        recent, allowed = await asyncio.to_thread(_recent_and_allowed)
+        partner = _pick_partner(allowed, recent)
+        if partner is None:
+            # u1 has blocked (or been blocked by) everyone still waiting — leave
+            # them pooled for a future round rather than forcing a bad pairing.
+            continue
         remaining.remove(partner)
 
         if await _do_pair(bot, db_path, guild_id, u1, partner):
             pairs_made += 1
 
-    return pairs_made, len(remaining)
+    def _pool_count():
+        with open_db(db_path) as conn:
+            return len(_get_pool(conn, guild_id))
+
+    return pairs_made, await asyncio.to_thread(_pool_count)
 
 
 # ── Background loop ───────────────────────────────────────────────────────────
@@ -468,7 +735,7 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                 for gid in guild_ids
             }
             auto_cfgs = conn.execute(
-                "SELECT * FROM pen_pals_config WHERE enabled = 1 AND auto_round_dow >= 0"
+                "SELECT * FROM pen_pals_config WHERE enabled = 1"
             ).fetchall()
             return sessions, configs, list(auto_cfgs)
 
@@ -484,6 +751,9 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
         warned = row["close_warning_sent"]
         user1_id = row["user1_id"]
         user2_id = row["user2_id"]
+        cfg = configs.get(guild_id)
+        warn_seconds = cfg["warn_seconds"] if cfg else _WARN_SECS
+        q_suppress_seconds = cfg["question_suppress_seconds"] if cfg else _Q_SUPPRESS_SECS
 
         raw = bot.get_channel(channel_id)
         if raw is None:
@@ -513,10 +783,20 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _close_session(conn, sid, "expired")
             await asyncio.to_thread(_close_exp)
             log.info("pen_pals: session %s expired", session_id)
+
+            # Quest hook: running the full 24h is "seeing it through" — both
+            # members fire; early-ended sessions never reach this path.
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            for uid in (user1_id, user2_id):
+                await fire_member_trigger(
+                    cast("Bot", bot), guild_id, uid, "pen_pal_complete",
+                    occurrence=str(session_id),
+                )
             continue
 
         # 1-hour close warning
-        if not warned and (expiry_at - now) <= _WARN_SECS:
+        if not warned and (expiry_at - now) <= warn_seconds:
             try:
                 await channel.send("⏰ This pen pal channel closes in 1 hour.")
             except discord.HTTPException:
@@ -526,11 +806,9 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _set_close_warning_sent(conn, sid)
             await asyncio.to_thread(_mark_warned)
 
-        # Auto question (skip if < 2 h remain)
-        if next_q_at <= now and (expiry_at - now) >= _Q_SUPPRESS_SECS:
-            cfg = configs.get(guild_id)
-            q_cat = (cfg["question_category"] if cfg else None) or "sfw"
-            question = await _draw_question(db_path, session_id, q_cat)
+        # Auto question (skip if too little session time remains)
+        if next_q_at <= now and (expiry_at - now) >= q_suppress_seconds:
+            question = await _draw_question(db_path, session_id, _cfg_allows_nsfw(cfg))
             try:
                 await channel.send(
                     f"<@{user1_id}> <@{user2_id}>\n"
@@ -545,35 +823,45 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _advance_next_question(conn, sid, nq + _Q_INTERVAL)
             await asyncio.to_thread(_save_q)
 
-    # Auto-round
-    now_utc = datetime.now(timezone.utc)
-    current_dow = now_utc.weekday()
-    current_hour = now_utc.hour
+    # Pool sweep. Joining pairs on the spot, so a backlog only forms when
+    # someone was ineligible at join time (on cooldown, mid-session) and became
+    # eligible later. Sweeping every tick means those pairs go out within
+    # minutes of becoming possible instead of waiting for a scheduled round.
     for cfg in auto_cfgs:
-        if cfg["auto_round_dow"] != current_dow or cfg["auto_round_hour"] != current_hour:
+        guild_id = cfg["guild_id"]
+
+        def _pending(gid: int = guild_id, c=cfg) -> int:
+            with open_db(db_path) as conn:
+                cooldown = c["match_cooldown_seconds"]
+                return len(_eligible_pool(conn, gid, time.time(), cooldown))
+
+        if await asyncio.to_thread(_pending) < 2:
             continue
-        if now - (cfg["last_auto_round_at"] or 0) < 3600:
-            continue
-        pairs, left = await _do_round(bot, db_path, cfg["guild_id"])
-        log.info("pen_pals: auto-round guild %d — %d pairs, %d left over", cfg["guild_id"], pairs, left)
+        pairs, left = await _do_round(bot, db_path, guild_id)
+        log.info("pen_pals: swept guild %d — %d pairs, %d left over", guild_id, pairs, left)
 
 
 # ── Signup panel ──────────────────────────────────────────────────────────────
 
 
-def _build_panel_embed(pool_size: int) -> discord.Embed:
+def _build_panel_embed(
+    pool_size: int, color: "discord.Color | None" = None
+) -> discord.Embed:
+    if color is None:
+        color = discord.Color.from_str("#5865F2")
     embed = discord.Embed(
         title="🖊️ Pen Pals",
         description=(
-            "Get matched 1-on-1 with another server member for 72 hours.\n"
-            "A private channel opens for just the two of you, "
-            "with a conversation starter already waiting."
+            "Get matched 1-on-1 with another server member for 24 hours.\n"
+            "If someone's already waiting you're matched on the spot — "
+            "a private channel opens for just the two of you, "
+            "with a conversation starter already in it."
         ),
-        color=discord.Color.from_str("#5865F2"),
+        color=color,
     )
     label = f"{pool_size} member{'s' if pool_size != 1 else ''} waiting" if pool_size else "No one waiting yet"
     embed.add_field(name="Pool", value=label, inline=True)
-    embed.set_footer(text="Responses are private — only you can see them.")
+    embed.set_footer(text="Matches open a private channel visible to just the two of you (and admins).")
     return embed
 
 
@@ -584,6 +872,11 @@ def _build_panel_view() -> discord.ui.View:
     return view
 
 
+# One refresh at a time per guild: concurrent delete+repost calls would each
+# post a panel and orphan all but the last-saved message.
+_panel_refresh_locks: dict[int, asyncio.Lock] = {}
+
+
 async def _refresh_panel(
     bot: discord.Client,
     db_path: Path,
@@ -592,6 +885,18 @@ async def _refresh_panel(
     repost: bool = False,
 ) -> None:
     """Edit the panel embed in place (or delete+repost when repost=True)."""
+    lock = _panel_refresh_locks.setdefault(guild_id, asyncio.Lock())
+    async with lock:
+        await _refresh_panel_locked(bot, db_path, guild_id, repost=repost)
+
+
+async def _refresh_panel_locked(
+    bot: discord.Client,
+    db_path: Path,
+    guild_id: int,
+    *,
+    repost: bool = False,
+) -> None:
     def _load():
         with open_db(db_path) as conn:
             cfg = _get_config(conn, guild_id)
@@ -609,7 +914,9 @@ async def _refresh_panel(
     if not isinstance(channel, discord.TextChannel):
         return
 
-    embed = _build_panel_embed(pool_size)
+    guild = bot.get_guild(guild_id)
+    accent = await resolve_accent_color(db_path, guild) if guild else None
+    embed = _build_panel_embed(pool_size, color=accent)
     view = _build_panel_view()
 
     if not repost and panel_message_id:
@@ -636,6 +943,121 @@ async def _refresh_panel(
     await asyncio.to_thread(_save)
 
 
+# ── Join / leave flows (shared by the panel buttons and slash commands) ──────
+
+
+async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
+    if not interaction.guild:
+        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    guild_id = guild.id
+    user_id = interaction.user.id
+
+    def _load_cfg():
+        with open_db(db_path) as conn:
+            return _get_config(conn, guild_id)
+
+    cfg = await asyncio.to_thread(_load_cfg)
+    if cfg is None or not cfg["enabled"]:
+        await interaction.response.send_message(
+            "Pen Pals isn't set up yet — ask an admin.", ephemeral=True
+        )
+        return
+
+    if cfg["opt_in_role_id"]:
+        role = guild.get_role(int(cfg["opt_in_role_id"]))
+        member = guild.get_member(user_id)
+        if role is not None and (member is None or role not in member.roles):
+            await interaction.response.send_message(
+                f"You need the **{role.name}** role to join Pen Pals.", ephemeral=True
+            )
+            return
+
+    def _check() -> tuple[str, int | None]:
+        with open_db(db_path) as conn:
+            if _get_active_session(conn, guild_id, user_id):
+                return "active", None
+            if _in_pool(conn, guild_id, user_id):
+                return "in_pool", None
+            _add_to_pool(conn, guild_id, user_id)
+            # Joining pairs immediately when someone eligible is already
+            # waiting; the pool is only for when nobody is.
+            return "queued", _find_instant_match(conn, guild_id, user_id)
+
+    status, partner_id = await asyncio.to_thread(_check)
+
+    if status == "active":
+        await interaction.response.send_message(
+            "You already have an active pen pal. Use `/penpals status` to see it.", ephemeral=True
+        )
+        return
+    if status == "in_pool":
+        await interaction.response.send_message(
+            "You're already in the pool. Use `/penpals status` to check your position.", ephemeral=True
+        )
+        return
+
+    if partner_id is None:
+        await interaction.response.send_message(
+            "✅ You're in the pool! The moment someone else joins, "
+            "your private channel opens automatically.",
+            ephemeral=True,
+        )
+        await _refresh_panel(interaction.client, db_path, guild_id)
+        return
+
+    # Channel creation is several round-trips — defer so the token survives.
+    await interaction.response.defer(ephemeral=True)
+    paired = await _do_pair(interaction.client, db_path, guild_id, user_id, partner_id)
+    if paired:
+        def _channel_of():
+            with open_db(db_path) as conn:
+                row = _get_active_session(conn, guild_id, user_id)
+                return row["channel_id"] if row else None
+
+        channel_id = await asyncio.to_thread(_channel_of)
+        where = f"<#{channel_id}>" if channel_id else "your new pen pal channel"
+        await interaction.followup.send(
+            f"🖊️ Matched! Say hi to <@{partner_id}> in {where}.", ephemeral=True
+        )
+    else:
+        # Pairing fell through (permissions, a lost race, member left) — the
+        # joiner stays pooled for the sweeper rather than losing their spot.
+        await interaction.followup.send(
+            "✅ You're in the pool! The moment someone else joins, "
+            "your private channel opens automatically.",
+            ephemeral=True,
+        )
+    await _refresh_panel(interaction.client, db_path, guild_id)
+
+
+async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None:
+    if not interaction.guild:
+        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        return
+
+    guild_id = interaction.guild.id
+    user_id = interaction.user.id
+
+    def _remove():
+        with open_db(db_path) as conn:
+            if not _in_pool(conn, guild_id, user_id):
+                return False
+            _remove_from_pool(conn, guild_id, user_id)
+            return True
+
+    removed = await asyncio.to_thread(_remove)
+    if removed:
+        await interaction.response.send_message("You've left the Pen Pals pool.", ephemeral=True)
+        await _refresh_panel(interaction.client, db_path, guild_id)
+    else:
+        await interaction.response.send_message(
+            "You're not in the pool. Use `/penpals status` to check your status.", ephemeral=True
+        )
+
+
 class _PenPalsPanelJoinButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"pen_pals:join",
@@ -655,83 +1077,8 @@ class _PenPalsPanelJoinButton(
         return cls()
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message("This only works in a server.", ephemeral=True)
-            return
-
-        ctx = interaction.client._pen_pals_ctx  # type: ignore[attr-defined]
-        db_path = ctx.db_path
-        guild = interaction.guild
-        guild_id = guild.id
-        user_id = interaction.user.id
-
-        def _load_cfg():
-            with open_db(db_path) as conn:
-                return _get_config(conn, guild_id)
-
-        cfg = await asyncio.to_thread(_load_cfg)
-        if cfg is None or not cfg["enabled"]:
-            await interaction.response.send_message(
-                "Pen Pals isn't set up yet — ask an admin.", ephemeral=True
-            )
-            return
-
-        if cfg["opt_in_role_id"]:
-            role = guild.get_role(int(cfg["opt_in_role_id"]))
-            member = guild.get_member(user_id)
-            if role is not None and (member is None or role not in member.roles):
-                await interaction.response.send_message(
-                    f"You need the **{role.name}** role to join Pen Pals.", ephemeral=True
-                )
-                return
-
-        def _check():
-            with open_db(db_path) as conn:
-                if _get_active_session(conn, guild_id, user_id):
-                    return "active", 0
-                if _in_pool(conn, guild_id, user_id):
-                    return "in_pool", 0
-                pool = [r["user_id"] for r in _get_pool(conn, guild_id) if r["user_id"] != user_id]
-                recent = _recent_partners(conn, guild_id, user_id)
-                partner: int = next((u for u in pool if u not in recent), pool[0] if pool else 0)
-                if partner:
-                    _remove_from_pool(conn, guild_id, partner)
-                else:
-                    _add_to_pool(conn, guild_id, user_id)
-                return "ok", partner
-
-        _result: tuple[str, int] = await asyncio.to_thread(_check)
-        status, partner_id = _result
-
-        if status == "active":
-            await interaction.response.send_message(
-                "You already have an active pen pal. Use `/penpals status` to see it.", ephemeral=True
-            )
-        elif status == "in_pool":
-            await interaction.response.send_message("You're already in the pool.", ephemeral=True)
-        elif partner_id:
-            await interaction.response.defer(ephemeral=True)
-            success = await _do_pair(interaction.client, db_path, guild_id, int(partner_id), user_id)
-            if success:
-                await interaction.followup.send(
-                    "✅ You've been matched! Check your new pen pal channel.", ephemeral=True
-                )
-            else:
-                def _requeue(pid: int = int(partner_id)):
-                    with open_db(db_path) as conn:
-                        _add_to_pool(conn, guild_id, pid)
-                        _add_to_pool(conn, guild_id, user_id)
-                await asyncio.to_thread(_requeue)
-                await interaction.followup.send(
-                    "Something went wrong creating the channel — you've been added to the pool instead.",
-                    ephemeral=True,
-                )
-            await _refresh_panel(interaction.client, db_path, guild_id)
-        else:
-            await interaction.response.send_message(
-                "✅ You're in the pool! You'll get a private channel when someone joins.", ephemeral=True
-            )
-            await _refresh_panel(interaction.client, db_path, guild_id)
+        ctx = cast("Bot", interaction.client).ctx
+        await _handle_join(interaction, ctx.db_path)
 
 
 class _PenPalsPanelLeaveButton(
@@ -753,28 +1100,136 @@ class _PenPalsPanelLeaveButton(
         return cls()
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message("This only works in a server.", ephemeral=True)
-            return
+        ctx = cast("Bot", interaction.client).ctx
+        await _handle_leave(interaction, ctx.db_path)
 
-        ctx = interaction.client._pen_pals_ctx  # type: ignore[attr-defined]
-        db_path = ctx.db_path
-        guild_id = interaction.guild.id
-        user_id = interaction.user.id
 
-        def _remove():
-            with open_db(db_path) as conn:
-                if not _in_pool(conn, guild_id, user_id):
-                    return False
-                _remove_from_pool(conn, guild_id, user_id)
-                return True
+# ── Self-service blocklist (/penpals block) ───────────────────────────────────
 
-        removed = await asyncio.to_thread(_remove)
-        if removed:
-            await interaction.response.send_message("You've left the Pen Pals pool.", ephemeral=True)
-            await _refresh_panel(interaction.client, db_path, guild_id)
-        else:
-            await interaction.response.send_message("You're not in the pool.", ephemeral=True)
+
+def _block_panel_content(guild: discord.Guild, blocked_ids: list[int]) -> str:
+    """Ephemeral message body listing a member's current Pen Pals blocks."""
+    if not blocked_ids:
+        return (
+            "🚫 **Pen Pals — your blocklist**\n"
+            "You have no blocks. Pick members below and Pen Pals will never "
+            "match you with them. They're never told they were blocked."
+        )
+
+    def _label(uid: int) -> str:
+        member = guild.get_member(uid)
+        return member.display_name if member else f"User {uid}"
+
+    lines = "\n".join(f"• {_label(u)}" for u in blocked_ids)
+    return (
+        "🚫 **Pen Pals — your blocklist**\n"
+        "You'll never be matched with:\n"
+        f"{lines}\n\n"
+        "Add more below, or pick someone to unblock. Blocking someone doesn't "
+        "end a chat you're already in — use `/penpals end` for that."
+    )
+
+
+class _PenPalsBlockView(discord.ui.View):
+    """Ephemeral, single-viewer manager for a member's own Pen Pals blocklist.
+
+    Only the invoker can see or use this (it rides on an ephemeral message), so
+    it needs no author check. A user-select adds blocks; a string-select of the
+    current blocks removes them. Both rebuild the view in place.
+    """
+
+    def __init__(
+        self,
+        db_path: Path,
+        guild: discord.Guild,
+        user_id: int,
+        blocked_ids: list[int],
+    ) -> None:
+        super().__init__(timeout=180)
+        self.db_path = db_path
+        self.guild = guild
+        self.user_id = user_id
+        self.blocked_ids = blocked_ids
+        self._build()
+
+    def _label(self, uid: int) -> str:
+        member = self.guild.get_member(uid)
+        return member.display_name if member else f"User {uid}"
+
+    def content(self) -> str:
+        return _block_panel_content(self.guild, self.blocked_ids)
+
+    def _build(self) -> None:
+        self.clear_items()
+
+        add = discord.ui.UserSelect(placeholder="Block someone…", min_values=1, max_values=25)
+        add.callback = self._on_add  # type: ignore[method-assign]
+        self.add_item(add)
+
+        if self.blocked_ids:
+            options = [
+                discord.SelectOption(label=self._label(u)[:100], value=str(u))
+                for u in self.blocked_ids[:25]
+            ]
+            remove = discord.ui.Select(
+                placeholder="Unblock someone…",
+                min_values=1,
+                max_values=len(options),
+                options=options,
+            )
+            remove.callback = self._on_remove  # type: ignore[method-assign]
+            self.add_item(remove)
+
+    async def _reload_and_edit(self, interaction: discord.Interaction) -> None:
+        def _load() -> list[int]:
+            with open_db(self.db_path) as conn:
+                return _get_member_blocks(conn, self.guild.id, self.user_id)
+
+        self.blocked_ids = await asyncio.to_thread(_load)
+        self._build()
+        await interaction.response.edit_message(content=self.content(), view=self)
+
+    async def _on_add(self, interaction: discord.Interaction) -> None:
+        select = cast(discord.ui.UserSelect, self.children[0])
+        # Never block yourself (you can't be matched with yourself) or bots.
+        ids = [u.id for u in select.values if u.id != self.user_id and not getattr(u, "bot", False)]
+
+        def _save() -> None:
+            with open_db(self.db_path) as conn:
+                for uid in ids:
+                    _add_block(conn, self.guild.id, self.user_id, uid)
+
+        await asyncio.to_thread(_save)
+        await self._reload_and_edit(interaction)
+
+    async def _on_remove(self, interaction: discord.Interaction) -> None:
+        select = cast(discord.ui.Select, self.children[1])
+        ids = [int(v) for v in select.values]
+
+        def _save() -> None:
+            with open_db(self.db_path) as conn:
+                for uid in ids:
+                    _remove_block(conn, self.guild.id, self.user_id, uid)
+
+        await asyncio.to_thread(_save)
+        await self._reload_and_edit(interaction)
+
+
+async def _handle_block(interaction: discord.Interaction, db_path: Path) -> None:
+    if not interaction.guild:
+        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    user_id = interaction.user.id
+
+    def _load() -> list[int]:
+        with open_db(db_path) as conn:
+            return _get_member_blocks(conn, guild.id, user_id)
+
+    blocked = await asyncio.to_thread(_load)
+    view = _PenPalsBlockView(db_path, guild, user_id, blocked)
+    await interaction.response.send_message(view.content(), view=view, ephemeral=True)
 
 
 # ── Confirm view for /penpals end ─────────────────────────────────────────────
@@ -807,12 +1262,7 @@ class _EndConfirmView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content="Closing pen pal session…", view=None)
 
-        def _close(sid: str = self.session_id):
-            with open_db(self.db_path) as conn:
-                _close_session(conn, sid, "early")
-        await asyncio.to_thread(_close)
-
-        # DM the other member
+        # DM the other member before the channel (and this interaction) go away
         guild = self.channel.guild
         other = guild.get_member(self.other_user_id) if guild else None
         if other:
@@ -823,10 +1273,19 @@ class _EndConfirmView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
+        # Delete the channel first, then close the session row. If the close
+        # doesn't happen (crash), the loop finds the channel missing and marks
+        # the session closed itself — the reverse order could orphan a live
+        # channel behind an already-closed session.
         try:
             await self.channel.delete(reason="Pen Pals ended early")
-        except discord.HTTPException:
-            pass
+        except discord.HTTPException as exc:
+            log.warning("pen_pals: failed to delete channel %d on early end: %s", self.channel.id, exc)
+
+        def _close(sid: str = self.session_id):
+            with open_db(self.db_path) as conn:
+                _close_session(conn, sid, "early")
+        await asyncio.to_thread(_close)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -850,13 +1309,14 @@ class _EndConfirmView(discord.ui.View):
 class PenPalsCog(commands.Cog):
     penpals = app_commands.Group(
         name="penpals",
-        description="Pen Pals — get matched with someone for a 72-hour private chat.",
+        description="Pen Pals — get matched with someone for a private chat.",
     )
 
     def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
         self.bot = bot
         self.ctx = ctx
         self._panel_channels: dict[int, int] = {}  # panel_channel_id → guild_id
+        self._panel_repost_pending: set[int] = set()  # guild_ids with a repost queued
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -865,7 +1325,6 @@ class PenPalsCog(commands.Cog):
 
         bot.add_dynamic_items(_PenPalsPanelJoinButton)
         bot.add_dynamic_items(_PenPalsPanelLeaveButton)
-        bot._pen_pals_ctx = self.ctx  # type: ignore[attr-defined]
 
         def _load_panels():
             with open_db(db_path) as conn:
@@ -884,7 +1343,19 @@ class PenPalsCog(commands.Cog):
         guild_id = self._panel_channels.get(message.channel.id)
         if guild_id is None:
             return
-        await _refresh_panel(self.bot, self.ctx.db_path, guild_id, repost=True)
+        # Debounce: a burst of messages triggers a single repost after a short
+        # settle window instead of one delete+send per message.
+        if guild_id in self._panel_repost_pending:
+            return
+        self._panel_repost_pending.add(guild_id)
+        try:
+            await asyncio.sleep(2)
+        finally:
+            self._panel_repost_pending.discard(guild_id)
+        try:
+            await _refresh_panel(self.bot, self.ctx.db_path, guild_id, repost=True)
+        except discord.HTTPException as exc:
+            log.warning("pen_pals: panel repost failed in guild %d: %s", guild_id, exc)
 
     @commands.Cog.listener("on_pen_pals_panel_refresh")
     async def _on_panel_refresh(
@@ -914,110 +1385,24 @@ class PenPalsCog(commands.Cog):
 
     # ── /penpals join ─────────────────────────────────────────────────
 
-    @penpals.command(name="join", description="Join the Pen Pals pool and get matched with someone.")
+    @penpals.command(name="join", description="Get matched with a pen pal now, or wait for the next person to join.")
     async def penpals_join(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
-            return
-
-        guild = interaction.guild  # narrowed above
-        guild_id = guild.id
-        user_id = interaction.user.id
-        db_path = self.ctx.db_path
-
-        # Config + role check (needs DB but role lookup is guild-side)
-        def _load_cfg():
-            with open_db(db_path) as conn:
-                return _get_config(conn, guild_id)
-
-        cfg = await asyncio.to_thread(_load_cfg)
-        if cfg is None or not cfg["enabled"]:
-            await interaction.response.send_message("Pen Pals isn't set up yet — ask an admin.", ephemeral=True)
-            return
-
-        if cfg["opt_in_role_id"]:
-            role = guild.get_role(int(cfg["opt_in_role_id"]))
-            member = guild.get_member(user_id)
-            if role is not None and (member is None or role not in member.roles):
-                await interaction.response.send_message(
-                    f"You need the **{role.name}** role to join Pen Pals.", ephemeral=True
-                )
-                return
-
-        def _check():
-            with open_db(db_path) as conn:
-                if _get_active_session(conn, guild_id, user_id):
-                    return "active", 0
-                if _in_pool(conn, guild_id, user_id):
-                    return "in_pool", 0
-                pool = [r["user_id"] for r in _get_pool(conn, guild_id) if r["user_id"] != user_id]
-                recent = _recent_partners(conn, guild_id, user_id)
-                partner: int = next((u for u in pool if u not in recent), pool[0] if pool else 0)
-                if partner:
-                    _remove_from_pool(conn, guild_id, partner)
-                else:
-                    _add_to_pool(conn, guild_id, user_id)
-                return "ok", partner
-
-        _result: tuple[str, int] = await asyncio.to_thread(_check)
-        status, partner_id = _result
-
-        if status == "active":
-            await interaction.response.send_message(
-                "You already have an active pen pal. Use `/penpals status` to see it.", ephemeral=True
-            )
-            return
-        if status == "in_pool":
-            await interaction.response.send_message(
-                "You're already in the pool. Use `/penpals status` to check your position.", ephemeral=True
-            )
-            return
-
-        if partner_id:
-            await interaction.response.defer(ephemeral=True)
-            success = await _do_pair(self.bot, db_path, guild_id, int(partner_id), user_id)
-            if success:
-                await interaction.followup.send("✅ You've been matched! Check your new pen pal channel.", ephemeral=True)
-            else:
-                def _requeue(pid: int = int(partner_id)):
-                    with open_db(db_path) as conn:
-                        _add_to_pool(conn, guild_id, pid)
-                        _add_to_pool(conn, guild_id, user_id)
-                await asyncio.to_thread(_requeue)
-                await interaction.followup.send(
-                    "Something went wrong creating the channel — you've been added to the pool instead.", ephemeral=True
-                )
-        else:
-            await interaction.response.send_message(
-                "✅ You're in the pool! You'll get a private channel when someone joins.", ephemeral=True
-            )
+        await _handle_join(interaction, self.ctx.db_path)
 
     # ── /penpals leave ────────────────────────────────────────────────
 
     @penpals.command(name="leave", description="Leave the Pen Pals pool before being matched.")
     async def penpals_leave(self, interaction: discord.Interaction) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
-            return
+        await _handle_leave(interaction, self.ctx.db_path)
 
-        guild_id = interaction.guild.id
-        user_id = interaction.user.id
-        db_path = self.ctx.db_path
+    # ── /penpals block ────────────────────────────────────────────────
 
-        def _remove():
-            with open_db(db_path) as conn:
-                if not _in_pool(conn, guild_id, user_id):
-                    return False
-                _remove_from_pool(conn, guild_id, user_id)
-                return True
-
-        removed = await asyncio.to_thread(_remove)
-        if removed:
-            await interaction.response.send_message("You've left the Pen Pals pool.", ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                "You're not in the pool. Use `/penpals status` to check your status.", ephemeral=True
-            )
+    @penpals.command(
+        name="block",
+        description="Manage who Pen Pals should never match you with.",
+    )
+    async def penpals_block(self, interaction: discord.Interaction) -> None:
+        await _handle_block(interaction, self.ctx.db_path)
 
     # ── /penpals status ───────────────────────────────────────────────
 
@@ -1035,7 +1420,9 @@ class PenPalsCog(commands.Cog):
             with open_db(db_path) as conn:
                 session = _get_active_session(conn, guild_id, user_id)
                 if session:
-                    return "active", dict(session)
+                    cfg = _get_config(conn, guild_id)
+                    max_swaps = cfg["max_question_swaps"] if cfg else _MAX_SWAPS
+                    return "active", (dict(session), max_swaps)
                 pool = [r["user_id"] for r in _get_pool(conn, guild_id)]
                 if user_id in pool:
                     return "pool", pool.index(user_id) + 1
@@ -1044,12 +1431,13 @@ class PenPalsCog(commands.Cog):
         status, data = await asyncio.to_thread(_check)
 
         if status == "active":
-            assert isinstance(data, dict)
-            ch = interaction.guild.get_channel(data["channel_id"])
-            other_id = data["user2_id"] if data["user1_id"] == user_id else data["user1_id"]
+            assert isinstance(data, tuple)
+            session_data, max_swaps = data
+            ch = interaction.guild.get_channel(session_data["channel_id"])
+            other_id = session_data["user2_id"] if session_data["user1_id"] == user_id else session_data["user1_id"]
             other = interaction.guild.get_member(other_id)
-            expiry_at = int(data["expiry_at"])
-            swaps_left = _MAX_SWAPS - data["question_swaps_used"]
+            expiry_at = int(session_data["expiry_at"])
+            swaps_left = max_swaps - session_data["question_swaps_used"]
             lines = [
                 f"You have an active pen pal: {other.mention if other else f'<@{other_id}>'}",
                 f"Channel: {ch.mention if ch else '(channel missing)'}",
@@ -1060,7 +1448,9 @@ class PenPalsCog(commands.Cog):
         elif status == "pool":
             pos = data
             await interaction.response.send_message(
-                f"You're in the pool at position **#{pos}**. Hang tight!", ephemeral=True
+                f"You're in the pool at position **#{pos}** — you'll be matched "
+                "as soon as someone eligible joins.",
+                ephemeral=True,
             )
         else:
             await interaction.response.send_message(
@@ -1070,7 +1460,7 @@ class PenPalsCog(commands.Cog):
 
     # ── /penpals new-question ─────────────────────────────────────────
 
-    @penpals.command(name="new-question", description="Swap the current question for a fresh one (3 times max).")
+    @penpals.command(name="new-question", description="Swap the current question for a fresh one (limited swaps per session).")
     async def penpals_new_question(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
             await interaction.response.send_message("This command only works in a server.", ephemeral=True)
@@ -1084,30 +1474,33 @@ class PenPalsCog(commands.Cog):
 
         def _load():
             with open_db(db_path) as conn:
-                return _get_session_by_channel(conn, channel_id)
+                session = _get_session_by_channel(conn, channel_id)
+                cfg = _get_config(conn, session["guild_id"]) if session else None
+                return session, cfg
 
-        session = await asyncio.to_thread(_load)
+        session, cfg = await asyncio.to_thread(_load)
         if session is None:
             await interaction.response.send_message(
                 "This command only works in an active pen pal channel.", ephemeral=True
             )
             return
 
-        if session["question_swaps_used"] >= _MAX_SWAPS:
+        if interaction.user.id not in (session["user1_id"], session["user2_id"]):
             await interaction.response.send_message(
-                "You've used all 3 question swaps for this session.", ephemeral=True
+                "Only the two pen pals can swap the question.", ephemeral=True
+            )
+            return
+
+        max_swaps = cfg["max_question_swaps"] if cfg else _MAX_SWAPS
+        if session["question_swaps_used"] >= max_swaps:
+            await interaction.response.send_message(
+                f"You've used all {max_swaps} question swaps for this session.", ephemeral=True
             )
             return
 
         await interaction.response.defer(ephemeral=True)
 
-        def _load_cfg():
-            with open_db(db_path) as conn:
-                return _get_config(conn, session["guild_id"])
-
-        cfg = await asyncio.to_thread(_load_cfg)
-        q_cat = (cfg["question_category"] if cfg else None) or "sfw"
-        question = await _draw_question(db_path, session["session_id"], q_cat)
+        question = await _draw_question(db_path, session["session_id"], _cfg_allows_nsfw(cfg))
 
         def _save():
             with open_db(db_path) as conn:
@@ -1116,7 +1509,7 @@ class PenPalsCog(commands.Cog):
                 return swaps_used
 
         swaps_used = await asyncio.to_thread(_save)
-        swaps_left = _MAX_SWAPS - swaps_used
+        swaps_left = max_swaps - swaps_used
 
         user1_id = session["user1_id"]
         user2_id = session["user2_id"]
@@ -1204,6 +1597,8 @@ class PenPalsCog(commands.Cog):
                 cfg = _get_config(conn, guild_id)
                 if cfg is None or not cfg["enabled"]:
                     return "disabled", None
+                if _is_blocked_pair(conn, guild_id, user1.id, user2.id):
+                    return "blocked", None
                 s1 = _get_active_session(conn, guild_id, user1.id)
                 s2 = _get_active_session(conn, guild_id, user2.id)
                 return "ok", (s1, s2)
@@ -1211,6 +1606,13 @@ class PenPalsCog(commands.Cog):
         status, data = await asyncio.to_thread(_check)
         if status == "disabled":
             await interaction.response.send_message("Pen Pals isn't enabled on this server.", ephemeral=True)
+            return
+        if status == "blocked":
+            await interaction.response.send_message(
+                "These two can't be paired — one has blocked the other, or they're "
+                "on the Pen Pals separations list. Clear the block first if this is intended.",
+                ephemeral=True,
+            )
             return
 
         assert data is not None
@@ -1244,7 +1646,7 @@ class PenPalsCog(commands.Cog):
         pairs, left = await _do_round(self.bot, self.ctx.db_path, interaction.guild.id)
         msg = f"✅ Paired **{pairs}** {'pair' if pairs == 1 else 'pairs'}."
         if left:
-            msg += f" **{left}** member{'s' if left != 1 else ''} still waiting in the pool."
+            msg += f" **{left}** member{'s' if left != 1 else ''} still in the pool (waiting or on cooldown)."
         else:
             msg += " Pool is now empty."
         await interaction.followup.send(msg, ephemeral=True)

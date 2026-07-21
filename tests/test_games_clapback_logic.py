@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import random
 
+import discord
 import pytest
 
+from bot_modules.games.constants import GAME_ICONS
 from bot_modules.games_clapback.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -25,6 +27,7 @@ from bot_modules.games_clapback.embeds import (
     build_submit_embed,
     build_vote_embed,
 )
+from bot_modules.services.embeds import COLOR_GREEN
 from bot_modules.games_clapback.logic import (
     AI_SYSTEM_PROMPT,
     AI_USER_PROMPT,
@@ -558,6 +561,33 @@ def test_build_vote_embed_escapes_markdown_in_answers():
     assert "\\_italic\\_" in embed.description
 
 
+def test_build_vote_embed_shows_prompt_when_supplied():
+    embed = build_vote_embed(
+        answer_a="ans A",
+        answer_b="ans B",
+        round_num=1,
+        matchup_index=0,
+        total_matchups=1,
+        deadline_str="<t:1:R>",
+        prompt="A terrible name for a pet store",
+    )
+    assert embed.description is not None
+    assert "A terrible name for a pet store" in embed.description
+
+
+def test_build_vote_embed_omits_prompt_when_absent():
+    embed = build_vote_embed(
+        answer_a="ans A",
+        answer_b="ans B",
+        round_num=1,
+        matchup_index=0,
+        total_matchups=1,
+        deadline_str="<t:1:R>",
+    )
+    assert embed.description is not None
+    assert "💬" not in embed.description
+
+
 # ── build_reveal_embed: clapback branch ─────────────────────────────
 
 
@@ -681,6 +711,28 @@ def test_build_reveal_embed_regular_win_branch():
     assert embed.title is not None
     assert "MATCHUP RESULT" in embed.title
     # No "C L A P B A C K" prefix
+    assert "C L A P B A C K" not in embed.title
+
+
+def test_build_reveal_embed_shows_prompt_when_supplied():
+    result = {
+        "winner": 10,
+        "scores": {10: 67, 20: 33},
+        "clapback": False,
+        "vote_counts": {10: 2, 20: 1},
+    }
+    embed = build_reveal_embed(
+        result=result,
+        answers={"10": "winner answer", "20": "loser answer"},
+        player_a=10,
+        player_b=20,
+        anonymous=False,
+        name_resolver=_name_resolver,
+        prompt="The worst superpower to have on a first date",
+    )
+    assert embed.description is not None
+    assert "The worst superpower to have on a first date" in embed.description
+    assert embed.title is not None
     assert "C L A P B A C K" not in embed.title
     winner_field = next(f for f in embed.fields if f.name == "🏆 Winner")
     assert winner_field.value is not None
@@ -896,6 +948,105 @@ def test_build_recap_embed_omits_total_clapbacks_when_zero():
     assert "⚡ Total CLAPBACKS" not in field_names
 
 
+# ── accent-color threading (2026-07-21 ruling: games follow guild accent) ──
+
+_ACCENT = discord.Color(0x123456)
+_GREEN = discord.Color(COLOR_GREEN)
+
+
+def test_lobby_embed_honors_passed_accent():
+    embed = build_lobby_embed("Alice", {"rounds": 5}, [], _name_resolver, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_submit_embed_honors_passed_accent():
+    embed = build_submit_embed(
+        prompt="p", round_num=1, total_rounds=5, deadline_str="<t:1:R>",
+        answers_in=0, total_players=3, color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_vote_embed_honors_passed_accent():
+    embed = build_vote_embed(
+        answer_a="a", answer_b="b", round_num=1, matchup_index=0,
+        total_matchups=1, deadline_str="<t:1:R>", color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_scoreboard_embed_honors_passed_accent():
+    embed = build_scoreboard_embed(
+        {"scores": {"1": 10}}, 1, 5, bye_player=None, color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_recap_embed_honors_passed_accent():
+    payload = {"scores": {}, "clapbacks": {}, "round_history": [], "players": []}
+    embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_reveal_tie_branch_honors_passed_accent():
+    """A tie has no winner → neutral, so it follows the accent, not a palette."""
+    result = {
+        "winner": None, "scores": {10: 50, 20: 50},
+        "clapback": False, "vote_counts": {10: 1, 20: 1},
+    }
+    embed = build_reveal_embed(
+        result=result, answers={"10": "a", "20": "b"},
+        player_a=10, player_b=20, anonymous=False,
+        name_resolver=_name_resolver, color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_reveal_clapback_winner_stays_green_ignoring_accent():
+    """A clapback is a win → green stays semantic even when an accent is passed."""
+    result = {
+        "winner": 10, "scores": {10: 125, 20: 0},
+        "clapback": True, "vote_counts": {10: 2, 20: 0},
+    }
+    embed = build_reveal_embed(
+        result=result, answers={"10": "win", "20": "lose"},
+        player_a=10, player_b=20, anonymous=False,
+        name_resolver=_name_resolver, color=_ACCENT,
+    )
+    assert embed.color == _GREEN
+
+
+def test_reveal_regular_win_stays_green_ignoring_accent():
+    result = {
+        "winner": 10, "scores": {10: 67, 20: 33},
+        "clapback": False, "vote_counts": {10: 2, 20: 1},
+    }
+    embed = build_reveal_embed(
+        result=result, answers={"10": "win", "20": "lose"},
+        player_a=10, player_b=20, anonymous=False,
+        name_resolver=_name_resolver, color=_ACCENT,
+    )
+    assert embed.color == _GREEN
+
+
+def test_reveal_clapback_title_leads_with_game_icon_not_wordmark():
+    """The clapback reveal title now leads with the ⚔️ game icon like its
+    sibling cards, not the old off-pattern '⚡ C L A P B A C K ⚡' wordmark."""
+    result = {
+        "winner": 10, "scores": {10: 125, 20: 0},
+        "clapback": True, "vote_counts": {10: 2, 20: 0},
+    }
+    embed = build_reveal_embed(
+        result=result, answers={"10": "win", "20": "lose"},
+        player_a=10, player_b=20, anonymous=False,
+        name_resolver=_name_resolver,
+    )
+    assert embed.title is not None
+    assert embed.title.startswith(GAME_ICONS["clapback"])
+    assert "⚡" not in embed.title
+    assert "C L A P B A C K" in embed.title
+
+
 @pytest.mark.parametrize("rounds,timer,vote_timer", [
     (5, 120, 40),
     (1, 15, 10),
@@ -904,3 +1055,37 @@ def test_build_recap_embed_omits_total_clapbacks_when_zero():
 def test_clamp_config_values_boundary_inputs_unchanged(rounds, timer, vote_timer):
     """Boundary-valid inputs aren't altered."""
     assert clamp_config_values(rounds, timer, vote_timer) == (rounds, timer, vote_timer)
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_clapback_cog as clapback_cog  # noqa: E402
+from tests.fakes import FakeChannel  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self) -> None:
+        self.games_db = None
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=":memory:")
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_post_recap_passes_players_to_end_game(monkeypatch):
+    """The genuine recap site pays the joined roster, not just the host."""
+    spy = AsyncMock()
+    monkeypatch.setattr(clapback_cog, "end_game", spy)
+    cog = clapback_cog.ClapbackCog(_SpyBot())  # type: ignore[arg-type]
+    channel = FakeChannel(id=100)
+    payload = {"players": [1, 2, 3], "scores": {}, "clapbacks": {},
+               "round_history": [], "host_id": 1}
+    await cog._post_recap("g1", channel, payload, {"anonymous": False})
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]
+    assert call.kwargs["bot"] is cog.bot

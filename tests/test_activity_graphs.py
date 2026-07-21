@@ -290,7 +290,7 @@ def test_query_message_activity_filters_by_channel(db_conn):
     assert sum(msgs) == 1
 
 
-def test_query_message_activity_honours_exclusions(db_conn):
+def test_query_message_activity_honors_exclusions(db_conn):
     now_ts = datetime.now(timezone.utc).timestamp() - 60
     _seed_processed(
         db_conn,

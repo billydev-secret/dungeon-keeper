@@ -14,7 +14,7 @@ export function mount(container) {
       container.querySelector(".panel").innerHTML = `
         <header><h2>Wellness</h2></header>
         <div class="w-notice">
-          <p>You haven't opted in to the wellness programme yet.</p>
+          <p>You haven't opted in to the wellness program yet.</p>
           <p>Use <code>/wellness setup</code> in Discord to get started.</p>
         </div>`;
       return;

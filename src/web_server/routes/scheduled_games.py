@@ -133,6 +133,11 @@ async def list_schedules(
         out = []
         for r in rows:
             d = dict(r)
+            # Skip rows for game types that have left the shared games menu
+            # (e.g. 'photo' — now the standalone Photo Challenge feature, which
+            # owns its own schedule UI). Their rows still run on the shared loop.
+            if d["game_type"] not in SCHEDULABLE_GAME_TYPES:
+                continue
             d["game_name"] = GAME_NAMES.get(d["game_type"], d["game_type"])
             d["game_icon"] = GAME_ICONS.get(d["game_type"], "🎮")
             d["recur_days"] = json.loads(d["recur_days"]) if d.get("recur_days") else None

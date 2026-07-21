@@ -14,15 +14,23 @@ from __future__ import annotations
 import discord
 
 
+# Human labels for the four access states, shown in the profile embed.
+_ACCESS_STATE_LABELS: dict[str, str] = {
+    "open": "🔓 Open",
+    "nsfw": "🔞 NSFW — open",
+    "locked": "🔒 NSFW — locked",
+    "spectate": "🎭 Spectator",
+}
+
+
 def build_profile_show_embed(
     *,
     saved_name: str | None,
     saved_limit: int,
-    locked: bool,
-    hidden: bool,
-    spectator: bool = False,
+    access_state: str,
     trusted_count: int,
     blocked_count: int,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed for ``/voice profile show``.
 
@@ -30,9 +38,11 @@ def build_profile_show_embed(
     tell the difference between "I cleared this" and "I never set it"
     (functionally identical, but the UI explains the fall-through).
     """
+    if color is None:
+        color = discord.Color.blurple()
     embed = discord.Embed(
-        title="Your Voice Master profile",
-        color=discord.Color.blurple(),
+        title="👤 Your Voice Master profile",
+        color=color,
     )
     embed.add_field(
         name="Saved name",
@@ -44,10 +54,10 @@ def build_profile_show_embed(
         value=str(saved_limit) if saved_limit else "no cap",
         inline=True,
     )
-    embed.add_field(name="Locked", value="yes" if locked else "no", inline=True)
-    embed.add_field(name="Hidden", value="yes" if hidden else "no", inline=True)
     embed.add_field(
-        name="Spectator", value="yes" if spectator else "no", inline=True
+        name="Access",
+        value=_ACCESS_STATE_LABELS.get(access_state, access_state),
+        inline=True,
     )
     embed.add_field(name="Trusted (count)", value=str(trusted_count), inline=True)
     embed.add_field(name="Blocked (count)", value=str(blocked_count), inline=True)
@@ -68,7 +78,7 @@ def build_admin_audit_mirror_embed(
     actions visually with other domain entries.
     """
     embed = discord.Embed(
-        title=f"Voice Master · {action}",
+        title=f"🛡️ Voice Master · {action}",
         description=summary,
         color=discord.Color.orange(),
     )
@@ -76,19 +86,23 @@ def build_admin_audit_mirror_embed(
     return embed
 
 
-def build_claim_prompt_embed(*, channel_name: str) -> discord.Embed:
+def build_claim_prompt_embed(
+    *, channel_name: str, color: "discord.Color | None" = None
+) -> discord.Embed:
     """Prompt dropped into a channel's side chat once its owner is gone for good.
 
     Posted only after the owner-grace window elapses (a brief disconnect won't
     trigger it), so its presence means the channel is genuinely claimable now.
     """
+    if color is None:
+        color = discord.Color.gold()
     embed = discord.Embed(
         title="👑 Channel up for grabs",
         description=(
             "The owner left and didn't come back. Anyone in this channel can "
             "take it over — claim it to rename, invite, and manage the room."
         ),
-        color=discord.Color.gold(),
+        color=color,
     )
     embed.set_footer(text=channel_name)
     return embed
@@ -107,18 +121,22 @@ def build_claim_done_embed(
     return embed
 
 
-def build_panel_embed() -> discord.Embed:
+def build_panel_embed(color: "discord.Color | None" = None) -> discord.Embed:
     """Embed for the persistent control-channel Voice Master panel."""
+    if color is None:
+        color = discord.Color.blurple()
     embed = discord.Embed(
-        title="Voice Master controls",
+        title="🎛️ Voice Master controls",
         description=(
             "Join the Hub voice channel to spin up your own room.\n"
             "Use the menus below to manage **the channel you currently own**.\n\n"
-            "🔒 / 🔓 Lock or unlock — control whether new members can join.\n"
-            "👁️ / 👀 Hide or unhide — control whether the channel is visible "
-            "at all.\n"
+            "Set **who can see and join** in one pick:\n"
+            "🔓 **Open** · 🔞 **NSFW — open** (age-gated) · "
+            "🔒 **NSFW — locked** (age-gated, hidden, invite-only) · "
+            "🎭 **Spectator** (age-gated audience).\n"
+            "People you invite can always get in, even when locked.\n"
         ),
-        color=discord.Color.blurple(),
+        color=color,
     )
     embed.set_footer(
         text="Menus act on the channel you own. Don't own one? Join the Hub."
@@ -126,21 +144,28 @@ def build_panel_embed() -> discord.Embed:
     return embed
 
 
-def build_inline_panel_embed(*, owner_mention: str) -> discord.Embed:
+def build_inline_panel_embed(
+    *, owner_mention: str, color: "discord.Color | None" = None
+) -> discord.Embed:
     """Owner-greeting embed for the panel posted into a new channel's chat."""
+    if color is None:
+        color = discord.Color.blurple()
     return discord.Embed(
-        title="Your voice channel is ready",
+        title="✅ Your voice channel is ready",
         description=(
             f"Welcome, {owner_mention}. Use the menus below to manage "
-            "**this channel** — lock/hide it, rename it, set a user limit, "
-            "invite or kick members, transfer ownership, or reset it. "
+            "**this channel** — set its access (open, NSFW, locked, or "
+            "spectator), rename it, set a user limit, invite or kick members, "
+            "transfer ownership, or reset it. "
             "Changes you make are saved as your default for next time."
         ),
-        color=discord.Color.blurple(),
+        color=color,
     )
 
 
-def build_howto_embed(*, hub_mention: str | None = None) -> discord.Embed:
+def build_howto_embed(
+    *, hub_mention: str | None = None, color: "discord.Color | None" = None
+) -> discord.Embed:
     """A member-facing 'how it works' guide, meant for a lobby channel.
 
     ``hub_mention`` is an optional ``<#id>`` mention for the configured Hub
@@ -150,6 +175,8 @@ def build_howto_embed(*, hub_mention: str | None = None) -> discord.Embed:
     Kept comfortably inside Discord's embed limits (field values ≤1024,
     ≤25 fields) — the command lists are short by design.
     """
+    if color is None:
+        color = discord.Color.blurple()
     hub = hub_mention or "the **Hub** voice channel"
     embed = discord.Embed(
         title="🔊 Make Your Own Voice Channel",
@@ -160,16 +187,17 @@ def build_howto_embed(*, hub_mention: str | None = None) -> discord.Embed:
             "Set it up right in the room's **side chat** — use the control "
             "panel there, or `/voice` commands."
         ),
-        color=discord.Color.blurple(),
+        color=color,
     )
     embed.add_field(
         name="🔑 Who can get in",
         value=(
-            "🔒 **Lock** — others must knock to ask in · 🔓 **Unlock** — all "
-            "welcome\n"
-            "👁️ **Hide** — make the room invisible to everyone else\n"
-            "👋 **Invite** someone in · 🚫 **Kick** someone out\n"
-            "🔔 **Knock** — ask to join someone else's locked room"
+            "Pick one **access** state:\n"
+            "🔓 **Open** — all welcome · 🔞 **NSFW — open** — age-gated but open\n"
+            "🔒 **NSFW — locked** — age-gated, hidden, others must knock\n"
+            "🎭 **Spectator** — age-gated audience: join muted, read-only\n"
+            "👋 **Invite** someone in · 🚫 **Kick** someone out · "
+            "🔔 **Knock** to ask into a locked room"
         ),
         inline=False,
     )
@@ -182,13 +210,26 @@ def build_knock_request_embed(
     requester_mention: str,
     owner_mention: str,
     channel_name: str,
+    guild_name: str | None = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
-    """Embed posted to the control channel when someone knocks on a channel."""
+    """Embed for a knock request.
+
+    Delivered as a DM to the owner (or, as a fallback, posted to the control
+    channel). In a DM the embed is out of its guild's context, so ``guild_name``
+    is named explicitly — an owner with a same-named channel in more than one
+    server otherwise can't tell which one is being knocked on.
+    """
+    if color is None:
+        color = discord.Color.gold()
+    where = f"**{channel_name}**"
+    if guild_name:
+        where += f" in **{guild_name}**"
     return discord.Embed(
         title="🔔 Voice channel knock",
         description=(
-            f"{requester_mention} is asking to join **{channel_name}**.\n"
+            f"{requester_mention} is asking to join {where}.\n"
             f"Owner: {owner_mention} — choose below."
         ),
-        color=discord.Color.gold(),
+        color=color,
     )

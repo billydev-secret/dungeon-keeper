@@ -19,11 +19,20 @@ def purge_user_data(
     message rows that exist for the user (and were removed unless
     *keep_messages* is set).
 
+    NOTE: this is the genuine hard-erasure path and is deliberately **not wired
+    to any command** — the ``/delete_me`` and ``/delete_user`` commands only
+    clear Discord messages and retain all server-side data for moderation. This
+    function is retained for manual/legal (e.g. GDPR) erasure run out-of-band.
+
     *keep_messages*: when True, the messages table and its child tables
     (attachments, mentions, embeds, reactions, sentiment, processed_messages)
-    are left untouched. Used by ``/delete_me`` so users can keep a local
-    archive of what they posted even after the Discord copies are gone.
-    Other PII (XP, activity, profile, wellness) is still cleared.
+    are left untouched. Used by ``/delete_me``: the server retains its own copy
+    of the messages for moderation even once the Discord copies are gone. That
+    retention is disclosed in the confirmation prompt, before the member
+    confirms. Other PII (XP, activity, profile, wellness) is still cleared.
+
+    Only a full erasure reaches this function — a partial ``mode`` scrub skips
+    the purge entirely rather than passing flags here.
     """
     msg_ids = [
         r[0]

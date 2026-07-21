@@ -7,16 +7,21 @@ and a load smoke for the 3-level Cog + class-attr app_commands.Group.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import discord
+import pytest
 import pytest_asyncio
 
 from bot_modules.cogs.hot_potato_group import db as hpgdb
 from bot_modules.cogs.hot_potato_group.cog import HotPotatoGroupGameCog
+from bot_modules.core.db_utils import open_db
 from bot_modules.duels import db as duels_db
+from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.games_db import GamesDb
-from tests.fakes import FakeGuild, fake_interaction
+from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
 
 GUILD = 9001
 CH = 100
@@ -42,6 +47,17 @@ class FakeBot:
 @pytest_asyncio.fixture
 async def db(sync_db_path: Path) -> GamesDb:
     return GamesDb(sync_db_path)
+
+
+@pytest.fixture(autouse=True)
+def _stub_lobby_accent():
+    """The lobby embed now resolves the guild accent; the FakeGuild here has no
+    real avatar to read, so stub the lookup."""
+    with patch(
+        "bot_modules.duels.base_game.resolve_accent_color",
+        new=AsyncMock(return_value=discord.Color.blurple()),
+    ):
+        yield
 
 
 @pytest_asyncio.fixture
@@ -107,6 +123,35 @@ async def test_group_eliminate_terminal_sets_group_cooldowns(cog, db):
             db, GUILD, "hot_potato_group", uid, 48
         )
         assert remaining is not None and remaining > 0
+
+
+async def test_detonate_final_resolves_and_pays(db, sync_db_path):
+    """The last detonation pays the whole roster — including players
+    eliminated in earlier rounds — with the win bonus for the survivor."""
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = HotPotatoGroupGameCog(FakeEconGamesBot(db, sync_db_path, [1, 2, 3]))  # type: ignore[arg-type]
+    gid = await hpgdb.create_lobby(db, GUILD, CH, 1, None)
+    now = time.time()
+    await hpgdb.set_game_state(
+        db, gid, "ACTIVE",
+        roster=json.dumps([1, 2, 3]),
+        alive=json.dumps([1, 2]),
+        elimination_order=json.dumps([3]),
+        holder_id=1,
+        fuse_seconds=5.0,
+        phase_started_at=now - 6.0,
+        pass_log=json.dumps([{"holder_id": 1, "received_at": now - 3.0, "passed_at": None}]),
+    )
+    await cog._detonate(gid)
+    g = await hpgdb.get_game(db, gid)
+    assert g.state == "RESOLVED"
+    assert g.winner_id == 2
+    assert g.loser_id == 1
+    with open_db(sync_db_path) as conn:
+        assert get_balance(conn, GUILD, 2) == 25   # participation + win
+        assert get_balance(conn, GUILD, 1) == 5
+        assert get_balance(conn, GUILD, 3) == 5
 
 
 # ── _handle_group_button routing ───────────────────────────────────────────────

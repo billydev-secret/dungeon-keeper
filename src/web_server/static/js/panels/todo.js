@@ -1,8 +1,10 @@
 import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 function renderList(todos, activeId) {
   if (!todos.length) {
-    return '<div class="empty">No todos match this filter.</div>';
+    return renderEmpty("No todos match this filter.");
   }
   return todos
     .map((t) => {
@@ -105,18 +107,18 @@ export function mount(container) {
         <div class="ticket-list-wrap">
           <div class="ticket-list-head">
             <h3>Tasks</h3>
-            <div class="ctrl-group" role="tablist" data-filter-group>
+            <div class="ctrl-group" role="group" aria-label="Filter tasks" data-filter-group>
               <button class="active" data-filter="pending">Pending</button>
               <button data-filter="completed">Completed</button>
               <button data-filter="all">All</button>
             </div>
           </div>
           <div class="ticket-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading…")}
           </div>
         </div>
         <div class="ticket-detail" data-detail>
-          <div class="empty">Loading…</div>
+          ${renderLoading("Loading…")}
         </div>
       </section>
 
@@ -193,11 +195,8 @@ export function mount(container) {
     }
   });
 
-  filterGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-filter]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
-    state.filter = btn.dataset.filter;
+  makeFilterStrip(filterGroup, (value) => {
+    state.filter = value;
     state.activeId = null;
     render();
   });

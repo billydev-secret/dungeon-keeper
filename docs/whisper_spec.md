@@ -19,7 +19,7 @@ An anonymous-message-with-guessing game. Members opt in to a per-guild role, the
 
 There is no one-shot `/whisper <target> <message>` — send is always picker + compose modal so the bot can pre-validate role membership.
 
-## Behaviour
+## Behavior
 
 ### Persistent launcher
 A single launcher message sits at the bottom of the feed channel. Any non-bot message in that channel bumps it: the previous launcher is deleted and a fresh one is posted. Concurrent bumps coalesce so a busy channel produces at most one delete-and-repost cycle at a time. Launcher buttons keep working across bot restarts.
@@ -42,7 +42,7 @@ The target gets **three guesses**. The guess picker lists every opted-in member 
 - **Wrong, last guess**: the DM's Guess button is removed; the whisper remains active for Share / Reply / Delete.
 
 ### Sharing, replying, deleting, exposing
-- **Share** (target only, before solved): the no-content feed post is replaced with one showing the full content (codefence escapes neutralised so user content can't break formatting). The DM keeps the Guess + Reply buttons if still applicable.
+- **Share** (target only, before solved): the no-content feed post is replaced with one showing the full content (codefence escapes neutralised so user content can't break formatting). The DM keeps the Guess + Reply buttons if still applicable. The ephemeral confirmation ("Shared to the whisper feed.") is a jump link to the new feed post when the post succeeds.
 - **Reply** (sender or target, **one reply per whisper**): a modal collects up to 1000 characters; the other party is DM'd. The reply DM carries a Report button. If the recipient's DMs are closed the reply is rolled back and the writer sees "Couldn't deliver — they have DMs disabled."
 - **Delete** (target only): soft-delete — the whisper disappears from the target's inbox but remains in the sender's sent list. Idempotent.
 - **Expose** (target only, after correct guess): edits the target's DM to append `💥 Sender: @<sender>`.

@@ -6,12 +6,15 @@ from datetime import datetime, timezone
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 from bot_modules.games.utils.game_manager import (
     create_game, update_game_message, update_game_state,
     modify_payload, get_game_payload, end_game, update_session,
     resolve_name,
 )
 from bot_modules.games.constants import GAME_ICONS
+from bot_modules.core.branding import resolve_accent_color
 from ..data import (
     pick_template, mark_template_used, get_prompts, get_channel_max_tier,
     HEAT_LABELS,
@@ -99,9 +102,10 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 host_name, template["title"], tier, "quiplash",
                 len(payload["players"]), template["player_min"],
             )
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         elif action == "start":
@@ -120,21 +124,20 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 return
             await action_interaction.response.defer()
             join_view.stop()
-            for item in join_view.children:
-                item.disabled = True
+            disable_all_items(join_view)
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(view=join_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
             await _run_fill_phase(action_interaction, payload)
 
-    async def handle_cancel(action_interaction: discord.Interaction):
+    async def handle_cancel(action_interaction: discord.Interaction) -> None:
         cog._game_canceled.add(game_id)
         await end_game(db, game_id)
         cog._game_canceled.discard(game_id)
         join_view.stop()
-        for item in join_view.children:
-            item.disabled = True
+        disable_all_items(join_view)
         cog.bot.active_views.pop(game_id, None)
         try:
             await action_interaction.response.edit_message(
@@ -201,7 +204,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await fill_msg.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             # Early exit if everyone submitted
@@ -213,11 +216,10 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
         # Disable fill view
         fill_view.stop()
-        for item in fill_view.children:
-            item.disabled = True
+        disable_all_items(fill_view)
         try:
             await fill_msg.edit(view=fill_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         await _run_reveal_phase(fill_msg)
@@ -258,8 +260,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         view = cog.bot.active_views.pop(game_id, None)
         if view:
             view.stop()
-            for item in view.children:
-                item.disabled = True
+            disable_all_items(view)
         try:
             await cancel_interaction.response.edit_message(
                 embed=discord.Embed(title="📝 LegitLibs — Cancelled", color=0x99AAB5),
@@ -317,13 +318,14 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 cast_embed = discord.Embed(
                     title=f"{_GAME_ICONS_LL} WHO WROTE WHAT",
                     description="\n".join(cast_lines),
-                    color=0x99AAB5,
+                    color=await resolve_accent_color(cog.bot.ctx.db_path, guild),
                 )
                 await channel.send(embed=cast_embed)
 
             await mark_template_used(db, guild.id, template["template_id"])
         finally:
-            await end_game(db, game_id, player_count=len(player_ids), round_count=1)
+            await end_game(db, game_id, player_count=len(player_ids), round_count=1,
+                           bot=cog.bot, player_ids=player_ids)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
 

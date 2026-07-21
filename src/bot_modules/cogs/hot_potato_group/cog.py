@@ -1,6 +1,11 @@
 """Hot Potato (group) cog — pass-the-bomb for 2..N players with progressive elimination."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -9,12 +14,10 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
-from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
-from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
 
 from . import db as hpgdb
 from .game import (
@@ -34,7 +37,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
     GAME_KEY = "hot_potato_group"
     GAME_DISPLAY_NAME = "Hot Potato"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
 
@@ -48,7 +51,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
     async def _db_get_game(self, game_id: int) -> HotPotatoGroupGame | None:
         return await hpgdb.get_game(self.db, game_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await hpgdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
@@ -109,8 +112,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 game.alive = new_alive
                 game.elimination_order = new_elim
                 game.pass_log = new_log
-                await hpgdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     alive=json.dumps(new_alive),
                     elimination_order=json.dumps(new_elim),
                     pass_log=json.dumps(new_log),
@@ -125,8 +128,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 new_log.append(
                     {"holder_id": next_holder, "received_at": now, "passed_at": None}
                 )
-                await hpgdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     round=game.round + 1,
                     alive=json.dumps(new_alive),
                     elimination_order=json.dumps(new_elim),
@@ -172,8 +175,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         now = time.time()
         holder = random.choice(game.alive)
         init_log = json.dumps([{"holder_id": holder, "received_at": now, "passed_at": None}])
-        await hpgdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             round=1,
             holder_id=holder,
             fuse_seconds=fuse,
@@ -242,6 +245,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         def name(uid: int | None) -> str:
@@ -278,7 +282,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:
@@ -327,8 +331,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
             new_log[-1] = {**new_log[-1], "passed_at": now}
         new_log.append({"holder_id": new_holder, "received_at": now, "passed_at": None})
 
-        await hpgdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             holder_id=new_holder,
             pass_log=json.dumps(new_log),
             last_action_at=now,
@@ -340,112 +344,20 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
     # ── Slash commands ────────────────────────────────────────────────────────
 
     @hotpotatogroup.command(name="start", description="Open a Hot Potato lobby")
-    @app_commands.describe(stakes="Optional custom stakes text (max 200 chars)")
-    async def hpg_start(
-        self, interaction: discord.Interaction, stakes: str | None = None
-    ) -> None:
-        await self._base_lobby(interaction, stakes)
-
-    @hotpotatogroup.command(name="stats", description="View Hot Potato (group) stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def hpg_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await hpgdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        embed = discord.Embed(
-            title=f"🥔 Hot Potato (group) — {target.display_name}", color=COLOR_GOLD
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
-    @hotpotatogroup.command(name="config", description="Configure Hot Potato group (mods only)")
     @app_commands.describe(
-        cooldown_hours="Hours before a player can join another game (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        min_fuse="Minimum fuse seconds per round (default 20)",
-        max_fuse="Maximum fuse seconds per round (default 60)",
-        min_hold="Seconds a holder must wait before passing (default 2)",
-        min_players="Minimum players to start (default 2)",
-        max_players="Maximum players in a lobby (default 10)",
+        stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — every player antes this; winner takes the pot",
     )
-    async def hpg_config(
+    async def hpg_start(
         self,
         interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        min_fuse: float | None = None,
-        max_fuse: float | None = None,
-        min_hold: float | None = None,
-        min_players: int | None = None,
-        max_players: int | None = None,
+        stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure this game.", ephemeral=True
-            )
-            return
+        await self._base_lobby(interaction, stakes, wager)
 
-        shared_updates: dict = {}
-        game_updates: dict = {}
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if min_fuse is not None:
-            game_updates["min_fuse"] = max(5.0, min_fuse)
-        if max_fuse is not None:
-            game_updates["max_fuse"] = max(10.0, max_fuse)
-        if min_hold is not None:
-            game_updates["min_hold"] = max(0.0, min_hold)
-        if min_players is not None:
-            game_updates["min_players"] = max(2, min_players)
-        if max_players is not None:
-            game_updates["max_players"] = max(2, max_players)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await hpgdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Hot Potato (group) Config", color=COLOR_GOLD)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(
-                self.db, interaction.guild.id, self.GAME_KEY, **shared_updates
-            )
-        if game_updates:
-            await hpgdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = HotPotatoGroupGameCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats", "config"):
-        cog.hotpotatogroup.remove_command(name)
     bot.tree.remove_command("hotpotatogroup")
     games.add_command(cog.hotpotatogroup)

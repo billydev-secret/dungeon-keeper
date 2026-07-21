@@ -1,5 +1,7 @@
 import { api, apiPost, esc, fmtTs } from "../api.js";
 import { toast } from "../ui.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 const TIER_BADGE = {
   immediate: '<span class="badge badge-danger">Immediate</span>',
@@ -53,10 +55,16 @@ function renderDetail(ev) {
   if (!ev || !ev.id) return '<div class="empty">Select an event to review.</div>';
 
   let windowHtml = "";
+  let windowFlagged = false;
   if (ev.window_json) {
     try {
       const lines = JSON.parse(ev.window_json);
-      windowHtml = `<pre class="rw-window">${lines.map(esc).join("\n")}</pre>`;
+      // The triggering message is the newest line in the window (built oldest-first).
+      const last = lines.length - 1;
+      windowFlagged = last >= 0;
+      windowHtml = `<div class="rw-window">${lines.map((l, i) =>
+        `<div class="rw-window__line${i === last ? " rw-window__line--flag" : ""}">${esc(l)}</div>`
+      ).join("")}</div>`;
     } catch {
       windowHtml = `<pre class="rw-window">${esc(ev.window_json)}</pre>`;
     }
@@ -67,6 +75,7 @@ function renderDetail(ev) {
 
   return `
     <div class="rw-detail">
+      <button class="btn btn-secondary rw-back" data-back>← Back to queue</button>
       <div class="rw-detail__header">
         <span>Event #${ev.id}</span>
         ${TIER_BADGE[ev.priority_tier] || ""}
@@ -84,7 +93,7 @@ function renderDetail(ev) {
 
       <div class="rw-signals">${sigChips(ev)}</div>
 
-      ${windowHtml ? `<div class="rw-section"><div class="rw-section__title">Conversation window</div>${windowHtml}</div>` : ""}
+      ${windowHtml ? `<div class="rw-section"><div class="rw-section__title">Conversation window${windowFlagged ? ' · <span class="rw-flag-legend">flagged message</span>' : ""}</div>${windowHtml}</div>` : ""}
 
       ${!alreadyLabeled ? `
         <div class="rw-actions">
@@ -95,7 +104,7 @@ function renderDetail(ev) {
 }
 
 function renderStatsTab(stats) {
-  if (!stats) return '<div class="empty">No stats yet.</div>';
+  if (!stats) return renderEmpty("No stats yet.");
   const fpPct = stats.fp_rate != null ? `${(stats.fp_rate * 100).toFixed(0)}%` : "—";
   const tierRows = Object.entries(stats.by_tier || {})
     .map(([t, n]) => `<tr><td>${esc(t)}</td><td>${n}</td></tr>`).join("");
@@ -116,6 +125,41 @@ function renderStatsTab(stats) {
     </div>`;
 }
 
+const LEDGER_KIND = {
+  dm_consent:     '<span class="badge badge-dim">DM consent</span>',
+  cross_platform: '<span class="badge badge-dim">Cross-platform</span>',
+};
+
+function renderLedgerTab(rows) {
+  if (!rows.length) {
+    return renderEmpty("Nothing on the ledger yet. These fire rarely by design — roughly once a month between them.");
+  }
+  const body = rows.map(r => `
+    <tr>
+      <td class="rw-row__ts">${esc(fmtTs(r.detected_at))}</td>
+      <td>${LEDGER_KIND[r.kind] || esc(r.kind)}</td>
+      <td>${r.platform ? esc(r.platform) : "—"}</td>
+      <td>
+        <div class="rw-ledger__excerpt">${esc(r.excerpt || "")}</div>
+        ${r.matched_phrase ? `<span class="rw-ledger__match">matched: ${esc(r.matched_phrase)}</span>` : ""}
+      </td>
+    </tr>`).join("");
+  return `<div class="rw-ledger-scroll"><table class="rw-ledger-tbl">
+    <thead><tr><th>When</th><th>Kind</th><th>Platform</th><th>What was said</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+
+function renderLedgerRepeats(rows) {
+  if (!rows.length) return "";
+  const items = rows.map(r =>
+    `<li>User <code>${esc(r.author_id)}</code> — ${esc(String(r.distinct_targets))} different people, ${esc(String(r.hits))} entries</li>`
+  ).join("");
+  return `<div class="rw-ledger-repeats">
+    <h4>Same entry against more than one person</h4>
+    <ul style="margin:0; padding-left:18px">${items}</ul>
+  </div>`;
+}
+
 export function mount(container) {
   container.innerHTML = `
     <div class="panel">
@@ -124,13 +168,14 @@ export function mount(container) {
         <div class="subtitle">Passive AI moderation monitor — alert queue and label capture</div>
       </header>
 
-      <div class="ctrl-group" role="tablist" data-tabs style="margin-bottom:16px">
+      <div class="ctrl-group" role="group" aria-label="Views" data-tabs style="margin-bottom:16px">
         <button class="active" data-tab="queue">Alert Queue</button>
+        <button data-tab="ledger">Ledger</button>
         <button data-tab="stats">Label Stats</button>
       </div>
 
       <div data-tab-content="queue">
-        <div class="ctrl-group" role="tablist" data-filter-group style="margin-bottom:12px">
+        <div class="ctrl-group" role="group" aria-label="Filter events" data-filter-group style="margin-bottom:12px">
           <button class="active" data-tier="">All</button>
           <button data-tier="immediate">Immediate</button>
           <button data-tier="digest">Digest</button>
@@ -142,7 +187,7 @@ export function mount(container) {
 
         <div class="rw-layout">
           <div class="rw-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading…")}
           </div>
           <div class="rw-detail-pane" data-detail>
             <div class="empty">Select an event to review.</div>
@@ -150,8 +195,23 @@ export function mount(container) {
         </div>
       </div>
 
+      <div data-tab-content="ledger" style="display:none">
+        <div class="rw-ledger-note">
+          A record of specific things that were said — not an assessment of anyone.
+          Nothing here has been flagged, scored, or judged, and no alert was sent.
+          It exists so that if someone is being reviewed, the dates are already on hand.
+        </div>
+        <div class="ctrl-group" role="group" aria-label="Filter ledger" data-ledger-filter style="margin-bottom:12px">
+          <button class="active" data-kind="">All</button>
+          <button data-kind="dm_consent">DM consent</button>
+          <button data-kind="cross_platform">Cross-platform</button>
+        </div>
+        <div data-ledger-repeats></div>
+        <div data-ledger-content>${renderLoading("Loading…")}</div>
+      </div>
+
       <div data-tab-content="stats" style="display:none">
-        <div data-stats-content><div class="empty">Loading…</div></div>
+        <div data-stats-content>${renderLoading("Loading…")}</div>
       </div>
     </div>
 
@@ -174,20 +234,68 @@ export function mount(container) {
       .rw-section__title { font-size:12px; color:var(--dim, #888); margin-bottom:4px; }
       .rw-window { font-size:12px; background:var(--surface2, #2a2d32); padding:10px; border-radius:4px;
                    white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; }
+      .rw-window__line { padding:1px 4px; border-radius:3px; }
+      .rw-window__line--flag { background:var(--red-soft, #4a1f1f); box-shadow:inset 3px 0 0 var(--red, #e06666);
+                               padding-left:8px; font-weight:600; }
+      .rw-flag-legend { color:var(--red, #e06666); }
       .rw-actions { display:flex; gap:8px; margin-top:12px; }
       .rw-stats__tables { display:flex; gap:16px; margin-top:16px; }
       .rw-table { border-collapse:collapse; font-size:13px; }
       .rw-table th, .rw-table td { padding:4px 12px; border:1px solid var(--border); }
       .rw-pending-toggle { font-size:13px; display:flex; align-items:center; gap:6px; margin-bottom:8px; }
+      .rw-ledger-note { font-size:13px; color:var(--dim, #888); border-left:3px solid var(--border);
+                        padding:8px 12px; margin-bottom:14px; line-height:1.5; }
+      .rw-ledger-tbl { border-collapse:collapse; font-size:13px; width:100%; }
+      .rw-ledger-tbl th { text-align:left; font-weight:600; color:var(--dim, #888); font-size:12px;
+                          padding:6px 10px; border-bottom:1px solid var(--border); }
+      .rw-ledger-tbl td { padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+      .rw-ledger-tbl tr:last-child td { border-bottom:none; }
+      .rw-ledger__excerpt { color:var(--fg, #ddd); word-break:break-word; }
+      .rw-ledger__match { display:inline-block; font-size:11px; padding:1px 6px; border-radius:3px;
+                          background:var(--surface2, #3a3d42); margin-top:4px; }
+      .rw-ledger-repeats { border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+                           margin-bottom:14px; font-size:13px; }
+      .rw-ledger-repeats h4 { margin:0 0 6px; font-size:13px; }
+      .rw-ledger-scroll { overflow-x:auto; }
+      @media (max-width: 700px) {
+        .rw-ledger-tbl { font-size:12px; }
+        .rw-ledger-tbl th:nth-child(3), .rw-ledger-tbl td:nth-child(3) { display:none; }
+      }
       .badge-ok { background:#1e4620; color:#7ecb7f; }
+      .rw-back { display:none; }
+
+      @media (max-width: 700px) {
+        .rw-layout { flex-direction:column; min-height:0; }
+        .rw-list { flex:1 1 auto; max-height:none; }
+        /* Master/detail: show one pane at a time */
+        .rw-detail-pane { display:none; }
+        .rw-layout--detail .rw-list { display:none; }
+        .rw-layout--detail .rw-detail-pane { display:block; }
+        .rw-back { display:inline-flex; margin-bottom:10px; }
+        .rw-row { grid-template-columns:72px 1fr auto; column-gap:8px; row-gap:2px; padding:12px 10px;
+                  grid-template-areas:"tier rule score" "tier ts label"; font-size:14px; }
+        .rw-row__tier { grid-area:tier; }
+        .rw-row__rule { grid-area:rule; }
+        .rw-row__score { grid-area:score; text-align:right; }
+        .rw-row__ts { grid-area:ts; }
+        .rw-row__label { grid-area:label; text-align:right; }
+        .rw-meta { grid-template-columns:80px 1fr; }
+        .rw-actions { position:sticky; bottom:0; gap:10px; padding:10px 0;
+                      background:var(--bg-card, var(--bg, #1e1e1e)); }
+        .rw-actions .btn { flex:1; padding:14px 8px; font-size:15px; }
+      }
     </style>
   `;
 
-  const tabBtns = container.querySelectorAll("[data-tabs] button");
   const queuePane = container.querySelector('[data-tab-content="queue"]');
+  const ledgerPane = container.querySelector('[data-tab-content="ledger"]');
   const statsPane = container.querySelector('[data-tab-content="stats"]');
+  const ledgerContent = container.querySelector("[data-ledger-content]");
+  const ledgerRepeatsEl = container.querySelector("[data-ledger-repeats]");
+  const ledgerFilter = container.querySelector("[data-ledger-filter]");
   const filterGroup = container.querySelector("[data-filter-group]");
   const pendingOnlyEl = container.querySelector("[data-pending-only]");
+  const layoutEl = container.querySelector(".rw-layout");
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const statsContent = container.querySelector("[data-stats-content]");
@@ -197,43 +305,83 @@ export function mount(container) {
   let currentTier = "";
   let pendingOnly = true;
   let activeTab = "queue";
+  let ledgerKind = "";
 
   // --- Tab switching ---
-  tabBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      tabBtns.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      activeTab = btn.dataset.tab;
-      queuePane.style.display = activeTab === "queue" ? "" : "none";
-      statsPane.style.display = activeTab === "stats" ? "" : "none";
-      if (activeTab === "stats") loadStats();
-    });
-  });
+  makeFilterStrip(container.querySelector("[data-tabs]"), (tab) => {
+    activeTab = tab;
+    queuePane.style.display = activeTab === "queue" ? "" : "none";
+    ledgerPane.style.display = activeTab === "ledger" ? "" : "none";
+    statsPane.style.display = activeTab === "stats" ? "" : "none";
+    if (activeTab === "stats") loadStats();
+    if (activeTab === "ledger") loadLedger();
+  }, { attr: "data-tab" });
+
+  // --- Ledger kind filter ---
+  makeFilterStrip(ledgerFilter, (kind) => {
+    ledgerKind = kind;
+    loadLedger();
+  }, { attr: "data-kind" });
 
   // --- Tier filter ---
-  filterGroup.addEventListener("click", e => {
-    const btn = e.target.closest("[data-tier]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    currentTier = btn.dataset.tier;
+  makeFilterStrip(filterGroup, (tier) => {
+    currentTier = tier;
     loadQueue();
-  });
+  }, { attr: "data-tier" });
 
   pendingOnlyEl.addEventListener("change", () => {
     pendingOnly = pendingOnlyEl.checked;
     loadQueue();
   });
 
+  // --- Select an event (renders detail, syncs list, handles mobile master/detail) ---
+  function selectEvent(id) {
+    activeId = id;
+    renderList();
+    const ev = id != null ? events.find(x => x.id === id) || null : null;
+    detailEl.innerHTML = renderDetail(ev);
+    bindDetailActions(ev);
+    const mobile = window.matchMedia("(max-width: 700px)").matches;
+    layoutEl.classList.toggle("rw-layout--detail", id != null);
+    if (id != null) {
+      if (mobile) layoutEl.scrollIntoView({ block: "start" });
+      else {
+        const activeRow = listEl.querySelector(".rw-row.active");
+        if (activeRow) activeRow.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
+
+  // Next still-unlabeled event after the given one (wraps to earlier ones, else null).
+  function nextUnlabeledId(afterId) {
+    const idx = events.findIndex(x => x.id === afterId);
+    for (let i = idx + 1; i < events.length; i++) {
+      if (events[i].is_violation == null) return events[i].id;
+    }
+    for (let i = 0; i < idx; i++) {
+      if (events[i].is_violation == null) return events[i].id;
+    }
+    return null;
+  }
+
   // --- List click ---
   listEl.addEventListener("click", e => {
     const row = e.target.closest("[data-id]");
     if (!row) return;
-    activeId = Number(row.dataset.id);
-    renderList();
-    const ev = events.find(x => x.id === activeId);
-    detailEl.innerHTML = renderDetail(ev || null);
-    bindDetailActions(ev);
+    selectEvent(Number(row.dataset.id));
+  });
+  // Rows are role="button" tabindex="0" — activate with Enter/Space too.
+  listEl.addEventListener("keydown", e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest("[data-id]");
+    if (!row) return;
+    e.preventDefault();
+    selectEvent(Number(row.dataset.id));
+  });
+
+  // --- Back to queue (mobile) ---
+  detailEl.addEventListener("click", e => {
+    if (e.target.closest("[data-back]")) selectEvent(null);
   });
 
   // --- Label buttons in detail pane ---
@@ -245,9 +393,15 @@ export function mount(container) {
         try {
           await apiPost(`/api/rules-watch/events/${ev.id}/label`, { is_violation: isViolation });
           ev.is_violation = isViolation;
-          detailEl.innerHTML = renderDetail(ev);
-          bindDetailActions(ev);
-          renderList();
+          const nextId = nextUnlabeledId(ev.id);
+          if (nextId != null) {
+            selectEvent(nextId);
+          } else {
+            activeId = null;
+            renderList();
+            detailEl.innerHTML = '<div class="empty">✅ Nothing left to review in this queue.</div>';
+            layoutEl.classList.remove("rw-layout--detail");
+          }
         } catch (err) {
           toast(err.message, "error");
           btn.textContent = "Error — try again";
@@ -280,8 +434,27 @@ export function mount(container) {
     }
   }
 
+  async function loadLedger() {
+    ledgerContent.innerHTML = renderLoading("Loading…");
+    const params = { limit: 200 };
+    if (ledgerKind) params.kind = ledgerKind;
+    try {
+      const rows = await api("/api/rules-watch/ledger", params);
+      ledgerContent.innerHTML = renderLedgerTab(rows);
+    } catch {
+      ledgerContent.innerHTML = '<div class="empty">Failed to load ledger.</div>';
+      return;
+    }
+    try {
+      const repeats = await api("/api/rules-watch/ledger/repeats");
+      ledgerRepeatsEl.innerHTML = renderLedgerRepeats(repeats);
+    } catch {
+      ledgerRepeatsEl.innerHTML = "";
+    }
+  }
+
   async function loadStats() {
-    statsContent.innerHTML = '<div class="empty">Loading…</div>';
+    statsContent.innerHTML = renderLoading("Loading…");
     try {
       const stats = await api("/api/rules-watch/stats");
       statsContent.innerHTML = renderStatsTab(stats);

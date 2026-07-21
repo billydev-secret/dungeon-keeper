@@ -1,5 +1,5 @@
 discord.py>=2.3.0
-python-dotenv>=1.0.0
+python-dotenv>=1.0.0  # NOTE: do NOT install the separate `dotenv` PyPI package (v0.9.9) — it is a deprecated wrapper around python-dotenv and must not be used
 anthropic>=0.40.0
 fastapi>=0.110.0
 python-multipart>=0.0.9
@@ -20,6 +20,9 @@ Pillow
 pilmoji
 numpy
 matplotlib>=3.8.0
-llama-cpp-python>=0.3.0
+# llama-cpp-python lives in requirements-local-llm.txt — it is the only
+# dependency here that builds from source (no manylinux wheel for cp314), so
+# hosts using the remote llama-server backend skip a full C++ toolchain by
+# not installing it. See deploy/README.md.
 huggingface_hub>=0.24.0
 faster-whisper>=1.0.0

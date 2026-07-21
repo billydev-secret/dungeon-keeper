@@ -16,10 +16,14 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
+from bot_modules.duels.filters import contains_disallowed_content
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
 from bot_modules.services.guess_pipeline import (
     compute_padded_crop,
@@ -54,6 +58,8 @@ from bot_modules.services.guess_repo import (
 )
 
 # Hard cap on per-(user, round) guesses — kills brute-force-by-dropdown.
+# Fallback matching GuessConfig's default; actual enforcement reads
+# config.max_guesses_per_round, configurable per-guild from the dashboard.
 MAX_GUESSES_PER_USER_ROUND = 5
 
 # Maximum number of persistent GameViews to re-register at startup. Bounds the
@@ -70,6 +76,29 @@ log = logging.getLogger("dungeonkeeper.guess")
 # guess reveals them. Submitters are warned at submit time that the file is
 # kept until the round is solved.
 _GUESS_ORIG_DIR = Path("guess_cache") / "orig"
+
+# Per-user submission rate limit (in-memory flood protection; resets on
+# restart). Fallbacks matching GuessConfig's defaults; actual enforcement
+# reads config.submit_max_per_window / config.submit_window_seconds,
+# configurable per-guild from the dashboard's Guess config panel.
+_SUBMIT_WINDOW_S = 3600
+_SUBMIT_MAX_PER_WINDOW = 5
+_submit_history: dict[int, list[float]] = {}
+
+
+def _submit_rate_limited(
+    user_id: int, *, max_per_window: int = _SUBMIT_MAX_PER_WINDOW, window_seconds: int = _SUBMIT_WINDOW_S
+) -> bool:
+    """Return True (and record the attempt) if the user has exceeded the
+    submission cap within the rolling window."""
+    now = time.time()
+    hist = [t for t in _submit_history.get(user_id, []) if now - t < window_seconds]
+    if len(hist) >= max_per_window:
+        _submit_history[user_id] = hist
+        return True
+    hist.append(now)
+    _submit_history[user_id] = hist
+    return False
 
 
 # ── Pure validation helpers (module-level so they're patchable in tests) ─────
@@ -277,10 +306,14 @@ def _do_audit(
 
 # ── Embed helpers ─────────────────────────────────────────────────────────────
 
-def _game_embed(round_id: int) -> discord.Embed:
+def _game_embed(
+    round_id: int, color: "discord.Color | None" = None
+) -> discord.Embed:
+    if color is None:
+        color = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
-        title=f"Round #{round_id}",
-        color=discord.Color.from_rgb(80, 20, 100),
+        title=f"🎭 Round #{round_id}",
+        color=color,
     )
 
 
@@ -366,6 +399,7 @@ class GuessSelectView(discord.ui.View):
         game_message: discord.Message,
         *,
         cooldown_seconds: int = 0,
+        max_guesses_per_round: int = MAX_GUESSES_PER_USER_ROUND,
         guess_placeholder: str = "Who is in this photo?",
     ) -> None:
         super().__init__(timeout=SELECT_TIMEOUT_SECONDS)
@@ -373,6 +407,7 @@ class GuessSelectView(discord.ui.View):
         self.round_id = round_id
         self.game_message = game_message
         self.cooldown_seconds = cooldown_seconds
+        self.max_guesses_per_round = max_guesses_per_round
         self._all_members = list(guess_members)
         self._display_members = self._all_members
         self._filter_query = ""
@@ -460,8 +495,7 @@ class GuessSelectView(discord.ui.View):
             self.add_item(clear_btn)
 
     def _disable_all(self) -> None:
-        for item in self.children:
-            item.disabled = True  # type: ignore[union-attr]
+        disable_all_items(self)
 
     async def _on_prev(self, interaction: discord.Interaction) -> None:
         self._page = max(0, self._page - 1)
@@ -493,7 +527,7 @@ class GuessSelectView(discord.ui.View):
         prior_guesses = await asyncio.to_thread(
             _do_count_user_guesses, db_path, self.round_id, interaction.user.id
         )
-        if prior_guesses >= MAX_GUESSES_PER_USER_ROUND:
+        if prior_guesses >= self.max_guesses_per_round:
             self._disable_all()
             guild_id = interaction.guild.id if interaction.guild else 0
             await asyncio.to_thread(
@@ -505,7 +539,7 @@ class GuessSelectView(discord.ui.View):
             await interaction.edit_original_response(
                 content=(
                     f"You're out of guesses on this round "
-                    f"(cap: {MAX_GUESSES_PER_USER_ROUND})."
+                    f"(cap: {self.max_guesses_per_round})."
                 ),
                 view=self,
             )
@@ -540,6 +574,15 @@ class GuessSelectView(discord.ui.View):
             correct=correct,
         )
 
+        # A scored guess is "playing the round" for the economy's quest
+        # trigger (right or wrong — the guess is the participation).
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            self.bot, round_row.guild_id, interaction.user.id,
+            "guess", occurrence=str(self.round_id),
+        )
+
         if correct and round_row.solved_at is None:
             self._disable_all()
             rowcount, guess_count, unique_count = await asyncio.to_thread(
@@ -552,6 +595,13 @@ class GuessSelectView(discord.ui.View):
                     view=self,
                 )
                 return
+            # The race is won: this member solved the round. guess_win is the
+            # stretch twin of the participation `guess` kind above.
+            await fire_member_trigger(
+                self.bot, round_row.guild_id, interaction.user.id,
+                "guess_win", occurrence=str(self.round_id),
+            )
+
             answer_mention = f"<@{round_row.answer_id}>"
             submitter_mention = f"<@{round_row.submitter_id}>"
             solved_emb = _solved_embed(
@@ -727,6 +777,7 @@ class GameView(discord.ui.View):
             view=GuessSelectView(
                 self.bot, self.round_id, guess_members, interaction.message,
                 cooldown_seconds=config.guess_cooldown_seconds,
+                max_guesses_per_round=config.max_guesses_per_round,
                 guess_placeholder=placeholder,
             ),
             ephemeral=True,
@@ -951,9 +1002,10 @@ class CropEditorView(discord.ui.View):
         crop_file = discord.File(io.BytesIO(crop_bytes), filename="SPOILER_guess_crop.jpg")
         game_view = GameView(self.bot, round_id)
         self.bot.add_view(game_view)
+        accent = await resolve_accent_color(db_path, interaction.guild)
         game_msg = await guess_channel.send(
             content=None,
-            embed=_game_embed(round_id),
+            embed=_game_embed(round_id, color=accent),
             file=crop_file,
             view=game_view,
         )
@@ -1213,7 +1265,9 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
         )
 
 
-def _prompt_embed() -> discord.Embed:
+def _prompt_embed(color: "discord.Color | None" = None) -> discord.Embed:
+    if color is None:
+        color = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
         title="🎭 Guess",
         description=(
@@ -1221,7 +1275,7 @@ def _prompt_embed() -> discord.Embed:
             "Click below to play.\n\n"
             "📎 To upload a photo directly, use `/guess submit`."
         ),
-        color=discord.Color.from_rgb(80, 20, 100),
+        color=color,
     )
 
 
@@ -1241,7 +1295,7 @@ class GuessPromptView(discord.ui.View):
         self.add_item(submit_btn)
 
         help_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label="❓ How to Play",
+            label="❓ Help",
             style=discord.ButtonStyle.secondary,
             custom_id="guess_prompt_help",
         )
@@ -1278,8 +1332,11 @@ async def _repost_prompt(
         except (discord.NotFound, discord.Forbidden):
             pass
 
+    accent = await resolve_accent_color(db_path, channel.guild)
     try:
-        new_msg = await channel.send(embed=_prompt_embed(), view=GuessPromptView(bot))
+        new_msg = await channel.send(
+            embed=_prompt_embed(color=accent), view=GuessPromptView(bot)
+        )
     except discord.HTTPException:
         log.exception("guess: failed to post channel prompt in guild %d", guild_id)
         return
@@ -1376,9 +1433,10 @@ class ConfessionPreviewView(discord.ui.View):
         card_file = discord.File(io.BytesIO(card_bytes), filename="SPOILER_guess_confession.jpg")
         game_view = GameView(self._bot, round_id)
         self._bot.add_view(game_view)
+        accent = await resolve_accent_color(db_path, interaction.guild)
         game_msg = await guess_channel.send(
             content=None,
-            embed=_game_embed(round_id),
+            embed=_game_embed(round_id, color=accent),
             file=card_file,
             view=game_view,
         )
@@ -1548,6 +1606,18 @@ class GuessCog(commands.Cog):
             )
             return
 
+        if _submit_rate_limited(
+            interaction.user.id,
+            max_per_window=config.submit_max_per_window,
+            window_seconds=config.submit_window_seconds,
+        ):
+            await interaction.followup.send(
+                f"You've hit the submission limit ({config.submit_max_per_window} per "
+                f"{config.submit_window_seconds}s). Please wait a bit before submitting again.",
+                ephemeral=True,
+            )
+            return
+
         if not _validate_mime(image.content_type):
             await interaction.followup.send("Please submit an image file.", ephemeral=True)
             return
@@ -1607,9 +1677,10 @@ class GuessCog(commands.Cog):
         else:
             status = "⏳ Open"
 
+        accent = await resolve_accent_color(db_path, interaction.guild)
         embed = discord.Embed(
-            title=f"Round #{round_row.id} — inspector",
-            color=discord.Color.dark_grey(),
+            title=f"🔍 Round #{round_row.id} — inspector",
+            color=accent,
             description=(
                 f"**Status:** {status}\n"
                 f"**Submitter:** <@{round_row.submitter_id}>\n"
@@ -1774,6 +1845,12 @@ class GuessCog(commands.Cog):
             await interaction.followup.send("Confession text cannot be empty.", ephemeral=True)
             return
 
+        if contains_disallowed_content(text):
+            await interaction.followup.send(
+                "That confession contains disallowed content. Please rephrase.", ephemeral=True
+            )
+            return
+
         card_bytes = await asyncio.to_thread(render_quote, text)
         await interaction.followup.send(
             "Here's your confession card — post it?",
@@ -1820,7 +1897,8 @@ class GuessCog(commands.Cog):
             if guessers else "_No rounds solved yet._"
         )
 
-        embed = discord.Embed(title="Guess Leaderboard", color=discord.Color.purple())
+        accent = await resolve_accent_color(db_path, interaction.guild)
+        embed = discord.Embed(title="🏆 Guess Leaderboard", color=accent)
         embed.add_field(name="Top Posters", value=poster_text, inline=False)
         embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
 

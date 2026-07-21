@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import json
 import os
 from datetime import date
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from bot_modules.core.db_utils import (
@@ -54,6 +57,11 @@ from bot_modules.services.booster_roles import (
     sync_swatches,
     upsert_booster_role,
 )
+from bot_modules.services.quote_renderer import (
+    BorderStyle,
+    analyze_border_opening,
+    guild_border_path,
+)
 from bot_modules.services.inactivity_prune_service import (
     add_prune_exception,
     get_prune_exception_ids,
@@ -61,8 +69,10 @@ from bot_modules.services.inactivity_prune_service import (
     remove_prune_exception,
 )
 from bot_modules.services.dm_perms_service import (
+    get_dm_mode_role_ids,
     get_dms_config_with_conn,
     set_audit_channel,
+    set_dm_mode_role_ids,
     set_panel_settings,
     set_request_channel,
 )
@@ -75,6 +85,14 @@ from bot_modules.services.confessions_service import (
     get_config_conn as _confessions_get_config_conn,
     upsert_config as _confessions_upsert_config,
 )
+from bot_modules.services.branding_service import (
+    ACCENT_MODE_AVATAR,
+    ACCENT_MODE_CUSTOM,
+    ACCENT_HEX_UNSET,
+    get_branding_conn,
+    upsert_branding,
+)
+from bot_modules.core.branding import invalidate_accent_cache
 from bot_modules.services.starboard_service import (
     get_starboard_config as _get_starboard_config,
     upsert_starboard_config as _upsert_starboard_config,
@@ -99,15 +117,20 @@ from bot_modules.cogs.bump_tracker_cog import (
 )
 from bot_modules.starboard.filters import validate_emoji as _starboard_validate_emoji
 from bot_modules.cogs.pen_pals_cog import (
+    _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
     _get_pool as _pp_get_pool,
+    _set_admin_separations as _pp_set_admin_separations,
     _set_config as _pp_set_config,
+    _set_timers as _pp_set_timers,
 )
 from bot_modules.services.voice_transcription_service import (
     DEFAULT_MODEL as _VT_DEFAULT_MODEL,
     VALID_MODELS as _VT_VALID_MODELS,
+    download_model_to_cache as _vt_download_model,
     get_config as _vt_get_config,
     is_available as _vt_is_available,
+    model_is_cached as _vt_model_is_cached,
     set_config as _vt_set_config,
 )
 from bot_modules.services.ollama_client import is_available as _ollama_is_available
@@ -115,6 +138,7 @@ from bot_modules.services.ollama_client import is_available as _ollama_is_availa
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
 _RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
+_RISKY_MAX_GAMES_KEY = "risky_max_games_per_channel"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
 _POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
 _POLICY_VOTE_TIMEOUT_DEFAULT = 72
@@ -188,6 +212,7 @@ def _xp_coefficients(conn, guild_id: int = 0) -> dict:
         "image_reaction_received_xp": _f(
             "image_reaction_received_xp", d.image_reaction_received_xp
         ),
+        "reaction_given_xp": _f("reaction_given_xp", d.reaction_given_xp),
         "cooldown_thresholds_seconds": _s(
             "cooldown_thresholds_seconds",
             ",".join(str(v) for v in d.cooldown_thresholds_seconds),
@@ -347,6 +372,15 @@ def _bot_identity_section(guild) -> dict:
     }
 
 
+def _branding_section(conn, guild_id: int) -> dict:
+    cfg = get_branding_conn(conn, guild_id)
+    accent_hex = f"#{cfg.accent_hex:06X}" if cfg.has_custom_color() else ""
+    return {
+        "accent_mode": cfg.normalized_mode(),
+        "accent_hex": accent_hex,
+    }
+
+
 def _guess_section(conn, guild_id: int) -> dict:
     gc = _get_guess_config(conn, guild_id)
     return {
@@ -356,6 +390,9 @@ def _guess_section(conn, guild_id: int) -> dict:
         "guess_cooldown_seconds": gc.guess_cooldown_seconds,
         "min_image_dimension_px": gc.min_image_dimension_px,
         "max_image_size_mb": gc.max_image_size_mb,
+        "submit_max_per_window": gc.submit_max_per_window,
+        "submit_window_seconds": gc.submit_window_seconds,
+        "max_guesses_per_round": gc.max_guesses_per_round,
     }
 
 
@@ -392,15 +429,20 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "channel_id": str(wc.channel_id),
         "role_id": str(wc.role_id),
         "log_channel_id": str(wc.log_channel_id),
+        "cooldown_seconds": wc.cooldown_seconds,
+        "hourly_cap_per_target": wc.hourly_cap_per_target,
     }
 
 
 def _risky_section(conn, guild_id: int) -> dict:
     ping_role = get_config_value(conn, _RISKY_PING_KEY, "0", guild_id=guild_id)
     min_secs = get_config_value(conn, _RISKY_MIN_GAME_KEY, "0", guild_id=guild_id)
+    # Default "10" mirrors risky_roll.store.MAX_GAMES_PER_CHANNEL.
+    max_games = get_config_value(conn, _RISKY_MAX_GAMES_KEY, "10", guild_id=guild_id)
     return {
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
+        "max_games_per_channel": int(max_games),
     }
 
 
@@ -411,6 +453,24 @@ def _policy_section(conn, guild_id: int) -> dict:
             _POLICY_VOTE_TIMEOUT_KEY,
             _POLICY_VOTE_TIMEOUT_DEFAULT,
             guild_id=guild_id,
+        ),
+    }
+
+
+def _greeting_watch_section(conn, guild_id: int) -> dict:
+    # Read the same keys the ingest hook (GuildConfig) and the monitor loop act
+    # on, so the panel never disagrees with what actually fires. channel_ids is
+    # a CSV of watched-channel ids (same shape as mod_role_ids).
+    return {
+        "enabled": _bool_val(conn, "greeting_watch_enabled", guild_id=guild_id),
+        "channel_ids": _str_val(
+            conn, "greeting_watch_channel_ids", guild_id=guild_id
+        ),
+        "notify_user_id": str(
+            _int_val(conn, "greeting_watch_notify_user_id", guild_id=guild_id)
+        ),
+        "window_minutes": _int_val(
+            conn, "greeting_watch_window_minutes", 10, guild_id=guild_id
         ),
     }
 
@@ -430,6 +490,157 @@ def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
     }
 
 
+# ── Inactive-sweep config helper ────────────────────────────────────────
+
+
+def _inactive_section(conn, guild_id: int) -> dict:
+    return {
+        "threshold_days": _int_val(
+            conn, "inactive_threshold_days", 30, guild_id=guild_id
+        ),
+        "auto_sweep": _bool_val(conn, "inactive_auto_sweep", guild_id=guild_id),
+        "sweep_cap": _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
+    }
+
+
+# ── Duel/group-games config helpers ─────────────────────────────────────
+# Every game's settings are split shared-tier (the ``duel_config`` table,
+# one row per guild+game_type — cooldowns, sentence duration, the channel
+# allowlist, nickname/stakes length caps) and game-tier (a dedicated
+# ``<game>_config`` table with that game's own mechanics knobs; Pressure
+# Cooker has no game-tier table, it only uses the shared one). The bot's own
+# db.py modules for these tables are async (built for its aiosqlite-style
+# GamesDb wrapper) — the web server's ``ctx.open_db()`` connection is sync
+# sqlite3, so reads/writes here are hand-rolled rather than reusing them.
+#
+# ``channel_allowlist`` and the two length caps are enforced generically for
+# all six games in bot_modules/duels/base_duel.py and base_game.py, even
+# though historically only Pressure Cooker's Discord command ever exposed
+# them — every panel below surfaces them, closing that gap.
+
+_DUEL_SHARED_DEFAULTS: dict = {
+    "cooldown_hours": 48,
+    "sentence_hours": 24,
+    "channel_allowlist": "[]",
+    "max_nick_length": 32,
+    "max_stakes_length": 200,
+}
+
+# game_key == duel_config.game_type for every game (no renaming needed).
+_DUEL_GAMES: dict = {
+    "pressure": {
+        "table": None,
+        "defaults": {},
+        "shared_fields": (
+            "cooldown_hours", "sentence_hours",
+            "channel_allowlist", "max_nick_length", "max_stakes_length",
+        ),
+    },
+    "quickdraw": {
+        "table": "quickdraw_config",
+        "defaults": {"min_delay": 3.0, "max_delay": 8.0, "draw_window": 5.0},
+        "shared_fields": (
+            "cooldown_hours", "sentence_hours",
+            "channel_allowlist", "max_nick_length", "max_stakes_length",
+        ),
+    },
+    "hot_potato": {
+        "table": "hot_potato_config",
+        "defaults": {"min_timer": 10.0, "max_timer": 45.0},
+        "shared_fields": (
+            "cooldown_hours", "sentence_hours",
+            "channel_allowlist", "max_nick_length", "max_stakes_length",
+        ),
+    },
+    "hot_potato_group": {
+        "table": "hp_group_config",
+        "defaults": {
+            "min_fuse": 20.0, "max_fuse": 60.0, "min_hold": 2.0,
+            "min_players": 2, "max_players": 10,
+        },
+        "shared_fields": (
+            "cooldown_hours", "sentence_hours",
+            "channel_allowlist", "max_nick_length", "max_stakes_length",
+        ),
+    },
+    "chicken": {
+        "table": "chicken_config",
+        "defaults": {"climb_duration": 25.0, "min_players": 2, "max_players": 8},
+        "shared_fields": (
+            "cooldown_hours", "sentence_hours",
+            "channel_allowlist", "max_nick_length", "max_stakes_length",
+        ),
+    },
+    "musical_chairs": {
+        "table": "mc_config",
+        "defaults": {
+            "min_music": 5.0, "max_music": 15.0, "scramble_window": 8.0,
+            "false_start_elim": 1, "min_players": 3, "max_players": 10,
+        },
+        "shared_fields": (
+            "cooldown_hours", "sentence_hours",
+            "channel_allowlist", "max_nick_length", "max_stakes_length",
+        ),
+    },
+}
+
+
+def _duel_shared_row(conn, guild_id: int, game_type: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM duel_config WHERE guild_id = ? AND game_type = ?",
+        (guild_id, game_type),
+    ).fetchone()
+    if row:
+        return dict(row)
+    return {"guild_id": guild_id, "game_type": game_type, **_DUEL_SHARED_DEFAULTS}
+
+
+def _duel_game_table_row(conn, guild_id: int, table: str | None, defaults: dict) -> dict:
+    merged = dict(defaults)
+    if not table:
+        return merged
+    row = conn.execute(f"SELECT * FROM {table} WHERE guild_id = ?", (guild_id,)).fetchone()
+    if row:
+        merged.update({k: v for k, v in dict(row).items() if k != "guild_id"})
+    return merged
+
+
+def _duel_game_section(conn, guild_id: int, game_key: str) -> dict:
+    spec = _DUEL_GAMES[game_key]
+    shared = _duel_shared_row(conn, guild_id, game_key)
+    out = {f: shared[f] for f in spec["shared_fields"]}
+    if "channel_allowlist" in out:
+        out["channel_allowlist"] = [
+            str(i) for i in json.loads(out["channel_allowlist"] or "[]")
+        ]
+    out.update(_duel_game_table_row(conn, guild_id, spec["table"], spec["defaults"]))
+    return out
+
+
+def _duel_game_upsert(
+    conn, guild_id: int, game_key: str, shared_updates: dict, game_updates: dict
+) -> None:
+    spec = _DUEL_GAMES[game_key]
+    if shared_updates:
+        conn.execute(
+            "INSERT OR IGNORE INTO duel_config (guild_id, game_type) VALUES (?, ?)",
+            (guild_id, game_key),
+        )
+        set_clause = ", ".join(f"{k} = ?" for k in shared_updates)
+        conn.execute(
+            f"UPDATE duel_config SET {set_clause} WHERE guild_id = ? AND game_type = ?",
+            (*shared_updates.values(), guild_id, game_key),
+        )
+    if game_updates and spec["table"]:
+        table = spec["table"]
+        conn.execute(f"INSERT OR IGNORE INTO {table} (guild_id) VALUES (?)", (guild_id,))
+        set_clause = ", ".join(f"{k} = ?" for k in game_updates)
+        conn.execute(
+            f"UPDATE {table} SET {set_clause} WHERE guild_id = ?",
+            (*game_updates.values(), guild_id),
+        )
+
+
 # ── Auto-react config helper ──────────────────────────────────────────
 
 
@@ -447,6 +658,12 @@ def _auto_react_section(conn, guild_id: int) -> list:
 def _pen_pals_section(conn, guild_id: int) -> dict:
     cfg = _pp_get_config(conn, guild_id)
     pool_size = len(_pp_get_pool(conn, guild_id))
+    # Snowflake ids cross to the browser as strings so JS float math can't
+    # round them into non-existent members.
+    separations = [
+        {"user_a": str(a), "user_b": str(b)}
+        for a, b in _pp_get_admin_separations(conn, guild_id)
+    ]
     if cfg is None:
         return {
             "enabled": False,
@@ -454,10 +671,14 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "opt_in_role_id": None,
             "question_category": "sfw",
             "log_channel_id": None,
-            "auto_round_dow": -1,
-            "auto_round_hour": 12,
             "panel_channel_id": None,
             "pool_size": pool_size,
+            "session_seconds": 86400,
+            "match_cooldown_seconds": 2592000,
+            "max_question_swaps": 3,
+            "warn_seconds": 3600,
+            "question_suppress_seconds": 7200,
+            "separations": separations,
         }
     return {
         "enabled": bool(cfg["enabled"]),
@@ -465,11 +686,19 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "opt_in_role_id": str(cfg["opt_in_role_id"]) if cfg["opt_in_role_id"] else None,
         "question_category": cfg["question_category"] or "sfw",
         "log_channel_id": str(cfg["log_channel_id"]) if cfg["log_channel_id"] else None,
-        "auto_round_dow": int(cfg["auto_round_dow"]),
-        "auto_round_hour": int(cfg["auto_round_hour"]),
         "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
         "pool_size": pool_size,
+        "session_seconds": int(cfg["session_seconds"]),
+        "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
+        "max_question_swaps": int(cfg["max_question_swaps"]),
+        "warn_seconds": int(cfg["warn_seconds"]),
+        "question_suppress_seconds": int(cfg["question_suppress_seconds"]),
+        "separations": separations,
     }
+
+
+def _vt_models_status() -> list[dict]:
+    return [{"name": m, "cached": _vt_model_is_cached(m)} for m in _VT_VALID_MODELS]
 
 
 def _voice_transcription_section(conn, guild_id: int) -> dict:
@@ -480,12 +709,14 @@ def _voice_transcription_section(conn, guild_id: int) -> dict:
             "model_name": _VT_DEFAULT_MODEL,
             "channel_ids": [],
             "available": _vt_is_available(),
+            "models": _vt_models_status(),
         }
     return {
         "enabled": cfg.enabled,
         "model_name": cfg.model_name,
         "channel_ids": [str(c) for c in cfg.channel_ids],
         "available": _vt_is_available(),
+        "models": _vt_models_status(),
     }
 
 
@@ -795,6 +1026,7 @@ async def get_config(
                         "max_age_seconds": int(r["max_age_seconds"]),
                         "interval_seconds": int(r["interval_seconds"]),
                         "last_run_ts": float(r["last_run_ts"]),
+                        "media_only": bool(r["media_only"]),
                         "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
                         "interval_display": _fmt_dur(int(r["interval_seconds"])),
                     }
@@ -806,12 +1038,25 @@ async def get_config(
                 "starboard": _starboard_section(conn, guild_id),
                 "birthday": _birthday_section(conn, guild_id),
                 "bot_identity": _bot_identity_section(prune_guild),
+                "branding": _branding_section(conn, guild_id),
                 "guess": _guess_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
                 "needle": _needle_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
                 "rules_watch": _rules_watch_section(conn, guild_id, ctx.db_path),
+                "inactive": _inactive_section(conn, guild_id),
+                "games_pressure": _duel_game_section(conn, guild_id, "pressure"),
+                "games_quickdraw": _duel_game_section(conn, guild_id, "quickdraw"),
+                "games_hot_potato": _duel_game_section(conn, guild_id, "hot_potato"),
+                "games_hot_potato_group": _duel_game_section(
+                    conn, guild_id, "hot_potato_group"
+                ),
+                "games_chicken": _duel_game_section(conn, guild_id, "chicken"),
+                "games_musical_chairs": _duel_game_section(
+                    conn, guild_id, "musical_chairs"
+                ),
+                "greeting_watch": _greeting_watch_section(conn, guild_id),
                 "auto_react": _auto_react_section(conn, guild_id),
                 "bump_tracker": _bump_tracker_section(conn, guild_id),
                 "pen_pals": _pen_pals_section(conn, guild_id),
@@ -840,7 +1085,6 @@ async def update_global(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    is_home = guild_id == ctx.guild_id
 
     def _q():
         with ctx.open_db() as conn:
@@ -848,28 +1092,18 @@ async def update_global(
                 set_config_value(
                     conn, "tz_offset_hours", str(body.tz_offset_hours), guild_id
                 )
-                if is_home:
-                    ctx.tz_offset_hours = body.tz_offset_hours
             if body.mod_channel_id is not None:
                 set_config_value(
                     conn, "mod_channel_id", body.mod_channel_id, guild_id
                 )
-                if is_home:
-                    ctx.mod_channel_id = int(body.mod_channel_id)
             if body.bypass_role_ids is not None:
                 clear_config_id_bucket(conn, "bypass_role_ids", guild_id)
                 for rid in body.bypass_role_ids:
                     add_config_id(conn, "bypass_role_ids", int(rid), guild_id)
-                if is_home:
-                    ctx.bypass_role_ids = {int(r) for r in body.bypass_role_ids}
             if body.recorded_bot_user_ids is not None:
                 clear_config_id_bucket(conn, "recorded_bot_user_ids", guild_id)
                 for uid in body.recorded_bot_user_ids:
                     add_config_id(conn, "recorded_bot_user_ids", int(uid), guild_id)
-                if is_home:
-                    ctx.recorded_bot_user_ids = {
-                        int(u) for u in body.recorded_bot_user_ids
-                    }
             if body.booster_swatch_dir is not None:
                 # booster_swatch_dir is a single host filesystem path read
                 # globally (guild_id=0); pin the write there to avoid a
@@ -1016,16 +1250,6 @@ async def update_welcome(
                 val = getattr(body, field_name)
                 if val is not None:
                     set_config_value(conn, config_key, val, guild_id)
-                    # Keep the home guild's flat ctx fields fresh for straggler
-                    # readers not yet migrated to guild_config() (e.g. the
-                    # reports route reads ctx.greeter_role_id /
-                    # ctx.join_leave_log_channel_id). Only for the home guild —
-                    # mutating these for another guild would corrupt home state.
-                    if guild_id == ctx.guild_id and hasattr(ctx, config_key):
-                        try:
-                            setattr(ctx, config_key, int(val))
-                        except ValueError:
-                            setattr(ctx, config_key, val)
         return {"ok": True}
 
     result = await run_query(_q)
@@ -1066,26 +1290,36 @@ async def welcome_preview(
     from bot_modules.bios.trigger import resolve_bio_placeholders
     from bot_modules.services.welcome_service import server_guide_mention_for
 
-    with ctx.open_db() as conn:
-        welcome_msg = get_config_value(
-            conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
-        )
-        leave_msg = get_config_value(
-            conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
-        )
-        bio_link, bios_channel_mention = resolve_bio_placeholders(conn, guild_id)
-        try:
-            server_guide_channel_id = int(
-                get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            wm = get_config_value(
+                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
             )
-        except (TypeError, ValueError):
-            server_guide_channel_id = 0
+            lm = get_config_value(
+                conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+            )
+            bl, bcm = resolve_bio_placeholders(conn, guild_id)
+            try:
+                sgcid = int(
+                    get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+                )
+            except (TypeError, ValueError):
+                sgcid = 0
+            return wm, lm, bl, bcm, sgcid
+
+    welcome_msg, leave_msg, bio_link, bios_channel_mention, server_guide_channel_id = (
+        await run_query(_q)
+    )
     server_guide_mention = server_guide_mention_for(server_guide_channel_id)
 
     try:
         member_bio_link = await resolve_member_bio_link(ctx, member)
     except Exception:
         member_bio_link = ""
+
+    from bot_modules.core.branding import resolve_accent_color
+
+    accent = await resolve_accent_color(ctx.db_path, guild)
 
     welcome_embed = build_welcome_embed(
         member,
@@ -1094,6 +1328,7 @@ async def welcome_preview(
         bios_channel_mention=bios_channel_mention,
         member_bio_link=member_bio_link,
         server_guide_mention=server_guide_mention,
+        color=accent,
     )
     leave_embed = build_leave_embed(
         member,
@@ -1102,6 +1337,7 @@ async def welcome_preview(
         bios_channel_mention=bios_channel_mention,
         member_bio_link=member_bio_link,
         server_guide_mention=server_guide_mention,
+        color=accent,
     )
 
     def _to_dict(e) -> dict:
@@ -1130,6 +1366,7 @@ class XpConfigUpdate(BaseModel):
     message_word_xp: float | None = None
     reply_bonus_xp: float | None = None
     image_reaction_received_xp: float | None = None
+    reaction_given_xp: float | None = None
     cooldown_thresholds_seconds: str | None = None
     cooldown_multipliers: str | None = None
     duplicate_multiplier: float | None = None
@@ -1150,11 +1387,6 @@ async def update_xp(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    # Per-guild aware: XP config is read at runtime via ctx.guild_config(gid).
-    # In-memory flat-field updates below are kept for the home guild only (some
-    # cosmetic home readers remain); other guilds are refreshed via the
-    # invalidate_guild_config call after the write.
-    is_home = guild_id == ctx.guild_id
 
     def _q():
         with ctx.open_db() as conn:
@@ -1162,8 +1394,6 @@ async def update_xp(
                 set_config_value(
                     conn, "xp_level_5_role_id", body.level_5_role_id, guild_id
                 )
-                if is_home:
-                    ctx.level_5_role_id = int(body.level_5_role_id)
             if body.level_5_log_channel_id is not None:
                 set_config_value(
                     conn,
@@ -1171,8 +1401,6 @@ async def update_xp(
                     body.level_5_log_channel_id,
                     guild_id,
                 )
-                if is_home:
-                    ctx.level_5_log_channel_id = int(body.level_5_log_channel_id)
             if body.level_up_log_channel_id is not None:
                 set_config_value(
                     conn,
@@ -1180,8 +1408,6 @@ async def update_xp(
                     body.level_up_log_channel_id,
                     guild_id,
                 )
-                if is_home:
-                    ctx.level_up_log_channel_id = int(body.level_up_log_channel_id)
             if body.xp_grant_allowed_user_ids is not None:
                 clear_config_id_bucket(
                     conn, "xp_grant_allowed_user_ids", guild_id
@@ -1190,10 +1416,6 @@ async def update_xp(
                     add_config_id(
                         conn, "xp_grant_allowed_user_ids", int(uid), guild_id
                     )
-                if is_home:
-                    ctx.xp_grant_allowed_user_ids = {
-                        int(u) for u in body.xp_grant_allowed_user_ids
-                    }
             if body.xp_excluded_channel_ids is not None:
                 clear_config_id_bucket(
                     conn, "xp_excluded_channel_ids", guild_id
@@ -1202,16 +1424,13 @@ async def update_xp(
                     add_config_id(
                         conn, "xp_excluded_channel_ids", int(cid), guild_id
                     )
-                if is_home:
-                    ctx.xp_excluded_channel_ids = {
-                        int(c) for c in body.xp_excluded_channel_ids
-                    }
 
             # Persist algorithm coefficients
             _COEFF_FIELDS = [
                 "message_word_xp",
                 "reply_bonus_xp",
                 "image_reaction_received_xp",
+                "reaction_given_xp",
                 "cooldown_thresholds_seconds",
                 "cooldown_multipliers",
                 "duplicate_multiplier",
@@ -1232,11 +1451,6 @@ async def update_xp(
                         str(val),
                         guild_id,
                     )
-
-            # Reload live XP settings on ctx (home guild only — reload_xp_settings
-            # reads ctx.guild_id).
-            if is_home and hasattr(ctx, "reload_xp_settings"):
-                ctx.reload_xp_settings()
 
         return {"ok": True}
 
@@ -1450,10 +1664,6 @@ async def update_moderation(
     # Permission checks read mod/admin roles via ctx.guild_config(guild_id); drop
     # the cached snapshot so the next check reloads the edited roles.
     ctx.invalidate_guild_config(guild_id)
-    if guild_id == ctx.guild_id:
-        # Keep the home guild's flat role caches in sync for stragglers not yet
-        # migrated to guild_config() (e.g. setup_cog reads ctx.mod_role_ids).
-        ctx.reload_permission_roles()
     return result
 
 
@@ -1494,6 +1704,397 @@ async def update_rules_watch(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+class InactiveConfigUpdate(BaseModel):
+    threshold_days: int | None = None
+    auto_sweep: bool | None = None
+    sweep_cap: int | None = None
+
+
+@router.put("/config/inactive")
+async def update_inactive(
+    request: Request,
+    body: InactiveConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Set the inactive-sweep threshold/cap and toggle the 6-hourly auto sweep.
+
+    Ranges mirror the retired ``/inactive config`` command:
+    threshold_days 1-3650, sweep_cap 1-200.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.threshold_days is not None:
+                set_config_value(
+                    conn,
+                    "inactive_threshold_days",
+                    str(max(1, min(3650, body.threshold_days))),
+                    guild_id,
+                )
+            if body.auto_sweep is not None:
+                set_config_value(
+                    conn, "inactive_auto_sweep", "1" if body.auto_sweep else "0", guild_id
+                )
+            if body.sweep_cap is not None:
+                set_config_value(
+                    conn, "inactive_sweep_cap", str(max(1, min(200, body.sweep_cap))), guild_id
+                )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Duel/group-games config writes ──────────────────────────────────────
+# One small update model per game (field sets differ), all delegating to the
+# shared `_duel_game_upsert` helper defined above with `_rules_watch_section`.
+
+
+def _clamp_channel_allowlist(values: list[str] | None) -> str | None:
+    if values is None:
+        return None
+    return json.dumps(sorted({int(v) for v in values if str(v).strip()}))
+
+
+class PressureConfigUpdate(BaseModel):
+    cooldown_hours: int | None = None
+    sentence_hours: int | None = None
+    channel_allowlist: list[str] | None = None
+    max_nick_length: int | None = None
+    max_stakes_length: int | None = None
+
+
+@router.put("/config/games-pressure")
+async def update_games_pressure(
+    request: Request,
+    body: PressureConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared: dict = {}
+        if body.cooldown_hours is not None:
+            shared["cooldown_hours"] = max(0, body.cooldown_hours)
+        if body.sentence_hours is not None:
+            shared["sentence_hours"] = max(1, body.sentence_hours)
+        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+        if allowlist is not None:
+            shared["channel_allowlist"] = allowlist
+        if body.max_nick_length is not None:
+            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
+        if body.max_stakes_length is not None:
+            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, "pressure", shared, {})
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class QuickdrawConfigUpdate(BaseModel):
+    cooldown_hours: int | None = None
+    sentence_hours: int | None = None
+    channel_allowlist: list[str] | None = None
+    max_nick_length: int | None = None
+    max_stakes_length: int | None = None
+    min_delay: float | None = None
+    max_delay: float | None = None
+    draw_window: float | None = None
+
+
+@router.put("/config/games-quickdraw")
+async def update_games_quickdraw(
+    request: Request,
+    body: QuickdrawConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared: dict = {}
+        if body.cooldown_hours is not None:
+            shared["cooldown_hours"] = max(0, body.cooldown_hours)
+        if body.sentence_hours is not None:
+            shared["sentence_hours"] = max(1, body.sentence_hours)
+        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+        if allowlist is not None:
+            shared["channel_allowlist"] = allowlist
+        if body.max_nick_length is not None:
+            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
+        if body.max_stakes_length is not None:
+            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+        game: dict = {}
+        if body.min_delay is not None:
+            game["min_delay"] = max(0.5, body.min_delay)
+        if body.max_delay is not None:
+            game["max_delay"] = max(1.0, body.max_delay)
+        if body.draw_window is not None:
+            game["draw_window"] = max(1.0, body.draw_window)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, "quickdraw", shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class HotPotatoConfigUpdate(BaseModel):
+    cooldown_hours: int | None = None
+    sentence_hours: int | None = None
+    channel_allowlist: list[str] | None = None
+    max_nick_length: int | None = None
+    max_stakes_length: int | None = None
+    min_timer: float | None = None
+    max_timer: float | None = None
+
+
+@router.put("/config/games-hot-potato")
+async def update_games_hot_potato(
+    request: Request,
+    body: HotPotatoConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared: dict = {}
+        if body.cooldown_hours is not None:
+            shared["cooldown_hours"] = max(0, body.cooldown_hours)
+        if body.sentence_hours is not None:
+            shared["sentence_hours"] = max(1, body.sentence_hours)
+        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+        if allowlist is not None:
+            shared["channel_allowlist"] = allowlist
+        if body.max_nick_length is not None:
+            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
+        if body.max_stakes_length is not None:
+            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+        game: dict = {}
+        if body.min_timer is not None:
+            game["min_timer"] = max(5.0, body.min_timer)
+        if body.max_timer is not None:
+            game["max_timer"] = max(10.0, body.max_timer)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, "hot_potato", shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class HotPotatoGroupConfigUpdate(BaseModel):
+    cooldown_hours: int | None = None
+    sentence_hours: int | None = None
+    channel_allowlist: list[str] | None = None
+    max_nick_length: int | None = None
+    max_stakes_length: int | None = None
+    min_fuse: float | None = None
+    max_fuse: float | None = None
+    min_hold: float | None = None
+    min_players: int | None = None
+    max_players: int | None = None
+
+
+@router.put("/config/games-hot-potato-group")
+async def update_games_hot_potato_group(
+    request: Request,
+    body: HotPotatoGroupConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared: dict = {}
+        if body.cooldown_hours is not None:
+            shared["cooldown_hours"] = max(0, body.cooldown_hours)
+        if body.sentence_hours is not None:
+            shared["sentence_hours"] = max(1, body.sentence_hours)
+        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+        if allowlist is not None:
+            shared["channel_allowlist"] = allowlist
+        if body.max_nick_length is not None:
+            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
+        if body.max_stakes_length is not None:
+            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+        game: dict = {}
+        if body.min_fuse is not None:
+            game["min_fuse"] = max(5.0, body.min_fuse)
+        if body.max_fuse is not None:
+            game["max_fuse"] = max(10.0, body.max_fuse)
+        if body.min_hold is not None:
+            game["min_hold"] = max(0.0, body.min_hold)
+        if body.min_players is not None:
+            game["min_players"] = max(2, body.min_players)
+        if body.max_players is not None:
+            game["max_players"] = max(2, body.max_players)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, "hot_potato_group", shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class ChickenConfigUpdate(BaseModel):
+    cooldown_hours: int | None = None
+    sentence_hours: int | None = None
+    channel_allowlist: list[str] | None = None
+    max_nick_length: int | None = None
+    max_stakes_length: int | None = None
+    climb_duration: float | None = None
+    min_players: int | None = None
+    max_players: int | None = None
+
+
+@router.put("/config/games-chicken")
+async def update_games_chicken(
+    request: Request,
+    body: ChickenConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared: dict = {}
+        if body.cooldown_hours is not None:
+            shared["cooldown_hours"] = max(0, body.cooldown_hours)
+        if body.sentence_hours is not None:
+            shared["sentence_hours"] = max(1, body.sentence_hours)
+        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+        if allowlist is not None:
+            shared["channel_allowlist"] = allowlist
+        if body.max_nick_length is not None:
+            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
+        if body.max_stakes_length is not None:
+            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+        game: dict = {}
+        if body.climb_duration is not None:
+            game["climb_duration"] = max(5.0, body.climb_duration)
+        if body.min_players is not None:
+            game["min_players"] = max(2, body.min_players)
+        if body.max_players is not None:
+            game["max_players"] = max(2, body.max_players)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, "chicken", shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class MusicalChairsConfigUpdate(BaseModel):
+    cooldown_hours: int | None = None
+    sentence_hours: int | None = None
+    channel_allowlist: list[str] | None = None
+    max_nick_length: int | None = None
+    max_stakes_length: int | None = None
+    min_music: float | None = None
+    max_music: float | None = None
+    scramble_window: float | None = None
+    false_start_elim: bool | None = None
+    min_players: int | None = None
+    max_players: int | None = None
+
+
+@router.put("/config/games-musical-chairs")
+async def update_games_musical_chairs(
+    request: Request,
+    body: MusicalChairsConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        shared: dict = {}
+        if body.cooldown_hours is not None:
+            shared["cooldown_hours"] = max(0, body.cooldown_hours)
+        if body.sentence_hours is not None:
+            shared["sentence_hours"] = max(1, body.sentence_hours)
+        allowlist = _clamp_channel_allowlist(body.channel_allowlist)
+        if allowlist is not None:
+            shared["channel_allowlist"] = allowlist
+        if body.max_nick_length is not None:
+            shared["max_nick_length"] = max(1, min(32, body.max_nick_length))
+        if body.max_stakes_length is not None:
+            shared["max_stakes_length"] = max(1, min(2000, body.max_stakes_length))
+        game: dict = {}
+        if body.min_music is not None:
+            game["min_music"] = max(2.0, body.min_music)
+        if body.max_music is not None:
+            game["max_music"] = max(3.0, body.max_music)
+        if body.scramble_window is not None:
+            game["scramble_window"] = max(2.0, body.scramble_window)
+        if body.false_start_elim is not None:
+            game["false_start_elim"] = 1 if body.false_start_elim else 0
+        if body.min_players is not None:
+            game["min_players"] = max(3, body.min_players)
+        if body.max_players is not None:
+            game["max_players"] = max(3, body.max_players)
+        with ctx.open_db() as conn:
+            _duel_game_upsert(conn, guild_id, "musical_chairs", shared, game)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class GreetingWatchConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    channel_ids: str | None = None
+    notify_user_id: str | None = None
+    window_minutes: int | None = None
+
+
+@router.put("/config/greeting-watch")
+async def update_greeting_watch(
+    request: Request,
+    body: GreetingWatchConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Configure Greeting Watch — which channels to watch, who to DM, how long
+    to wait before flagging a greeting as unanswered."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.enabled is not None:
+                set_config_value(
+                    conn,
+                    "greeting_watch_enabled",
+                    "1" if body.enabled else "0",
+                    guild_id,
+                )
+            if body.channel_ids is not None:
+                set_config_value(
+                    conn, "greeting_watch_channel_ids", body.channel_ids, guild_id
+                )
+            if body.notify_user_id is not None:
+                set_config_value(
+                    conn,
+                    "greeting_watch_notify_user_id",
+                    body.notify_user_id,
+                    guild_id,
+                )
+            if body.window_minutes is not None:
+                set_config_value(
+                    conn,
+                    "greeting_watch_window_minutes",
+                    str(body.window_minutes),
+                    guild_id,
+                )
+        return {"ok": True}
+
+    result = await run_query(_q)
+    # The ingest hook reads these off the cached GuildConfig snapshot; drop it so
+    # the next message picks up the change without a restart.
+    ctx.invalidate_guild_config(guild_id)
+    return result
 
 
 class RoleGrantUpdate(BaseModel):
@@ -1575,8 +2176,6 @@ async def update_role_grant(
 
     result = await run_query(_q)
     ctx.invalidate_guild_config(guild_id)
-    if guild_id == ctx.guild_id:
-        ctx.reload_grant_roles()
     return result
 
 
@@ -1596,8 +2195,6 @@ async def delete_role_grant(
 
     result = await run_query(_q)
     ctx.invalidate_guild_config(guild_id)
-    if guild_id == ctx.guild_id:
-        ctx.reload_grant_roles()
     return result
 
 
@@ -1613,7 +2210,6 @@ async def update_spoiler(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    is_home = guild_id == ctx.guild_id
 
     def _q():
         with ctx.open_db() as conn:
@@ -1623,10 +2219,6 @@ async def update_spoiler(
                     add_config_id(
                         conn, "spoiler_required_channels", int(cid), guild_id
                     )
-                if is_home:
-                    ctx.spoiler_required_channels = {
-                        int(c) for c in body.spoiler_required_channels
-                    }
         return {"ok": True}
 
     result = await run_query(_q)
@@ -1860,12 +2452,157 @@ async def delete_booster_swatch(
     return _swatch_listing(ctx.db_path, guild_id)
 
 
+# ── Quote card border (per-guild uploaded frame) ─────────────────────
+#
+# A guild can upload one PNG/WEBP frame that becomes its default quote-card
+# border. The renderer composites it over the whole card using its own alpha
+# channel, so an opaque upload would hide the quote entirely — the upload path
+# therefore requires a real, partly-transparent alpha channel and re-encodes to
+# a clean RGBA PNG at the exact path the bot renderer reads
+# (``db_path.parent/quote_borders/<guild_id>/border.png``).
+
+_MAX_QUOTE_BORDER_BYTES = 8 * 1024 * 1024
+_QUOTE_BORDER_MAX_DIM = 2000
+
+
+def _quote_border_meta(db_path, guild_id: int) -> dict:
+    path = guild_border_path(db_path, guild_id)
+    if not path.is_file():
+        return {"exists": False, "width": None, "height": None}
+    width = height = None
+    try:
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(path) as im:
+            width, height = im.size
+    except Exception:
+        pass
+    return {"exists": True, "width": width, "height": height}
+
+
+@router.get("/config/quote-border")
+async def get_quote_border(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Metadata about this guild's uploaded quote-card border."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    return _quote_border_meta(ctx.db_path, guild_id)
+
+
+@router.get("/config/quote-border/image")
+async def get_quote_border_image(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Serve the raw border PNG for preview (admin only, guild-scoped)."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    path = guild_border_path(ctx.db_path, guild_id)
+    if not path.is_file():
+        raise HTTPException(404, "No quote border set")
+    return FileResponse(path, media_type="image/png")
+
+
+@router.post("/config/quote-border")
+async def upload_quote_border(
+    request: Request,
+    file: UploadFile = File(...),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Upload + normalize a per-guild quote-card border.
+
+    Rejects opaque images (they would cover the whole card) and re-encodes to a
+    clean RGBA PNG so the renderer always gets a safe, alpha-carrying frame.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    content = await file.read(_MAX_QUOTE_BORDER_BYTES + 1)
+    if len(content) > _MAX_QUOTE_BORDER_BYTES:
+        raise HTTPException(413, "Border image must be 8 MB or smaller.")
+    if not content:
+        raise HTTPException(400, "Empty file.")
+
+    from PIL import Image, UnidentifiedImageError  # noqa: PLC0415
+
+    try:
+        with Image.open(io.BytesIO(content)) as im:
+            im.load()
+            fmt = (im.format or "").upper()
+            img = im.convert("RGBA")
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(400, "Unsupported or corrupt image.")
+
+    # SVG can't reach here (PIL won't open it) and JPEG/GIF lack a usable alpha
+    # channel for a see-through frame, so restrict to the two formats that do.
+    if fmt not in ("PNG", "WEBP"):
+        raise HTTPException(
+            400, "Use a PNG or WEBP with transparency (JPEG/GIF have no usable alpha)."
+        )
+
+    # getextrema() on the single-band alpha returns (min, max); min>=250 means
+    # effectively no transparency. (Guard the union type the stubs declare.)
+    alpha_min = img.getchannel("A").getextrema()[0]
+    if isinstance(alpha_min, tuple):
+        alpha_min = alpha_min[0]
+    if alpha_min >= 250:
+        raise HTTPException(
+            400,
+            "This image has no transparent areas — it would cover the whole quote. "
+            "Upload a frame PNG with a see-through center.",
+        )
+
+    img.thumbnail(
+        (_QUOTE_BORDER_MAX_DIM, _QUOTE_BORDER_MAX_DIM), Image.Resampling.LANCZOS
+    )
+
+    target = guild_border_path(ctx.db_path, guild_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to a temp sibling and confirm the frame leaves a usable opening at the
+    # render canvas (900×500) before replacing any existing border — this is the
+    # real guard: the renderer fits the quote into this opening, so "no opening"
+    # is the failure mode, catching center-covered frames the opaque check misses.
+    tmp = target.with_name("border.tmp.png")
+    img.save(tmp, format="PNG")
+    probe = BorderStyle(
+        name="pending", path=tmp, flip=False, luma_key=False, mask_fit=True
+    )
+    if analyze_border_opening(probe, 900, 500) is None:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(
+            400,
+            "The frame leaves no clear opening for the quote — use a border with a "
+            "larger see-through center.",
+        )
+    tmp.replace(target)
+
+    return _quote_border_meta(ctx.db_path, guild_id)
+
+
+@router.delete("/config/quote-border")
+async def delete_quote_border(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Remove this guild's uploaded quote border."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    path = guild_border_path(ctx.db_path, guild_id)
+    if path.is_file():
+        path.unlink()
+    return _quote_border_meta(ctx.db_path, guild_id)
+
+
 # ── Auto-delete schedules ────────────────────────────────────────────
 
 
 class AutoDeleteRuleUpdate(BaseModel):
     max_age_seconds: int
     interval_seconds: int
+    media_only: bool = False
 
 
 @router.put("/config/auto-delete/{channel_id}")
@@ -1885,6 +2622,7 @@ async def update_auto_delete(
             int(channel_id),
             body.max_age_seconds,
             body.interval_seconds,
+            media_only=body.media_only,
         )
         return {"ok": True}
 
@@ -2090,8 +2828,6 @@ class PenPalsConfigUpdate(BaseModel):
     opt_in_role_id: str | None = None
     question_category: str = "sfw"
     log_channel_id: str | None = None
-    auto_round_dow: int = -1
-    auto_round_hour: int = 12
     panel_channel_id: str | None = None
 
 
@@ -2118,8 +2854,6 @@ async def update_pen_pals_config(
                 opt_in_role_id=int(body.opt_in_role_id) if body.opt_in_role_id else 0,
                 question_category=body.question_category,
                 log_channel_id=int(body.log_channel_id) if body.log_channel_id else 0,
-                auto_round_dow=body.auto_round_dow,
-                auto_round_hour=body.auto_round_hour,
                 panel_channel_id=new_channel_id,
             )
             return old_channel_id, old_message_id
@@ -2135,6 +2869,86 @@ async def update_pen_pals_config(
     return {"ok": True}
 
 
+class PenPalsTimersUpdate(BaseModel):
+    session_seconds: int
+    match_cooldown_seconds: int
+    max_question_swaps: int
+    warn_seconds: int
+    question_suppress_seconds: int
+
+
+@router.put("/config/pen-pals/timers")
+async def update_pen_pals_timers(
+    request: Request,
+    body: PenPalsTimersUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    if body.session_seconds < 1:
+        raise HTTPException(400, "session_seconds must be at least 1")
+    if body.match_cooldown_seconds < 0:
+        raise HTTPException(400, "match_cooldown_seconds cannot be negative")
+    if body.max_question_swaps < 0:
+        raise HTTPException(400, "max_question_swaps cannot be negative")
+    if body.warn_seconds < 0:
+        raise HTTPException(400, "warn_seconds cannot be negative")
+    if body.question_suppress_seconds < 0:
+        raise HTTPException(400, "question_suppress_seconds cannot be negative")
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _pp_set_timers(
+                conn,
+                guild_id,
+                session_seconds=body.session_seconds,
+                match_cooldown_seconds=body.match_cooldown_seconds,
+                max_question_swaps=body.max_question_swaps,
+                warn_seconds=body.warn_seconds,
+                question_suppress_seconds=body.question_suppress_seconds,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class PenPalsSeparation(BaseModel):
+    user_a: str
+    user_b: str
+
+
+class PenPalsSeparationsUpdate(BaseModel):
+    separations: list[PenPalsSeparation] = []
+
+
+@router.put("/config/pen-pals/separations")
+async def update_pen_pals_separations(
+    request: Request,
+    body: PenPalsSeparationsUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    pairs: list[tuple[int, int]] = []
+    for sep in body.separations:
+        try:
+            a, b = int(sep.user_a), int(sep.user_b)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "separation user ids must be numeric")
+        if a == b:
+            raise HTTPException(400, "a separation must be between two different members")
+        pairs.append((a, b))
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _pp_set_admin_separations(conn, guild_id, pairs)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
 # ── Voice transcription config ───────────────────────────────────────
 
 
@@ -2142,6 +2956,10 @@ class VoiceTranscriptionConfigUpdate(BaseModel):
     enabled: bool = False
     model_name: str = _VT_DEFAULT_MODEL
     channel_ids: list[str] = []
+
+
+class VoiceTranscriptionDownloadRequest(BaseModel):
+    model_name: str = _VT_DEFAULT_MODEL
 
 
 @router.put("/config/voice-transcription")
@@ -2167,6 +2985,26 @@ async def update_voice_transcription_config(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.post("/config/voice-transcription/download")
+async def download_voice_transcription_model(
+    request: Request,
+    body: VoiceTranscriptionDownloadRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    if not _vt_is_available():
+        raise HTTPException(400, "faster-whisper isn't installed on the bot host.")
+    if body.model_name not in _VT_VALID_MODELS:
+        raise HTTPException(400, f"Unknown model {body.model_name!r}.")
+
+    try:
+        # Network fetch — can take a while; keep it off the event loop.
+        await run_query(_vt_download_model, body.model_name)
+    except Exception as exc:
+        raise HTTPException(502, f"Download failed: {exc}") from exc
+
+    return {"ok": True, "cached": _vt_model_is_cached(body.model_name)}
 
 
 # ── Confessions config ───────────────────────────────────────────────
@@ -2296,6 +3134,9 @@ async def post_confessions_button(
 class DmsConfigUpdate(BaseModel):
     request_channel_id: str | None = None
     audit_channel_id: str | None = None
+    open_role_id: str | None = None
+    ask_role_id: str | None = None
+    closed_role_id: str | None = None
 
 
 @router.put("/config/dms")
@@ -2307,14 +3148,38 @@ async def update_dms(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    role_fields = (body.open_role_id, body.ask_role_id, body.closed_role_id)
+
     def _q():
         if body.request_channel_id is not None:
             set_request_channel(ctx.db_path, guild_id, int(body.request_channel_id))
         if body.audit_channel_id is not None:
             set_audit_channel(ctx.db_path, guild_id, int(body.audit_channel_id))
-        return {"ok": True}
+        if any(f is not None for f in role_fields):
+            current = get_dm_mode_role_ids(ctx.db_path, guild_id)
+            merged = {
+                "open": int(body.open_role_id) if body.open_role_id is not None else current["open"],
+                "ask": int(body.ask_role_id) if body.ask_role_id is not None else current["ask"],
+                "closed": int(body.closed_role_id) if body.closed_role_id is not None else current["closed"],
+            }
+            set_dm_mode_role_ids(
+                ctx.db_path, guild_id,
+                open_role_id=merged["open"],
+                ask_role_id=merged["ask"],
+                closed_role_id=merged["closed"],
+            )
+            return merged
+        return None
 
-    return await run_query(_q)
+    merged = await run_query(_q)
+
+    # Poke the cog's in-memory cache so the new roles apply without a restart.
+    if merged is not None:
+        bot = getattr(ctx, "bot", None)
+        cog = bot.get_cog("DmPermsCog") if bot is not None else None
+        if cog is not None:
+            cog.mode_role_ids[guild_id] = merged
+    return {"ok": True}
 
 
 @router.post("/config/dms/post-panel")
@@ -2323,6 +3188,8 @@ async def post_dms_panel(
     body: PostButtonRequest,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
+    import discord
+
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -2337,7 +3204,31 @@ async def post_dms_panel(
         raise HTTPException(503, "Discord guild not available")
 
     channel_id = int(body.channel_id)
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(400, "Channel not found or not a text channel")
+    perms = channel.permissions_for(guild.me)
+    missing = [
+        label
+        for flag, label in (
+            (perms.view_channel, "View Channel"),
+            (perms.send_messages, "Send Messages"),
+            (perms.embed_links, "Embed Links"),
+        )
+        if not flag
+    ]
+    if missing:
+        raise HTTPException(
+            400,
+            f"The bot can't post in #{channel.name} — missing permissions: "
+            f"{', '.join(missing)}",
+        )
+
     message_id = await cog._ensure_panel(guild, channel_id, force_repost=True)
+    if message_id is None:
+        raise HTTPException(
+            502, f"Discord rejected the post in #{channel.name} — panel was not posted"
+        )
     set_panel_settings(ctx.db_path, guild_id, channel_id, message_id)
     cog.panel_settings[guild_id] = {"panel_channel_id": channel_id, "panel_message_id": message_id}
     return {"ok": True}
@@ -2508,6 +3399,7 @@ async def update_birthday(
 class RiskyConfigUpdate(BaseModel):
     ping_role_id: str | None = None
     min_game_seconds: int | None = None
+    max_games_per_channel: int | None = None
 
 
 @router.put("/config/risky")
@@ -2521,14 +3413,17 @@ async def update_risky(
 
     if body.min_game_seconds is not None and body.min_game_seconds < 0:
         raise HTTPException(400, "min_game_seconds cannot be negative")
+    if body.max_games_per_channel is not None and body.max_games_per_channel < 1:
+        raise HTTPException(400, "max_games_per_channel must be at least 1")
 
     new_ping_role: int | None = None
     clear_ping_role = False
     new_min_secs: int | None = None
     clear_min_secs = False
+    new_max_games: int | None = None
 
     def _q():
-        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs
+        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs, new_max_games
         with ctx.open_db() as conn:
             if body.ping_role_id is not None:
                 role_id = int(body.ping_role_id)
@@ -2552,6 +3447,9 @@ async def update_risky(
                 else:
                     set_config_value(conn, _RISKY_MIN_GAME_KEY, str(secs), guild_id)
                     new_min_secs = secs
+            if body.max_games_per_channel is not None:
+                set_config_value(conn, _RISKY_MAX_GAMES_KEY, str(body.max_games_per_channel), guild_id)
+                new_max_games = body.max_games_per_channel
         return {"ok": True}
 
     result = await run_query(_q)
@@ -2567,6 +3465,8 @@ async def update_risky(
         rr_state.min_game_seconds.pop(guild_id, None)
     elif new_min_secs is not None:
         rr_state.min_game_seconds[guild_id] = new_min_secs
+    if new_max_games is not None:
+        rr_state.max_games_per_channel[guild_id] = new_max_games
 
     return result
 
@@ -2708,6 +3608,9 @@ class GuessConfigUpdate(BaseModel):
     guess_cooldown_seconds: int | None = None
     min_image_dimension_px: int | None = None
     max_image_size_mb: int | None = None
+    submit_max_per_window: int | None = None
+    submit_window_seconds: int | None = None
+    max_guesses_per_round: int | None = None
 
 
 @router.put("/config/guess")
@@ -2756,6 +3659,12 @@ async def update_guess_config(
                 set_guess_config_value(conn, guild_id, "guess_min_image_dimension_px", str(body.min_image_dimension_px))
             if body.max_image_size_mb is not None:
                 set_guess_config_value(conn, guild_id, "guess_max_image_size_mb", str(body.max_image_size_mb))
+            if body.submit_max_per_window is not None:
+                set_guess_config_value(conn, guild_id, "guess_submit_max_per_window", str(max(1, body.submit_max_per_window)))
+            if body.submit_window_seconds is not None:
+                set_guess_config_value(conn, guild_id, "guess_submit_window_seconds", str(max(1, body.submit_window_seconds)))
+            if body.max_guesses_per_round is not None:
+                set_guess_config_value(conn, guild_id, "guess_max_guesses_per_round", str(max(1, body.max_guesses_per_round)))
         return {"ok": True}
 
     return await run_query(_q)
@@ -2765,6 +3674,8 @@ class WhisperConfigUpdate(BaseModel):
     channel_id: str | None = None
     role_id: str | None = None
     log_channel_id: str | None = None
+    cooldown_seconds: int | None = None
+    hourly_cap_per_target: int | None = None
 
 
 @router.put("/config/whisper")
@@ -2785,6 +3696,14 @@ async def update_whisper_config(
                 set_whisper_config_value(conn, guild_id, "whisper_role_id", body.role_id)
             if body.log_channel_id is not None:
                 set_whisper_config_value(conn, guild_id, "whisper_log_channel_id", body.log_channel_id)
+            if body.cooldown_seconds is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_cooldown_seconds", str(max(0, body.cooldown_seconds))
+                )
+            if body.hourly_cap_per_target is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_hourly_cap_per_target", str(max(1, body.hourly_cap_per_target))
+                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -2844,6 +3763,66 @@ async def update_bot_identity(
         "nick": guild.me.nick or "",
         "avatar_url": str(guild.me.display_avatar.url),
     }
+
+
+# ── Branding (embed accent color) ────────────────────────────────────
+
+
+class BrandingConfigUpdate(BaseModel):
+    accent_mode: str | None = None
+    accent_hex: str | None = None
+
+
+def _parse_hex_color(raw: str) -> int:
+    """Parse a ``#RRGGBB`` (or ``RRGGBB``) string to an int, raising ValueError."""
+    s = raw.strip().lstrip("#")
+    if len(s) != 6:
+        raise ValueError("expected 6-digit hex color")
+    return int(s, 16)
+
+
+@router.put("/config/branding")
+async def update_branding(
+    request: Request,
+    body: BrandingConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    new_mode: str | None = None
+    if body.accent_mode is not None:
+        new_mode = body.accent_mode.strip().lower()
+        if new_mode not in (ACCENT_MODE_AVATAR, ACCENT_MODE_CUSTOM):
+            raise HTTPException(400, "accent_mode must be 'avatar' or 'custom'")
+
+    hex_provided = body.accent_hex is not None
+    new_hex = ACCENT_HEX_UNSET
+    if hex_provided:
+        raw = (body.accent_hex or "").strip()
+        if raw:
+            try:
+                new_hex = _parse_hex_color(raw)
+            except ValueError:
+                raise HTTPException(400, "accent_hex must be a #RRGGBB color")
+
+    def _q():
+        with ctx.open_db() as conn:
+            cfg = get_branding_conn(conn, guild_id)
+        if new_mode is not None:
+            cfg.accent_mode = new_mode
+        if hex_provided:
+            cfg.accent_hex = new_hex
+        upsert_branding(ctx.db_path, cfg)
+        return {
+            "ok": True,
+            "accent_mode": cfg.normalized_mode(),
+            "accent_hex": f"#{cfg.accent_hex:06X}" if cfg.has_custom_color() else "",
+        }
+
+    result = await run_query(_q)
+    invalidate_accent_cache(guild_id)
+    return result
 
 
 # ── Needle (auto-thread) config ──────────────────────────────────────────────

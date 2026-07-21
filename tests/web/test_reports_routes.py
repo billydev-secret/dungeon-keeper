@@ -152,3 +152,104 @@ def test_reports_require_auth(fake_ctx):
     resp = client.get("/api/reports/role-growth")
     assert resp.status_code in (401, 403)
     client.close()
+
+
+# ── grant-audit ───────────────────────────────────────────────────────
+
+
+class _FakeRole:
+    def __init__(self, role_id, members=()):
+        self.id = role_id
+        self.name = "NSFW"
+        self.members = list(members)
+
+
+class _FakeMember:
+    def __init__(self, user_id, display_name="", bot=False, roles=()):
+        self.id = user_id
+        self.display_name = display_name or str(user_id)
+        self.bot = bot
+        self.roles = list(roles)
+
+
+class _FakeGuild:
+    def __init__(self, role, members):
+        self._role = role
+        self._members = {m.id: m for m in members}
+
+    def get_role(self, role_id):
+        return self._role if role_id == self._role.id else None
+
+    def get_member(self, user_id):
+        return self._members.get(user_id)
+
+
+class _FakeBot:
+    def __init__(self, guild):
+        self._guild = guild
+
+    def get_guild(self, guild_id):
+        return self._guild
+
+
+def _seed_grant_audit(db_path, guild_id, role_id):
+    now = time.time()
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO grant_roles (guild_id, grant_name, label, role_id) "
+            "VALUES (?, 'nsfw', 'NSFW', ?)",
+            (guild_id, role_id),
+        )
+        # 3001: level 6, never granted, never pruned → waiting bucket.
+        # 3002: pruned 5d ago, active again yesterday → stripped-returned.
+        # 3003: pruned 3d ago, last active 60d ago → recent-inactive.
+        for uid, level in ((3001, 6), (3002, 7)):
+            conn.execute(
+                "INSERT INTO member_xp (guild_id, user_id, total_xp, level) "
+                "VALUES (?, ?, 0, ?)",
+                (guild_id, uid, level),
+            )
+        for uid, pruned_days in ((3002, 5), (3003, 3)):
+            conn.execute(
+                "INSERT INTO role_prune_events (guild_id, user_id, role_id, pruned_at) "
+                "VALUES (?, ?, ?, ?)",
+                (guild_id, uid, role_id, now - pruned_days * 86400),
+            )
+        for uid, active_days in ((3001, 1), (3002, 1), (3003, 60)):
+            conn.execute(
+                "INSERT INTO member_activity (guild_id, user_id, last_channel_id, "
+                "last_message_id, last_message_at) VALUES (?, ?, 1, 1, ?)",
+                (guild_id, uid, now - active_days * 86400),
+            )
+        conn.commit()
+
+
+def test_grant_audit_buckets(open_client, fake_ctx):
+    role_id = 555
+    _seed_grant_audit(fake_ctx.db_path, fake_ctx.guild_id, role_id)
+    role = _FakeRole(role_id)
+    guild = _FakeGuild(role, [_FakeMember(uid) for uid in (3001, 3002, 3003)])
+    fake_ctx.bot = _FakeBot(guild)
+
+    resp = open_client.get("/api/reports/grant-audit?grant_name=nsfw&min_level=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["label"] == "NSFW"
+    assert data["role_id"] == str(role_id)
+    assert [r["user_id"] for r in data["waiting_first_grant"]] == ["3001"]
+    assert [r["user_id"] for r in data["stripped_returned"]] == ["3002"]
+    assert data["stripped_returned"][0]["level"] == 7
+    assert [r["user_id"] for r in data["recent_inactive"]] == ["3003"]
+    assert data["recent_inactive"][0]["pruned_at"] is not None
+
+
+def test_grant_audit_unknown_grant_404(open_client, fake_ctx):
+    role = _FakeRole(555)
+    fake_ctx.bot = _FakeBot(_FakeGuild(role, []))
+    resp = open_client.get("/api/reports/grant-audit?grant_name=nope")
+    assert resp.status_code == 404
+
+
+def test_grant_audit_no_guild_503(open_client):
+    resp = open_client.get("/api/reports/grant-audit")
+    assert resp.status_code == 503

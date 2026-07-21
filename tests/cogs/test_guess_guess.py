@@ -15,6 +15,18 @@ def _patch_count_user_guesses():
     with patch("bot_modules.cogs.guess_cog._do_count_user_guesses", return_value=0) as m:
         yield m
 
+
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    import discord
+
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
 GUESS_ROLE_ID = 7001
 ROUND_ID = 99
 
@@ -59,6 +71,7 @@ def _make_select_view(
     game_message=None,
     round_id: int = ROUND_ID,
     cooldown_seconds: int = 0,
+    max_guesses_per_round: int = 5,
 ):
     from bot_modules.cogs.guess_cog import GuessSelectView
 
@@ -75,6 +88,7 @@ def _make_select_view(
     return GuessSelectView(
         bot, round_id, guess_members, game_message,  # type: ignore[arg-type]
         cooldown_seconds=cooldown_seconds,
+        max_guesses_per_round=max_guesses_per_round,
     )
 
 
@@ -285,6 +299,27 @@ async def test_guess_cap_allows_under_limit():
 
 
 @pytest.mark.asyncio
+async def test_guess_cap_uses_configured_value_not_hardcoded_default():
+    """A guild with a lower configured per-round cap blocks before the
+    hardcoded default of 5 — proving the view's max_guesses_per_round,
+    not the module constant, drives enforcement."""
+    view = _make_select_view(cooldown_seconds=0, max_guesses_per_round=2)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    insert_mock = MagicMock()
+    with patch("bot_modules.cogs.guess_cog._do_count_user_guesses", return_value=2), \
+         patch("bot_modules.cogs.guess_cog._do_insert_guess", insert_mock), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    insert_mock.assert_not_called()
+    msg = interaction.edit_original_response.call_args.kwargs.get("content", "")
+    assert "cap: 2" in msg
+
+
+@pytest.mark.asyncio
 async def test_correct_guess_loses_race_does_not_edit_message():
     """If _do_mark_solved returns rowcount==0 (someone else won the race),
     the cog must NOT edit the public game message — only ack the guesser."""
@@ -414,7 +449,6 @@ async def test_guess_callback_message_mentions_timer():
 
     guesser = FakeMember(id=9999)
     interaction = fake_interaction(user=guesser)
-    interaction.response.send_message = AsyncMock()
     guess_role = MagicMock()
     guess_role.members = [FakeMember(id=2001, display_name="Alice")]
     interaction.guild.get_role = MagicMock(return_value=guess_role)
@@ -426,7 +460,7 @@ async def test_guess_callback_message_mentions_timer():
          patch("bot_modules.cogs.guess_cog._do_load_round", return_value=round_row):
         await view._guess_callback(interaction)
 
-    msg = interaction.response.send_message.call_args.args[0]
+    msg = interaction.followup.send.call_args.args[0]
     assert "60" in msg or "second" in msg.lower(), f"expected timer hint in: {msg!r}"
 
 
@@ -441,7 +475,6 @@ async def test_game_view_rejects_submitter_guessing_own_round():
 
     submitter = FakeMember(id=1001)
     interaction = fake_interaction(user=submitter)
-    interaction.response.send_message = AsyncMock()
 
     round_row = _make_round(submitter_id=1001)
     config = GuessConfig(guild_id=9001, guess_role_id=GUESS_ROLE_ID)
@@ -450,7 +483,7 @@ async def test_game_view_rejects_submitter_guessing_own_round():
          patch("bot_modules.cogs.guess_cog._do_load_round", return_value=round_row):
         await view._guess_callback(interaction)
 
-    msg = interaction.response.send_message.call_args.args[0]
+    msg = interaction.followup.send.call_args.args[0]
     assert "can't guess" in msg.lower() or "own round" in msg.lower()
 
 

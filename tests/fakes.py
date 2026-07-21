@@ -6,6 +6,10 @@ Import these instead of building ad-hoc mocks in individual test files.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
+from types import SimpleNamespace
+
+from bot_modules.core.db_utils import open_db
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -95,6 +99,65 @@ class FakeGuild:
 
     def get_role(self, rid: int):
         return self.roles.get(rid)
+
+
+class FakeSendChannel:
+    """Channel whose ``send`` returns a message with a real integer id, so
+    result posts that persist ``result_message_id`` can run against sqlite."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self._next_id = 7000
+
+    async def send(self, *args, **kwargs) -> SimpleNamespace:
+        self._next_id += 1
+        self.sent.append({"args": args, **kwargs})
+        return SimpleNamespace(id=self._next_id)
+
+    async def fetch_message(self, message_id: int):
+        raise discord.NotFound(MagicMock(status=404), "no message")
+
+
+class FakeEconGamesBot:
+    """Bot fake for duel/economy payout tests: a real ``games_db``, a
+    ``ctx.db_path`` the economy layer can open, and a guild whose members
+    resolve (non-bot, non-booster). ``with_channel=True`` adds a
+    FakeSendChannel so resolution paths that post a result message work."""
+
+    def __init__(
+        self,
+        games_db,
+        db_path: Path,
+        member_ids,
+        *,
+        guild_id: int = 9001,
+        with_channel: bool = False,
+    ) -> None:
+        self.games_db = games_db
+        # ``open_db`` matches AppContext's: the wager escrow (and anything
+        # else on the economy side) opens its own transaction through it.
+        self.ctx = SimpleNamespace(
+            db_path=db_path,
+            open_db=lambda: open_db(db_path),
+        )
+        members = {
+            uid: SimpleNamespace(
+                id=uid, bot=False, premium_since=None,
+                display_name=f"U{uid}", mention=f"<@{uid}>",
+            )
+            for uid in member_ids
+        }
+        self.guild = FakeGuild(id=guild_id, members=members)
+        self.channel = FakeSendChannel() if with_channel else None
+
+    def add_view(self, *args, **kwargs) -> None:
+        pass
+
+    def get_guild(self, guild_id: int):
+        return self.guild if guild_id == self.guild.id else None
+
+    def get_channel(self, channel_id: int):
+        return self.channel
 
 
 def fake_interaction(

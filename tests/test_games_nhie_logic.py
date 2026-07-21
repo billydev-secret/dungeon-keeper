@@ -9,8 +9,10 @@ module proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
+import discord
 import pytest
 
+from bot_modules.games.constants import PHASE_PLAYING, PHASE_RECAP, PHASE_RESULTS
 from bot_modules.games_nhie.embeds import (
     build_closed_embed,
     build_recap_embed,
@@ -392,6 +394,57 @@ def test_build_round_embed_has_footer():
     assert "Round 3" in embed.footer.text
 
 
+# ── accent color threading ───────────────────────────────────────────
+
+ACCENT = discord.Color(0x123456)
+
+
+def test_build_round_embed_honors_passed_accent_active():
+    embed = build_round_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_round_embed_honors_passed_accent_when_closed():
+    """Accent wins even in the round-over state — no forced phase green."""
+    embed = build_round_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, closed=True, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_round_embed_falls_back_to_phase_color_without_accent():
+    active = build_round_embed(statement="x", guilty=[], innocent=[], round_num=1)
+    closed = build_round_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, closed=True
+    )
+    assert active.color == discord.Color(PHASE_PLAYING)
+    assert closed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_build_closed_embed_honors_passed_accent():
+    embed = build_closed_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_closed_embed_falls_back_to_recap_color_without_accent():
+    embed = build_closed_embed(statement="x", guilty=[], innocent=[], round_num=1)
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_build_recap_embed_honors_passed_accent():
+    embed = build_recap_embed(winner_id=42, guilt_scores={"42": 1}, color=ACCENT)
+    assert embed.color == ACCENT
+
+
+def test_build_recap_embed_falls_back_to_recap_color_without_accent():
+    embed = build_recap_embed(winner_id=42, guilt_scores={"42": 1})
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
 # ── build_closed_embed ───────────────────────────────────────────────
 
 
@@ -404,7 +457,7 @@ def test_build_closed_embed_title_says_closed():
 
 
 def test_build_closed_embed_uses_recap_color():
-    """Closed flips to the recap colour (dark gold), distinct from the
+    """Closed flips to the recap color (dark gold), distinct from the
     round-over green."""
     closed = build_closed_embed(
         statement="x", guilty=[], innocent=[], round_num=1
@@ -412,7 +465,7 @@ def test_build_closed_embed_uses_recap_color():
     round_over = build_round_embed(
         statement="x", guilty=[], innocent=[], round_num=1, closed=True
     )
-    assert closed.colour != round_over.colour
+    assert closed.color != round_over.color
 
 
 # ── build_recap_embed ────────────────────────────────────────────────
@@ -506,3 +559,57 @@ def test_full_round_flow_single_winner():
     status, uid = find_winner(lives, eliminated)
     assert status == "winner"
     assert uid == 1
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_nhie_cog as nhie_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from tests.fakes import FakeGuild  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_advance_winner_pays_survivors_and_eliminated(monkeypatch, sync_db_path):
+    """The guiltiest winner may be an eliminated player, so the roster must be
+    everyone who played (survivors + eliminated), not just survivors."""
+    spy = AsyncMock()
+    monkeypatch.setattr(nhie_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "rounds": {"1": {}},
+        "lives": {"1": 1, "2": 1},
+        "eliminated": [],
+        "guilt_scores": {},
+        "max_lives": 1,
+    }
+    gid = await create_game(bot.games_db, 100, 1, "nhie", payload=payload)
+    bot.active_views[gid] = object()
+    cog = nhie_cog.NHIECog(bot)  # type: ignore[arg-type]
+    guild = FakeGuild(id=9001)
+    channel = SimpleNamespace(id=100, guild=guild, send=AsyncMock())
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=1, channel=channel,
+        guild=guild, statement="X", lives={1: 1, 2: 1}, eliminated=set(),
+        max_lives=1, interaction=None,
+    )
+    view.guilty = [1]     # player 1 admits guilt -> loses last life -> eliminated
+    view.innocent = [2]   # player 2 survives -> winner
+    await view.advance_callback(SimpleNamespace(edit=AsyncMock()))
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    # Eliminated guiltiest (1) is included alongside survivor (2).
+    assert sorted(call.kwargs["player_ids"]) == [1, 2]
+    assert call.kwargs["bot"] is bot

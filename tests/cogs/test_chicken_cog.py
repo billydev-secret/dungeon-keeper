@@ -9,8 +9,10 @@ import pytest_asyncio
 
 from bot_modules.cogs.chicken import db as chdb
 from bot_modules.cogs.chicken.cog import ChickenCog
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.games_db import GamesDb
-from tests.fakes import FakeGuild, fake_interaction
+from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
 
 GUILD = 9001
 CH = 100
@@ -96,6 +98,65 @@ async def test_crash_sets_group_cooldowns(cog, db):
     await cog._crash(game.id)
     for uid in (1, 2, 3):
         assert await duels_db.check_group_cooldown(db, GUILD, "chicken", uid, 48) is not None
+
+
+# ── economy payouts (Stage 1 faucet) ─────────────────────────────────────────
+
+
+async def test_crash_pays_winner_and_losers(db, sync_db_path):
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = ChickenCog(FakeEconGamesBot(db, sync_db_path, [1, 2, 3]))  # type: ignore[arg-type]
+    bail = [{"player_id": 3, "bail_ts": time.time(), "meter_pct": 75.0}]
+    game = await _climbing(db, alive=[1, 2], bail_log=bail, roster=[1, 2, 3])
+    assert game is not None
+    await cog._crash(game.id)  # winner = 3 (bravest bailer)
+    with open_db(sync_db_path) as conn:
+        assert get_balance(conn, GUILD, 3) == 25  # participation + win
+        assert get_balance(conn, GUILD, 1) == 5   # participation only
+        assert get_balance(conn, GUILD, 2) == 5
+
+
+async def test_crash_no_payout_when_disabled(db, sync_db_path):
+    cog = ChickenCog(FakeEconGamesBot(db, sync_db_path, [1, 2, 3]))  # type: ignore[arg-type]
+    game = await _climbing(db, alive=[1, 2, 3], bail_log=[], roster=[1, 2, 3])
+    assert game is not None
+    await cog._crash(game.id)  # total wipeout, economy disabled
+    with open_db(sync_db_path) as conn:
+        assert get_balance(conn, GUILD, 1) == 0
+
+
+async def test_wipeout_pays_participation_only(db, sync_db_path):
+    """Total wipeout (winner=None) still reaches the payout: everyone gets
+    participation, nobody gets the win bonus."""
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = ChickenCog(FakeEconGamesBot(db, sync_db_path, [1, 2, 3]))  # type: ignore[arg-type]
+    game = await _climbing(db, alive=[1, 2, 3], bail_log=[], roster=[1, 2, 3])
+    assert game is not None
+    await cog._crash(game.id)
+    g = await chdb.get_game(db, game.id)
+    assert g.state == "RESOLVED_NO_NICK"
+    assert g.winner_id is None
+    with open_db(sync_db_path) as conn:
+        for uid in (1, 2, 3):
+            assert get_balance(conn, GUILD, uid) == 5
+
+
+async def test_expire_active_abandons_without_payout(db, sync_db_path):
+    """An abandoned game terminalizes with zero economy effect — the most
+    important branch for the wager refund path (stage 4b) to hook later."""
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = ChickenCog(FakeEconGamesBot(db, sync_db_path, [1, 2, 3]))  # type: ignore[arg-type]
+    game = await _climbing(db, alive=[1, 2], bail_log=[], roster=[1, 2, 3])
+    assert game is not None
+    await cog._expire_active(game)
+    g = await chdb.get_game(db, game.id)
+    assert g.state == "ABANDONED"
+    with open_db(sync_db_path) as conn:
+        for uid in (1, 2, 3):
+            assert get_balance(conn, GUILD, uid) == 0
 
 
 # ── _on_bail flow ──────────────────────────────────────────────────────────────

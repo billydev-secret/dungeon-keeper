@@ -12,17 +12,16 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.embeds import (
-    MOD_INFO as CLR_INFO,
     MOD_JAIL as CLR_JAIL,  # noqa: F401  re-exported for jail_cog
     MOD_POLICY as CLR_POLICY,  # noqa: F401  re-exported for jail_cog
     MOD_SUCCESS as CLR_SUCCESS,
-    MOD_TICKET as CLR_TICKET,
 )
 from bot_modules.services.moderation import (
     add_policy,
@@ -41,6 +40,7 @@ from bot_modules.services.moderation import (
     get_policy_ticket,
     get_policy_votes,
     get_ticket_by_channel,
+    get_tickets_to_autodelete,
     parse_duration,
     release_jail,
     reopen_ticket,
@@ -48,6 +48,7 @@ from bot_modules.services.moderation import (
     store_transcript,
     write_audit,
     PolicyTicketRow,
+    TicketRow,
 )
 from bot_modules.jail.embeds import (
     build_policy_vote_update_embed,
@@ -56,13 +57,15 @@ from bot_modules.jail.embeds import (
 )
 from bot_modules.jail.logic import (
     SETUP_FINAL_STEP,
+    merge_setup_selection,
+    paginate_setup_options,
     setup_button_label,
     setup_step_meta,
     vote_outcome as _vote_outcome,
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext
+    from bot_modules.core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.jail_commands")
 
@@ -193,14 +196,17 @@ async def _collect_and_post_transcript(
         record_id=record_id,
         extra_meta=extra_meta,
     )
-    with ctx.open_db() as conn:
-        store_transcript(
-            conn,
-            guild_id=channel.guild.id,
-            record_type=record_type,
-            record_id=record_id,
-            content=transcript,
-        )
+    def _store():
+        with ctx.open_db() as conn:
+            store_transcript(
+                conn,
+                guild_id=channel.guild.id,
+                record_type=record_type,
+                record_id=record_id,
+                content=transcript,
+            )
+
+    await asyncio.to_thread(_store)
 
     # Build Markdown file
     md_bytes = render_transcript_markdown(transcript).encode("utf-8")
@@ -213,10 +219,11 @@ async def _collect_and_post_transcript(
     if transcript_ch_id:
         ch = channel.guild.get_channel(transcript_ch_id)
         if ch and isinstance(ch, discord.TextChannel):
+            accent = await resolve_accent_color(ctx.db_path, channel.guild)
             embed = discord.Embed(
                 title=f"Transcript — {record_type.title()} #{record_id}",
                 description=f"**Channel:** #{channel.name}\n**Messages:** {transcript['message_count']}",
-                color=CLR_INFO,
+                color=accent,
             )
             await ch.send(
                 embed=embed, file=discord.File(io.BytesIO(md_bytes), filename)
@@ -224,6 +231,103 @@ async def _collect_and_post_transcript(
 
     # DM to user
     await _dm_user(user, file=discord.File(io.BytesIO(md_bytes), filename))
+
+
+# ---------------------------------------------------------------------------
+# Ticket status embed helper
+# ---------------------------------------------------------------------------
+
+# The ticket embed carries a "Status" field that must track the ticket's
+# lifecycle. Every open-embed builder seeds it with ``TICKET_STATUS_OPEN``;
+# close/reopen/escalate rewrite it. Both the button flows here and the slash
+# ``/ticket`` flows in ``jail_cog`` share these so the wording stays in sync.
+TICKET_STATUS_OPEN = "🟢 Open"
+TICKET_STATUS_CLOSED = "🔒 Closed"
+TICKET_STATUS_ESCALATED = "⚠️ Escalated"
+
+
+def _apply_ticket_status(embed: discord.Embed, status_value: str) -> discord.Embed:
+    """Rewrite the ticket embed's ``Status`` field in place, returning it.
+
+    Matches on the field *name* rather than a fixed index so it survives extra
+    fields (e.g. the "Source message" field on message-context tickets); adds
+    the field if a legacy embed somehow lacks it.
+    """
+    for i, field in enumerate(embed.fields):
+        if field.name == "Status":
+            embed.set_field_at(
+                i, name="Status", value=status_value, inline=field.inline
+            )
+            return embed
+    embed.add_field(name="Status", value=status_value, inline=True)
+    return embed
+
+
+async def _finalize_ticket_delete(
+    ctx: AppContext,
+    channel: discord.TextChannel,
+    ticket: TicketRow,
+    *,
+    actor_id: int,
+    auto: bool = False,
+) -> None:
+    """Archive and permanently delete a ticket channel.
+
+    Shared by the Delete button, ``/ticket delete`` and the 24 h auto-delete
+    sweep. The transcript is generated and posted *first*: if that raises, the
+    exception propagates before the row is marked deleted or the channel is
+    removed, so we never destroy a conversation we failed to archive. ``auto``
+    only changes the audit wording and the channel-delete audit reason.
+    """
+    guild = channel.guild
+    ticket_id = ticket["id"]
+    user_id = ticket["user_id"]
+    # Fall back to the bot itself so the transcript DM step always has a target
+    # (the send simply fails-soft if the creator has left or DMs are closed).
+    transcript_user = guild.get_member(user_id) or guild.me
+
+    await _collect_and_post_transcript(
+        ctx,
+        channel,
+        record_type="ticket",
+        record_id=ticket_id,
+        user=transcript_user,
+        extra_meta={
+            "closed_by": ticket.get("closed_by"),
+            "close_reason": ticket.get("close_reason", ""),
+            "auto_deleted": auto,
+        },
+    )
+
+    guild_id = guild.id
+
+    def _mark_deleted() -> None:
+        with ctx.open_db() as conn:
+            delete_ticket(conn, ticket_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_delete",
+                actor_id=actor_id,
+                target_id=user_id,
+                extra={"ticket_id": ticket_id, "auto": auto},
+            )
+
+    await asyncio.to_thread(_mark_deleted)
+
+    accent = await resolve_accent_color(ctx.db_path, guild)
+    if auto:
+        desc = f"**Ticket #{ticket_id}** by <@{user_id}> auto-deleted 24h after close."
+        reason = f"Ticket #{ticket_id} auto-deleted 24h after close"
+    else:
+        desc = f"**Ticket #{ticket_id}** by <@{user_id}> deleted by <@{actor_id}>."
+        reason = f"Ticket #{ticket_id} deleted"
+    await _post_audit(
+        ctx,
+        guild,
+        discord.Embed(title="🗑️ Ticket Deleted", description=desc, color=accent),
+    )
+    await channel.delete(reason=reason)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -297,7 +401,224 @@ _SETUP_SELECTS: dict[str, type] = {
 }
 
 
-def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.View]:
+# ── DM-delivered setup wizard ─────────────────────────────────────────
+#
+# ``/setup`` DMs the admin who ran it and walks them through the same six
+# steps as the in-channel wizard above. The native RoleSelect/ChannelSelect
+# components can't be reused: they auto-populate from the interaction's guild,
+# which is absent in a DM. So each step is a plain StringSelect whose options
+# we build by hand from the guild captured at ``/setup`` time — paged, since a
+# select tops out at 25 options. The guild is also why config is written with
+# ``guild.id`` rather than ``interaction.guild_id`` (the latter is ``None`` in
+# a DM). Pure paging/accumulation lives in ``jail.logic``; this View is glue.
+
+
+def _setup_options_for(
+    guild: discord.Guild, select_kind: str
+) -> list[tuple[int, str]]:
+    """Assemble the selectable ``(id, label)`` list for a step from the guild.
+
+    Roles exclude ``@everyone`` (never a meaningful mod/admin role) and are
+    ordered high-to-low like the role list in Discord's UI; channels and
+    categories follow their positional order.
+    """
+    if select_kind == "role":
+        roles = [r for r in guild.roles if not r.is_default()]
+        roles.sort(key=lambda r: r.position, reverse=True)
+        return [(r.id, r.name) for r in roles]
+    if select_kind == "category":
+        cats = sorted(guild.categories, key=lambda c: c.position)
+        return [(c.id, c.name) for c in cats]
+    chans = sorted(guild.text_channels, key=lambda c: c.position)
+    return [(c.id, c.name) for c in chans]
+
+
+class _SetupDMView(discord.ui.View):
+    """Stateful DM wizard: one StringSelect per step, paged, with Back/Next.
+
+    Only rebuilt state (current page, accumulated selection) lives on the
+    instance; the step wording and ordering come from ``setup_step_meta`` so
+    this shares its single source of truth with the in-channel wizard.
+    """
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        guild: discord.Guild,
+        step: int = 1,
+        *,
+        color: "discord.Color | None" = None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.ctx = ctx
+        self.guild = guild
+        self.step = step
+        self.color = color
+        self.page = 0
+        self.selected: list[int] = []
+        self._build()
+
+    # -- helpers --------------------------------------------------------
+
+    def _is_multi(self, meta: dict[str, str]) -> bool:
+        # Only the mod/admin *role* steps allow more than one pick.
+        return meta["select_kind"] == "role"
+
+    def _render_selected(self, select_kind: str) -> str:
+        prefix = "@" if select_kind == "role" else "#" if select_kind == "channel" else ""
+        labels = dict(_setup_options_for(self.guild, select_kind))
+        return ", ".join(f"{prefix}{labels.get(i, i)}" for i in self.selected) or "(none)"
+
+    def _guild_footer(self, embed: discord.Embed) -> discord.Embed:
+        # The DM is decontextualised from the server, so an admin who manages
+        # several guilds needs to see which one this wizard is configuring.
+        embed.set_footer(text=f"Configuring: {self.guild.name}")
+        return embed
+
+    def _embed(self) -> discord.Embed:
+        meta = setup_step_meta(self.step)
+        if meta is None:
+            return self._guild_footer(build_setup_complete_embed())
+        embed = build_setup_step_embed(meta, color=self.color)
+        if self.selected:
+            embed.add_field(
+                name="Selected", value=self._render_selected(meta["select_kind"]),
+                inline=False,
+            )
+        return self._guild_footer(embed)
+
+    # -- rebuild items for the current step/page ------------------------
+
+    def _build(self) -> None:
+        self.clear_items()
+        meta = setup_step_meta(self.step)
+        if meta is None:
+            return
+
+        options = _setup_options_for(self.guild, meta["select_kind"])
+        page_slice, self.page, total_pages = paginate_setup_options(options, self.page)
+        multi = self._is_multi(meta)
+
+        if page_slice:
+            select = discord.ui.Select(
+                placeholder=meta["placeholder"],
+                min_values=0 if multi else 1,
+                max_values=len(page_slice) if multi else 1,
+                options=[
+                    discord.SelectOption(
+                        label=(label or str(oid))[:100],
+                        value=str(oid),
+                        default=oid in self.selected,
+                    )
+                    for oid, label in page_slice
+                ],
+            )
+        else:
+            # No candidates (e.g. a server with no categories yet). Show a
+            # disabled placeholder so the admin can still skip the step.
+            select = discord.ui.Select(
+                placeholder="Nothing to choose — skip with Next →",
+                min_values=0,
+                max_values=1,
+                options=[discord.SelectOption(label="(none available)", value="__none__")],
+                disabled=True,
+            )
+        select.callback = self._on_select  # type: ignore[method-assign]
+        self.add_item(select)
+
+        if total_pages > 1:
+            prev_btn: discord.ui.Button = discord.ui.Button(
+                label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0,
+                row=1,
+            )
+            prev_btn.callback = self._on_prev  # type: ignore[method-assign]
+            self.add_item(prev_btn)
+
+            page_btn: discord.ui.Button = discord.ui.Button(
+                label=f"Page {self.page + 1}/{total_pages}",
+                style=discord.ButtonStyle.secondary, disabled=True, row=1,
+            )
+            self.add_item(page_btn)
+
+            next_btn: discord.ui.Button = discord.ui.Button(
+                label="▶", style=discord.ButtonStyle.secondary,
+                disabled=self.page >= total_pages - 1, row=1,
+            )
+            next_btn.callback = self._on_next_page  # type: ignore[method-assign]
+            self.add_item(next_btn)
+
+        advance: discord.ui.Button = discord.ui.Button(
+            label=setup_button_label(self.step), style=discord.ButtonStyle.primary, row=2,
+        )
+        advance.callback = self._on_advance  # type: ignore[method-assign]
+        self.add_item(advance)
+
+    # -- callbacks ------------------------------------------------------
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        meta = setup_step_meta(self.step)
+        if meta is None:
+            return
+        options = _setup_options_for(self.guild, meta["select_kind"])
+        page_slice, self.page, _ = paginate_setup_options(options, self.page)
+        page_ids = [oid for oid, _ in page_slice]
+        raw = (interaction.data or {}).get("values", []) if isinstance(interaction.data, dict) else []
+        picked = [int(v) for v in raw if isinstance(v, str) and v.isdigit()]
+        if self._is_multi(meta):
+            self.selected = merge_setup_selection(self.selected, page_ids, picked)
+        else:
+            self.selected = picked[:1]
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        self.page -= 1
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _on_next_page(self, interaction: discord.Interaction) -> None:
+        self.page += 1
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _on_advance(self, interaction: discord.Interaction) -> None:
+        meta = setup_step_meta(self.step)
+        if meta is not None and self.selected:
+            # Only persist when something was picked, so skipping a step never
+            # clobbers an existing value on a re-run.
+            self.ctx.set_config_value(
+                meta["config_key"], ",".join(str(i) for i in self.selected), self.guild.id
+            )
+
+        self.step += 1
+        self.page = 0
+        self.selected = []
+        if setup_step_meta(self.step) is None:
+            self.clear_items()
+            self.stop()
+            await interaction.response.edit_message(embed=self._embed(), view=self)
+            return
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+
+def _setup_dm_view(
+    ctx: AppContext,
+    guild: discord.Guild,
+    *,
+    color: "discord.Color | None" = None,
+) -> tuple[discord.Embed, "_SetupDMView"]:
+    """Build the first-step embed + View for the DM-delivered ``/setup`` wizard."""
+    view = _SetupDMView(ctx, guild, 1, color=color)
+    return view._embed(), view
+
+
+def _setup_view(
+    ctx: AppContext,
+    step: int,
+    *,
+    color: "discord.Color | None" = None,
+) -> tuple[discord.Embed, discord.ui.View]:
     """Return the embed + view for a given setup step.
 
     The per-step content (title, description, config key, select type,
@@ -305,6 +626,10 @@ def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.V
     be tested without spinning up a View. This function is the glue:
     pick the right ``discord.ui.Select`` subclass, wire up the Next button,
     and return the rendered embed/view pair.
+
+    ``color`` is the resolved per-guild accent, threaded from the async
+    ``/setup`` entry point (this function is sync, so it can't resolve it
+    itself). Left ``None`` for tests, falling back to the builder default.
     """
     meta = setup_step_meta(step)
     if meta is None:
@@ -315,7 +640,7 @@ def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.V
     view.add_item(select_cls(meta["config_key"], ctx, placeholder=meta["placeholder"]))
 
     async def next_step(interaction: discord.Interaction):
-        e, v = _setup_view(ctx, step + 1)
+        e, v = _setup_view(ctx, step + 1, color=color)
         await interaction.response.edit_message(embed=e, view=v)
 
     btn: discord.ui.Button = discord.ui.Button(
@@ -323,7 +648,7 @@ def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.V
     )  # type: ignore[assignment]
     btn.callback = next_step  # type: ignore[method-assign]
     view.add_item(btn)
-    return build_setup_step_embed(meta), view
+    return build_setup_step_embed(meta, color=color), view
 
 
 # Kept for backwards compatibility with anything that imported the constant
@@ -383,7 +708,13 @@ class TicketCloseButton(
         return cls(tid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(_TicketCloseModal(self.ticket_id))
+        # Capture the ticket embed message here (a component interaction, where
+        # ``interaction.message`` is reliably set) and hand it to the modal — a
+        # modal's own ``on_submit`` interaction has ``message = None``, so the
+        # close handler couldn't otherwise find the embed to update.
+        await interaction.response.send_modal(
+            _TicketCloseModal(self.ticket_id, interaction.message)
+        )
 
 
 class TicketReopenButton(
@@ -411,7 +742,7 @@ class TicketReopenButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         # Get ctx from bot
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -419,21 +750,34 @@ class TicketReopenButton(
             )
             return
 
-        with ctx.open_db() as conn:
-            reopen_ticket(conn, self.ticket_id)
-            write_audit(
-                conn,
-                guild_id=interaction.guild_id or 0,
-                action="ticket_reopen",
-                actor_id=member.id,
-                extra={"ticket_id": self.ticket_id},
-            )
+        ticket_id = self.ticket_id
+        guild_id = interaction.guild_id or 0
+        member_id = member.id
+
+        def _reopen():
+            with ctx.open_db() as conn:
+                reopen_ticket(conn, ticket_id)
+                write_audit(
+                    conn,
+                    guild_id=guild_id,
+                    action="ticket_reopen",
+                    actor_id=member_id,
+                    extra={"ticket_id": ticket_id},
+                )
+
+        await asyncio.to_thread(_reopen)
 
         # Restore send permission for creator
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
-            with ctx.open_db() as conn:
-                ticket = get_ticket_by_channel(conn, channel.id)
+            accent = await resolve_accent_color(ctx.db_path, channel.guild)
+            reopen_ch_id = channel.id
+
+            def _fetch_reopened_ticket():
+                with ctx.open_db() as conn:
+                    return get_ticket_by_channel(conn, reopen_ch_id)
+
+            ticket = await asyncio.to_thread(_fetch_reopened_ticket)
             if ticket:
                 creator = interaction.guild.get_member(ticket["user_id"])  # type: ignore[union-attr]
                 if creator:
@@ -448,14 +792,28 @@ class TicketReopenButton(
                     creator or interaction.user,
                     embed=discord.Embed(
                         description=f"Your ticket in **{interaction.guild.name}** has been reopened.",  # type: ignore[union-attr]
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                 )
 
-            # Swap to close button
+            # Swap to close button and restore the embed's Status field. An
+            # escalated ticket keeps its ⚠️ marker (the flag survives reopen);
+            # otherwise it goes back to 🟢 Open.
             view = discord.ui.View(timeout=None)
             view.add_item(TicketCloseButton(self.ticket_id))
-            await interaction.response.edit_message(view=view)
+            reopen_status = (
+                TICKET_STATUS_ESCALATED
+                if ticket and ticket.get("escalated")
+                else TICKET_STATUS_OPEN
+            )
+            msg = interaction.message
+            if msg is not None and msg.embeds:
+                await interaction.response.edit_message(
+                    embed=_apply_ticket_status(msg.embeds[0], reopen_status),
+                    view=view,
+                )
+            else:
+                await interaction.response.edit_message(view=view)
             await channel.send(
                 f"🔓 Ticket reopened by {member.mention}.",
                 allowed_mentions=discord.AllowedMentions.none(),
@@ -486,7 +844,7 @@ class TicketDeleteButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -530,46 +888,18 @@ class TicketDeleteButton(
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return
+        del_ch_id = channel.id
 
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, channel.id)
+        def _fetch_del_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, del_ch_id)
+
+        ticket = await asyncio.to_thread(_fetch_del_ticket)
 
         if not ticket:
             return
 
-        # Transcript
-        creator = interaction.guild.get_member(ticket["user_id"]) or interaction.user  # type: ignore[union-attr]
-        await _collect_and_post_transcript(
-            ctx,
-            channel,
-            record_type="ticket",
-            record_id=self.ticket_id,
-            user=creator,
-            extra_meta={
-                "closed_by": member.id,
-                "close_reason": ticket.get("close_reason", ""),
-                "transcript_stage": "delete",
-            },
-        )
-
-        with ctx.open_db() as conn:
-            delete_ticket(conn, self.ticket_id)
-            write_audit(
-                conn,
-                guild_id=interaction.guild_id or 0,
-                action="ticket_delete",
-                actor_id=member.id,
-                target_id=ticket["user_id"],
-                extra={"ticket_id": self.ticket_id, "message_count": 0},
-            )
-
-        audit_embed = discord.Embed(
-            title="🗑️ Ticket Deleted",
-            description=f"**Ticket #{self.ticket_id}** by <@{ticket['user_id']}> deleted by {member.mention}",
-            color=CLR_TICKET,
-        )
-        await _post_audit(ctx, interaction.guild, audit_embed)  # type: ignore[arg-type]
-        await channel.delete(reason=f"Ticket #{self.ticket_id} deleted by {member}")
+        await _finalize_ticket_delete(ctx, channel, ticket, actor_id=member.id)
 
 
 # ---------------------------------------------------------------------------
@@ -602,46 +932,55 @@ async def finalize_policy_vote(
     'rejected_no_quorum' only makes sense when ``timed_out=True``.
     """
     db_status = "passed" if outcome == "adopted" else "failed"
+    guild_id = guild.id
 
-    with ctx.open_db() as conn:
-        won = resolve_policy_vote(conn, policy_id, status=db_status)
-        if not won:
-            return False
-        policy = get_policy_ticket(conn, policy_id)
-        if policy is None:
-            return False
-        policy_row_id: int | None = None
-        adopted_text = policy["vote_text"] or policy["description"]
-        if outcome == "adopted":
-            policy_row_id = add_policy(
+    def _db_commit():
+        with ctx.open_db() as conn:
+            won = resolve_policy_vote(conn, policy_id, status=db_status)
+            if not won:
+                return None
+            pol = get_policy_ticket(conn, policy_id)
+            if pol is None:
+                return None
+            pol_row_id: int | None = None
+            pol_adopted_text = pol["vote_text"] or pol["description"]
+            if outcome == "adopted":
+                pol_row_id = add_policy(
+                    conn,
+                    guild_id=guild_id,
+                    policy_ticket_id=policy_id,
+                    title=pol["title"],
+                    description=pol_adopted_text,
+                )
+            pol_audit_extra: dict = {
+                "policy_id": policy_id,
+                "yes": len(yes_ids),
+                "no": len(no_ids),
+                "abstain": len(abstain_ids),
+                "timed_out": timed_out,
+            }
+            if outcome == "rejected_no_quorum":
+                pol_audit_extra["no_quorum"] = True
+            if outcome == "adopted":
+                pol_audit_extra["policy_row_id"] = pol_row_id
+                pol_audit_extra["vote_text"] = pol_adopted_text
+                pol_audit_action = "policy_passed"
+            else:
+                pol_audit_action = "policy_vote_failed"
+            write_audit(
                 conn,
-                guild_id=guild.id,
-                policy_ticket_id=policy_id,
-                title=policy["title"],
-                description=adopted_text,
+                guild_id=guild_id,
+                action=pol_audit_action,
+                actor_id=actor_id,
+                extra=pol_audit_extra,
             )
-        audit_extra: dict = {
-            "policy_id": policy_id,
-            "yes": len(yes_ids),
-            "no": len(no_ids),
-            "abstain": len(abstain_ids),
-            "timed_out": timed_out,
-        }
-        if outcome == "rejected_no_quorum":
-            audit_extra["no_quorum"] = True
-        if outcome == "adopted":
-            audit_extra["policy_row_id"] = policy_row_id
-            audit_extra["vote_text"] = adopted_text
-            audit_action = "policy_passed"
-        else:
-            audit_action = "policy_vote_failed"
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action=audit_action,
-            actor_id=actor_id,
-            extra=audit_extra,
-        )
+        return {"policy": pol, "adopted_text": pol_adopted_text}
+
+    commit = await asyncio.to_thread(_db_commit)
+    if commit is None:
+        return False
+    policy = commit["policy"]
+    adopted_text = commit["adopted_text"]
 
     vote_text = policy["vote_text"] or policy["title"]
 
@@ -657,8 +996,11 @@ async def finalize_policy_vote(
                 f"**Adopted policy:** {adopted_text}\n"
                 f"{adopted_suffix}"
             )
-            with ctx.open_db() as conn:
-                adopted_policies = get_policies_by_ticket_id(conn, policy_id)
+            def _get_adopted():
+                with ctx.open_db() as conn:
+                    return get_policies_by_ticket_id(conn, policy_id)
+
+            adopted_policies = await asyncio.to_thread(_get_adopted)
             if adopted_policies:
                 adopted_embed = discord.Embed(
                     title="Adopted Policies",
@@ -762,7 +1104,7 @@ async def _handle_policy_vote(
 ) -> None:
     """Shared handler for all three policy vote buttons."""
     bot = interaction.client
-    ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+    ctx: AppContext = cast("Bot", bot).ctx
     member = interaction.user
     guild = interaction.guild
     if not isinstance(member, discord.Member) or not guild:
@@ -774,8 +1116,11 @@ async def _handle_policy_vote(
         )
         return
 
-    with ctx.open_db() as conn:
-        policy = get_policy_ticket(conn, policy_id)
+    def _get_policy():
+        with ctx.open_db() as conn:
+            return get_policy_ticket(conn, policy_id)
+
+    policy = await asyncio.to_thread(_get_policy)
     if not policy or policy["status"] != "voting":
         await interaction.response.send_message(
             "This vote is no longer active.", ephemeral=True
@@ -783,9 +1128,14 @@ async def _handle_policy_vote(
         return
 
     # Cast or update vote
-    with ctx.open_db() as conn:
-        cast_policy_vote(conn, policy_id=policy_id, user_id=member.id, vote=vote)
-        votes = get_policy_votes(conn, policy_id)
+    member_id = member.id
+
+    def _cast_vote():
+        with ctx.open_db() as conn:
+            cast_policy_vote(conn, policy_id=policy_id, user_id=member_id, vote=vote)
+            return get_policy_votes(conn, policy_id)
+
+    votes = await asyncio.to_thread(_cast_vote)
 
     # Build eligible voter set
     mod_role_ids = _get_mod_role_ids(ctx, guild.id)
@@ -941,7 +1291,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
@@ -960,6 +1310,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         # Create channel
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
@@ -998,27 +1349,33 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         )
 
         desc_text = self.description.value or "(no description)"
-        with ctx.open_db() as conn:
-            ticket_id = create_ticket(
-                conn,
-                guild_id=guild.id,
-                user_id=user.id,
-                channel_id=channel.id,
-                description=desc_text,
-            )
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_open",
-                actor_id=user.id,
-                extra={"ticket_id": ticket_id, "description": desc_text},
-            )
+        guild_id = guild.id
+
+        def _create_ticket():
+            with ctx.open_db() as conn:
+                tid = create_ticket(
+                    conn,
+                    guild_id=guild_id,
+                    user_id=user.id,
+                    channel_id=channel.id,
+                    description=desc_text,
+                )
+                write_audit(
+                    conn,
+                    guild_id=guild_id,
+                    action="ticket_open",
+                    actor_id=user.id,
+                    extra={"ticket_id": tid, "description": desc_text},
+                )
+            return tid
+
+        ticket_id = await asyncio.to_thread(_create_ticket)
 
         # Post ticket embed
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",
             description=desc_text,
-            color=CLR_TICKET,
+            color=accent,
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="Opened by", value=user.mention, inline=True)
@@ -1037,13 +1394,16 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
             user,
             embed=discord.Embed(
                 description=f"Your ticket has been created in **{guild.name}** → [Go to ticket]({channel.jump_url})",
-                color=CLR_TICKET,
+                color=accent,
             ),
         )
 
         # Notify mods
-        with ctx.open_db() as conn:
-            notify = get_config_value(conn, "ticket_notify_on_create", "1")
+        def _get_notify():
+            with ctx.open_db() as conn:
+                return get_config_value(conn, "ticket_notify_on_create", "1")
+
+        notify = await asyncio.to_thread(_get_notify)
         if notify != "0":
             for rid in mod_role_ids:
                 role = guild.get_role(rid)
@@ -1057,7 +1417,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
                         embed=discord.Embed(
                             title="📩 New Ticket",
                             description=f"**{user}** opened a ticket → [Jump to ticket]({channel.jump_url})\n\n{desc_text}",
-                            color=CLR_TICKET,
+                            color=accent,
                         ),
                     )
 
@@ -1065,7 +1425,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         audit_embed = discord.Embed(
             title="📩 Ticket Opened",
             description=f"**Ticket #{ticket_id}** by {user.mention} in {channel.mention}",
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1075,13 +1435,14 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
         label="Reason (optional)", required=False, max_length=500
     )  # type: ignore[assignment]
 
-    def __init__(self, ticket_id: int):
+    def __init__(self, ticket_id: int, ticket_message: discord.Message | None = None):
         super().__init__()
         self.ticket_id = ticket_id
+        self.ticket_message = ticket_message
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         member = interaction.user
         guild = interaction.guild
         if not isinstance(member, discord.Member) or guild is None:
@@ -1093,22 +1454,34 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             return
 
         reason = self.reason.value or ""
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
-            if not ticket or ticket["status"] != "open":
-                await interaction.response.send_message(
-                    "This ticket is not open.", ephemeral=True
+        accent = await resolve_accent_color(ctx.db_path, guild)
+        close_guild_id = guild.id
+        close_channel_id = interaction.channel_id or 0
+        close_ticket_id = self.ticket_id
+        close_member_id = member.id
+
+        def _close():
+            with ctx.open_db() as conn:
+                t = get_ticket_by_channel(conn, close_channel_id)
+                if not t or t["status"] != "open":
+                    return None
+                close_ticket(conn, close_ticket_id, closed_by=close_member_id, reason=reason)
+                write_audit(
+                    conn,
+                    guild_id=close_guild_id,
+                    action="ticket_close",
+                    actor_id=close_member_id,
+                    target_id=t["user_id"],
+                    extra={"ticket_id": close_ticket_id, "reason": reason},
                 )
-                return
-            close_ticket(conn, self.ticket_id, closed_by=member.id, reason=reason)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_close",
-                actor_id=member.id,
-                target_id=ticket["user_id"],
-                extra={"ticket_id": self.ticket_id, "reason": reason},
+                return t
+
+        ticket = await asyncio.to_thread(_close)
+        if ticket is None:
+            await interaction.response.send_message(
+                "This ticket is not open.", ephemeral=True
             )
+            return
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
@@ -1122,11 +1495,22 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
                     read_message_history=True,
                 )
 
-            # Swap buttons to Reopen + Delete
+            # Swap buttons to Reopen + Delete and flip the embed's Status
+            # field to Closed in the same edit. ``edit_message`` on a modal
+            # submit targets the message the Close button lived on; we read the
+            # embed off the captured ``ticket_message`` because the modal's own
+            # ``interaction.message`` is None.
             view = discord.ui.View(timeout=None)
             view.add_item(TicketReopenButton(self.ticket_id))
             view.add_item(TicketDeleteButton(self.ticket_id))
-            await interaction.response.edit_message(view=view)
+            tmsg = self.ticket_message
+            if tmsg is not None and tmsg.embeds:
+                await interaction.response.edit_message(
+                    embed=_apply_ticket_status(tmsg.embeds[0], TICKET_STATUS_CLOSED),
+                    view=view,
+                )
+            else:
+                await interaction.response.edit_message(view=view)
 
             close_msg = f"🔒 Ticket closed by {member.mention}."
             if reason:
@@ -1141,7 +1525,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
                     creator,
                     embed=discord.Embed(
                         description=f"Your ticket in **{guild.name}** has been closed.\n{f'**Reason:** {reason}' if reason else ''}\nYou can still view the channel.",
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                     fallback_channel=channel,
                 )
@@ -1150,7 +1534,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             title="🔒 Ticket Closed",
             description=f"**Ticket #{self.ticket_id}** closed by {member.mention}"
             + (f"\nReason: {reason}" if reason else ""),
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1256,8 +1640,12 @@ async def _do_unjail(
     actor: discord.Member | None = None,
 ) -> str:
     """Core unjail logic.  Returns a status message."""
-    with ctx.open_db() as conn:
-        jail = get_active_jail(conn, guild.id, target.id)
+
+    def _fetch_jail():
+        with ctx.open_db() as conn:
+            return get_active_jail(conn, guild.id, target.id)
+
+    jail = await asyncio.to_thread(_fetch_jail)
     if not jail:
         return f"{target} is not currently jailed."
 
@@ -1300,16 +1688,21 @@ async def _do_unjail(
 
     # Update DB
     actor_id = actor.id if actor else 0
-    with ctx.open_db() as conn:
-        release_jail(conn, jail["id"], reason=reason)
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action="jail_release",
-            actor_id=actor_id,
-            target_id=target.id,
-            extra={"jail_id": jail["id"], "reason": reason},
-        )
+    jail_id_rel = jail["id"]
+
+    def _release():
+        with ctx.open_db() as conn:
+            release_jail(conn, jail_id_rel, reason=reason)
+            write_audit(
+                conn,
+                guild_id=guild.id,
+                action="jail_release",
+                actor_id=actor_id,
+                target_id=target.id,
+                extra={"jail_id": jail_id_rel, "reason": reason},
+            )
+
+    await asyncio.to_thread(_release)
 
     # DM
     dm_embed = discord.Embed(
@@ -1343,8 +1736,12 @@ async def _do_unjail(
 
 async def check_jail_rejoin(ctx: AppContext, member: discord.Member) -> bool:
     """If the member has an active jail, re-apply it. Returns True if jailed."""
-    with ctx.open_db() as conn:
-        jail = get_active_jail(conn, member.guild.id, member.id)
+
+    def _fetch_rejoin_jail():
+        with ctx.open_db() as conn:
+            return get_active_jail(conn, member.guild.id, member.id)
+
+    jail = await asyncio.to_thread(_fetch_rejoin_jail)
     if not jail:
         return False
 
@@ -1385,8 +1782,13 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
         try:
             guild = bot.get_guild(ctx.guild_id)
             if guild:
-                with ctx.open_db() as conn:
-                    expired = get_expired_jails(conn, guild.id)
+                el_guild_id = guild.id
+
+                def _get_expired():
+                    with ctx.open_db() as conn:
+                        return get_expired_jails(conn, el_guild_id)
+
+                expired = await asyncio.to_thread(_get_expired)
                 for jail in expired:
                     member = guild.get_member(jail["user_id"])
                     if member:
@@ -1395,15 +1797,82 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
                         )
                     else:
                         # User left — just release the record
-                        with ctx.open_db() as conn:
-                            release_jail(
-                                conn,
-                                jail["id"],
-                                reason="Jail duration expired (user left)",
-                            )
+                        expired_jail_id = jail["id"]
+
+                        def _release_left(jid: int = expired_jail_id) -> None:
+                            with ctx.open_db() as conn:
+                                release_jail(
+                                    conn,
+                                    jid,
+                                    reason="Jail duration expired (user left)",
+                                )
+
+                        await asyncio.to_thread(_release_left)
         except Exception:
             log.exception("Error in jail expiry loop")
         await asyncio.sleep(60)
+
+
+# How long a closed ticket lingers before the sweep archives + deletes it, and
+# how often the sweep runs. The lingering window lets a mod hit Reopen for a
+# "one more thing" without spawning a fresh ticket; after 24 h untouched we
+# transcript and remove the channel.
+_TICKET_AUTODELETE_SECONDS = 24 * 3600
+_TICKET_AUTODELETE_POLL_SECONDS = 3600
+
+
+async def ticket_autodelete_loop(bot: discord.Client, ctx: AppContext) -> None:
+    """Permanently delete tickets 24 h after they were closed.
+
+    Reopening a ticket clears ``closed_at`` and flips its status back to
+    ``open``, so it silently drops out of the sweep — the countdown only runs
+    while a ticket sits closed. Each deletion goes through
+    :func:`_finalize_ticket_delete`, so the transcript is archived and DM'd
+    before the channel is removed. Per-ticket errors are logged and retried on
+    the next pass rather than aborting the whole sweep.
+    """
+    await bot.wait_until_ready()
+    me = bot.user
+    actor_id = me.id if me else 0
+    while not bot.is_closed():
+        try:
+            cutoff = time.time() - _TICKET_AUTODELETE_SECONDS
+
+            def _fetch(cutoff: float = cutoff):
+                with ctx.open_db() as conn:
+                    return get_tickets_to_autodelete(conn, closed_before=cutoff)
+
+            due = await asyncio.to_thread(_fetch)
+            for ticket in due:
+                try:
+                    guild = bot.get_guild(ticket["guild_id"])
+                    if guild is None:
+                        continue
+                    raw = guild.get_channel(ticket["channel_id"])
+                    if not isinstance(raw, discord.TextChannel):
+                        # Channel was already removed by hand — mark the row
+                        # deleted so it stops matching the sweep every hour.
+                        gone_id = ticket["id"]
+
+                        def _mark_gone(tid: int = gone_id) -> None:
+                            with ctx.open_db() as conn:
+                                delete_ticket(conn, tid)
+
+                        await asyncio.to_thread(_mark_gone)
+                        continue
+                    await _finalize_ticket_delete(
+                        ctx, raw, ticket, actor_id=actor_id, auto=True
+                    )
+                    log.info(
+                        "Auto-deleted ticket %s (24h after close)", ticket["id"]
+                    )
+                except Exception:
+                    log.exception(
+                        "Auto-delete failed for ticket %s", ticket.get("id")
+                    )
+        except Exception:
+            log.exception("Error in ticket auto-delete loop")
+        await asyncio.sleep(_TICKET_AUTODELETE_POLL_SECONDS)
 
 
 # Default if no per-guild override is set. Kept in sync with the
@@ -1434,11 +1903,15 @@ async def policy_vote_timeout_loop(bot: discord.Client, ctx: AppContext) -> None
             guild = bot.get_guild(ctx.guild_id)
             if guild is not None:
                 timeout_secs = _policy_vote_timeout_seconds(ctx, guild.id)
+                pvt_guild_id = guild.id
                 if timeout_secs > 0:
-                    with ctx.open_db() as conn:
-                        expired = find_expired_policy_votes(
-                            conn, guild.id, timeout_seconds=timeout_secs
-                        )
+                    def _get_expired_votes():
+                        with ctx.open_db() as conn:
+                            return find_expired_policy_votes(
+                                conn, pvt_guild_id, timeout_seconds=timeout_secs
+                            )
+
+                    expired = await asyncio.to_thread(_get_expired_votes)
                     for policy in expired:
                         try:
                             await _resolve_expired_policy(bot, ctx, guild, policy)
@@ -1472,8 +1945,11 @@ async def _resolve_expired_policy(
         if all_role_ids & {r.id for r in m.roles}:
             eligible.add(m.id)
 
-    with ctx.open_db() as conn:
-        votes = get_policy_votes(conn, policy_id)
+    def _get_votes():
+        with ctx.open_db() as conn:
+            return get_policy_votes(conn, policy_id)
+
+    votes = await asyncio.to_thread(_get_votes)
     vote_map = {v["user_id"]: v["vote"] for v in votes}
     voted_ids = set(vote_map.keys()) & eligible
     yes_ids = [uid for uid in voted_ids if vote_map[uid] == "yes"]
@@ -1526,7 +2002,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
@@ -1542,6 +2018,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
         desc_text = self.description.value or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{user.name[:16]}-{ts}"
@@ -1578,31 +2055,38 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
             name, category=category, overwrites=overwrites  # type: ignore[arg-type]
         )
 
-        with ctx.open_db() as conn:
-            ticket_id = create_ticket(
-                conn,
-                guild_id=guild.id,
-                user_id=user.id,
-                channel_id=channel.id,
-                description=desc_text,
-                source_message_url=self.source_message.jump_url,
-            )
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_open",
-                actor_id=user.id,
-                extra={
-                    "ticket_id": ticket_id,
-                    "description": desc_text,
-                    "source": self.source_message.jump_url,
-                },
-            )
+        fm_guild_id = guild.id
+        fm_source_url = self.source_message.jump_url
+
+        def _create_fm_ticket():
+            with ctx.open_db() as conn:
+                tid = create_ticket(
+                    conn,
+                    guild_id=fm_guild_id,
+                    user_id=user.id,
+                    channel_id=channel.id,
+                    description=desc_text,
+                    source_message_url=fm_source_url,
+                )
+                write_audit(
+                    conn,
+                    guild_id=fm_guild_id,
+                    action="ticket_open",
+                    actor_id=user.id,
+                    extra={
+                        "ticket_id": tid,
+                        "description": desc_text,
+                        "source": fm_source_url,
+                    },
+                )
+            return tid
+
+        ticket_id = await asyncio.to_thread(_create_fm_ticket)
 
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",
             description=desc_text,
-            color=CLR_TICKET,
+            color=accent,
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="Opened by", value=user.mention, inline=True)

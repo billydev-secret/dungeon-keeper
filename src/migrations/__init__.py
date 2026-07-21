@@ -59,7 +59,12 @@ def _strip_line_comments(sql: str) -> str:
 
 
 def _exec_migration_sql(conn: sqlite3.Connection, sql: str, name: str) -> None:
-    """Run each statement in a migration individually, tolerating already-applied DDL."""
+    """Run each statement in a migration individually, tolerating already-applied DDL.
+
+    Deliberately does NOT commit — the caller commits the statements together
+    with the schema_version insert so each migration applies atomically (a
+    crash mid-migration rolls back instead of re-running half-applied DDL).
+    """
     for stmt in _strip_line_comments(sql).split(";"):
         stmt = stmt.strip()
         if not stmt:
@@ -71,7 +76,6 @@ def _exec_migration_sql(conn: sqlite3.Connection, sql: str, name: str) -> None:
                 log.warning("Already-applied DDL skipped in %s: %s", name, exc)
             else:
                 raise
-    conn.commit()
 
 
 def apply_migrations_sync(db_path: str | Path) -> None:
@@ -89,17 +93,28 @@ def apply_migrations_sync(db_path: str | Path) -> None:
                 continue
             sql = path.read_text(encoding="utf-8")
             log.info("Applying migration: %s", name)
-            _exec_migration_sql(conn, sql, name)
-            conn.execute(
-                "INSERT INTO schema_version (migration, applied_at) VALUES (?, ?)",
-                (name, time.time()),
-            )
-            conn.commit()
+            try:
+                # Explicit BEGIN: in the sqlite3 module's legacy isolation mode
+                # DDL runs in autocommit (no implicit transaction), so without
+                # this a failed migration could leave earlier statements applied.
+                conn.execute("BEGIN")
+                _exec_migration_sql(conn, sql, name)
+                conn.execute(
+                    "INSERT INTO schema_version (migration, applied_at) VALUES (?, ?)",
+                    (name, time.time()),
+                )
+                conn.commit()  # statements + version row land atomically
+            except Exception:
+                conn.rollback()
+                raise
             log.info("Applied migration: %s", name)
 
 
 async def _exec_migration_sql_async(db, sql: str, name: str) -> None:
-    """Run each statement in a migration individually, tolerating already-applied DDL."""
+    """Run each statement in a migration individually, tolerating already-applied DDL.
+
+    Deliberately does NOT commit — see _exec_migration_sql.
+    """
     for stmt in _strip_line_comments(sql).split(";"):
         stmt = stmt.strip()
         if not stmt:
@@ -111,7 +126,6 @@ async def _exec_migration_sql_async(db, sql: str, name: str) -> None:
                 log.warning("Already-applied DDL skipped in %s: %s", name, exc)
             else:
                 raise
-    await db.commit()
 
 
 async def apply_migrations(db) -> None:
@@ -130,10 +144,16 @@ async def apply_migrations(db) -> None:
             continue
         sql = path.read_text(encoding="utf-8")
         log.info("Applying migration: %s", name)
-        await _exec_migration_sql_async(db, sql, name)
-        await db.execute(
-            "INSERT INTO schema_version (migration, applied_at) VALUES (?, ?)",
-            (name, time.time()),
-        )
-        await db.commit()
+        try:
+            # Explicit BEGIN — see apply_migrations_sync for why.
+            await db.execute("BEGIN")
+            await _exec_migration_sql_async(db, sql, name)
+            await db.execute(
+                "INSERT INTO schema_version (migration, applied_at) VALUES (?, ?)",
+                (name, time.time()),
+            )
+            await db.commit()  # statements + version row land atomically
+        except Exception:
+            await db.rollback()
+            raise
         log.info("Applied migration: %s", name)

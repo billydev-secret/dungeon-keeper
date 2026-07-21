@@ -1,6 +1,6 @@
 """VADER-based sentiment analysis batch pipeline.
 
-Runs periodically to score un-analysed messages.  Results are stored in the
+Runs periodically to score un-analyzed messages.  Results are stored in the
 ``message_sentiment`` table for consumption by the health dashboard.
 """
 

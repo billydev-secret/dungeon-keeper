@@ -16,14 +16,12 @@ from discord.ext import commands
 
 from bot_modules.commands.voice_master_commands import (
     PANEL_DYNAMIC_ITEM_CLASSES,
-    _apply_hide,
+    _apply_access_state,
     _apply_invite,
     _apply_kick,
     _apply_limit,
-    _apply_lock,
     _apply_rename,
     _apply_reset,
-    _apply_spectator,
     _apply_transfer,
     _ephemeral,
     _grant_speaker_if_spectating,
@@ -33,14 +31,23 @@ from bot_modules.commands.voice_master_commands import (
     post_knock_request,
     post_panel,
 )
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.economy_rentals_service import entitlements
+from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
+    ACCESS_LOCKED,
+    ACCESS_NSFW,
+    ACCESS_OPEN,
+    ACCESS_SPECTATE,
     CATEGORY_CHANNEL_CAP,
     DEFAULT_NAME_TEMPLATE,
     VoiceMasterConfig,
     VoiceProfile,
+    access_state_profile_flags,
     access_status_text,
     active_channel_count,
+    profile_access_state,
     add_blocked,
     add_trusted,
     compute_reconciliation_actions,
@@ -82,6 +89,7 @@ from bot_modules.voice_master.logic import (
     profile_reset_summary,
     select_effective_bitrate,
     select_effective_limit,
+    style_lease_blocks,
     validate_block_add,
     validate_trust_add,
 )
@@ -139,12 +147,11 @@ class VoiceMasterCog(commands.Cog):
         self._claim_timers: dict[int, asyncio.Task] = {}
         # (guild_id, user_id) → pending self-disconnect task
         self._sleepkick_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        # channel_id → voice_room_host quest already fired this room lifetime
+        self._host_quest_fired: set[int] = set()
         super().__init__()
 
     async def cog_load(self) -> None:
-        # Expose the AppContext to panel DynamicItem callbacks (which only
-        # see ``interaction.client``). Mirrors the jail cog's _mod_ctx pattern.
-        setattr(self.bot, "_vm_ctx", self.ctx)
         # Register persistent panel dropdown classes so they survive restarts.
         for cls in PANEL_DYNAMIC_ITEM_CLASSES:
             self.bot.add_dynamic_items(cls)
@@ -170,9 +177,16 @@ class VoiceMasterCog(commands.Cog):
 
     async def _reconcile_guild(self, guild: discord.Guild) -> None:
         """Resume tracked channels for one guild; clean up empty/missing ones."""
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, guild.id)
-            tracked = list_active_channels(conn, guild.id)
+        guild_id = guild.id
+
+        def _load():
+            with self.ctx.open_db() as conn:
+                return (
+                    load_voice_master_config(conn, guild_id),
+                    list_active_channels(conn, guild_id),
+                )
+
+        cfg, tracked = await asyncio.to_thread(_load)
 
         if not cfg.hub_channel_id and not tracked:
             return  # unconfigured and nothing tracked
@@ -211,9 +225,14 @@ class VoiceMasterCog(commands.Cog):
                     log.exception("voice_master: failed to delete channel %d", cid)
 
         if plan.db_to_delete:
-            with self.ctx.open_db() as conn:
-                for cid in plan.db_to_delete:
-                    delete_active_channel(conn, cid)
+            db_to_delete = list(plan.db_to_delete)
+
+            def _del_db():
+                with self.ctx.open_db() as conn:
+                    for cid in db_to_delete:
+                        delete_active_channel(conn, cid)
+
+            await asyncio.to_thread(_del_db)
 
         for cid in plan.orphan_warnings:
             log.warning(
@@ -228,6 +247,7 @@ class VoiceMasterCog(commands.Cog):
         # posted before the restart) is harmless: first claim wins, and the
         # other button then refuses (claiming clears owner_left_at).
         now = time.time()
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         for row in tracked:
             if (
                 row.channel_id not in present_ids
@@ -240,7 +260,7 @@ class VoiceMasterCog(commands.Cog):
                 continue
             remaining = cfg.owner_grace_s - (now - row.owner_left_at)
             if remaining <= 0:
-                await post_claim_prompt(ch)
+                await post_claim_prompt(ch, color=accent)
             else:
                 self._schedule_claim_prompt(ch, int(remaining))
 
@@ -261,20 +281,27 @@ class VoiceMasterCog(commands.Cog):
     async def on_guild_channel_delete(
         self, channel: discord.abc.GuildChannel
     ) -> None:
-        row = None
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, channel.guild.id)
-            row = get_active_channel(conn, channel.id)
-            if row is not None:
-                delete_active_channel(conn, channel.id)
-                write_audit(
-                    conn,
-                    guild_id=channel.guild.id,
-                    action="vm_channel_delete",
-                    actor_id=0,
-                    target_id=row.owner_id,
-                    extra={"channel_id": channel.id, "reason": "external_delete"},
-                )
+        _del_guild_id = channel.guild.id
+        _del_channel_id = channel.id
+        self._host_quest_fired.discard(_del_channel_id)
+
+        def _fetch_and_delete():
+            with self.ctx.open_db() as conn:
+                cfg_ = load_voice_master_config(conn, _del_guild_id)
+                row_ = get_active_channel(conn, _del_channel_id)
+                if row_ is not None:
+                    delete_active_channel(conn, _del_channel_id)
+                    write_audit(
+                        conn,
+                        guild_id=_del_guild_id,
+                        action="vm_channel_delete",
+                        actor_id=0,
+                        target_id=row_.owner_id,
+                        extra={"channel_id": _del_channel_id, "reason": "external_delete"},
+                    )
+                return cfg_, row_
+
+        cfg, row = await asyncio.to_thread(_fetch_and_delete)
         # Tracked channel deleted out from under us — already cleaned up in the block above.
         if row is not None:
             return
@@ -335,18 +362,26 @@ class VoiceMasterCog(commands.Cog):
     async def _cleanup_for_departed_user(
         self, guild: discord.Guild, user_id: int
     ) -> None:
-        with self.ctx.open_db() as conn:
-            owned_rows = conn.execute(
-                "SELECT channel_id FROM voice_master_channels "
-                "WHERE guild_id = ? AND owner_id = ?",
-                (guild.id, user_id),
-            ).fetchall()
+        _guild_id = guild.id
+
+        def _get_owned_rows():
+            with self.ctx.open_db() as conn:
+                return conn.execute(
+                    "SELECT channel_id FROM voice_master_channels "
+                    "WHERE guild_id = ? AND owner_id = ?",
+                    (_guild_id, user_id),
+                ).fetchall()
+
+        owned_rows = await asyncio.to_thread(_get_owned_rows)
         for row in owned_rows:
             cid = int(row["channel_id"])
             ch = guild.get_channel(cid)
             if not isinstance(ch, discord.VoiceChannel):
-                with self.ctx.open_db() as conn:
-                    delete_active_channel(conn, cid)
+                def _del_missing(cid_: int) -> None:
+                    with self.ctx.open_db() as conn:
+                        delete_active_channel(conn, cid_)
+
+                await asyncio.to_thread(_del_missing, cid)
                 continue
             humans = [m for m in ch.members if not m.bot]
             if humans:
@@ -366,34 +401,46 @@ class VoiceMasterCog(commands.Cog):
                     log.exception(
                         "voice_master: failed to update perms for new owner of %d", cid
                     )
-                with self.ctx.open_db() as conn:
-                    set_owner(conn, cid, new_owner.id)
-                    write_audit(
-                        conn,
-                        guild_id=guild.id,
-                        action="vm_transfer",
-                        actor_id=new_owner.id,
-                        target_id=user_id,
-                        extra={"channel_id": cid, "reason": "owner_left_server"},
-                    )
+                _new_owner_id = new_owner.id
+
+                def _set_owner(cid_: int, new_owner_id_: int) -> None:
+                    with self.ctx.open_db() as conn:
+                        set_owner(conn, cid_, new_owner_id_)
+                        write_audit(
+                            conn,
+                            guild_id=_guild_id,
+                            action="vm_transfer",
+                            actor_id=new_owner_id_,
+                            target_id=user_id,
+                            extra={"channel_id": cid_, "reason": "owner_left_server"},
+                        )
+
+                await asyncio.to_thread(_set_owner, cid, _new_owner_id)
             else:
                 # Empty — delete it now.
                 try:
                     await ch.delete(reason="Voice Master: owner left server, channel empty")
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception("voice_master: failed to delete %d", cid)
-                with self.ctx.open_db() as conn:
-                    delete_active_channel(conn, cid)
-                    write_audit(
-                        conn,
-                        guild_id=guild.id,
-                        action="vm_channel_delete",
-                        actor_id=user_id,
-                        extra={"channel_id": cid, "reason": "owner_left_server"},
-                    )
+
+                def _del_active(cid_: int) -> None:
+                    with self.ctx.open_db() as conn:
+                        delete_active_channel(conn, cid_)
+                        write_audit(
+                            conn,
+                            guild_id=_guild_id,
+                            action="vm_channel_delete",
+                            actor_id=user_id,
+                            extra={"channel_id": cid_, "reason": "owner_left_server"},
+                        )
+
+                await asyncio.to_thread(_del_active, cid)
         # Remove the departed member from every other owner's trust + block list.
-        with self.ctx.open_db() as conn:
-            n = remove_member_from_all_lists(conn, guild.id, user_id)
+        def _remove_lists():
+            with self.ctx.open_db() as conn:
+                return remove_member_from_all_lists(conn, _guild_id, user_id)
+
+        n = await asyncio.to_thread(_remove_lists)
         if n:
             log.info(
                 "voice_master: removed user %d from %d trust/block entries in guild %d",
@@ -412,8 +459,11 @@ class VoiceMasterCog(commands.Cog):
         if member.bot:
             return
 
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, member.guild.id)
+        def _load_cfg():
+            with self.ctx.open_db() as conn:
+                return load_voice_master_config(conn, member.guild.id)
+
+        cfg = await asyncio.to_thread(_load_cfg)
         if cfg.hub_channel_id == 0:
             return  # feature unconfigured
 
@@ -444,12 +494,19 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if not isinstance(channel, discord.VoiceChannel):
             return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
-            if row is None:
-                return
-            if member.id == row.owner_id:
-                set_owner_left_at(conn, channel.id, time.time())
+
+        def _mark_left():
+            with self.ctx.open_db() as conn:
+                row = get_active_channel(conn, channel.id)
+                if row is None:
+                    return None
+                if member.id == row.owner_id:
+                    set_owner_left_at(conn, channel.id, time.time())
+                return row
+
+        row = await asyncio.to_thread(_mark_left)
+        if row is None:
+            return
 
         if not any(not m.bot for m in channel.members):
             self._schedule_empty_delete(channel, cfg.empty_grace_s)
@@ -466,15 +523,44 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if not isinstance(channel, discord.VoiceChannel):
             return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
-            if row is None:
-                return
-            owner_returned = (
-                member.id == row.owner_id and row.owner_left_at is not None
+
+        def _mark_joined():
+            with self.ctx.open_db() as conn:
+                row = get_active_channel(conn, channel.id)
+                if row is None:
+                    return None
+                owner_returned = (
+                    member.id == row.owner_id and row.owner_left_at is not None
+                )
+                if owner_returned:
+                    set_owner_left_at(conn, channel.id, None)
+                return row, owner_returned
+
+        marked = await asyncio.to_thread(_mark_joined)
+        if marked is None:
+            return
+        row, owner_returned = marked
+
+        # Quest hook: the room became a real hangout — 2+ non-bot guests with
+        # the owner in the room. Once per room lifetime via the in-memory set
+        # (restarts forgive; the event occurrence key still blocks a re-pay
+        # of the same channel id). Guarded wrapper, never raises.
+        guests = [
+            m for m in channel.members if not m.bot and m.id != row.owner_id
+        ]
+        owner_present = any(m.id == row.owner_id for m in channel.members)
+        if (
+            len(guests) >= 2
+            and owner_present
+            and channel.id not in self._host_quest_fired
+        ):
+            self._host_quest_fired.add(channel.id)
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                self.bot, channel.guild.id, row.owner_id, "voice_room_host",
+                occurrence=str(channel.id),
             )
-            if owner_returned:
-                set_owner_left_at(conn, channel.id, None)
         self._cancel_empty_timer(channel.id)
         # The owner coming back disarms a pending claim prompt; a random member
         # joining does not (the channel is still ownerless).
@@ -525,11 +611,17 @@ class VoiceMasterCog(commands.Cog):
             return
         if not any(not m.bot for m in live.members):
             return  # everyone left during grace; empty-cleanup will delete it
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _pca_channel_id = channel.id
+
+        def _fetch_pca():
+            with self.ctx.open_db() as conn:
+                return get_active_channel(conn, _pca_channel_id)
+
+        row = await asyncio.to_thread(_fetch_pca)
         if row is None or row.owner_left_at is None:
             return  # owner returned (cancel raced) — nothing to claim
-        await post_claim_prompt(live)
+        accent = await resolve_accent_color(self.ctx.db_path, live.guild)
+        await post_claim_prompt(live, color=accent)
 
     async def _delete_after_grace(
         self, channel: discord.VoiceChannel, grace_s: int
@@ -542,8 +634,13 @@ class VoiceMasterCog(commands.Cog):
         # source of truth via discord.py's voice cache.
         live = self.bot.get_channel(channel.id)
         if not isinstance(live, discord.VoiceChannel):
-            with self.ctx.open_db() as conn:
-                delete_active_channel(conn, channel.id)
+            cid = channel.id
+
+            def _del_stale():
+                with self.ctx.open_db() as conn:
+                    delete_active_channel(conn, cid)
+
+            await asyncio.to_thread(_del_stale)
             self._empty_timers.pop(channel.id, None)
             return
         if any(not m.bot for m in live.members):
@@ -555,15 +652,22 @@ class VoiceMasterCog(commands.Cog):
             log.exception("voice_master: failed to delete empty channel %d", channel.id)
             return
         self._cancel_claim_timer(channel.id)
-        with self.ctx.open_db() as conn:
-            delete_active_channel(conn, channel.id)
-            write_audit(
-                conn,
-                guild_id=channel.guild.id,
-                action="vm_channel_delete",
-                actor_id=self.bot.user.id if self.bot.user else 0,
-                extra={"channel_id": channel.id, "reason": "empty_grace"},
-            )
+        _actor_id = self.bot.user.id if self.bot.user else 0
+        _ch_id = channel.id
+        _guild_id_del = channel.guild.id
+
+        def _del_empty():
+            with self.ctx.open_db() as conn:
+                delete_active_channel(conn, _ch_id)
+                write_audit(
+                    conn,
+                    guild_id=_guild_id_del,
+                    action="vm_channel_delete",
+                    actor_id=_actor_id,
+                    extra={"channel_id": _ch_id, "reason": "empty_grace"},
+                )
+
+        await asyncio.to_thread(_del_empty)
         self._empty_timers.pop(channel.id, None)
 
     # ── Hub join → create channel ─────────────────────────────────────
@@ -575,8 +679,14 @@ class VoiceMasterCog(commands.Cog):
         async with self._create_locks[member.id]:
             # If the member already owns a live channel, return them to it
             # rather than kicking them out of the Hub.
-            with self.ctx.open_db() as conn:
-                existing = get_owned_channel(conn, guild.id, member.id)
+            guild_id = guild.id
+            member_id = member.id
+
+            def _get_existing():
+                with self.ctx.open_db() as conn:
+                    return get_owned_channel(conn, guild_id, member_id)
+
+            existing = await asyncio.to_thread(_get_existing)
             if existing is not None:
                 live = guild.get_channel(existing.channel_id)
                 if isinstance(live, discord.VoiceChannel):
@@ -587,8 +697,13 @@ class VoiceMasterCog(commands.Cog):
                         )
                     return
                 # Stale DB row — clean it up so the cap check below is accurate.
-                with self.ctx.open_db() as conn:
-                    delete_active_channel(conn, existing.channel_id)
+                stale_cid = existing.channel_id
+
+                def _del_stale_hub(cid_: int) -> None:
+                    with self.ctx.open_db() as conn:
+                        delete_active_channel(conn, cid_)
+
+                await asyncio.to_thread(_del_stale_hub, stale_cid)
 
             now = time.time()
             last = self._last_create.get(member.id, 0.0)
@@ -601,25 +716,45 @@ class VoiceMasterCog(commands.Cog):
                 return
             self._last_create[member.id] = now
 
-            with self.ctx.open_db() as conn:
-                if active_channel_count(conn, guild.id, member.id) >= cfg.max_per_member:
-                    with self._suppress_voice_errors():
-                        await member.move_to(
-                            None, reason="Voice Master: max channels reached"
+            def _load_profile_data() -> tuple[bool, VoiceProfile, list[int], list[int], list[str]]:
+                with self.ctx.open_db() as conn:
+                    if active_channel_count(conn, guild_id, member_id) >= cfg.max_per_member:
+                        return True, default_profile(), [], [], []
+                    # Saves disabled? Treat every member as having no profile.
+                    if cfg.disable_saves:
+                        profile_ = default_profile()
+                        trusted_ids_: list[int] = []
+                        blocked_ids_: list[int] = []
+                    else:
+                        profile_ = (
+                            load_profile(conn, guild_id, member_id) or default_profile()
                         )
-                    return
-                # Saves disabled? Treat every member as having no profile.
-                if cfg.disable_saves:
-                    profile = default_profile()
-                    trusted_ids: list[int] = []
-                    blocked_ids: list[int] = []
-                else:
-                    profile = (
-                        load_profile(conn, guild.id, member.id) or default_profile()
+                        trusted_ids_ = list_trusted(conn, guild_id, member_id)
+                        blocked_ids_ = list_blocked(conn, guild_id, member_id)
+                    # Voice-style lease (economy sinks round 3, stage 3): the
+                    # saved name/limit only re-apply while leased — the profile
+                    # stays stored (dormant), so re-renting restores the setup.
+                    econ = load_econ_settings(conn, guild_id)
+                    if style_lease_blocks(
+                        economy_enabled=econ.enabled,
+                        price=econ.price_voice_style,
+                        entitled=(
+                            econ.enabled
+                            and econ.price_voice_style > 0
+                            and "voice_style" in entitlements(conn, guild_id, member_id)
+                        ),
+                    ):
+                        profile_ = replace(profile_, saved_name=None, saved_limit=0)
+                    blocklist_ = list_name_blocklist(conn, guild_id)
+                    return False, profile_, trusted_ids_, blocked_ids_, blocklist_
+
+            cap_exceeded, profile, trusted_ids, blocked_ids, blocklist = await asyncio.to_thread(_load_profile_data)
+            if cap_exceeded:
+                with self._suppress_voice_errors():
+                    await member.move_to(
+                        None, reason="Voice Master: max channels reached"
                     )
-                    trusted_ids = list_trusted(conn, guild.id, member.id)
-                    blocked_ids = list_blocked(conn, guild.id, member.id)
-                blocklist = list_name_blocklist(conn, guild.id)
+                return
 
             template = cfg.default_name_template or DEFAULT_NAME_TEMPLATE
             name, name_fell_back = resolve_channel_name(
@@ -668,6 +803,11 @@ class VoiceMasterCog(commands.Cog):
                 create_kwargs["user_limit"] = limit
             if bitrate > 0:
                 create_kwargs["bitrate"] = bitrate
+            # Every access state but plain "open" is age-gated (mirrors
+            # _apply_access_state), so carry Discord's age gate at creation.
+            initial_state = profile_access_state(profile)
+            if initial_state != ACCESS_OPEN:
+                create_kwargs["nsfw"] = True
 
             try:
                 channel = await guild.create_voice_channel(**create_kwargs)
@@ -678,29 +818,34 @@ class VoiceMasterCog(commands.Cog):
                 log.exception("voice_master: failed to create channel for %s", member.id)
                 return
 
-            with self.ctx.open_db() as conn:
-                insert_active_channel(
-                    conn,
-                    channel_id=channel.id,
-                    guild_id=guild.id,
-                    owner_id=member.id,
-                    now=now,
-                )
-                skipped_payload = build_skipped_payload(
-                    name_fell_back=name_fell_back,
-                    missing_target_count=len(skipped_targets),
-                )
-                write_audit(
-                    conn,
-                    guild_id=guild.id,
-                    action="vm_channel_create",
-                    actor_id=member.id,
-                    extra={
-                        "channel_id": channel.id,
-                        "name": name,
-                        "applied_skipped": skipped_payload,
-                    },
-                )
+            new_channel_id = channel.id
+            skipped_payload = build_skipped_payload(
+                name_fell_back=name_fell_back,
+                missing_target_count=len(skipped_targets),
+            )
+
+            def _insert_channel():
+                with self.ctx.open_db() as conn:
+                    insert_active_channel(
+                        conn,
+                        channel_id=new_channel_id,
+                        guild_id=guild_id,
+                        owner_id=member_id,
+                        now=now,
+                    )
+                    write_audit(
+                        conn,
+                        guild_id=guild_id,
+                        action="vm_channel_create",
+                        actor_id=member_id,
+                        extra={
+                            "channel_id": new_channel_id,
+                            "name": name,
+                            "applied_skipped": skipped_payload,
+                        },
+                    )
+
+            await asyncio.to_thread(_insert_channel)
 
             try:
                 await member.move_to(channel, reason="Voice Master: own channel ready")
@@ -712,18 +857,18 @@ class VoiceMasterCog(commands.Cog):
                     channel.id, member.id,
                 )
 
-            # Advertise the room's lock state on its status line. create_voice_channel
+            # Advertise the room's access state on its status line. create_voice_channel
             # can't carry a status, so set it here in a follow-up edit (separate
             # endpoint, not subject to the name rate limit). Best-effort.
             with self._suppress_voice_errors():
-                if profile.spectator:
-                    initial_mode = "spectate"
-                elif profile.locked:
-                    initial_mode = "lock"
-                else:
-                    initial_mode = "open"
+                status_mode = {
+                    ACCESS_OPEN: "open",
+                    ACCESS_NSFW: "nsfw",
+                    ACCESS_LOCKED: "lock",
+                    ACCESS_SPECTATE: "spectate",
+                }[initial_state]
                 await channel.edit(
-                    status=access_status_text(mode=initial_mode),
+                    status=access_status_text(mode=status_mode),
                     reason="Voice Master: initial access-state status",
                 )
 
@@ -731,7 +876,8 @@ class VoiceMasterCog(commands.Cog):
             # owner has the buttons right where they are. Non-fatal on failure
             # (perms missing, channel deleted out from under us, etc.).
             if cfg.post_inline_panel:
-                await post_inline_panel(channel, member)
+                accent = await resolve_accent_color(self.ctx.db_path, guild)
+                await post_inline_panel(channel, member, color=accent)
 
             # DM the owner about anything we had to skip.
             notes_text = build_hub_join_notes(
@@ -778,12 +924,16 @@ class VoiceMasterCog(commands.Cog):
         gate_role = (
             guild.get_role(gate_role_id) if gate_role_id else None
         )
+        # Derive the flags from the single access state so legacy rows behave:
+        # the locked state always implies hidden, even for profiles saved before
+        # the states were unified.
+        flags = access_state_profile_flags(profile_access_state(profile))
         plan = plan_initial_overwrites(
             owner_id=owner.id,
             everyone_role_id=guild.default_role.id,
-            profile_locked=profile.locked,
-            profile_hidden=profile.hidden,
-            profile_spectator=profile.spectator,
+            profile_locked=flags["locked"],
+            profile_hidden=flags["hidden"],
+            profile_spectator=flags["spectator"],
             # Only treat spectating as gated if the role still exists.
             gate_role_id=gate_role.id if gate_role is not None else None,
             trusted_ids=trusted_ids,
@@ -821,59 +971,36 @@ class VoiceMasterCog(commands.Cog):
 
     # ── Owner slash commands ──────────────────────────────────────────
 
-    @voice.command(name="lock", description="Lock your voice channel (denies @everyone Connect).")
-    async def voice_lock(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_lock(interaction, channel, row, locked=True)
-
-    @voice.command(name="unlock", description="Unlock your voice channel.")
-    async def voice_unlock(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_lock(interaction, channel, row, locked=False)
-
     @voice.command(
-        name="spectator",
-        description="Open your channel to muted spectators (no mic, no camera, read-only chat).",
+        name="access",
+        description="Set who can see and join your channel (open / NSFW / locked / spectator).",
     )
-    async def voice_spectator(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_spectator(interaction, channel, row, spectator=True)
-
-    @voice.command(
-        name="unspectator",
-        description="Turn off spectator mode and reopen your channel.",
+    @app_commands.describe(state="The access state to apply.")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="🔓 Open — anyone can see and join", value=ACCESS_OPEN),
+            app_commands.Choice(
+                name="🔞 NSFW — age-gated, but open", value=ACCESS_NSFW
+            ),
+            app_commands.Choice(
+                name="🔒 NSFW locked — age-gated, hidden, invite-only",
+                value=ACCESS_LOCKED,
+            ),
+            app_commands.Choice(
+                name="🎭 Spectator — age-gated muted audience", value=ACCESS_SPECTATE
+            ),
+        ]
     )
-    async def voice_unspectator(self, interaction: discord.Interaction) -> None:
+    async def voice_access(
+        self,
+        interaction: discord.Interaction,
+        state: app_commands.Choice[str],
+    ) -> None:
         resolved = await _resolve_owned_channel(interaction)
         if resolved is None:
             return
         channel, row = resolved
-        await _apply_spectator(interaction, channel, row, spectator=False)
-
-    @voice.command(name="hide", description="Hide your voice channel from non-invited members.")
-    async def voice_hide(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_hide(interaction, channel, row, hidden=True)
-
-    @voice.command(name="unhide", description="Make your voice channel visible again.")
-    async def voice_unhide(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_hide(interaction, channel, row, hidden=False)
+        await _apply_access_state(interaction, channel, row, state=state.value)
 
     @voice.command(name="rename", description="Rename your voice channel.")
     @app_commands.describe(name="The new channel name (1–100 characters).")
@@ -973,9 +1100,17 @@ class VoiceMasterCog(commands.Cog):
         if not isinstance(channel, discord.VoiceChannel):
             await _ephemeral(interaction, "That isn't a managed voice channel.")
             return
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, member.guild.id)
-            row = get_active_channel(conn, channel.id)
+        _guild_id = member.guild.id
+        _channel_id = channel.id
+
+        def _fetch_claim_data():
+            with self.ctx.open_db() as conn:
+                return (
+                    load_voice_master_config(conn, _guild_id),
+                    get_active_channel(conn, _channel_id),
+                )
+
+        cfg, row = await asyncio.to_thread(_fetch_claim_data)
         if row is None:
             await _ephemeral(interaction, "This channel isn't managed by Voice Master.")
             return
@@ -1011,16 +1146,22 @@ class VoiceMasterCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             await _ephemeral(interaction, "Couldn't grant you ownership permissions.")
             return
-        with self.ctx.open_db() as conn:
-            set_owner(conn, channel.id, member.id)
-            write_audit(
-                conn,
-                guild_id=member.guild.id,
-                action="vm_claim",
-                actor_id=member.id,
-                target_id=row.owner_id,
-                extra={"channel_id": channel.id},
-            )
+        _prev_owner_id = row.owner_id
+        _claimer_id = member.id
+
+        def _save_claim():
+            with self.ctx.open_db() as conn:
+                set_owner(conn, _channel_id, _claimer_id)
+                write_audit(
+                    conn,
+                    guild_id=_guild_id,
+                    action="vm_claim",
+                    actor_id=_claimer_id,
+                    target_id=_prev_owner_id,
+                    extra={"channel_id": _channel_id},
+                )
+
+        await asyncio.to_thread(_save_claim)
         await _ephemeral(interaction, "You're the new owner of this channel.")
 
     # ── Sleep-kick (self-disconnect timer) ─────────────────────────────
@@ -1092,8 +1233,14 @@ class VoiceMasterCog(commands.Cog):
     async def trusted_list(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            ids = list_trusted(conn, interaction.guild.id, interaction.user.id)
+        _tl_guild_id = interaction.guild.id
+        _tl_user_id = interaction.user.id
+
+        def _fetch_trusted():
+            with self.ctx.open_db() as conn:
+                return list_trusted(conn, _tl_guild_id, _tl_user_id)
+
+        ids = await asyncio.to_thread(_fetch_trusted)
         await _ephemeral(interaction, format_trusted_list(ids))
 
     @voice_trusted.command(name="add", description="Add a member to your trust list.")
@@ -1103,24 +1250,34 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, interaction.guild.id)
-            err = validate_trust_add(
-                target_is_bot=member.bot,
-                target_is_self=member.id == interaction.user.id,
-                disable_saves=cfg.disable_saves,
-                saveable_fields=cfg.saveable_fields,
-            )
-            if err is not None:
-                await _ephemeral(interaction, err)
-                return
-            added, evicted = add_trusted(
-                conn,
-                interaction.guild.id,
-                interaction.user.id,
-                member.id,
-                cap=cfg.trust_cap,
-            )
+        _ta_guild_id = interaction.guild.id
+        _ta_user_id = interaction.user.id
+
+        def _do_trust_add() -> str | tuple[bool, int | None]:
+            with self.ctx.open_db() as conn:
+                cfg = load_voice_master_config(conn, _ta_guild_id)
+                err = validate_trust_add(
+                    target_is_bot=member.bot,
+                    target_is_self=member.id == _ta_user_id,
+                    disable_saves=cfg.disable_saves,
+                    saveable_fields=cfg.saveable_fields,
+                )
+                if err is not None:
+                    return err
+                added, evicted = add_trusted(
+                    conn,
+                    _ta_guild_id,
+                    _ta_user_id,
+                    member.id,
+                    cap=cfg.trust_cap,
+                )
+                return added, evicted
+
+        _result = await asyncio.to_thread(_do_trust_add)
+        if isinstance(_result, str):
+            await _ephemeral(interaction, _result)
+            return
+        added, evicted = _result
         await _ephemeral(
             interaction,
             format_trust_add_result(
@@ -1136,10 +1293,14 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            removed = remove_trusted(
-                conn, interaction.guild.id, interaction.user.id, member.id
-            )
+        _tr_guild_id = interaction.guild.id
+        _tr_user_id = interaction.user.id
+
+        def _do_trust_remove():
+            with self.ctx.open_db() as conn:
+                return remove_trusted(conn, _tr_guild_id, _tr_user_id, member.id)
+
+        removed = await asyncio.to_thread(_do_trust_remove)
         if removed:
             await _ephemeral(interaction, f"Removed {member.mention} from your trust list.")
         else:
@@ -1149,8 +1310,14 @@ class VoiceMasterCog(commands.Cog):
     async def blocked_list(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            ids = list_blocked(conn, interaction.guild.id, interaction.user.id)
+        _bl_guild_id = interaction.guild.id
+        _bl_user_id = interaction.user.id
+
+        def _fetch_blocked():
+            with self.ctx.open_db() as conn:
+                return list_blocked(conn, _bl_guild_id, _bl_user_id)
+
+        ids = await asyncio.to_thread(_fetch_blocked)
         await _ephemeral(interaction, format_blocked_list(ids))
 
     @voice_blocked.command(name="add", description="Add a member to your blocklist.")
@@ -1160,24 +1327,34 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, interaction.guild.id)
-            err = validate_block_add(
-                target_is_bot=member.bot,
-                target_is_self=member.id == interaction.user.id,
-                disable_saves=cfg.disable_saves,
-                saveable_fields=cfg.saveable_fields,
-            )
-            if err is not None:
-                await _ephemeral(interaction, err)
-                return
-            added, evicted = add_blocked(
-                conn,
-                interaction.guild.id,
-                interaction.user.id,
-                member.id,
-                cap=cfg.block_cap,
-            )
+        _ba_guild_id = interaction.guild.id
+        _ba_user_id = interaction.user.id
+
+        def _do_block_add() -> str | tuple[bool, int | None]:
+            with self.ctx.open_db() as conn:
+                cfg = load_voice_master_config(conn, _ba_guild_id)
+                err = validate_block_add(
+                    target_is_bot=member.bot,
+                    target_is_self=member.id == _ba_user_id,
+                    disable_saves=cfg.disable_saves,
+                    saveable_fields=cfg.saveable_fields,
+                )
+                if err is not None:
+                    return err
+                added, evicted = add_blocked(
+                    conn,
+                    _ba_guild_id,
+                    _ba_user_id,
+                    member.id,
+                    cap=cfg.block_cap,
+                )
+                return added, evicted
+
+        _result = await asyncio.to_thread(_do_block_add)
+        if isinstance(_result, str):
+            await _ephemeral(interaction, _result)
+            return
+        added, evicted = _result
         await _ephemeral(
             interaction,
             format_block_add_result(
@@ -1193,10 +1370,14 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            removed = remove_blocked(
-                conn, interaction.guild.id, interaction.user.id, member.id
-            )
+        _br_guild_id = interaction.guild.id
+        _br_user_id = interaction.user.id
+
+        def _do_block_remove():
+            with self.ctx.open_db() as conn:
+                return remove_blocked(conn, _br_guild_id, _br_user_id, member.id)
+
+        removed = await asyncio.to_thread(_do_block_remove)
         if removed:
             await _ephemeral(interaction, f"Removed {member.mention} from your blocklist.")
         else:
@@ -1214,8 +1395,13 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _knock_channel_id = channel.id
+
+        def _fetch_knock_row():
+            with self.ctx.open_db() as conn:
+                return get_active_channel(conn, _knock_channel_id)
+
+        row = await asyncio.to_thread(_fetch_knock_row)
         if row is None:
             await _ephemeral(
                 interaction, "That channel isn't managed by Voice Master."
@@ -1239,12 +1425,13 @@ class VoiceMasterCog(commands.Cog):
         if ok:
             await _ephemeral(
                 interaction,
-                f"Knock sent to {owner.mention} — they'll respond in the control channel.",
+                f"Knock sent to {owner.mention} — you'll hear back if they let you in.",
             )
         else:
             await _ephemeral(
                 interaction,
-                "Couldn't deliver the knock — control channel is unconfigured or unavailable.",
+                "Couldn't deliver the knock — the owner's DMs are closed and "
+                "there's no control channel to fall back to.",
             )
 
     # ── Profile inspection / reset ────────────────────────────────────
@@ -1253,18 +1440,26 @@ class VoiceMasterCog(commands.Cog):
     async def profile_show(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             return
-        with self.ctx.open_db() as conn:
-            profile = load_profile(conn, interaction.guild.id, interaction.user.id) or default_profile()
-            trusted = list_trusted(conn, interaction.guild.id, interaction.user.id)
-            blocked = list_blocked(conn, interaction.guild.id, interaction.user.id)
+        _ps_guild_id = interaction.guild.id
+        _ps_user_id = interaction.user.id
+
+        def _fetch_profile():
+            with self.ctx.open_db() as conn:
+                return (
+                    load_profile(conn, _ps_guild_id, _ps_user_id) or default_profile(),
+                    list_trusted(conn, _ps_guild_id, _ps_user_id),
+                    list_blocked(conn, _ps_guild_id, _ps_user_id),
+                )
+
+        profile, trusted, blocked = await asyncio.to_thread(_fetch_profile)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
         embed = build_profile_show_embed(
             saved_name=profile.saved_name,
             saved_limit=profile.saved_limit,
-            locked=profile.locked,
-            hidden=profile.hidden,
-            spectator=profile.spectator,
+            access_state=profile_access_state(profile),
             trusted_count=len(trusted),
             blocked_count=len(blocked),
+            color=accent,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1275,9 +1470,7 @@ class VoiceMasterCog(commands.Cog):
             app_commands.Choice(name="all (full reset)", value="all"),
             app_commands.Choice(name="name", value="name"),
             app_commands.Choice(name="limit", value="limit"),
-            app_commands.Choice(name="locked", value="locked"),
-            app_commands.Choice(name="hidden", value="hidden"),
-            app_commands.Choice(name="spectator", value="spectator"),
+            app_commands.Choice(name="access", value="access"),
             app_commands.Choice(name="trusted", value="trusted"),
             app_commands.Choice(name="blocked", value="blocked"),
         ]
@@ -1292,48 +1485,55 @@ class VoiceMasterCog(commands.Cog):
         target = field.value if field is not None else "all"
         gid = interaction.guild.id
         uid = interaction.user.id
-        with self.ctx.open_db() as conn:
-            if target == "all":
-                delete_profile(conn, gid, uid)
-                conn.execute(
-                    "DELETE FROM voice_master_trusted WHERE guild_id = ? AND owner_id = ?",
-                    (gid, uid),
+
+        def _do_reset():
+            with self.ctx.open_db() as conn:
+                if target == "all":
+                    delete_profile(conn, gid, uid)
+                    conn.execute(
+                        "DELETE FROM voice_master_trusted WHERE guild_id = ? AND owner_id = ?",
+                        (gid, uid),
+                    )
+                    conn.execute(
+                        "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
+                        (gid, uid),
+                    )
+                elif target == "trusted":
+                    conn.execute(
+                        "DELETE FROM voice_master_trusted WHERE guild_id = ? AND owner_id = ?",
+                        (gid, uid),
+                    )
+                elif target == "blocked":
+                    conn.execute(
+                        "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
+                        (gid, uid),
+                    )
+                else:
+                    profile = load_profile(conn, gid, uid) or default_profile()
+                    if target == "name":
+                        profile = replace(profile, saved_name=None)
+                    elif target == "limit":
+                        profile = replace(profile, saved_limit=0)
+                    elif target == "access":
+                        # One dial now — clear every underlying access flag.
+                        profile = replace(
+                            profile,
+                            locked=False,
+                            hidden=False,
+                            spectator=False,
+                            age_gated=False,
+                        )
+                    save_profile(conn, gid, uid, profile)
+                write_audit(
+                    conn,
+                    guild_id=gid,
+                    action="vm_reset_profile",
+                    actor_id=uid,
+                    extra={"field": target},
                 )
-                conn.execute(
-                    "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
-                    (gid, uid),
-                )
-            elif target == "trusted":
-                conn.execute(
-                    "DELETE FROM voice_master_trusted WHERE guild_id = ? AND owner_id = ?",
-                    (gid, uid),
-                )
-            elif target == "blocked":
-                conn.execute(
-                    "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
-                    (gid, uid),
-                )
-            else:
-                profile = load_profile(conn, gid, uid) or default_profile()
-                if target == "name":
-                    profile = replace(profile, saved_name=None)
-                elif target == "limit":
-                    profile = replace(profile, saved_limit=0)
-                elif target == "locked":
-                    profile = replace(profile, locked=False)
-                elif target == "hidden":
-                    profile = replace(profile, hidden=False)
-                elif target == "spectator":
-                    profile = replace(profile, spectator=False)
-                save_profile(conn, gid, uid, profile)
-            summary = profile_reset_summary(target)
-            write_audit(
-                conn,
-                guild_id=gid,
-                action="vm_reset_profile",
-                actor_id=uid,
-                extra={"field": target},
-            )
+
+        await asyncio.to_thread(_do_reset)
+        summary = profile_reset_summary(target)
         await _ephemeral(interaction, summary)
 
     @voice.command(name="owner", description="Show who owns the voice channel you're in.")
@@ -1343,8 +1543,13 @@ class VoiceMasterCog(commands.Cog):
             await _ephemeral(interaction, "You're not in a voice channel.")
             return
         channel = member.voice.channel
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _owner_channel_id = channel.id
+
+        def _fetch_owner_row():
+            with self.ctx.open_db() as conn:
+                return get_active_channel(conn, _owner_channel_id)
+
+        row = await asyncio.to_thread(_fetch_owner_row)
         if row is None:
             await _ephemeral(
                 interaction,
@@ -1370,8 +1575,13 @@ class VoiceMasterCog(commands.Cog):
         if interaction.guild is None:
             await interaction.response.send_message("Server only.", ephemeral=True)
             return
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, interaction.guild.id)
+        _pp_guild_id = interaction.guild.id
+
+        def _fetch_pp_cfg():
+            with self.ctx.open_db() as conn:
+                return load_voice_master_config(conn, _pp_guild_id)
+
+        cfg = await asyncio.to_thread(_fetch_pp_cfg)
         if not cfg.control_channel_id:
             await interaction.response.send_message(
                 "No control channel set. Configure it in the web dashboard first.",

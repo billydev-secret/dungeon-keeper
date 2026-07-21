@@ -53,6 +53,16 @@ class VoiceTranscriptionCog(commands.Cog):
         if not _is_voice_message(message):
             return
 
+        # Quest hook: fires on the post itself, before the transcription
+        # config gate — the quest is "post a voice message", not "have it
+        # transcribed". Guarded, never raised into the listener.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, message.guild.id, message.author.id, "voice_message",
+            occurrence=str(message.id),
+        )
+
         cfg = await asyncio.to_thread(self._read_config, message.guild.id)
         if cfg is None or not cfg.enabled:
             return

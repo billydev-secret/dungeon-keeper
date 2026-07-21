@@ -9,13 +9,12 @@ module proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
+import discord
 import pytest
 
 from bot_modules.games.constants import (
     GAME_ICONS,
     PHASE_PLAYING,
-    PHASE_RECAP,
-    PHASE_RESULTS,
 )
 from bot_modules.games_wyr.embeds import build_closed_embed, build_wyr_embed
 from bot_modules.games_wyr.logic import (
@@ -163,8 +162,34 @@ def test_build_wyr_embed_title_when_closed():
     embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1, closed=True)
     assert embed.title is not None
     assert "ROUND OVER" in embed.title
+    # Per the 2026-07-21 ruling WYR is a voting game with no winner, so the
+    # closed state no longer flips to a semantic results color — with no
+    # accent passed it falls back to the PHASE_PLAYING default.
     assert embed.color is not None
-    assert embed.color.value == PHASE_RESULTS
+    assert embed.color.value == PHASE_PLAYING
+
+
+def test_build_wyr_embed_honors_passed_accent():
+    """A passed accent color wins over the PHASE_PLAYING default."""
+    accent = discord.Color(0x123456)
+    embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1, color=accent)
+    assert embed.color == accent
+
+
+def test_build_wyr_embed_accent_used_in_closed_state_too():
+    """The accent applies regardless of the closed flag (no phase override)."""
+    accent = discord.Color(0xABCDEF)
+    embed = build_wyr_embed(
+        "Alice", "fly", "swim", [], [], False, 1, closed=True, color=accent
+    )
+    assert embed.color == accent
+
+
+def test_build_wyr_embed_falls_back_when_accent_none():
+    """color=None (no guild / resolution failed) → PHASE_PLAYING default."""
+    embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1, color=None)
+    assert embed.color is not None
+    assert embed.color.value == PHASE_PLAYING
 
 
 def test_build_wyr_embed_shows_round_and_options():
@@ -244,10 +269,19 @@ def test_build_closed_embed_title_says_closed():
     assert "ROUND OVER" not in embed.title  # CLOSED overrides the ROUND-OVER suffix
 
 
-def test_build_closed_embed_uses_recap_colour():
+def test_build_closed_embed_defaults_to_phase_playing():
+    """No accent passed → the closed embed no longer overrides to a recap
+    color; it falls back to the PHASE_PLAYING default like the round embed."""
     embed = build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1)
-    assert embed.colour is not None
-    assert embed.colour.value == PHASE_RECAP
+    assert embed.color is not None
+    assert embed.color.value == PHASE_PLAYING
+
+
+def test_build_closed_embed_honors_passed_accent():
+    """The CLOSED variant threads the guild accent through unchanged."""
+    accent = discord.Color(0x0FF1CE)
+    embed = build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1, color=accent)
+    assert embed.color == accent
 
 
 def test_build_closed_embed_preserves_vote_counts():
@@ -264,3 +298,45 @@ def test_build_closed_embed_can_reveal_voters():
     votes_field = _field_by_name(embed)["Votes"]
     assert "<@1>" in votes_field
     assert "<@2>" in votes_field
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_wyr_cog as wyr_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_run_round_empty_bank_pays_all_voters(monkeypatch, sync_db_path):
+    """When the question bank runs dry, the game ends paying everyone who voted
+    for either option across all completed rounds."""
+    spy = AsyncMock()
+    monkeypatch.setattr(wyr_cog, "end_game", spy)
+    monkeypatch.setattr(wyr_cog, "get_wyr_question", AsyncMock(return_value=None))
+    bot = _SpyBot(sync_db_path)
+    payload = {"rounds": {
+        "1": {"a": [1, 2], "b": [3], "q": "A OR B"},
+        "2": {"a": [4], "b": [1], "q": "C OR D"},
+    }}
+    gid = await create_game(bot.games_db, 100, 1, "wyr", payload=payload)
+    bot.active_views[gid] = object()
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await cog._run_round(None, gid, 1, "Host", 3, channel)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3, 4]
+    assert call.kwargs["bot"] is bot

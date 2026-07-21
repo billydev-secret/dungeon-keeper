@@ -2,6 +2,7 @@ import { api, esc } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
+import { renderEmpty, renderError } from "../states.js";
 
 const RESOLUTIONS = [
   { value: "hour",        label: "Hourly (24h)" },
@@ -47,13 +48,11 @@ function filterSelect(placeholder, options) {
   wrap.appendChild(list);
   let selectedId = "";
 
-  function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-
   function render(filter) {
     const lc = filter.toLowerCase();
     const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
     list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--ink-dim)">(all)</em></div>` +
-      (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${escHtml(o.id)}">${escHtml(o.label)}</div>`).join("");
+      (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`).join("");
   }
 
   input.addEventListener("focus", () => { render(input.value); list.style.display = "block"; });
@@ -248,7 +247,7 @@ export function mount(container, initialParams) {
       if (slider) { slider.destroy(); slider = null; }
 
       if (!data.labels.length || !data.counts.some((c) => c > 0)) {
-        wrap.innerHTML = `<div class="empty">No ${data.mode} activity for this period.</div>`;
+        wrap.innerHTML = renderEmpty(`No ${data.mode} activity for this period.`);
         sliderWrap.innerHTML = "";
         return;
       }
@@ -285,7 +284,7 @@ export function mount(container, initialParams) {
         onChange: renderChart,
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = renderError(err);
       sliderWrap.innerHTML = "";
     }
   }

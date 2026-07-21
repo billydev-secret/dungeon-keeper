@@ -17,6 +17,16 @@ GUESS_ROLE_ID = 7001
 GUILD_ID = 9001
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
+
 def _make_cog(db_path: str = ":memory:"):
     from bot_modules.cogs.guess_cog import GuessCog
     bot = MagicMock()

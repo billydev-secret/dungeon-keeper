@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.dm_perms.embeds import (
     build_acceptance_embed,
     build_denial_embed_for_requester,
@@ -38,15 +39,16 @@ from bot_modules.dm_perms.logic import (
     pick_dm_roles_to_remove,
 )
 from bot_modules.services.dm_perms_service import (
-    DM_ROLE_NAMES,
     add_consent_pair,
     build_panel_embed,
     count_pending_for_requester,
     expire_stale_pending_requests,
     get_consent_pair_meta,
     init_db,
+    is_dm_mode_role,
     load_audit_channels,
     load_consent_pairs,
+    load_dm_mode_roles,
     load_panel_settings,
     load_request_by_message_id,
     load_request_channels,
@@ -71,6 +73,7 @@ log = logging.getLogger(__name__)
 DM_REQUEST_PANEL_CUSTOM_ID = "dm_request:open_modal"
 DM_CONSENT_ACCEPT_CUSTOM_ID = "dm_consent:accept"
 DM_CONSENT_DENY_CUSTOM_ID = "dm_consent:deny"
+DM_CONSENT_DENY_REPLY_CUSTOM_ID = "dm_consent:deny_reply"
 
 REQUEST_TIMEOUT_SECONDS = 24 * 60 * 60
 REQUEST_TIMEOUT_LABEL = "24 hours"
@@ -116,6 +119,50 @@ class AskConsentView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await self._handle_click(interaction, accepted=False)
+
+    @discord.ui.button(
+        label="Deny with reply",
+        style=discord.ButtonStyle.secondary,
+        custom_id=DM_CONSENT_DENY_REPLY_CUSTOM_ID,
+    )
+    async def deny_with_reply(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await self._open_deny_reply_modal(interaction)
+
+    async def _open_deny_reply_modal(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Validate the click, then open a modal for the denier's note.
+
+        Resolution/validation here must not consume the interaction response
+        (``send_modal`` needs an un-responded interaction), so it only does DB
+        reads before either erroring out or sending the modal.
+        """
+        message = interaction.message
+        if message is None:
+            await interaction.response.send_message(
+                "Couldn't find the request for this button.", ephemeral=True
+            )
+            return
+
+        record = load_request_by_message_id(self.cog.ctx.db_path, message.id)
+        if record is None:
+            try:
+                await interaction.response.edit_message(
+                    embed=build_stale_request_embed(), view=None
+                )
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            return
+
+        if interaction.user.id != record["target_id"]:
+            await interaction.response.send_message(
+                "This request isn't for you.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(DmDenyReplyModal(self, message))
 
     async def _handle_click(
         self, interaction: discord.Interaction, *, accepted: bool
@@ -262,7 +309,39 @@ class AskConsentView(discord.ui.View):
         type_label = request_type_label(req_type)
         deny_embed = build_denial_embed_for_view(type_label=type_label, reason=reason)
 
+        # Edit first: if this raises we bail before touching the DB, leaving the
+        # request pending rather than half-resolved.
         await interaction.response.edit_message(embed=deny_embed, view=None)
+
+        await self._finalize_deny(
+            guild=guild,
+            requester=requester,
+            target=target,
+            requester_id=requester_id,
+            target_id=target_id,
+            req_type=req_type,
+            reason=reason,
+        )
+
+    async def _finalize_deny(
+        self,
+        *,
+        guild: discord.Guild,
+        requester: Optional[discord.Member],
+        target: Optional[discord.Member],
+        requester_id: int,
+        target_id: int,
+        req_type: str,
+        reason: str,
+        reply: str = "",
+    ) -> None:
+        """Drop the request, notify the requester, and audit the denial.
+
+        Shared by the plain Deny button and the "Deny with reply" modal; the
+        caller is responsible for having already updated the target's own DM
+        message. ``reply`` is the denier's optional note to the requester.
+        """
+        type_label = request_type_label(req_type)
 
         self.cog._drop_request_from_memory(guild.id, requester_id, target_id)
         remove_request(self.cog.ctx.db_path, guild.id, requester_id, target_id)
@@ -274,13 +353,14 @@ class AskConsentView(discord.ui.View):
                 guild_name=guild.name,
                 type_label=type_label,
                 reason=reason,
+                reply=reply,
             )
             await _safe_dm(requester, embed=req_embed)
 
         write_audit_log(
             self.cog.ctx.db_path, guild.id, "request_denied",
             actor_id=target_id, user_a_id=requester_id, user_b_id=target_id,
-            notes=f"type={req_type}",
+            notes=f"type={req_type}" + ("; replied" if reply else ""),
         )
         requester_name = display_name_for(requester, requester_id)
         target_name = display_name_for(target, target_id)
@@ -373,6 +453,85 @@ class DmRequestReasonModal(discord.ui.Modal, title="DM Request"):
         )
 
 
+class DmDenyReplyModal(discord.ui.Modal, title="Decline with a reply"):
+    """Lets the target deny a request while sending a short note to the requester.
+
+    Opened from the "Deny with reply" button. Carries the source DM message so
+    the bot can edit it directly on submit (a version-independent alternative to
+    editing via the modal-submit interaction), and re-resolves the request by
+    that message id so a request answered in the meantime resolves as stale.
+    """
+
+    reply = discord.ui.TextInput(
+        label="Message to the requester",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=MAX_REASON_LENGTH,
+        placeholder="Add a short note to send back with your decline…",
+    )
+
+    def __init__(self, view: AskConsentView, message: discord.Message) -> None:
+        super().__init__()
+        self._view = view
+        self._message = message
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        reply = str(self.reply.value or "").strip()
+        view = self._view
+
+        record = load_request_by_message_id(view.cog.ctx.db_path, self._message.id)
+        if record is None:
+            await interaction.response.send_message(
+                "That request is no longer pending.", ephemeral=True
+            )
+            return
+
+        guild = view.cog.bot.get_guild(record["guild_id"])
+        if guild is None:
+            await interaction.response.send_message(
+                "That server is no longer available.", ephemeral=True
+            )
+            return
+
+        requester_id = record["requester_id"]
+        target_id = record["target_id"]
+        req_type = record["request_type"]
+        reason = record["reason"]
+        requester = guild.get_member(requester_id)
+        target = guild.get_member(target_id)
+
+        deny_embed = build_denial_embed_for_view(
+            type_label=request_type_label(req_type), reason=reason, reply=reply
+        )
+        # Edit the bot's own DM first: on failure, bail before the DB delete so
+        # the request stays pending (mirrors the plain-Deny fail-safe ordering).
+        try:
+            await self._message.edit(embed=deny_embed, view=None)
+        except discord.HTTPException:
+            log.warning("dm_perms: failed to edit source DM on deny-with-reply")
+            await interaction.response.send_message(
+                "Something went wrong updating the request — nothing was changed, "
+                "please try again.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "Declined — your reply was sent to them.", ephemeral=True
+        )
+
+        await view._finalize_deny(
+            guild=guild,
+            requester=requester,
+            target=target,
+            requester_id=requester_id,
+            target_id=target_id,
+            req_type=req_type,
+            reason=reason,
+            reply=reply,
+        )
+
+
 class DmRequestPanelView(discord.ui.View):
     """Persistent panel button registered on startup."""
 
@@ -416,6 +575,9 @@ class DmPermsCog(commands.Cog):
         self.dm_requests: dict[int, dict[tuple[int, int], dict[str, Any]]] = {}
         self.request_channels: dict[int, int] = {}
         self.panel_settings: dict[int, dict[str, Optional[int]]] = {}
+        # Per-guild mode→role-id overrides ({"open"/"ask"/"closed": id}).
+        # Loaded at cog_load; the web config route pokes this cache on save.
+        self.mode_role_ids: dict[int, dict[str, int]] = {}
         self._panel_locks: dict[int, asyncio.Lock] = {}
         self._panel_bump_guards: dict[int, float] = {}
         self._expiry_task: Optional[asyncio.Task[None]] = None
@@ -429,6 +591,7 @@ class DmPermsCog(commands.Cog):
                 "dm_requests": load_requests(self.ctx.db_path),
                 "request_channels": load_request_channels(self.ctx.db_path),
                 "panel_settings": load_panel_settings(self.ctx.db_path),
+                "mode_role_ids": load_dm_mode_roles(self.ctx.db_path),
             }
 
         loaded = await asyncio.to_thread(_load_all)
@@ -436,6 +599,7 @@ class DmPermsCog(commands.Cog):
         self.dm_requests = loaded["dm_requests"]
         self.request_channels = loaded["request_channels"]
         self.panel_settings = loaded["panel_settings"]
+        self.mode_role_ids = loaded["mode_role_ids"]
 
         # Persistent views: clicks on DM consent buttons across ALL DMs route
         # to this single instance, which recovers per-request state from the DB.
@@ -521,7 +685,10 @@ class DmPermsCog(commands.Cog):
         return int(ch) if ch else None
 
     async def _post_audit(self, guild: discord.Guild, message: str) -> None:
-        await post_audit_event(guild, self._audit_channel_for(guild.id), message)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_audit_event(
+            guild, self._audit_channel_for(guild.id), message, color=accent
+        )
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -537,12 +704,34 @@ class DmPermsCog(commands.Cog):
             self._panel_locks[guild_id] = asyncio.Lock()
         return self._panel_locks[guild_id]
 
+    def _mode_roles_for(self, guild_id: int) -> dict[str, int]:
+        """The guild's configured mode→role-id overrides (empty dict if none)."""
+        return self.mode_role_ids.get(guild_id, {})
+
+    def _mode_role_names_for(self, guild: discord.Guild) -> dict[str, str]:
+        """Display names for the guild's DM-mode roles (for the panel embed).
+
+        Configured overrides that resolve to a live role use that role's
+        name; everything else keeps the default "DMs: …" label.
+        """
+        overrides = self._mode_roles_for(guild.id)
+        names: dict[str, str] = {}
+        for mode, rid in overrides.items():
+            role = guild.get_role(rid) if rid else None
+            if role is not None:
+                names[mode] = role.name
+        return names
+
     def _precheck_dm_request(self, guild: discord.Guild, requester: discord.Member, target: discord.Member | discord.User) -> Optional[str]:
         # ``classify_dm_request`` takes primitives, not discord objects, so it
         # remains testable without spinning up Discord. The cog observes the
         # facts here and the classifier picks the right message.
         target_in_guild = isinstance(target, discord.Member)
-        target_mode = resolve_mode(target) if isinstance(target, discord.Member) else ""
+        target_mode = (
+            resolve_mode(target, self._mode_roles_for(guild.id))
+            if isinstance(target, discord.Member)
+            else ""
+        )
         return classify_dm_request(
             target_in_guild=target_in_guild,
             is_self=target.id == requester.id,
@@ -596,6 +785,7 @@ class DmPermsCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
         type_label = request_type_label(req_type)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_request_dm_embed(
             guild_name=guild.name,
             requester_display_name=requester.display_name,
@@ -603,6 +793,7 @@ class DmPermsCog(commands.Cog):
             request_timeout_label=REQUEST_TIMEOUT_LABEL,
             type_label=type_label,
             reason=reason_clean,
+            color=accent,
         )
 
         message = await _safe_dm(user, embed=embed, view=AskConsentView(self))
@@ -630,6 +821,7 @@ class DmPermsCog(commands.Cog):
             request_timeout_label=REQUEST_TIMEOUT_LABEL,
             type_label=type_label,
             reason=reason_clean,
+            color=accent,
         )
         await _safe_dm(requester, embed=sender_embed)
 
@@ -654,6 +846,8 @@ class DmPermsCog(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 return None
 
+            accent = await resolve_accent_color(self.ctx.db_path, guild)
+            role_names = self._mode_role_names_for(guild)
             settings = self.panel_settings.get(guild.id, {})
             old_msg_id = settings.get("panel_message_id")
 
@@ -670,13 +864,13 @@ class DmPermsCog(commands.Cog):
             if old_msg_id and not force_repost:
                 try:
                     existing = await channel.fetch_message(old_msg_id)
-                    await existing.edit(embed=build_panel_embed(), view=DmRequestPanelView(self))
+                    await existing.edit(embed=build_panel_embed(color=accent, role_names=role_names), view=DmRequestPanelView(self))
                     return existing.id
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
             try:
-                new_msg = await channel.send(embed=build_panel_embed(), view=DmRequestPanelView(self))
+                new_msg = await channel.send(embed=build_panel_embed(color=accent, role_names=role_names), view=DmRequestPanelView(self))
             except (discord.Forbidden, discord.HTTPException):
                 return None
 
@@ -723,7 +917,10 @@ class DmPermsCog(commands.Cog):
     async def _on_member_update_dm_roles(
         self, _before: discord.Member, after: discord.Member
     ) -> None:
-        dm_roles = [r for r in after.roles if r.name in DM_ROLE_NAMES]
+        dm_roles = [
+            r for r in after.roles
+            if is_dm_mode_role(r, self._mode_roles_for(after.guild.id))
+        ]
         to_remove = pick_dm_roles_to_remove(dm_roles)
         if not to_remove:
             return
@@ -742,7 +939,8 @@ class DmPermsCog(commands.Cog):
     async def dm_help(self, interaction: discord.Interaction) -> None:
         assert interaction.guild
         icon_url = interaction.guild.icon.url if interaction.guild.icon else None
-        embed = build_dm_help_embed(icon_url)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        embed = build_dm_help_embed(icon_url, color=accent)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="dm_set_mode", description="Set your DM request mode.")
@@ -757,11 +955,18 @@ class DmPermsCog(commands.Cog):
         assert isinstance(interaction.user, discord.Member)
         await interaction.response.defer(ephemeral=True)
         try:
-            await set_member_dm_mode(interaction.user, mode.value)
+            await set_member_dm_mode(
+                interaction.user,
+                mode.value,
+                self._mode_roles_for(interaction.user.guild.id),
+            )
         except discord.Forbidden:
             await interaction.followup.send("I don't have permission to manage roles here.", ephemeral=True)
             return
-        await interaction.followup.send(embed=build_mode_updated_embed(mode.value), ephemeral=True)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.user.guild)
+        await interaction.followup.send(
+            embed=build_mode_updated_embed(mode.value, color=accent), ephemeral=True
+        )
 
     @app_commands.command(name="dm_revoke", description="Remove DM permission relationship with another user.")
     @app_commands.guild_only()
@@ -823,7 +1028,8 @@ class DmPermsCog(commands.Cog):
             ),
         )
         await interaction.response.send_message(
-            f"Done — your connection with {user.mention} has been removed."
+            f"Done — your connection with {user.mention} has been removed.",
+            ephemeral=True,
         )
 
     @app_commands.command(name="dm_status", description="Check whether mutual DM permission exists with a user.")

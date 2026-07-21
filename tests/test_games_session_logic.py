@@ -9,6 +9,7 @@ spinning up Discord or a guild.
 
 from __future__ import annotations
 
+from bot_modules.games.constants import GAME_NAMES
 from bot_modules.games_session.embeds import build_session_recap_embed
 from bot_modules.games_session.logic import (
     build_game_highlight,
@@ -174,9 +175,9 @@ def test_build_game_highlight_hottakes_empty_returns_bare_header():
 
 def test_build_game_highlight_other_game_returns_bare_header():
     """A game type with no special highlight rule (e.g. ffa) still
-    renders cleanly."""
+    renders cleanly, using its friendly name from GAME_NAMES."""
     out = build_game_highlight("ffa", {"question": "Q?"})
-    assert "Free For All" in out
+    assert GAME_NAMES["ffa"] in out
 
 
 # ── build_highlights ─────────────────────────────────────────────────
@@ -189,8 +190,8 @@ def test_build_highlights_runs_per_game():
     ]
     out = build_highlights(histories)
     assert len(out) == 2
-    assert "Would You Rather" in out[0]
-    assert "Free For All" in out[1]
+    assert GAME_NAMES["wyr"] in out[0]
+    assert GAME_NAMES["ffa"] in out[1]
 
 
 def test_build_highlights_passes_name_lookup_through():

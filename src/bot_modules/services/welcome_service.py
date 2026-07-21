@@ -50,6 +50,7 @@ def build_welcome_embed(
     bios_channel_mention: str = "",
     member_bio_link: str = "",
     server_guide_mention: str = "",
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(
         description=_resolve(
@@ -60,7 +61,7 @@ def build_welcome_embed(
             member_bio_link=member_bio_link,
             server_guide_mention=server_guide_mention,
         ),
-        color=discord.Color.blurple(),
+        color=color or discord.Color.blurple(),
     )
     embed.set_author(
         name=f"Welcome, {member.display_name}!", icon_url=member.display_avatar.url
@@ -80,6 +81,7 @@ def build_leave_embed(
     bios_channel_mention: str = "",
     member_bio_link: str = "",
     server_guide_mention: str = "",
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(
         description=_resolve(
@@ -90,7 +92,7 @@ def build_leave_embed(
             member_bio_link=member_bio_link,
             server_guide_mention=server_guide_mention,
         ),
-        color=discord.Color.dark_grey(),
+        color=color or discord.Color.blurple(),
     )
     embed.set_author(
         name=f"{member.display_name} left", icon_url=member.display_avatar.url

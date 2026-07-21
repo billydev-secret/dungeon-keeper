@@ -1,5 +1,5 @@
 import { loadConfig, loadRoles, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
-import { api, esc } from "../api.js";
+import { api, esc, apiPost } from "../api.js";
 import { toast } from "../ui.js";
 
 function fmtTs(ts) {
@@ -99,12 +99,12 @@ export function mount(container) {
     container.innerHTML = `
       <div class="panel">
         <header>
-          <h2>Inactivity Prune</h2>
+          <h2>Auto-Remove Role (Inactive)</h2>
           <div class="subtitle">Automatically remove a role from inactive members</div>
         </header>
         <form class="form" data-form>
           <div class="field">
-            <label>Role to Prune</label>
+            <label>Role to Remove</label>
             <select name="role_id">${roleSelect(roles, p.role_id)}</select>
             <div class="field-hint">Set to (none) to disable pruning</div>
           </div>
@@ -214,22 +214,11 @@ export function mount(container) {
       previewStatusEl.textContent = "Computing…";
       previewEl.innerHTML = "";
       try {
-        const res = await fetch("/api/config/prune/preview", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            role_id: roleId,
-            inactivity_days: days,
-            exempt_user_ids: exemptions.map((e) => String(e.id)),
-          }),
+        const data = await apiPost("/api/config/prune/preview", {
+          role_id: roleId,
+          inactivity_days: days,
+          exempt_user_ids: exemptions.map((e) => String(e.id)),
         });
-        if (!res.ok) {
-          let detail = res.statusText;
-          try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
-          throw new Error(`${res.status}: ${detail}`);
-        }
-        const data = await res.json();
         previewStatusEl.textContent = `${data.candidates.length} of ${data.role_member_count || 0} would be removed (${data.considered_count || 0} considered after exemptions).`;
         if (!data.candidates.length) {
           previewEl.innerHTML = `<div class="empty">No members would be removed.</div>`;

@@ -1,16 +1,21 @@
 import json
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_session.embeds import build_session_recap_embed
 from bot_modules.games_session.logic import build_highlights, format_duration
 
 
 class SessionCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -81,14 +86,21 @@ class SessionCog(commands.Cog):
 
         highlights = build_highlights(game_histories, name_lookup)
 
+        guild = interaction.guild
+        color = (
+            await resolve_accent_color(self.bot.ctx.db_path, guild)
+            if guild
+            else None
+        )
         embed = build_session_recap_embed(
             game_count=len(game_ids),
             player_ids=player_ids,
             duration_str=duration_str,
             highlights=highlights,
+            color=color,
         )
         await interaction.followup.send(embed=embed)
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     await bot.add_cog(SessionCog(bot))

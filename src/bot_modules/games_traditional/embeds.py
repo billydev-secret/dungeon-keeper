@@ -19,7 +19,7 @@ from bot_modules.games_traditional.logic import (
     summarize_asked_by_category,
 )
 
-_RESULTS_GREY = 0x808080
+_RESULTS_GRAY = 0x808080
 
 # Per-category card styling: (emoji, accent color). Truths are cool-toned
 # and inquisitive; dares are warm-toned and bold; the NSFW variants get
@@ -38,12 +38,15 @@ def build_tod_embed(
     payload: dict[str, Any],
     closed: bool = False,
     names: dict[str, str] | None = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the main lobby embed shown alongside the host/player buttons."""
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
     title = f"{GAME_ICONS['traditional']} TRUTH OR DARE"
     if closed:
         title += " — GAME OVER"
-    embed = discord.Embed(title=title, color=BRAND_COLOR)
+    embed = discord.Embed(title=title, color=color)
     embed.add_field(name="Host", value=host_name, inline=True)
 
     participants: list = payload.get("participants", [])
@@ -65,17 +68,28 @@ def build_tod_embed(
         value = "\n".join(members_in_cat) if members_in_cat else "—"
         embed.add_field(name=CAT_LABELS[cat], value=value, inline=True)
 
-    embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
+    embed.set_footer(text=_footer_text(payload.get("single_choice", False)))
     return embed
 
 
-def build_recap_embed(payload: dict[str, Any]) -> discord.Embed:
+def _footer_text(single_choice: bool) -> str:
+    """Footer line, tagged with the pick mode when single-choice is on."""
+    base = f"{GAME_ICONS['traditional']} Truth or Dare"
+    return f"{base} • One category each" if single_choice else base
+
+
+def build_recap_embed(
+    payload: dict[str, Any],
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
     """Build the game-over recap embed.
 
     Shows totals plus a per-category breakdown for any non-zero
     category — categories with zero questions are skipped to keep the
     embed compact.
     """
+    if color is None:
+        color = discord.Color(_RESULTS_GRAY)
     participants: list = payload.get("participants", [])
     asked: dict[str, str] = payload.get("asked", {})
     total_q = len(asked)
@@ -83,10 +97,13 @@ def build_recap_embed(payload: dict[str, Any]) -> discord.Embed:
 
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE — GAME OVER",
-        color=_RESULTS_GREY,
+        color=color,
     )
     embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
     embed.add_field(name="Participants", value=str(len(participants)), inline=True)
+    bank_asked = payload.get("bank_asked", 0)
+    if bank_asked:
+        embed.add_field(name="Bank Round Questions", value=str(bank_asked), inline=True)
     for cat, count in by_cat.items():
         if count:
             label = CAT_LABELS.get(cat, cat)
@@ -94,21 +111,33 @@ def build_recap_embed(payload: dict[str, Any]) -> discord.Embed:
     return embed
 
 
-def build_lobby_embed(host_name: str) -> discord.Embed:
+def build_lobby_embed(
+    host_name: str,
+    color: "discord.Color | None" = None,
+    single_choice: bool = False,
+) -> discord.Embed:
     """Build the initial lobby embed shown when ``/traditional`` is invoked.
 
     Distinct from :func:`build_tod_embed` only in the description and
-    the hard-coded zero counts (no payload required yet).
+    the hard-coded zero counts (no payload required yet). When
+    ``single_choice`` is on, the prompt and footer say so up front.
     """
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
+    description = (
+        "Pick the one category you're up for below to join!"
+        if single_choice
+        else "Select your preferences below to join!"
+    )
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE",
-        description="Select your preferences below to join!",
-        color=BRAND_COLOR,
+        description=description,
+        color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Participants", value="0", inline=True)
     embed.add_field(name="Questions Asked", value="0", inline=True)
-    embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
+    embed.set_footer(text=_footer_text(single_choice))
     return embed
 
 

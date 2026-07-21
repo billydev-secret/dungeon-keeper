@@ -26,6 +26,7 @@ from starlette.responses import StreamingResponse
 
 from bot_modules.services.auto_delete_service import init_auto_delete_tables
 from bot_modules.services.booster_roles import init_booster_role_tables
+from bot_modules.services.branding_service import init_db as init_branding_db
 from bot_modules.services.confessions_service import init_db as init_confessions_db
 from bot_modules.services.dm_perms_service import init_db as init_dm_perms_db
 from bot_modules.services.health_service import init_health_tables
@@ -68,6 +69,7 @@ _RATE_TIERS: dict[str, tuple[int, float]] = {
 # Map path prefixes to tiers
 _TIER_ROUTES: list[tuple[str, str]] = [
     ("/api/messages/ai-query", "ai"),
+    ("/api/help/advisor",      "ai"),
     ("/api/messages/search",   "search"),
     ("/login",                 "auth"),
     ("/callback",              "auth"),
@@ -107,6 +109,24 @@ def _get_tier(path: str) -> str:
     return "default"
 
 
+def _client_ip(request: Request) -> str:
+    """Real client IP for rate-limiting.
+
+    Behind the Cloudflare tunnel the socket peer is always the loopback origin,
+    so every user would otherwise share one bucket. Cloudflare sets
+    ``CF-Connecting-IP``; trust it (and X-Forwarded-For's first hop as a
+    fallback) since the origin is only reachable through the tunnel. Falls back
+    to the socket peer for direct/LAN access.
+    """
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         global _last_prune  # noqa: PLW0603
@@ -116,7 +136,7 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
         if path.startswith("/static/"):
             return await call_next(request)
 
-        ip = request.client.host if request.client else "unknown"
+        ip = _client_ip(request)
         tier = _get_tier(path)
         max_tokens, refill_rate = _RATE_TIERS[tier]
 
@@ -149,10 +169,14 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def _auto_detect_auth(guild_id: int) -> AuthBackend:
-    """Pick an auth backend based on environment variables.
+    """Pick an auth backend based on environment variables — failing *closed*.
 
-    If DISCORD_CLIENT_ID and SESSION_SECRET are set, use Discord OAuth2.
-    Otherwise fall back to the open (LAN-only) backend.
+    Discord OAuth2 when DISCORD_CLIENT_ID + SESSION_SECRET are set. The open
+    (no-auth, full-admin) backend is served ONLY when explicitly opted into via
+    ``DASHBOARD_OPEN_AUTH=1``. A missing OAuth secret must NOT silently fall back
+    to admin-to-everyone: the cloudflared tunnel bridges the loopback bind to the
+    public internet, so a dropped env var would otherwise publish an unguarded
+    admin dashboard. When neither is configured we refuse to start.
     """
     client_id = os.getenv("DISCORD_CLIENT_ID")
     session_secret = os.getenv("SESSION_SECRET")
@@ -162,14 +186,27 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
         _log.info("Discord OAuth2 authentication enabled (client_id=%s)", client_id)
         return DiscordOAuthAuth(session_secret, guild_id, support_user_id=support_user_id)
 
-    _log.info(
-        "Open authentication (LAN mode) — set DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth"
+    if os.getenv("DASHBOARD_OPEN_AUTH") == "1":
+        _log.warning(
+            "Open (no-auth, full-admin) dashboard — DASHBOARD_OPEN_AUTH=1. Intended "
+            "for a trusted LAN only; never expose this backend through a tunnel."
+        )
+        return OpenAuth()
+
+    raise RuntimeError(
+        "Dashboard auth is unconfigured. Set DISCORD_CLIENT_ID + SESSION_SECRET "
+        "to enable Discord OAuth, or DASHBOARD_OPEN_AUTH=1 to explicitly run the "
+        "open (no-auth, full-admin) backend on a trusted LAN. Refusing to start "
+        "rather than silently granting admin access to everyone."
     )
-    return OpenAuth()
 
 
 def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
-    app = FastAPI(title="Dungeon Keeper Dashboard", docs_url="/api/docs", redoc_url=None)
+    # Swagger UI lives at /api/_docs, NOT /api/docs — the latter is a real REST
+    # resource (the Docs feature's list endpoint). FastAPI registers the docs_url
+    # route before our routers, so pointing it at /api/docs would shadow
+    # GET /api/docs and return Swagger HTML where JSON is expected.
+    app = FastAPI(title="Dungeon Keeper Dashboard", docs_url="/api/_docs", redoc_url=None)
     app.state.ctx = ctx
     app.state.auth = auth or _auto_detect_auth(ctx.guild_id)
 
@@ -182,6 +219,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         init_auto_delete_tables(conn)
     init_confessions_db(ctx.db_path)
     init_dm_perms_db(ctx.db_path)
+    init_branding_db(ctx.db_path)
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web_server.routes import oauth as oauth_routes
@@ -192,6 +230,8 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     # ── API routes ──────────────────────────────────────────────────
     from web_server.routes import config as config_routes
+    from web_server.routes import economy as economy_routes
+    from web_server.routes import economy_manager as economy_manager_routes
     from web_server.routes import home as home_routes
     from web_server.routes import logs as logs_routes
     from web_server.routes import ai_routes
@@ -205,15 +245,39 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(meta_routes.router, prefix="/api", tags=["meta"])
     app.include_router(reports_routes.router, prefix="/api/reports", tags=["reports"])
     app.include_router(config_routes.router, prefix="/api", tags=["config"])
+    app.include_router(economy_routes.router, prefix="/api", tags=["economy"])
+    app.include_router(
+        economy_manager_routes.router, prefix="/api", tags=["economy-manager"]
+    )
     app.include_router(ai_routes.router, prefix="/api", tags=["ai"])
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
     app.include_router(rules_watch_routes.router, prefix="/api", tags=["rules-watch"])
 
+    from web_server.routes import advisor as advisor_routes
+
+    app.include_router(advisor_routes.router, prefix="/api", tags=["advisor"])
+
     from web_server.routes import todo as todo_routes
 
     app.include_router(todo_routes.router, prefix="/api", tags=["todos"])
+
+    from web_server.routes import docs as docs_routes
+
+    app.include_router(docs_routes.router, prefix="/api", tags=["docs"])
+
+    from web_server.routes import role_menus as role_menus_routes
+
+    app.include_router(role_menus_routes.router, prefix="/api", tags=["role-menus"])
+
+    from web_server.routes import chat_revive as chat_revive_routes
+
+    app.include_router(chat_revive_routes.router, prefix="/api", tags=["chat-revive"])
+
+    from web_server.routes import qa as qa_routes
+
+    app.include_router(qa_routes.router, prefix="/api", tags=["qa"])
 
     # ── Health dashboard routes ────────────────────────────────────
     from web_server.routes import health as health_routes
@@ -255,6 +319,19 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(
         scheduled_games_routes.router, prefix="/api/games/schedule", tags=["games"]
+    )
+
+    from web_server.routes import photo_challenge as photo_challenge_routes
+
+    app.include_router(
+        photo_challenge_routes.router, prefix="/api/photo-challenge", tags=["photo-challenge"]
+    )
+
+    # ── Announcements ───────────────────────────────────────────────────
+    from web_server.routes import announcements as announcements_routes
+
+    app.include_router(
+        announcements_routes.router, prefix="/api/announcements", tags=["announcements"]
     )
 
     # ── Quotes ──────────────────────────────────────────────────────────
@@ -354,6 +431,16 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 async def serve_forever(ctx, host: str, port: int) -> None:  # noqa: ANN001
     """Run the FastAPI app under uvicorn on the current event loop."""
     app = create_app(ctx)
+    # Fail closed: never expose the open (no-auth) backend on a non-loopback
+    # bind. If OAuth env is missing, force loopback so a dropped env var can't
+    # silently publish a full-admin dashboard to all interfaces.
+    if isinstance(app.state.auth, OpenAuth) and host not in ("127.0.0.1", "::1", "localhost"):
+        _log.critical(
+            "Open (no-auth) dashboard requested on %s — forcing 127.0.0.1. Set "
+            "DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth for public access.",
+            host,
+        )
+        host = "127.0.0.1"
     config = uvicorn.Config(
         app,
         host=host,

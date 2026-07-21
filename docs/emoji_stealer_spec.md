@@ -1,6 +1,6 @@
 # Emoji Stealer — Feature Spec
 
-Add a custom emoji to one of DungeonKeeper's servers, either by right-clicking a message that contains a custom emoji or by giving a direct image URL. When the bot is in multiple servers, prompts the user to pick which server.
+Add a custom emoji to one of DungeonKeeper's servers, either by right-clicking a message that carries a custom emoji — in its text **or** as a reaction on it — or by giving a direct image URL. When the bot is in multiple servers, prompts the user to pick which server.
 
 ## Commands
 
@@ -11,10 +11,10 @@ Add a custom emoji to one of DungeonKeeper's servers, either by right-clicking a
 
 Both require the **bot** to have Manage Expressions in the destination server.
 
-## Behaviour
+## Behavior
 
 ### Right-click → "Steal Emoji"
-Parses every custom emoji from the clicked message, deduplicating repeats. With exactly one emoji and one eligible server, uploads immediately. Otherwise opens a picker (emoji selector + server selector + **Steal** / **Steal All** / **Cancel**) that times out after two minutes and only accepts input from the invoker.
+Parses every custom emoji from the clicked message — both those written in its text and those added to it as reactions — deduplicating repeats (an emoji that appears in both is offered once, at its in-text position). Unicode reactions are skipped; only custom emoji are stealable. With exactly one emoji and one eligible server, uploads immediately. Otherwise opens a picker (emoji selector + server selector + **Steal** / **Steal All** / **Cancel**) that times out after two minutes and only accepts input from the invoker.
 
 **Steal All** uploads every emoji in the message to one server. A single emoji failing doesn't abort the batch — failures are collected and reported alongside successes.
 
@@ -31,7 +31,7 @@ Animated GIFs over Discord's 256 KB emoji ceiling are downscaled (96 → 64 → 
 | Bot lacks Manage Expressions in the chosen server | "I don't have **Manage Expressions** in **{server}**." |
 | Discord rejects the upload (size, slot-full, content policy) | "Discord rejected it: {reason}" |
 | URL or emoji download fails | "Couldn't download the {emoji \| image}: {reason}" |
-| Message has no custom emojis | "No custom emojis found in that message." |
+| Message has no custom emojis (in text or reactions) | "No custom emojis found in that message or its reactions." |
 | URL doesn't start with `https://` | "URL must start with `https://`." |
 | Emoji name fails validation | "Emoji name must be at least 2 characters (letters, numbers, underscores)." |
 | Non-invoker clicks a picker button | "This menu isn't for you." |
@@ -44,7 +44,7 @@ Animated GIFs over Discord's 256 KB emoji ceiling are downscaled (96 → 64 → 
 
 ## Configuration
 
-None. Behaviour is gated by Discord's **Manage Expressions** permission on the destination server.
+None. Behavior is gated by Discord's **Manage Expressions** permission on the destination server.
 
 ## Stored data
 

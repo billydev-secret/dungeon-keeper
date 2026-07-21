@@ -35,6 +35,16 @@ CONTROL_CH = 6010
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.commands.voice_master_commands.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
+
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "vm_glue.db"
@@ -107,7 +117,10 @@ def _wire_interaction(ctx, *, user_id: int = OWNER):
     inter.guild.id = GUILD
     inter.guild.name = "Guild"
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", ctx)
+    setattr(inter.client, "ctx", ctx)
+    # Knock buttons resolve the guild from the bot cache (they may be answered
+    # from a DM); point that at the wired guild so channel/member lookups work.
+    inter.client.get_guild = MagicMock(return_value=inter.guild)
     return inter
 
 
@@ -120,7 +133,7 @@ async def test_resolve_owned_channel_no_ctx_errors():
 
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     out = await _resolve_owned_channel(inter)
     assert out is None
     inter.response.send_message.assert_awaited_once()
@@ -149,12 +162,12 @@ async def test_defer_if_needed_skips_when_already_done(ctx):
     inter.response.defer.assert_not_called()
 
 
-# ── _apply_lock / _apply_hide ─────────────────────────────────────────────
+# ── _apply_access_state ───────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_apply_lock_handles_permission_failure(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_lock
+async def test_apply_access_locked_handles_permission_failure(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
@@ -162,37 +175,38 @@ async def test_apply_lock_handles_permission_failure(ctx, voice_channel):
     assert row is not None
     voice_channel.set_permissions = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "no"))
     inter = _wire_interaction(ctx)
-    await _apply_lock(inter, voice_channel, row, locked=True)
-    # On failure we should send an error and not save the profile
+    await _apply_access_state(inter, voice_channel, row, state="locked")
+    # On failure we should send an error and not save the profile.
     with open_db(ctx.db_path) as conn:
         p = load_profile(conn, GUILD, OWNER)
-    # Profile may exist as default but locked should not be set to True via this path
     if p is not None:
         assert p.locked is False
 
 
 @pytest.mark.asyncio
-async def test_apply_hide_sets_overwrite_and_saves_profile(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_hide
+async def test_apply_access_locked_hides_and_saves_profile(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
         row = get_active_channel(conn, CH)
     assert row is not None
     inter = _wire_interaction(ctx)
-    await _apply_hide(inter, voice_channel, row, hidden=True)
+    await _apply_access_state(inter, voice_channel, row, state="locked")
     voice_channel.set_permissions.assert_awaited_once()
     _, kwargs = voice_channel.set_permissions.await_args
-    assert kwargs["overwrite"].view_channel is False
+    assert kwargs["overwrite"].view_channel is False  # locked ⇒ hidden
+    assert kwargs["overwrite"].connect is False
     with open_db(ctx.db_path) as conn:
         p = load_profile(conn, GUILD, OWNER)
     assert p is not None
     assert p.hidden is True
+    assert p.locked is True
 
 
 @pytest.mark.asyncio
-async def test_apply_hide_handles_permission_failure(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_hide
+async def test_apply_access_locked_reply_on_permission_failure(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
@@ -200,7 +214,7 @@ async def test_apply_hide_handles_permission_failure(ctx, voice_channel):
     assert row is not None
     voice_channel.set_permissions = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "no"))
     inter = _wire_interaction(ctx)
-    await _apply_hide(inter, voice_channel, row, hidden=True)
+    await _apply_access_state(inter, voice_channel, row, state="locked")
     # An error reply should be sent (either via followup or response).
     assert (
         inter.response.send_message.await_count
@@ -232,8 +246,8 @@ def _per_target_overwrites(voice_channel):
 
 
 @pytest.mark.asyncio
-async def test_apply_spectator_enable_mutes_everyone_and_saves(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_spectator
+async def test_apply_access_spectate_mutes_everyone_and_saves(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     _per_target_overwrites(voice_channel)
     everyone = voice_channel.guild.default_role
@@ -245,12 +259,11 @@ async def test_apply_spectator_enable_mutes_everyone_and_saves(ctx, voice_channe
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
-        # Pre-seed locked=True to prove enabling spectator clears it.
         set_voice_master_config_value(conn, GUILD, "voice_master_saveable_fields",
-                                      "name,limit,locked,hidden,spectator,trusted,blocked")
+                                      "name,limit,access,trusted,blocked")
         row = get_active_channel(conn, CH)
     inter = _wire_interaction(ctx)
-    await _apply_spectator(inter, voice_channel, row, spectator=True)
+    await _apply_access_state(inter, voice_channel, row, state="spectate")
 
     everyone_ow = voice_channel.overwrites_for(everyone)
     assert everyone_ow.speak is False
@@ -265,11 +278,12 @@ async def test_apply_spectator_enable_mutes_everyone_and_saves(ctx, voice_channe
     assert p is not None
     assert p.spectator is True
     assert p.locked is False  # mutually exclusive
+    assert p.age_gated is True  # spectator is age-gated
 
 
 @pytest.mark.asyncio
-async def test_apply_spectator_enable_gated_blocks_everyone_join(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_spectator
+async def test_apply_access_spectate_gated_blocks_everyone_join(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     _per_target_overwrites(voice_channel)
     everyone = voice_channel.guild.default_role
@@ -289,7 +303,7 @@ async def test_apply_spectator_enable_gated_blocks_everyone_join(ctx, voice_chan
         )
         row = get_active_channel(conn, CH)
     inter = _wire_interaction(ctx)
-    await _apply_spectator(inter, voice_channel, row, spectator=True)
+    await _apply_access_state(inter, voice_channel, row, state="spectate")
 
     everyone_ow = voice_channel.overwrites_for(everyone)
     assert everyone_ow.connect is False  # blocked from joining
@@ -897,57 +911,72 @@ async def test_reset_confirm_view_run_missing_channel(ctx):
 
 
 @pytest.mark.asyncio
-async def test_on_lock_grants_full_lock(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _on_lock
+async def test_on_access_locked_applies_lock(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _on_access_locked
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
         row = get_active_channel(conn, CH)
     assert row is not None
     inter = _wire_interaction(ctx)
-    await _on_lock(inter, voice_channel, row)
-    voice_channel.set_permissions.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_on_unlock_clears_lock(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _on_unlock
-
-    with open_db(ctx.db_path) as conn:
-        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
-        row = get_active_channel(conn, CH)
-    assert row is not None
-    inter = _wire_interaction(ctx)
-    await _on_unlock(inter, voice_channel, row)
+    await _on_access_locked(inter, voice_channel, row)
     voice_channel.set_permissions.assert_awaited_once()
     _, kwargs = voice_channel.set_permissions.await_args
-    assert kwargs["overwrite"].connect is None
+    assert kwargs["overwrite"].connect is False
+    assert kwargs["overwrite"].view_channel is False
 
 
 @pytest.mark.asyncio
-async def test_on_hide_calls_apply_hide(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _on_hide
+async def test_on_access_open_clears_everyone_overwrite(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _on_access_open
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
         row = get_active_channel(conn, CH)
     assert row is not None
     inter = _wire_interaction(ctx)
-    await _on_hide(inter, voice_channel, row)
+    await _on_access_open(inter, voice_channel, row)
     voice_channel.set_permissions.assert_awaited_once()
+    _, kwargs = voice_channel.set_permissions.await_args
+    # Fully empty overwrite is cleared (None); otherwise connect/view inherit.
+    ow = kwargs["overwrite"]
+    assert ow is None or (ow.connect is None and ow.view_channel is None)
 
 
 @pytest.mark.asyncio
-async def test_on_unhide_calls_apply_hide(ctx, voice_channel):
-    from bot_modules.commands.voice_master_commands import _on_unhide
+async def test_on_access_nsfw_gates_only(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _on_access_nsfw
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
         row = get_active_channel(conn, CH)
     assert row is not None
     inter = _wire_interaction(ctx)
-    await _on_unhide(inter, voice_channel, row)
-    voice_channel.set_permissions.assert_awaited_once()
+    await _on_access_nsfw(inter, voice_channel, row)
+    nsfw_calls = [
+        c.kwargs["nsfw"]
+        for c in voice_channel.edit.await_args_list
+        if "nsfw" in c.kwargs
+    ]
+    assert nsfw_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_on_access_spectate_dispatches(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _on_access_spectate
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
+        row = get_active_channel(conn, CH)
+    assert row is not None
+    voice_channel.guild.get_member = MagicMock(return_value=None)
+    voice_channel.guild.me = MagicMock(id=1)
+    inter = _wire_interaction(ctx)
+    await _on_access_spectate(inter, voice_channel, row)
+    with open_db(ctx.db_path) as conn:
+        p = load_profile(conn, GUILD, OWNER)
+    assert p is not None
+    assert p.spectator is True
 
 
 @pytest.mark.asyncio
@@ -1091,36 +1120,18 @@ async def test_post_panel_writes_message_id_to_config(ctx):
 # ── post_knock_request branches ───────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_post_knock_request_returns_false_without_control_channel(ctx, voice_channel, owner_member, other_member):
-    from bot_modules.commands.voice_master_commands import post_knock_request
-
-    out = await post_knock_request(
-        ctx, channel=voice_channel, requester=other_member, owner=owner_member
-    )
-    assert out is False
+def _dms_closed(member):
+    """Make ``member.send`` reject like a user with DMs off."""
+    member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "dms closed"))
 
 
 @pytest.mark.asyncio
-async def test_post_knock_request_returns_false_when_control_missing(ctx, voice_channel, owner_member, other_member):
+async def test_post_knock_request_dms_the_owner_privately(ctx, voice_channel, owner_member, other_member):
+    """The happy path is a DM — nothing is posted to the control channel."""
     from bot_modules.commands.voice_master_commands import post_knock_request
 
-    with open_db(ctx.db_path) as conn:
-        set_voice_master_config_value(
-            conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
-        )
-    # Guild.get_channel returns None (channel is gone).
-    voice_channel.guild.get_channel = MagicMock(return_value=None)
-    out = await post_knock_request(
-        ctx, channel=voice_channel, requester=other_member, owner=owner_member
-    )
-    assert out is False
-
-
-@pytest.mark.asyncio
-async def test_post_knock_request_sends_when_control_configured(ctx, voice_channel, owner_member, other_member):
-    from bot_modules.commands.voice_master_commands import post_knock_request
-
+    owner_member.send = AsyncMock()
+    # A control channel exists, but an open DM should mean we never use it.
     with open_db(ctx.db_path) as conn:
         set_voice_master_config_value(
             conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
@@ -1128,6 +1139,28 @@ async def test_post_knock_request_sends_when_control_configured(ctx, voice_chann
     control = MagicMock(spec=discord.TextChannel)
     control.send = AsyncMock()
     voice_channel.guild.get_channel = MagicMock(return_value=control)
+
+    out = await post_knock_request(
+        ctx, channel=voice_channel, requester=other_member, owner=owner_member
+    )
+    assert out is True
+    owner_member.send.assert_awaited_once()
+    control.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_knock_request_falls_back_to_control_when_dms_closed(ctx, voice_channel, owner_member, other_member):
+    from bot_modules.commands.voice_master_commands import post_knock_request
+
+    _dms_closed(owner_member)
+    with open_db(ctx.db_path) as conn:
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
+        )
+    control = MagicMock(spec=discord.TextChannel)
+    control.send = AsyncMock()
+    voice_channel.guild.get_channel = MagicMock(return_value=control)
+
     out = await post_knock_request(
         ctx, channel=voice_channel, requester=other_member, owner=owner_member
     )
@@ -1136,9 +1169,38 @@ async def test_post_knock_request_sends_when_control_configured(ctx, voice_chann
 
 
 @pytest.mark.asyncio
-async def test_post_knock_request_handles_send_failure(ctx, voice_channel, owner_member, other_member):
+async def test_post_knock_request_returns_false_when_dms_closed_and_no_control(ctx, voice_channel, owner_member, other_member):
     from bot_modules.commands.voice_master_commands import post_knock_request
 
+    _dms_closed(owner_member)
+    # No control channel configured → nowhere to fall back to.
+    out = await post_knock_request(
+        ctx, channel=voice_channel, requester=other_member, owner=owner_member
+    )
+    assert out is False
+
+
+@pytest.mark.asyncio
+async def test_post_knock_request_returns_false_when_dms_closed_and_control_missing(ctx, voice_channel, owner_member, other_member):
+    from bot_modules.commands.voice_master_commands import post_knock_request
+
+    _dms_closed(owner_member)
+    with open_db(ctx.db_path) as conn:
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
+        )
+    voice_channel.guild.get_channel = MagicMock(return_value=None)  # channel gone
+    out = await post_knock_request(
+        ctx, channel=voice_channel, requester=other_member, owner=owner_member
+    )
+    assert out is False
+
+
+@pytest.mark.asyncio
+async def test_post_knock_request_returns_false_when_dm_and_control_both_fail(ctx, voice_channel, owner_member, other_member):
+    from bot_modules.commands.voice_master_commands import post_knock_request
+
+    _dms_closed(owner_member)
     with open_db(ctx.db_path) as conn:
         set_voice_master_config_value(
             conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
@@ -1336,7 +1398,7 @@ async def test_reset_confirm_view_run_not_owner_anymore(ctx, voice_channel):
 async def test_knock_response_view_blocks_non_owner(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx, user_id=99999)
     out = await view.interaction_check(inter)
     assert out is False
@@ -1346,7 +1408,7 @@ async def test_knock_response_view_blocks_non_owner(ctx):
 async def test_knock_response_view_resolve_missing_channel(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=None)
     out = await view._resolve(inter)
@@ -1358,7 +1420,7 @@ async def test_knock_response_view_resolve_missing_channel(ctx):
 async def test_knock_response_view_resolve_missing_requester(ctx, voice_channel):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=None)
@@ -1370,7 +1432,7 @@ async def test_knock_response_view_resolve_missing_requester(ctx, voice_channel)
 async def test_knock_response_view_accept_success(ctx, voice_channel, other_member):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=other_member)
@@ -1383,7 +1445,7 @@ async def test_knock_response_view_accept_success(ctx, voice_channel, other_memb
 async def test_knock_response_view_accept_perm_failure(ctx, voice_channel, other_member):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=other_member)
@@ -1404,7 +1466,7 @@ async def test_knock_response_view_accept_edit_message_failure_swallowed(
 ):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=other_member)
@@ -1419,7 +1481,7 @@ async def test_knock_response_view_accept_edit_message_failure_swallowed(
 async def test_knock_response_view_deny_disables_buttons(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     await view.deny.callback.callback(view, inter, MagicMock())
     inter.response.edit_message.assert_awaited_once()
@@ -1432,7 +1494,7 @@ async def test_knock_response_view_deny_disables_buttons(ctx):
 async def test_knock_response_view_deny_swallows_edit_failure(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.response.edit_message = AsyncMock(
         side_effect=discord.HTTPException(MagicMock(), "boom")
@@ -1444,8 +1506,8 @@ async def test_knock_response_view_deny_swallows_edit_failure(ctx):
 
 
 @pytest.mark.asyncio
-async def test_apply_lock_no_ctx_short_circuits(voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_lock
+async def test_apply_access_no_ctx_short_circuits(voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     row = MagicMock()
     row.owner_id = OWNER
@@ -1454,21 +1516,21 @@ async def test_apply_lock_no_ctx_short_circuits(voice_channel):
     row.last_edit_at_2 = 0.0
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
-    await _apply_lock(inter, voice_channel, row, locked=True)
+    setattr(inter.client, "ctx", None)
+    await _apply_access_state(inter, voice_channel, row, state="locked")
     voice_channel.set_permissions.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_apply_hide_no_ctx_short_circuits(voice_channel):
-    from bot_modules.commands.voice_master_commands import _apply_hide
+async def test_apply_access_spectate_no_ctx_short_circuits(voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_access_state
 
     row = MagicMock()
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
-    await _apply_hide(inter, voice_channel, row, hidden=True)
+    setattr(inter.client, "ctx", None)
+    await _apply_access_state(inter, voice_channel, row, state="spectate")
     voice_channel.set_permissions.assert_not_called()
 
 
@@ -1480,7 +1542,7 @@ async def test_apply_rename_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_rename(inter, voice_channel, row, new_name="x")
     voice_channel.edit.assert_not_called()
 
@@ -1493,7 +1555,7 @@ async def test_apply_limit_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_limit(inter, voice_channel, row, new_limit=5)
     voice_channel.edit.assert_not_called()
 
@@ -1506,7 +1568,7 @@ async def test_apply_invite_no_ctx_short_circuits(voice_channel, other_member):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_invite(inter, voice_channel, row, target=other_member, remember=False)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1519,7 +1581,7 @@ async def test_apply_kick_no_ctx_short_circuits(voice_channel, other_member):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_kick(inter, voice_channel, row, target=other_member, remember=False)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1532,7 +1594,7 @@ async def test_apply_reset_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_reset(inter, voice_channel, row, also_profile=False)
     voice_channel.edit.assert_not_called()
 
@@ -1545,7 +1607,7 @@ async def test_apply_transfer_no_ctx_short_circuits(voice_channel, other_member)
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_transfer(inter, voice_channel, row, new_owner=other_member)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1559,6 +1621,6 @@ async def test_gate_and_record_edit_no_ctx_returns_false():
     row.last_edit_at_2 = 0.0
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     out = await _gate_and_record_edit(inter, row)
     assert out is False

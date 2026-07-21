@@ -204,9 +204,11 @@ async def test_ai_prompt(
 
     ctx = get_ctx(request)
 
-    with ctx.open_db() as conn:
-        system = get_prompt(conn, key, guild_id)
-        model = get_command_model(conn, key, guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            return get_prompt(conn, key, guild_id), get_command_model(conn, key, guild_id)
+
+    system, model = await run_query(_q)
 
     result = await ollama_client.chat(
         model=model,

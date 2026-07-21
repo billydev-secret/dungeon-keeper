@@ -130,29 +130,6 @@ async def test_upsert_config_updates(db):
     assert cfg["min_fuse"] == pytest.approx(20.0)  # untouched
 
 
-# ── stats ─────────────────────────────────────────────────────────────────────
-
-async def test_get_stats_empty(db):
-    assert await hpgdb.get_stats(db, GUILD, 99) == {"wins": 0, "losses": 0, "total_games": 0}
-
-
-async def test_get_stats_counts_membership(db):
-    gid = await hpgdb.create_lobby(db, GUILD, CH, HOST, None)
-    await hpgdb.set_game_state(
-        db, gid, "RESOLVED",
-        roster=json.dumps([10, 20, 30]),
-        winner_id=20, loser_id=10,
-    )
-    s_host = await hpgdb.get_stats(db, GUILD, 10)
-    assert s_host == {"wins": 0, "losses": 1, "total_games": 1}
-    s_win = await hpgdb.get_stats(db, GUILD, 20)
-    assert s_win == {"wins": 1, "losses": 0, "total_games": 1}
-    s_other = await hpgdb.get_stats(db, GUILD, 30)
-    assert s_other == {"wins": 0, "losses": 0, "total_games": 1}
-    s_outsider = await hpgdb.get_stats(db, GUILD, 999)
-    assert s_outsider["total_games"] == 0
-
-
 # ── group cooldowns (shared duels/db.py) ───────────────────────────────────────
 
 async def test_group_cooldown_set_and_check(db):

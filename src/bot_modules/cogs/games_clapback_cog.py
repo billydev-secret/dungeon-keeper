@@ -2,8 +2,14 @@ import asyncio
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 
@@ -12,6 +18,7 @@ from bot_modules.games.constants import (
     HOW_TO_PLAY,
 )
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
     get_game_options,
@@ -22,20 +29,18 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_name,
+    channel_name,
 )
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
     get_clapback_prompt,
     has_clapback_prompts,
-    has_matching_questions,
+    channel_allows_nsfw,
 )
-from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.command_groups import play
 from bot_modules.games_clapback.logic import (
-    AI_SYSTEM_PROMPT,
-    AI_USER_PROMPT,
     MAX_PLAYERS,
     MIN_PLAYERS,
     calculate_matchup_score,
@@ -61,39 +66,10 @@ ICON = GAME_ICONS["clapback"]
 
 
 async def fetch_prompt(db, config: dict, used: list[str]) -> str | None:
-    """Get a prompt from bank and/or AI depending on *source*."""
-    source = config.get("source", "both")
-
+    """Get a prompt from the question bank (Clapback is bank-only)."""
     tags = config.get("tags") or None
-
-    if source == "bank":
-        return await get_clapback_prompt(db, exclude=used, tags=tags)
-
-    if source == "ai":
-        return await _ai_prompt(used)
-
-    # source == "both": try bank first, fall back to AI
-    prompt = await get_clapback_prompt(db, exclude=used, tags=tags)
-    if prompt:
-        return prompt
-    return await _ai_prompt(used)
-
-
-async def _ai_prompt(used: list[str]) -> str | None:
-    for _ in range(2):  # retry once on failure
-        result = await generate_text(AI_SYSTEM_PROMPT, AI_USER_PROMPT, max_tokens=100)
-        if not result:
-            continue
-        # Find the first non-header, non-empty line
-        prompt = None
-        for line in result.strip().splitlines():
-            line = line.strip().lstrip("-•*0123456789). ").strip('"').strip()
-            if line and not line.startswith("#"):
-                prompt = line
-                break
-        if prompt and prompt not in used:
-            return prompt
-    return None
+    allow_nsfw = bool(config.get("allow_nsfw", False))
+    return await get_clapback_prompt(db, exclude=used, tags=tags, allow_nsfw=allow_nsfw)
 
 
 # ── Modal ────────────────────────────────────────────────────────────────────
@@ -150,29 +126,55 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
 
 
 class ClapbackJoinView(discord.ui.View):
-    def __init__(self, game_id: str, host_id: int, db, bot, cog, config: dict):
-        super().__init__(timeout=300)
+    # Inactivity window; every button press resets it. A scheduled start
+    # (start_in) extends the first window past the advertised start time.
+    LOBBY_TIMEOUT = 600
+
+    def __init__(
+        self, game_id: str, host_id: int, db, bot, cog, config: dict,
+        accent: "discord.Color | None" = None,
+    ):
+        timeout = float(self.LOBBY_TIMEOUT)
+        start_epoch = config.get("start_epoch")
+        if start_epoch:
+            timeout = max(timeout, start_epoch - time.time() + 120)
+        super().__init__(timeout=timeout)
         self.game_id = game_id
         self.host_id = host_id
         self.db = db
         self.bot = bot
         self.cog = cog
         self.config = config
+        # Guild accent resolved once at game start; reused for every live
+        # lobby edit (join/leave) instead of re-resolving per button press.
+        self.accent = accent
+        self.message: discord.Message | None = None
 
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     async def on_timeout(self):
         await self.cog._cancel_game(self.game_id, reason="Lobby timed out")
+        # Retire the lobby message — a live-looking Join/Start row on a dead
+        # view swallows clicks as "This interaction failed".
+        if self.message is not None:
+            disable_all_items(self)
+            try:
+                await self.message.edit(
+                    content="⌛ **Lobby timed out** — the game wasn't started in time. Run `/games play clapback` to open a new one.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="ql_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         def _add(payload):
@@ -186,7 +188,7 @@ class ClapbackJoinView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="ql_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         if uid == self.host_id:
@@ -206,16 +208,16 @@ class ClapbackJoinView(discord.ui.View):
         log.info("%s left game %s", interaction.user.display_name, self.game_id)
         await self._update_embed(interaction, payload)
 
-    @discord.ui.button(label="▶️ Start Game", style=discord.ButtonStyle.primary, custom_id="ql_start")
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
 
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
-        min_p = self.config.get("min_players", MIN_PLAYERS)
+        min_p = MIN_PLAYERS
 
         if len(players) < min_p:
             await interaction.response.send_message(
@@ -230,25 +232,15 @@ class ClapbackJoinView(discord.ui.View):
             )
             return
 
+        channel = interaction.channel
+        assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
+
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
-        # Ping players
-        if interaction.guild:
-            mentions = [
-                interaction.guild.get_member(uid).mention
-                for uid in players
-                if interaction.guild.get_member(uid)
-            ]
-            if mentions:
-                try:
-                    await interaction.followup.send(
-                        f"{ICON} **Clapback is starting!** {' '.join(mentions)}",
-                    )
-                except discord.Forbidden:
-                    log.warning("Clapback %s: missing perms to send start ping in #%s", self.game_id, getattr(interaction.channel, "name", "?"))
+        # Players are pinged per-round when each round's prompt is posted
+        # (see _submit_phase), so there's no separate start ping here.
 
         # Initialize scores
         payload["scores"] = {str(p): 0 for p in players}
@@ -264,40 +256,16 @@ class ClapbackJoinView(discord.ui.View):
         await update_game_payload(self.db, self.game_id, payload)
 
         try:
-            await self.cog._run_game(self.game_id, interaction.channel, payload)
+            await self.cog._run_game(self.game_id, channel, payload)
         except Exception as e:
             log.error("Clapback game %s crashed: %s", self.game_id, e, exc_info=True)
-            await interaction.channel.send("❌ Something went wrong. Game ended.")
+            await channel.send("❌ Something went wrong. Game ended.")
             await end_game(self.db, self.game_id)
             self.bot.active_views.pop(self.game_id, None)
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="ql_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        game_msg = interaction.message
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(content="Game cancelled.", view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            self.bot.active_views.pop(self.game_id, None)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to cancel this game?", view=view, ephemeral=True,
-        )
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         cfg = self.config
         text = HOW_TO_PLAY["clapback"] + (
             f"\n\n⏱️ **{cfg['timer']}s** to write each answer\n"
@@ -319,6 +287,7 @@ class ClapbackJoinView(discord.ui.View):
             players=players,
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=self.config.get("start_epoch"),
+            color=self.accent,
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -336,14 +305,14 @@ class ClapbackSubmitView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="✏️ Submit Answer", style=discord.ButtonStyle.primary, custom_id="ql_submit")
+    @discord.ui.button(label="✏️ Submit", style=discord.ButtonStyle.primary, custom_id="ql_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
         if interaction.user.id not in players:
@@ -353,14 +322,6 @@ class ClapbackSubmitView(discord.ui.View):
             return
         modal = ClapbackAnswerModal(self.game_id, self.round_num, self.db, self.cog)
         await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_submit_end", row=1)
-    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
-            return
-        await self.cog._confirm_end(interaction, self.game_id)
 
 
 class ClapbackVoteView(discord.ui.View):
@@ -384,7 +345,7 @@ class ClapbackVoteView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -410,12 +371,9 @@ class ClapbackVoteView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        if uid not in self.players:
-            await interaction.response.send_message(
-                "Only players in this game can vote.",
-                ephemeral=True,
-            )
-            return
+
+        # Anyone (players and spectators alike) can vote — the only people
+        # blocked are the two contestants in this matchup, above.
 
         idx = self.matchup_index
 
@@ -424,27 +382,11 @@ class ClapbackVoteView(discord.ui.View):
             if idx < len(matchups):
                 matchups[idx]["votes"][str(uid)] = voted_for
 
-        payload = await modify_payload(self.db, self.game_id, _store_vote)
-        matchups = payload.get("matchups", [])
-        vote_count = len(matchups[idx]["votes"]) if idx < len(matchups) else 0
+        await modify_payload(self.db, self.game_id, _store_vote)
 
         await interaction.response.send_message(
             f"Voted for {label}!", ephemeral=True, delete_after=3,
         )
-
-        # Matchup participants can't vote — everyone else does.
-        eligible = len(self.players) - 2
-        if vote_count >= eligible and eligible > 0:
-            if self.game_id in self.cog._vote_events:
-                self.cog._vote_events[self.game_id].set()
-
-    @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_vote_end", row=1)
-    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
-            return
-        await self.cog._confirm_end(interaction, self.game_id)
 
 
 class ClapbackRoundSummaryView(discord.ui.View):
@@ -460,7 +402,7 @@ class ClapbackRoundSummaryView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -470,23 +412,14 @@ class ClapbackRoundSummaryView(discord.ui.View):
 
     @discord.ui.button(label="▶️ Next Round", style=discord.ButtonStyle.primary, custom_id="ql_next")
     async def next_round(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
         self._advanced.set()
-
-    @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_round_end")
-    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
-            return
-        await self.cog._confirm_end(interaction, self.game_id)
 
 
 class ClapbackRecapView(discord.ui.View):
@@ -502,20 +435,19 @@ class ClapbackRecapView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="🔄 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
+    @discord.ui.button(label="🔁 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
         await self.cog._start_new_game(
             channel=interaction.channel,
@@ -527,22 +459,23 @@ class ClapbackRecapView(discord.ui.View):
 
     @discord.ui.button(label="🔀 Play Again (Shuffled)", style=discord.ButtonStyle.secondary, custom_id="ql_replay_shuffle")
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
+        channel = interaction.channel
+        assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         shuffled = shuffled_replay_config(self.config)
-        await interaction.channel.send(
+        await channel.send(
             f"🔀 **Shuffled settings:** {shuffled['rounds']} rounds, "
             f"{shuffled['timer']}s submit, {shuffled['vote_timer']}s vote"
         )
         await self.cog._start_new_game(
-            channel=interaction.channel,
+            channel=channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild=interaction.guild,
@@ -554,16 +487,34 @@ class ClapbackRecapView(discord.ui.View):
 
 
 class ClapbackCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
         # Events used to signal early completion of submit / vote phases
         self._submit_events: dict[str, asyncio.Event] = {}
         self._vote_events: dict[str, asyncio.Event] = {}
         self._game_cancelled: set[str] = set()
+        # Guild accent resolved ONCE per game at start (or on recovery) and
+        # reused by every phase's embed — never re-resolved per vote / update.
+        self._accents: dict[str, "discord.Color | None"] = {}
 
     @property
     def db(self):
         return self.bot.games_db
+
+    async def _resolve_accent(self, guild) -> "discord.Color | None":
+        """Resolve the guild accent once, swallowing any failure to None.
+
+        Kept guild-tolerant: with no guild (headless / DM) or a resolver
+        error we return None and the builders fall back to their neutral
+        default rather than crashing the game loop.
+        """
+        if guild is None:
+            return None
+        try:
+            return await resolve_accent_color(self.bot.ctx.db_path, guild)
+        except Exception:
+            log.warning("clapback accent resolve failed for guild %s", getattr(guild, "id", "?"))
+            return None
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the game from the next un-played round after a restart.
@@ -578,6 +529,9 @@ class ClapbackCog(commands.Cog):
             return False
         game_id = row["game_id"]
         self._game_cancelled.discard(game_id)
+        # Accent cache is lost across a restart — re-resolve it once here so the
+        # resumed phases stay on-theme without re-resolving per update.
+        self._accents[game_id] = await self._resolve_accent(getattr(channel, "guild", None))
         resume_round = len(payload.get("round_history", [])) + 1
         await start_redrive(
             self.bot, game_id, message,
@@ -590,36 +544,17 @@ class ClapbackCog(commands.Cog):
 
     @app_commands.command(name="clapback", description="Start a Clapback game — comedy head-to-head!")
     @app_commands.describe(
-        rounds="Number of prompt rounds (1-15, default 5)",
-        timer="Seconds for answer submission (15-180, default 120)",
-        vote_timer="Seconds per matchup vote (10-60, default 40)",
-        source="Where prompts come from",
-        anonymous="Hide author names until final recap",
         start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
-        tags="Comma-separated tags to filter the bank when source uses it (include 'nsfw' to allow NSFW)",
-    )
-    @app_commands.choices(
-        source=[
-            app_commands.Choice(name="AI Generated", value="ai"),
-            app_commands.Choice(name="Question Bank", value="bank"),
-            app_commands.Choice(name="Both", value="both"),
-        ],
     )
     async def clapback(
         self,
         interaction: discord.Interaction,
-        rounds: int = 5,
-        timer: int = 120,
-        vote_timer: int = 40,
-        source: str = "both",
-        anonymous: bool = False,
         start_in: app_commands.Range[int, 1, 60] | None = None,
-        tags: str = "",
     ):
         log.info(
             "%s used /games play clapback in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
 
         # Pre-flight checks
@@ -633,24 +568,14 @@ class ClapbackCog(commands.Cog):
             await interaction.response.send_message("Clapback is currently disabled on this server.", ephemeral=True)
             return
 
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-
-        # Hard bank-error pre-check (nice ephemeral message; launch falls back silently).
-        if source == "bank":
-            if tag_list:
-                if not await has_matching_questions(self.db, "clapback", tag_list):
-                    await interaction.response.send_message(
-                        f"No prompts match tags: {', '.join(tag_list)} for Clapback.",
-                        ephemeral=True,
-                    )
-                    return
-            elif not await has_clapback_prompts(self.db):
-                await interaction.response.send_message(
-                    "No prompts in the bank for Clapback. "
-                    "Add some with `/bank add clapback` or use `source:ai`.",
-                    ephemeral=True,
-                )
-                return
+        # Clapback is bank-only, so an empty bank means there's nothing to play.
+        if not await has_clapback_prompts(self.db):
+            await interaction.response.send_message(
+                "No prompts in the bank for Clapback. "
+                "Add some with `/bank add clapback` or in the dashboard.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.defer()
         game_id = await self.launch(
@@ -658,21 +583,9 @@ class ClapbackCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={
-                "rounds": rounds, "timer": timer, "vote_timer": vote_timer,
-                "source": source, "anonymous": anonymous,
-                "start_in": start_in, "tags": tag_list,
-            },
+            options={"start_in": start_in},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -684,28 +597,36 @@ class ClapbackCog(commands.Cog):
         options: dict,
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        # Clapback is bank-only; nothing to play if the bank is empty. Covers
+        # headless (scheduled) launches, which skip the slash pre-check.
+        if not await has_clapback_prompts(self.db):
+            log.warning("clapback launch skipped in channel %s — question bank is empty", getattr(channel, "id", "?"))
+            return None
+        # Pacing/content knobs live in the per-server dashboard config (game_opts);
+        # an explicit *options* value (e.g. from a saved schedule) still wins.
+        game_opts = await get_game_options(self.db, "clapback", guild_id)
         rounds, timer, vote_timer = clamp_config_values(
-            int(options.get("rounds", 5)),
-            int(options.get("timer", 120)),
-            int(options.get("vote_timer", 40)),
+            int(options.get("rounds", game_opts.get("rounds", 5))),
+            int(options.get("timer", game_opts.get("timer", 120))),
+            int(options.get("vote_timer", game_opts.get("vote_timer", 40))),
         )
-        source = options.get("source", "both")
-        # Bank fallback: if the bank is empty, fall back to AI (no user to prompt headless).
-        if source in ("bank", "both") and not await has_clapback_prompts(self.db):
-            source = "ai"
         start_in_min = options.get("start_in")
         start_epoch = int(time.time()) + int(start_in_min) * 60 if start_in_min else None
-        game_opts = await get_game_options(self.db, "clapback", guild_id)
-        min_players = int(game_opts.get("min_players", MIN_PLAYERS))
+        # Normalize tags to a list — the dashboard/scheduler store a
+        # comma-separated string, an explicit options value may be a list.
+        tags_cfg = options.get("tags", game_opts.get("tags", ""))
+        if isinstance(tags_cfg, str):
+            tags = [t.strip() for t in tags_cfg.split(",") if t.strip()]
+        else:
+            tags = [str(t).strip() for t in (tags_cfg or []) if str(t).strip()]
         config = {
             "rounds": rounds,
             "timer": timer,
             "vote_timer": vote_timer,
-            "source": source,
-            "anonymous": bool(options.get("anonymous", False)),
+            "anonymous": bool(options.get("anonymous", game_opts.get("anonymous", False))),
             "start_epoch": start_epoch,
-            "min_players": min_players,
-            "tags": options.get("tags") or [],
+            "tags": tags,
+            "allow_nsfw": channel_allows_nsfw(channel),
         }
         return await self._start_new_game(
             channel=channel, host_id=host_id, host_name=host_name,
@@ -727,19 +648,24 @@ class ClapbackCog(commands.Cog):
             host_id,
             "clapback",
             state="joining",
-            payload={"config": config, "players": []},
+            payload={"config": config, "players": [], "host_id": host_id},
         )
         log.info("Game %s (clapback) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
+        # Resolve the guild accent ONCE for the whole game and cache it; every
+        # phase (lobby / submit / vote / reveal / scoreboard / recap) reuses it.
+        accent = await self._resolve_accent(guild)
+        self._accents[game_id] = accent
         embed = build_lobby_embed(
             host_name=host_name,
             config=config,
             players=[],
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=config.get("start_epoch"),
+            color=accent,
         )
 
-        view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config)
+        view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config, accent=accent)
         self.bot.active_views[game_id] = view
 
         try:
@@ -750,6 +676,7 @@ class ClapbackCog(commands.Cog):
             log.warning("clapback launch lacked send perms in channel %s", channel.id)
             return None
 
+        view.message = msg
         await update_game_message(self.db, game_id, msg.id)
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
@@ -824,7 +751,7 @@ class ClapbackCog(commands.Cog):
                     return
                 result = await self._vote_matchup(
                     game_id, channel, payload, mi, matchup,
-                    answers, config, host_id, round_num, len(matchups),
+                    answers, config, host_id, round_num, len(matchups), prompt,
                 )
                 if result is None:
                     return  # game cancelled
@@ -860,7 +787,7 @@ class ClapbackCog(commands.Cog):
                 await asyncio.sleep(2)  # between-round breather
             else:
                 # Show final summary scoreboard briefly before recap
-                await self._post_scoreboard(channel, payload, round_num, total_rounds, bye_player, final=True)
+                await self._post_scoreboard(game_id, channel, payload, round_num, total_rounds, bye_player, final=True)
 
         if self._is_cancelled(game_id):
             return
@@ -886,12 +813,26 @@ class ClapbackCog(commands.Cog):
             deadline_str=format_deadline(deadline),
             answers_in=0,
             total_players=len(players),
+            color=self._accents.get(game_id),
         )
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
 
-        msg = await channel.send(embed=embed, view=view)
+        # Ping the active players so nobody misses a new round starting. Only
+        # user mentions go in the content, so no @everyone/@role pings.
+        guild = getattr(channel, "guild", None)
+        content = None
+        if guild:
+            mentions = " ".join(
+                member.mention
+                for uid in players
+                if (member := guild.get_member(uid))
+            )
+            if mentions:
+                content = f"{ICON} **Round {round_num} starting!** {mentions}"
+
+        msg = await channel.send(content=content, embed=embed, view=view)
         await update_game_message(self.db, game_id, msg.id)
 
         submit_event = asyncio.Event()
@@ -926,7 +867,7 @@ class ClapbackCog(commands.Cog):
                 embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
                 try:
                     await msg.edit(embed=embed)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
             if count >= len(players):
@@ -936,15 +877,14 @@ class ClapbackCog(commands.Cog):
 
         # Disable submit view
         view.stop()
-        for item in view.children:
-            item.disabled = True
+        disable_all_items(view)
         try:
             p = await get_game_payload(self.db, game_id)
             count = len(p.get("answers", {}))
             embed.set_field_at(0, name="Timer", value="⏱️ Closed", inline=True)
             embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
             await msg.edit(embed=embed, view=view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         payload = await get_game_payload(self.db, game_id)
@@ -954,7 +894,7 @@ class ClapbackCog(commands.Cog):
 
     async def _vote_matchup(
         self, game_id, channel, payload, matchup_index, matchup,
-        answers, config, host_id, round_num, total_matchups,
+        answers, config, host_id, round_num, total_matchups, prompt,
     ):
         from bot_modules.games.utils.timer import format_deadline, now_plus
         player_a, player_b = int(matchup["pair"][0]), int(matchup["pair"][1])
@@ -965,6 +905,7 @@ class ClapbackCog(commands.Cog):
         vote_timer = config["vote_timer"]
         deadline = now_plus(vote_timer)
 
+        accent = self._accents.get(game_id)
         embed = build_vote_embed(
             answer_a=answer_a,
             answer_b=answer_b,
@@ -973,6 +914,8 @@ class ClapbackCog(commands.Cog):
             total_matchups=total_matchups,
             deadline_str=format_deadline(deadline),
             vote_count=0,
+            prompt=prompt,
+            color=accent,
         )
 
         view = ClapbackVoteView(
@@ -1018,12 +961,13 @@ class ClapbackCog(commands.Cog):
                     embed.set_field_at(1, name="Votes", value=str(vcount), inline=True)
                     try:
                         await msg.edit(embed=embed)
-                    except Exception:
+                    except discord.HTTPException:
                         pass
 
-                eligible = len(players)
-                if vcount >= eligible and eligible > 0:
-                    break
+        # Voting is open to everyone, so "all eligible voters have voted" is
+        # no longer determinable — the matchup always runs the full vote timer
+        # (a host /games end pops the game from active_views, which the next
+        # _is_cancelled check below catches within a second).
 
         self._vote_events.pop(game_id, None)
         view._closed = True
@@ -1053,14 +997,15 @@ class ClapbackCog(commands.Cog):
             player_b=player_b,
             anonymous=anonymous,
             name_resolver=lambda uid: resolve_name(guild, uid),
+            prompt=prompt,
+            color=accent,
         )
 
         # Edit message with reveal (buttons disabled)
-        for item in view.children:
-            item.disabled = True
+        disable_all_items(view)
         try:
             await msg.edit(embed=reveal, view=view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         await asyncio.sleep(4)  # Let players read the reveal
@@ -1082,7 +1027,10 @@ class ClapbackCog(commands.Cog):
     async def _round_summary(
         self, game_id, channel, payload, round_num, total_rounds, host_id, bye_player,
     ):
-        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=False)
+        embed = build_scoreboard_embed(
+            payload, round_num, total_rounds, bye_player,
+            final=False, color=self._accents.get(game_id),
+        )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
         msg = await channel.send(embed=embed, view=view)
@@ -1097,16 +1045,18 @@ class ClapbackCog(commands.Cog):
             return False
 
         view.stop()
-        for item in view.children:
-            item.disabled = True
+        disable_all_items(view)
         try:
             await msg.edit(view=view)
-        except Exception:
+        except discord.HTTPException:
             pass
         return True
 
-    async def _post_scoreboard(self, channel, payload, round_num, total_rounds, bye_player, final=False):
-        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=final)
+    async def _post_scoreboard(self, game_id, channel, payload, round_num, total_rounds, bye_player, final=False):
+        embed = build_scoreboard_embed(
+            payload, round_num, total_rounds, bye_player,
+            final=final, color=self._accents.get(game_id),
+        )
         await channel.send(embed=embed)
 
     # ── Final recap ──────────────────────────────────────────────────────
@@ -1119,7 +1069,11 @@ class ClapbackCog(commands.Cog):
             payload=payload,
             config=config,
             name_resolver=lambda uid: resolve_name(guild, uid),
+            color=self._accents.get(game_id),
         )
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "clapback")
 
         rounds_played = len(payload.get("round_history", []))
         host_id = payload.get("host_id") or (players[0] if players else 0)
@@ -1133,40 +1087,12 @@ class ClapbackCog(commands.Cog):
             player_count=len(players),
             round_count=rounds_played,
             payload=payload,
+            bot=self.bot, player_ids=list(players),
         )
         self.bot.active_views.pop(game_id, None)
         self._cleanup(game_id)
 
     # ── Helpers ──────────────────────────────────────────────────────────
-
-    async def _confirm_end(self, interaction: discord.Interaction, game_id: str):
-        """Show end-game confirmation. Used by multiple views."""
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._game_cancelled.add(game_id)
-            # Unblock any waiting events
-            ev = self._submit_events.pop(game_id, None)
-            if ev:
-                ev.set()
-            ev = self._vote_events.pop(game_id, None)
-            if ev:
-                ev.set()
-
-            # Post partial recap if scores exist
-            payload = await get_game_payload(self.db, game_id)
-            if payload.get("scores"):
-                await self._post_recap(game_id, channel, payload, payload.get("config", {}))
-            else:
-                await end_game(self.db, game_id)
-                self.bot.active_views.pop(game_id, None)
-                self._cleanup(game_id)
-                await channel.send(f"{ICON} Game ended by host.")
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to end this game?", view=view, ephemeral=True,
-        )
 
     async def _cancel_game(self, game_id: str, reason: str = ""):
         """Silently cancel a game (e.g. lobby timeout)."""
@@ -1182,13 +1108,55 @@ class ClapbackCog(commands.Cog):
     def _cleanup(self, game_id: str):
         self._submit_events.pop(game_id, None)
         self._vote_events.pop(game_id, None)
+        self._accents.pop(game_id, None)
         self._game_cancelled.discard(game_id)
 
+    # ── Mid-game join / leave (dispatched from /games join, /games leave) ──
 
-async def setup(bot: commands.Bot):
+    async def mid_game_join(self, channel, game_id: str, member):
+        """Add *member* to a running game. The submit phase re-reads the
+        roster each round, so they play from the next round on."""
+        uid = member.id
+        state: dict = {}
+
+        def _add(payload):
+            players = payload.setdefault("players", [])
+            if uid in players:
+                state["already"] = True
+                return
+            players.append(uid)
+            payload.setdefault("scores", {}).setdefault(str(uid), 0)
+            payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
+
+        await modify_payload(self.db, game_id, _add)
+        if state.get("already"):
+            return False, f"**{member.display_name}** is already in this game."
+        return True, f"{ICON} **{member.display_name}** joined Clapback — they'll play from the next round!"
+
+    async def mid_game_leave(self, channel, game_id: str, member):
+        """Remove *member* from a running game. Their score stays on the board."""
+        uid = member.id
+        state: dict = {}
+
+        def _remove(payload):
+            players = payload.setdefault("players", [])
+            if uid not in players:
+                state["missing"] = True
+                return
+            players.remove(uid)
+
+        await modify_payload(self.db, game_id, _remove)
+        if state.get("missing"):
+            return False, f"**{member.display_name}** isn't in this game."
+        return True, f"{ICON} **{member.display_name}** left Clapback — their score stays on the board."
+
+
+async def setup(bot: "Bot"):
     cog = ClapbackCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("clapback")
-    play.add_command(cog.clapback)
+    play.add_command(cog.clapback, override=True)
     bot.game_launchers["clapback"] = cog.launch
     bot.game_recoverers["clapback"] = cog.recover_game
+    bot.game_joiners["clapback"] = cog.mid_game_join
+    bot.game_leavers["clapback"] = cog.mid_game_leave

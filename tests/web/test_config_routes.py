@@ -228,16 +228,6 @@ def test_update_welcome_invalidates_guild_config_cache(authed_client, fake_ctx):
     assert fresh.welcome_channel_id == 8888
 
 
-def test_update_welcome_syncs_flat_field_for_home_guild(authed_client, fake_ctx):
-    """For the home guild, ``ctx.welcome_channel_id`` must track the edit so
-    legacy readers stay consistent with the per-guild snapshot."""
-    resp = authed_client.put(
-        "/api/config/welcome", json={"welcome_channel_id": "7777"}
-    )
-    assert resp.status_code == 200
-    assert fake_ctx.welcome_channel_id == 7777
-
-
 # ── PUT /api/config/xp ────────────────────────────────────────────────
 
 
@@ -272,10 +262,18 @@ def test_update_xp_coefficient(authed_client, fake_ctx):
     assert float(val) == 0.75
 
 
-def test_xp_triggers_reload(authed_client, fake_ctx):
-    before = fake_ctx._xp_reload_count
-    authed_client.put("/api/config/xp", json={"message_word_xp": 1.0})
-    assert fake_ctx._xp_reload_count == before + 1
+def test_reaction_given_xp_coefficient_roundtrips(authed_client):
+    # Default surfaces on GET before any write.
+    before = authed_client.get("/api/config")
+    assert before.status_code == 200
+    assert before.json()["xp"]["reaction_given_xp"] == 0.34
+
+    put = authed_client.put("/api/config/xp", json={"reaction_given_xp": 0.5})
+    assert put.status_code == 200
+
+    after = authed_client.get("/api/config")
+    assert after.status_code == 200
+    assert after.json()["xp"]["reaction_given_xp"] == 0.5
 
 
 # ── PUT /api/config/prune ─────────────────────────────────────────────
@@ -343,20 +341,6 @@ def test_update_moderation_invalidates_guild_config_cache(authed_client, fake_ct
     assert fresh is not primed
     assert fresh.mod_role_ids == frozenset({100, 101})
     assert fresh.admin_role_ids == frozenset({200})
-
-
-def test_update_moderation_syncs_flat_role_caches_for_home_guild(
-    authed_client, fake_ctx
-):
-    """For the home guild, ``ctx.mod_role_ids``/``ctx.admin_role_ids`` must
-    track the edit (reload_permission_roles is called)."""
-    resp = authed_client.put(
-        "/api/config/moderation",
-        json={"mod_role_ids": "555,556", "admin_role_ids": "777"},
-    )
-    assert resp.status_code == 200
-    assert fake_ctx.mod_role_ids == {555, 556}
-    assert fake_ctx.admin_role_ids == {777}
 
 
 # ── PUT /api/config/roles/{grant_name} ───────────────────────────────
@@ -434,6 +418,9 @@ def test_get_config_includes_guess_section(authed_client):
     assert v["guess_cooldown_seconds"] == 60
     assert v["min_image_dimension_px"] == 400
     assert v["max_image_size_mb"] == 10
+    assert v["submit_max_per_window"] == 5
+    assert v["submit_window_seconds"] == 3600
+    assert v["max_guesses_per_round"] == 5
 
 
 def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
@@ -480,6 +467,30 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
     assert 3001 not in [r["channel_id"] for r in rules]
 
 
+def test_auto_delete_media_only_round_trips(authed_client, fake_ctx):
+    from bot_modules.services.auto_delete_service import list_auto_delete_rules_for_guild
+
+    # media_only defaults to False when omitted.
+    authed_client.put("/api/config/auto-delete/3002", json={
+        "max_age_seconds": 86400,
+        "interval_seconds": 3600,
+    })
+    rules = {r["channel_id"]: r for r in list_auto_delete_rules_for_guild(
+        fake_ctx.db_path, fake_ctx.guild_id
+    )}
+    assert bool(rules[3002]["media_only"]) is False
+
+    # Setting it persists, and the config payload surfaces it.
+    authed_client.put("/api/config/auto-delete/3002", json={
+        "max_age_seconds": 86400,
+        "interval_seconds": 3600,
+        "media_only": True,
+    })
+    config = authed_client.get("/api/config").json()
+    entry = next(e for e in config["auto_delete"] if e["channel_id"] == "3002")
+    assert entry["media_only"] is True
+
+
 # ── PUT /api/config/guess ──────────────────────────────────────────────
 
 
@@ -509,6 +520,24 @@ def test_update_guess_invalid_difficulty_returns_error(authed_client):
     data = resp.json()
     assert data["ok"] is False
     assert "crop_difficulty" in data["detail"]
+
+
+def test_update_guess_rate_limit_fields(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/guess",
+        json={
+            "submit_max_per_window": 2,
+            "submit_window_seconds": 600,
+            "max_guesses_per_round": 3,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "guess_submit_max_per_window", "5", fake_ctx.guild_id) == "2"
+        assert get_config_value(conn, "guess_submit_window_seconds", "3600", fake_ctx.guild_id) == "600"
+        assert get_config_value(conn, "guess_max_guesses_per_round", "5", fake_ctx.guild_id) == "3"
 
 
 # ── Multi-guild safety ───────────────────────────────────────────────
@@ -640,6 +669,90 @@ def test_update_birthday_rejects_empty_message(authed_client):
     assert resp.status_code == 400
 
 
+def test_get_config_includes_risky_section_defaults(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    r = resp.json()["risky"]
+    assert r["ping_role_id"] == "0"
+    assert r["min_game_seconds"] == 0
+    assert r["max_games_per_channel"] == 10
+
+
+def test_get_config_includes_pen_pals_timer_defaults(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    pp = resp.json()["pen_pals"]
+    assert pp["session_seconds"] == 86400
+    assert pp["match_cooldown_seconds"] == 2592000
+    assert pp["max_question_swaps"] == 3
+    assert pp["warn_seconds"] == 3600
+    assert pp["question_suppress_seconds"] == 7200
+
+
+def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 1800,
+            "match_cooldown_seconds": 86400,
+            "max_question_swaps": 1,
+            "warn_seconds": 300,
+            "question_suppress_seconds": 600,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    resp2 = authed_client.get("/api/config")
+    pp = resp2.json()["pen_pals"]
+    assert pp["session_seconds"] == 1800
+    assert pp["match_cooldown_seconds"] == 86400
+    assert pp["max_question_swaps"] == 1
+    assert pp["warn_seconds"] == 300
+    assert pp["question_suppress_seconds"] == 600
+
+
+def test_update_pen_pals_timers_rejects_invalid_session_seconds(authed_client):
+    resp = authed_client.put(
+        "/api/config/pen-pals/timers",
+        json={
+            "session_seconds": 0,
+            "match_cooldown_seconds": 0,
+            "max_question_swaps": 0,
+            "warn_seconds": 0,
+            "question_suppress_seconds": 0,
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_update_pen_pals_separations_persists_normalized(authed_client):
+    # Big snowflake-ish ids to confirm they round-trip as strings.
+    a, b = "1469000000000000123", "1469000000000000456"
+    resp = authed_client.put(
+        "/api/config/pen-pals/separations",
+        json={"separations": [{"user_a": b, "user_b": a}]},  # entered high→low
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["separations"] == [{"user_a": a, "user_b": b}]  # normalized low→high
+
+    # Sending an empty list clears them.
+    resp2 = authed_client.put("/api/config/pen-pals/separations", json={"separations": []})
+    assert resp2.status_code == 200
+    assert authed_client.get("/api/config").json()["pen_pals"]["separations"] == []
+
+
+def test_update_pen_pals_separations_rejects_self_pair(authed_client):
+    resp = authed_client.put(
+        "/api/config/pen-pals/separations",
+        json={"separations": [{"user_a": "42", "user_b": "42"}]},
+    )
+    assert resp.status_code == 400
+
+
 # ── /config/risky — in-memory state must be updated ──────────────────
 
 
@@ -649,15 +762,24 @@ def test_update_risky_persists_and_updates_in_memory_state(authed_client, fake_c
 
     rr_state.ping_roles.pop(fake_ctx.guild_id, None)
     rr_state.min_game_seconds.pop(fake_ctx.guild_id, None)
+    rr_state.max_games_per_channel.pop(fake_ctx.guild_id, None)
 
     resp = authed_client.put(
         "/api/config/risky",
-        json={"ping_role_id": "5555", "min_game_seconds": 90},
+        json={"ping_role_id": "5555", "min_game_seconds": 90, "max_games_per_channel": 4},
     )
     assert resp.status_code == 200
 
     assert rr_state.ping_roles[fake_ctx.guild_id] == 5555
     assert rr_state.min_game_seconds[fake_ctx.guild_id] == 90
+    assert rr_state.max_games_per_channel[fake_ctx.guild_id] == 4
+
+
+def test_update_risky_rejects_max_games_below_one(authed_client):
+    resp = authed_client.put(
+        "/api/config/risky", json={"max_games_per_channel": 0}
+    )
+    assert resp.status_code == 400
 
 
 def test_update_risky_zero_values_clear_in_memory_state(authed_client, fake_ctx):
@@ -736,6 +858,30 @@ def test_update_dms_persists_channels(authed_client, fake_ctx):
     )
     assert load_request_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1100
     assert load_audit_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1200
+
+
+def test_update_dms_persists_mode_roles(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/dms",
+        json={"open_role_id": "500", "ask_role_id": "0", "closed_role_id": "600"},
+    )
+    assert resp.status_code == 200
+
+    from bot_modules.services.dm_perms_service import get_dm_mode_role_ids
+    assert get_dm_mode_role_ids(fake_ctx.db_path, fake_ctx.guild_id) == {
+        "open": 500,
+        "ask": 0,
+        "closed": 600,
+    }
+
+    # Partial update: only one field changes, the rest are preserved.
+    resp = authed_client.put("/api/config/dms", json={"ask_role_id": "550"})
+    assert resp.status_code == 200
+    assert get_dm_mode_role_ids(fake_ctx.db_path, fake_ctx.guild_id) == {
+        "open": 500,
+        "ask": 550,
+        "closed": 600,
+    }
 
 
 # ── /config/confessions (PUT + block/unblock) ────────────────────────
@@ -888,10 +1034,9 @@ def test_dms_post_panel_503_when_guild_missing(authed_client, fake_ctx):
     assert resp.status_code == 503
 
 
-def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fake_ctx):
-    """Happy path: cog._ensure_panel(guild, channel_id, force_repost=True) is
-    awaited; the returned message_id is persisted via set_panel_settings; and
-    the cog's in-memory panel_settings dict is updated."""
+def _dms_panel_guild(fake_ctx, *, perms=None, channel=None):
+    """Build the bot/guild/channel mock scaffolding for post-panel tests."""
+    import discord
     from unittest.mock import AsyncMock, MagicMock
 
     cog = MagicMock()
@@ -900,11 +1045,30 @@ def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fak
 
     guild = MagicMock()
     guild.id = fake_ctx.guild_id
+    if channel is None:
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.name = "general"
+        channel.permissions_for = MagicMock(
+            return_value=perms
+            if perms is not None
+            else discord.Permissions(
+                view_channel=True, send_messages=True, embed_links=True
+            )
+        )
+    guild.get_channel = MagicMock(return_value=channel)
 
     bot = MagicMock()
     bot.get_cog = MagicMock(return_value=cog)
     bot.get_guild = MagicMock(return_value=guild)
     fake_ctx.bot = bot
+    return cog, guild
+
+
+def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fake_ctx):
+    """Happy path: cog._ensure_panel(guild, channel_id, force_repost=True) is
+    awaited; the returned message_id is persisted via set_panel_settings; and
+    the cog's in-memory panel_settings dict is updated."""
+    cog, guild = _dms_panel_guild(fake_ctx)
 
     resp = authed_client.post(
         "/api/config/dms/post-panel", json={"channel_id": "5000"}
@@ -922,6 +1086,53 @@ def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fak
     assert persisted is not None
     assert persisted["panel_channel_id"] == 5000
     assert persisted["panel_message_id"] == 88888
+
+
+def test_dms_post_panel_400_when_channel_not_text(authed_client, fake_ctx):
+    """get_channel returns a non-TextChannel (or None) → 400, no send."""
+    from unittest.mock import MagicMock
+
+    cog, guild = _dms_panel_guild(fake_ctx, channel=MagicMock())
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 400
+    cog._ensure_panel.assert_not_awaited()
+
+
+def test_dms_post_panel_400_names_missing_permissions(authed_client, fake_ctx):
+    """Bot lacks send/embed in the channel → 400 whose detail names the
+    missing permissions, and nothing is posted or persisted."""
+    import discord
+
+    cog, guild = _dms_panel_guild(
+        fake_ctx, perms=discord.Permissions(view_channel=True)
+    )
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "Send Messages" in detail
+    assert "Embed Links" in detail
+    assert "View Channel" not in detail
+    cog._ensure_panel.assert_not_awaited()
+    assert cog.panel_settings == {}
+
+
+def test_dms_post_panel_502_when_discord_rejects_send(authed_client, fake_ctx):
+    """Perms look fine but the actual send still fails (_ensure_panel → None):
+    the route must report an error instead of a false success."""
+    cog, guild = _dms_panel_guild(fake_ctx)
+    cog._ensure_panel.return_value = None
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 502
+    assert cog.panel_settings == {}
 
 
 # ── /config/booster-roles/post-panel happy + sync-swatches ───────────
@@ -1009,7 +1220,14 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
     bot.get_guild = MagicMock(return_value=guild)
     fake_ctx.bot = bot
 
-    resp = authed_client.get("/api/config/welcome/preview")
+    import discord
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "bot_modules.core.branding.resolve_accent_color",
+        new=AsyncMock(return_value=discord.Color(0x123456)),
+    ):
+        resp = authed_client.get("/api/config/welcome/preview")
     # 200 happy path; the route's build_*_embed helpers are exercised. If the
     # preview shape changes later, this is a useful regression bait.
     assert resp.status_code == 200

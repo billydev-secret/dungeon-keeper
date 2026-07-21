@@ -1,0 +1,25 @@
+#!/bin/sh
+# Post this commit's "Testing:" checklist (if it has one) as a QA card.
+#
+# Installed by scripts/hooks/install.sh into $(git rev-parse --git-common-dir)/hooks,
+# which every worktree shares -- so this resolves the *committing* worktree and
+# runs that tree's own copy of the script against that tree's history.
+#
+# Never fails a commit: every path exits 0.
+# Escape hatch: DK_NO_QUEUE_POST=1 git commit ...
+
+[ -n "$DK_NO_QUEUE_POST" ] && exit 0
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+script="$top/scripts/post_testing_docs.py"
+
+# An older checkout (or a worktree predating the script) simply does nothing.
+[ -f "$script" ] || exit 0
+[ -f "$top/.env" ] || exit 0
+
+sha=$(git rev-parse HEAD 2>/dev/null) || exit 0
+
+# Bounded so a network stall can never hold the commit open.
+timeout 90 python3 "$script" --commit "$sha" 2>&1 | sed 's/^/  /'
+
+exit 0

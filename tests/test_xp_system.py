@@ -7,6 +7,7 @@ import pytest
 from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_GRANT,
+    XP_SOURCE_REACTION_GIVEN,
     XP_SOURCE_REPLY,
     XP_SOURCE_TEXT,
     XP_SOURCE_VOICE,
@@ -176,3 +177,32 @@ def test_manual_grant_source_records_event(xp_conn):
     board = get_xp_leaderboard(xp_conn, guild_id=1, source=XP_SOURCE_GRANT, limit=5)
     assert award.awarded_xp == DEFAULT_XP_SETTINGS.manual_grant_xp
     assert [(e.user_id, e.xp) for e in board] == [(50, DEFAULT_XP_SETTINGS.manual_grant_xp)]
+
+
+def test_reaction_given_source_and_default():
+    assert XP_SOURCE_REACTION_GIVEN == "reaction_given"
+    assert DEFAULT_XP_SETTINGS.reaction_given_xp == 0.34
+
+
+def test_reaction_given_source_records_event(xp_conn):
+    record_xp_event(xp_conn, guild_id=1, user_id=60, source=XP_SOURCE_REACTION_GIVEN, amount=DEFAULT_XP_SETTINGS.reaction_given_xp, created_at=100.0)
+    board = get_xp_leaderboard(xp_conn, guild_id=1, source=XP_SOURCE_REACTION_GIVEN, limit=5)
+    assert [(e.user_id, e.xp) for e in board] == [(60, 0.34)]
+
+
+def test_load_xp_settings_reads_reaction_given_coeff(tmp_path):
+    from bot_modules.core.db_utils import open_db, set_config_value
+    from bot_modules.core.xp_system import load_xp_settings
+    from migrations import apply_migrations_sync
+
+    db_path = tmp_path / "test.db"
+    apply_migrations_sync(db_path)
+    with open_db(db_path) as conn:
+        set_config_value(conn, "xp_coeff_reaction_given_xp", "0.5", 7)
+    with open_db(db_path) as conn:
+        configured = load_xp_settings(conn, 7)
+        unconfigured = load_xp_settings(conn, 8)
+    assert configured.reaction_given_xp == 0.5
+    # Other fields keep defaults; other guilds keep the default coefficient.
+    assert configured.message_word_xp == DEFAULT_XP_SETTINGS.message_word_xp
+    assert unconfigured.reaction_given_xp == DEFAULT_XP_SETTINGS.reaction_given_xp

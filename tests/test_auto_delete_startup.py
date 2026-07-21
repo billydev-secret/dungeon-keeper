@@ -111,10 +111,18 @@ async def test_scan_drops_before_cutoff_when_tracking_enabled(tmp_path):
 
 
 class _FakeMessage:
-    def __init__(self, message_id: int, created_at: datetime, *, pinned: bool = False):
+    def __init__(
+        self,
+        message_id: int,
+        created_at: datetime,
+        *,
+        pinned: bool = False,
+        attachments: list[Any] | None = None,
+    ):
         self.id = message_id
         self.created_at = created_at
         self.pinned = pinned
+        self.attachments = attachments or []
 
     async def delete(self, *, delay: float | None = None, reason: str | None = None) -> None:
         pass
@@ -236,6 +244,42 @@ async def test_scan_skips_pinned_messages_when_tracking(tmp_path):
             conn, guild_id=42, channel_id=999, cutoff_ts=cutoff.timestamp() + 86400
         )
     assert tracked == []
+
+
+@pytest.mark.asyncio
+async def test_media_only_scan_ignores_text_messages(tmp_path):
+    """A media_only startup scan must delete/track only messages with
+    attachments — text-only messages are left untouched on both paths."""
+    db_path = tmp_path / "test.db"
+    with open_db(db_path) as conn:
+        init_auto_delete_tables(conn)
+
+    cutoff = datetime.now(timezone.utc)
+    # Eligible (older than cutoff): one media, one text-only.
+    media_old = _FakeMessage(1001, cutoff - timedelta(hours=1), attachments=[object()])
+    text_old = _FakeMessage(1002, cutoff - timedelta(hours=1))
+    # Downtime orphans (younger than cutoff): one media, one text-only.
+    media_young = _FakeMessage(1003, cutoff + timedelta(minutes=30), attachments=[object()])
+    text_young = _FakeMessage(1004, cutoff + timedelta(minutes=30))
+    channel = _FakeChannel([media_old, text_old, media_young, text_young])
+
+    await _scan_and_delete_channel_history(
+        channel,  # type: ignore[arg-type]
+        cutoff,
+        reason="test",
+        db_path=db_path,
+        guild_id=42,
+        media_only=True,
+    )
+
+    # Only the media message old enough to delete was bulk-deleted.
+    assert channel.bulk_deleted == [[1001]]
+    # Only the media orphan was tracked; the text orphan was ignored.
+    with open_db(db_path) as conn:
+        tracked = pop_due_auto_delete_message_ids(
+            conn, guild_id=42, channel_id=999, cutoff_ts=cutoff.timestamp() + 86400
+        )
+    assert [mid for mid, _ in tracked] == [1003]
 
 
 # ── run_startup_auto_delete runs channels in parallel ─────────────────

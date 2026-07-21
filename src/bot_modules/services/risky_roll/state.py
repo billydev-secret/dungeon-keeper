@@ -18,7 +18,13 @@ pending_questions: dict[str, PendingQuestionState] = {}
 posted_questions: dict[int, PostedQuestionState] = {}
 ping_roles: dict[int, int] = {}
 min_game_seconds: dict[int, int] = {}
+max_games_per_channel: dict[int, int] = {}
 auto_close_tasks: dict[str, asyncio.Task] = {}
+
+# user_id -> display name, captured when a player rolls so the roster embed can
+# print names instead of raw <@id> mentions (embeds don't resolve mentions for
+# members the viewer's client hasn't cached — mainly people who've left).
+display_names: dict[int, str] = {}
 
 _channel_locks: weakref.WeakValueDictionary[int, asyncio.Lock] = weakref.WeakValueDictionary()
 _game_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()

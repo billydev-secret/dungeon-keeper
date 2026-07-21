@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 
 if TYPE_CHECKING:
@@ -157,16 +158,19 @@ def _get_sites_with_detectors(
     ).fetchall()
 
 
-def _log_bump(conn: sqlite3.Connection, guild_id: int, site_name: str) -> None:
+def _log_bump(
+    conn: sqlite3.Connection, guild_id: int, site_name: str, user_id: int = 0
+) -> None:
     conn.execute(
         """
-        INSERT INTO bump_tracker_log (guild_id, site_name, bumped_at, notified)
-        VALUES (?, ?, ?, 0)
+        INSERT INTO bump_tracker_log (guild_id, site_name, bumped_at, notified, user_id)
+        VALUES (?, ?, ?, 0, ?)
         ON CONFLICT (guild_id, site_name) DO UPDATE SET
             bumped_at = excluded.bumped_at,
-            notified  = 0
+            notified  = 0,
+            user_id   = excluded.user_id
         """,
-        (guild_id, site_name, time.time()),
+        (guild_id, site_name, time.time(), user_id),
     )
 
 
@@ -220,10 +224,14 @@ class _SiteStatus:
         return max(0.0, remaining)
 
 
-def _build_widget_embed(statuses: list[_SiteStatus]) -> discord.Embed:
+def _build_widget_embed(
+    statuses: list[_SiteStatus], color: "discord.Color | None" = None
+) -> discord.Embed:
+    if color is None:
+        color = discord.Color.blurple()
     embed = discord.Embed(
         title="Bump Tracker",
-        color=discord.Color.blurple(),
+        color=color,
     )
     if not statuses:
         embed.description = "No sites configured. Add sites from the web dashboard."
@@ -343,7 +351,9 @@ async def _refresh_widget(
     if not isinstance(channel, discord.TextChannel):
         return
 
-    embed = _build_widget_embed(statuses)
+    guild = bot.get_guild(guild_id)
+    accent = await resolve_accent_color(db_path, guild) if guild else None
+    embed = _build_widget_embed(statuses, color=accent)
 
     # Edit in place when nothing new was posted to the channel — avoids
     # firing the unread-message indicator unnecessarily.
@@ -436,12 +446,14 @@ class BumpTrackerCog(commands.Cog):
         assert interaction.guild is not None
         guild_id = interaction.guild.id
 
+        invoker_id = interaction.user.id
+
         def _load():
             with open_db(self.ctx.db_path) as conn:
                 sites = [r["site_name"] for r in _list_sites(conn, guild_id)]
                 if name not in sites:
                     return None, None
-                _log_bump(conn, guild_id, name)
+                _log_bump(conn, guild_id, name, invoker_id)
                 cfg = _get_config(conn, guild_id)
                 logs = _get_all_logs(conn, guild_id)
                 return cfg, logs
@@ -455,6 +467,15 @@ class BumpTrackerCog(commands.Cog):
 
         await interaction.response.send_message(
             f"Logged bump for **{name}**. Timer reset!", ephemeral=True
+        )
+
+        # Quest hook: manual log path (mod-gated command). Interaction id is
+        # the stable per-bump occurrence key.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, guild_id, invoker_id, "bump",
+            occurrence=str(interaction.id),
         )
 
         if not cfg["channel_id"]:
@@ -498,7 +519,8 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        embed = _build_widget_embed(statuses)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        embed = _build_widget_embed(statuses, color=accent)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── on_message — auto-detect bumps ───────────────────────────────────
@@ -544,14 +566,31 @@ class BumpTrackerCog(commands.Cog):
         if matched_site is None:
             return
 
+        # Attribution: a listing bot's success message is its slash command's
+        # response, so interaction_metadata names the member who bumped. A
+        # detector matching a non-interaction message leaves 0 (unknown).
+        meta = message.interaction_metadata
+        bumper_id = meta.user.id if meta is not None else 0
+
         def _do_log():
             with open_db(self.ctx.db_path) as conn:
-                _log_bump(conn, guild_id, matched_site)  # type: ignore[arg-type]
+                _log_bump(conn, guild_id, matched_site, bumper_id)  # type: ignore[arg-type]
                 logs = _get_all_logs(conn, guild_id)
                 return logs
 
         log_rows = await asyncio.to_thread(_do_log)
-        log.info("bump_tracker: auto-detected bump for %r in guild %d", matched_site, guild_id)
+        log.info(
+            "bump_tracker: auto-detected bump for %r in guild %d (by %s)",
+            matched_site, guild_id, bumper_id or "unknown",
+        )
+
+        if bumper_id:
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                self.bot, guild_id, bumper_id, "bump",
+                occurrence=str(message.id),
+            )
 
         statuses = [
             _SiteStatus(

@@ -86,8 +86,14 @@ def build_acceptance_embed(
     return embed
 
 
-def build_denial_embed_for_view(*, type_label: str, reason: str) -> discord.Embed:
-    """Embed that replaces the buttons on the target's DM when they deny."""
+def build_denial_embed_for_view(
+    *, type_label: str, reason: str, reply: str = ""
+) -> discord.Embed:
+    """Embed that replaces the buttons on the target's DM when they deny.
+
+    When the denier chose "Deny with reply", ``reply`` is echoed back so they
+    can see the note they sent to the requester.
+    """
     embed = discord.Embed(
         title="❌ Request declined",
         description="No worries — the request was turned down.",
@@ -95,6 +101,8 @@ def build_denial_embed_for_view(*, type_label: str, reason: str) -> discord.Embe
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    if reply:
+        embed.add_field(name="Your reply", value=safe_field_text(reply), inline=False)
     return embed
 
 
@@ -104,11 +112,13 @@ def build_denial_embed_for_requester(
     guild_name: str,
     type_label: str,
     reason: str,
+    reply: str = "",
 ) -> discord.Embed:
     """Embed DM'd back to the requester when their request is denied.
 
     ``type_label`` is the human-readable label (e.g. "Direct Message");
-    the description lowercases it for the natural-language sentence.
+    the description lowercases it for the natural-language sentence. When the
+    denier included a ``reply``, it is shown as a message from them.
     """
     embed = discord.Embed(
         title="❌ Request declined",
@@ -121,6 +131,12 @@ def build_denial_embed_for_requester(
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    if reply:
+        embed.add_field(
+            name=f"Reply from {target_display_name}",
+            value=safe_field_text(reply),
+            inline=False,
+        )
     return embed
 
 
@@ -132,15 +148,18 @@ def build_request_dm_embed(
     request_timeout_label: str,
     type_label: str,
     reason: str,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed delivered to the target's DMs — this is the actual request prompt."""
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
         title="📨 Someone wants to connect with you",
         description=(
             f"A member of **{guild_name}** would like to connect.\n\n"
             f"This request expires in {request_timeout_label}."
         ),
-        color=DM_PRIMARY,
+        color=color,
     )
     embed.set_author(name=requester_display_name, icon_url=requester_avatar_url)
     embed.set_footer(
@@ -158,8 +177,11 @@ def build_request_sent_embed(
     request_timeout_label: str,
     type_label: str,
     reason: str,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed DM'd back to the requester confirming delivery of their request."""
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
         title="📨 Request sent!",
         description=(
@@ -168,7 +190,7 @@ def build_request_sent_embed(
             f"You'll get a DM when they respond. "
             f"The request expires in {request_timeout_label}."
         ),
-        color=DM_PRIMARY,
+        color=color,
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
@@ -219,12 +241,17 @@ def build_revoked_embed(
     return embed
 
 
-def build_dm_help_embed(guild_icon_url: Optional[str]) -> discord.Embed:
+def build_dm_help_embed(
+    guild_icon_url: Optional[str],
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
     """Embed shown by ``/dm_help`` — a static overview of the DM-perm system."""
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
         title="📬 DM Request System",
         description="Control how users may request DM access with you.",
-        color=DM_PRIMARY,
+        color=color,
     )
     if guild_icon_url:
         embed.set_thumbnail(url=guild_icon_url)
@@ -258,15 +285,20 @@ def build_dm_help_embed(guild_icon_url: Optional[str]) -> discord.Embed:
     return embed
 
 
-def build_mode_updated_embed(mode: str) -> discord.Embed:
+def build_mode_updated_embed(
+    mode: str,
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
     """Embed confirming a member's DM mode change.
 
     ``mode`` is expected to be one of "open", "ask", "closed". Upper-
     casing it keeps the visual consistent with the role names without
     requiring a separate label table.
     """
+    if color is None:
+        color = discord.Color(DM_PRIMARY)
     return discord.Embed(
         title="DM preference updated",
         description=f"You're now set to **{mode.upper()}**.",
-        color=DM_PRIMARY,
+        color=color,
     )

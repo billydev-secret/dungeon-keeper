@@ -17,6 +17,15 @@ ROLE_DM_ASK = "DMs: Ask"
 ROLE_DM_CLOSED = "DMs: Closed"
 DM_ROLE_NAMES = (ROLE_DM_OPEN, ROLE_DM_ASK, ROLE_DM_CLOSED)
 
+# Canonical mode keys and their default (bot-created) role names. Guilds can
+# remap any mode to a pre-existing role via ``set_dm_mode_role_ids``; the
+# name-based defaults stay as a fallback so unconfigured guilds keep working.
+DM_MODE_ROLE_NAMES = {
+    "open": ROLE_DM_OPEN,
+    "ask": ROLE_DM_ASK,
+    "closed": ROLE_DM_CLOSED,
+}
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -38,13 +47,40 @@ def relationship_key(a: int, b: int) -> str:
     return f"{lo}-{hi}"
 
 
-def resolve_mode(member: discord.Member) -> str:
+def resolve_mode(
+    member: discord.Member, role_ids: Optional[dict[str, int]] = None
+) -> str:
+    """Return a member's DM mode ("open" / "ask" / "closed").
+
+    ``role_ids`` is the guild's configured mode→role-id mapping (from
+    ``get_dm_mode_role_ids``). Configured IDs are checked alongside the
+    default role names so a guild mid-migration (or with stale default
+    roles still assigned) resolves sensibly. Open beats closed; no match
+    means "ask".
+    """
+    ids = {r.id for r in member.roles}
     names = {r.name for r in member.roles}
-    if ROLE_DM_OPEN in names:
+    role_ids = role_ids or {}
+    if role_ids.get("open") in ids or ROLE_DM_OPEN in names:
         return "open"
-    if ROLE_DM_CLOSED in names:
+    if role_ids.get("closed") in ids or ROLE_DM_CLOSED in names:
         return "closed"
     return "ask"
+
+
+def is_dm_mode_role(
+    role: discord.Role, role_ids: Optional[dict[str, int]] = None
+) -> bool:
+    """True if ``role`` is one of the guild's DM-mode roles.
+
+    Matches either the default bot-created names or the guild's configured
+    role IDs (``role_ids`` as returned by ``get_dm_mode_role_ids``).
+    """
+    if role.name in DM_ROLE_NAMES:
+        return True
+    if role_ids:
+        return role.id in {rid for rid in role_ids.values() if rid}
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +137,14 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             guild_id INTEGER PRIMARY KEY,
             panel_channel_id INTEGER,
             panel_message_id INTEGER
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dm_mode_roles (
+            guild_id INTEGER PRIMARY KEY,
+            open_role_id INTEGER NOT NULL DEFAULT 0,
+            ask_role_id INTEGER NOT NULL DEFAULT 0,
+            closed_role_id INTEGER NOT NULL DEFAULT 0
         )
     """)
     conn.execute("""
@@ -412,11 +456,15 @@ def get_dms_config_with_conn(conn: sqlite3.Connection, guild_id: int) -> dict[st
         "SELECT panel_channel_id, panel_message_id FROM dm_panel_settings WHERE guild_id = ?",
         (guild_id,),
     ).fetchone()
+    mode_roles = get_dm_mode_role_ids_with_conn(conn, guild_id)
     return {
         "request_channel_id": int(req["channel_id"]) if req else 0,
         "audit_channel_id": int(aud["channel_id"]) if aud else 0,
         "panel_channel_id": int(pan["panel_channel_id"]) if pan and pan["panel_channel_id"] else 0,
         "panel_message_id": int(pan["panel_message_id"]) if pan and pan["panel_message_id"] else 0,
+        "open_role_id": mode_roles["open"],
+        "ask_role_id": mode_roles["ask"],
+        "closed_role_id": mode_roles["closed"],
     }
 
 
@@ -436,6 +484,72 @@ def set_panel_settings(
                 panel_channel_id=excluded.panel_channel_id,
                 panel_message_id=excluded.panel_message_id
         """, (guild_id, panel_channel_id, panel_message_id))
+
+
+# ---------------------------------------------------------------------------
+# Mode-role overrides
+# ---------------------------------------------------------------------------
+
+def get_dm_mode_role_ids_with_conn(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[str, int]:
+    """Return {"open": id, "ask": id, "closed": id} (0 = use the default role)."""
+    try:
+        row = conn.execute(
+            "SELECT open_role_id, ask_role_id, closed_role_id "
+            "FROM dm_mode_roles WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        # Table not created yet (caller ran before the DM cog's init_db).
+        row = None
+    if not row:
+        return {"open": 0, "ask": 0, "closed": 0}
+    return {
+        "open": int(row["open_role_id"] or 0),
+        "ask": int(row["ask_role_id"] or 0),
+        "closed": int(row["closed_role_id"] or 0),
+    }
+
+
+def get_dm_mode_role_ids(db_path: Path, guild_id: int) -> dict[str, int]:
+    with open_db(db_path) as conn:
+        return get_dm_mode_role_ids_with_conn(conn, guild_id)
+
+
+def load_dm_mode_roles(db_path: Path) -> dict[int, dict[str, int]]:
+    """Returns {guild_id: {"open": id, "ask": id, "closed": id}} for all guilds."""
+    with open_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT guild_id, open_role_id, ask_role_id, closed_role_id FROM dm_mode_roles"
+        ).fetchall()
+    return {
+        int(r["guild_id"]): {
+            "open": int(r["open_role_id"] or 0),
+            "ask": int(r["ask_role_id"] or 0),
+            "closed": int(r["closed_role_id"] or 0),
+        }
+        for r in rows
+    }
+
+
+def set_dm_mode_role_ids(
+    db_path: Path,
+    guild_id: int,
+    *,
+    open_role_id: int,
+    ask_role_id: int,
+    closed_role_id: int,
+) -> None:
+    with open_db(db_path) as conn:
+        conn.execute("""
+            INSERT INTO dm_mode_roles (guild_id, open_role_id, ask_role_id, closed_role_id)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(guild_id) DO UPDATE SET
+                open_role_id=excluded.open_role_id,
+                ask_role_id=excluded.ask_role_id,
+                closed_role_id=excluded.closed_role_id
+        """, (guild_id, open_role_id, ask_role_id, closed_role_id))
 
 
 # ---------------------------------------------------------------------------
@@ -485,29 +599,39 @@ def get_audit_log(
 # DM role management
 # ---------------------------------------------------------------------------
 
-async def ensure_dm_roles(guild: discord.Guild) -> dict[str, discord.Role]:
-    """Return (creating if absent) the three DM-mode roles."""
+async def ensure_dm_roles(
+    guild: discord.Guild, role_ids: Optional[dict[str, int]] = None
+) -> dict[str, discord.Role]:
+    """Return the three DM-mode roles, keyed by mode ("open"/"ask"/"closed").
+
+    A mode with a configured role ID (``role_ids``) that resolves to an
+    existing guild role uses that role. Otherwise it falls back to the
+    default-named role, creating it if absent.
+    """
+    role_ids = role_ids or {}
     roles: dict[str, discord.Role] = {}
-    for name in DM_ROLE_NAMES:
-        role = discord.utils.get(guild.roles, name=name)
+    for mode, name in DM_MODE_ROLE_NAMES.items():
+        role: Optional[discord.Role] = None
+        configured_id = role_ids.get(mode) or 0
+        if configured_id:
+            role = guild.get_role(configured_id)
+        if role is None:
+            role = discord.utils.get(guild.roles, name=name)
         if role is None:
             role = await guild.create_role(name=name, reason="DM permission system")
-        roles[name] = role
+        roles[mode] = role
     return roles
 
 
-async def set_member_dm_mode(member: discord.Member, mode: str) -> None:
+async def set_member_dm_mode(
+    member: discord.Member, mode: str, role_ids: Optional[dict[str, int]] = None
+) -> None:
     """Assign exactly one DM-mode role, removing the others."""
-    target_name = {
-        "open": ROLE_DM_OPEN,
-        "ask": ROLE_DM_ASK,
-        "closed": ROLE_DM_CLOSED,
-    }.get(mode)
-    if target_name is None:
+    if mode not in DM_MODE_ROLE_NAMES:
         return
-    roles = await ensure_dm_roles(member.guild)
-    to_remove = [r for name, r in roles.items() if name != target_name and r in member.roles]
-    to_add = roles[target_name]
+    roles = await ensure_dm_roles(member.guild, role_ids)
+    to_remove = [r for m, r in roles.items() if m != mode and r in member.roles]
+    to_add = roles[mode]
     if to_remove:
         await member.remove_roles(*to_remove, reason="DM mode change")
     if to_add not in member.roles:
@@ -518,23 +642,29 @@ async def set_member_dm_mode(member: discord.Member, mode: str) -> None:
 # Panel embed
 # ---------------------------------------------------------------------------
 
-def build_panel_embed() -> discord.Embed:
+def build_panel_embed(
+    color: "discord.Color | None" = None,
+    role_names: Optional[dict[str, str]] = None,
+) -> discord.Embed:
+    if color is None:
+        color = discord.Color.blurple()
+    names = {**DM_MODE_ROLE_NAMES, **(role_names or {})}
     embed = discord.Embed(
         title="📬 DM Request System",
         description=(
             "Want to reach out to someone privately? Use the button below to send them a request first.\n\n"
             "Requests are delivered straight to their DMs — nothing gets posted publicly here."
         ),
-        color=discord.Color.blurple(),
+        color=color,
     )
     embed.add_field(
         name="👤 DM Status Roles",
         value=(
             "Every member has a status that controls who can reach them. "
             "You can see someone's preference right on their profile as a role:\n\n"
-            "🟢 **DMs: Open** — Anyone can message them freely\n"
-            "🟡 **DMs: Ask** — They want to approve requests first\n"
-            "🔴 **DMs: Closed** — Not accepting requests right now\n\n"
+            f"🟢 **{names['open']}** — Anyone can message them freely\n"
+            f"🟡 **{names['ask']}** — They want to approve requests first\n"
+            f"🔴 **{names['closed']}** — Not accepting requests right now\n\n"
             "Set your own preference with `/dm_set_mode`."
         ),
         inline=False,
@@ -573,19 +703,22 @@ async def post_audit_event(
     guild: discord.Guild,
     audit_channel_id: Optional[int],
     message: str,
+    color: "discord.Color | None" = None,
 ) -> None:
     if not audit_channel_id:
         return
     channel = guild.get_channel(audit_channel_id)
     if not isinstance(channel, discord.TextChannel):
         return
+    if color is None:
+        color = discord.Color.blurple()
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%d %H:%M:%S UTC"
     )
     embed = discord.Embed(
         title="📜 DM Permission Audit",
         description=message,
-        color=discord.Color.blurple(),
+        color=color,
     )
     embed.set_footer(text=timestamp)
     try:

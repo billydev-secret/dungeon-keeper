@@ -2,7 +2,7 @@
 
 A consent gate for Discord DMs **within this community**. Every member carries one of three "DM mode" roles (Open / Ask / Closed). When someone wants to contact an Ask-mode member, they open a request via a persistent server panel; the target gets a DM with Accept / Deny buttons. Accept records a **bidirectional consent pair**, both sides get a confirmation DM, and either side can revoke at any time. Every state transition writes to an audit log and optionally fan-outs to a mod-visible audit channel.
 
-This is **not** a Discord-friend system — it lives entirely inside the bot. The only Discord-side artefacts are role assignments and the DM messages carrying the buttons.
+This is **not** a Discord-friend system — it lives entirely inside the bot. The only Discord-side artifacts are role assignments and the DM messages carrying the buttons.
 
 ## Commands
 
@@ -18,7 +18,7 @@ This is **not** a Discord-friend system — it lives entirely inside the bot. Th
 | Post panel | Web (dashboard) | Admin | Force-(re)post the panel into a chosen channel |
 | DM audit log | Web (dashboard) | Admin | Paginated audit-log browser with optional action/type filters |
 
-## Behaviour
+## Behavior
 
 ### The three DM modes
 - **Open** — anyone can DM. No request needed.
@@ -54,7 +54,7 @@ If the bot has been removed from the guild between the request being sent and th
 The panel auto-bumps to the bottom of its channel on any new message there, debounced to one bump per **2 seconds** per guild to avoid thrashing during busy periods.
 
 ### Revoke
-Either party can `/dm_revoke` the other. The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM. The audit log records `relationship_revoked` with the actor's name.
+Either party can `/dm_revoke` the other. The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM; the invoker's slash-command confirmation is ephemeral, so nothing about the revoke is visible in the channel. The audit log records `relationship_revoked` with the actor's name.
 
 ### Status check
 `/dm_status` is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when.
@@ -110,7 +110,7 @@ Per-guild settings an admin chooses via the dashboard:
 
 The panel message id is bot-managed (written when the panel is posted or bumped) and not user-editable.
 
-Built-in behavioural constants (not user-tunable): pending requests expire after 24 hours, the expiry sweep runs hourly, requesters cap at 5 simultaneous pending requests, reason fields cap at 250 characters, and the panel-bump debounce is 2 seconds per guild.
+Built-in behavioral constants (not user-tunable): pending requests expire after 24 hours, the expiry sweep runs hourly, requesters cap at 5 simultaneous pending requests, reason fields cap at 250 characters, and the panel-bump debounce is 2 seconds per guild.
 
 ## Stored data
 

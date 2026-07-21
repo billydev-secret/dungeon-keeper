@@ -334,3 +334,40 @@ def test_full_lobby_flow_four_players():
     # Serialize for end-game payload
     serialized = serialize_assignments(out)
     assert set(serialized.keys()) == {"1", "2", "3", "4"}
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_mfk_cog as mfk_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from tests.fakes import FakeUser, fake_interaction  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_close_assign_pays_pool(monkeypatch, sync_db_path):
+    """Assigning roles pays everyone who joined the pool."""
+    spy = AsyncMock()
+    monkeypatch.setattr(mfk_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "mfk", payload={"participants": [1, 2, 3, 4]})
+    view = mfk_cog.MFKView(gid, 1, bot.games_db, bot)  # type: ignore[arg-type]
+    interaction = fake_interaction(user=FakeUser(id=1))
+    interaction.guild = None
+    await view.close_assign.callback(interaction)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3, 4]
+    assert call.kwargs["bot"] is bot

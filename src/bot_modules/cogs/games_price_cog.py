@@ -15,27 +15,36 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
     get_game_payload,
+    get_game_options,
     end_game,
     update_session,
     is_game_expired,
-    ConfirmCloseView,
     resolve_name,
+    channel_name,
 )
-from bot_modules.games.utils.question_source import get_price_scenario, has_matching_questions
+from bot_modules.games.utils.question_source import get_price_scenario, channel_allows_nsfw
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.utils.timer import GameTimer
 from bot_modules.games_price.embeds import (
@@ -99,7 +108,7 @@ class PriceModal(discord.ui.Modal, title="Name Your Price"):
         log.info(
             "%s submitted price modal in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         amount = parse_price(self.price.value)
         if amount is None:
@@ -144,7 +153,7 @@ class HostScenarioModal(discord.ui.Modal, title="Write a Scenario"):
         log.info(
             "%s submitted scenario modal in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         self._result = self.scenario.value.strip()
         await interaction.response.send_message("✅ Scenario submitted!", ephemeral=True, delete_after=5)
@@ -186,7 +195,7 @@ class AddRoundsModal(discord.ui.Modal, title="Add Rounds"):
 
         # Update view if tracked
         view = self._cog.bot.active_views.get(self._game_id)
-        if view and hasattr(view, "total_rounds"):
+        if isinstance(view, (PriceGameView, PriceVoteView)):
             view.total_rounds += n
 
         await interaction.response.send_message(
@@ -207,9 +216,12 @@ class ReasonableSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: PriceVoteView = self.view
+        view = cast("PriceVoteView", self.view)
         uid = interaction.user.id
         target = int(self.values[0])
+        if uid == target:
+            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            return
         changed = uid in view.reasonable_votes
         view.reasonable_votes[uid] = target
         target_name = resolve_name(interaction.guild, target)
@@ -232,9 +244,12 @@ class UnhingedSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: PriceVoteView = self.view
+        view = cast("PriceVoteView", self.view)
         uid = interaction.user.id
         target = int(self.values[0])
+        if uid == target:
+            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            return
         changed = uid in view.unhinged_votes
         view.unhinged_votes[uid] = target
         target_name = resolve_name(interaction.guild, target)
@@ -262,7 +277,7 @@ class HostWriteView(discord.ui.View):
         button.disabled = True
         try:
             await interaction.edit_original_response(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
 
 
@@ -284,7 +299,7 @@ class PlayerWriteView(discord.ui.View):
         button.disabled = True
         try:
             await interaction.edit_original_response(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
 
 
@@ -304,6 +319,7 @@ class PriceGameView(discord.ui.View):
         bot,
         cog: "PriceCog",
         expected_players: int | None = None,
+        accent: discord.Color | None = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -317,6 +333,9 @@ class PriceGameView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self.expected_players = expected_players
+        # Guild accent resolved once at view creation and reused on every
+        # refresh — never re-resolve per modal submit / per embed refresh.
+        self.accent = accent
         self.prices: dict[int, int] = {}
         self._msg: discord.Message | None = None
         self._timer: GameTimer | None = None
@@ -325,7 +344,7 @@ class PriceGameView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -339,6 +358,7 @@ class PriceGameView(discord.ui.View):
             self._timer.remaining if self._timer else self.timer_secs,
             len(self.prices),
             self.expected_players,
+            color=self.accent,
         )
 
     async def refresh_embed(self):
@@ -354,15 +374,15 @@ class PriceGameView(discord.ui.View):
 
     @discord.ui.button(label="💵 Name Your Price", style=discord.ButtonStyle.success, custom_id="price_submit", row=0)
     async def submit_price(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
         await interaction.response.send_modal(PriceModal(self))
 
-    @discord.ui.button(label="⏭️ Skip Round", style=discord.ButtonStyle.secondary, custom_id="price_skip", row=1)
+    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="price_skip", row=1)
     async def skip_round(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
@@ -371,33 +391,15 @@ class PriceGameView(discord.ui.View):
 
     @discord.ui.button(label="➕ Add Rounds", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
     async def add_rounds(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can add rounds.", ephemeral=True)
             return
         await interaction.response.send_modal(AddRoundsModal(self.cog, self.game_id))
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="price_close", row=2)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = self._msg
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            if self._timer:
-                self._timer.cancel()
-            await self.cog._end_game(self.game_id, game_msg=game_msg, channel=channel)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=2)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["price"], ephemeral=True)
 
 
@@ -473,23 +475,23 @@ class PriceRecapView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="🔁 Run Again", style=discord.ButtonStyle.primary, custom_id="price_run_again")
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
         # Disable buttons on old recap
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
+        assert interaction.message  # component interactions always carry their message
         try:
             await interaction.message.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         self.stop()
         await interaction.response.defer()
@@ -508,7 +510,7 @@ class PriceRecapView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Hand Off", style=discord.ButtonStyle.secondary, custom_id="price_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
@@ -516,11 +518,11 @@ class PriceRecapView(discord.ui.View):
             "Type the **/price** command to start a new game as the new host!",
             ephemeral=True,
         )
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
+        assert interaction.message  # component interactions always carry their message
         try:
             await interaction.message.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         self.stop()
 
@@ -528,12 +530,28 @@ class PriceRecapView(discord.ui.View):
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class PriceCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
     def db(self):
         return self.bot.games_db
+
+    async def _resolve_accent(self, guild) -> discord.Color | None:
+        """Resolve the guild accent once at game start; ``None`` on any miss.
+
+        Falls back to ``None`` (embeds then use their PHASE_* fallback) when
+        there is no guild, no ``bot.ctx``, or accent resolution raises — never
+        crash the round loop over branding.
+        """
+        ctx = getattr(self.bot, "ctx", None)
+        if guild is None or ctx is None:
+            return None
+        try:
+            return await resolve_accent_color(ctx.db_path, guild)
+        except Exception as e:  # branding must never break the game
+            log.debug("price: accent resolution failed: %s", e)
+            return None
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the round loop from the next un-played round after a restart.
@@ -562,15 +580,16 @@ class PriceCog(commands.Cog):
 
         try:
             await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
+        accent = await self._resolve_accent(guild)
         if start_round > total_rounds:
-            asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings))
+            asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings, accent=accent))
         else:
             asyncio.create_task(self._run_round(
                 game_id=game_id, host_id=host_id, host_name=host_name,
                 channel=channel, guild=guild, round_num=start_round,
-                settings=settings, msg=message,
+                settings=settings, msg=message, accent=accent,
             ))
         log.info(
             "Recovering price game %s (resuming at round %d) in #%s",
@@ -580,7 +599,7 @@ class PriceCog(commands.Cog):
 
     async def _advance_round(
         self, game_id, host_id, host_name, channel, guild, round_num, settings, msg,
-        *, pre_round_delay: int = 0,
+        *, pre_round_delay: int = 0, accent: discord.Color | None = None,
     ):
         """Finish round_num: checkpoint scores, then go to the next round / recap.
 
@@ -597,19 +616,15 @@ class PriceCog(commands.Cog):
         if round_num < total_rounds:
             if pre_round_delay:
                 await asyncio.sleep(pre_round_delay)
-            await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
+            await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg, accent=accent)
         else:
-            await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+            await self._show_recap(game_id, host_id, host_name, channel, guild, settings, accent=accent)
 
     # ── Slash command ────────────────────────────────────────────────
 
     @app_commands.command(name="price", description="Start a Name Your Price game!")
     @app_commands.describe(
-        rounds="Number of rounds (1-20, default 5)",
-        timer="Seconds for price submission per round (default 30)",
-        vote_timer="Seconds for voting per round (default 20)",
         source="Where scenarios come from",
-        tags="Comma-separated tags to filter the bank when source uses it (include 'nsfw' to allow NSFW)",
     )
     @app_commands.choices(
         source=[
@@ -623,16 +638,12 @@ class PriceCog(commands.Cog):
     async def price_cmd(
         self,
         interaction: discord.Interaction,
-        rounds: int = 5,
-        timer: int = 30,
-        vote_timer: int = 20,
         source: str = "host",
-        tags: str = "",
     ):
         log.info(
             "%s used /games play price in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
@@ -644,31 +655,15 @@ class PriceCog(commands.Cog):
             await interaction.response.send_message("Name Your Price is currently disabled on this server.", ephemeral=True)
             return
 
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and source == "bank" and not await has_matching_questions(self.db, "price", tag_list):
-            await interaction.response.send_message(
-                f"No scenarios match tags: {', '.join(tag_list)} for this game.",
-                ephemeral=True,
-            )
-            return
-
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"rounds": rounds, "timer": timer, "vote_timer": vote_timer, "source": source, "tags": tag_list},
+            options={"source": source},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -680,9 +675,12 @@ class PriceCog(commands.Cog):
         options: dict,
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
-        rounds = max(1, min(int(options.get("rounds", 5)), 20))
-        timer = max(10, min(int(options.get("timer", 30)), 120))
-        vote_timer = max(10, min(int(options.get("vote_timer", 20)), 60))
+        # Pacing knobs come from the per-server dashboard config; an explicit
+        # *options* value (e.g. from a saved schedule) still wins.
+        game_opts = await get_game_options(self.db, "price", guild_id)
+        rounds = max(1, min(int(options.get("rounds", game_opts.get("rounds", 5))), 20))
+        timer = max(10, min(int(options.get("timer", game_opts.get("timer", 30))), 120))
+        vote_timer = max(10, min(int(options.get("vote_timer", game_opts.get("vote_timer", 20))), 60))
         source = options.get("source", "host")
         guild = getattr(channel, "guild", None)
 
@@ -709,7 +707,10 @@ class PriceCog(commands.Cog):
         )
         log.info("Game %s (price) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        embed = build_start_embed(host_name, 1, rounds)
+        # Resolve the guild accent once for the whole game; threaded into every
+        # non-winner embed builder below. Never re-resolved per round/guess.
+        accent = await self._resolve_accent(guild)
+        embed = build_start_embed(host_name, 1, rounds, color=accent)
         try:
             msg = await channel.send(embed=embed)
         except discord.Forbidden:
@@ -730,6 +731,7 @@ class PriceCog(commands.Cog):
             round_num=1,
             settings=settings,
             msg=msg,
+            accent=accent,
         ))
         return game_id
 
@@ -750,11 +752,11 @@ class PriceCog(commands.Cog):
             return await self._ai_scenario()
 
         if source == "bank":
-            return await get_price_scenario(self.db, tags=tags)
+            return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
         if source == "both":
             if random.random() < 0.5:
-                result = await get_price_scenario(self.db, tags=tags)
+                result = await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
                 if result:
                     return result
             return await self._ai_scenario()
@@ -786,12 +788,12 @@ class PriceCog(commands.Cog):
         # Clean up prompt message
         try:
             await prompt_msg.delete()
-        except Exception:
+        except discord.HTTPException:
             pass
 
         if not result:
             log.info("Host scenario timed out, falling back to question bank")
-            return await get_price_scenario(self.db, tags=tags)
+            return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
         return result
 
@@ -811,12 +813,12 @@ class PriceCog(commands.Cog):
 
         try:
             await prompt_msg.delete()
-        except Exception:
+        except discord.HTTPException:
             pass
 
         if not result:
             log.info("Player scenario timed out, falling back to question bank")
-            return await get_price_scenario(self.db, tags=tags)
+            return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
         return result
 
@@ -830,6 +832,7 @@ class PriceCog(commands.Cog):
         round_num: int,
         settings: dict,
         msg: discord.Message,
+        accent: discord.Color | None = None,
     ):
         """Execute one full round: scenario → submit → reveal → vote → results."""
         # Check if game still exists
@@ -843,16 +846,19 @@ class PriceCog(commands.Cog):
         scenario = await self._get_scenario(settings, host_id, channel, msg)
         if not scenario:
             # Fall back to question bank, then AI as last resort
-            scenario = await get_price_scenario(self.db, tags=settings.get("tags") or None)
+            scenario = await get_price_scenario(
+                self.db, tags=settings.get("tags") or None,
+                allow_nsfw=channel_allows_nsfw(channel),
+            )
         if not scenario:
             scenario = await self._ai_scenario()
         if not scenario:
             try:
                 await channel.send("❌ Couldn't generate a scenario. Skipping round.")
-            except Exception:
+            except discord.HTTPException:
                 pass
             # Advance to next round or end
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=2)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=2, accent=accent)
             return
 
         # ── Submission phase ──
@@ -867,6 +873,7 @@ class PriceCog(commands.Cog):
             db=self.db,
             bot=self.bot,
             cog=self,
+            accent=accent,
         )
         self.bot.active_views[game_id] = game_view
 
@@ -901,11 +908,10 @@ class PriceCog(commands.Cog):
 
         # Disable submission view
         game_view._closed = True
-        for item in game_view.children:
-            item.disabled = True
+        disable_all_items(game_view)
         try:
             await msg.edit(view=game_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         prices = dict(game_view.prices)
@@ -925,28 +931,28 @@ class PriceCog(commands.Cog):
         if len(prices) == 0:
             try:
                 await channel.send("Nobody submitted a price this round. Moving on...")
-            except Exception:
+            except discord.HTTPException:
                 pass
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3, accent=accent)
             return
 
         # ── Reveal phase ──
         ladder = build_ladder(prices)
         named_ladder = [(resolve_name(guild, uid), amt) for uid, amt in ladder]
-        reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder)
+        reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder, color=accent)
 
         try:
             await msg.edit(embed=reveal_embed, view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         if len(prices) == 1:
             try:
                 await channel.send("Only one price submitted — skipping the vote.")
-            except Exception:
+            except discord.HTTPException:
                 pass
             await asyncio.sleep(3)
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
             return
 
         # 5s pause for reactions
@@ -972,13 +978,13 @@ class PriceCog(commands.Cog):
         )
         self.bot.active_views[game_id] = vote_view
 
-        vote_embed = build_vote_embed(host_name, scenario, round_num, total_rounds, settings["vote_timer"])
+        vote_embed = build_vote_embed(host_name, scenario, round_num, total_rounds, settings["vote_timer"], color=accent)
         try:
             vote_msg = await channel.send(embed=vote_embed, view=vote_view)
             vote_view._msg = vote_msg
         except Exception:
             # Can't send vote view — skip voting
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
             return
 
         vote_done = asyncio.Event()
@@ -996,13 +1002,16 @@ class PriceCog(commands.Cog):
         await vote_timer.start()
         await vote_done.wait()
 
+        # Bail if the game was force-ended (e.g. /games end) while voting.
+        if game_id not in self.bot.active_views:
+            return
+
         # Disable vote view
         vote_view._closed = True
-        for item in vote_view.children:
-            item.disabled = True
+        disable_all_items(vote_view)
         try:
             await vote_msg.edit(view=vote_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # ── Tally votes ──
@@ -1050,16 +1059,16 @@ class PriceCog(commands.Cog):
         )
         try:
             await vote_msg.edit(embed=results_embed, view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # ── Next round or recap ──
         await asyncio.sleep(5)
-        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
+        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
 
     # ── Recap ────────────────────────────────────────────────────────
 
-    async def _show_recap(self, game_id: str, host_id: int, host_name: str, channel, guild, settings: dict):
+    async def _show_recap(self, game_id: str, host_id: int, host_name: str, channel, guild, settings: dict, accent: discord.Color | None = None):
         payload = await get_game_payload(self.db, game_id)
         rounds_data = payload.get("rounds", {})
         scores = payload.get("scores", {"reasonable_wins": {}, "unhinged_wins": {}})
@@ -1084,12 +1093,15 @@ class PriceCog(commands.Cog):
                 f"{format_price(lo)} to {format_price(hi_amt)}"
             )
 
-        recap_embed = build_recap_embed(host_name, rounds_played, len(all_players), awards, highlight)
+        recap_embed = build_recap_embed(host_name, rounds_played, len(all_players), awards, highlight, color=accent)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, recap_embed, guild.id, "price")
         recap_view = PriceRecapView(game_id, host_id, self, settings)
 
         try:
             await channel.send(embed=recap_embed, view=recap_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # End the game
@@ -1099,6 +1111,7 @@ class PriceCog(commands.Cog):
             player_count=len(all_players),
             round_count=rounds_played,
             payload=payload,
+            bot=self.bot, player_ids=list(all_players),
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
@@ -1117,13 +1130,13 @@ class PriceCog(commands.Cog):
                 )
                 await game_msg.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("price: failed to edit closed-game message")
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = PriceCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("price")
-    play.add_command(cog.price_cmd)
+    play.add_command(cog.price_cmd, override=True)
     bot.game_launchers["price"] = cog.launch
     bot.game_recoverers["price"] = cog.recover_game

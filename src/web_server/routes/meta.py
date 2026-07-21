@@ -9,6 +9,7 @@ import psutil
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from bot_modules.services.economy_service import load_econ_settings
 from web_server.auth import AuthenticatedUser, DiscordOAuthAuth, SESSION_COOKIE
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web_server.schemas import ChannelMeta, GuildInfo, MemberMeta, MeResponse, RoleMeta
@@ -49,9 +50,12 @@ async def me(
             row = conn.execute(
                 "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
             ).fetchone()
-            return str(row["role_id"]) if row else None
+            games_role = str(row["role_id"]) if row else None
+            econ_role_id = load_econ_settings(conn, guild_id).manager_role_id
+            econ_role = str(econ_role_id) if econ_role_id else None
+            return games_role, econ_role
 
-    games_editor_role_id = await run_query(_q_editor_role)
+    games_editor_role_id, economy_manager_role_id = await run_query(_q_editor_role)
 
     return MeResponse(
         user_id=str(user.user_id),
@@ -69,6 +73,7 @@ async def me(
         avatar_url=user.avatar_url,
         status=status,
         games_editor_role_id=games_editor_role_id,
+        economy_manager_role_id=economy_manager_role_id,
     )
 
 
@@ -141,9 +146,14 @@ async def select_guild(
             row = conn.execute(
                 "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
             ).fetchone()
-            return str(row["role_id"]) if row else None
+            games_role = str(row["role_id"]) if row else None
+            econ_role_id = load_econ_settings(conn, guild_id).manager_role_id
+            econ_role = str(econ_role_id) if econ_role_id else None
+            return games_role, econ_role
 
-    games_editor_role_id = await run_query(_q_editor_role_select)
+    games_editor_role_id, economy_manager_role_id = await run_query(
+        _q_editor_role_select
+    )
 
     session_guilds = _guilds_from_session(request)
     body = MeResponse(
@@ -162,6 +172,7 @@ async def select_guild(
         avatar_url=user.avatar_url,
         status=status,
         games_editor_role_id=games_editor_role_id,
+        economy_manager_role_id=economy_manager_role_id,
     )
 
     from web_server.routes.oauth import _is_secure
@@ -204,18 +215,21 @@ async def meta_roles(
 
     # Fallback: no live Discord cache (e.g. standalone dashboard mode).
     # Derive the list of roles from role_events history in the DB.
-    with ctx.open_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT role_name,
-                   SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS net
-            FROM role_events
-            WHERE guild_id = ?
-            GROUP BY role_name
-            ORDER BY role_name COLLATE NOCASE
-            """,
-            (guild_id,),
-        ).fetchall()
+    def _q():
+        with ctx.open_db() as conn:
+            return conn.execute(
+                """
+                SELECT role_name,
+                       SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS net
+                FROM role_events
+                WHERE guild_id = ?
+                GROUP BY role_name
+                ORDER BY role_name COLLATE NOCASE
+                """,
+                (guild_id,),
+            ).fetchall()
+
+    rows = await run_query(_q)
     return [
         RoleMeta(
             id=str(
@@ -335,16 +349,20 @@ async def meta_channels(
     # Fallback: derive channel list from messages table (text channels only).
     if "text" not in requested:
         return []
-    with ctx.open_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT channel_id
-            FROM processed_messages
-            WHERE guild_id = ?
-            ORDER BY channel_id
-            """,
-            (guild_id,),
-        ).fetchall()
+
+    def _q_ch():
+        with ctx.open_db() as conn:
+            return conn.execute(
+                """
+                SELECT DISTINCT channel_id
+                FROM processed_messages
+                WHERE guild_id = ?
+                ORDER BY channel_id
+                """,
+                (guild_id,),
+            ).fetchall()
+
+    rows = await run_query(_q_ch)
     return [
         ChannelMeta(
             id=str(r[0]),

@@ -33,7 +33,7 @@ All `/beta` commands are guild-scoped to the test guild and gated to **Mod** (or
 
 Every command logs invocation (user, args, timestamp, outcome) to the beta-tools audit channel and to a beta command log table.
 
-## Behaviour
+## Behavior
 
 ### The three identity classes
 

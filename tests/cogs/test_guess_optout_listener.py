@@ -114,7 +114,7 @@ async def test_member_update_noop_when_role_still_held():
     flag_mock.assert_not_called()
 
 
-# ── _guess_callback honours answer_optout ────────────────────────────────────
+# ── _guess_callback honors answer_optout ────────────────────────────────────
 
 def _make_round(*, answer_optout: bool = False) -> GuessRound:
     return GuessRound(
@@ -148,7 +148,12 @@ async def test_guess_callback_blocks_when_answer_opted_out():
          patch("bot_modules.cogs.guess_cog._do_load_round", return_value=_make_round(answer_optout=True)):
         await view._guess_callback(interaction)
 
-    args = interaction.response.send_message.call_args
+    # The callback defers first, then delivers the opt-out notice via followup.
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+    interaction.response.send_message.assert_not_called()
+    args = interaction.followup.send.call_args
+    assert args is not None
     msg = args.args[0] if args.args else args.kwargs.get("content", "")
     assert "no longer" in msg.lower() or "opted out" in msg.lower() or "unsolvable" in msg.lower()
+    # No GuessSelectView dropdown may be attached — the round is unsolvable.
     assert "view" not in args.kwargs or args.kwargs["view"] is None

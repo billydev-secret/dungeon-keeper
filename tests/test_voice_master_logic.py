@@ -969,8 +969,7 @@ def test_build_profile_show_embed_uses_template_default_for_empty_name():
     embed = build_profile_show_embed(
         saved_name=None,
         saved_limit=0,
-        locked=False,
-        hidden=False,
+        access_state="open",
         trusted_count=0,
         blocked_count=0,
     )
@@ -978,8 +977,7 @@ def test_build_profile_show_embed_uses_template_default_for_empty_name():
     fields = {f.name: f.value or "" for f in embed.fields}
     assert "*(template default)*" in fields["Saved name"]
     assert fields["User limit"] == "no cap"
-    assert fields["Locked"] == "no"
-    assert fields["Hidden"] == "no"
+    assert "Open" in fields["Access"]
     assert fields["Trusted (count)"] == "0"
     assert fields["Blocked (count)"] == "0"
 
@@ -988,16 +986,14 @@ def test_build_profile_show_embed_renders_saved_name():
     embed = build_profile_show_embed(
         saved_name="my room",
         saved_limit=5,
-        locked=True,
-        hidden=True,
+        access_state="locked",
         trusted_count=3,
         blocked_count=1,
     )
     fields = {f.name: f.value or "" for f in embed.fields}
     assert fields["Saved name"] == "my room"
     assert fields["User limit"] == "5"
-    assert fields["Locked"] == "yes"
-    assert fields["Hidden"] == "yes"
+    assert "locked" in fields["Access"].lower()
     assert fields["Trusted (count)"] == "3"
     assert fields["Blocked (count)"] == "1"
 
@@ -1006,8 +1002,7 @@ def test_build_profile_show_embed_has_blurple_color():
     embed = build_profile_show_embed(
         saved_name=None,
         saved_limit=0,
-        locked=False,
-        hidden=False,
+        access_state="open",
         trusted_count=0,
         blocked_count=0,
     )
@@ -1494,19 +1489,25 @@ def test_user_picker_labels_unknown_falls_back_to_invite():
 
 
 def test_panel_button_order_lists_all_actions():
-    assert "lock" in PANEL_BUTTON_ORDER
-    assert "spectator" in PANEL_BUTTON_ORDER
-    assert "unspectator" in PANEL_BUTTON_ORDER
+    # The four access states are the single access dial.
+    assert "open" in PANEL_BUTTON_ORDER
+    assert "nsfw" in PANEL_BUTTON_ORDER
+    assert "locked" in PANEL_BUTTON_ORDER
+    assert "spectate" in PANEL_BUTTON_ORDER
     assert "transfer" in PANEL_BUTTON_ORDER
     assert "reset" in PANEL_BUTTON_ORDER
-    assert len(PANEL_BUTTON_ORDER) == 12
+    # No separate lock/unlock/hide/unhide/spectator buttons any more.
+    assert "lock" not in PANEL_BUTTON_ORDER
+    assert "hide" not in PANEL_BUTTON_ORDER
+    assert len(PANEL_BUTTON_ORDER) == 10
 
 
 def test_panel_button_meta_known_action():
-    meta = panel_button_meta("lock")
+    meta = panel_button_meta("locked")
     assert isinstance(meta, PanelButtonMeta)
-    assert meta.label == "Lock"
+    assert meta.label == "NSFW — locked"
     assert meta.emoji == "🔒"
+    assert meta.description  # access states carry a description line
 
 
 def test_panel_button_meta_unknown_action_returns_none():
@@ -1533,13 +1534,16 @@ def test_panel_groups_partition_all_actions():
 
 
 def test_panel_metas_for_group_preserve_display_order():
+    access = [m.action for m in panel_metas_for_group("access")]
+    assert access == ["open", "nsfw", "locked", "spectate"]
     settings = [m.action for m in panel_metas_for_group("settings")]
-    assert settings == ["rename", "limit", "hide", "unhide", "reset"]
+    assert settings == ["rename", "limit", "reset"]
     perms = [m.action for m in panel_metas_for_group("permissions")]
-    assert perms == ["lock", "unlock", "invite", "kick", "transfer"]
+    assert perms == ["invite", "kick", "transfer"]
 
 
 def test_panel_group_placeholder_text():
+    assert panel_group_placeholder("access") == "Set who can see and join"
     assert panel_group_placeholder("settings") == "Change channel settings"
     assert panel_group_placeholder("permissions") == "Change channel permissions"
 
@@ -1582,3 +1586,49 @@ def test_build_knock_request_embed_includes_requester_owner_channel():
     assert "<@2>" in embed.description
     assert "Game Night" in embed.description
     assert embed.color == discord.Color.gold()
+
+
+def test_build_knock_request_embed_names_the_guild_for_dm_context():
+    """In a DM the embed is out of its guild's context, so it must name the
+    server — an owner can have a same-named channel in several of them."""
+    embed = build_knock_request_embed(
+        requester_mention="<@1>",
+        owner_mention="<@2>",
+        channel_name="General",
+        guild_name="The Golden Meadow",
+    )
+    assert embed.description is not None
+    assert "General" in embed.description
+    assert "The Golden Meadow" in embed.description
+
+
+def test_build_knock_request_embed_omits_guild_when_not_given():
+    """Backwards-compatible: no guild_name → no dangling 'in' clause."""
+    embed = build_knock_request_embed(
+        requester_mention="<@1>",
+        owner_mention="<@2>",
+        channel_name="General",
+    )
+    assert embed.description is not None
+    assert " in **" not in embed.description
+
+
+# ── voice-style lease verdict (economy sinks round 3, stage 3) ─────────
+
+
+def test_style_lease_blocks_table():
+    from bot_modules.voice_master.logic import style_lease_blocks
+
+    cases = [
+        # (economy_enabled, price, entitled) -> blocked
+        ((True, 30, False), True),    # armed paywall, no lease -> blocked
+        ((True, 30, True), False),    # leased (or gifted) -> free
+        ((True, 0, False), False),    # price 0 = shipped dark -> free for all
+        ((False, 30, False), False),  # economy off -> paywall can't arm
+        ((False, 0, False), False),
+        ((True, 1, False), True),     # any positive price arms it
+    ]
+    for (economy_enabled, price, entitled), blocked in cases:
+        assert style_lease_blocks(
+            economy_enabled=economy_enabled, price=price, entitled=entitled
+        ) is blocked, (economy_enabled, price, entitled)

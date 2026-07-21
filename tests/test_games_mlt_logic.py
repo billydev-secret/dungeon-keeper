@@ -12,10 +12,18 @@ proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
+import discord
 import pytest
 
+from bot_modules.games.constants import (
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
 from bot_modules.games_mlt.embeds import (
     build_closed_embed,
+    build_final_standings_embed,
     build_join_embed,
     build_results_embed,
     build_round_embed,
@@ -400,7 +408,7 @@ def test_build_round_embed_has_footer_with_round_number():
 def test_build_round_embed_active_vs_closed_color_differs():
     active = build_round_embed("x", round_num=1, vote_count=0, closed=False)
     closed = build_round_embed("x", round_num=1, vote_count=0, closed=True)
-    assert active.colour != closed.colour
+    assert active.color != closed.color
 
 
 # ── build_closed_embed ───────────────────────────────────────────────
@@ -415,7 +423,7 @@ def test_build_closed_embed_title_says_closed():
 def test_build_closed_embed_color_differs_from_round_over():
     closed = build_closed_embed("x", round_num=1, vote_count=0)
     round_over = build_round_embed("x", round_num=1, vote_count=0, closed=True)
-    assert closed.colour != round_over.colour
+    assert closed.color != round_over.color
 
 
 def test_build_closed_embed_preserves_prompt_and_round():
@@ -500,6 +508,79 @@ def test_build_results_embed_renders_vote_counts():
     assert "2 votes" in embed.description
 
 
+# ── accent color (guild accent vs. phase fallback) ───────────────────
+
+_ACCENT = discord.Color(0x112233)
+
+
+def test_join_embed_honors_passed_accent():
+    embed = build_join_embed("Alice", [], color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_join_embed_falls_back_to_phase_color():
+    embed = build_join_embed("Alice", [])
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_round_embed_active_honors_passed_accent():
+    embed = build_round_embed("x", round_num=1, vote_count=0, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_round_embed_closed_honors_passed_accent():
+    """Round-over is a voting phase, not a win — accent, not semantic green."""
+    embed = build_round_embed(
+        "x", round_num=1, vote_count=0, closed=True, color=_ACCENT
+    )
+    assert embed.color == _ACCENT
+
+
+def test_round_embed_falls_back_to_phase_colors():
+    active = build_round_embed("x", round_num=1, vote_count=0)
+    closed = build_round_embed("x", round_num=1, vote_count=0, closed=True)
+    assert active.color == discord.Color(PHASE_PLAYING)
+    assert closed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_closed_embed_honors_passed_accent():
+    embed = build_closed_embed("x", round_num=1, vote_count=0, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_closed_embed_falls_back_to_recap_color():
+    embed = build_closed_embed("x", round_num=1, vote_count=0)
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_results_embed_honors_passed_accent():
+    embed = build_results_embed(
+        prompt="x", round_num=1, tally={1: 3, 2: 1}, color=_ACCENT
+    )
+    assert embed.color == _ACCENT
+
+
+def test_results_embed_falls_back_to_phase_color():
+    embed = build_results_embed(prompt="x", round_num=1, tally={1: 1})
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_final_standings_embed_honors_passed_accent():
+    embed = build_final_standings_embed({"1": 2}, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_final_standings_embed_falls_back_to_phase_color():
+    embed = build_final_standings_embed({"1": 2})
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_final_standings_embed_empty_still_honors_accent():
+    """The no-crowns early-return path must still carry the accent."""
+    embed = build_final_standings_embed({}, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
 # ── sanity / integration ─────────────────────────────────────────────
 
 
@@ -559,3 +640,48 @@ def test_lobby_minimum_enforced_then_passes(vote_kind_unused):
     assert can_start(players) is False
     add_player(players, 3)
     assert can_start(players) is True
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_mlt_cog as mlt_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_run_round_empty_bank_pays_all_voters(monkeypatch, sync_db_path):
+    """When the prompt bank runs dry, the game ends paying everyone who voted
+    across all completed rounds (not just current survivors)."""
+    spy = AsyncMock()
+    monkeypatch.setattr(mlt_cog, "end_game", spy)
+    monkeypatch.setattr(mlt_cog, "get_mlt_prompt", AsyncMock(return_value=None))
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "rounds": {
+            "1": {"votes": {"1": "2", "2": "1"}, "prompt": "x"},
+            "2": {"votes": {"3": "1"}, "prompt": "y"},
+        },
+        "crowns": {}, "players": [1, 3],  # player 2 left mid-game
+    }
+    gid = await create_game(bot.games_db, 100, 1, "mlt", payload=payload)
+    bot.active_views[gid] = object()
+    cog = mlt_cog.MLTCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await cog._run_round(None, gid, 1, "Host", 3, [1, 3], channel)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]  # includes departed voter 2
+    assert call.kwargs["bot"] is bot

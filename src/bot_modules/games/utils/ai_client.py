@@ -1,6 +1,7 @@
 import logging
 import os
 from anthropic import AsyncAnthropic, APIError, APITimeoutError
+from anthropic.types import TextBlock
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ async def generate_text(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
+        parts = [b.text for b in response.content if isinstance(b, TextBlock)]
         return "".join(parts).strip() or None
     except (APIError, APITimeoutError) as e:
         log.error("Anthropic API error: %s", e)

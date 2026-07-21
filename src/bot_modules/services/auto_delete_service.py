@@ -31,10 +31,17 @@ def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
             max_age_seconds INTEGER NOT NULL,
             interval_seconds INTEGER NOT NULL,
             last_run_ts REAL NOT NULL DEFAULT 0,
+            media_only INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, channel_id)
         )
         """
     )
+    # Migration: add media_only to rule tables created before the media-only mode.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(auto_delete_rules)").fetchall()}
+    if "media_only" not in cols:
+        conn.execute(
+            "ALTER TABLE auto_delete_rules ADD COLUMN media_only INTEGER NOT NULL DEFAULT 0"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS auto_delete_messages (
@@ -61,11 +68,25 @@ def upsert_auto_delete_rule(
     max_age_seconds: int,
     interval_seconds: int,
     *,
+    media_only: bool = False,
     last_run_ts: float | None = None,
 ) -> None:
-    """Create or update an auto-delete rule for a channel."""
+    """Create or update an auto-delete rule for a channel.
+
+    When ``media_only`` is toggled on an existing rule, the channel's tracked
+    message queue is cleared: the sweep is queue-driven and can't re-inspect a
+    message's attachments at delete time, so a queue built under the old mode
+    could delete messages that no longer match. Clearing only un-tracks them
+    (nothing is deleted); the next startup catch-up rebuilds the queue under the
+    new mode. Editing age/interval without changing the mode leaves the queue
+    intact.
+    """
     run_ts = time.time() if last_run_ts is None else last_run_ts
     with open_db(db_path) as conn:
+        prev = conn.execute(
+            "SELECT media_only FROM auto_delete_rules WHERE guild_id = ? AND channel_id = ?",
+            (guild_id, channel_id),
+        ).fetchone()
         conn.execute(
             """
             INSERT INTO auto_delete_rules (
@@ -73,16 +94,23 @@ def upsert_auto_delete_rule(
                 channel_id,
                 max_age_seconds,
                 interval_seconds,
-                last_run_ts
+                last_run_ts,
+                media_only
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(guild_id, channel_id) DO UPDATE SET
                 max_age_seconds = excluded.max_age_seconds,
                 interval_seconds = excluded.interval_seconds,
-                last_run_ts = excluded.last_run_ts
+                last_run_ts = excluded.last_run_ts,
+                media_only = excluded.media_only
             """,
-            (guild_id, channel_id, max_age_seconds, interval_seconds, run_ts),
+            (guild_id, channel_id, max_age_seconds, interval_seconds, run_ts, int(media_only)),
         )
+        if prev is not None and bool(prev["media_only"]) != bool(media_only):
+            conn.execute(
+                "DELETE FROM auto_delete_messages WHERE guild_id = ? AND channel_id = ?",
+                (guild_id, channel_id),
+            )
 
 
 def remove_auto_delete_rule(db_path: Path, guild_id: int, channel_id: int) -> bool:
@@ -118,7 +146,8 @@ def list_auto_delete_rules(db_path: Path) -> list[sqlite3.Row]:
     with open_db(db_path) as conn:
         return conn.execute(
             """
-            SELECT guild_id, channel_id, max_age_seconds, interval_seconds, last_run_ts
+            SELECT guild_id, channel_id, max_age_seconds, interval_seconds,
+                   last_run_ts, media_only
             FROM auto_delete_rules
             ORDER BY guild_id, channel_id
             """
@@ -132,7 +161,8 @@ def list_auto_delete_rules_for_guild_with_conn(
     """List auto-delete rules for a guild using an existing connection."""
     return conn.execute(
         """
-        SELECT guild_id, channel_id, max_age_seconds, interval_seconds, last_run_ts
+        SELECT guild_id, channel_id, max_age_seconds, interval_seconds,
+               last_run_ts, media_only
         FROM auto_delete_rules
         WHERE guild_id = ?
         ORDER BY channel_id
@@ -166,6 +196,34 @@ def auto_delete_rule_exists(
         (guild_id, channel_id),
     ).fetchone()
     return row is not None
+
+
+def should_track_auto_delete_message(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    *,
+    has_media: bool,
+) -> bool:
+    """Return True if a message in this channel should be queued for auto-delete.
+
+    False when no rule covers the channel. A ``media_only`` rule queues only
+    messages carrying an attachment; a regular rule queues everything. This is
+    the single gate for every queue-insertion site — the sweep is queue-driven,
+    so filtering here is what makes media-only deletion correct.
+    """
+    row = conn.execute(
+        """
+        SELECT media_only
+        FROM auto_delete_rules
+        WHERE guild_id = ? AND channel_id = ?
+        LIMIT 1
+        """,
+        (guild_id, channel_id),
+    ).fetchone()
+    if row is None:
+        return False
+    return has_media or not bool(row["media_only"])
 
 
 def track_auto_delete_message(
@@ -578,6 +636,7 @@ async def _scan_and_delete_channel_history(
     after: datetime | None = None,
     db_path: Path | None = None,
     guild_id: int | None = None,
+    media_only: bool = False,
 ) -> tuple[int, int]:
     """Scan channel history and delete unpinned messages older than cutoff datetime.
 
@@ -637,6 +696,10 @@ async def _scan_and_delete_channel_history(
 
     async for message in channel.history(**history_kwargs):
         if message.pinned:
+            continue
+        # media_only rules ignore text-only messages for both deletion and the
+        # downtime-backfill below, mirroring the live queue-insertion gate.
+        if media_only and not message.attachments:
             continue
         msg_ts = message.created_at.timestamp() if message.created_at else 0.0
 
@@ -767,6 +830,7 @@ async def _run_startup_for_rule(
     max_age_seconds = int(rule["max_age_seconds"])
     interval_seconds = int(rule["interval_seconds"])
     last_run_ts = float(rule["last_run_ts"])
+    media_only = bool(rule["media_only"])
 
     guild = bot.get_guild(guild_id)
     if guild is None:
@@ -793,6 +857,7 @@ async def _run_startup_for_rule(
                 after=after,
                 db_path=db_path,
                 guild_id=guild_id,
+                media_only=media_only,
             )
             if failed > 0:
                 log.info(

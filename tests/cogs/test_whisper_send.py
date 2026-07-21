@@ -16,6 +16,16 @@ SENDER_ID = 1001
 TARGET_ID = 2001
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.cogs.whisper_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
+
 def _cfg() -> WhisperConfig:
     return WhisperConfig(guild_id=9001, role_id=ROLE, channel_id=FEED, log_channel_id=LOG)
 
@@ -396,3 +406,77 @@ async def test_send_fails_when_feed_channel_missing():
     args, kwargs = interaction.response.send_message.call_args
     assert kwargs.get("ephemeral") is True
     assert "feed" in args[0].lower() or "channel" in args[0].lower()
+
+
+# ── configurable rate limits ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_uses_configured_cooldown_not_hardcoded_default():
+    """A guild with a shorter configured cooldown isn't blocked by the 30s default."""
+    from unittest.mock import patch as _patch
+    import time as _t
+
+    cog = _make_cog()
+    sender = FakeMember(id=SENDER_ID, roles=[FakeRole(id=ROLE)])
+    target = _make_target_dmable()
+
+    feed_channel = MagicMock(spec=discord.TextChannel)
+    feed_channel.send = AsyncMock(return_value=MagicMock(id=88888))
+    interaction = fake_interaction(user=sender)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    interaction.guild.name = "Test"
+    interaction.guild.get_channel = MagicMock(side_effect=lambda cid: {FEED: feed_channel}.get(cid))
+    interaction.response.send_message = AsyncMock()
+
+    # Last send was 5s ago — would block under the 30s default, but this
+    # guild has configured a 3s cooldown.
+    cog._last_send_at[SENDER_ID] = _t.time() - 5
+    short_cooldown_cfg = WhisperConfig(
+        guild_id=9001, role_id=ROLE, channel_id=FEED, log_channel_id=LOG, cooldown_seconds=3,
+    )
+
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=short_cooldown_cfg), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper", return_value=42), \
+         _patch("bot_modules.cogs.whisper_cog._do_set_message_ids"):
+        await cog._send_impl(interaction, target=target, message="hello")  # type: ignore[arg-type]
+
+    target.send.assert_awaited_once()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_send_uses_configured_hourly_cap_not_hardcoded_default():
+    """A guild with a lower configured hourly cap is blocked before the 5-send default."""
+    from unittest.mock import patch as _patch
+    import time as _t
+
+    cog = _make_cog()
+    sender = FakeMember(id=SENDER_ID, roles=[FakeRole(id=ROLE)])
+    target = _make_target_dmable()
+
+    interaction = fake_interaction(user=sender)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    interaction.guild.name = "Test"
+    interaction.guild.get_channel = MagicMock(return_value=None)
+    interaction.response.send_message = AsyncMock()
+
+    now = _t.time()
+    rate_key = (9001, SENDER_ID, TARGET_ID)
+    # Only 2 recent sends — under the hardcoded default cap of 5, but this
+    # guild has configured a cap of 2.
+    cog._target_sends[rate_key] = [now - 60, now - 120]
+    cog._last_send_at[SENDER_ID] = 0
+    low_cap_cfg = WhisperConfig(
+        guild_id=9001, role_id=ROLE, channel_id=FEED, log_channel_id=LOG, hourly_cap_per_target=2,
+    )
+
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=low_cap_cfg), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper") as ins:
+        await cog._send_impl(interaction, target=target, message="spam")  # type: ignore[arg-type]
+
+    ins.assert_not_called()
+    args, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    assert "hour" in args[0].lower() or "2" in args[0]

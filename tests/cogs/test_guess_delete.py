@@ -19,6 +19,18 @@ MOD_ROLE_ID = 7777
 ROUND_ID = 42
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    import discord
+
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
+
+
 def _make_round(*, submitter_id: int = SUBMITTER_ID, original_path: str = "") -> GuessRound:
     return GuessRound(
         id=ROUND_ID, guild_id=GUILD_ID, submitter_id=submitter_id,
@@ -157,12 +169,13 @@ async def test_delete_unlinks_original_file_when_present(tmp_path: Path):
     assert not orig_file.exists()
 
 
-# ── _on_post NSFW recheck ────────────────────────────────────────────────────
+# ── _on_post NSFW behavior ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_post_rejects_non_nsfw_channel():
-    """Defense in depth: if the configured channel is no longer NSFW at post
-    time (or was never), refuse to post."""
+async def test_post_proceeds_in_non_nsfw_channel():
+    """The NSFW-channel recheck was deliberately removed (commit 47ca6a5,
+    "remove guess NSFW gate") — posting proceeds regardless of the channel's
+    age-restriction flag."""
     from bot_modules.cogs.guess_cog import CropEditorView
 
     bot = MagicMock()
@@ -171,7 +184,10 @@ async def test_post_rejects_non_nsfw_channel():
 
     fake_channel = MagicMock()
     fake_channel.is_nsfw = lambda: False
-    fake_channel.send = AsyncMock()
+    fake_msg = MagicMock()
+    fake_msg.id = 9999
+    fake_msg.attachments = []
+    fake_channel.send = AsyncMock(return_value=fake_msg)
     fake_channel.mention = "#general"
 
     interaction = fake_interaction()
@@ -194,12 +210,17 @@ async def test_post_rejects_non_nsfw_channel():
         candidate_count=1,
     )
 
-    with patch("bot_modules.cogs.guess_cog._do_insert_round") as insert_mock:
+    with patch("bot_modules.cogs.guess_cog._do_insert_round", return_value=77) as insert_mock, \
+         patch("bot_modules.cogs.guess_cog._do_update_round_message"), \
+         patch("bot_modules.cogs.guess_cog._do_set_crop_box"), \
+         patch("bot_modules.cogs.guess_cog._do_audit"), \
+         patch("bot_modules.cogs.guess_cog.render_crop", return_value=b"\xff\xd8fake"), \
+         patch("bot_modules.cogs.guess_cog._repost_prompt", new_callable=AsyncMock):
         with patch("bot_modules.cogs.guess_cog.isinstance", lambda obj, types: True):
             await view._on_post(interaction)
 
-    insert_mock.assert_not_called()
-    fake_channel.send.assert_not_called()
+    insert_mock.assert_called_once()
+    fake_channel.send.assert_called_once()
 
 
 # ── _on_post double-click guard ─────────────────────────────────────────────

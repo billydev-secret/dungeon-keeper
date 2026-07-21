@@ -1,12 +1,21 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
+
 import discord
+
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
@@ -16,7 +25,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_name,
-    ConfirmCloseView,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
@@ -36,6 +45,26 @@ from bot_modules.games_hottakes.logic import (
 log = logging.getLogger(__name__)
 
 
+async def _resolve_accent(bot, guild) -> "discord.Color | None":
+    """Resolve the guild accent color once, tolerantly.
+
+    Returns ``None`` (embed builders fall back to their old PHASE_*
+    color) when there's no guild, no bot.ctx/db_path, or resolution
+    fails for any reason — never raises into a game path.
+    """
+    if guild is None:
+        return None
+    ctx = getattr(bot, "ctx", None)
+    db_path = getattr(ctx, "db_path", None)
+    if db_path is None:
+        return None
+    try:
+        return await resolve_accent_color(db_path, guild)
+    except Exception as e:  # pragma: no cover - defensive
+        log.debug("hottakes accent resolve failed: %s", e)
+        return None
+
+
 class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
     take = discord.ui.TextInput(
         label="Hot Take",
@@ -52,7 +81,7 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
         self.queue_mode = queue_mode
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Hot Take", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Hot Take", channel_name(interaction.channel))
 
         def _add_take(payload):
             add_take(payload, interaction.user.id, self.take.value)
@@ -87,7 +116,7 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
                     break
             try:
                 await msg.edit(embed=embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
 
@@ -99,24 +128,25 @@ class HotTakesSubmitView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
+        self._message: discord.Message | None = None
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Submit Hot Take", style=discord.ButtonStyle.primary, custom_id="ht_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         modal = SubmitHotTakeModal(self.game_id, self.db, origin_message=interaction.message)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.success, custom_id="ht_start")
+    @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.primary, custom_id="ht_start")
     async def start_voting(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start voting.", ephemeral=True)
             return
@@ -130,20 +160,22 @@ class HotTakesSubmitView(discord.ui.View):
         await update_game_payload(self.db, self.game_id, payload)
 
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
+
+        channel = interaction.channel
+        assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
 
         # Ping submitters
         if interaction.guild:
             submitter_ids = {t["user_id"] for t in takes}
             mentions = [
-                interaction.guild.get_member(uid).mention
+                member.mention
                 for uid in submitter_ids
-                if interaction.guild.get_member(uid)
+                if (member := interaction.guild.get_member(uid))
             ]
             if mentions:
-                await interaction.channel.send(
+                await channel.send(
                     f"🔥 **Hot Takes voting is starting!** {' '.join(mentions)} — get ready to vote!",
                     delete_after=15,
                 )
@@ -154,32 +186,17 @@ class HotTakesSubmitView(discord.ui.View):
                 game_id=self.game_id,
                 host_id=self.host_id,
                 host_name=interaction.user.display_name,
-                channel=interaction.channel,
+                channel=channel,
             )
         except Exception as e:
             log.error("Failed to start voting for game %s: %s", self.game_id, e, exc_info=True)
-            await interaction.channel.send("❌ Something went wrong starting the vote. Game ended.")
+            await channel.send("❌ Something went wrong starting the vote. Game ended.")
             await end_game(self.db, self.game_id)
             self.bot.active_views.pop(self.game_id, None)
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="ht_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        self.stop()
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="Game cancelled.", view=self)
-
-        await end_game(self.db, self.game_id)
-        if self.game_id in self.bot.active_views:
-            del self.bot.active_views[self.game_id]
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ht_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ht_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["hottakes"], ephemeral=True)
 
 
@@ -195,6 +212,7 @@ class HotTakeVoteView(discord.ui.View):
         bot,
         host_name: str,
         advance_callback,
+        accent: "discord.Color | None" = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -206,6 +224,7 @@ class HotTakeVoteView(discord.ui.View):
         self.bot = bot
         self.host_name = host_name
         self.advance_callback = advance_callback
+        self.accent = accent
         self.votes: dict[int, int] = {}  # user_id -> 0-4 index
         self._updater = LiveBarUpdater()
         self._closed = False
@@ -214,7 +233,7 @@ class HotTakeVoteView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -226,6 +245,7 @@ class HotTakeVoteView(discord.ui.View):
             total_takes=self.total_takes,
             votes_by_user=self.votes,
             closed=closed,
+            color=self.accent,
         )
 
     @discord.ui.button(label="🧊", style=discord.ButtonStyle.secondary, custom_id="ht_v0", row=0)
@@ -249,7 +269,7 @@ class HotTakeVoteView(discord.ui.View):
         await self._do_vote(interaction, 4)
 
     async def _do_vote(self, interaction: discord.Interaction, idx: int):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This vote is closed.", ephemeral=True)
             return
@@ -263,7 +283,7 @@ class HotTakeVoteView(discord.ui.View):
 
     @discord.ui.button(label="📝 Submit Take", style=discord.ButtonStyle.secondary, custom_id="ht_v_submit", row=1)
     async def submit_take(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self.game_id not in self.bot.active_views:
             await interaction.response.send_message("This game has already ended.", ephemeral=True)
             return
@@ -272,68 +292,27 @@ class HotTakeVoteView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next Take", style=discord.ButtonStyle.secondary, custom_id="ht_next", row=1)
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="ht_close", row=1)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            # Flush in-memory votes for the current round into the payload
-            payload = await get_game_payload(self.db, self.game_id)
-            if self.votes:
-                vote_counts, avg, _std = tally_votes(self.votes)
-                results = payload.get("results", [])
-                results.append({
-                    "text": self.take_text,
-                    "counts": vote_counts,
-                    "avg": avg,
-                    # Preserve historical behavior: close-game path has always
-                    # recorded std=0.0 here regardless of voter count.
-                    "std": 0.0,
-                    "voters": list(self.votes.keys()),
-                    "author": 0,
-                })
-                payload["results"] = results
-            await self._post_recap(channel, payload)
-            await end_game(self.db, self.game_id, payload=payload)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            # Unblock the voting loop so it can exit cleanly
-            if self._advanced_event:
-                self._advanced_event.set()
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
-        embed = build_recap_embed(results)
+        embed = build_recap_embed(results, color=self.accent)
         if embed is None:
             return
+        guild = getattr(channel, "guild", None)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "hottakes")
         await channel.send(embed=embed)
 
 
 class HotTakesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -342,7 +321,7 @@ class HotTakesCog(commands.Cog):
 
     @app_commands.command(name="hottakes", description="Start a Hot Takes / Unpopular Opinions game!")
     async def hottakes(self, interaction: discord.Interaction):
-        log.info("%s used /games play hottakes in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play hottakes in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -358,15 +337,7 @@ class HotTakesCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -387,7 +358,8 @@ class HotTakesCog(commands.Cog):
             payload={"takes": [], "results": []},
         )
 
-        embed = build_lobby_embed(host_name)
+        accent = await _resolve_accent(self.bot, getattr(channel, "guild", None))
+        embed = build_lobby_embed(host_name, color=accent)
 
         log.info("Game %s (hottakes) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         view = HotTakesSubmitView(game_id, host_id, self.db, self.bot, self)
@@ -424,6 +396,11 @@ class HotTakesCog(commands.Cog):
             results = []
             processed = 0
 
+        # Resolve the guild accent once for the whole game — never per vote /
+        # per round. Every vote view + the recap reuse this cached value.
+        accent = await _resolve_accent(self.bot, getattr(channel, "guild", None))
+
+        view: HotTakeVoteView | None = None
         while True:
             payload = await get_game_payload(self.db, game_id)
             if game_id not in self.bot.active_views:
@@ -441,7 +418,8 @@ class HotTakesCog(commands.Cog):
 
             advanced = asyncio.Event()
 
-            async def advance(message: discord.Message, _take=take_text, _num=take_num, _taker_id=take_data["user_id"]):
+            async def advance(message: discord.Message, _take=take_text, _num=take_num, _taker_id=take_data["user_id"]) -> None:
+                assert view is not None
                 if view._closed:
                     return
                 view._closed = True
@@ -465,11 +443,10 @@ class HotTakesCog(commands.Cog):
                 await modify_payload(self.db, game_id, _save_result)
 
                 final_embed = view._build_embed(closed=True)
-                for item in view.children:
-                    item.disabled = True
+                disable_all_items(view)
                 try:
                     await message.edit(embed=final_embed, view=view)
-                except Exception:
+                except discord.HTTPException:
                     pass
                 advanced.set()
 
@@ -483,6 +460,7 @@ class HotTakesCog(commands.Cog):
                 bot=self.bot,
                 host_name=host_name,
                 advance_callback=advance,
+                accent=accent,
             )
             view._advanced_event = advanced
             self.bot.active_views[game_id] = view
@@ -505,12 +483,20 @@ class HotTakesCog(commands.Cog):
         payload = await get_game_payload(self.db, game_id)
 
         if processed > 0:
+            assert view is not None
             await view._post_recap(channel, payload)
+        # Roster = everyone who voted or authored a take; the winning take's
+        # author may not have voted, so a voters-only set would drop their bonus.
+        participants = sorted(
+            {v for r in results for v in r.get("voters", [])}
+            | {r["author"] for r in results if r.get("author") is not None}
+        )
         await end_game(
             self.db, game_id,
-            player_count=len({v for r in results for v in r.get("voters", [])}),
+            player_count=len(participants),
             round_count=processed,
             payload=payload,
+            bot=self.bot, player_ids=participants,
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
@@ -541,11 +527,11 @@ class HotTakesCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = HotTakesCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("hottakes")
-    play.add_command(cog.hottakes)
+    play.add_command(cog.hottakes, override=True)
     bot.game_launchers["hottakes"] = cog.launch
     bot.game_recoverers["hottakes"] = cog.recover_game
 

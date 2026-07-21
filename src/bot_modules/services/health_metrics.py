@@ -204,7 +204,7 @@ def compute_dau_mau(
 
     # Day-of-week breakdown (avg DAU per weekday, 0=Mon)
     dow_rows = conn.execute(
-        """SELECT CAST(((ts % 604800) + 345600) / 86400 AS INTEGER) % 7 AS dow,
+        """SELECT CAST(((ts % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
                   COUNT(DISTINCT author_id) AS cnt
            FROM messages WHERE guild_id=? AND ts>=?
            GROUP BY dow ORDER BY dow""",
@@ -243,20 +243,26 @@ def compute_dau_mau(
 
 
 def compute_heatmap(
-    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    utc_offset_hours: float = 0.0,
 ) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
+    offset_secs = int(utc_offset_hours * 3600)
 
-    # 7x24 grid: day_of_week (0=Mon) x hour_of_day -> avg msgs/hr
+    # 7x24 grid: day_of_week (0=Mon) x hour_of_day -> avg msgs/hr, bucketed in
+    # guild-local time (ts shifted by the guild's tz offset before bucketing).
     rows = conn.execute(
         """SELECT
-             CAST(((ts % 604800) + 345600) / 86400 AS INTEGER) % 7 AS dow,
-             (ts % 86400) / 3600 AS hod,
+             CAST((((ts + ?) % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
+             ((ts + ?) % 86400) / 3600 AS hod,
              COUNT(*) AS cnt
            FROM messages WHERE guild_id=? AND ts>=?
            GROUP BY dow, hod""",
-        (guild_id, thirty_days_ago),
+        (offset_secs, offset_secs, guild_id, thirty_days_ago),
     ).fetchall()
 
     weeks = 4.3  # ~30 days
@@ -289,13 +295,13 @@ def compute_heatmap(
     # Per-channel mini heatmaps (top 10 channels by volume)
     ch_rows = conn.execute(
         """SELECT channel_id,
-             CAST(((ts % 604800) + 345600) / 86400 AS INTEGER) % 7 AS dow,
-             (ts % 86400) / 3600 AS hod,
+             CAST((((ts + ?) % 604800) + 259200) / 86400 AS INTEGER) % 7 AS dow,
+             ((ts + ?) % 86400) / 3600 AS hod,
              COUNT(*) AS cnt
            FROM messages WHERE guild_id=? AND ts>=?
            GROUP BY channel_id, dow, hod
            ORDER BY cnt DESC""",
-        (guild_id, thirty_days_ago),
+        (offset_secs, offset_secs, guild_id, thirty_days_ago),
     ).fetchall()
 
     ch_totals: dict[int, int] = defaultdict(int)
@@ -1409,9 +1415,14 @@ def compute_mod_workload(
     ).fetchall():
         mod_channel_ids.add(r["channel_id"])
 
+    # Voice Master actions are self-service (a mod using their own voice
+    # channel), not moderation work — excluded from workload everywhere below.
+    _not_vm = " AND action NOT LIKE 'vm_%'"
+
     # Total actions (7d) — mod-only when mod_ids provided
     total_actions = conn.execute(
         "SELECT COUNT(*) FROM audit_log WHERE guild_id=? AND created_at>=?"
+        + _not_vm
         + mod_filter,
         (guild_id, seven_days_ago) + mod_params,
     ).fetchone()[0]
@@ -1420,6 +1431,7 @@ def compute_mod_workload(
     mod_rows = conn.execute(
         "SELECT actor_id, COUNT(*) AS cnt FROM audit_log "
         "WHERE guild_id=? AND created_at>=?"
+        + _not_vm
         + mod_filter
         + " GROUP BY actor_id ORDER BY cnt DESC",
         (guild_id, seven_days_ago) + mod_params,
@@ -1492,6 +1504,7 @@ def compute_mod_workload(
     type_rows = conn.execute(
         "SELECT action, COUNT(*) AS cnt FROM audit_log "
         "WHERE guild_id=? AND created_at>=?"
+        + _not_vm
         + mod_filter
         + " GROUP BY action ORDER BY cnt DESC",
         (guild_id, seven_days_ago) + mod_params,

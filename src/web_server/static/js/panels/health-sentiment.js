@@ -1,7 +1,6 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeLineChart, makeHorizontalBarChart } from "../charts.js";
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });

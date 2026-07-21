@@ -77,7 +77,7 @@ def match_channel(prod: dict, dev_channels: list[dict]) -> int | None:
         )
         return None
 
-    # Loose fallback: name + type only (parent may have been reorganised)
+    # Loose fallback: name + type only (parent may have been reorganized)
     fallback = [
         c for c in dev_channels
         if c["name"] == prod["name"] and c["type"] == prod["type"]

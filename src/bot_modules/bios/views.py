@@ -23,6 +23,8 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 
 ControlCallback = Callable[[discord.Interaction], Awaitable[None]]
@@ -85,18 +87,14 @@ class ResumeRestartView(discord.ui.View):
     async def resume(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
+        disable_all_items(self)
         await self._on_resume(interaction)
 
     @discord.ui.button(label="Restart", style=discord.ButtonStyle.danger)
     async def restart(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
+        disable_all_items(self)
         await self._on_restart(interaction)
 
 
@@ -226,9 +224,7 @@ class CombinedStepView(discord.ui.View):
 
     def _wrap_ctrl(self, cb: ControlCallback) -> ControlCallback:
         async def _inner(interaction: discord.Interaction) -> None:
-            for child in self.children:
-                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
-                    child.disabled = True
+            disable_all_items(self)
             await cb(interaction)
         return _inner
 
@@ -236,9 +232,7 @@ class CombinedStepView(discord.ui.View):
         self, on_pick: PickCallback, choice: str
     ) -> ControlCallback:
         async def _inner(interaction: discord.Interaction) -> None:
-            for child in self.children:
-                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
-                    child.disabled = True
+            disable_all_items(self)
             await on_pick(interaction, choice)
         return _inner
 
@@ -346,9 +340,7 @@ class BrowseQuestionsView(discord.ui.View):
 
     def _wrap(self, cb: ControlCallback) -> ControlCallback:
         async def _inner(interaction: discord.Interaction) -> None:
-            for child in self.children:
-                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
-                    child.disabled = True
+            disable_all_items(self)
             await cb(interaction)
         return _inner
 
@@ -362,9 +354,7 @@ class BrowseQuestionsView(discord.ui.View):
         except (TypeError, ValueError):
             await interaction.response.defer()
             return
-        for child in self.children:
-            if isinstance(child, (discord.ui.Button, discord.ui.Select)):
-                child.disabled = True
+        disable_all_items(self)
         await self._on_pick(interaction, qid)
 
 

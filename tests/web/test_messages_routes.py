@@ -2,7 +2,7 @@
 
 These routes have a wide filter surface — author, channel, regex, sentiment,
 emotion, attachments, reactions, time ranges, sort modes, paging. Each test
-seeds a minimal corpus and exercises one filter or behaviour.
+seeds a minimal corpus and exercises one filter or behavior.
 """
 
 from __future__ import annotations

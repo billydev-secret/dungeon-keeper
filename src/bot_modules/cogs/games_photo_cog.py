@@ -1,35 +1,33 @@
 import asyncio
 import io
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
-from discord import app_commands
 from bot_modules.games.utils.game_manager import (
-    check_allowed_channel,
     create_game,
+    get_game_options,
     update_session,
     end_game,
 )
-from bot_modules.games.command_groups import play
-from bot_modules.games.utils.question_source import get_photo_prompt
+from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
-# Reuse only the confession bot's thread-naming helper so the reply thread is
-# named after the prompt, exactly like the Truth-or-Dare card. Photo Challenge
-# has no anonymous replies — people post their photos straight into the thread.
-from bot_modules.services.confessions_service import thread_name_from_content
 
 log = logging.getLogger(__name__)
 
 CARD_FILENAME = "photo.png"
 
 # Header drawn on the card. Plain text — the card header is rendered by PIL
-# with Inter, which has no colour-emoji glyphs (the 📸 lives in GAME_ICONS and
+# with Inter, which has no color-emoji glyphs (the 📸 lives in GAME_ICONS and
 # Discord message text only).
 LABEL = "PHOTO CHALLENGE"
 
 
-async def _resolve_card_image(guild: discord.Guild, bot, host_id: int) -> bytes | None:
+async def _resolve_card_image(guild: discord.Guild | None, bot, host_id: int) -> bytes | None:
     """Bytes for the card background — the server avatar, host avatar fallback.
 
     The card *is* the deliverable, so this tries hard to return something:
@@ -57,87 +55,12 @@ async def _resolve_card_image(guild: discord.Guild, bot, host_id: int) -> bytes 
 
 
 class PhotoCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
     def db(self):
         return self.bot.games_db
-
-    @app_commands.command(
-        name="photo",
-        description="Post a Photo Challenge card and open a thread for everyone's photos!",
-    )
-    @app_commands.describe(
-        tags="Comma-separated tags to filter the prompt bank (include 'nsfw' to allow NSFW)",
-        prompt="Write your own challenge instead of pulling one from the bank (optional)",
-    )
-    async def photo(
-        self,
-        interaction: discord.Interaction,
-        tags: str = "",
-        prompt: str | None = None,
-    ):
-        await self.start_photo(interaction, tags, prompt)
-
-    async def start_photo(
-        self,
-        interaction: discord.Interaction,
-        tags: str = "",
-        prompt: str | None = None,
-    ):
-        log.info(
-            "%s used /games play photo in #%s",
-            interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
-        )
-        if isinstance(interaction.channel, discord.Thread):
-            await interaction.response.send_message(
-                "Run this in a regular text channel — I can't open a new thread from inside a thread.",
-                ephemeral=True,
-            )
-            return
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-
-        custom = (prompt or "").strip()
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        # When no custom prompt is given, pull one from the curated bank now so we
-        # can give a friendly notice (instead of a generic error) if it's empty.
-        text = custom
-        if not text:
-            text = await get_photo_prompt(self.db, tags=tag_list or None)
-            if not text:
-                msg = (
-                    f"📸 No photo challenges match tags: {', '.join(tag_list)}."
-                    if tag_list
-                    else "📸 No photo challenges are in the bank yet — an editor can add some "
-                    "from the **Games Studio** in the web dashboard."
-                )
-                await interaction.response.send_message(msg, ephemeral=True)
-                return
-
-        await interaction.response.defer()
-        game_id = await self.launch(
-            channel=interaction.channel,
-            host_id=interaction.user.id,
-            host_name=interaction.user.display_name,
-            guild_id=interaction.guild_id or 0,
-            options={"tags": tag_list, "prompt": text},
-        )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I couldn't start the game here. Please grant me **View Channel**, "
-                    "**Send Messages**, **Attach Files**, and **Create Public Threads**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
 
     async def launch(
         self,
@@ -148,20 +71,22 @@ class PhotoCog(commands.Cog):
         guild_id: int,
         options: dict,
     ) -> str | None:
-        """Interaction-free launch (slash command + scheduler). Returns game_id, or None.
+        """Interaction-free launch (driven by the Photo Challenge scheduler). Returns game_id, or None.
 
         Returns None when the bank is empty (and no custom prompt was given) so the
         scheduler simply skips the run instead of posting an empty card.
         """
         custom = (options.get("prompt") or "").strip()
         tags = list(options.get("tags") or [])
-        # Backward-compat: legacy scheduled games stored {"nsfw": true}.
-        if options.get("nsfw") and "nsfw" not in tags:
-            tags.append("nsfw")
 
-        text = custom or await get_photo_prompt(self.db, tags=tags or None)
+        text = custom or await get_photo_prompt(
+            self.db, tags=tags or None, allow_nsfw=channel_allows_nsfw(channel)
+        )
         if not text:
-            log.info("photo launch: bank empty for tags=%s in channel %s", tags, channel.id)
+            log.warning(
+                "photo launch: bank empty for tags=%s in channel %s — scheduled run skipped; "
+                "add prompts in the Games Studio", tags, channel.id,
+            )
             return None
 
         guild = getattr(channel, "guild", None)
@@ -183,30 +108,30 @@ class PhotoCog(commands.Cog):
             log.exception("photo launch failed to render card in channel %s", channel.id)
             return None
 
-        # Post the card (bare image — replies are just photos posted in the thread).
+        # Post the card (bare image — members reply with their photos). A
+        # configured ping role (Photo Challenge dashboard) rides along.
+        content = None
+        allowed = discord.utils.MISSING
+        options = await get_game_options(self.db, "photo", guild_id)
         try:
-            msg = await channel.send(file=discord.File(io.BytesIO(card_bytes), filename=CARD_FILENAME))
+            ping_role_id = int(str(options.get("ping_role_id", "")).strip() or 0)
+        except ValueError:
+            ping_role_id = 0
+        if ping_role_id > 0:
+            content = f"<@&{ping_role_id}>"
+            allowed = discord.AllowedMentions(roles=True)
+        try:
+            msg = await channel.send(
+                content=content,
+                file=discord.File(io.BytesIO(card_bytes), filename=CARD_FILENAME),
+                allowed_mentions=allowed,
+            )
         except discord.Forbidden:
             log.warning("photo launch lacked send perms in channel %s", channel.id)
             return None
 
-        # Open the thread (named after the prompt) where members post their photos.
-        thread = None
-        try:
-            thread = await msg.create_thread(
-                name=thread_name_from_content(text), auto_archive_duration=1440
-            )
-        except (discord.HTTPException, discord.Forbidden):
-            log.warning("photo: could not open reply thread in channel %s", channel.id)
-            try:
-                await channel.send(
-                    "⚠️ I couldn't open a reply thread (I need **Create Public Threads**)."
-                )
-            except Exception:
-                pass
-
         # Record the play to history for stats (fire-and-forget: there's no
-        # interactive game state to keep alive — people just post in the thread).
+        # interactive game state to keep alive — people just post in the channel).
         game_id = await create_game(
             self.db,
             channel.id,
@@ -217,18 +142,19 @@ class PhotoCog(commands.Cog):
             payload={
                 "prompt": text,
                 "tags": tags,
-                "thread_id": thread.id if thread is not None else None,
             },
         )
         log.info("Game %s (photo) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
+
         await update_session(self.db, channel.id, game_id, [host_id])
         await end_game(self.db, game_id)
         return game_id
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
+    # No slash command — Photo Challenge is scheduled-only, driven from its own
+    # dashboard feature. The launcher stays registered so the shared scheduler
+    # loop can fire the standalone photo schedules.
     cog = PhotoCog(bot)
     await bot.add_cog(cog)
-    bot.tree.remove_command("photo")
-    play.add_command(cog.photo)
     bot.game_launchers["photo"] = cog.launch

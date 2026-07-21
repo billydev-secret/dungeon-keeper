@@ -20,6 +20,7 @@ from bot_modules.games_traditional.embeds import (
     build_recap_embed,
     build_tod_embed,
 )
+from bot_modules.games.utils.question_source import get_traditional_question
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
     CATEGORIES,
@@ -27,6 +28,7 @@ from bot_modules.games_traditional.logic import (
     available_targets,
     question_pool_size,
     record_asked,
+    select_bank_categories_for_all,
     select_next_question_target,
     summarize_asked_by_category,
     toggle_pref,
@@ -78,6 +80,35 @@ def test_toggle_pref_handles_multiple_users_independently():
     toggle_pref(payload, 2, "nsfw_dare")
     assert payload["participants"] == [1, 2]
     assert payload["prefs"] == {"1": ["sfw_truth"], "2": ["nsfw_dare"]}
+
+
+def test_toggle_pref_single_choice_replaces_existing_pick():
+    """In single-choice mode a new pick swaps out the old one (radio-style)."""
+    payload: dict = {}
+    toggle_pref(payload, 42, "sfw_truth", single_choice=True)
+    action = toggle_pref(payload, 42, "nsfw_dare", single_choice=True)
+    assert action == "switched"
+    assert payload["prefs"]["42"] == ["nsfw_dare"]
+    # Still a single participant entry after the swap
+    assert payload["participants"] == [42]
+
+
+def test_toggle_pref_single_choice_first_pick_is_a_plain_add():
+    """A player's first pick in single-choice mode is an ordinary add, not a swap."""
+    payload: dict = {}
+    action = toggle_pref(payload, 42, "sfw_dare", single_choice=True)
+    assert action == "added"
+    assert payload["prefs"]["42"] == ["sfw_dare"]
+
+
+def test_toggle_pref_single_choice_deselects_to_empty():
+    """Tapping the already-selected category in single-choice mode clears it."""
+    payload: dict = {}
+    toggle_pref(payload, 42, "sfw_truth", single_choice=True)
+    action = toggle_pref(payload, 42, "sfw_truth", single_choice=True)
+    assert action == "removed"
+    assert payload["participants"] == []
+    assert "42" not in payload["prefs"]
 
 
 # ── record_asked ─────────────────────────────────────────────────────
@@ -310,6 +341,21 @@ def test_build_tod_embed_has_footer():
     assert "Truth or Dare" in embed.footer.text
 
 
+def test_build_tod_embed_footer_flags_single_choice():
+    plain = build_tod_embed("Alice", {})
+    single = build_tod_embed("Alice", {"single_choice": True})
+    assert "One category each" not in (plain.footer.text or "")
+    assert "One category each" in (single.footer.text or "")
+
+
+def test_build_lobby_embed_single_choice_changes_prompt_and_footer():
+    plain = build_lobby_embed("Alice")
+    single = build_lobby_embed("Alice", single_choice=True)
+    assert "as many" not in (plain.description or "")  # default prompt unchanged
+    assert "one category" in (single.description or "").lower()
+    assert "One category each" in (single.footer.text or "")
+
+
 # ── build_recap_embed ────────────────────────────────────────────────
 
 
@@ -368,9 +414,9 @@ def test_build_lobby_embed_shows_host_name():
 
 
 def test_build_question_embed_includes_category_label_and_question():
-    embed = build_question_embed("sfw_truth", "What's your favourite color?", "Alice")
+    embed = build_question_embed("sfw_truth", "What's your favorite color?", "Alice")
     assert "SFW TRUTH" in embed.title
-    assert "What's your favourite color?" in embed.description
+    assert "What's your favorite color?" in embed.description
     assert embed.author.name == "For Alice"
 
 
@@ -424,3 +470,118 @@ def test_categories_and_labels_stay_aligned():
 @pytest.mark.parametrize("cat", CATEGORIES)
 def test_each_category_has_a_human_label(cat):
     assert CAT_LABELS[cat]
+
+
+# ── select_bank_categories_for_all ───────────────────────────────────
+
+
+def test_bank_categories_picks_one_per_participant():
+    prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]}
+    chosen = select_bank_categories_for_all(prefs, {}, rng=random.Random(0))
+    assert set(chosen.keys()) == {"1", "2"}
+    assert chosen["1"] in prefs["1"]
+    assert chosen["2"] == "nsfw_dare"
+
+
+def test_bank_categories_omits_players_with_no_prefs():
+    prefs = {"1": ["sfw_truth"], "2": []}
+    chosen = select_bank_categories_for_all(prefs, {})
+    assert set(chosen.keys()) == {"1"}
+
+
+def test_bank_categories_empty_prefs_gives_empty():
+    assert select_bank_categories_for_all({}, {}) == {}
+
+
+def test_bank_categories_skips_already_asked_pairs():
+    # Player 1 was already asked sfw_truth (bank or written — same history),
+    # so only sfw_dare remains for them; player 2 is fully asked and omitted.
+    prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]}
+    asked = {"1:sfw_truth": "q1", "2:nsfw_dare": "q2"}
+    chosen = select_bank_categories_for_all(prefs, asked, rng=random.Random(0))
+    assert chosen == {"1": "sfw_dare"}
+
+
+def test_bank_categories_empty_when_everyone_fully_asked():
+    prefs = {"1": ["sfw_truth"]}
+    asked = {"1:sfw_truth": "q1"}
+    assert select_bank_categories_for_all(prefs, asked) == {}
+
+
+# ── get_traditional_question (bank getter) ───────────────────────────
+
+
+class _FakeDB:
+    """Minimal async db exposing fetchall/execute for the getter."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+        self.served: list[int] = []
+
+    async def fetchall(self, query, params=()):
+        return list(self._rows)
+
+    async def execute(self, query, params=()):
+        (qid,) = params
+        self.served.append(qid)
+
+
+_next_qid = iter(range(1, 10_000))
+
+
+def _row(text, category, last_served_at=None):
+    import json
+    return (next(_next_qid), text, json.dumps([category]), last_served_at)
+
+
+async def test_get_traditional_question_exact_category_match():
+    db = _FakeDB([_row("truth Q", "sfw_truth"), _row("dare Q", "sfw_dare")])
+    got = await get_traditional_question(db, "sfw_truth")
+    assert got == "truth Q"
+
+
+async def test_get_traditional_question_nsfw_is_a_distinct_category():
+    # An sfw category must never serve an nsfw-tagged question.
+    db = _FakeDB([_row("spicy", "nsfw_truth")])
+    assert await get_traditional_question(db, "sfw_truth") is None
+    assert await get_traditional_question(db, "nsfw_truth") == "spicy"
+
+
+async def test_get_traditional_question_excludes_used():
+    db = _FakeDB([_row("a", "sfw_dare"), _row("b", "sfw_dare")])
+    got = await get_traditional_question(db, "sfw_dare", exclude=["a"])
+    assert got == "b"
+
+
+async def test_get_traditional_question_none_when_empty():
+    assert await get_traditional_question(_FakeDB([]), "sfw_truth") is None
+
+
+async def test_get_traditional_question_unknown_category_returns_none():
+    db = _FakeDB([_row("a", "sfw_truth")])
+    assert await get_traditional_question(db, "bogus") is None
+
+
+# ── round-robin: least-recently-served wins over pure randomness ─────
+
+
+async def test_get_traditional_question_prefers_never_served_row():
+    """A never-served row (last_served_at is None) beats a previously-served
+    row every time, regardless of random tiebreaks — a small bank shouldn't
+    repeat a question while an untouched one is still available."""
+    db = _FakeDB([
+        _row("served already", "sfw_truth", last_served_at="2026-07-01 00:00:00"),
+        _row("never served", "sfw_truth", last_served_at=None),
+    ])
+    for _ in range(25):
+        assert await get_traditional_question(db, "sfw_truth") == "never served"
+
+
+async def test_get_traditional_question_marks_the_served_row():
+    """Serving a question records it as served (round-robin state) so the
+    next draw across a separate game session won't repeat it immediately."""
+    db = _FakeDB([_row("only one", "sfw_truth")])
+    qid = db._rows[0][0]
+    got = await get_traditional_question(db, "sfw_truth")
+    assert got == "only one"
+    assert db.served == [qid]

@@ -364,6 +364,16 @@ def test_build_denial_embed_for_view_uses_no_worries_copy():
     by_name = {f.name: f.value or "" for f in embed.fields}
     assert by_name["Request Type"] == "Direct Message"
     assert "not now" in by_name["Reason"]
+    # No reply given → no reply field.
+    assert "Your reply" not in by_name
+
+
+def test_build_denial_embed_for_view_shows_reply_when_given():
+    embed = build_denial_embed_for_view(
+        type_label="Direct Message", reason="not now", reply="maybe later, ok?",
+    )
+    by_name = {f.name: f.value or "" for f in embed.fields}
+    assert "maybe later, ok?" in by_name["Your reply"]
 
 
 # ── build_denial_embed_for_requester ─────────────────────────────────
@@ -384,6 +394,20 @@ def test_build_denial_embed_for_requester_lowercases_label_in_sentence():
     # The field value preserves the original cased label.
     by_name = {f.name: f.value for f in embed.fields}
     assert by_name["Request Type"] == "Friend Request"
+    # No reply given → no "Reply from …" field.
+    assert not any((f.name or "").startswith("Reply from") for f in embed.fields)
+
+
+def test_build_denial_embed_for_requester_shows_reply_from_target():
+    embed = build_denial_embed_for_requester(
+        target_display_name="Bob",
+        guild_name="My Guild",
+        type_label="Friend Request",
+        reason="busy",
+        reply="please don't message me again",
+    )
+    by_name = {f.name: f.value or "" for f in embed.fields}
+    assert by_name["Reply from Bob"] == "please don't message me again"
 
 
 # ── build_request_dm_embed ───────────────────────────────────────────

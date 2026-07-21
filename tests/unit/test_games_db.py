@@ -1,4 +1,9 @@
-"""Unit tests for the GamesDb async adapter."""
+"""Unit tests for the GamesDb async adapter.
+
+Migration 054 seeds a starter 'ffa' bank into ``games_question_bank``, so a
+freshly-migrated DB is never empty — assertions scope to the game_type each
+test inserts (never seeded 'ffa') instead of counting the whole table.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ _INSERT_Q = (
 async def test_execute_inserts_row(sync_db_path):
     db = GamesDb(sync_db_path)
     await db.execute(_INSERT_Q, ("wyr", "sfw", "Would you rather fly or be invisible?"))
-    rows = await db.fetchall("SELECT * FROM games_question_bank")
+    rows = await db.fetchall("SELECT * FROM games_question_bank WHERE game_type = 'wyr'")
     assert len(rows) == 1
     assert rows[0]["question_text"] == "Would you rather fly or be invisible?"
 
@@ -52,7 +57,8 @@ async def test_fetchall_returns_multiple_rows(sync_db_path):
 
 async def test_fetchall_returns_empty_list_when_no_rows(sync_db_path):
     db = GamesDb(sync_db_path)
-    rows = await db.fetchall("SELECT * FROM games_question_bank")
+    # 'wyr' has no seeded rows and nothing was inserted here.
+    rows = await db.fetchall("SELECT * FROM games_question_bank WHERE game_type = 'wyr'")
     assert rows == []
 
 
@@ -60,7 +66,7 @@ async def test_executemany_inserts_batch(sync_db_path):
     db = GamesDb(sync_db_path)
     items = [("mlt", "sfw", f"Q{i}?") for i in range(5)]
     await db.executemany(_INSERT_Q, items)
-    rows = await db.fetchall("SELECT * FROM games_question_bank")
+    rows = await db.fetchall("SELECT * FROM games_question_bank WHERE game_type = 'mlt'")
     assert len(rows) == 5
 
 
@@ -84,7 +90,9 @@ async def test_lastrowid_id_matches_inserted_row(sync_db_path):
 async def test_row_factory_allows_column_name_access(sync_db_path):
     db = GamesDb(sync_db_path)
     await db.execute(_INSERT_Q, ("wyr", "sfw", "Column access test?"))
-    row = await db.fetchone("SELECT * FROM games_question_bank")
+    row = await db.fetchone(
+        "SELECT * FROM games_question_bank WHERE game_type = 'wyr'"
+    )
     assert row is not None
     assert row["game_type"] == "wyr"
     assert row["category"] == "sfw"

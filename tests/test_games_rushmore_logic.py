@@ -27,12 +27,15 @@ from bot_modules.games_rushmore.embeds import (
 from bot_modules.games_rushmore.logic import (
     DRAFT_ROUNDS,
     SKIPPED_MARKER,
+    apply_backfill,
     clamp_settings,
     compute_recap_stats,
     eligible_voters,
     find_who_picked,
+    first_skipped_slot,
     generate_snake_order,
     is_duplicate,
+    players_with_skips,
     tally_votes,
 )
 
@@ -441,7 +444,7 @@ def test_build_join_embed_no_topic():
     assert embed.title is not None
     assert "MT. RUSHMORE DRAFT" in embed.title
     assert embed.description is not None
-    assert "snake draft" in embed.description
+    assert "snake draft" in embed.description.lower()
     # Players field present with count 0
     by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
     assert any("Players (0)" in n for n in by_name)
@@ -695,3 +698,230 @@ def test_build_recap_embed_empty_stats_omits_draft_stats_field():
     )
     field_names = [f.name or "" for f in embed.fields]
     assert not any(n.endswith("Draft Stats") for n in field_names)
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+import time as _time_mod  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_rushmore_cog as rushmore_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_show_recap_pays_drafters(monkeypatch, sync_db_path):
+    """Recap pays the full drafting roster."""
+    spy = AsyncMock()
+    monkeypatch.setattr(rushmore_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "rushmore", payload={"players": [1, 2, 3]})
+    cog = rushmore_cog.RushmoreCog(bot)  # type: ignore[arg-type]
+    draft_view = SimpleNamespace(
+        game_id=gid, _draft_start=_time_mod.time(), boards={}, draft_order=[],
+        all_picks=[], pick_times={}, skipped=[], host_name="Host",
+        topic="Best X", players=[1, 2, 3], host_id=1, mode="snake",
+    )
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await cog._show_recap(draft_view, channel, None, {}, {}, [])  # type: ignore[arg-type]
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]
+    assert call.kwargs["bot"] is bot
+
+
+# ── backfill helpers ─────────────────────────────────────────────────
+
+
+def test_first_skipped_slot_finds_earliest():
+    board = ["A", SKIPPED_MARKER, None, SKIPPED_MARKER]
+    assert first_skipped_slot(board) == 1
+
+
+def test_first_skipped_slot_none_when_no_skips():
+    assert first_skipped_slot(["A", "B", None, "C"]) is None
+    assert first_skipped_slot([]) is None
+
+
+def test_players_with_skips_lists_only_skip_owners():
+    boards = {
+        "1": ["A", "B", "C", "D"],
+        "2": [SKIPPED_MARKER, "X", "Y", "Z"],
+        "3": [SKIPPED_MARKER] * 4,
+    }
+    assert players_with_skips(boards) == ["2", "3"]
+
+
+def test_apply_backfill_fills_first_slot_and_clears_skip_entry():
+    boards = {"7": ["A", SKIPPED_MARKER, SKIPPED_MARKER, "D"]}
+    skipped = ["7_2", "7_3", "9_1"]
+    slot = apply_backfill(boards, skipped, 7, "New Pick")
+    assert slot == 1
+    assert boards["7"] == ["A", "New Pick", SKIPPED_MARKER, "D"]
+    # Only the filled slot's skip entry is removed.
+    assert skipped == ["7_3", "9_1"]
+
+
+def test_apply_backfill_sequential_fills_advance_through_slots():
+    boards = {"7": [SKIPPED_MARKER, "B", SKIPPED_MARKER, "D"]}
+    skipped = ["7_1", "7_3"]
+    assert apply_backfill(boards, skipped, 7, "P1") == 0
+    assert apply_backfill(boards, skipped, 7, "P2") == 2
+    assert apply_backfill(boards, skipped, 7, "P3") is None  # nothing left
+    assert boards["7"] == ["P1", "B", "P2", "D"]
+    assert skipped == []
+
+
+def test_apply_backfill_unknown_player_is_noop():
+    boards = {"7": [SKIPPED_MARKER, None, None, None]}
+    skipped = ["7_1"]
+    assert apply_backfill(boards, skipped, 99, "Pick") is None
+    assert boards["7"][0] == SKIPPED_MARKER
+    assert skipped == ["7_1"]
+
+
+def test_backfilled_pick_makes_player_vote_eligible():
+    boards = {"7": [SKIPPED_MARKER] * 4}
+    assert eligible_voters([7], boards) == []
+    apply_backfill(boards, ["7_1"], 7, "Pick")
+    assert eligible_voters([7], boards) == [7]
+
+
+# ── join embed how-to lines ──────────────────────────────────────────
+
+
+def test_join_embed_snake_explains_turn_based_flow():
+    embed = build_join_embed("Billy", [], "Snacks")
+    assert "How it works" in (embed.description or "")
+    assert "when it's your turn" in embed.description.lower()
+
+
+def test_join_embed_blitz_explains_simultaneous_flow():
+    embed = build_join_embed("Billy", [], "Snacks", mode="blitz")
+    assert "everyone picks at once" in (embed.description or "").lower()
+    assert "fastest fingers" in embed.description.lower()
+
+
+# ── accent color migration (ruling 2026-07-21) ───────────────────────
+#
+# Games follow the guild accent; only the true *win* embed stays semantic
+# green. Every builder takes an optional ``color`` and, absent a guild,
+# falls back to its old per-phase constant (kept only as the no-guild
+# default). These tests pin both the passed-accent path and the fallback.
+
+import discord  # noqa: E402
+
+from bot_modules.games.constants import (  # noqa: E402
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
+from bot_modules.services.embeds import COLOR_GREEN  # noqa: E402
+
+_ACCENT = discord.Color(0x123456)
+
+
+def _sample_boards():
+    return {"1": ["Pizza", "Sushi", "Tacos", "Burgers"]}
+
+
+def test_join_embed_honors_passed_accent():
+    embed = build_join_embed("Host", [], topic="Snacks", color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_join_embed_falls_back_to_phase_joining():
+    embed = build_join_embed("Host", [], topic="Snacks")
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_draft_embed_honors_passed_accent():
+    embed = build_draft_embed(
+        "Host", "Snacks", [(1, "Alice")], {"1": [None] * 4},
+        active_player_id=1, active_player_name="Alice",
+        round_num=1, timer_secs=30, color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_draft_embed_falls_back_to_phase_playing():
+    embed = build_draft_embed(
+        "Host", "Snacks", [(1, "Alice")], {"1": [None] * 4},
+        active_player_id=1, active_player_name="Alice",
+        round_num=1, timer_secs=30,
+    )
+    assert embed.color == discord.Color(PHASE_PLAYING)
+
+
+def test_final_boards_embed_honors_passed_accent():
+    embed = build_final_boards_embed(
+        "Host", "Snacks", [(1, "Alice")], _sample_boards(), color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_final_boards_embed_falls_back_to_phase_results():
+    embed = build_final_boards_embed(
+        "Host", "Snacks", [(1, "Alice")], _sample_boards(),
+    )
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_vote_embed_honors_passed_accent():
+    embed = build_vote_embed("Host", "Snacks", timer_secs=30, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_vote_embed_falls_back_to_phase_playing():
+    embed = build_vote_embed("Host", "Snacks", timer_secs=30)
+    assert embed.color == discord.Color(PHASE_PLAYING)
+
+
+def test_recap_embed_honors_passed_accent():
+    embed = build_recap_embed(
+        "Host", "Snacks", 3, 60.0, ["Alice"], 2,
+        [["A", "B", "C", "D"]], stats={"skipped_count": 0}, color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_recap_embed_falls_back_to_phase_recap():
+    embed = build_recap_embed(
+        "Host", "Snacks", 3, 60.0, ["Alice"], 2,
+        [["A", "B", "C", "D"]], stats={"skipped_count": 0},
+    )
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_winner_embed_is_semantic_green_by_default():
+    """The winner reveal is the game's true *win* — it stays semantic
+    green (not the guild accent) even with no color passed."""
+    embed = build_winner_embed(
+        "Host", "Snacks", ["Alice"], 3,
+        [["Pizza", "Sushi", "Tacos", "Burgers"]],
+        all_results=[("Alice", 3)],
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+
+
+def test_winner_embed_color_override_still_honored():
+    """The ``color`` param is accepted for uniformity, though prod leaves
+    the winner embed semantic green."""
+    embed = build_winner_embed(
+        "Host", "Snacks", ["Alice"], 3,
+        [["Pizza", "Sushi", "Tacos", "Burgers"]],
+        all_results=[("Alice", 3)], color=_ACCENT,
+    )
+    assert embed.color == _ACCENT

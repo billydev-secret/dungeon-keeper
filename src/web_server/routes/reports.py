@@ -28,6 +28,7 @@ from web_server.schemas import (
     ChannelComparisonResponse,
     ChillingEffectResponse,
     DropoffResponse,
+    GrantAuditResponse,
     GreeterResponseResponse,
     InactiveResponse,
     InactiveRoleResponse,
@@ -78,14 +79,13 @@ async def role_growth(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
     role_filter: set[str] | None = None
     if roles is not None:
         role_filter = {r.strip().lower() for r in roles.split(",") if r.strip()}
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_role_growth_data(
                 conn, guild_id, resolution, role_filter, utc_offset_hours=tz
             )
@@ -113,11 +113,10 @@ async def message_cadence(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     ch_id = int(channel_id) if channel_id else None
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_message_cadence_data(
                 conn,
                 guild_id,
@@ -145,8 +144,12 @@ async def join_times(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
+
+    def _get_tz():
+        with ctx.open_db() as conn:
+            return get_tz_offset_hours(conn, guild_id)
+
+    tz = await run_query(_get_tz)
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
@@ -227,8 +230,6 @@ async def nsfw_gender(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
 
     if channel_id:
         target_ids = [int(channel_id)]
@@ -268,6 +269,7 @@ async def nsfw_gender(
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_nsfw_gender_data(
                 conn,
                 guild_id,
@@ -298,11 +300,10 @@ async def message_rate(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     days = max(1, min(365, days))
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_message_rate_data(
                 conn,
                 guild_id,
@@ -333,15 +334,10 @@ async def greeter_response(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
-    greeter_channel_id = (
-        getattr(ctx, "greeter_chat_channel_id", 0)
-        or getattr(ctx, "welcome_channel_id", 0)
-    )
-    log_channel_id = (
-        getattr(ctx, "join_leave_log_channel_id", 0)
-        or getattr(ctx, "leave_channel_id", 0)
-    )
-    greeter_role_id = getattr(ctx, "greeter_role_id", 0)
+    cfg = ctx.guild_config(guild_id)
+    greeter_channel_id = cfg.greeter_chat_channel_id or cfg.welcome_channel_id
+    log_channel_id = cfg.join_leave_log_channel_id or cfg.leave_channel_id
+    greeter_role_id = cfg.greeter_role_id
 
     from datetime import datetime, timedelta, timezone
 
@@ -460,8 +456,6 @@ async def activity(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
     uid = int(user_id) if user_id else None
     cid = int(channel_id) if channel_id else None
 
@@ -481,10 +475,11 @@ async def activity(
         guild = bot.get_guild(guild_id) if bot is not None else None
         if guild is not None:
             excluded_users.update(m.id for m in guild.members if m.bot)
-        excluded_users.update(getattr(ctx, "recorded_bot_user_ids", set()))
+        excluded_users.update(ctx.guild_config(guild_id).recorded_bot_user_ids)
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_activity_data(
                 conn,
                 guild_id,
@@ -656,13 +651,12 @@ async def voice_activity(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_voice_activity_data(
                 conn,
                 guild_id,
@@ -850,8 +844,11 @@ async def channel_comparison(
                     continue
             unresolved_ids.append(int(ch_row["channel_id"]))
         if unresolved_ids:
-            with ctx.open_db() as conn:
-                known = get_known_channels_bulk(conn, guild_id, unresolved_ids)
+            def _fetch_known():
+                with ctx.open_db() as conn:
+                    return get_known_channels_bulk(conn, guild_id, unresolved_ids)
+
+            known = await run_query(_fetch_known)
             for ch_row in result["channels"]:
                 if not ch_row.get("channel_name"):
                     cid = int(ch_row["channel_id"])
@@ -1617,6 +1614,63 @@ async def inactive(
         "channel_id": channel_id,
         "total": len(rows),
         "members": rows,
+    }
+
+
+@router.get("/grant-audit", response_model=GrantAuditResponse)
+async def grant_audit(
+    request: Request,
+    grant_name: str = "nsfw",
+    min_level: int = 5,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Three-bucket audit of members missing a grant role, backed by the
+    role_prune_events ledger: waiting for their first grant, stripped by the
+    inactivity prune but active again, and recently stripped + still inactive."""
+    import time as _time
+
+    from bot_modules.services.role_grant_audit_service import (
+        gather_grant_audit,
+        resolve_grant_audit_buckets,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    cfg = ctx.guild_config(guild_id).grant_roles.get(grant_name)
+    if cfg is None or int(cfg["role_id"]) <= 0:
+        raise HTTPException(404, "Grant role not configured")
+    role = guild.get_role(int(cfg["role_id"]))
+    if role is None:
+        raise HTTPException(404, "Configured role no longer exists")
+
+    min_level = max(1, min_level)
+    role_id = role.id
+    role_name = role.name
+
+    def _q():
+        with ctx.open_db() as conn:
+            return gather_grant_audit(conn, guild_id, role_id, min_level, role_name)
+
+    gathered = await run_query(_q)
+    snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, _time.time())
+
+    def _rows(bucket: list[dict]) -> list[dict]:
+        return [{**r, "user_id": str(r["user_id"])} for r in bucket]
+
+    return {
+        "grant_name": grant_name,
+        "label": cfg["label"],
+        "role_id": str(role_id),
+        "min_level": min_level,
+        "inactivity_days": snap.inactivity_days,
+        "waiting_first_grant": _rows(snap.waiting),
+        "stripped_returned": _rows(snap.returned),
+        "recent_inactive": _rows(snap.inactive),
     }
 
 

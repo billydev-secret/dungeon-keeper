@@ -1,4 +1,11 @@
-"""Privacy commands — let users purge their own data, and let admins do the same for any user."""
+"""Privacy commands — let users clear their own Discord messages, and let admins
+do the same for any user.
+
+These commands only remove messages from Discord. The bot's server-side records
+(XP, activity, profile, and its own copy of the messages) are always retained for
+moderation. The genuine hard-erasure path lives in ``privacy_service.purge_user_data``,
+which is deliberately not wired to any command.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +14,22 @@ import logging
 from typing import TYPE_CHECKING
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.privacy.logic import (
+    MODE_ALL,
+    MODE_MEDIA,
+    MODE_TEXT,
     chunk_for_bulk_delete,
+    confirm_button_label,
     group_messages_by_channel,
     is_forum_thread,
+    message_matches_mode,
     partition_by_bulk_delete_window,
+    render_confirm_prompt,
     render_deletion_summary,
     render_empty_summary,
     render_progress_bar,
@@ -22,7 +37,6 @@ from bot_modules.privacy.logic import (
     should_throttle,
 )
 from bot_modules.services.discord_scan import find_user_messages
-from bot_modules.services.privacy_service import purge_user_data
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -34,21 +48,23 @@ log = logging.getLogger("dungeonkeeper.privacy")
 # ---------------------------------------------------------------------------
 
 class _ConfirmDeleteView(discord.ui.View):
-    def __init__(self, actor_id: int) -> None:
+    def __init__(self, actor_id: int, *, confirm_label: str = "Yes, delete my messages") -> None:
         super().__init__(timeout=60)
         self.actor_id = actor_id
         self.confirmed: bool | None = None
+        # The label is the last thing read before an irreversible click, so it
+        # names the actual scope — a broader claim than "messages" would be a lie.
+        self.confirm.label = confirm_label
 
-    @discord.ui.button(label="Yes, delete everything", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Yes, delete my messages", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if interaction.user.id != self.actor_id:
             await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
             return
         self.confirmed = True
-        for item in self.children:
-            item.disabled = True  # type: ignore[attr-defined]
+        disable_all_items(self)
         await interaction.response.edit_message(
-            content="Deleting your data — this may take a moment…", view=self
+            content="Working on it — this may take a moment…", view=self
         )
         self.stop()
 
@@ -208,21 +224,87 @@ async def _delete_discord_messages(
     return deleted, failed, replaced
 
 
-async def _edit_or_send(
-    interaction: discord.Interaction, content: str
-) -> None:
-    """Update the deletion status. After ~15 minutes the interaction token
-    expires (long scans can hit this); fall back to a DM so the result
-    doesn't appear publicly in the channel."""
-    try:
-        await interaction.edit_original_response(content=content, view=None)
-        return
-    except (discord.HTTPException, discord.NotFound):
-        pass
-    try:
-        await interaction.user.send(content)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+# Progress card colors: in-flight vs. finished.
+_PROGRESS_COLOR = discord.Color.blurple()
+_DONE_COLOR = discord.Color.green()
+
+_PROGRESS_TITLE = "Deleting your messages"
+
+
+def _scan_embed(done: int, total: int, found: int) -> discord.Embed:
+    """The in-progress scan card — status line plus a channel progress bar."""
+    return discord.Embed(
+        title=_PROGRESS_TITLE,
+        description=f"{render_scan_status(done, total, found)}\n{render_progress_bar(done, total)}",
+        color=_PROGRESS_COLOR,
+    )
+
+
+def _delete_embed(done: int, total: int) -> discord.Embed:
+    """The in-progress delete card — a message progress bar."""
+    return discord.Embed(
+        title=_PROGRESS_TITLE,
+        description=f"Deleting…\n{render_progress_bar(done, total)}",
+        color=_PROGRESS_COLOR,
+    )
+
+
+def _summary_embed(description: str) -> discord.Embed:
+    """The final result card."""
+    return discord.Embed(
+        title="Deletion complete",
+        description=description,
+        color=_DONE_COLOR,
+    )
+
+
+class _ProgressReporter:
+    """Delivers deletion progress to a single, continuously-edited message.
+
+    While the slash-command interaction token is alive (~15 min) it edits the
+    original ephemeral response. A full-server scan can outlive that token; the
+    first edit that fails flips us to a DM, and every later update — scan,
+    delete, and the final summary — edits that *same* DM message. The member
+    sees one card that updates in place, not a fresh message (and a fresh push
+    notification) every couple of seconds.
+
+    One reporter must span the whole run: sharing the DM handle across all three
+    phases is what keeps it to a single notification.
+    """
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self._interaction = interaction
+        # Sticky: once the token is gone the ephemeral message is unreachable,
+        # so we never try to edit it again.
+        self._fell_back = False
+        self._dm_message: discord.Message | None = None
+
+    async def update(self, embed: discord.Embed) -> None:
+        if not self._fell_back:
+            try:
+                # content=None clears the "Working on it…" text the confirm view
+                # left behind, so only the embed shows.
+                await self._interaction.edit_original_response(
+                    content=None, embed=embed, view=None
+                )
+                return
+            except (discord.HTTPException, discord.NotFound):
+                self._fell_back = True
+        await self._update_dm(embed)
+
+    async def _update_dm(self, embed: discord.Embed) -> None:
+        if self._dm_message is not None:
+            try:
+                await self._dm_message.edit(content=None, embed=embed)
+                return
+            except (discord.HTTPException, discord.NotFound):
+                # The DM was lost (deleted?) — fall through and send a new one.
+                self._dm_message = None
+        try:
+            self._dm_message = await self._interaction.user.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            # DMs closed — nowhere left to report. Deletion still completes.
+            pass
 
 
 async def _run_deletion(
@@ -231,8 +313,17 @@ async def _run_deletion(
     user_id: int,
     original_interaction: discord.Interaction,
     *,
-    keep_messages: bool = True,
+    mode: str = MODE_ALL,
 ) -> None:
+    # Every mode only clears the member's *Discord* messages; nothing on the
+    # server side is touched. XP, activity, profile, and the bot's own copy of
+    # the messages are retained for moderation — the modes differ only in which
+    # Discord messages (all / images / text) are removed.
+
+    # One reporter for the whole run — it holds the single message everything
+    # edits, so scan, delete, and summary share one card and one notification.
+    reporter = _ProgressReporter(original_interaction)
+
     # Phase 1 — scan Discord directly. Authoritative: doesn't depend on what
     # the local index has captured, so messages from before the bot joined,
     # from downtime, or from channels that were never backfilled all show up.
@@ -240,27 +331,28 @@ async def _run_deletion(
 
     async def _scan_progress(done: int, total: int, found: int) -> None:
         nonlocal last_scan_update
-        # Throttle edits — Discord rate-limits edit_original_response.
+        # Throttle edits — Discord rate-limits message edits.
         now = asyncio.get_running_loop().time()
         if should_throttle(last_scan_update, now, done=done, total=total, interval=2.0):
             return
         last_scan_update = now
-        await _edit_or_send(
-            original_interaction, render_scan_status(done, total, found)
-        )
+        await reporter.update(_scan_embed(done, total, found))
 
     msg_rows = await find_user_messages(
-        guild, user_id, on_progress=_scan_progress
+        guild,
+        user_id,
+        on_progress=_scan_progress,
+        # Filter during the scan: the returned ids carry no attachment detail,
+        # so a mode that selects on content has to decide while the Message is
+        # still in hand.
+        predicate=(
+            None if mode == MODE_ALL else lambda m: message_matches_mode(m, mode)
+        ),
     )
     total = len(msg_rows)
 
     if total == 0:
-        with ctx.open_db() as conn:
-            purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
-        await _edit_or_send(
-            original_interaction,
-            render_empty_summary(keep_messages=keep_messages),
-        )
+        await reporter.update(_summary_embed(render_empty_summary(mode=mode)))
         return
 
     # Phase 2 — delete what we found on Discord. The local archive is safe:
@@ -275,25 +367,21 @@ async def _run_deletion(
         if should_throttle(last_delete_update, now, done=done, total=total, interval=1.5):
             return
         last_delete_update = now
-        await _edit_or_send(
-            original_interaction, f"Deleting… {render_progress_bar(done, total)}"
-        )
+        await reporter.update(_delete_embed(done, total))
 
     discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
         guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
-    with ctx.open_db() as conn:
-        purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
-
-    await _edit_or_send(
-        original_interaction,
-        render_deletion_summary(
-            deleted=discord_deleted,
-            failed=discord_failed,
-            replaced=discord_replaced,
-            keep_messages=keep_messages,
-        ),
+    await reporter.update(
+        _summary_embed(
+            render_deletion_summary(
+                deleted=discord_deleted,
+                failed=discord_failed,
+                replaced=discord_replaced,
+                mode=mode,
+            )
+        )
     )
 
 
@@ -310,9 +398,23 @@ class PrivacyCog(commands.Cog):
 
     @app_commands.command(
         name="delete_me",
-        description="Permanently delete all your messages and data from this server.",
+        description="Delete your messages from this server — all of them, or just images or text.",
     )
-    async def delete_me(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(
+        mode="What to clear from Discord. Your XP, profile, and the server's own records always stay.",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="All my messages", value=MODE_ALL),
+            app_commands.Choice(name="Images & files only", value=MODE_MEDIA),
+            app_commands.Choice(name="Text messages only", value=MODE_TEXT),
+        ]
+    )
+    async def delete_me(
+        self,
+        interaction: discord.Interaction,
+        mode: app_commands.Choice[str] | None = None,
+    ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
                 "This command only works in a server.", ephemeral=True
@@ -326,11 +428,17 @@ class PrivacyCog(commands.Cog):
             )
             return
 
-        view = _ConfirmDeleteView(actor_id=interaction.user.id)
+        # Omitting the option clears all of the member's Discord messages (their
+        # server-side data is kept either way), so muscle-memory /delete_me still
+        # does the broadest message clear.
+        mode_value = mode.value if mode else MODE_ALL
+
+        view = _ConfirmDeleteView(
+            actor_id=interaction.user.id,
+            confirm_label=confirm_button_label(mode_value, self_service=True),
+        )
         await interaction.response.send_message(
-            "⚠️ **This will permanently delete everything you have done in this server** — "
-            "all your messages, XP, activity history, and profile data. "
-            "This cannot be undone.\n\nAre you sure?",
+            render_confirm_prompt(mode=mode_value),
             view=view,
             ephemeral=True,
         )
@@ -340,20 +448,37 @@ class PrivacyCog(commands.Cog):
             await view.wait()
             if not view.confirmed:
                 return
-            await _run_deletion(self.ctx, interaction.guild, interaction.user.id, interaction)
+            await _run_deletion(
+                self.ctx,
+                interaction.guild,
+                interaction.user.id,
+                interaction,
+                mode=mode_value,
+            )
         finally:
             self._active_deletions.discard(interaction.user.id)
 
     @app_commands.command(
         name="delete_user",
-        description="Permanently delete all messages and data for a user from this server.",
+        description="Delete a user's messages from this server — all of them, or just images or text.",
     )
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(member="The user whose data should be erased (works for users who have left).")
+    @app_commands.describe(
+        member="The user whose Discord messages should be cleared (works for users who have left).",
+        mode="What to clear from Discord. Their XP, profile, and the server's own records always stay.",
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="All their messages", value=MODE_ALL),
+            app_commands.Choice(name="Images & files only", value=MODE_MEDIA),
+            app_commands.Choice(name="Text messages only", value=MODE_TEXT),
+        ]
+    )
     async def delete_user(
         self,
         interaction: discord.Interaction,
         member: discord.User,
+        mode: app_commands.Choice[str] | None = None,
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
@@ -374,11 +499,17 @@ class PrivacyCog(commands.Cog):
             )
             return
 
-        view = _ConfirmDeleteView(actor_id=interaction.user.id)
+        mode_value = mode.value if mode else MODE_ALL
+
+        view = _ConfirmDeleteView(
+            actor_id=interaction.user.id,
+            confirm_label=confirm_button_label(mode_value, self_service=False),
+        )
         await interaction.response.send_message(
-            f"⚠️ **This will permanently delete everything {member.mention} has done in this server** — "
-            f"all their messages, XP, activity history, and profile data. "
-            f"This cannot be undone.\n\nAre you sure?",
+            render_confirm_prompt(
+                mode=mode_value,
+                subject=member.mention,
+            ),
             view=view,
             ephemeral=True,
         )
@@ -388,7 +519,13 @@ class PrivacyCog(commands.Cog):
             await view.wait()
             if not view.confirmed:
                 return
-            await _run_deletion(self.ctx, interaction.guild, member.id, interaction, keep_messages=False)
+            await _run_deletion(
+                self.ctx,
+                interaction.guild,
+                member.id,
+                interaction,
+                mode=mode_value,
+            )
         finally:
             self._active_deletions.discard(member.id)
 

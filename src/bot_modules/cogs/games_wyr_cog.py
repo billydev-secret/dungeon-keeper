@@ -1,11 +1,19 @@
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.command_groups import play
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
     create_game,
@@ -16,11 +24,15 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     is_game_expired,
     resolve_name,
-    ConfirmCloseView,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.games.utils.question_source import get_wyr_question, has_matching_questions
-from bot_modules.games_wyr.embeds import build_closed_embed, build_wyr_embed
+from bot_modules.games.utils.question_source import (
+    get_wyr_question,
+    has_matching_questions,
+    channel_allows_nsfw,
+)
+from bot_modules.games_wyr.embeds import build_wyr_embed
 from bot_modules.games_wyr.logic import (
     next_button_label,
     parse_question_input,
@@ -28,6 +40,9 @@ from bot_modules.games_wyr.logic import (
 )
 
 log = logging.getLogger(__name__)
+
+# Cap the player-submitted question queue to prevent flooding.
+_MAX_QUEUED_QUESTIONS = 15
 
 
 class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
@@ -50,7 +65,7 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
         self._message = message
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Question", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Question", channel_name(interaction.channel))
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
@@ -59,12 +74,18 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
         if not a or not b:
             await interaction.response.send_message("Both options are required.", ephemeral=True)
             return
+        if len(self._view.queued_questions) >= _MAX_QUEUED_QUESTIONS:
+            await interaction.response.send_message(
+                f"The question queue is full ({_MAX_QUEUED_QUESTIONS}). Let some play first!",
+                ephemeral=True,
+            )
+            return
         self._view.queued_questions.append((a, b))
         count = len(self._view.queued_questions)
         self._view.next_btn.label = next_button_label(count)
         try:
             await self._message.edit(view=self._view)
-        except Exception:
+        except discord.HTTPException:
             pass
         await interaction.response.send_message("✅ Your question has been queued!", ephemeral=True)
 
@@ -82,6 +103,7 @@ class WYRRoundView(discord.ui.View):
         bot,
         host_name: str,
         advance_callback,
+        accent: "discord.Color | None" = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -94,6 +116,9 @@ class WYRRoundView(discord.ui.View):
         self.bot = bot
         self.host_name = host_name
         self.advance_callback = advance_callback
+        # Guild accent resolved once at view-creation time and reused for
+        # every live vote update (never re-resolved on the per-vote path).
+        self.accent = accent
         self.votes_a: list[int] = []
         self.votes_b: list[int] = []
         self.revealed = False
@@ -104,7 +129,7 @@ class WYRRoundView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -120,11 +145,12 @@ class WYRRoundView(discord.ui.View):
             self.round_num,
             closed=closed,
             revealed=self.revealed,
+            color=self.accent,
         )
 
     @discord.ui.button(label="🅰️ Option A", style=discord.ButtonStyle.primary, custom_id="wyr_a", row=0)
     async def vote_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -135,7 +161,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="🅱️ Option B", style=discord.ButtonStyle.primary, custom_id="wyr_b", row=0)
     async def vote_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -146,15 +172,16 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="✍️ Pose Question", style=discord.ButtonStyle.primary, custom_id="wyr_pose", row=1)
     async def pose_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
+        assert interaction.message  # component interactions always carry their message
         await interaction.response.send_modal(PoseWYRModal(self, interaction.message))
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="wyr_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -166,7 +193,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="👀 Reveal Voters", style=discord.ButtonStyle.secondary, custom_id="wyr_reveal", row=2)
     async def reveal_voters(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can reveal voters.", ephemeral=True)
             return
@@ -174,53 +201,14 @@ class WYRRoundView(discord.ui.View):
         button.disabled = True
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="wyr_close", row=2)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                embed = build_closed_embed(
-                    host_name=self.host_name,
-                    option_a=self.option_a,
-                    option_b=self.option_b,
-                    votes_a=self.votes_a,
-                    votes_b=self.votes_b,
-                    anonymous=self.anonymous,
-                    round_num=self.round_num,
-                    revealed=self.revealed,
-                )
-                await game_msg.edit(embed=embed, view=self)
-            except Exception:
-                pass
-            payload = await get_game_payload(self.db, self.game_id)
-            payload["rounds"][str(self.round_num)]["a"] = self.votes_a
-            payload["rounds"][str(self.round_num)]["b"] = self.votes_b
-            await update_game_payload(self.db, self.game_id, payload)
-            await end_game(self.db, self.game_id, round_count=self.round_num, payload=payload)
-            self.bot.active_views.pop(self.game_id, None)
-            await channel.send("🛑 Game ended by host.")
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="wyr_htp", row=3)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="wyr_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["wyr"], ephemeral=True)
 
 
 class WYRCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -230,7 +218,7 @@ class WYRCog(commands.Cog):
     @app_commands.command(name="wyr", description="Start a Would You Rather game!")
     @app_commands.describe(
         question="Opening question (format: 'option A | option B') — defaults to question bank",
-        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the question bank",
     )
     async def wyr(
         self,
@@ -238,7 +226,7 @@ class WYRCog(commands.Cog):
         question: str = "",
         tags: str = "",
     ):
-        log.info("%s used /wyr in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /wyr in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -257,7 +245,9 @@ class WYRCog(commands.Cog):
             return
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not question.strip() and not await has_matching_questions(self.db, "wyr", tag_list):
+        if tag_list and not question.strip() and not await has_matching_questions(
+            self.db, "wyr", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+        ):
             await interaction.response.send_message(
                 f"No questions match tags: {', '.join(tag_list)} for this game.",
                 ephemeral=True,
@@ -272,15 +262,7 @@ class WYRCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"question": question, "tags": tag_list},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -327,6 +309,36 @@ class WYRCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def _resolve_accent(self, channel) -> "discord.Color | None":
+        """Resolve the guild accent color once, safely.
+
+        Returns ``None`` (letting the embed builder fall back to its
+        default PHASE color) when there's no guild in scope, no bot ctx,
+        or accent resolution raises — a game must never fail to render
+        because branding lookup hiccuped.
+        """
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            return None
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return None
+        try:
+            return await resolve_accent_color(ctx.db_path, guild)
+        except Exception:
+            log.exception("WYR: accent resolution failed; using default color")
+            return None
+
+    async def _voter_roster(self, game_id: str) -> list[int]:
+        """Everyone who voted for either option in any completed round — the
+        real participant set for economy payouts."""
+        payload = await get_game_payload(self.db, game_id)
+        return sorted({
+            int(v)
+            for rd in payload.get("rounds", {}).values()
+            for v in (rd.get("a") or []) + (rd.get("b") or [])
+        })
+
     async def _run_round(
         self,
         interaction,
@@ -342,13 +354,15 @@ class WYRCog(commands.Cog):
             option_a, option_b = custom_question
         else:
             tags = (await get_game_payload(self.db, game_id)).get("tags") or None
-            question = await get_wyr_question(self.db, tags=tags)
+            question = await get_wyr_question(
+                self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel)
+            )
             if not question:
                 await channel.send(
                     "❌ The question bank is empty! Use **✍️ Pose Question** to submit your own, "
                     "or ask an admin to add questions with `/bank add`."
                 )
-                await end_game(self.db, game_id)
+                await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
                 self.bot.active_views.pop(game_id, None)
                 return
             option_a, option_b = question
@@ -358,6 +372,7 @@ class WYRCog(commands.Cog):
         rounds_data[str(round_num)] = {"a": [], "b": [], "q": f"{option_a} OR {option_b}"}
         await update_game_payload(self.db, game_id, payload)
 
+        accent = await self._resolve_accent(channel)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -368,6 +383,7 @@ class WYRCog(commands.Cog):
             option_b=option_b,
             anonymous=payload.get("anonymous", True),
             interaction=interaction,
+            accent=accent,
         )
         if carry_over_queue:
             view.queued_questions = carry_over_queue
@@ -397,6 +413,7 @@ class WYRCog(commands.Cog):
         option_b: str,
         anonymous: bool = True,
         interaction=None,
+        accent: "discord.Color | None" = None,
     ) -> "WYRRoundView":
         """Construct a round view with its advance callback wired.
 
@@ -410,11 +427,10 @@ class WYRCog(commands.Cog):
             view._closed = True
 
             final_embed = view._build_embed(closed=True)
-            for item in view.children:
-                item.disabled = True
+            disable_all_items(view)
             try:
                 await message.edit(embed=final_embed, view=view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             if await is_game_expired(self.db, game_id):
@@ -447,7 +463,7 @@ class WYRCog(commands.Cog):
                 self.bot.active_views.pop(game_id, None)
                 try:
                     await channel.send("❌ Something went wrong advancing the round. Game ended.")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         view = WYRRoundView(
@@ -461,6 +477,7 @@ class WYRCog(commands.Cog):
             bot=self.bot,
             host_name=host_name,
             advance_callback=advance,
+            accent=accent,
         )
         return view
 
@@ -479,6 +496,7 @@ class WYRCog(commands.Cog):
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
 
+        accent = await self._resolve_accent(channel)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -489,6 +507,7 @@ class WYRCog(commands.Cog):
             option_b=option_b,
             anonymous=payload.get("anonymous", True),
             interaction=None,
+            accent=accent,
         )
         view.votes_a = list(rd.get("a", []))
         view.votes_b = list(rd.get("b", []))
@@ -498,10 +517,10 @@ class WYRCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = WYRCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("wyr")
-    play.add_command(cog.wyr)
+    play.add_command(cog.wyr, override=True)
     bot.game_launchers["wyr"] = cog.launch
     bot.game_recoverers["wyr"] = cog.recover_game

@@ -1,6 +1,11 @@
 """Musical Chairs cog — reflex elimination for 3..N players."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -9,9 +14,7 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
-from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
@@ -28,7 +31,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     GAME_KEY = "musical_chairs"
     GAME_DISPLAY_NAME = "Musical Chairs"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
 
@@ -42,7 +45,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     async def _db_get_game(self, game_id: int) -> MusicalChairsGame | None:
         return await mcdb.get_game(self.db, game_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await mcdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
@@ -101,8 +104,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 return
             now = time.time()
             cfg = await mcdb.get_config(self.db, game.guild_id)
-            await mcdb.set_game_state(
-                self.db, game_id, "ACTIVE",
+            await self._db_set_state(
+                game_id, "ACTIVE",
                 phase="SCRAMBLE",
                 seated="[]",
                 chairs=chairs_for(len(game.alive)),
@@ -139,8 +142,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             loser = new_elim[-1] if new_elim else None
             game.alive = survivors
             game.elimination_order = new_elim
-            await mcdb.set_game_state(
-                self.db, game.id, "ACTIVE",
+            await self._db_set_state(
+                game.id, "ACTIVE",
                 alive=json.dumps(survivors),
                 elimination_order=json.dumps(new_elim),
                 seated="[]",
@@ -153,8 +156,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         cfg = await mcdb.get_config(self.db, game.guild_id)
         music = random.uniform(cfg["min_music"], cfg["max_music"])
         new_chairs = chairs_for(len(survivors))
-        await mcdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             phase="MUSIC",
             round=game.round + 1,
             chairs=new_chairs,
@@ -229,8 +232,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                     )
                     return
                 new_seated = list(game.seated) + [uid]
-                await mcdb.set_game_state(
-                    self.db, game_id, "ACTIVE",
+                await self._db_set_state(
+                    game_id, "ACTIVE",
                     seated=json.dumps(new_seated), last_action_at=time.time(),
                 )
                 game.seated = new_seated
@@ -253,8 +256,8 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         cfg = await mcdb.get_config(self.db, game.guild_id)
         music = random.uniform(cfg["min_music"], cfg["max_music"])
         now = time.time()
-        await mcdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             phase="MUSIC",
             round=1,
             chairs=chairs_for(len(game.alive)),
@@ -332,6 +335,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner_name = self._name(guild, game.winner_id) if game.winner_id else "?"
@@ -352,7 +356,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:
@@ -368,123 +372,27 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
     def build_game_view(self, game_id: int) -> SitView:
         # SIT routes through _on_sit (not _handle_group_button) because Musical Chairs'
-        # button has phase-dependent behaviour (false-start vs seat-claim) and can
+        # button has phase-dependent behavior (false-start vs seat-claim) and can
         # eliminate multiple players at once on round close.
         return SitView(game_id, self._on_sit)
 
     # ── Slash commands ────────────────────────────────────────────────────────
 
     @musicalchairs.command(name="start", description="Open a Musical Chairs lobby")
-    @app_commands.describe(stakes="Optional custom stakes text (max 200 chars)")
-    async def mc_start(
-        self, interaction: discord.Interaction, stakes: str | None = None
-    ) -> None:
-        await self._base_lobby(interaction, stakes)
-
-    @musicalchairs.command(name="stats", description="View Musical Chairs stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def mc_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await mcdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        embed = discord.Embed(
-            title=f"🪑 Musical Chairs — {target.display_name}", color=COLOR_GOLD
-        )
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Runner-up", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
-    @musicalchairs.command(name="config", description="Configure Musical Chairs (mods only)")
     @app_commands.describe(
-        cooldown_hours="Hours before a player can join another game (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        min_music="Minimum music seconds (default 5)",
-        max_music="Maximum music seconds (default 15)",
-        scramble_window="Seconds to grab a chair after the music stops (default 8)",
-        false_start_elim="Eliminate players who sit during the music: 0=no, 1=yes",
-        min_players="Minimum players to start (default 3)",
-        max_players="Maximum players in a lobby (default 10)",
+        stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — every player antes this; winner takes the pot",
     )
-    async def mc_config(
+    async def mc_start(
         self,
         interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        min_music: float | None = None,
-        max_music: float | None = None,
-        scramble_window: float | None = None,
-        false_start_elim: int | None = None,
-        min_players: int | None = None,
-        max_players: int | None = None,
+        stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure this game.", ephemeral=True
-            )
-            return
+        await self._base_lobby(interaction, stakes, wager)
 
-        shared_updates: dict = {}
-        game_updates: dict = {}
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if min_music is not None:
-            game_updates["min_music"] = max(2.0, min_music)
-        if max_music is not None:
-            game_updates["max_music"] = max(3.0, max_music)
-        if scramble_window is not None:
-            game_updates["scramble_window"] = max(2.0, scramble_window)
-        if false_start_elim is not None:
-            game_updates["false_start_elim"] = 1 if false_start_elim else 0
-        if min_players is not None:
-            game_updates["min_players"] = max(3, min_players)
-        if max_players is not None:
-            game_updates["max_players"] = max(3, max_players)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await mcdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Musical Chairs Config", color=COLOR_GOLD)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(
-                self.db, interaction.guild.id, self.GAME_KEY, **shared_updates
-            )
-        if game_updates:
-            await mcdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = MusicalChairsCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats", "config"):
-        cog.musicalchairs.remove_command(name)
     bot.tree.remove_command("musicalchairs")
     games.add_command(cog.musicalchairs)

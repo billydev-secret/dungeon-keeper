@@ -1,4 +1,11 @@
-"""Tests for slash command handlers."""
+"""Tests for slash command handlers.
+
+The /grant command lives in ``bot_modules.cogs.role_grant_cog`` (RoleGrantCog),
+which resolves the grant config and delegates to
+``bot_modules.commands.role_grant_commands._execute_grant``. Tests drive the
+cog's command callback directly so both the permission/config gate and the
+shared execution path are covered.
+"""
 
 from __future__ import annotations
 
@@ -8,34 +15,10 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from bot_modules.commands.role_grant_commands import register_role_grant_commands
+from bot_modules.cogs.role_grant_cog import RoleGrantCog
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
-
-class _CommandCapture:
-    """Captures slash command callbacks registered via bot.tree.command."""
-
-    def __init__(self):
-        self.commands: dict[str, Any] = {}
-        self.error_handler = None
-        bot = MagicMock()
-        bot.tree.command = self._capture_command
-        bot.tree.error = self._capture_error
-        self.bot = bot
-
-    def _capture_command(self, name: str, **kwargs):
-        def decorator(fn):
-            self.commands[name] = fn
-            return fn
-        return decorator
-
-    def _capture_error(self, fn):
-        self.error_handler = fn
-        return fn
-
-    def get(self, name: str):
-        return self.commands[name]
 
 
 def _make_interaction(*, user_id: int = 100, guild: Any = None, channel: Any = None) -> MagicMock:
@@ -124,13 +107,12 @@ def _guild_with_role(role):
 
 @pytest.fixture
 def grant_setup():
-    cap = _CommandCapture()
     ctx = _make_ctx(can_grant_any_role=True, denizen_role_id=999)
-    register_role_grant_commands(cap.bot, ctx)
-    cmd = cap.get("grant")
+    cog = RoleGrantCog(MagicMock(), ctx)
+    cmd = RoleGrantCog.grant_cmd.callback
 
     async def grant(interaction, member):
-        return await cmd(interaction, "denizen", member)
+        return await cmd(cog, interaction, "denizen", member)
 
     return ctx, grant
 
@@ -245,3 +227,139 @@ async def test_grant_success_posts_public_message(grant_setup):
     ix.response.defer.assert_awaited_once()
     ix.followup.send.assert_awaited_once()
     assert "granted" in ix.followup.send.call_args[0][0].lower()
+
+
+# ── /grant closes the prune ledger ───────────────────────────────────────
+# (The old /grant_missing audit moved to the dashboard's Grant Audit panel;
+# its bucketing coverage lives in tests/test_role_grant_audit_logic.py.)
+
+
+async def test_grant_marks_open_prune_event_restored(grant_setup, tmp_path):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.role_grant_audit_service import (
+        get_open_prune_events,
+        record_prune_events,
+    )
+    from migrations import apply_migrations_sync
+
+    guild_id = 12345
+    db_path = tmp_path / "grant.db"
+    apply_migrations_sync(db_path)
+
+    ctx, grant = grant_setup
+    ctx.open_db = lambda: open_db(db_path)
+
+    denizen_role = _MockRole(position=1, role_id=999)
+    guild = _guild_with_role(denizen_role)
+    guild.id = guild_id
+    ix = _make_interaction(guild=guild)
+    member = _make_member(user_id=201)
+
+    with open_db(db_path) as conn:
+        record_prune_events(conn, guild_id, [201], 999, 100.0)
+
+    await grant(ix, member)
+
+    member.add_roles.assert_awaited_once()
+    with open_db(db_path) as conn:
+        assert get_open_prune_events(conn, guild_id, 999) == []
+        row = conn.execute(
+            "SELECT restored_at FROM role_prune_events WHERE user_id = 201"
+        ).fetchone()
+        assert row["restored_at"] is not None
+
+
+# ── /grant_audit card posting ────────────────────────────────────────────
+
+
+@pytest.fixture
+def grant_audit_setup(tmp_path):
+    from bot_modules.core.db_utils import open_db
+    from migrations import apply_migrations_sync
+
+    db_path = tmp_path / "audit_card.db"
+    apply_migrations_sync(db_path)
+
+    ctx = _make_ctx(is_mod=True)
+    ctx.grant_roles["nsfw"]["role_id"] = 555
+    ctx.open_db = lambda: open_db(db_path)
+    ctx.db_path = db_path
+    cog = RoleGrantCog(MagicMock(), ctx)
+    cmd = RoleGrantCog.grant_audit_cmd.callback
+
+    async def grant_audit(interaction, role="nsfw", min_level=5, channel=None):
+        return await cmd(cog, interaction, role, min_level, channel)
+
+    return ctx, grant_audit, db_path
+
+
+def _audit_guild():
+    role = _MockRole(role_id=555, name="NSFW")
+    role.members = []
+    guild = MagicMock()
+    guild.id = 12345
+    guild.me = None
+    guild.get_role = MagicMock(return_value=role)
+    guild.get_member = MagicMock(return_value=None)
+    return guild
+
+
+def _audit_channel(channel_id=777):
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = channel_id
+    channel.mention = f"<#{channel_id}>"
+    message = MagicMock()
+    message.id = 2**60 + 7
+    channel.send = AsyncMock(return_value=message)
+    channel.fetch_message = AsyncMock()
+    return channel, message
+
+
+async def test_grant_audit_denied_for_non_mod(grant_audit_setup):
+    ctx, grant_audit, _ = grant_audit_setup
+    ctx.is_mod.return_value = False
+    ix = _make_interaction(guild=_audit_guild())
+    await grant_audit(ix)
+    assert "permission" in ix.response.send_message.call_args[0][0].lower()
+
+
+async def test_grant_audit_posts_card_and_stores_ref(grant_audit_setup):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.role_grant_audit_service import load_card_ref
+
+    ctx, grant_audit, db_path = grant_audit_setup
+    guild = _audit_guild()
+    channel, message = _audit_channel()
+    ix = _make_interaction(guild=guild, channel=channel)
+
+    await grant_audit(ix)
+
+    channel.send.assert_awaited_once()
+    embed = channel.send.call_args.kwargs["embed"]
+    assert embed.title == "📋 Grant audit — NSFW"
+    with open_db(db_path) as conn:
+        ref = load_card_ref(conn, 12345)
+    assert (ref.channel_id, ref.message_id) == (channel.id, message.id)
+    assert (ref.grant_name, ref.min_level) == ("nsfw", 5)
+    assert "is live" in ix.followup.send.call_args[0][0]
+
+
+async def test_grant_audit_repost_same_channel_edits_in_place(grant_audit_setup):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.role_grant_audit_service import save_card_ref
+
+    ctx, grant_audit, db_path = grant_audit_setup
+    guild = _audit_guild()
+    channel, _ = _audit_channel()
+    old_message = MagicMock()
+    old_message.id = 424242
+    old_message.edit = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=old_message)
+    with open_db(db_path) as conn:
+        save_card_ref(conn, 12345, channel.id, old_message.id, "nsfw", 5)
+    ix = _make_interaction(guild=guild, channel=channel)
+
+    await grant_audit(ix)
+
+    old_message.edit.assert_awaited_once()
+    channel.send.assert_not_awaited()

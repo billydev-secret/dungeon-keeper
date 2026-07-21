@@ -1,6 +1,6 @@
 """Music cog -- YouTube and Spotify playback via wavelink + Lavalink.
 
-Spec: MUSIC_COG_CLAUDE_CODE_SPEC.md (overrides documented in
+Spec: docs/music_spec.md (overrides documented in
 ~/.claude/plans/take-a-look-at-zippy-lemur.md).
 """
 
@@ -17,6 +17,7 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.music.embeds import build_247_status_embed, build_queue_embed
 from bot_modules.music.logic import (
     format_247_status_line,
@@ -274,6 +275,16 @@ class MusicCog(commands.Cog):
             getattr(player, "connected", "?"),
             len(queue.tracks),
         )
+
+        # Quest hook: one successful /play per guild-local day counts — the
+        # day-keyed occurrence means a 30-track playlist and 30 separate
+        # requests look the same, so queue spam never multi-pays. Guarded.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, guild.id, requester_id, "music_request",
+            daily_occurrence=True,
+        )
         if not player.playing:
             await self._play_next(player, queue)
             await interaction.followup.send(summary)
@@ -430,6 +441,7 @@ class MusicCog(commands.Cog):
         start, end, total_pages, normalized_page = paginate_queue(total, page)
         items = list(queue.tracks)[start:end]
 
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_queue_embed(
             current_summary=(
                 self._track_summary(queue.current)
@@ -442,6 +454,7 @@ class MusicCog(commands.Cog):
             page=normalized_page,
             total_pages=total_pages,
             loop_mode_value=queue.loop_mode.value,
+            color=accent,
         )
         await interaction.response.send_message(embed=embed)
 
@@ -504,7 +517,10 @@ class MusicCog(commands.Cog):
             if queue.requester_for(queue.current)
             else None
         )
-        embed = build_embed(queue.current, queue, requester, paused=player.paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_embed(
+            queue.current, queue, requester, paused=player.paused, color=accent
+        )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
         await interaction.response.send_message(embed=embed, view=view)
@@ -531,8 +547,15 @@ class MusicCog(commands.Cog):
         if ch_id is not None:
             settings = self._get_settings(guild.id, ch_id)
             if settings and settings.always_on:
-                with self.ctx.open_db() as conn:
-                    set_always_on(conn, guild.id, ch_id, False, interaction.user.id)
+                _guild_id = guild.id
+                _ch_id = ch_id
+                _user_id = interaction.user.id
+
+                def _do_disable_always_on():
+                    with self.ctx.open_db() as conn:
+                        set_always_on(conn, _guild_id, _ch_id, False, _user_id)
+
+                await asyncio.to_thread(_do_disable_always_on)
                 await interaction.response.send_message(
                     "Disconnected. 24/7 disabled for this channel."
                 )
@@ -572,17 +595,21 @@ class MusicCog(commands.Cog):
             await self._ephemeral(interaction, "autoplay_playlist must be a Spotify URL.")
             return
 
-        with self.ctx.open_db() as conn:
-            previous = list_always_on_channels(conn, guild.id)
-            cleared = [s for s in previous if s.voice_channel_id != ch_id and s.always_on]
-            for s in cleared:
-                set_always_on(conn, guild.id, s.voice_channel_id, False, interaction.user.id)
-            set_always_on(conn, guild.id, ch_id, enabled, interaction.user.id)
-            if autoplay_playlist:
-                set_autoplay_playlist(
-                    conn, guild.id, ch_id, autoplay_playlist, interaction.user.id
-                )
+        _guild_id = guild.id
+        _user_id = interaction.user.id
 
+        def _do_247_toggle():
+            with self.ctx.open_db() as conn:
+                _previous = list_always_on_channels(conn, _guild_id)
+                _cleared = [s for s in _previous if s.voice_channel_id != ch_id and s.always_on]
+                for s in _cleared:
+                    set_always_on(conn, _guild_id, s.voice_channel_id, False, _user_id)
+                set_always_on(conn, _guild_id, ch_id, enabled, _user_id)
+                if autoplay_playlist:
+                    set_autoplay_playlist(conn, _guild_id, ch_id, autoplay_playlist, _user_id)
+            return _cleared
+
+        cleared = await asyncio.to_thread(_do_247_toggle)
         cleared_mentions: list[str] = []
         join_error: str | None = None
         if enabled:
@@ -614,8 +641,13 @@ class MusicCog(commands.Cog):
         if guild is None:
             await self._ephemeral(interaction, "Use in a server.")
             return
-        with self.ctx.open_db() as conn:
-            entries = list_always_on_channels(conn, guild.id)
+        _guild_id = guild.id
+
+        def _do_list_always_on():
+            with self.ctx.open_db() as conn:
+                return list_always_on_channels(conn, _guild_id)
+
+        entries = await asyncio.to_thread(_do_list_always_on)
         if not entries:
             await interaction.response.send_message("No 24/7 channels configured.")
             return
@@ -626,7 +658,8 @@ class MusicCog(commands.Cog):
             lines.append(
                 format_247_status_line(mention, bool(s.autoplay_playlist_url))
             )
-        embed = build_247_status_embed(lines)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_247_status_embed(lines, color=accent)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -762,7 +795,10 @@ class MusicCog(commands.Cog):
 
         requester_id = queue.requester_for(track)
         requester = guild.get_member(requester_id) if requester_id else None
-        embed = build_embed(track, queue, requester, paused=player.paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_embed(
+            track, queue, requester, paused=player.paused, color=accent
+        )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
         try:
@@ -842,13 +878,19 @@ class MusicCog(commands.Cog):
         if not isinstance(channel, discord.VoiceChannel):
             return
         guild = channel.guild
-        with self.ctx.open_db() as conn:
-            settings = get_channel_settings(conn, guild.id, channel.id)
-            if settings:
-                clear_channel(conn, guild.id, channel.id)
-                log.info(
-                    "cleared music settings for deleted voice channel %s", channel.id
-                )
+        _guild_id = guild.id
+        _channel_id = channel.id
+
+        def _do_clear_channel():
+            with self.ctx.open_db() as conn:
+                _settings = get_channel_settings(conn, _guild_id, _channel_id)
+                if _settings:
+                    clear_channel(conn, _guild_id, _channel_id)
+                    log.info(
+                        "cleared music settings for deleted voice channel %s", _channel_id
+                    )
+
+        await asyncio.to_thread(_do_clear_channel)
         player = self._player(guild)
         if player is not None and player.channel and player.channel.id == channel.id:
             with contextlib.suppress(Exception):
@@ -911,15 +953,17 @@ class MusicCog(commands.Cog):
                 if any(node.status == wavelink.NodeStatus.CONNECTED for node in wavelink.Pool.nodes.values()):
                     break
             except Exception:
-                pass
+                log.exception("wavelink node status check")
             await asyncio.sleep(1.0)
         else:
             log.warning("no wavelink node connected after %ss; aborting 24/7 rejoin", _REJOIN_NODE_WAIT_S)
             return
 
-        with self.ctx.open_db() as conn:
-            entries = list_all_always_on(conn)
+        def _do_list_all_always_on():
+            with self.ctx.open_db() as conn:
+                return list_all_always_on(conn)
 
+        entries = await asyncio.to_thread(_do_list_all_always_on)
         for s in entries:
             try:
                 guild = self.bot.get_guild(s.guild_id)
@@ -986,11 +1030,13 @@ class MusicCog(commands.Cog):
         await player.pause(new_paused)
         queue = self._queue(guild.id)
         view.refresh_for(queue, paused=new_paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_embed(
             queue.current,
             queue,
             guild.get_member(queue.requester_for(queue.current) or 0),
             paused=new_paused,
+            color=accent,
         ) if queue.current else None
         if embed is not None:
             await interaction.response.edit_message(embed=embed, view=view)
@@ -1056,11 +1102,13 @@ class MusicCog(commands.Cog):
         player = self._player(guild)
         paused = bool(player and player.paused)
         view.refresh_for(queue, paused=paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_embed(
             queue.current,
             queue,
             guild.get_member(queue.requester_for(queue.current) or 0),
             paused=paused,
+            color=accent,
         ) if queue.current else None
         if embed is not None:
             await interaction.response.edit_message(embed=embed, view=view)

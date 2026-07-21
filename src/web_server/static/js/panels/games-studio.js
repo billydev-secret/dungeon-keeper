@@ -6,7 +6,7 @@ import { apiPut, showStatus } from "../config-helpers.js";
 const GAME_NAMES = {
   wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
   rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
-  photo: "Photo Challenge",
+  photo: "Photo Challenge", pen_pals: "Pen Pals",
 };
 
 const GAME_HINTS = {
@@ -18,6 +18,7 @@ const GAME_HINTS = {
   clapback: "Generates provocative debate topics.",
   ama:      "Generates anonymous question prompts.",
   photo:    "Generates photo-challenge prompts players answer with a picture.",
+  pen_pals: "Generates getting-to-know-you conversation starters for matched pen pals.",
 };
 
 export function mount(container, params = {}) {
@@ -53,7 +54,7 @@ export function mount(container, params = {}) {
         <div class="section-label">Test Generation</div>
         <div class="form">
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
-            <div class="field" style="margin:0;">
+            <div class="field m-0">
               <label>Category
                 <select data-ctrl="cat">
                   <option value="sfw">SFW</option>
@@ -61,7 +62,7 @@ export function mount(container, params = {}) {
                 </select>
               </label>
             </div>
-            <div class="field" style="margin:0;">
+            <div class="field m-0">
               <label>Count
                 <select data-ctrl="count">
                   <option value="1">1</option>
@@ -74,10 +75,10 @@ export function mount(container, params = {}) {
             </div>
             <button class="btn btn-primary" data-action="generate">Generate</button>
           </div>
-          <div style="margin-top:8px;">
+          <div class="mt-8">
             <button class="btn" data-action="toggle-custom" style="font-size:12px;padding:2px 8px;">Custom prompt</button>
             <div data-region="custom-prompt" style="display:none;margin-top:6px;">
-              <textarea data-ctrl="custom-prompt" rows="3" style="width:100%;" placeholder="Override the user prompt sent to the AI (optional)"></textarea>
+              <textarea class="w-full" data-ctrl="custom-prompt" rows="3" placeholder="Override the user prompt sent to the AI (optional)"></textarea>
             </div>
           </div>
         </div>
@@ -101,13 +102,13 @@ export function mount(container, params = {}) {
       region("game-form").innerHTML = `
         <div class="field">
           <label>Descriptor
-            <input type="text" data-ctrl="descriptor" value="${esc((g.descriptor || "")).replace(/"/g, "&quot;")}" style="width:100%;" />
+            <input class="w-full" type="text" data-ctrl="descriptor" value="${esc((g.descriptor || "")).replace(/"/g, "&quot;")}" />
           </label>
           <div class="field-hint">Short label used in the AI system prompt context.</div>
         </div>
         <div class="field">
           <label>User prompt
-            <textarea data-ctrl="user_prompt" rows="4" style="width:100%;">${esc(g.user_prompt || "")}</textarea>
+            <textarea class="w-full" data-ctrl="user_prompt" rows="4">${esc(g.user_prompt || "")}</textarea>
           </label>
         </div>
         <div class="field">
@@ -124,18 +125,18 @@ export function mount(container, params = {}) {
       region("global-form").innerHTML = `
         <div class="field">
           <label>Audience description
-            <textarea data-ctrl="audience" rows="3" style="width:100%;">${esc(cfg.audience || "")}</textarea>
+            <textarea class="w-full" data-ctrl="audience" rows="3">${esc(cfg.audience || "")}</textarea>
           </label>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
-          <div class="field" style="margin:0;">
+          <div class="field m-0">
             <label>SFW tone
-              <textarea data-ctrl="sfw_tone" rows="3" style="width:100%;">${esc(cfg.sfw_tone || "")}</textarea>
+              <textarea class="w-full" data-ctrl="sfw_tone" rows="3">${esc(cfg.sfw_tone || "")}</textarea>
             </label>
           </div>
-          <div class="field" style="margin:0;">
+          <div class="field m-0">
             <label>NSFW tone
-              <textarea data-ctrl="nsfw_tone" rows="3" style="width:100%;">${esc(cfg.nsfw_tone || "")}</textarea>
+              <textarea class="w-full" data-ctrl="nsfw_tone" rows="3">${esc(cfg.nsfw_tone || "")}</textarea>
             </label>
           </div>
         </div>

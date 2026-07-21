@@ -14,6 +14,7 @@ from pathlib import Path
 import discord
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
     accept_partner_request,
     dissolve_partnership,
@@ -92,7 +93,7 @@ class WellnessPartnerAcceptButton(
             embed = discord.Embed(
                 title="💚 Partner request accepted!",
                 description=f"**{interaction.user.display_name}** is now your accountability partner.",
-                color=discord.Color.from_str("#7BC97B"),
+                color=discord.Color(WELLNESS_PRIMARY),
             )
             await requester.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):

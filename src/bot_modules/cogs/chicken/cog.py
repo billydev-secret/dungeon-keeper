@@ -1,6 +1,11 @@
 """Chicken cog — brinkmanship for 2..N players. Hold your nerve or bail before the crash."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -8,7 +13,6 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
@@ -36,7 +40,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     GAME_KEY = "chicken"
     GAME_DISPLAY_NAME = "Chicken"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         # Chicken runs TWO concurrent tasks per game: the crash deadline + the meter
         # ticker that edits the embed as the bar climbs.
@@ -52,7 +56,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     async def _db_get_game(self, game_id: int) -> ChickenGame | None:
         return await chdb.get_game(self.db, game_id)
 
-    async def _db_set_state(self, game_id: int, state: str, **kw) -> None:
+    async def _db_write_state(self, game_id: int, state: str, **kw) -> None:
         await chdb.set_game_state(self.db, game_id, state, **kw)
 
     async def _db_create_lobby(
@@ -158,8 +162,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-        await chdb.set_game_state(
-            self.db, game.id, "RESOLVED_NO_NICK",
+        await self._db_set_state(
+            game.id, "RESOLVED_NO_NICK",
             winner_id=winner_id,
             result_message_id=result_message_id,
             resolved_at=now,
@@ -192,8 +196,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             new_bail = list(game.bail_log) + [
                 {"player_id": uid, "bail_ts": now, "meter_pct": pct}
             ]
-            await chdb.set_game_state(
-                self.db, game_id, "ACTIVE",
+            await self._db_set_state(
+                game_id, "ACTIVE",
                 alive=json.dumps(new_alive),
                 bail_log=json.dumps(new_bail),
                 last_action_at=now,
@@ -220,8 +224,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         cfg = await chdb.get_config(self.db, game.guild_id)
         duration = float(cfg["climb_duration"])
         now = time.time()
-        await chdb.set_game_state(
-            self.db, game.id, "ACTIVE",
+        await self._db_set_state(
+            game.id, "ACTIVE",
             phase="CLIMBING",
             climb_started_at=now,
             climb_duration=duration,
@@ -295,6 +299,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         if game.loser_id is not None:
@@ -320,7 +325,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             if imposed_nick:
                 embed.add_field(
                     name="🏷️ Nickname Applied",
-                    value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                    value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                     inline=False,
                 )
             elif game.stakes_text is None:
@@ -363,102 +368,20 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     # ── Slash commands ────────────────────────────────────────────────────────
 
     @chicken.command(name="start", description="Open a Chicken lobby")
-    @app_commands.describe(stakes="Optional custom stakes text (max 200 chars)")
-    async def ch_start(
-        self, interaction: discord.Interaction, stakes: str | None = None
-    ) -> None:
-        await self._base_lobby(interaction, stakes)
-
-    @chicken.command(name="stats", description="View Chicken stats")
-    @app_commands.describe(user="User to look up (defaults to yourself)")
-    async def ch_stats(
-        self, interaction: discord.Interaction, user: discord.Member | None = None
-    ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        target = user or interaction.user
-        stats = await chdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        embed = discord.Embed(title=f"🐔 Chicken — {target.display_name}", color=COLOR_GOLD)
-        embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
-        embed.add_field(name="Crashes", value=str(stats["losses"]), inline=True)
-        embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
-        await interaction.response.send_message(embed=embed)
-
-    @chicken.command(name="config", description="Configure Chicken (mods only)")
     @app_commands.describe(
-        cooldown_hours="Hours before a player can join another game (default 48)",
-        sentence_hours="Hours the imposed nickname lasts (default 24)",
-        climb_duration="Seconds for the meter to climb 0→100 (default 25)",
-        min_players="Minimum players to start (default 2)",
-        max_players="Maximum players in a lobby (default 8)",
+        stakes="Optional custom stakes text (max 200 chars)",
+        wager="Optional coin wager — every player antes this; winner takes the pot",
     )
-    async def ch_config(
+    async def ch_start(
         self,
         interaction: discord.Interaction,
-        cooldown_hours: int | None = None,
-        sentence_hours: int | None = None,
-        climb_duration: float | None = None,
-        min_players: int | None = None,
-        max_players: int | None = None,
+        stakes: str | None = None,
+        wager: int | None = None,
     ) -> None:
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-        if not interaction.user.guild_permissions.manage_guild:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "You need the Manage Server permission to configure this game.", ephemeral=True
-            )
-            return
+        await self._base_lobby(interaction, stakes, wager)
 
-        shared_updates: dict = {}
-        game_updates: dict = {}
-        if cooldown_hours is not None:
-            shared_updates["cooldown_hours"] = max(0, cooldown_hours)
-        if sentence_hours is not None:
-            shared_updates["sentence_hours"] = max(1, sentence_hours)
-        if climb_duration is not None:
-            game_updates["climb_duration"] = max(5.0, climb_duration)
-        if min_players is not None:
-            game_updates["min_players"] = max(2, min_players)
-        if max_players is not None:
-            game_updates["max_players"] = max(2, max_players)
-
-        if not shared_updates and not game_updates:
-            shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
-            game_cfg = await chdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Chicken Config", color=COLOR_GOLD)
-            for k, v in shared_cfg.items():
-                if k not in ("guild_id", "game_type"):
-                    embed.add_field(name=k, value=str(v), inline=True)
-            for k, v in game_cfg.items():
-                if k != "guild_id":
-                    embed.add_field(name=k, value=str(v), inline=True)
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        if shared_updates:
-            await duels_db.upsert_config(
-                self.db, interaction.guild.id, self.GAME_KEY, **shared_updates
-            )
-        if game_updates:
-            await chdb.upsert_config(self.db, interaction.guild.id, **game_updates)
-
-        all_updates = {**shared_updates, **game_updates}
-        lines = [f"**{k}** → `{v}`" for k, v in all_updates.items()]
-        await interaction.response.send_message(
-            "Config updated:\n" + "\n".join(lines), ephemeral=True
-        )
-
-
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = ChickenCog(bot)
     await bot.add_cog(cog)
-    for name in ("stats", "config"):
-        cog.chicken.remove_command(name)
     bot.tree.remove_command("chicken")
     games.add_command(cog.chicken)

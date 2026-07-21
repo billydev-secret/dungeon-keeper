@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import check_allowed_channel, get_active_game
+from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game, finish_launch_response
 from bot_modules.games.command_groups import play
 from .data import seed_templates_from_file
 from .modes.quiplash import run_quiplash
@@ -14,10 +14,6 @@ from .modes.classic import run_classic
 log = logging.getLogger(__name__)
 
 _SEED_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "templates_seed.json")
-
-# Kill-switch flag — set to True by /legitlibs-admin killswitch
-_MODULE_DISABLED = False
-
 
 class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     def __init__(self, bot):
@@ -35,7 +31,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     # ── /games play legitlibs ─────────────────────────────────────────────────────────────
     @app_commands.command(name="legitlibs", description="Start a LegitLibs round!")
     @app_commands.describe(
-        mode="Game mode: classic (default), quiplash, or hotseat",
+        mode="Game mode: classic (default) or quiplash",
         tier="Heat tier 1–4 (1=Flirty, 2=Spicy, 3=Filthy, 4=Unhinged). Default: 2",
         template_id="Optional: use a specific template by ID",
         tag="Optional: filter templates by tag",
@@ -43,7 +39,6 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     @app_commands.choices(mode=[
         app_commands.Choice(name="Classic (sequential fill)", value="classic"),
         app_commands.Choice(name="Quiplash (everyone fills, all revealed)", value="quiplash"),
-        app_commands.Choice(name="Hot Seat (author picks best fills)", value="hotseat"),
     ])
     @app_commands.choices(tier=[
         app_commands.Choice(name="1 — Flirty 🌶️", value=1),
@@ -56,17 +51,10 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         interaction: discord.Interaction,
         mode: str = "classic",
         tier: int = 2,
-        template_id: str = None,
-        tag: str = None,
+        template_id: str | None = None,
+        tag: str | None = None,
     ):
-        global _MODULE_DISABLED
-        log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-
-        if _MODULE_DISABLED:
-            await interaction.response.send_message(
-                "LegitLibs is currently disabled. Ask an admin to re-enable it.", ephemeral=True
-            )
-            return
+        log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
@@ -91,15 +79,11 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
             guild_id=interaction.guild_id or 0,
             options={"mode": mode, "tier": tier, "template_id": template_id, "tag": tag},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "Couldn't start LegitLibs — no published templates for that tier/tag, "
-                    "or I'm missing permission to post here.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(
+            interaction, game_id,
+            perms_hint="Couldn't start LegitLibs — no published templates for that tier/tag, "
+            "or I'm missing permission to post here.",
+        )
 
     async def launch(self, *, channel, host_id, host_name, guild_id, options) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""

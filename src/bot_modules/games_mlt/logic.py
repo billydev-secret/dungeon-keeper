@@ -86,7 +86,7 @@ def apply_vote(
     ``voter_id`` is in the player pool and returns an ephemeral error
     otherwise before calling this).
 
-    Behaviour:
+    Behavior:
 
     * If the voter has no prior vote, the new pick is recorded and
       ``False`` is returned.

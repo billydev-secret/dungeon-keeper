@@ -24,6 +24,7 @@ class MeResponse(BaseModel):
     avatar_url: str | None = None
     status: str | None = None
     games_editor_role_id: str | None = None
+    economy_manager_role_id: str | None = None
 
 
 class RoleMeta(BaseModel):
@@ -846,6 +847,24 @@ class OldestSfwResponse(BaseModel):
     nsfw_role_name: str = ""
     sfw_total: int
     members: list[MemberRowSchema]
+
+
+class GrantAuditMemberRow(BaseModel):
+    user_id: str
+    display_name: str = ""
+    level: int | None = None
+    pruned_at: float | None = None
+
+
+class GrantAuditResponse(BaseModel):
+    grant_name: str
+    label: str
+    role_id: str
+    min_level: int
+    inactivity_days: int
+    waiting_first_grant: list[GrantAuditMemberRow]
+    stripped_returned: list[GrantAuditMemberRow]
+    recent_inactive: list[GrantAuditMemberRow]
 
 
 # ── Welcome / leave preview ────────────────────────────────────────────

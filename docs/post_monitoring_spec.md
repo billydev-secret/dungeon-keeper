@@ -6,7 +6,7 @@ A side-effect layer that runs message-content checks as part of the normal `on_m
 
 Post monitoring has **no commands** of its own — no slash, no context menu, no web routes. It is invoked from gateway message listeners (see [[events-spec]]).
 
-## Behaviour
+## Behavior
 
 ### Spoiler enforcement (v1)
 

@@ -33,7 +33,7 @@ CAT_LABELS: dict[str, str] = {
 
 
 def toggle_pref(
-    payload: dict[str, Any], user_id: int, category: str
+    payload: dict[str, Any], user_id: int, category: str, single_choice: bool = False
 ) -> str:
     """Toggle ``category`` in ``user_id``'s preference list inside ``payload``.
 
@@ -43,8 +43,15 @@ def toggle_pref(
     the user from ``participants`` entirely when their last preference
     is removed (so an opted-out player isn't still shown in the lobby).
 
-    Returns ``"added"`` or ``"removed"`` so the caller can echo back the
-    action in an ephemeral reply.
+    When ``single_choice`` is true the four categories behave like radio
+    buttons: picking a new category while another is already selected
+    replaces the old one, so each player holds exactly one preference.
+    Tapping the already-selected category still deselects it (leaving the
+    player with none), and a player's first pick is an ordinary add.
+
+    Returns ``"added"``, ``"removed"``, or — only in single-choice mode
+    when an existing pick was replaced — ``"switched"``, so the caller
+    can echo back the action in an ephemeral reply.
     """
     str_id = str(user_id)
     participants: list[int] = payload.setdefault("participants", [])
@@ -60,6 +67,10 @@ def toggle_pref(
             participants.remove(user_id)
             del prefs[str_id]
         return "removed"
+    if single_choice and user_prefs:
+        user_prefs.clear()
+        user_prefs.append(category)
+        return "switched"
     user_prefs.append(category)
     return "added"
 
@@ -137,6 +148,30 @@ def select_next_question_target(
 
     chooser = rng if rng is not None else random
     return chooser.choice(least_asked)
+
+
+def select_bank_categories_for_all(
+    prefs: dict[str, list[str]],
+    asked: dict[str, str],
+    rng: random.Random | None = None,
+) -> dict[str, str]:
+    """Pick one opted-in category per participant for a bank round.
+
+    Returns ``{user_id: category}`` — for each participant, a single category
+    chosen uniformly at random from the preferences they have *not yet been
+    asked in* (bank questions are recorded in the same ``asked`` history as
+    written ones). Players with no preferences, or whose every preference has
+    already been asked, are omitted — so re-running the bank round after new
+    people join only serves the newcomers instead of double-asking the
+    original group.
+    """
+    chooser = rng if rng is not None else random
+    out: dict[str, str] = {}
+    for uid, cats in prefs.items():
+        open_cats = [cat for cat in cats if f"{uid}:{cat}" not in asked]
+        if open_cats:
+            out[uid] = chooser.choice(open_cats)
+    return out
 
 
 def summarize_asked_by_category(asked: dict[str, str]) -> dict[str, int]:

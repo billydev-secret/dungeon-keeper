@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -210,8 +211,14 @@ class _SetupWizardView(discord.ui.View):
         assert self._timezone is not None
         assert self._enforcement is not None
 
-        with self._ctx.open_db() as conn:
-            cfg = get_wellness_config(conn, guild.id)
+        ctx = self._ctx
+        guild_id = guild.id
+
+        def _get_cfg():
+            with ctx.open_db() as conn:
+                return get_wellness_config(conn, guild_id)
+
+        cfg = await asyncio.to_thread(_get_cfg)
 
         if cfg is None or not cfg.role_id:
             self.stop()
@@ -246,14 +253,15 @@ class _SetupWizardView(discord.ui.View):
             )
             return
 
-        with self._ctx.open_db() as conn:
-            opt_in_user(
-                conn,
-                guild.id,
-                interaction.user.id,
-                timezone=self._timezone,
-                enforcement_level=self._enforcement,
-            )
+        timezone = self._timezone
+        enforcement = self._enforcement
+        user_id = interaction.user.id
+
+        def _opt_in():
+            with ctx.open_db() as conn:
+                opt_in_user(conn, guild_id, user_id, timezone=timezone, enforcement_level=enforcement)
+
+        await asyncio.to_thread(_opt_in)
 
         try:
             await member.add_roles(role, reason="Wellness Guardian opt-in")
@@ -355,11 +363,15 @@ class _SettingsView(discord.ui.View):
                 await interaction.response.defer()
                 return
             value = interaction.data["values"][0]  # type: ignore[index,typeddict-item]
-            with self._ctx.open_db() as conn:
-                update_user_settings(
-                    conn, interaction.guild_id or 0, interaction.user.id,
-                    enforcement_level=value,
-                )
+            ctx = self._ctx
+            guild_id = interaction.guild_id or 0
+            user_id = interaction.user.id
+
+            def _write():
+                with ctx.open_db() as conn:
+                    update_user_settings(conn, guild_id, user_id, enforcement_level=value)
+
+            await asyncio.to_thread(_write)
             await interaction.response.send_message(
                 f"✅ Enforcement set to **{ENFORCEMENT_LABELS[value]}**.", ephemeral=True
             )
@@ -371,11 +383,15 @@ class _SettingsView(discord.ui.View):
                 await interaction.response.defer()
                 return
             value = interaction.data["values"][0]  # type: ignore[index,typeddict-item]
-            with self._ctx.open_db() as conn:
-                update_user_settings(
-                    conn, interaction.guild_id or 0, interaction.user.id,
-                    notifications_pref=value,
-                )
+            ctx = self._ctx
+            guild_id = interaction.guild_id or 0
+            user_id = interaction.user.id
+
+            def _write():
+                with ctx.open_db() as conn:
+                    update_user_settings(conn, guild_id, user_id, notifications_pref=value)
+
+            await asyncio.to_thread(_write)
             await interaction.response.send_message(
                 f"✅ Notifications set to **{value}**.", ephemeral=True
             )
@@ -386,13 +402,18 @@ class _SettingsView(discord.ui.View):
             if not self._check(interaction):
                 await interaction.response.defer()
                 return
-            with self._ctx.open_db() as conn:
-                user = get_wellness_user(conn, interaction.guild_id or 0, interaction.user.id)
-                new_value = not (user.public_commitment if user else current)
-                update_user_settings(
-                    conn, interaction.guild_id or 0, interaction.user.id,
-                    public_commitment=new_value,
-                )
+            ctx = self._ctx
+            guild_id = interaction.guild_id or 0
+            user_id = interaction.user.id
+
+            def _write():
+                with ctx.open_db() as conn:
+                    wuser = get_wellness_user(conn, guild_id, user_id)
+                    new_val = not (wuser.public_commitment if wuser else current)
+                    update_user_settings(conn, guild_id, user_id, public_commitment=new_val)
+                return new_val
+
+            new_value = await asyncio.to_thread(_write)
             await interaction.response.send_message(
                 "✅ You're now on the **Active in Commitment** list."
                 if new_value
@@ -407,11 +428,17 @@ class _SettingsView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 
-def _require_active_user(ctx: AppContext, interaction: discord.Interaction):
+async def _require_active_user(ctx: AppContext, interaction: discord.Interaction):
     if interaction.guild_id is None:
         return None
-    with ctx.open_db() as conn:
-        user = get_wellness_user(conn, interaction.guild_id, interaction.user.id)
+    guild_id = interaction.guild_id
+    user_id = interaction.user.id
+
+    def _q():
+        with ctx.open_db() as conn:
+            return get_wellness_user(conn, guild_id, user_id)
+
+    user = await asyncio.to_thread(_q)
     if user is None or not user.is_active:
         return None
     return user
@@ -456,12 +483,17 @@ class WellnessCog(commands.Cog):
             await interaction.response.send_message("Server only.", ephemeral=True)
             return
 
-        with ctx.open_db() as conn:
-            cfg = get_wellness_config(conn, guild.id)
+        guild_id = guild.id
+
+        def _get_cfg():
+            with ctx.open_db() as conn:
+                return get_wellness_config(conn, guild_id)
+
+        cfg = await asyncio.to_thread(_get_cfg)
         if cfg is None or not cfg.role_id:
             await interaction.response.send_message(
                 "⚠️ Wellness Guardian isn't set up on this server yet. "
-                "Ask an admin to run `/wellness-admin setup`.",
+                "An admin can configure it from the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -484,7 +516,7 @@ class WellnessCog(commands.Cog):
         guild = interaction.guild
         if guild is None:
             return
-        user = _require_active_user(ctx, interaction)
+        user = await _require_active_user(ctx, interaction)
         if user is None:
             await interaction.response.send_message(
                 "You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
@@ -495,9 +527,15 @@ class WellnessCog(commands.Cog):
                 f"Away message must be {AWAY_MESSAGE_MAX} characters or fewer.", ephemeral=True
             )
             return
-        with ctx.open_db() as conn:
-            update_away_message(conn, guild.id, interaction.user.id, enabled=True, message=message)
-            updated = get_wellness_user(conn, guild.id, interaction.user.id)
+        guild_id = guild.id
+        user_id = interaction.user.id
+
+        def _write():
+            with ctx.open_db() as conn:
+                update_away_message(conn, guild_id, user_id, enabled=True, message=message)
+                return get_wellness_user(conn, guild_id, user_id)
+
+        updated = await asyncio.to_thread(_write)
         text = (updated.away_message if updated else "") or AWAY_DEFAULT_TEXT
         embed = _render_away_preview(text, interaction.user)
         embed.set_footer(text="Away mode ON. Use /wellness away off to turn it off.")
@@ -509,14 +547,20 @@ class WellnessCog(commands.Cog):
         guild = interaction.guild
         if guild is None:
             return
-        user = _require_active_user(ctx, interaction)
+        user = await _require_active_user(ctx, interaction)
         if user is None:
             await interaction.response.send_message(
                 "You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
             )
             return
-        with ctx.open_db() as conn:
-            update_away_message(conn, guild.id, interaction.user.id, enabled=False)
+        guild_id = guild.id
+        user_id = interaction.user.id
+
+        def _write():
+            with ctx.open_db() as conn:
+                update_away_message(conn, guild_id, user_id, enabled=False)
+
+        await asyncio.to_thread(_write)
         await interaction.response.send_message(
             "💚 Away mode is off. Welcome back!", ephemeral=True
         )

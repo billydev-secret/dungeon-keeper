@@ -205,6 +205,7 @@ async def backfill_xp_async(
     cfg = ctx.guild_config(guild.id)
     me = guild.get_member(ctx.bot.user.id) if ctx.bot and ctx.bot.user else None
     all_channels = await _collect_channels(guild, me)
+    awarded_ids: set[int] = set()
 
     with ctx.open_db() as conn:
         for channel in all_channels:
@@ -285,6 +286,7 @@ async def backfill_xp_async(
                         breakdown.awarded_xp,
                         settings=cfg.xp_settings,
                     )
+                    awarded_ids.add(message.author.id)
 
                     reply_award = 0.0
                     if breakdown.reply_bonus_xp > 0:
@@ -352,6 +354,22 @@ async def backfill_xp_async(
                             granted_members[m.id] = m
             except discord.Forbidden:
                 continue
+
+    # A backfill replays history: it credits XP for messages the member sent
+    # long ago and deliberately announces nothing. Catch announced_level up to
+    # the levels it just handed out, or every member it touched would have the
+    # whole lot announced on their next message. This does swallow a level a
+    # member was genuinely owed (e.g. a silent quest L5) if the backfill also
+    # awards them -- acceptable, since a backfill announces nothing by design.
+    # Scoped to the members this run actually awarded so a member it never
+    # touched keeps any announcement still owed to them.
+    if awarded_ids:
+        with ctx.open_db() as conn:
+            conn.executemany(
+                "UPDATE member_xp SET announced_level = level "
+                "WHERE guild_id = ? AND user_id = ?",
+                [(guild.id, uid) for uid in awarded_ids],
+            )
 
     for m in granted_members.values():
         await maybe_grant_level_role(

@@ -1,7 +1,6 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeBarChart } from "../charts.js";
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 function timeAgo(ts) {
   const diff = (Date.now() / 1000) - ts;

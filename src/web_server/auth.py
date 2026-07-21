@@ -28,6 +28,7 @@ _KICK_MEMBERS = 0x2
 _BAN_MEMBERS = 0x4
 _MANAGE_MESSAGES = 0x2000
 _MANAGE_ROLES = 0x10000000
+_MODERATE_MEMBERS = 0x10000000000  # "Timeout Members" — Discord's modern mod perm
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,12 @@ class OpenAuth:
 
 
 _MOD_BITS = (
-    _MANAGE_GUILD | _KICK_MEMBERS | _BAN_MEMBERS | _MANAGE_MESSAGES | _MANAGE_ROLES
+    _MANAGE_GUILD
+    | _KICK_MEMBERS
+    | _BAN_MEMBERS
+    | _MANAGE_MESSAGES
+    | _MANAGE_ROLES
+    | _MODERATE_MEMBERS
 )
 
 
@@ -80,7 +86,8 @@ def resolve_discord_perms(permission_bits: int) -> frozenset[str]:
 
     * ``admin``         — user has the Discord ADMINISTRATOR bit.
     * ``moderator``     — user has ADMINISTRATOR *or* any of MANAGE_GUILD,
-      KICK_MEMBERS, BAN_MEMBERS, MANAGE_MESSAGES, MANAGE_ROLES.
+      KICK_MEMBERS, BAN_MEMBERS, MANAGE_MESSAGES, MANAGE_ROLES,
+      MODERATE_MEMBERS (Timeout Members).
     * ``manage_server`` — user has ADMINISTRATOR or MANAGE_GUILD specifically.
       Used by the wellness panel admin pages (spec §10).
 

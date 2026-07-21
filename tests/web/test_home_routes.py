@@ -68,6 +68,48 @@ def test_home_fields_param_supports_multiple_groups(authed_client):
     assert "top_channels" not in body
 
 
+# ── Moderation group: economy claims ──────────────────────────────────
+
+
+def test_home_moderation_counts_pending_claims(authed_client, fake_ctx):
+    """The moderation group reports quest claims waiting on sign-off."""
+    from bot_modules.services import economy_quests_service as quests_svc
+    from bot_modules.services.economy_service import load_econ_settings
+
+    body = authed_client.get("/api/home?fields=moderation").json()
+    assert body["pending_claims"] == 0
+    assert body["latest_claim"] is None
+
+    quest = authed_client.post(
+        "/api/economy/quests",
+        json={
+            "title": "Say hi",
+            "description": "",
+            "qtype": "daily",
+            "reward": 15,
+            "signoff": True,
+            "criteria": "",
+        },
+    ).json()
+    with open_db(fake_ctx.db_path) as conn:
+        settings = load_econ_settings(conn, fake_ctx.guild_id)
+        quests_svc.set_quest_active(conn, fake_ctx.guild_id, quest["id"], True)
+        quests_svc.claim_quest(
+            conn,
+            settings,
+            fake_ctx.guild_id,
+            quest["id"],
+            555,
+            period="2026-07-10",
+            booster=False,
+        )
+
+    body = authed_client.get("/api/home?fields=moderation").json()
+    assert body["pending_claims"] == 1
+    assert body["latest_claim"]["quest_title"] == "Say hi"
+    assert body["latest_claim"]["user_id"] == "555"
+
+
 # ── Permission-based group stripping ──────────────────────────────────
 
 

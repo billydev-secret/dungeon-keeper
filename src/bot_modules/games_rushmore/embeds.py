@@ -26,6 +26,7 @@ from bot_modules.games.constants import (
     PHASE_RESULTS,
 )
 from bot_modules.games_rushmore.logic import DRAFT_ROUNDS, SKIPPED_MARKER
+from bot_modules.services.embeds import COLOR_GREEN
 
 
 def _footer(host_name: str) -> str:
@@ -79,13 +80,16 @@ def build_join_embed(
     host_name: str,
     player_names: list[str],
     topic: str | None = None,
+    mode: str = "snake",
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Lobby embed shown while players are joining.
 
     When ``topic`` is set (host-supplied), the description teases the
-    upcoming draft topic; otherwise it explains the snake-draft rules.
-    The roster field renders with a count and a comma-joined list (or
-    a placeholder when nobody has joined yet).
+    upcoming draft topic. A one-line how-to always renders — the ❓ Help
+    button exists but live games showed nobody presses it, so the rules
+    ride in the embed itself. ``mode`` flips the line between snake
+    ("when it's your turn") and blitz ("everyone picks at once").
     """
     title = f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT"
     desc = f"Hosted by: **{discord.utils.escape_markdown(host_name)}**"
@@ -94,9 +98,22 @@ def build_join_embed(
             "\n\nBuild your Mt. Rushmore of "
             f"**{discord.utils.escape_markdown(topic)}**!"
         )
+    if mode == "blitz":
+        desc += (
+            "\n\n⚡ **How it works:** each round, everyone picks at once — hit "
+            "🗿 **Make Your Pick** and type one. Top 4, no duplicates "
+            "(fastest fingers win), then the room votes on the best board."
+        )
     else:
-        desc += "\n\nJoin up — snake draft, 4 rounds, no duplicate picks."
-    embed = discord.Embed(title=title, description=desc, color=PHASE_JOINING)
+        desc += (
+            "\n\n**How it works:** when it's your turn, hit 🗿 **Make Your "
+            "Pick** and type one. Snake draft, top 4, no duplicates, then "
+            "the room votes on the best board."
+        )
+    embed = discord.Embed(
+        title=title, description=desc,
+        color=color or discord.Color(PHASE_JOINING),
+    )
     pool_str = ", ".join(player_names) if player_names else "(nobody yet)"
     embed.add_field(
         name=f"Players ({len(player_names)})", value=pool_str, inline=False,
@@ -114,6 +131,7 @@ def build_draft_embed(
     active_player_name: str | None,
     round_num: int,
     timer_secs: int,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Active-round draft embed.
 
@@ -128,7 +146,7 @@ def build_draft_embed(
             f"{GAME_ICONS['rushmore']} MT. RUSHMORE OF: "
             f"{discord.utils.escape_markdown(topic)}"
         ),
-        color=PHASE_PLAYING,
+        color=color or discord.Color(PHASE_PLAYING),
     )
     embed.add_field(
         name="Timer",
@@ -158,6 +176,7 @@ def build_final_boards_embed(
     topic: str,
     players: list[tuple[int, str]],
     boards: dict[str, list[Any]],
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Final-boards embed shown after the snake draft completes.
 
@@ -169,7 +188,7 @@ def build_final_boards_embed(
             f"{GAME_ICONS['rushmore']} MT. RUSHMORE OF: "
             f"{discord.utils.escape_markdown(topic)} — FINAL BOARDS"
         ),
-        color=PHASE_RESULTS,
+        color=color or discord.Color(PHASE_RESULTS),
     )
     for uid, name in players:
         board = boards.get(str(uid), [None] * DRAFT_ROUNDS)
@@ -193,6 +212,7 @@ def build_final_boards_embed(
 
 def build_vote_embed(
     host_name: str, topic: str, timer_secs: int,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Voting-phase embed; the dropdown is attached by the cog's view."""
     from bot_modules.games.utils.timer import format_deadline, now_plus
@@ -201,7 +221,7 @@ def build_vote_embed(
             f"{GAME_ICONS['rushmore']} VOTE — Best Mt. Rushmore of "
             f"{discord.utils.escape_markdown(topic)}"
         ),
-        color=PHASE_PLAYING,
+        color=color or discord.Color(PHASE_PLAYING),
     )
     embed.add_field(
         name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False,
@@ -220,6 +240,7 @@ def build_winner_embed(
     winner_votes: int,
     winner_boards: list[list[Any]],
     all_results: list[tuple[str, int]],
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Winner reveal embed shown right after the vote phase.
 
@@ -227,13 +248,19 @@ def build_winner_embed(
     each winner's board (with a blank line between when there's more
     than one). ``all_results`` is the sorted ``(name, votes)`` list the
     cog hands in.
+
+    This is the game's genuine *win* state, so it stays semantic green
+    (``COLOR_GREEN``) rather than following the guild accent — per the
+    2026-07-21 ruling, true win=green survives the accent migration.
+    ``color`` is accepted for uniformity/testability but callers should
+    normally leave it unset so the semantic green applies.
     """
     embed = discord.Embed(
         title=(
             f"{GAME_ICONS['rushmore']} WINNER — Mt. Rushmore of "
             f"{discord.utils.escape_markdown(topic)}"
         ),
-        color=PHASE_RESULTS,
+        color=color or discord.Color(COLOR_GREEN),
     )
     winner_label = " & ".join(
         discord.utils.escape_markdown(n) for n in winner_names
@@ -281,6 +308,7 @@ def build_recap_embed(
     winner_votes: int,
     winner_boards: list[list[Any]],
     stats: dict[str, Any],
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Final game-over embed.
 
@@ -294,7 +322,7 @@ def build_recap_embed(
     secs = int(duration_secs % 60)
     embed = discord.Embed(
         title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT — GAME OVER",
-        color=PHASE_RECAP,
+        color=color or discord.Color(PHASE_RECAP),
     )
     winner_label = " & ".join(
         discord.utils.escape_markdown(n) for n in winner_names

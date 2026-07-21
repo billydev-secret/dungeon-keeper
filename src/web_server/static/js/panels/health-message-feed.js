@@ -1,6 +1,5 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 function fmtTime(ts) {
   const dt = new Date(ts * 1000);

@@ -401,6 +401,15 @@ def get_active_jail(
     return dict(row) if row else None  # type: ignore[return-value]
 
 
+def active_jailed_user_ids(conn: sqlite3.Connection, guild_id: int) -> set[int]:
+    """Return the set of user IDs currently jailed in this guild."""
+    rows = conn.execute(
+        "SELECT user_id FROM jails WHERE guild_id = ? AND status = 'active'",
+        (guild_id,),
+    ).fetchall()
+    return {r["user_id"] for r in rows}
+
+
 def get_jail_by_channel(
     conn: sqlite3.Connection,
     channel_id: int,
@@ -510,6 +519,27 @@ def delete_ticket(conn: sqlite3.Connection, ticket_id: int) -> None:
         "UPDATE tickets SET status = 'deleted', deleted_at = ? WHERE id = ?",
         (now, ticket_id),
     )
+
+
+def get_tickets_to_autodelete(
+    conn: sqlite3.Connection,
+    *,
+    closed_before: float,
+) -> list[TicketRow]:
+    """Closed tickets whose close time is older than ``closed_before`` (unix ts).
+
+    Drives the 24 h auto-delete sweep. Only ``status = 'closed'`` rows with a
+    non-null ``closed_at`` qualify, so a ticket that was reopened (status flips
+    back to ``'open'`` and ``closed_at`` is cleared) or already deleted drops
+    out of the result set — reopening naturally resets the countdown.
+    """
+    rows = conn.execute(
+        "SELECT * FROM tickets WHERE status = 'closed' "
+        "AND closed_at IS NOT NULL AND closed_at <= ? "
+        "ORDER BY closed_at",
+        (closed_before,),
+    ).fetchall()
+    return [dict(r) for r in rows]  # type: ignore[misc]
 
 
 def claim_ticket(conn: sqlite3.Connection, ticket_id: int, claimer_id: int) -> None:

@@ -30,6 +30,7 @@ destruction would be a trust killer.
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import time
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 
 import discord
 
+from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
     COOLDOWN_DURATION_SECONDS,
     NUDGE_SUPPRESSION_SECONDS,
@@ -355,7 +357,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
                             "*Adjust your settings anytime with `/wellness settings`.*"
                         ),
-                        color=discord.Color.from_str("#7BC97B"),
+                        color=discord.Color(WELLNESS_PRIMARY),
                     ),
                 )
                 if not dm_ok:
@@ -414,7 +416,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
                             "*Adjust your settings anytime with `/wellness settings`.*"
                         ),
-                        color=discord.Color.from_str("#7BC97B"),
+                        color=discord.Color(WELLNESS_PRIMARY),
                     ),
                 )
                 if not dm_ok:
@@ -569,26 +571,34 @@ async def _handle_away_mentions(ctx, message: discord.Message) -> None:
 
     guild_id = message.guild.id
     now = time.time()
-    seen: set[int] = set()
-    away_targets: list[tuple[discord.User | discord.Member, WellnessUser]] = []
-    with ctx.open_db() as conn:
-        for mentioned in message.mentions:
-            if mentioned.bot or mentioned.id == message.author.id:
-                continue
-            if mentioned.id in seen:
-                continue
-            seen.add(mentioned.id)
-            other = get_wellness_user(conn, guild_id, mentioned.id)
-            if other is None or not other.is_active:
-                continue
-            if not other.away_enabled:
-                continue
-            if not can_send_away(conn, guild_id, mentioned.id, message.channel.id, now):
-                continue
-            away_targets.append((mentioned, other))
-        # Reserve rate-limit slots immediately so a flood of mentions can't burst past it
-        for mentioned, _ in away_targets:
-            record_away_sent(conn, guild_id, mentioned.id, message.channel.id, now)
+    channel_id = message.channel.id
+    author_id = message.author.id
+    mentions = message.mentions
+
+    def _do_away() -> list[tuple[discord.User | discord.Member, WellnessUser]]:
+        seen: set[int] = set()
+        targets: list[tuple[discord.User | discord.Member, WellnessUser]] = []
+        with ctx.open_db() as conn:
+            for mentioned in mentions:
+                if mentioned.bot or mentioned.id == author_id:
+                    continue
+                if mentioned.id in seen:
+                    continue
+                seen.add(mentioned.id)
+                other = get_wellness_user(conn, guild_id, mentioned.id)
+                if other is None or not other.is_active:
+                    continue
+                if not other.away_enabled:
+                    continue
+                if not can_send_away(conn, guild_id, mentioned.id, channel_id, now):
+                    continue
+                targets.append((mentioned, other))
+            # Reserve rate-limit slots immediately so a flood of mentions can't burst past it
+            for mentioned, _ in targets:
+                record_away_sent(conn, guild_id, mentioned.id, channel_id, now)
+        return targets
+
+    away_targets = await asyncio.to_thread(_do_away)
 
     if not away_targets:
         return
@@ -598,7 +608,7 @@ async def _handle_away_mentions(ctx, message: discord.Message) -> None:
         embed = discord.Embed(
             title=f"💚 {mentioned.display_name} is away",
             description=text,
-            color=discord.Color.from_str("#7BC97B"),
+            color=discord.Color(WELLNESS_PRIMARY),
         )
         embed.set_footer(text="Wellness Guardian — auto-reply")
         try:

@@ -39,8 +39,10 @@ class _FakeMessage:
     def __init__(self, mid: int):
         self.id = mid
         self.embeds: list = []
+        self.edited = False
 
     async def edit(self, **kwargs):
+        self.edited = True
         return None
 
 
@@ -127,15 +129,17 @@ async def test_traditional_recovers_view_bound_to_message():
     assert bot.active_views[game_id] is view
 
 
-async def test_ffa_recovers_with_question_from_payload():
+async def test_ffa_recovers_with_prompt_from_payload():
+    # Embed mode (/games play ffa) is the stateful, recoverable variant; a custom
+    # prompt skips the DB prompt bank so the test needs no seeded questions.
     bot, game_id, msg_id = await _launch_and_restart(
-        FFACog, "ffa", {"question": "best pizza topping?"}
+        FFACog, "ffa", {"prompt": "best pizza topping?", "kind": "truth"}
     )
 
     assert game_id in bot.active_views
     view, bound_id = bot.added_views[0]
     assert bound_id == msg_id
-    assert view.question == "best pizza topping?", "question not restored from payload"
+    assert view.text == "best pizza topping?", "prompt not restored from payload"
 
 
 async def test_mfk_recovers_view():
@@ -424,8 +428,18 @@ async def test_ttl_redrives_guessing_skipping_played_subjects(sync_db_path):
         view = await _poll_for(bot, game_id, TTLGuessView)
         assert isinstance(view, TTLGuessView), f"got {type(view).__name__}"
         assert view.subject_id == 222  # 111 already scored -> skipped
-        row = await db.fetchone("SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,))
-        assert int(row["message_id"]) != stale.id
+        # The loop registers the view *before* posting the fresh message and
+        # persisting its id (games_ttl_cog: active_views[..] = view → send →
+        # update_game_message), so poll rather than read the row once.
+        row = None
+        for _ in range(50):
+            row = await db.fetchone(
+                "SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,)
+            )
+            if row is not None and int(row["message_id"]) != stale.id:
+                break
+            await asyncio.sleep(0.02)
+        assert row is not None and int(row["message_id"]) != stale.id
     finally:
         _cancel_pending(_baseline)
 

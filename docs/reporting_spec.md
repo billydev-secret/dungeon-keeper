@@ -1,6 +1,6 @@
 # Reporting — Feature Spec
 
-Reporting is the analytics backbone of the dashboard. Four small services — interaction tracking, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is nearly empty: one mod slash group for leave-of-absence management, plus an unrelated `/invite` command that returns the bot ' install URL.
+Reporting is the analytics backbone of the dashboard. Four small services — interaction tracking, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is nearly empty: one mod slash group for leave-of-absence management, plus an unrelated `/invite` command that returns the bot's install URL.
 
 ## Commands
 
@@ -9,20 +9,20 @@ Reporting is the analytics backbone of the dashboard. Four small services — in
 | `/quality_leave add member:<m> days:<30|60|90>` | Slash | Mod | Mark a member on leave; quality reports treat them as `Leave of Absence` until the term ends |
 | `/quality_leave remove member:<m>` | Slash | Mod | Clear an active leave row |
 | `/quality_leave list` | Slash | Mod (ephemeral) | Show the active leave roster with remaining days |
-| `/invite` | Slash | Everyone | Returns the bot ' OAuth install URL. Unrelated to invite attribution |
-| Dashboard report tiles | Web | Admin | Read-only analytics surfaces — see Behaviour |
-| Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behaviour |
+| `/invite` | Slash | Everyone | Returns the bot's OAuth install URL. Unrelated to invite attribution |
+| Dashboard report tiles | Web | Admin | Read-only analytics surfaces — see Behavior |
+| Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behavior |
 | Cache clear | Web | Admin | Drop every cached report payload for the active guild |
 
 The bot needs **Manage Server** to read invite codes for attribution. When missing, invite attribution silently degrades to "no inviter detected" — no other report is blocked.
 
-## Behaviour
+## Behavior
 
 ### Dashboard report tiles
 
 Every report is admin-only, GET-only (cache clear is the single POST), and read through a per-route cache keyed by guild + parameters. Most tiles use a 60-second TTL; heavier tiles that scan the message archive (quality score, time-to-level, interaction heatmap, dropoff, chilling-effect) use 5 to 10 minutes. The cache only invalidates on TTL expiry or explicit clear — there are no realtime pushes.
 
-Day-bucketed charts roll over at the guild ' local 6 am, not midnight. Names on every row are resolved live from the guild cache when the bot is online and fall back to the historical name archive when offline; some tiles (role listings, guild-wide inactivity) return a service-unavailable error when the bot is offline since they depend on live role membership.
+Day-bucketed charts roll over at the guild's local 6 am, not midnight. Names on every row are resolved live from the guild cache when the bot is online and fall back to the historical name archive when offline; some tiles (role listings, guild-wide inactivity) return a service-unavailable error when the bot is offline since they depend on live role membership.
 
 Tiles group into a few areas:
 
@@ -55,7 +55,7 @@ A separate **Export** button downloads the current result set as a CSV. Both the
 
 ### Incident detection
 
-A per-process velocity tracker keeps a 10-minute sliding window of message rate per guild. Against a 30-day baseline (mean + standard deviation per hour-of-day × day-of-week, refreshed every 15 minutes), a velocity spike fires when the current rate is at least mean + 3·stddev **and** above 5 messages per minute. Severity is `critical` past 1.5× the threshold, otherwise `warning`. The same guild can ' t emit another velocity incident within 5 minutes.
+A per-process velocity tracker keeps a 10-minute sliding window of message rate per guild. Against a 30-day baseline (mean + standard deviation per hour-of-day × day-of-week, refreshed every 15 minutes), a velocity spike fires when the current rate is at least mean + 3·stddev **and** above 5 messages per minute. Severity is `critical` past 1.5× the threshold, otherwise `warning`. The same guild can't emit another velocity incident within 5 minutes.
 
 A join raid fires when at least 3 accounts younger than 7 days join within a 2-minute window. Severity is always `critical`. Incidents are stored for the health-metrics tiles to read.
 
@@ -67,14 +67,14 @@ The bot caches the current `uses` count for every guild invite at startup and re
 
 A whole-server score in `[0, 1]` computed over a rolling 90-day window from four sub-scores:
 
-1. **Engagement Given (40%)** — average percentile of reaction-rate and reply-ratio (replies under 5 characters don ' t count). Multiplied by an initiative multiplier (0.85× to 1.10×) based on what fraction of pair interactions the member started. Anti-gaming: serial reactions to the same author on the same day get half credit after 5 and zero after 10.
-2. **Consistency & Recency (25%)** — 60% recency (exponential decay since last seen) + 40% consistency (active weeks divided by min of weeks-in-window or weeks-since-join, so newcomers aren ' t penalised for short tenure).
+1. **Engagement Given (40%)** — average percentile of reaction-rate and reply-ratio (replies under 5 characters don't count). Multiplied by an initiative multiplier (0.85× to 1.10×) based on what fraction of pair interactions the member started. Anti-gaming: serial reactions to the same author on the same day get half credit after 5 and zero after 10.
+2. **Consistency & Recency (25%)** — 60% recency (exponential decay since last seen) + 40% consistency (active weeks divided by min of weeks-in-window or weeks-since-join, so newcomers aren't penalised for short tenure).
 3. **Content Resonance (20%)** — mean reactions + replies received per "post" (an attachment or a non-reply conversation starter). Non-posters get the neutral percentile 0.5.
 4. **Posting Activity (15%)** — daily-capped attachments + conversation starters per active day. Non-posters get a percentile floor of 0.25.
 
 Status precedence: `Leave of Absence` (active leave row) → `Onboarding` (under 7 days tenure) → `Insufficient Data` (under 7 active days) → `Active`. Onboarding / insufficient / leave rows are scored 0 and sort to the bottom.
 
-Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivity threshold, surfaced on each row so reviewers can see why a long-tenured quiet member isn ' t flagged.
+Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivity threshold, surfaced on each row so reviewers can see why a long-tenured quiet member isn't flagged.
 
 ## Permissions
 
@@ -88,7 +88,7 @@ Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivit
 
 | When | The user sees |
 |---|---|
-| `/quality_leave *` invoked by non-mod | "You don ' t have permission to use this command." |
+| `/quality_leave *` invoked by non-mod | "You don't have permission to use this command." |
 | `/quality_leave list` in DM | "This command only works in a server." |
 | Generalised time-to-level requested with level outside 2–100 | HTTP 400 |
 | Greeter-response asked for a period with no resolvable greeters | HTTP 404 "No greeter response data found for the selected period." |

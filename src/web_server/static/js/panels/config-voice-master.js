@@ -1,32 +1,6 @@
+import { api, apiPost, apiDelete } from "../api.js";
 import { showStatus, buildField } from "../config-helpers.js";
 import { toast } from "../ui.js";
-
-async function apiGet(path) {
-  const res = await fetch(path, { credentials: "same-origin" });
-  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
-  return res.json();
-}
-
-async function apiPost(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: body == null ? null : JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
-    throw new Error(`${res.status}: ${detail}`);
-  }
-  return res.json();
-}
-
-async function apiDel(path) {
-  const res = await fetch(path, { method: "DELETE", credentials: "same-origin" });
-  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
-  return res.json();
-}
 
 function clearChildren(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
@@ -125,9 +99,9 @@ export function mount(container) {
     let cfg, channels, roles;
     try {
       [cfg, channels, roles] = await Promise.all([
-        apiGet("/api/voice-master/config"),
-        apiGet("/api/meta/channels?types=text,voice,category"),
-        apiGet("/api/meta/roles"),
+        api("/api/voice-master/config"),
+        api("/api/meta/channels?types=text,voice,category"),
+        api("/api/meta/roles"),
       ]);
     } catch (err) {
       loading.textContent = "Failed to load: " + err.message;
@@ -197,10 +171,11 @@ export function mount(container) {
     form.appendChild(buildField(
       "Saveable fields",
       checkboxList("saveable_fields",
-        ["name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"],
+        ["name", "limit", "access", "trusted", "blocked"],
         new Set(cfg.saveable_fields),
       ),
-      "Which profile fields owners may persist.",
+      "Which profile fields owners may persist. \"access\" covers the single " +
+        "open / NSFW / locked / spectator room-access state.",
     ));
 
     const saveRow = document.createElement("div");
@@ -318,7 +293,7 @@ export function mount(container) {
         del.textContent = "remove";
         del.addEventListener("click", async () => {
           try {
-            await apiDel("/api/voice-master/name-blocklist/" + encodeURIComponent(p));
+            await apiDelete("/api/voice-master/name-blocklist/" + encodeURIComponent(p));
             li.remove();
           } catch (err) {
             toast("Remove failed: " + err.message, "error");
@@ -337,7 +312,7 @@ export function mount(container) {
       try {
         await apiPost("/api/voice-master/name-blocklist", { pattern });
         blInput.value = "";
-        const fresh = await apiGet("/api/voice-master/config");
+        const fresh = await api("/api/voice-master/config");
         renderList(fresh.name_blocklist || []);
       } catch (err) {
         toast("Add failed: " + err.message, "error");

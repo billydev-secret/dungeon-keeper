@@ -1,8 +1,22 @@
-"""Local LLM inference via llama-cpp-python.
+"""Local LLM inference, either in-process (llama-cpp-python) or over HTTP.
 
-The model loads (and downloads if needed) in a background thread at startup
-so the bot comes online immediately. Any ``chat()`` call that arrives before
-loading finishes simply awaits the ready event, then proceeds normally.
+Two backends, chosen by whether ``LLAMA_SERVER_URL`` is set:
+
+**in-process** (default) — the GGUF loads (and downloads if needed) in a
+background thread at startup so the bot comes online immediately. Any
+``chat()`` call that arrives before loading finishes awaits the ready event.
+Inference is serialised through a single worker, so one slow call blocks all
+AI features.
+
+**remote** — point at a llama.cpp ``llama-server`` on another machine (e.g. one
+with a GPU) and calls go out over HTTP instead. Nothing loads locally, and
+concurrent calls are handled by the server's own continuous batching rather
+than queueing behind a single thread.
+
+The remote endpoint is **restricted to private/loopback addresses** by default
+so that moderation content cannot be pointed at a third-party inference API by
+a stray config edit; set ``LLAMA_SERVER_ALLOW_PUBLIC=1`` to override
+deliberately. See ``is_private_endpoint``.
 
 Config is read from the database first, falling back to environment variables.
 DB keys (all guild_id=0):
@@ -13,17 +27,24 @@ DB keys (all guild_id=0):
 Env var fallbacks (used when DB keys are absent):
     LLAMA_MODEL_PATH, LLAMA_HF_REPO, LLAMA_HF_FILE
     LLAMA_N_CTX, LLAMA_N_GPU_LAYERS, LLAMA_N_THREADS
+
+Remote backend (env only — this is deployment topology, like LAVALINK_HOST):
+    LLAMA_SERVER_URL           Base URL of llama-server, e.g. http://192.168.1.20:8080
+    LLAMA_SERVER_TIMEOUT       Per-request timeout in seconds (default 120).
+    LLAMA_SERVER_ALLOW_PUBLIC  Set to 1 to permit a non-private endpoint.
 """
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 log = logging.getLogger("dungeonkeeper.llm")
 
@@ -77,15 +98,112 @@ def get_config(db_path: Path | None = None) -> tuple[str, str, str]:
     )
 
 
+# ── Remote backend ─────────────────────────────────────────────────────────────
+
+# Hostnames that are unambiguously LAN-local even though they aren't IP literals.
+_LOCAL_HOST_SUFFIXES = (".local", ".lan", ".home", ".internal", ".localdomain")
+
+
+def is_private_endpoint(url: str) -> bool:
+    """True if ``url`` points somewhere that cannot leave the local network.
+
+    Conversation windows sent to the guard model are exactly the content we
+    keep off third-party AI services, so the remote backend refuses to talk to
+    anything that isn't demonstrably local unless explicitly overridden.
+
+    IP literals are classified by :mod:`ipaddress` (loopback, RFC1918 private,
+    link-local, or unique-local v6). Bare hostnames can't be classified without
+    a DNS lookup, so only ``localhost`` and an explicit local-suffix allowlist
+    pass — an unqualified name resolves to *something*, and we'd rather refuse
+    than guess wrong about where content is going.
+    """
+    host = (urlparse(url).hostname or "").strip().lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host.endswith(_LOCAL_HOST_SUFFIXES)
+
+    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
+
+
+def get_server_url() -> str:
+    """Return the remote llama-server base URL, or '' when running in-process.
+
+    Returns '' (falling back to the in-process backend) if the configured URL
+    is non-private and ``LLAMA_SERVER_ALLOW_PUBLIC`` is not set, logging why.
+    """
+    url = os.getenv("LLAMA_SERVER_URL", "").strip().rstrip("/")
+    if not url:
+        return ""
+
+    if not is_private_endpoint(url) and os.getenv("LLAMA_SERVER_ALLOW_PUBLIC", "") not in ("1", "true", "yes"):
+        log.error(
+            "LLAMA_SERVER_URL=%s is not a private/loopback address — refusing to send "
+            "content off-network. Set LLAMA_SERVER_ALLOW_PUBLIC=1 to override. "
+            "Falling back to in-process inference.",
+            url,
+        )
+        return ""
+
+    return url
+
+
+async def _remote_chat(
+    url: str,
+    *,
+    system: str,
+    user_content: str,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    """Single-turn chat against llama-server's OpenAI-compatible endpoint."""
+    import httpx
+
+    timeout = float(os.getenv("LLAMA_SERVER_TIMEOUT", "120"))
+    payload = {
+        # llama-server serves one model; the name is advisory. Deliberately not
+        # the caller's `model` arg — see chat()'s note on why that stays ignored.
+        "model": "local",
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+
+    t0 = time.monotonic()
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(f"{url}/v1/chat/completions", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+    elapsed = time.monotonic() - t0
+    text = (data["choices"][0]["message"]["content"] or "").strip()
+    tokens_out = (data.get("usage") or {}).get("completion_tokens", "?")
+    log.debug("LLM (remote) response %.1fs %s tokens: %.120s", elapsed, tokens_out, text)
+    return text
+
+
 # ── Public helpers ─────────────────────────────────────────────────────────────
 
 
 def is_available(db_path: Path | None = None) -> bool:
+    if get_server_url():
+        return True
     model_path, hf_repo, hf_file = get_config(db_path)
     return bool(model_path or (hf_repo and hf_file))
 
 
 def default_model(db_path: Path | None = None) -> str:
+    url = get_server_url()
+    if url:
+        return f"llama-server ({urlparse(url).netloc})"
     model_path, _, hf_file = get_config(db_path)
     if hf_file:
         return hf_file
@@ -96,6 +214,7 @@ def status() -> dict:
     return {
         "phase": _phase,
         "available": _phase == "ready",
+        "backend": "remote" if get_server_url() else "in-process",
         "model": default_model() if _phase == "ready" else None,
         "error": _model_error if _phase == "error" else None,
     }
@@ -138,7 +257,7 @@ def _download(model_path: str, hf_repo: str, hf_file: str) -> str:
             mb = size / 1_048_576
             size_hint = f" ({mb:.0f} MB)"
     except Exception:
-        pass
+        log.exception("ollama_client: HuggingFace size check")
 
     log.info("Downloading %s/%s%s from HuggingFace → %s", hf_repo, hf_file, size_hint, local_dir or ".")
 
@@ -179,6 +298,19 @@ def start_loading(db_path: Path | None = None) -> None:
         return  # already in progress
 
     if not is_available(db_path):
+        return
+
+    server_url = get_server_url()
+    if server_url:
+        # Nothing to download or load — the server owns the model. Mark ready
+        # immediately so callers don't block on an event that never fires.
+        event = asyncio.Event()
+        event.set()
+        _ready_event = event
+        _phase = "ready"
+        _model = None
+        _model_error = None
+        log.info("LLM backend: remote llama-server at %s (no local model load).", server_url)
         return
 
     loop = asyncio.get_event_loop()
@@ -271,11 +403,29 @@ async def chat(
     """Run a single-turn chat and return the response text.
 
     Waits for the model to finish loading if it hasn't yet.
+
+    The ``model`` argument is accepted but **ignored** on both backends: only
+    one model is served at a time. It is deliberately not forwarded to the
+    remote server — some guild rows carry hosted model IDs (e.g. a Claude
+    model name) left over from an abandoned cloud switch, and honouring those
+    would silently route moderation content off-box.
     """
     if _ready_event is None:
         raise RuntimeError("LLM not initialised — start_loading() was never called.")
 
     await _ready_event.wait()
+
+    server_url = get_server_url()
+    if server_url:
+        log.debug("LLM (remote) request max_tokens=%d system=%.120s user=%.120s",
+                  max_tokens, system, user_content)
+        return await _remote_chat(
+            server_url,
+            system=system,
+            user_content=user_content,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
 
     if _phase == "error":
         raise RuntimeError(f"LLM failed to load: {_model_error}")

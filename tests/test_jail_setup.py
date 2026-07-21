@@ -13,7 +13,10 @@ import pytest
 
 from bot_modules.jail.logic import (
     SETUP_FINAL_STEP,
+    SETUP_PAGE_SIZE,
     cap_mentions,
+    merge_setup_selection,
+    paginate_setup_options,
     sanitize_channel_name,
     setup_button_label,
     setup_step_meta,
@@ -191,3 +194,79 @@ def test_setup_button_label_post_final():
     """Past the final step we'd say "Finish" too, though the caller is
     expected to stop calling once meta returns None."""
     assert setup_button_label(7) == "Finish"
+
+
+# ── paginate_setup_options ─────────────────────────────────────────────
+
+
+def _opts(n: int) -> list[tuple[int, str]]:
+    return [(i, f"r{i}") for i in range(n)]
+
+
+def test_paginate_under_one_page_returns_all():
+    page, clamped, total = paginate_setup_options(_opts(5), 0)
+    assert page == _opts(5)
+    assert clamped == 0
+    assert total == 1
+
+
+def test_paginate_empty_yields_single_empty_page():
+    """No candidates (e.g. a server with no categories) must still be one
+    page so the caller renders a disabled 'skip me' select, not a crash."""
+    page, clamped, total = paginate_setup_options([], 0)
+    assert page == []
+    assert clamped == 0
+    assert total == 1
+
+
+def test_paginate_splits_at_25():
+    opts = _opts(30)
+    first, _, total = paginate_setup_options(opts, 0)
+    second, _, _ = paginate_setup_options(opts, 1)
+    assert total == 2
+    assert len(first) == SETUP_PAGE_SIZE
+    assert first[0] == (0, "r0")
+    assert second == [(i, f"r{i}") for i in range(25, 30)]
+
+
+def test_paginate_clamps_page_past_the_end():
+    """Pressing ▶ on the last page is a no-op, not an empty menu."""
+    page, clamped, total = paginate_setup_options(_opts(30), 99)
+    assert clamped == total - 1 == 1
+    assert page == [(i, f"r{i}") for i in range(25, 30)]
+
+
+def test_paginate_clamps_negative_page():
+    page, clamped, _ = paginate_setup_options(_opts(30), -5)
+    assert clamped == 0
+    assert page[0] == (0, "r0")
+
+
+# ── merge_setup_selection ──────────────────────────────────────────────
+
+
+def test_merge_adds_new_picks():
+    assert merge_setup_selection([], [1, 2, 3], [2, 3]) == [2, 3]
+
+
+def test_merge_preserves_off_page_picks():
+    """A pick made on an earlier page survives selecting on the current one."""
+    result = merge_setup_selection([10], [1, 2, 3], [2])
+    assert result == [10, 2]
+
+
+def test_merge_deselecting_on_page_drops_only_that_page():
+    """Clearing the current page removes its picks but keeps off-page ones."""
+    result = merge_setup_selection([10, 2], [1, 2, 3], [])
+    assert result == [10]
+
+
+def test_merge_collapses_duplicates():
+    result = merge_setup_selection([2], [1, 2, 3], [2, 3])
+    assert result == [2, 3]
+
+
+def test_merge_caps_at_max_picks():
+    result = merge_setup_selection([1, 2, 3], [4, 5], [4, 5], max_picks=4)
+    assert len(result) == 4
+    assert result == [1, 2, 3, 4]

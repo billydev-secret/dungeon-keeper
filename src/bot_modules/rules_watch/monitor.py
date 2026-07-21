@@ -15,15 +15,15 @@ import discord
 from discord.ext import commands
 
 from bot_modules.core.db_utils import get_config_value
-from bot_modules.rules_watch import service
+from bot_modules.rules_watch import ledger, service
 from bot_modules.rules_watch.scorer import (
     Signals,
     TargetResult,
-    check_boundary_token,
     compute_priority,
     compute_thread_reciprocity,
     compute_vader_trajectory,
     count_persistence,
+    detect_boundary_crossing,
     detect_slur,
     get_consent_state,
     get_mutual_count,
@@ -90,6 +90,87 @@ class RulesWatchMonitor(commands.Cog):
             self._process(message),
             name=f"rules_watch:{message.id}",
         )
+        # The ledger runs independently of the guard pipeline: a concrete act is
+        # worth recording whether or not the sentiment pre-filter would have let
+        # the message through, and it never calls the model.
+        asyncio.create_task(
+            self._record_ledger(message),
+            name=f"rules_ledger:{message.id}",
+        )
+
+    # ------------------------------------------------------------------
+    # Ledger (§7.3, §7.4) — records concrete acts, posts nothing
+    # ------------------------------------------------------------------
+
+    async def _record_ledger(self, message: discord.Message) -> None:
+        """Record DM-consent and cross-platform acts for later human review.
+
+        Deliberately silent: no Discord alert, no priority score, no label
+        prompt. These rows exist so that when somebody is already being
+        reviewed, prior acts are on record with dates instead of being
+        reconstructed from memory.
+        """
+        content = message.content or ""
+        if not content:
+            return
+
+        guild_id = message.guild.id  # type: ignore[union-attr]
+        channel_id = message.channel.id
+        author_id = message.author.id
+        message_id = message.id
+        created_ts = message.created_at.timestamp()
+        mention_ids = [m.id for m in message.mentions if not m.bot]
+        reply_to_id = (
+            message.reference.message_id
+            if message.reference and message.reference.message_id
+            else None
+        )
+
+        def _do_ledger() -> None:
+            with self.ctx.open_db() as conn:
+                dm_hit = ledger.detect_dm_consent(
+                    conn, guild_id, channel_id, author_id, content, created_ts
+                )
+                # Only resolve a target if something might actually fire —
+                # identify_target runs several queries.
+                needs_target = dm_hit is not None or (
+                    ledger.names_platform(content) is not None
+                    and not ledger.is_intake_ritual(content)
+                    and ledger.demonstrates_observation(content)
+                )
+                if not needs_target:
+                    return
+
+                target = identify_target(
+                    conn, guild_id, channel_id, author_id, reply_to_id, mention_ids
+                )
+
+                if dm_hit is not None:
+                    ledger.record_hit(
+                        conn, guild_id=guild_id, hit=dm_hit,
+                        message_id=message_id, channel_id=channel_id,
+                        author_id=author_id, target_id=target.target_id,
+                        target_confidence=target.confidence,
+                        detected_at=created_ts,
+                    )
+
+                xp_hit = ledger.detect_cross_platform(
+                    conn, guild_id, channel_id, author_id, target.target_id,
+                    content, created_ts,
+                )
+                if xp_hit is not None:
+                    ledger.record_hit(
+                        conn, guild_id=guild_id, hit=xp_hit,
+                        message_id=message_id, channel_id=channel_id,
+                        author_id=author_id, target_id=target.target_id,
+                        target_confidence=target.confidence,
+                        detected_at=created_ts,
+                    )
+
+        try:
+            await asyncio.to_thread(_do_ledger)
+        except Exception:
+            log.exception("rules_watch ledger failed for message %s", message.id)
 
     # ------------------------------------------------------------------
     # Pipeline
@@ -101,140 +182,191 @@ class RulesWatchMonitor(commands.Cog):
         author_id = message.author.id
         content = message.content or ""
 
-        with self.ctx.open_db() as conn:
-            # 1. Pre-filter -------------------------------------------------------
-            # Gather cheap signals to decide whether to call the LLM at all.
-            mention_ids = [m.id for m in message.mentions if not m.bot]
-            reply_to_id = (
-                message.reference.message_id
-                if message.reference and message.reference.message_id
-                else None
-            )
+        # Pre-compute message fields before entering the thread so Discord
+        # cache reads stay on the event-loop thread.
+        mention_ids = [m.id for m in message.mentions if not m.bot]
+        reply_to_id = (
+            message.reference.message_id
+            if message.reference and message.reference.message_id
+            else None
+        )
+        message_id = message.id
+        message_created_ts = message.created_at.timestamp()
+        message_author_display = getattr(message.author, "display_name", f"User {author_id}")
+        guild_ref = message.guild  # checked non-None in on_message
 
-            # Check existing VADER score from DB (events_cog already scored it)
-            vader_row = conn.execute(
-                "SELECT sentiment FROM messages WHERE message_id = ?",
-                (message.id,),
-            ).fetchone()
-            vader_compound: float | None = None
-            if vader_row and vader_row["sentiment"] is not None:
-                vader_compound = float(vader_row["sentiment"])
+        def _do_pre_filter_and_window():
+            with self.ctx.open_db() as conn:
+                # 1. Pre-filter ---------------------------------------------------
+                vader_row = conn.execute(
+                    "SELECT sentiment FROM messages WHERE message_id = ?",
+                    (message_id,),
+                ).fetchone()
+                _vader_compound: float | None = None
+                if vader_row and vader_row["sentiment"] is not None:
+                    _vader_compound = float(vader_row["sentiment"])
 
-            boundary_hit = check_boundary_token(content)
-            slur_hit = detect_slur(content)
+                _slur_hit = detect_slur(content)
 
-            # Target needed for persistence check
-            target_preliminary = identify_target(
-                conn, guild_id, channel_id, author_id,
-                reply_to_id, mention_ids,
-            )
-
-            persistence = 0
-            if target_preliminary.target_id is not None:
-                persistence = count_persistence(
+                target_preliminary = identify_target(
                     conn, guild_id, channel_id, author_id,
-                    target_preliminary.target_id,
+                    reply_to_id, mention_ids,
                 )
 
-            # Pre-filter gate: skip LLM unless at least one signal fires
-            if not (
-                (vader_compound is not None and vader_compound < -0.25)
-                or boundary_hit
-                or slur_hit
-                or persistence >= 3
-            ):
-                return
+                # A boundary event is the TARGET telling THIS author to stop and
+                # the author continuing — not the author's own use of the word
+                # "no". Requires a target, so it is computed here rather than
+                # from `content`.
+                _persistence = 0
+                _boundary_hit = False
+                if target_preliminary.target_id is not None:
+                    _persistence = count_persistence(
+                        conn, guild_id, channel_id, author_id,
+                        target_preliminary.target_id,
+                    )
+                    _boundary_hit = detect_boundary_crossing(
+                        conn, guild_id, channel_id, author_id,
+                        target_preliminary.target_id, message_created_ts,
+                    )
 
-            # 2. Build conversation window ----------------------------------------
-            window_rows = conn.execute(
-                """
-                SELECT m.message_id, m.author_id, m.content, m.reply_to_id, m.ts,
-                       ku.display_name
-                FROM messages m
-                LEFT JOIN known_users ku
-                    ON ku.user_id = m.author_id AND ku.guild_id = m.guild_id
-                WHERE m.guild_id = ? AND m.channel_id = ?
-                ORDER BY m.ts DESC
-                LIMIT ?
-                """,
-                (guild_id, channel_id, _WINDOW_SIZE),
-            ).fetchall()
-            window_rows = list(reversed(window_rows))  # oldest first
+                # Pre-filter gate: skip LLM unless at least one signal fires
+                if not (
+                    (_vader_compound is not None and _vader_compound < -0.25)
+                    or _boundary_hit
+                    or _slur_hit
+                    or _persistence >= 3
+                ):
+                    return None
 
-            # Fetch mentions for each window message
-            if window_rows:
-                wids = [r["message_id"] for r in window_rows]
-                placeholders = ",".join("?" * len(wids))
-                mention_rows = conn.execute(
-                    f"SELECT message_id, user_id FROM message_mentions WHERE message_id IN ({placeholders})",
-                    wids,
+                # 2. Build conversation window ------------------------------------
+                window_rows = conn.execute(
+                    """
+                    SELECT m.message_id, m.author_id, m.content, m.reply_to_id, m.ts,
+                           ku.display_name
+                    FROM messages m
+                    LEFT JOIN known_users ku
+                        ON ku.user_id = m.author_id AND ku.guild_id = m.guild_id
+                    WHERE m.guild_id = ? AND m.channel_id = ?
+                    ORDER BY m.ts DESC
+                    LIMIT ?
+                    """,
+                    (guild_id, channel_id, _WINDOW_SIZE),
                 ).fetchall()
-                msg_mentions: dict[int, list[int]] = {}
-                for mr in mention_rows:
-                    msg_mentions.setdefault(mr["message_id"], []).append(mr["user_id"])
-            else:
-                msg_mentions = {}
+                window_rows = list(reversed(window_rows))  # oldest first
 
-            id_to_name: dict[int, str] = {}
-            for r in window_rows:
-                aid = r["author_id"]
-                if aid not in id_to_name:
-                    m = message.guild.get_member(aid)  # type: ignore[union-attr]
-                    id_to_name[aid] = (
-                        m.display_name if m
-                        else (r["display_name"] or f"User {aid}")
-                    )
+                if window_rows:
+                    wids = [r["message_id"] for r in window_rows]
+                    placeholders = ",".join("?" * len(wids))
+                    mention_rows = conn.execute(
+                        f"SELECT message_id, user_id FROM message_mentions WHERE message_id IN ({placeholders})",
+                        wids,
+                    ).fetchall()
+                    _msg_mentions: dict[int, list[int]] = {}
+                    for mr in mention_rows:
+                        _msg_mentions.setdefault(mr["message_id"], []).append(mr["user_id"])
+                else:
+                    _msg_mentions = {}
 
-            # Build id→author map for reply resolution
-            id_to_author = {r["message_id"]: r["author_id"] for r in window_rows}
-            window_lines: list[str] = []
-            for r in window_rows:
-                ts_str = datetime.fromtimestamp(r["ts"], tz=timezone.utc).strftime("%H:%M")
-                name = id_to_name.get(r["author_id"], f"User {r['author_id']}")
-                text = (r["content"] or "").replace("\n", " ")[:400]
-                reply_note = ""
-                if r["reply_to_id"] and r["reply_to_id"] in id_to_author:
-                    reply_author_name = id_to_name.get(
-                        id_to_author[r["reply_to_id"]], "?"
-                    )
-                    reply_note = f" [↩ replying to {reply_author_name}]"
-                window_lines.append(f"[{ts_str}] {name}{reply_note}: {text}")
-            window_text = "\n".join(window_lines)
+                id_to_name: dict[int, str] = {}
+                for r in window_rows:
+                    aid = r["author_id"]
+                    if aid not in id_to_name:
+                        mem = guild_ref.get_member(aid) if guild_ref is not None else None
+                        id_to_name[aid] = (
+                            mem.display_name if mem
+                            else (r["display_name"] or f"User {aid}")
+                        )
 
-            # 3. Context signals (DB-bound) ----------------------------------------
-            target = identify_target(
-                conn, guild_id, channel_id, author_id,
-                reply_to_id, mention_ids,
-                window_messages=[
-                    {"author_id": r["author_id"], "mentions": msg_mentions.get(r["message_id"], [])}
-                    for r in window_rows
-                ],
+                id_to_author = {r["message_id"]: r["author_id"] for r in window_rows}
+                _window_lines: list[str] = []
+                for r in window_rows:
+                    ts_str = datetime.fromtimestamp(r["ts"], tz=timezone.utc).strftime("%H:%M")
+                    name = id_to_name.get(r["author_id"], f"User {r['author_id']}")
+                    text = (r["content"] or "").replace("\n", " ")[:400]
+                    reply_note = ""
+                    if r["reply_to_id"] and r["reply_to_id"] in id_to_author:
+                        reply_author_name = id_to_name.get(
+                            id_to_author[r["reply_to_id"]], "?"
+                        )
+                        reply_note = f" [↩ replying to {reply_author_name}]"
+                    _window_lines.append(f"[{ts_str}] {name}{reply_note}: {text}")
+
+                # The triggering message is dispatched (create_task) concurrently
+                # with the events_cog message store, and _process reaches this
+                # window build before the store completes — so the message is
+                # usually NOT yet in the `messages` table above. Append it
+                # explicitly from memory so the guard evaluates the message the
+                # alert is actually about, as the final (most-recent) line.
+                if message_id not in id_to_author:
+                    trig_ts = datetime.fromtimestamp(
+                        message_created_ts, tz=timezone.utc
+                    ).strftime("%H:%M")
+                    trig_name = id_to_name.get(author_id) or message_author_display
+                    trig_reply = ""
+                    if reply_to_id and reply_to_id in id_to_author:
+                        trig_reply = f" [↩ replying to {id_to_name.get(id_to_author[reply_to_id], '?')}]"
+                    trig_text = content.replace("\n", " ")[:400]
+                    _window_lines.append(f"[{trig_ts}] {trig_name}{trig_reply}: {trig_text}")
+
+                _window_text = "\n".join(_window_lines)
+
+                # 3. Context signals (DB-bound) -----------------------------------
+                _target = identify_target(
+                    conn, guild_id, channel_id, author_id,
+                    reply_to_id, mention_ids,
+                    window_messages=[
+                        {"author_id": r["author_id"], "mentions": _msg_mentions.get(r["message_id"], [])}
+                        for r in window_rows
+                    ],
+                )
+                _tid = _target.target_id
+
+                _mutual_count = get_mutual_count(conn, guild_id, author_id, _tid) if _tid else 0
+                _recip_ratio = get_reciprocity_ratio(conn, guild_id, author_id, _tid) if _tid else None
+                _consent_active, _consent_revoked = (
+                    get_consent_state(conn, guild_id, author_id, _tid) if _tid else (False, False)
+                )
+                _thread_recip = (
+                    compute_thread_reciprocity(conn, guild_id, channel_id, author_id, _tid)
+                    if _tid else None
+                )
+                _vader_traj = compute_vader_trajectory(conn, guild_id, channel_id, _tid) if _tid else None
+                _tenure = service.compute_tenure_days(conn, guild_id, author_id)
+
+            return (
+                _vader_compound, _boundary_hit, _slur_hit, _persistence,
+                _window_text, _window_lines, _target, _tid,
+                _mutual_count, _recip_ratio, _consent_active, _consent_revoked,
+                _thread_recip, _vader_traj, _tenure,
             )
-            tid = target.target_id
 
-            mutual_count = get_mutual_count(conn, guild_id, author_id, tid) if tid else 0
-            recip_ratio = get_reciprocity_ratio(conn, guild_id, author_id, tid) if tid else None
-            consent_active, consent_revoked = (
-                get_consent_state(conn, guild_id, author_id, tid) if tid else (False, False)
-            )
-            thread_recip = (
-                compute_thread_reciprocity(conn, guild_id, channel_id, author_id, tid)
-                if tid else None
-            )
-            vader_traj = compute_vader_trajectory(conn, guild_id, channel_id, tid) if tid else None
-            tenure = service.compute_tenure_days(conn, guild_id, author_id)
+        pre = await asyncio.to_thread(_do_pre_filter_and_window)
+        if pre is None:
+            return
+        (
+            vader_compound, boundary_hit, slur_hit, persistence,
+            window_text, window_lines, target, tid,
+            mutual_count, recip_ratio, consent_active, consent_revoked,
+            thread_recip, vader_traj, tenure,
+        ) = pre
 
         # DM tier mismatch requires live discord.Member objects
         author_mode = "ask"
         target_mode = "ask"
         if tid and message.guild:
-            from bot_modules.services.dm_perms_service import resolve_mode
+            from bot_modules.services.dm_perms_service import (
+                get_dm_mode_role_ids,
+                resolve_mode,
+            )
+            mode_role_ids = await asyncio.to_thread(
+                get_dm_mode_role_ids, self.ctx.db_path, guild_id
+            )
             target_member = message.guild.get_member(tid)
             author_member = message.guild.get_member(author_id)
             if author_member:
-                author_mode = resolve_mode(author_member)
+                author_mode = resolve_mode(author_member, mode_role_ids)
             if target_member:
-                target_mode = resolve_mode(target_member)
+                target_mode = resolve_mode(target_member, mode_role_ids)
         tier_mismatch = is_dm_tier_mismatch(author_mode, target_mode) if tid else False
 
         # 4. Guard model call -------------------------------------------------------
@@ -278,36 +410,49 @@ class RulesWatchMonitor(commands.Cog):
 
         # 6. Store event -----------------------------------------------------------
         import json as _json
-        with self.ctx.open_db() as conn:
-            event_id = service.insert_event(
-                conn,
-                guild_id=guild_id,
-                message_id=message.id,
-                author_id=author_id,
-                channel_id=channel_id,
-                target_id=tid,
-                target_confidence=target.confidence,
-                window_json=_json.dumps(window_lines),
-                guard_verdict=guard.verdict,
-                guard_rule=guard.rule,
-                guard_reason=guard.reason,
-                guard_confidence=guard.confidence,
-                slur_signal=int(slur_hit),
-                vader_compound=vader_compound,
-                vader_trajectory=vader_traj,
-                mutual_interaction_count=mutual_count,
-                reciprocity_ratio=recip_ratio,
-                consent_pair_active=int(consent_active),
-                consent_pair_recently_revoked=int(consent_revoked),
-                dm_tier_mismatch=int(tier_mismatch),
-                thread_reciprocity_ratio=thread_recip,
-                persistence_count=persistence,
-                boundary_token_crossed=int(boundary_hit),
-                tenure_days=tenure,
-                priority_score=priority.score,
-                priority_tier=priority.tier,
-                priority_reason=priority.reason,
-            )
+        _window_json = _json.dumps(window_lines)
+        _target_confidence = target.confidence
+        _guard_verdict = guard.verdict
+        _guard_rule = guard.rule
+        _guard_reason = guard.reason
+        _guard_confidence = guard.confidence
+        _priority_score = priority.score
+        _priority_tier = priority.tier
+        _priority_reason = priority.reason
+
+        def _do_store_event():
+            with self.ctx.open_db() as conn:
+                return service.insert_event(
+                    conn,
+                    guild_id=guild_id,
+                    message_id=message_id,
+                    author_id=author_id,
+                    channel_id=channel_id,
+                    target_id=tid,
+                    target_confidence=_target_confidence,
+                    window_json=_window_json,
+                    guard_verdict=_guard_verdict,
+                    guard_rule=_guard_rule,
+                    guard_reason=_guard_reason,
+                    guard_confidence=_guard_confidence,
+                    slur_signal=int(slur_hit),
+                    vader_compound=vader_compound,
+                    vader_trajectory=vader_traj,
+                    mutual_interaction_count=mutual_count,
+                    reciprocity_ratio=recip_ratio,
+                    consent_pair_active=int(consent_active),
+                    consent_pair_recently_revoked=int(consent_revoked),
+                    dm_tier_mismatch=int(tier_mismatch),
+                    thread_reciprocity_ratio=thread_recip,
+                    persistence_count=persistence,
+                    boundary_token_crossed=int(boundary_hit),
+                    tenure_days=tenure,
+                    priority_score=_priority_score,
+                    priority_tier=_priority_tier,
+                    priority_reason=_priority_reason,
+                )
+
+        event_id = await asyncio.to_thread(_do_store_event)
 
         # 7. Alert routing ---------------------------------------------------------
         if priority.tier == "immediate":
@@ -353,8 +498,13 @@ class RulesWatchMonitor(commands.Cog):
             db_path=self.ctx.db_path,
         )
         if alert_msg:
-            with self.ctx.open_db() as conn:
-                service.update_alert_message_id(conn, event_id, alert_msg.id)
+            _alert_msg_id = alert_msg.id
+
+            def _do_update_alert_msg():
+                with self.ctx.open_db() as conn:
+                    service.update_alert_message_id(conn, event_id, _alert_msg_id)
+
+            await asyncio.to_thread(_do_update_alert_msg)
 
     # ------------------------------------------------------------------
     # Withdrawal async check
@@ -371,33 +521,39 @@ class RulesWatchMonitor(commands.Cog):
     ) -> None:
         await asyncio.sleep(_WITHDRAWAL_CHECK_DELAY)
         try:
-            with self.ctx.open_db() as conn:
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*) as cnt FROM messages
-                    WHERE guild_id = ? AND channel_id = ? AND author_id = ?
-                      AND ts > (
-                          SELECT detected_at FROM rules_events WHERE id = ?
-                      )
-                    """,
-                    (guild_id, channel_id, target_id, event_id),
-                ).fetchone()
-                withdrew = (row["cnt"] == 0) if row else False
+            def _do_withdrawal_check():
+                with self.ctx.open_db() as conn:
+                    row = conn.execute(
+                        """
+                        SELECT COUNT(*) as cnt FROM messages
+                        WHERE guild_id = ? AND channel_id = ? AND author_id = ?
+                          AND ts > (
+                              SELECT detected_at FROM rules_events WHERE id = ?
+                          )
+                        """,
+                        (guild_id, channel_id, target_id, event_id),
+                    ).fetchone()
+                    withdrew = (row["cnt"] == 0) if row else False
 
-                if not withdrew:
-                    service.update_withdrawal_flag(conn, event_id, withdrew=False)
-                    return
+                    if not withdrew:
+                        service.update_withdrawal_flag(conn, event_id, withdrew=False)
+                        return None  # sentinel: caller should return
 
-                # Re-score with withdrawal flag set
-                import dataclasses
-                new_sigs = dataclasses.replace(original_sigs, target_withdrew=True)
-                new_priority = compute_priority(new_sigs)
-                service.update_withdrawal_flag(
-                    conn, event_id, withdrew=True,
-                    new_priority_score=new_priority.score,
-                    new_priority_tier=new_priority.tier,
-                    new_priority_reason=new_priority.reason,
-                )
+                    # Re-score with withdrawal flag set
+                    import dataclasses
+                    new_sigs = dataclasses.replace(original_sigs, target_withdrew=True)
+                    _new_priority = compute_priority(new_sigs)
+                    service.update_withdrawal_flag(
+                        conn, event_id, withdrew=True,
+                        new_priority_score=_new_priority.score,
+                        new_priority_tier=_new_priority.tier,
+                        new_priority_reason=_new_priority.reason,
+                    )
+                return _new_priority
+
+            new_priority = await asyncio.to_thread(_do_withdrawal_check)
+            if new_priority is None:
+                return
 
             # If tier escalated to immediate, post (or re-post note) to alert channel
             if (

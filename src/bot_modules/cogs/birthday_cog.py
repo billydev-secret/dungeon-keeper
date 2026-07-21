@@ -7,7 +7,7 @@ import calendar
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
@@ -317,12 +317,28 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
             return
 
         pref = self.preference.value.strip() or None
-        with self._ctx.open_db() as conn:
-            _upsert_birthday(conn, guild_id, interaction.user.id, m, d, interaction.user.id, pref)
+        gid = guild_id
+        user_id = interaction.user.id
+
+        def _do_upsert_birthday():
+            with self._ctx.open_db() as conn:
+                _upsert_birthday(conn, gid, user_id, m, d, user_id, pref)
+
+        await asyncio.to_thread(_do_upsert_birthday)
 
         await interaction.response.send_message(
             f"Your birthday has been set to **{calendar.month_name[m]} {d}**.",
             ephemeral=True,
+        )
+
+        # Quest hook: the bio_set pattern — occurrence "set" makes an event
+        # quest pay once ever; updates collide on the same key. Guarded,
+        # never raised into the modal flow.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            cast("Bot", interaction.client), gid, user_id, "birthday_set",
+            occurrence="set",
         )
 
 
@@ -368,8 +384,14 @@ class BirthdayCog(commands.Cog):
             )
             return
 
-        with self.ctx.open_db() as conn:
-            removed = _delete_birthday(conn, guild_id, interaction.user.id)
+        gid = guild_id
+        user_id = interaction.user.id
+
+        def _do_delete_birthday():
+            with self.ctx.open_db() as conn:
+                return _delete_birthday(conn, gid, user_id)
+
+        removed = await asyncio.to_thread(_do_delete_birthday)
 
         if removed:
             await interaction.response.send_message(

@@ -10,17 +10,19 @@ Per-channel "delete messages older than X, sweep every Y" rules configured from 
 
 There are no slash commands or context menus. Members never see the configuration surface.
 
-## Behaviour
+## Behavior
 
 ### Setting a rule
 
 An admin opens the dashboard's auto-delete panel, picks a channel, picks a max message age (e.g. 7 days), and picks a sweep interval (e.g. 1 hour). Saving the rule activates it immediately — the next sweep tick that lands after the configured interval starts deleting eligible messages.
 
+An optional **media-only** toggle narrows the rule to messages that carry an attachment (images/videos/files); text-only messages are left alone. "Media" means a Discord attachment — link-preview embeds, stickers, and pasted image URLs that merely unfurl don't count. The default is off (delete everything). Because the sweep is queue-driven and can't re-inspect a message's attachments at delete time, **toggling media-only on an existing rule clears that channel's tracked queue** so the sweep can never delete a message that no longer matches; the queue rebuilds from live tracking and the next startup catch-up. Editing only the age/interval leaves the queue intact.
+
 Removing a rule clears the rule and discards every tracked message for that channel.
 
 ### Live tracking
 
-Every new message in a rule-channel is recorded against the channel's rule (queued for future sweep). Deletes — single or bulk — clear the message from the queue so the bot doesn't try to re-delete tombstones. Backfilled messages on bot startup follow the same path.
+Every new message in a rule-channel is recorded against the channel's rule (queued for future sweep). Under a media-only rule, only messages carrying an attachment are queued. Deletes — single or bulk — clear the message from the queue so the bot doesn't try to re-delete tombstones. Backfilled messages on bot startup follow the same path.
 
 ### The sweep
 
@@ -30,7 +32,7 @@ If the bot loses **Manage Messages** mid-sweep, the current sweep stops, the rul
 
 ### Startup catch-up
 
-When the bot boots, every rule runs a one-shot pass over its channel's recent history. Anything past the `max_age` cutoff is deleted; anything younger is queued so the next live sweep can age it out. **Pinned messages are skipped during the startup pass.** The live sweep doesn't re-check pin state — see Non-goals.
+When the bot boots, every rule runs a one-shot pass over its channel's recent history. Anything past the `max_age` cutoff is deleted; anything younger is queued so the next live sweep can age it out. **Pinned messages are skipped during the startup pass.** A media-only rule additionally skips text-only messages on both the delete and the queue paths. The live sweep doesn't re-check pin state — see Non-goals.
 
 ## Permissions
 
@@ -60,6 +62,7 @@ Per rule (one rule per channel):
 |---|---|
 | `max_age` | Messages older than this are deleted on the next due sweep |
 | `sweep_interval` | How often the rule fires |
+| `media_only` | When on, only messages with an attachment are eligible (default off) |
 
 No global config keys. Rules are per-guild, per-channel.
 
@@ -67,7 +70,7 @@ No global config keys. Rules are per-guild, per-channel.
 
 Two per-guild tables:
 
-- **Rules** — one row per (guild, channel) with the max-age, interval, and last-run timestamp.
+- **Rules** — one row per (guild, channel) with the max-age, interval, last-run timestamp, and the `media_only` flag.
 - **Tracked messages** — the pending-deletion queue. Transient — rows are deleted as soon as they're swept (or skipped if Discord already deleted the message). A wiped tracked-messages table is not catastrophic: the next startup catch-up rebuilds it from channel history.
 
 No per-user data. No filesystem cache. Live tracking is wired through the bot's message listeners (see [[events-spec]]).

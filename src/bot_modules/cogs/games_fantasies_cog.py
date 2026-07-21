@@ -1,13 +1,20 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
@@ -15,9 +22,10 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     modify_payload,
-    ConfirmCloseView,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_fantasies.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -54,7 +62,7 @@ class SubmitEntryModal(discord.ui.Modal, title="Submit a Fantasy or Dealbreaker"
         self.round_num = round_num
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Submit Entry", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Submit Entry", channel_name(interaction.channel))
         category = normalize_category(self.category.value)
         if category is None:
             await interaction.response.send_message(
@@ -100,14 +108,14 @@ class FantasiesMainView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Start Round", style=discord.ButtonStyle.primary, custom_id="fan_start_round")
     async def start_round(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start rounds.", ephemeral=True)
             return
@@ -123,41 +131,9 @@ class FantasiesMainView(discord.ui.View):
             channel=interaction.channel,
         )
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="fan_close")
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-
-            # Unblock any waiting submit_view so _run_round doesn't hang
-            if self._active_submit_view:
-                self._active_submit_view.stop()
-
-            payload = await get_game_payload(self.db, self.game_id)
-            await self.cog._post_recap(channel, payload)
-            log.info("Game %s ended — fantasies", self.game_id)
-            await end_game(self.db, self.game_id, payload=payload)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="fan_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="fan_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["fantasies"], ephemeral=True)
 
 
@@ -173,27 +149,26 @@ class SubmitRoundView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Submit", style=discord.ButtonStyle.primary, custom_id="fan_submit_entry")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         modal = SubmitEntryModal(self.game_id, self.db, self.round_num)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Close Submissions", style=discord.ButtonStyle.secondary, custom_id="fan_close_sub")
     async def close_submissions(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can close submissions.", ephemeral=True)
             return
         self._closed = True
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(content=f"✅ Submissions closed for Round {self.round_num}!", view=self)
 
 
@@ -209,6 +184,7 @@ class FantasiesVoteView(discord.ui.View):
         bot,
         host_name: str,
         advance_callback,
+        entry_author_id: int = 0,
         total_entries: int = 0,
     ):
         super().__init__(timeout=None)
@@ -222,16 +198,18 @@ class FantasiesVoteView(discord.ui.View):
         self.bot = bot
         self.host_name = host_name
         self.advance_callback = advance_callback
+        self.entry_author_id = entry_author_id
         self.same_votes: list[int] = []
         self.nope_votes: list[int] = []
         self._updater = LiveBarUpdater()
         self._closed = False
         self._advanced_event: asyncio.Event | None = None
+        self._accent_color: "discord.Color | None" = None
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -245,13 +223,19 @@ class FantasiesVoteView(discord.ui.View):
             nope_votes=self.nope_votes,
             total_entries=self.total_entries,
             closed=closed,
+            color=self._accent_color,
         )
 
     @discord.ui.button(label="✅ Same", style=discord.ButtonStyle.success, custom_id="fan_same", row=0)
     async def vote_same(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
+            return
+        if interaction.user.id == self.entry_author_id:
+            await interaction.response.send_message(
+                "You can't vote on your own entry!", ephemeral=True
+            )
             return
         changed = apply_vote(
             self.same_votes, self.nope_votes, interaction.user.id, "same"
@@ -262,9 +246,14 @@ class FantasiesVoteView(discord.ui.View):
 
     @discord.ui.button(label="❌ Not for me", style=discord.ButtonStyle.danger, custom_id="fan_nope", row=0)
     async def vote_nope(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
+            return
+        if interaction.user.id == self.entry_author_id:
+            await interaction.response.send_message(
+                "You can't vote on your own entry!", ephemeral=True
+            )
             return
         changed = apply_vote(
             self.same_votes, self.nope_votes, interaction.user.id, "nope"
@@ -275,48 +264,16 @@ class FantasiesVoteView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="fan_next", row=1)
     async def next_entry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="fan_vclose", row=1)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            payload = await get_game_payload(self.db, self.game_id)
-            cog = self.bot.cogs.get("FantasiesCog")
-            if cog:
-                await cog._post_recap(channel, payload)
-            await end_game(self.db, self.game_id, payload=payload)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            # Unblock the voting loop so it can exit cleanly
-            if self._advanced_event:
-                self._advanced_event.set()
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
 
 class FantasiesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -325,7 +282,7 @@ class FantasiesCog(commands.Cog):
 
     @app_commands.command(name="fantasies", description="Start a Fantasies & Dealbreakers game!")
     async def fantasies(self, interaction: discord.Interaction):
-        log.info("%s used /games play fantasies in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play fantasies in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -341,15 +298,7 @@ class FantasiesCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -370,7 +319,9 @@ class FantasiesCog(commands.Cog):
             payload={"rounds": {}, "results": []},
         )
 
-        embed = build_lobby_embed(host_name)
+        guild = getattr(channel, "guild", None)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, color=color)
 
         log.info("Game %s (fantasies) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         view = FantasiesMainView(game_id, host_id, self.db, self.bot, self)
@@ -395,7 +346,9 @@ class FantasiesCog(commands.Cog):
         round_num: int,
         channel,
     ):
-        submit_embed = build_round_submit_embed(round_num)
+        guild = getattr(channel, "guild", None)
+        accent_color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        submit_embed = build_round_submit_embed(round_num, color=accent_color)
         submit_view = SubmitRoundView(game_id, host_id, round_num, self.db, self.bot)
         # Let the main view know so it can stop us on close
         main_view = self.bot.active_views.get(game_id)
@@ -427,7 +380,7 @@ class FantasiesCog(commands.Cog):
             entry_num = i + 1
             advanced = asyncio.Event()
 
-            async def advance(message: discord.Message, _text=entry_text, _num=entry_num, _author=entry_data["user_id"], _cat=entry_category):
+            async def advance(message: discord.Message, _text=entry_text, _num=entry_num, _author=entry_data["user_id"], _cat=entry_category) -> None:
                 if view._closed:
                     return
                 view._closed = True
@@ -446,11 +399,10 @@ class FantasiesCog(commands.Cog):
                     payload.setdefault("results", []).append(_entry)
                 await modify_payload(self.db, game_id, _save_result)
 
-                for item in view.children:
-                    item.disabled = True
+                disable_all_items(view)
                 try:
                     await message.edit(embed=view._build_embed(closed=True), view=view)
-                except Exception:
+                except discord.HTTPException:
                     pass
                 advanced.set()
 
@@ -464,9 +416,11 @@ class FantasiesCog(commands.Cog):
                 bot=self.bot,
                 host_name=host_name,
                 advance_callback=advance,
+                entry_author_id=entry_data["user_id"],
                 total_entries=len(entries),
             )
             view._advanced_event = advanced
+            view._accent_color = accent_color
             self.bot.active_views[game_id] = view
 
             embed = view._build_embed()
@@ -485,7 +439,9 @@ class FantasiesCog(commands.Cog):
 
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
-        embed = build_recap_embed(results)
+        guild = getattr(channel, "guild", None)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_recap_embed(results, color=color)
         if embed is None:
             return
         await channel.send(embed=embed)
@@ -517,10 +473,10 @@ class FantasiesCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = FantasiesCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("fantasies")
-    play.add_command(cog.fantasies)
+    play.add_command(cog.fantasies, override=True)
     bot.game_launchers["fantasies"] = cog.launch
     bot.game_recoverers["fantasies"] = cog.recover_game

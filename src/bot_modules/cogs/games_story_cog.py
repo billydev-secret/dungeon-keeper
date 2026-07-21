@@ -1,12 +1,20 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
@@ -15,9 +23,9 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_name,
     resolve_names,
+    channel_name,
 )
 from bot_modules.games_story.embeds import (
     build_attribution_embed,
@@ -68,7 +76,7 @@ class StorySentenceModal(discord.ui.Modal, title="Add Your Sentence"):
             self.context_field._underlying.value = context_text[:4000]
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted story sentence in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted story sentence in #%s", interaction.user.display_name, channel_name(interaction.channel))
         self._submitted = True
         self._value = self.sentence.value
         await interaction.response.send_message("✅ Your sentence has been added!", ephemeral=True)
@@ -92,14 +100,14 @@ class StoryTurnView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="✍️ Write Your Sentence", style=discord.ButtonStyle.primary, custom_id="story_write")
     async def write(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.current_player_id:
             await interaction.response.send_message("It's not your turn!", ephemeral=True)
             return
@@ -118,7 +126,7 @@ class StoryTurnView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="story_skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
@@ -126,33 +134,6 @@ class StoryTurnView(discord.ui.View):
         self._submitted_event.set()
         self.stop()
         await interaction.response.send_message("⏩ Player skipped.", ephemeral=True)
-
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="story_turn_close")
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._skipped = True  # unblock the loop
-            self._submitted_event.set()
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            await channel.send("🛑 Story ended by host.")
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
 
 
 class StoryJoinView(discord.ui.View):
@@ -167,14 +148,14 @@ class StoryJoinView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="story_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         def _add(payload):
@@ -185,6 +166,7 @@ class StoryJoinView(discord.ui.View):
 
         players = payload.get("players", [])
         names = resolve_names(interaction.guild, players)
+        assert interaction.message  # component interactions always carry their message
         embed = interaction.message.embeds[0]
         embed.set_field_at(0, name=f"Writers ({len(players)})", value=", ".join(names) or "—", inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -192,7 +174,7 @@ class StoryJoinView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="story_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         def _remove(payload):
@@ -203,6 +185,7 @@ class StoryJoinView(discord.ui.View):
 
         players = payload.get("players", [])
         names = resolve_names(interaction.guild, players)
+        assert interaction.message  # component interactions always carry their message
         embed = interaction.message.embeds[0]
         embed.set_field_at(0, name=f"Writers ({len(players)})", value=", ".join(names) or "—", inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -210,7 +193,7 @@ class StoryJoinView(discord.ui.View):
 
     @discord.ui.button(label="Start Story", style=discord.ButtonStyle.primary, custom_id="story_start")
     async def start_story(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
@@ -221,18 +204,18 @@ class StoryJoinView(discord.ui.View):
             return
 
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         # Ping joined players
         if interaction.guild:
             mentions = [
-                interaction.guild.get_member(uid).mention
+                member.mention
                 for uid in players
-                if interaction.guild.get_member(uid)
+                if (member := interaction.guild.get_member(uid))
             ]
             if mentions:
+                assert isinstance(interaction.channel, discord.abc.Messageable)  # games run in text channels
                 await interaction.channel.send(
                     f"📖 **Story Builder is starting!** {' '.join(mentions)} — get ready to write!",
                     delete_after=15,
@@ -241,28 +224,14 @@ class StoryJoinView(discord.ui.View):
         payload["host_id"] = interaction.user.id
         await self.cog._run_story(interaction, self.game_id, payload, interaction.channel)
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="story_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        self.stop()
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="Game cancelled.", view=self)
-        await end_game(self.db, self.game_id)
-        if self.game_id in self.bot.active_views:
-            del self.bot.active_views[self.game_id]
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="story_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="story_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["story"], ephemeral=True)
 
 
 class StoryCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -288,7 +257,7 @@ class StoryCog(commands.Cog):
         visibility: str = "blind",
         starter: str = "",
     ):
-        log.info("%s used /games play story in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play story in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -308,15 +277,7 @@ class StoryCog(commands.Cog):
                 "starter": starter,
             },
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -349,10 +310,13 @@ class StoryCog(commands.Cog):
             },
         )
 
+        guild = getattr(channel, "guild", None)
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_name=host_name,
             visibility=visibility,
             max_sentences=max_sentences,
+            color=color,
         )
 
         log.info("Game %s (story) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
@@ -413,12 +377,14 @@ class StoryCog(commands.Cog):
             mention = current_member.mention if current_member else f"**{player_name}**"
             turn_view = StoryTurnView(game_id, host_id, current_player_id, context_text, self.db, self.bot)
 
+            turn_color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
             turn_embed = build_turn_embed(
                 sentence_count=sentence_count,
                 max_sentences=max_sentences,
                 current_player_id=current_player_id,
                 turn_order=turn_order,
                 name_resolver=_name_for,
+                color=turn_color,
             )
 
             timeout_min = _TURN_TIMEOUT // 60
@@ -435,11 +401,10 @@ class StoryCog(commands.Cog):
                 turn_view._skipped = True
 
             # Disable turn buttons
-            for item in turn_view.children:
-                item.disabled = True
+            disable_all_items(turn_view)
             try:
                 await turn_msg.edit(view=turn_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             # Check if game was closed via the close button
@@ -458,6 +423,7 @@ class StoryCog(commands.Cog):
 
             consecutive_skips = 0  # reset on successful submission
             new_sentence = turn_view._submitted_text
+            assert new_sentence is not None  # not skipped ⇒ a sentence was submitted
             append_sentence(payload, current_player_id, new_sentence)
             sentences = payload["sentences"]
             await update_game_payload(self.db, game_id, payload)
@@ -476,19 +442,25 @@ class StoryCog(commands.Cog):
         def _name_for(author_id: int) -> str:
             return resolve_name(guild, author_id)
 
+        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+
         # Send the full story embed first
         story_text = assemble_story_text(sentences)
         complete_embed = build_complete_story_embed(
             story_text=story_text,
             player_count=len(players),
             sentence_count=len(sentences),
+            color=color,
         )
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, complete_embed, guild.id, "story")
         await channel.send(embed=complete_embed)
 
         # Send attributed breakdown — split across messages if needed
         lines = build_attribution_lines(sentences, _name_for)
         chunks = chunk_attribution_lines(lines)
-        attr_embed = build_attribution_embed(chunks)
+        attr_embed = build_attribution_embed(chunks, color=color)
         await channel.send(embed=attr_embed)
 
         payload = await get_game_payload(self.db, game_id)
@@ -498,6 +470,7 @@ class StoryCog(commands.Cog):
             player_count=len(players),
             round_count=len(sentences),
             payload=payload,
+            bot=self.bot, player_ids=list(players),
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
@@ -516,7 +489,7 @@ class StoryCog(commands.Cog):
                     "📖 This Story game was interrupted by a bot restart and can't be "
                     "resumed — start a new one with `/games play story`."
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
             await end_game(self.db, row["game_id"])
             self.bot.active_views.pop(row["game_id"], None)
@@ -530,10 +503,10 @@ class StoryCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = StoryCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("story")
-    play.add_command(cog.story)
+    play.add_command(cog.story, override=True)
     bot.game_launchers["story"] = cog.launch
     bot.game_recoverers["story"] = cog.recover_game

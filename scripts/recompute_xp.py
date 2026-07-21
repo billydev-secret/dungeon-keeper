@@ -305,9 +305,14 @@ def main() -> int:
             tot = round(tot, 2)
             lvl = level_for_xp(tot, target)
             new_member_rows.append((tot, lvl, gid, uid))
+        # announced_level rides along with level: a recompute under new
+        # coefficients is bookkeeping, not an achievement. Leaving it behind
+        # would make everyone whose level rose here get the difference
+        # announced into the level-up channel on their next message.
         cur.executemany(
-            "UPDATE member_xp SET total_xp = ?, level = ? WHERE guild_id = ? AND user_id = ?",
-            new_member_rows,
+            "UPDATE member_xp SET total_xp = ?, level = ?, announced_level = ? "
+            "WHERE guild_id = ? AND user_id = ?",
+            [(tot, lvl, lvl, gid, uid) for tot, lvl, gid, uid in new_member_rows],
         )
         cur.execute("COMMIT")
     except Exception:

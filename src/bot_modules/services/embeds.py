@@ -20,6 +20,8 @@ Usage:
 """
 from __future__ import annotations
 
+import re
+
 # ──────────────────────────────────────────────────────────────────
 # Dashboard palette (mirrors web/static/app.css :root tokens 1:1)
 # ──────────────────────────────────────────────────────────────────
@@ -46,7 +48,7 @@ MOD_JAIL    = 0xE74C3C   # bright red — locked-in enforcement
 MOD_TICKET  = 0x3498DB   # blue — open question / conversation
 MOD_POLICY  = 0x9B59B6   # purple — formal policy
 MOD_SUCCESS = 0x2ECC71   # green — resolved / approved
-MOD_INFO    = 0x95A5A6   # grey — informational
+MOD_INFO    = 0x95A5A6   # gray — informational
 MOD_WARNING = 0xF1C40F   # yellow — pending warning
 
 
@@ -76,3 +78,20 @@ BIOS_PRIMARY = 0xC8763E
 
 # Generic / fallback
 GENERIC_PRIMARY = COLOR_GOLD
+
+
+# ──────────────────────────────────────────────────────────────────
+# Footer helpers
+# ──────────────────────────────────────────────────────────────────
+_CUSTOM_EMOJI_RE = re.compile(r"<a?:\w+:\d+>")
+
+
+def footer_emoji(emoji: str, fallback: str = "") -> str:
+    """An emoji safe to place in an embed **footer**.
+
+    Footers render as plain text, so a custom emoji (``<:name:id>``) shows as
+    its raw tag there. This passes plain **unicode** emoji through unchanged
+    and swaps a custom one for ``fallback`` (default: nothing). See
+    ``docs/embed_style_guide.md`` → Footers.
+    """
+    return fallback if _CUSTOM_EMOJI_RE.fullmatch((emoji or "").strip()) else emoji

@@ -9,7 +9,6 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/setup` | Slash | Administrator | First-run interactive wizard for roles, categories, log channels |
-| `/config set <key> <value>` / `/config get <key>` / `/config list` | Slash | Administrator | Tweak individual settings after setup |
 | `/jail <user> [duration] [reason]` | Slash | Mod | Jail a member, optionally with a duration like `24h` or `7d` |
 | `/unjail <user> [reason]` | Slash | Mod | Release a jailed member |
 | `Jail User` | User context menu | Mod | Modal for duration + reason, then runs the jail flow |
@@ -21,6 +20,10 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | `/ticket delete` | Slash | Mod | Permanently delete a closed ticket (generates transcript) |
 | `/ticket claim` | Slash | Mod | Subscribe to DM alerts on new activity in this ticket |
 | `/ticket escalate [reason]` | Slash | Mod | Bring admin roles into the ticket |
+| `/policy open title:<title> [description]` | Slash | Admin | Open a policy proposal channel; title is required and capped at 200 chars (longer titles are trimmed with an ellipsis) |
+| `/policy vote` | Slash | Mod / Admin | Start the formal vote on the current policy proposal (opens a modal) |
+| `/policy close [reason]` | Slash | Admin | Close a policy proposal without voting |
+| `/policy list` | Slash | Mod / Admin | List all passed policies |
 | `/pull <user>` | Slash | Mod | Add a user into the current jail or ticket channel |
 | `/remove <user>` | Slash | Mod | Remove a previously pulled user |
 | `/warn <user> [reason]` | Slash | Mod | Record a warning and DM the member |
@@ -51,9 +54,25 @@ The dashboard mirrors the moderator surface. Jail endpoints are read-only — re
 | `GET` | `/api/moderation/transcript` | Fetch a transcript |
 | `GET` | `/api/moderation/audit` | List audit log entries |
 
-Discord and dashboard actions produce identical side-effects (role changes, channel ops, DMs, transcripts, audit entries).
+Discord and dashboard actions are *intended* to produce identical side-effects
+(role changes, channel ops, DMs, transcripts, audit entries), and some do:
+`POST .../jail` routes through the same `apply_jail` flow as the slash command
+(real role + jail channel + DM), and `.../warn` and `.../claim` match their
+Discord counterparts (record-only).
 
-## Behaviour
+**Known gap (still true as of 2026-07-21):** the ticket-lifecycle routes
+`POST .../close`, `.../reopen`, `.../dismiss`, and `.../escalate` are currently
+**DB-only** — they flip the ticket row and write an audit entry but do **not**
+reach Discord. Closing (or dismissing/reopening/escalating) a ticket from the
+dashboard leaves the Discord channel untouched: the embed still shows its old
+status, the Close↔Reopen/Delete buttons don't swap, the channel isn't
+locked/unlocked, no note is posted, the creator isn't DM'd, and escalate
+neither adds admin roles nor pings them. The bridge to fix this exists
+(`ctx.bot` on the web server's event loop, as `.../jail` uses); wiring it up is
+deferred. Until then, drive close/reopen/escalate from **Discord** if you need
+the channel-side effects.
+
+## Behavior
 
 ### First-run setup
 
@@ -82,6 +101,8 @@ No cap on concurrent open tickets per user.
 Tickets pass through three states: **Open → Closed → Deleted**. Close locks the channel — the creator can still read everything but can't post; the embed updates to a "🔒 Closed" status with the closing mod and reason; the Close button is replaced with green "🔓 Reopen" and red "🗑️ Delete" buttons. Reopen restores send permissions and swaps the buttons back. Delete is permanent and runs through a final confirm; it generates the transcript, posts it to the transcript channel, DMs it to the creator, then deletes the channel.
 
 The intermediate Closed state exists so that a "wait, one more thing" message after close doesn't require opening a new ticket — the mod just clicks Reopen.
+
+A ticket left **closed for 24 hours** is deleted automatically. An hourly background sweep finds tickets whose close time is more than 24 h in the past and runs the same delete path as the button: it generates the transcript, posts it to the transcript channel, DMs it to the creator, then deletes the channel. Reopening resets the clock — reopen clears the close timestamp, so a reopened ticket drops out of the sweep until it's closed again (and a re-close starts a fresh 24 h). If the transcript can't be generated, the channel is left intact and the sweep retries on its next pass, so a ticket is never destroyed without an archive. Manual `/ticket delete` (or the Delete button) still works at any time for an immediate, mod-triggered delete.
 
 ### Claim & escalate
 
@@ -120,8 +141,8 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 **Bot needs:** Manage Roles (to assign / strip / restore roles and create `@Jailed`), Manage Channels (jail and ticket channel creation, lock/unlock, permission overwrites), View Channels and Send Messages in the configured log channels, Read Message History and Embed Links for embeds, Attach Files for transcript delivery. The bot's top role must sit above `@Jailed` for role-strip to work.
 
 **User needs:**
-- Mod role (configured via `/setup` or `/config`): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/warnings`, `/revokewarn`, `/modinfo`, `/ticket panel`, and the dashboard moderation routes.
-- Admin role: `/setup`, `/config`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Mod role (configured via `/setup` or the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/warnings`, `/revokewarn`, `/modinfo`, `/ticket panel`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
+- Admin role: `/setup`, `/policy open`, `/policy close`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
 ## User-visible errors
@@ -151,7 +172,7 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 
 ## Configuration
 
-Setup wizard sets most keys; the rest are tweaked with `/config set`.
+Setup wizard sets most keys; the rest live on the web dashboard.
 
 | Key | Purpose | Default |
 |---|---|---|

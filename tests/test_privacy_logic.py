@@ -18,6 +18,7 @@ import pytest
 
 from bot_modules.privacy.logic import (
     FOURTEEN_DAYS,
+    MODE_MEDIA,
     chunk_for_bulk_delete,
     group_messages_by_channel,
     is_forum_thread,
@@ -230,35 +231,42 @@ def test_render_scan_status_format():
 # ── render_deletion_summary ────────────────────────────────────────────
 
 
-def test_summary_minimal_keep_messages():
-    out = render_deletion_summary(deleted=12, failed=0, replaced=0, keep_messages=True)
+def test_summary_minimal_reports_deleted_count():
+    out = render_deletion_summary(deleted=12, failed=0, replaced=0)
     assert "**12**" in out
-    assert "archive is preserved" in out
     # Nothing about replaced or failed when both are zero
     assert "Forum posts" not in out
     assert "couldn't be deleted" not in out
 
 
-def test_summary_minimal_clear_all():
-    out = render_deletion_summary(deleted=12, failed=0, replaced=0, keep_messages=False)
-    assert "archive is preserved" not in out
-    assert "**cleared**" in out
+def test_summary_states_server_side_data_is_retained():
+    """The summary must never claim data was deleted — it's kept for moderation."""
+    out = render_deletion_summary(deleted=12, failed=0, replaced=0)
+    assert "kept for moderation" in out
+    # Guard against a regression to the old "cleared / erased" wording.
+    assert "cleared" not in out.lower()
+    assert "erased" not in out.lower()
+
+
+def test_summary_noun_tracks_mode():
+    out = render_deletion_summary(deleted=3, failed=0, replaced=0, mode=MODE_MEDIA)
+    assert "Images & files deleted from Discord: **3**" in out
 
 
 def test_summary_includes_replaced_when_nonzero():
-    out = render_deletion_summary(deleted=5, failed=0, replaced=2, keep_messages=False)
+    out = render_deletion_summary(deleted=5, failed=0, replaced=2)
     assert "Forum posts replaced with tombstone: **2**" in out
 
 
 def test_summary_includes_failures_when_nonzero():
-    out = render_deletion_summary(deleted=5, failed=3, replaced=0, keep_messages=False)
+    out = render_deletion_summary(deleted=5, failed=3, replaced=0)
     assert "couldn't be deleted (no access): **3**" in out
 
 
 def test_summary_full_kitchen_sink():
-    out = render_deletion_summary(deleted=10, failed=2, replaced=1, keep_messages=True)
+    out = render_deletion_summary(deleted=10, failed=2, replaced=1)
     lines = out.splitlines()
-    # Header, deleted count, server-side, replaced, failed
+    # Header, deleted count, retention line, replaced, failed
     assert len(lines) == 5
     assert lines[0] == "All done. Here's what was removed:"
 
@@ -266,15 +274,16 @@ def test_summary_full_kitchen_sink():
 # ── render_empty_summary ───────────────────────────────────────────────
 
 
-def test_empty_summary_keep_messages():
-    msg = render_empty_summary(keep_messages=True)
+def test_empty_summary_reports_nothing_found():
+    msg = render_empty_summary()
     assert "No messages found" in msg
-    assert "archive is preserved" in msg
 
 
-def test_empty_summary_clear_all():
-    msg = render_empty_summary(keep_messages=False)
-    assert "archive is preserved" not in msg
+def test_empty_summary_states_data_untouched():
+    msg = render_empty_summary()
+    assert "Nothing else was touched" in msg
+    assert "cleared" not in msg.lower()
+    assert "erased" not in msg.lower()
 
 
 # ── should_throttle ────────────────────────────────────────────────────

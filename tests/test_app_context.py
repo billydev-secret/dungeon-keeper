@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,23 +25,6 @@ def _make_ctx(db_path, guild_id: int = 123) -> AppContext:
         db_path=db_path,
         guild_id=guild_id,
         debug=True,
-        mod_channel_id=0,
-        spoiler_required_channels=set(),
-        bypass_role_ids=set(),
-        xp_grant_allowed_user_ids=set(),
-        xp_excluded_channel_ids=set(),
-        recorded_bot_user_ids=set(),
-        level_5_role_id=0,
-        level_5_log_channel_id=0,
-        level_up_log_channel_id=0,
-        greeter_role_id=0,
-        greeter_chat_channel_id=0,
-        join_leave_log_channel_id=0,
-        welcome_channel_id=0,
-        welcome_message="",
-        welcome_ping_role_id=0,
-        leave_channel_id=0,
-        leave_message="",
     )
 
 
@@ -54,10 +38,8 @@ def test_set_config_value_invalidates_guild_config_cache(tmp_path):
     # Write mod roles the way an in-Discord setup flow does.
     ctx.set_config_value("mod_role_ids", "900,901")
 
-    # The next read must reflect the write (cache was invalidated), and agree
-    # with the flat cache that set_config_value maintains.
+    # The next read must reflect the write (cache was invalidated).
     assert ctx.guild_config(ctx.guild_id).mod_role_ids == frozenset({900, 901})
-    assert ctx.mod_role_ids == {900, 901}
 
 
 def test_delete_config_value_invalidates_guild_config_cache(tmp_path):
@@ -116,6 +98,7 @@ def test_guild_config_load_reads_guild_specific_values(tmp_path):
         _db_set(conn, "mod_role_ids", "500,501", guild_id=42)
         _db_set(conn, "admin_role_ids", "600,601", guild_id=42)
         _db_set(conn, "mod_channel_id", "777", guild_id=42)
+        _db_set(conn, "greeter_role_id", "444", guild_id=42)
 
         cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)
 
@@ -127,6 +110,7 @@ def test_guild_config_load_reads_guild_specific_values(tmp_path):
     assert cfg.mod_role_ids == frozenset({500, 501})
     assert cfg.admin_role_ids == frozenset({600, 601})
     assert cfg.mod_channel_id == 777
+    assert cfg.greeter_role_id == 444
 
 
 def test_guild_config_load_strict_mode_ignores_legacy(tmp_path):
@@ -173,6 +157,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         welcome_ping_member=False,
         welcome_trigger="join",
         unverified_role_id=0,
+        greeter_role_id=0,
         greeter_chat_channel_id=0,
         leave_channel_id=0,
         leave_message="",
@@ -180,6 +165,10 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         mod_channel_id=0,
         mod_role_ids=frozenset({10}),
         admin_role_ids=frozenset({20}),
+        greeting_watch_enabled=False,
+        greeting_watch_channel_ids=frozenset(),
+        greeting_watch_notify_user_id=0,
+        greeting_watch_window_minutes=10,
         spoiler_required_channels=frozenset(),
         bypass_role_ids=frozenset(),
         recorded_bot_user_ids=frozenset(),
@@ -248,15 +237,15 @@ def test_invalidate_guild_config_drops_only_target_guild(tmp_path):
     assert ctx.guild_config(20) is cfg_20
 
 
-def test_reload_permission_roles_scoped_to_home_guild(tmp_path):
-    """reload_permission_roles must NOT pick up another guild's role IDs."""
+def test_guild_config_mod_roles_scoped_per_guild(tmp_path):
+    """Per-guild snapshots must NOT leak another guild's role IDs."""
     ctx = _make_ctx(tmp_path / "ctx_reload.db", guild_id=10)
     with open_db(ctx.db_path) as conn:
         _db_set(conn, "mod_role_ids", "100,101", guild_id=10)
         _db_set(conn, "mod_role_ids", "200,201", guild_id=20)
 
-    ctx.reload_permission_roles()
-    assert ctx.mod_role_ids == {100, 101}
+    assert ctx.guild_config(10).mod_role_ids == frozenset({100, 101})
+    assert ctx.guild_config(20).mod_role_ids == frozenset({200, 201})
 
 
 async def test_is_mod_uses_per_guild_config(tmp_path):
@@ -325,7 +314,7 @@ async def test_setup_hook_handles_forbidden_during_debug_guild_sync(tmp_path):
     bot.tree.sync = AsyncMock(side_effect=forbidden)
 
     async def fake_sync_if_changed(tree, _db_path, *, guild):
-        # Mirror real behaviour: call tree.sync, propagate Forbidden upward.
+        # Mirror real behavior: call tree.sync, propagate Forbidden upward.
         if guild is None:
             await tree.sync()
         else:
@@ -344,3 +333,54 @@ async def test_setup_hook_handles_forbidden_during_debug_guild_sync(tmp_path):
         str(call.args[0]) for call in print_mock.call_args_list if call.args
     )
     assert "missing access" in printed_text.lower()
+
+
+async def test_setup_hook_starts_loops_registered_during_cog_load():
+    """Cogs append their loop factories from cog_load — those must still start.
+
+    Regression: the launch loop used to run *before* load_extension(), so every
+    cog-owned background loop (pen pals, jail expiry, birthdays…) was registered
+    into a list nobody ever read and silently never ran in production.
+    """
+    bot = Bot(intents=discord.Intents.none(), debug=False, guild_id=0)
+    bot.ctx = MagicMock()
+    started = asyncio.Event()
+
+    async def cog_loop() -> None:
+        started.set()
+
+    async def fake_load_extension(_name: str) -> None:
+        # Stand in for a cog's cog_load() registering its background loop.
+        bot.startup_task_factories.append(lambda: cog_loop())
+
+    bot.extension_names = ["fake_cog"]
+    with patch.object(bot, "load_extension", side_effect=fake_load_extension), patch(
+        "bot_modules.services.command_sync.sync_if_changed",
+        new=AsyncMock(return_value=([], False)),
+    ), patch("builtins.print"):
+        await bot.setup_hook()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await bot.close()
+
+    assert len(bot.startup_tasks) == 1
+
+
+async def test_setup_hook_starts_loops_registered_before_setup():
+    """Factories the entry point registers up front still start (no regression)."""
+    bot = Bot(intents=discord.Intents.none(), debug=False, guild_id=0)
+    bot.ctx = MagicMock()
+    started = asyncio.Event()
+
+    async def entrypoint_loop() -> None:
+        started.set()
+
+    bot.startup_task_factories.append(lambda: entrypoint_loop())
+    with patch(
+        "bot_modules.services.command_sync.sync_if_changed",
+        new=AsyncMock(return_value=([], False)),
+    ), patch("builtins.print"):
+        await bot.setup_hook()
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await bot.close()
+
+    assert len(bot.startup_tasks) == 1

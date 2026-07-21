@@ -35,6 +35,28 @@ from bot_modules.services.embeds import (
     MOD_WARNING,
 )
 
+# Compact per-source XP labels for the /modinfo Level field. Order and source
+# keys mirror the stacked-bar chart palette in
+# ``bot_modules.services.activity_graphs`` so the text breakdown and the chart
+# tell the same story.
+_XP_SOURCE_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("text", "💬 Text"),
+    ("voice", "🔊 Voice"),
+    ("reply", "↩️ Reply"),
+    ("image_react", "🖼 React"),
+    ("grant", "🎁 Grant"),
+)
+
+
+def _fmt_xp(amount: float) -> str:
+    """Human-compact XP number: 950 → ``950``, 31234 → ``31.2k``, 1.2M."""
+    n = float(amount)
+    if abs(n) >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if abs(n) >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{n:.0f}"
+
 
 # Defaults that mirror the cog's existing knobs. Kept here so tests can
 # assert behavior changes when (e.g.) the page size moves without finding
@@ -87,7 +109,7 @@ def build_policy_vote_initial_embed(
     populated. Renders the ``"+N more"`` overflow when the roster is wider
     than ``max_mentions`` so the field stays under Discord's 1024-char cap.
     """
-    embed = discord.Embed(title=f"Policy Vote: {channel_name}", color=MOD_POLICY)
+    embed = discord.Embed(title=f"🗳️ Policy Vote: {channel_name}", color=MOD_POLICY)
     embed.add_field(name="📜 Policy Text", value=vote_text, inline=False)
     embed.add_field(
         name="Votes Cast", value=f"0/{len(list(eligible_ids))}", inline=True
@@ -140,7 +162,7 @@ def build_policy_vote_update_embed(
         color = MOD_POLICY
         status = "🗳️ Voting"
 
-    embed = discord.Embed(title=f"Policy Vote: {policy_title}", color=color)
+    embed = discord.Embed(title=f"🗳️ Policy Vote: {policy_title}", color=color)
     embed.add_field(name="📜 Policy Text", value=vote_text or "(no text)", inline=False)
     embed.add_field(
         name="Votes Cast", value=f"{voted_count}/{eligible_count}", inline=True
@@ -235,7 +257,7 @@ def build_warnings_list_embed(
             "Inspect via the dashboard for the full list.*"
         )
     embed = discord.Embed(
-        title=f"Warnings for {user_label}", description=description, color=MOD_WARNING,
+        title=f"⚠️ Warnings for {user_label}", description=description, color=MOD_WARNING,
     )
     active = sum(1 for w in warns if not w["revoked"])
     embed.set_footer(text=f"{active} active / {len(warns)} total")
@@ -245,8 +267,13 @@ def build_warnings_list_embed(
 # ── Ticket panel ───────────────────────────────────────────────────────
 
 
-def build_ticket_panel_embed() -> discord.Embed:
+def build_ticket_panel_embed(
+    *,
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
     """The static "📩 Support Tickets" embed for ``/ticket panel``."""
+    if color is None:
+        color = discord.Color(MOD_TICKET)
     return discord.Embed(
         title="📩 Support Tickets",
         description=(
@@ -254,7 +281,7 @@ def build_ticket_panel_embed() -> discord.Embed:
             "private ticket.\n\n"
             "A moderator will respond as soon as possible."
         ),
-        color=MOD_TICKET,
+        color=color,
     )
 
 
@@ -264,12 +291,15 @@ def build_ticket_open_embed(
     description: str,
     opener_mention: str,
     now: datetime | None = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the welcome embed posted inside a freshly-opened ticket."""
+    if color is None:
+        color = discord.Color(MOD_TICKET)
     embed = discord.Embed(
-        title=f"Ticket #{ticket_id}",
+        title=f"🎫 Ticket #{ticket_id}",
         description=description,
-        color=MOD_TICKET,
+        color=color,
         timestamp=now or datetime.now(timezone.utc),
     )
     embed.add_field(name="Opened by", value=opener_mention, inline=True)
@@ -287,23 +317,29 @@ def build_ticket_open_embed(
 # ── Setup wizard completion ────────────────────────────────────────────
 
 
-def build_setup_step_embed(step_meta: Mapping[str, str]) -> discord.Embed:
+def build_setup_step_embed(
+    step_meta: Mapping[str, str],
+    *,
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
     """Build the per-step embed for the ``/setup`` wizard.
 
     Takes the dict returned by ``jail.logic.setup_step_meta`` so the data
     and the View stay decoupled.
     """
+    if color is None:
+        color = discord.Color(MOD_TICKET)
     return discord.Embed(
-        title=step_meta["title"],
+        title=f"⚙️ {step_meta['title']}",
         description=step_meta["description"],
-        color=MOD_TICKET,
+        color=color,
     )
 
 
 def build_setup_complete_embed() -> discord.Embed:
     """Final "Setup Complete" embed shown after the wizard ends."""
     return discord.Embed(
-        title="Setup Complete",
+        title="⚙️ Setup Complete",
         description="All settings saved. Use `/config` to adjust later.",
         color=MOD_SUCCESS,
     )
@@ -320,6 +356,7 @@ def build_modinfo_embed(
     account_age_days: int,
     joined_at: datetime | None,
     xp_row: Mapping[str, Any] | None,
+    xp_by_source: Mapping[str, float] | None = None,
     watcher_count: int,
     active_jail: Mapping[str, Any] | None,
     jail_history: Sequence[Mapping[str, Any]],
@@ -329,6 +366,7 @@ def build_modinfo_embed(
     top_channels: Sequence[Mapping[str, Any]],
     msgs_30d_total: int,
     ts_formatter=None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Assemble the ``/modinfo`` summary embed.
 
@@ -341,7 +379,9 @@ def build_modinfo_embed(
     """
     formatter = ts_formatter or (lambda ts: f"<t:{int(ts)}:f>" if ts else "N/A")
 
-    embed = discord.Embed(title=f"Mod Info — {user_label}", color=MOD_INFO)
+    if color is None:
+        color = discord.Color(MOD_INFO)
+    embed = discord.Embed(title=f"ℹ️ Mod Info — {user_label}", color=color)
     if user_avatar_url:
         embed.set_thumbnail(url=user_avatar_url)
 
@@ -355,6 +395,20 @@ def build_modinfo_embed(
     # ── XP / Level ───────────────────────────────────────────────────
     if xp_row is not None:
         xp_text = f"Level **{xp_row['level']}** · {xp_row['total_xp']:,.0f} XP"
+        if xp_by_source:
+            known = {src for src, _ in _XP_SOURCE_DISPLAY}
+            parts = [
+                f"{label} {_fmt_xp(xp_by_source[src])}"
+                for src, label in _XP_SOURCE_DISPLAY
+                if xp_by_source.get(src)
+            ]
+            parts += [
+                f"{src} {_fmt_xp(amt)}"
+                for src, amt in xp_by_source.items()
+                if src not in known and amt
+            ]
+            if parts:
+                xp_text += "\n" + " · ".join(parts)
     else:
         xp_text = "No XP recorded"
     embed.add_field(name="⭐ Level", value=xp_text, inline=True)
@@ -542,12 +596,15 @@ def build_policy_close_embed(
     title: str,
     moderator_mention: str,
     reason: str = "",
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Embed posted when an admin closes a policy proposal without voting."""
+    if color is None:
+        color = discord.Color(MOD_INFO)
     embed = discord.Embed(
         title="📋 Policy Proposal Closed",
         description=f"**{title}** was closed by {moderator_mention}.",
-        color=MOD_INFO,
+        color=color,
     )
     if reason:
         embed.add_field(name="Reason", value=reason, inline=False)
@@ -558,7 +615,7 @@ def build_adopted_policies_embed(
     adopted: Sequence[Mapping[str, Any]],
 ) -> discord.Embed:
     """Embed listing all policies that were adopted from a parent proposal."""
-    embed = discord.Embed(title="Adopted Policies from This Proposal", color=MOD_SUCCESS)
+    embed = discord.Embed(title="📜 Adopted Policies from This Proposal", color=MOD_SUCCESS)
     for p in adopted:
         embed.add_field(
             name=p["title"], value=p["description"][:1024], inline=False,

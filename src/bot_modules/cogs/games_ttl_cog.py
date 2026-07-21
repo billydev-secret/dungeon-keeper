@@ -1,21 +1,30 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
+    get_game_options,
     get_game_payload,
     modify_payload,
     end_game,
     update_session,
     resolve_name,
-    ConfirmCloseView,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
@@ -28,8 +37,11 @@ from bot_modules.games_ttl.embeds import (
 from bot_modules.games_ttl.logic import (
     add_submission,
     compute_recap_winners,
+    mark_played,
     parse_lie_index,
+    played_ids_from_payload,
     shuffle_statements,
+    submission_locked,
     tally_votes,
     update_scores,
 )
@@ -38,24 +50,48 @@ log = logging.getLogger(__name__)
 
 
 class SubmitStatementsModal(discord.ui.Modal):
-    s1 = discord.ui.TextInput(label="Statement 1", max_length=200)
-    s2 = discord.ui.TextInput(label="Statement 2", max_length=200)
-    s3 = discord.ui.TextInput(label="Statement 3", max_length=200)
-    lie_index = discord.ui.TextInput(
-        label="Which statement is the lie? (1, 2, or 3)",
-        max_length=1,
-        placeholder="1, 2, or 3",
-    )
-
-    def __init__(self, game_id: str, db, prompt: str | None = None, origin_message: discord.Message | None = None):
-        super().__init__(title=f"Prompt: {prompt[:70]}" if prompt else "Submit Truths and a Lie")
+    def __init__(
+        self,
+        game_id: str,
+        db,
+        prompt: str | None = None,
+        origin_message: discord.Message | None = None,
+        existing: dict | None = None,
+    ):
+        super().__init__(title="Two Truths and a Lie")
         self.game_id = game_id
         self.db = db
         self._origin_message = origin_message
 
+        # Components-v2 layout: the full prompt rides as static text, so it
+        # can't be missed the way the 45-char-truncated title used to be.
+        if prompt:
+            self.add_item(discord.ui.TextDisplay(
+                f"**Prompt:** {prompt}\n"
+                "Your statements should answer the prompt — two true, one lie."
+            ))
+        ex_statements = (existing or {}).get("statements") or ["", "", ""]
+        ex_lie = (existing or {}).get("lie")
+        self._inputs: list[discord.ui.TextInput] = []
+        for i in range(3):
+            ti = discord.ui.TextInput(
+                label=None, max_length=200, default=ex_statements[i] or None,
+            )
+            self._inputs.append(ti)
+            self.add_item(discord.ui.Label(text=f"Statement {i + 1}", component=ti))
+        self._lie_input = discord.ui.TextInput(
+            label=None,
+            max_length=1,
+            placeholder="1, 2, or 3",
+            default=str(ex_lie + 1) if ex_lie is not None else None,
+        )
+        self.add_item(discord.ui.Label(
+            text="Which statement is the lie? (1, 2, or 3)", component=self._lie_input,
+        ))
+
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Statements", interaction.channel.name if interaction.channel else "unknown")
-        lie_idx = parse_lie_index(self.lie_index.value)
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Statements", channel_name(interaction.channel))
+        lie_idx = parse_lie_index(self._lie_input.value)
         if lie_idx is None:
             await interaction.response.send_message(
                 "❌ Please enter **1**, **2**, or **3** to indicate which statement is the lie.",
@@ -65,28 +101,47 @@ class SubmitStatementsModal(discord.ui.Modal):
 
         uid = interaction.user.id
         display_name = interaction.user.display_name
-        statements = [self.s1.value, self.s2.value, self.s3.value]
+        statements = [ti.value for ti in self._inputs]
+
+        locked = False
 
         def _add_submission(payload):
+            nonlocal locked
+            # Once a player's round has been revealed their statements are
+            # history — replacing them would rewrite a finished round.
+            if submission_locked(payload, uid):
+                locked = True
+                return
             add_submission(payload, uid, display_name, statements, lie_idx)
 
         payload = await modify_payload(self.db, self.game_id, _add_submission)
+        if locked:
+            await interaction.response.send_message(
+                "❌ Your round has already been played — statements can't change now.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.send_message("✅ Your statements have been submitted!", ephemeral=True)
 
-        msg = self._origin_message or interaction.message
-        if msg:
+        # Only ever touch the lobby message (threaded through as
+        # origin_message). Falling back to interaction.message here used to
+        # clobber statement 1's field on the active guess embed when someone
+        # joined mid-game.
+        msg = self._origin_message
+        if msg and msg.embeds:
             embed = msg.embeds[0]
-            names = list(payload.get("submitter_names", {}).values())
-            embed.set_field_at(
-                0,
-                name=f"Players ({len(names)})",
-                value=", ".join(names),
-                inline=True,
-            )
-            try:
-                await msg.edit(embed=embed)
-            except Exception:
-                pass
+            if embed.fields and (embed.fields[0].name or "").startswith("Players ("):
+                names = list(payload.get("submitter_names", {}).values())
+                embed.set_field_at(
+                    0,
+                    name=f"Players ({len(names)})",
+                    value=", ".join(names),
+                    inline=True,
+                )
+                try:
+                    await msg.edit(embed=embed)
+                except discord.HTTPException:
+                    pass
 
 
 class TTLSubmitView(discord.ui.View):
@@ -102,20 +157,25 @@ class TTLSubmitView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Submit Statements", style=discord.ButtonStyle.primary, custom_id="ttl_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        modal = SubmitStatementsModal(self.game_id, self.db, prompt=self.prompt, origin_message=interaction.message)
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        payload = await get_game_payload(self.db, self.game_id)
+        existing = payload.get("submissions", {}).get(str(interaction.user.id))
+        modal = SubmitStatementsModal(
+            self.game_id, self.db, prompt=self.prompt,
+            origin_message=interaction.message, existing=existing,
+        )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Start Guessing", style=discord.ButtonStyle.success, custom_id="ttl_start")
+    @discord.ui.button(label="Start Guessing", style=discord.ButtonStyle.primary, custom_id="ttl_start")
     async def start_guessing(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start guessing.", ephemeral=True)
             return
@@ -126,19 +186,22 @@ class TTLSubmitView(discord.ui.View):
             return
 
         self.stop()
-        for item in self.children:
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         # Ping all submitters
         if interaction.guild:
             mentions = [
-                interaction.guild.get_member(int(uid)).mention
+                member.mention
                 for uid in submissions
-                if interaction.guild.get_member(int(uid))
+                if (member := interaction.guild.get_member(int(uid)))
             ]
             if mentions:
-                await interaction.channel.send(
+                channel = interaction.channel
+                assert channel is not None and not isinstance(
+                    channel, (discord.ForumChannel, discord.CategoryChannel)
+                )
+                await channel.send(
                     f"🎮 **Two Truths and a Lie is starting!** {' '.join(mentions)} — get ready!",
                     delete_after=15,
                 )
@@ -151,23 +214,9 @@ class TTLSubmitView(discord.ui.View):
             channel=interaction.channel,
         )
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="ttl_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        self.stop()
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="Game cancelled.", view=self)
-        await end_game(self.db, self.game_id)
-        if self.game_id in self.bot.active_views:
-            del self.bot.active_views[self.game_id]
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ttl_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ttl_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["ttl"], ephemeral=True)
 
 
@@ -184,6 +233,7 @@ class TTLGuessView(discord.ui.View):
         host_name: str,
         advance_callback,
         prompt: str | None = None,
+        accent: discord.Color | None = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -196,6 +246,9 @@ class TTLGuessView(discord.ui.View):
         self.host_name = host_name
         self.advance_callback = advance_callback
         self.prompt = prompt
+        # Guild accent, resolved once when the round's view is built and
+        # reused for every live-bar rebuild — never re-resolved per vote.
+        self.accent = accent
         self.votes: dict[int, int] = {}
         self._updater = LiveBarUpdater()
         self._closed = False
@@ -204,13 +257,16 @@ class TTLGuessView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     def _build_embed(self, subject_name: str, closed: bool = False) -> discord.Embed:
-        return build_guess_embed(subject_name, self.statements, self.votes, closed=closed)
+        return build_guess_embed(
+            subject_name, self.statements, self.votes,
+            closed=closed, prompt=self.prompt, color=self.accent,
+        )
 
     def _build_reveal_embed(self, subject_name: str, correct_voters: list, fooled_voters: list, guild) -> discord.Embed:
         def _resolver(uid_str: str) -> str:
@@ -229,6 +285,7 @@ class TTLGuessView(discord.ui.View):
             correct_voters=correct_voters,
             fooled_voters=fooled_voters,
             name_resolver=_resolver,
+            color=self.accent,
         )
 
     @discord.ui.button(label="1️⃣", style=discord.ButtonStyle.primary, custom_id="ttl_v1", row=0)
@@ -244,7 +301,7 @@ class TTLGuessView(discord.ui.View):
         await self._vote(interaction, 2)
 
     async def _vote(self, interaction: discord.Interaction, idx: int):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -266,66 +323,55 @@ class TTLGuessView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="ttl_next", row=1)
     async def advance_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="ttl_close", row=1)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            payload = await get_game_payload(self.db, self.game_id)
-            await end_game(self.db, self.game_id, payload=payload)
-            self.bot.active_views.pop(self.game_id, None)
-            await channel.send("🛑 Game ended by host.")
-            # Unblock the guessing loop so it can exit cleanly
-            if self._advanced_event:
-                self._advanced_event.set()
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="📝 Join", style=discord.ButtonStyle.primary, custom_id="ttl_join", row=1)
+    @discord.ui.button(label="Join / Edit", style=discord.ButtonStyle.success, custom_id="ttl_join", row=1)
     async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
-        submissions = payload.get("submissions", {})
-        if str(interaction.user.id) in submissions:
-            await interaction.response.send_message("You've already submitted your statements!", ephemeral=True)
+        if submission_locked(payload, interaction.user.id):
+            await interaction.response.send_message(
+                "Your round has already been played — statements can't change now. You can still vote!",
+                ephemeral=True,
+            )
             return
-        modal = SubmitStatementsModal(self.game_id, self.db, prompt=self.prompt)
+        existing = payload.get("submissions", {}).get(str(interaction.user.id))
+        modal = SubmitStatementsModal(self.game_id, self.db, prompt=self.prompt, existing=existing)
         await interaction.response.send_modal(modal)
 
 
 class TTLCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
     def db(self):
         return self.bot.games_db
 
+    async def _resolve_accent(self, guild) -> discord.Color | None:
+        """Best-effort guild accent; never raises.
+
+        Returns ``None`` when there's no guild or when resolution fails
+        (e.g. no ``bot.ctx``), so the embed builders fall back to their
+        historical phase colors instead of crashing the game.
+        """
+        if guild is None:
+            return None
+        try:
+            return await resolve_accent_color(self.bot.ctx.db_path, guild)
+        except Exception:
+            log.debug("ttl accent resolution failed", exc_info=True)
+            return None
+
     @app_commands.command(name="twotruths", description="Start a Two Truths and a Lie game!")
     @app_commands.describe(prompt="Optional topic prompt for players' statements")
     async def twotruths(self, interaction: discord.Interaction, prompt: str | None = None):
-        log.info("%s used /games play twotruths in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play twotruths in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -341,15 +387,7 @@ class TTLCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"prompt": prompt},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -362,16 +400,26 @@ class TTLCog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         prompt = options.get("prompt")
+        game_opts = await get_game_options(self.db, "ttl", guild_id)
+        try:
+            vote_timer = int(options.get("vote_timer", game_opts.get("vote_timer", 0)))
+        except (TypeError, ValueError):
+            vote_timer = 0
+        vote_timer = max(0, min(vote_timer, 300))
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "ttl",
             state="joining",
-            payload={"submissions": {}, "submission_count": 0, "submitter_names": {}, "scores": {}, "prompt": prompt},
+            payload={
+                "submissions": {}, "submission_count": 0, "submitter_names": {},
+                "scores": {}, "prompt": prompt, "vote_timer": vote_timer,
+            },
         )
 
-        embed = build_lobby_embed(prompt=prompt)
+        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        embed = build_lobby_embed(prompt=prompt, color=accent)
 
         log.info("Game %s (ttl) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         view = TTLSubmitView(game_id, host_id, self.db, self.bot, self, prompt=prompt)
@@ -398,13 +446,16 @@ class TTLCog(commands.Cog):
         resume: bool = False,
     ):
         guild = channel.guild if hasattr(channel, "guild") else None
+        # Resolve the guild accent once for the whole game; every round's
+        # view + the final recap reuse it (never re-resolved per vote).
+        accent = await self._resolve_accent(guild)
         # On resume after a restart, seed from persisted scores so already-played
         # subjects are skipped; the subject whose round was interrupted is still
         # "unplayed" and gets a fresh round.
         if resume:
             payload = await get_game_payload(self.db, game_id)
             scores: dict[str, dict] = dict(payload.get("scores", {}))
-            played_ids: set[str] = set(scores.keys())
+            played_ids: set[str] = played_ids_from_payload(payload)
         else:
             scores = {}
             played_ids = set()
@@ -439,11 +490,11 @@ class TTLCog(commands.Cog):
 
             async def advance(
                 message: discord.Message,
-                _sub_id=subject_id,
-                _sub_name=subject_name,
-                _lie=lie_index,
-                _round=round_num,
-            ):
+                _sub_id: int = subject_id,
+                _sub_name: str = subject_name,
+                _lie: int = lie_index,
+                _round: int = round_num,
+            ) -> None:
                 if view._closed:
                     return
                 view._closed = True
@@ -453,14 +504,14 @@ class TTLCog(commands.Cog):
 
                 def _flush_scores(p):
                     p["scores"] = dict(scores)
+                    mark_played(p, _sub_id)
                 await modify_payload(self.db, game_id, _flush_scores)
 
                 reveal_embed = view._build_reveal_embed(_sub_name, correct, fooled, guild)
-                for item in view.children:
-                    item.disabled = True
+                disable_all_items(view)
                 try:
                     await message.edit(embed=view._build_embed(_sub_name, closed=True), view=view)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
                 await channel.send(embed=reveal_embed)
@@ -476,8 +527,12 @@ class TTLCog(commands.Cog):
                 db=self.db,
                 bot=self.bot,
                 host_name=host_name,
-                advance_callback=advance,
+                # pyright's flow analysis reports a circular inference here
+                # (advance captures `view`, whose initializer takes `advance`);
+                # the closure itself is fully annotated above.
+                advance_callback=advance,  # pyright: ignore[reportGeneralTypeIssues]
                 prompt=payload.get("prompt"),
+                accent=accent,
             )
             view._advanced_event = advanced
             self.bot.active_views[game_id] = view
@@ -486,7 +541,17 @@ class TTLCog(commands.Cog):
             msg = await channel.send(embed=embed, view=view)
             await update_game_message(self.db, game_id, msg.id)
 
-            await advanced.wait()
+            # vote_timer == 0 keeps the classic host-presses-Next pacing;
+            # otherwise the round closes itself when time runs out (the host
+            # can still advance early).
+            vote_timer = int(payload.get("vote_timer") or 0)
+            if vote_timer > 0:
+                try:
+                    await asyncio.wait_for(advanced.wait(), timeout=vote_timer)
+                except asyncio.TimeoutError:
+                    await advance(msg)
+            else:
+                await advanced.wait()
             # If the game was closed mid-round, stop the loop
             if view._closed and game_id not in self.bot.active_views:
                 break
@@ -520,7 +585,10 @@ class TTLCog(commands.Cog):
                 m = None
             return m.mention if m else None
 
-        embed, mentions = build_recap_embed(stats, _name_resolver, _mention_resolver)
+        embed, mentions = build_recap_embed(stats, _name_resolver, _mention_resolver, color=accent)
+        if guild:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(self.bot, embed, guild.id, "ttl")
 
         ping_str = " ".join(mentions) if mentions else None
         await channel.send(content=ping_str, embed=embed)
@@ -530,6 +598,7 @@ class TTLCog(commands.Cog):
             player_count=len(player_ids),
             round_count=len(player_ids),
             payload=payload,
+            bot=self.bot, player_ids=player_ids,
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
@@ -559,10 +628,10 @@ class TTLCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = TTLCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("twotruths")
-    play.add_command(cog.twotruths)
+    play.add_command(cog.twotruths, override=True)
     bot.game_launchers["ttl"] = cog.launch
     bot.game_recoverers["ttl"] = cog.recover_game

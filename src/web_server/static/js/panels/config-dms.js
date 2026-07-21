@@ -1,4 +1,8 @@
-import { loadConfig, loadChannels, apiPut, showStatus, buildField } from "../config-helpers.js";
+import { apiPost } from "../api.js";
+import {
+  loadConfig, loadChannels, loadRoles, apiPut, showStatus, buildField,
+  mountRolePicker,
+} from "../config-helpers.js";
 
 function buildChannelInput(name, channels, selectedId) {
   if (channels.length > 0) {
@@ -40,9 +44,9 @@ export function mount(container) {
   container.appendChild(loadingPanel);
 
   (async () => {
-    let config, channels;
+    let config, channels, roles;
     try {
-      [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
+      [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
     } catch (err) {
       while (container.firstChild) container.removeChild(container.firstChild);
       const errPanel = document.createElement("div");
@@ -67,7 +71,7 @@ export function mount(container) {
     h2.textContent = "DM Permissions";
     const sub = document.createElement("div");
     sub.className = "subtitle";
-    sub.textContent = "DM request system channel settings";
+    sub.textContent = "DM request system channels and status roles";
     header.appendChild(h2);
     header.appendChild(sub);
     panel.appendChild(header);
@@ -99,6 +103,33 @@ export function mount(container) {
       "Private log of all DM permission events",
     ));
 
+    // ── Status role overrides ────────────────────────────────────────
+    const rolesLabel = document.createElement("div");
+    rolesLabel.className = "section-label";
+    rolesLabel.textContent = "Status Roles";
+    form.appendChild(rolesLabel);
+
+    const rolesHint = document.createElement("div");
+    rolesHint.className = "field-hint";
+    rolesHint.style.marginBottom = "10px";
+    rolesHint.textContent =
+      "Use existing server roles for each DM status. Leave one unset and the bot "
+      + "falls back to its own role for that status (“DMs: Open”, "
+      + "“DMs: Ask” or “DMs: Closed”), creating it if needed.";
+    form.appendChild(rolesHint);
+
+    const roleDefs = [
+      ["open", "Open Role", "Members with this role accept DMs from anyone"],
+      ["ask", "Ask Role", "Members with this role want a request first (the default status)"],
+      ["closed", "Closed Role", "Members with this role aren't accepting DM requests"],
+    ];
+    const rolePickers = {};
+    for (const [mode, label, hint] of roleDefs) {
+      const slot = document.createElement("span");
+      form.appendChild(buildField(label, slot, hint));
+      rolePickers[mode] = mountRolePicker(slot, roles, d[mode + "_role_id"] || "0");
+    }
+
     const saveRow = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
@@ -116,6 +147,9 @@ export function mount(container) {
         await apiPut("/api/config/dms", {
           request_channel_id: fd.get("request_channel_id") || "0",
           audit_channel_id: fd.get("audit_channel_id") || "0",
+          open_role_id: rolePickers.open.getValue() || "0",
+          ask_role_id: rolePickers.ask.getValue() || "0",
+          closed_role_id: rolePickers.closed.getValue() || "0",
         });
         showStatus(saveStatus, true);
       } catch (err) {
@@ -179,16 +213,7 @@ export function mount(container) {
       if (!channelId || channelId === "0") return;
       pbBtn.disabled = true;
       try {
-        const res = await fetch("/api/config/dms/post-panel", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel_id: channelId }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || res.statusText);
-        }
+        await apiPost("/api/config/dms/post-panel", { channel_id: channelId });
         showStatus(pbStatus, true, "Panel posted");
         setTimeout(() => mount(container), 1500);
       } catch (err) {

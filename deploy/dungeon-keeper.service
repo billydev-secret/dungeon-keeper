@@ -1,0 +1,50 @@
+# systemd service for dungeon-keeper (Discord community/games bot + web dashboard)
+#
+# Install: see deploy/README.md in this folder.
+# Logs:    journalctl -u dungeon-keeper -f
+#
+# NOTE: this is the heavy one.
+#   - src/ layout: run as a module with PYTHONPATH=src (set below).
+#   - Music features need a Lavalink server (see lavalink/application.yml).
+#     If you run Lavalink as its own unit, uncomment the After/Wants lines.
+#   - Pulls a large ML stack (llama-cpp-python, mediapipe, nudenet, Pillow…)
+#     plus a ~350 MB sqlite DB — give it time/RAM on first boot.
+
+[Unit]
+Description=dungeon-keeper Discord bot
+PartOf=discord-bots.target
+After=network-online.target
+Wants=network-online.target
+# After=lavalink.service
+# Wants=lavalink.service
+
+[Service]
+Type=simple
+User=ben
+Group=ben
+WorkingDirectory=/home/ben/discord-bots/dungeon-keeper
+# src/ layout: make the in-tree packages importable.
+Environment=PYTHONPATH=/home/ben/discord-bots/dungeon-keeper/src
+# __main__ calls load_dotenv() itself; no EnvironmentFile needed.
+ExecStart=/home/ben/discord-bots/dungeon-keeper/.venv/bin/python -m dungeonkeeper
+
+Restart=on-failure
+RestartSec=10
+# ML model load can be slow; give it room before systemd gives up.
+TimeoutStartSec=180
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Writes DB, log.txt, and backups/ inside the repo.
+ReadWritePaths=/home/ben/discord-bots/dungeon-keeper
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target discord-bots.target

@@ -72,14 +72,3 @@ async def test_config_defaults_and_upsert(db):
     cfg2 = await chdb.get_config(db, GUILD)
     assert cfg2["climb_duration"] == pytest.approx(40.0)
     assert cfg2["max_players"] == 6
-
-
-async def test_stats_membership(db):
-    gid = await chdb.create_lobby(db, GUILD, CH, HOST, None)
-    await chdb.set_game_state(
-        db, gid, "RESOLVED",
-        roster=json.dumps([10, 20, 30]), winner_id=30, loser_id=10,
-    )
-    assert (await chdb.get_stats(db, GUILD, 30))["wins"] == 1
-    assert (await chdb.get_stats(db, GUILD, 10))["losses"] == 1
-    assert (await chdb.get_stats(db, GUILD, 999))["total_games"] == 0

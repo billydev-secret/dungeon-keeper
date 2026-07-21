@@ -79,7 +79,7 @@ async function renderConfigTab(pane) {
     <form class="form" data-form></form>
     <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border, #333);">
       <h3 style="margin-top:0">Trigger button</h3>
-      <p>Posts the persistent <strong>📝 Create / Update Bio</strong> button into the configured bios channel. Members tap it to start the wizard.</p>
+      <p>Posts the persistent <strong>📝 Create / Update Bio</strong> button into the configured bios channel, using the <strong>Trigger title</strong> and <strong>Trigger message</strong> above. Members tap it to start the wizard. Re-post after editing the copy to refresh the live message.</p>
       <button type="button" class="btn btn-secondary" data-post-btn>Post trigger button</button>
       <span data-post-status></span>
     </div>
@@ -94,6 +94,12 @@ async function renderConfigTab(pane) {
   };
   const mkInput = (name, attrs) => {
     const el = document.createElement("input");
+    el.name = name;
+    Object.assign(el, attrs);
+    return el;
+  };
+  const mkTextarea = (name, attrs) => {
+    const el = document.createElement("textarea");
     el.name = name;
     Object.assign(el, attrs);
     return el;
@@ -129,6 +135,16 @@ async function renderConfigTab(pane) {
     mkInput("archive_grace", { type: "number", min: "0", max: "3600", value: String(config.archive_grace || 60) }),
     "Wait this long after completion before deleting the wizard channel.",
   ));
+  form.appendChild(buildField(
+    "Trigger title",
+    mkInput("trigger_title", { type: "text", maxLength: 256, value: config.trigger_title || "📝 Share your bio", style: "width:100%;" }),
+    "Heading on the trigger-button embed in the bios channel.",
+  ));
+  form.appendChild(buildField(
+    "Trigger message",
+    mkTextarea("trigger_body", { rows: 3, maxLength: 2000, value: config.trigger_body || "", style: "width:100%;" }),
+    "Body under the heading. Discord markdown works. Re-post the button below to apply edits.",
+  ));
   const submit = document.createElement("div");
   submit.innerHTML = `<button type="submit" class="btn btn-primary">Save</button><span data-status></span>`;
   form.appendChild(submit);
@@ -145,6 +161,8 @@ async function renderConfigTab(pane) {
         embed_color: String(fd.get("embed_color") || "#C8763E"),
         wizard_timeout: parseInt(fd.get("wizard_timeout"), 10) || 15,
         archive_grace: parseInt(fd.get("archive_grace"), 10) || 60,
+        trigger_title: String(fd.get("trigger_title") || "").trim(),
+        trigger_body: String(fd.get("trigger_body") || "").trim(),
       });
       showStatus(statusEl, true);
     } catch (err) {

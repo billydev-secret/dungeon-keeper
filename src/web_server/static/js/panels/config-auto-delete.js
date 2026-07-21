@@ -57,6 +57,10 @@ function render(container, rules, channels) {
             </div>
           </div>
         </div>
+        <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
+          <input type="checkbox" name="media_only"${r.media_only ? " checked" : ""} />
+          Only delete messages with attachments (images/videos/files)
+        </label>
         <div class="field-hint">Last run: ${formatTs(r.last_run_ts)}</div>
         <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Save</button>
@@ -96,6 +100,10 @@ function render(container, rules, channels) {
             </div>
           </div>
         </div>
+        <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
+          <input type="checkbox" name="media_only" />
+          Only delete messages with attachments (images/videos/files)
+        </label>
         <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Add</button>
           <span data-add-status></span>
@@ -114,6 +122,7 @@ function render(container, rules, channels) {
         await apiPut(`/api/config/auto-delete/${r.channel_id}`, {
           max_age_seconds: parseInt(fd.get("age_value"), 10) * parseInt(fd.get("age_unit"), 10),
           interval_seconds: parseInt(fd.get("interval_value"), 10) * parseInt(fd.get("interval_unit"), 10),
+          media_only: form.querySelector("[name=media_only]").checked,
         });
         showStatus(status, true);
       } catch (err) {
@@ -148,6 +157,7 @@ function render(container, rules, channels) {
       await apiPut(`/api/config/auto-delete/${channelId}`, {
         max_age_seconds: parseInt(fd.get("age_value"), 10) * parseInt(fd.get("age_unit"), 10),
         interval_seconds: parseInt(fd.get("interval_value"), 10) * parseInt(fd.get("interval_unit"), 10),
+        media_only: addForm.querySelector("[name=media_only]").checked,
       });
       const fresh = await loadConfig();
       render(container, fresh.auto_delete || [], channels);

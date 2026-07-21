@@ -495,3 +495,40 @@ def test_build_attribution_embed_has_footer():
     embed = build_attribution_embed([["x"]])
     assert embed.footer.text is not None
     assert "Story Builder" in embed.footer.text
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_story_cog as story_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from tests.fakes import FakeChannel  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_reveal_story_pays_joined_players(monkeypatch, sync_db_path):
+    """The genuine reveal site pays the full joined roster, not just the host."""
+    spy = AsyncMock()
+    monkeypatch.setattr(story_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "story", payload={"players": [1, 2, 3]})
+    cog = story_cog.StoryCog(bot)  # type: ignore[arg-type]
+    channel = FakeChannel(id=100)
+    sentences = [{"author_id": None, "text": "A"}, {"author_id": 2, "text": "B"}]
+    await cog._reveal_story(channel, gid, sentences, [1, 2, 3], None)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]
+    assert call.kwargs["bot"] is bot

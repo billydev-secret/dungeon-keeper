@@ -34,6 +34,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+# Game formats. "hot_seat" is the classic one-person-at-a-time rotation;
+# "panel" lists everyone who opted in so any of them can be asked directly.
+AMA_FORMAT_HOT_SEAT = "hot_seat"
+AMA_FORMAT_PANEL = "panel"
+
 # Retention horizon for unanswered questions before their view is
 # pruned and the entry flipped to "expired".
 UNANSWERED_QUESTION_RETENTION = timedelta(days=7)
@@ -63,7 +68,7 @@ def utcnow_iso(now: datetime | None = None) -> str:
 def parse_iso_ts(value: Any) -> datetime | None:
     """Parse a stored ISO-8601 string back into a UTC ``datetime``.
 
-    Tolerates ``None``/empty input (returns ``None``) and unrecognised
+    Tolerates ``None``/empty input (returns ``None``) and unrecognized
     strings (also ``None``). Naive datetimes are coerced to UTC so the
     return value is always timezone-aware.
     """
@@ -112,10 +117,8 @@ def build_question_entry(
     """Return the dict appended to ``payload["questions"]`` for a new ask.
 
     ``status`` is ``"pending"`` for player questions (flipped to
-    ``"approved"`` once the message has been posted) and ``"approved"``
-    for AI-generated idle questions that skip review. ``source`` is set
-    to ``"ai_idle"`` for AI questions and omitted otherwise — matching
-    the existing cog payloads so the audit log can distinguish them.
+    ``"approved"`` once the message has been posted). ``source`` tags
+    the origin of a question and is omitted for ordinary player asks.
     """
     entry: dict[str, Any] = {
         "asker_id": asker_id,
@@ -315,6 +318,47 @@ def compute_recap_stats(payload: dict[str, Any]) -> dict[str, int]:
         "rotations": payload.get("hot_seat_rotations", 0),
         "unique_askers": unique_asker_count(questions),
     }
+
+
+def normalize_format(value: Any) -> str:
+    """Coerce a stored/param format string to a known value.
+
+    Anything that isn't the explicit panel sentinel falls back to the
+    classic hot-seat format, so old payloads (which have no ``format``
+    key) and bad input both behave as hot-seat.
+    """
+    return AMA_FORMAT_PANEL if value == AMA_FORMAT_PANEL else AMA_FORMAT_HOT_SEAT
+
+
+def toggle_panel_member(panel: list[int], uid: int) -> bool:
+    """Add or remove ``uid`` from ``panel`` in place (panel format).
+
+    Returns ``True`` when the user just joined the panel and ``False``
+    when a second tap removed them. Order is preserved so the roster
+    renders in join order.
+    """
+    if uid in panel:
+        panel.remove(uid)
+        return False
+    panel.append(uid)
+    return True
+
+
+def is_panel_target(panel: list[int], target_id: int) -> bool:
+    """Return whether ``target_id`` is still a valid panelist to ask.
+
+    Used to reject a question whose chosen target left the panel between
+    the dropdown opening and the modal being submitted.
+    """
+    return target_id in panel
+
+
+def panel_bottom_bar_label(panel_size: int) -> str:
+    """Format the persistent bottom-bar content for a panel-format game."""
+    if panel_size:
+        suffix = "s" if panel_size != 1 else ""
+        return f"🎙️ AMA Panel — {panel_size} answering question{suffix}"
+    return "🎙️ AMA Panel"
 
 
 def bottom_bar_label(hot_seat_name: str | None, queue_len: int) -> str:

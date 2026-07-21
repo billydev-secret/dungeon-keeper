@@ -1,11 +1,19 @@
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
     create_game,
@@ -16,12 +24,15 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     is_game_expired,
     resolve_name,
-    ConfirmCloseView,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.games.utils.question_source import get_nhie_statement, has_matching_questions
+from bot_modules.games.utils.question_source import (
+    get_nhie_statement,
+    has_matching_questions,
+    channel_allows_nsfw,
+)
 from bot_modules.games_nhie.embeds import (
-    build_closed_embed,
     build_recap_embed,
     build_round_embed,
 )
@@ -52,7 +63,7 @@ class PoseStatementModal(discord.ui.Modal, title="Pose a Statement"):
         self._message = message
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Statement", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Statement", channel_name(interaction.channel))
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
@@ -61,7 +72,7 @@ class PoseStatementModal(discord.ui.Modal, title="Pose a Statement"):
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
         try:
             await self._message.edit(view=self._view)
-        except Exception:
+        except discord.HTTPException:
             pass
         await interaction.response.send_message("✅ Your statement has been queued!", ephemeral=True)
 
@@ -81,6 +92,7 @@ class NHIERoundView(discord.ui.View):
         eliminated: set[int] | None = None,
         guild=None,
         max_lives: int = DEFAULT_LIVES,
+        accent: discord.Color | None = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -100,11 +112,14 @@ class NHIERoundView(discord.ui.View):
         self.eliminated = eliminated or set()
         self.guild = guild
         self.max_lives = max_lives
+        # Guild accent, resolved once at view-construction time and reused
+        # for every round-embed edit — never re-resolved on the per-vote path.
+        self.accent = accent
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -120,11 +135,12 @@ class NHIERoundView(discord.ui.View):
             eliminated=self.eliminated,
             guild=self.guild,
             max_lives=self.max_lives,
+            color=self.accent,
         )
 
     @discord.ui.button(label="😈 Guilty", style=discord.ButtonStyle.danger, custom_id="nhie_guilty", row=0)
     async def vote_guilty(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -141,7 +157,7 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="😇 Innocent", style=discord.ButtonStyle.success, custom_id="nhie_innocent", row=0)
     async def vote_innocent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -158,15 +174,16 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="✍️ Pose Statement", style=discord.ButtonStyle.primary, custom_id="nhie_pose", row=1)
     async def pose_statement(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
+        assert interaction.message  # component interactions always carry their message
         await interaction.response.send_modal(PoseStatementModal(self, interaction.message))
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="nhie_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -176,64 +193,44 @@ class NHIERoundView(discord.ui.View):
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="nhie_close", row=2)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                embed = build_closed_embed(
-                    statement=self.statement,
-                    guilty=self.guilty,
-                    innocent=self.innocent,
-                    round_num=self.round_num,
-                    lives=self.lives,
-                    eliminated=self.eliminated,
-                    guild=self.guild,
-                    max_lives=self.max_lives,
-                )
-                await game_msg.edit(embed=embed, view=self)
-            except Exception:
-                pass
-            payload = await get_game_payload(self.db, self.game_id)
-            payload["rounds"][str(self.round_num)]["guilty"] = self.guilty
-            payload["rounds"][str(self.round_num)]["innocent"] = self.innocent
-            await update_game_payload(self.db, self.game_id, payload)
-            await end_game(self.db, self.game_id, round_count=self.round_num, payload=payload)
-            self.bot.active_views.pop(self.game_id, None)
-            await channel.send("🛑 Game ended by host.")
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="nhie_htp", row=3)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="nhie_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["nhie"], ephemeral=True)
 
 
 class NHIECog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
     def db(self):
         return self.bot.games_db
 
+    async def _resolve_accent(self, guild) -> discord.Color | None:
+        """Best-effort guild accent for NHIE embeds.
+
+        Returns ``None`` (embeds fall back to the phase palette) when
+        there's no guild, no bot context, or accent resolution fails —
+        a branding lookup must never take a game down.
+        """
+        if guild is None:
+            return None
+        ctx = getattr(self.bot, "ctx", None)
+        db_path = getattr(ctx, "db_path", None)
+        if db_path is None:
+            return None
+        try:
+            return await resolve_accent_color(db_path, guild)
+        except Exception:
+            log.debug("nhie accent resolution failed for guild %s", getattr(guild, "id", "?"), exc_info=True)
+            return None
+
     @app_commands.command(name="nhie", description="Start a Never Have I Ever game!")
     @app_commands.describe(
         question="Opening statement (e.g. 'gone skydiving') — defaults to question bank",
         lives="Number of lives per player (default 3, 0 = no elimination)",
-        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the question bank",
     )
     async def nhie(
         self,
@@ -242,7 +239,7 @@ class NHIECog(commands.Cog):
         lives: int = DEFAULT_LIVES,
         tags: str = "",
     ):
-        log.info("%s used /games play nhie in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play nhie in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -254,7 +251,9 @@ class NHIECog(commands.Cog):
             return
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not question.strip() and not await has_matching_questions(self.db, "nhie", tag_list):
+        if tag_list and not question.strip() and not await has_matching_questions(
+            self.db, "nhie", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+        ):
             await interaction.response.send_message(
                 f"No questions match tags: {', '.join(tag_list)} for this game.",
                 ephemeral=True,
@@ -269,15 +268,7 @@ class NHIECog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"question": question, "lives": lives, "tags": tag_list},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -342,7 +333,9 @@ class NHIECog(commands.Cog):
             statement = custom_statement
         else:
             tags = (await get_game_payload(self.db, game_id)).get("tags") or None
-            statement = await get_nhie_statement(self.db, tags=tags)
+            statement = await get_nhie_statement(
+                self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel)
+            )
         if not statement:
             await channel.send(
                 "❌ The statement bank is empty! Use **✍️ Pose Statement** to submit your own, "
@@ -363,6 +356,7 @@ class NHIECog(commands.Cog):
         rounds_data[str(round_num)] = {"guilty": [], "innocent": [], "stmt": statement}
         await update_game_payload(self.db, game_id, payload)
 
+        accent = await self._resolve_accent(guild)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -375,6 +369,7 @@ class NHIECog(commands.Cog):
             eliminated=eliminated,
             max_lives=max_lives,
             interaction=interaction,
+            accent=accent,
         )
         if carry_over_queue:
             view.queued_statements = carry_over_queue
@@ -407,6 +402,7 @@ class NHIECog(commands.Cog):
         eliminated: set[int] | None,
         max_lives: int,
         interaction=None,
+        accent: discord.Color | None = None,
     ) -> "NHIERoundView":
         """Construct a round view with its advance callback wired.
 
@@ -420,11 +416,10 @@ class NHIECog(commands.Cog):
             view._closed = True
 
             final_embed = view._build_embed(closed=True)
-            for item in view.children:
-                item.disabled = True
+            disable_all_items(view)
             try:
                 await message.edit(embed=final_embed, view=view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             if await is_game_expired(self.db, game_id):
@@ -460,7 +455,7 @@ class NHIECog(commands.Cog):
                 name = resolve_name(guild, uid)
                 try:
                     await channel.send(f"💀 **{discord.utils.escape_markdown(name)}** has been eliminated!")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
             if max_lives > 0:
@@ -472,15 +467,24 @@ class NHIECog(commands.Cog):
                                 winner_id=winner_id,
                                 guilt_scores=guilt_scores,
                                 guild=guild,
+                                color=view.accent,
                             )
+                            if guild:
+                                from bot_modules.economy.game_rewards import append_payout_footer
+                                await append_payout_footer(self.bot, embed, guild.id, "nhie")
                             await channel.send(embed=embed)
                         else:
                             await channel.send(
                                 f"{GAME_ICONS['nhie']} Everyone's been eliminated! No winner this time."
                             )
-                    except Exception:
+                    except discord.HTTPException:
                         pass
-                    await end_game(self.db, game_id, player_count=len(current_lives), round_count=round_num, payload=payload)
+                    # Roster = everyone who played. ``current_lives`` retains
+                    # eliminated players (at 0 hp), so it is the full participant
+                    # set — the guiltiest winner may have been eliminated, and a
+                    # survivors-only roster would drop their win bonus + credit.
+                    await end_game(self.db, game_id, player_count=len(current_lives), round_count=round_num, payload=payload,
+                                   bot=self.bot, player_ids=sorted(current_lives))
                     if game_id in self.bot.active_views:
                         del self.bot.active_views[game_id]
                     return
@@ -508,7 +512,7 @@ class NHIECog(commands.Cog):
                 self.bot.active_views.pop(game_id, None)
                 try:
                     await channel.send("❌ Something went wrong advancing the round. Game ended.")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         view = NHIERoundView(
@@ -524,6 +528,7 @@ class NHIECog(commands.Cog):
             eliminated=eliminated,
             guild=guild,
             max_lives=max_lives,
+            accent=accent,
         )
         return view
 
@@ -542,6 +547,7 @@ class NHIECog(commands.Cog):
         host_name = resolve_name(guild, host_id) if guild else "Host"
         lives, eliminated, max_lives = payload_to_round_state(payload)
 
+        accent = await self._resolve_accent(guild)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -554,6 +560,7 @@ class NHIECog(commands.Cog):
             eliminated=eliminated,
             max_lives=max_lives,
             interaction=None,
+            accent=accent,
         )
         view.guilty = list(rd.get("guilty", []))
         view.innocent = list(rd.get("innocent", []))
@@ -563,10 +570,10 @@ class NHIECog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = NHIECog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("nhie")
-    play.add_command(cog.nhie)
+    play.add_command(cog.nhie, override=True)
     bot.game_launchers["nhie"] = cog.launch
     bot.game_recoverers["nhie"] = cog.recover_game

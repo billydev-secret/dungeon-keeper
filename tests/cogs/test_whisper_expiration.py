@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import pytest
 
 from bot_modules.services.whisper_models import Whisper, WhisperConfig
@@ -12,6 +13,16 @@ from tests.fakes import FakeMember, fake_interaction
 
 SENDER, TARGET = 1001, 2001
 ROLE = 7001
+
+
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.cogs.whisper_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Color.default()),
+    )
 
 
 def _w(*, created_at: float | None = None, **overrides) -> Whisper:

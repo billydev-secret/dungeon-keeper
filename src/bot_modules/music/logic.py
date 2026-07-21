@@ -21,7 +21,7 @@ def is_search_url(query: str) -> bool:
     """Return True when ``query`` is a URL that wavelink should treat verbatim.
 
     Plain-text queries get the YouTube source prefix prepended by wavelink;
-    URLs must be passed through untouched. Match the cog's behaviour:
+    URLs must be passed through untouched. Match the cog's behavior:
     only ``http://`` / ``https://`` count, anything else is a search.
     """
     return query.startswith(("http://", "https://"))

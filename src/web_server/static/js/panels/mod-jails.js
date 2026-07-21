@@ -1,5 +1,7 @@
 import { api, esc } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
 
@@ -76,7 +78,7 @@ function statusChip(j) {
 
 function renderList(jails, activeId) {
   if (!jails.length) {
-    return '<div class="empty">No jails match this filter.</div>';
+    return renderEmpty("No jails match this filter.");
   }
   return jails.map((j) => {
     const cls = priorityClass(j) + (j.id === activeId ? " active" : "");
@@ -231,19 +233,19 @@ export function mount(container) {
         <div class="ticket-list-wrap">
           <div class="ticket-list-head">
             <h3>Queue</h3>
-            <div class="ctrl-group" role="tablist" data-filter-group>
+            <div class="ctrl-group" role="group" aria-label="Filter jails" data-filter-group>
               <button class="active" data-filter="active">Active</button>
               <button data-filter="released">Released</button>
               <button data-filter="all">All</button>
             </div>
           </div>
           <div class="ticket-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading…")}
           </div>
         </div>
 
         <div class="ticket-detail" data-detail>
-          <div class="empty">Loading…</div>
+          ${renderLoading("Loading…")}
         </div>
       </section>
     </div>
@@ -313,11 +315,8 @@ export function mount(container) {
     }
   }
 
-  filterGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-filter]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
-    state.filter = btn.dataset.filter;
+  makeFilterStrip(filterGroup, (value) => {
+    state.filter = value;
     state.activeId = null;
     render();
   });
