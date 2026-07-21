@@ -114,14 +114,14 @@ _BONUS = (
 
 
 def test_rarity_coins_tiers():
-    assert parser.rarity_coins("fine") == 3       # common
-    assert parser.rarity_coins("wild") == 8       # uncommon (the *Rare* cat lives here too)
-    assert parser.rarity_coins("rare") == 8
-    assert parser.rarity_coins("reverse") == 20   # rare tier
-    assert parser.rarity_coins("legendary") == 50
-    assert parser.rarity_coins("mythic") == 120
+    assert parser.rarity_coins("fine") == 1       # common
+    assert parser.rarity_coins("wild") == 3       # uncommon (the *Rare* cat lives here too)
+    assert parser.rarity_coins("rare") == 3
+    assert parser.rarity_coins("reverse") == 11   # rare tier
+    assert parser.rarity_coins("legendary") == 35
+    assert parser.rarity_coins("mythic") == 102
     assert parser.rarity_coins("egirl") == 300
-    assert parser.rarity_coins("frobnicate") == 3  # unknown -> common
+    assert parser.rarity_coins("frobnicate") == 1  # unknown -> common
 
 
 def test_parse_cat_catch_normal():
@@ -130,7 +130,7 @@ def test_parse_cat_catch_normal():
     assert catch.username == "ceilruxdealta"
     assert catch.rarity == "nice"
     assert catch.doubled is False
-    assert catch.coins == 3
+    assert catch.coins == 1
 
 
 def test_parse_cat_catch_blessed_doubles_coins():
@@ -139,7 +139,7 @@ def test_parse_cat_catch_blessed_doubles_coins():
     assert catch.username == "efficientpanic"
     assert catch.rarity == "wild"
     assert catch.doubled is True
-    assert catch.coins == 16  # 8 (uncommon) x2
+    assert catch.coins == 6  # 3 (uncommon) x2
 
 
 def test_parse_cat_catch_reverse_cat():
@@ -147,7 +147,7 @@ def test_parse_cat_catch_reverse_cat():
     assert catch is not None
     assert catch.username == "ceilruxdealta"   # the non-emoji token by "cought"
     assert catch.rarity == "reverse"
-    assert catch.coins == 20
+    assert catch.coins == 11
 
 
 def test_spawn_and_bonus_are_not_catches():

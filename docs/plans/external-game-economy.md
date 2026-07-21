@@ -46,8 +46,9 @@ Discord **username** (not a mention) — resolved to a member via
 `guild.get_member_named`; unresolved (left/renamed) pay nobody. Rarity from the
 emoji name; reverse cats print the line reversed but keep the emoji intact, so
 the catcher is the non-emoji token beside "cought". "blessed…got doubled" →
-×2. Tiers (locked with Billy): common 3, uncommon 8, rare 20, epic 50, mythic
-120, divine 300 (the 22 types grouped in `parser._RARITY_TIER`). `pay_cat_catch`
+×2. Tiers (tapered 2026-07-21 — a 75%→0% linear cut from the bottom tier to the
+top, off an earlier flat 3/8/20/50/120/300): common 1, uncommon 3, rare 11, epic
+35, mythic 102, divine 300 (the 22 types grouped in `parser._RARITY_TIER`). `pay_cat_catch`
 credits the tiered coins (`apply_credit` kind `cat_catch`, booster-multiplied)
 and fires the new `cat_catch` trigger. Once per catch via the payout ledger.
 
