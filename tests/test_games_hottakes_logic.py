@@ -13,8 +13,15 @@ from __future__ import annotations
 import math
 import random
 
+import discord
 import pytest
 
+from bot_modules.games.constants import (
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
 from bot_modules.games_hottakes.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -379,6 +386,67 @@ def test_build_recap_embed_dedupes_total_voters():
     by_name = {f.name: f.value for f in embed.fields}
     assert by_name["Total Voters"] == "4"
     assert by_name["Total Takes"] == "2"
+
+
+# ── accent color migration (2026-07-21 ruling) ──────────────────────
+#
+# Hot Takes is a voting game: lobby / playing / results / recap are NOT
+# win/loss, so every phase honors the passed guild accent. With no color
+# passed, each builder falls back to its old PHASE_* constant.
+
+
+ACCENT = discord.Color(0x123456)
+
+
+def test_build_lobby_embed_honors_passed_accent():
+    embed = build_lobby_embed("Alice", color=ACCENT)
+    assert embed.color == ACCENT
+
+
+def test_build_lobby_embed_falls_back_to_phase_joining():
+    embed = build_lobby_embed("Alice")
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_build_vote_embed_open_honors_passed_accent():
+    embed = build_vote_embed(
+        "t", take_num=1, total_takes=1, votes_by_user={}, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_vote_embed_closed_honors_passed_accent():
+    embed = build_vote_embed(
+        "t", take_num=1, total_takes=1, votes_by_user={1: 4},
+        closed=True, color=ACCENT,
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_vote_embed_falls_back_to_phase_playing_when_open():
+    embed = build_vote_embed("t", take_num=1, total_takes=1, votes_by_user={})
+    assert embed.color == discord.Color(PHASE_PLAYING)
+
+
+def test_build_vote_embed_falls_back_to_phase_results_when_closed():
+    embed = build_vote_embed(
+        "t", take_num=1, total_takes=1, votes_by_user={1: 4}, closed=True
+    )
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_build_recap_embed_honors_passed_accent():
+    results = [{"text": "x", "avg": 3.0, "std": 0.0, "voters": [1]}]
+    embed = build_recap_embed(results, color=ACCENT)
+    assert embed is not None
+    assert embed.color == ACCENT
+
+
+def test_build_recap_embed_falls_back_to_phase_recap():
+    results = [{"text": "x", "avg": 3.0, "std": 0.0, "voters": [1]}]
+    embed = build_recap_embed(results)
+    assert embed is not None
+    assert embed.color == discord.Color(PHASE_RECAP)
 
 
 # ── parametrized: tally_votes covers the full scale ─────────────────

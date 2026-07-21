@@ -972,6 +972,8 @@ async def test_econ_first_login_dms_daily_digest(mock_notify, econ_db):
     mock_notify.assert_awaited_once()
     embed = mock_notify.await_args.kwargs["embed"]
     assert "day" in (embed.description or "").lower()
+    # The payout amount carries the currency emoji, not a bare number.
+    assert "🪙" in (embed.description or "")
     with open_db(econ_db) as conn:
         assert get_balance(conn, ECON_GUILD, ECON_USER) > 0
         row = conn.execute(

@@ -47,7 +47,7 @@ def build_queue_embed(
     """
     if color is None:
         color = discord.Color(_EMBED_COLOR)
-    embed = discord.Embed(title="Music queue", color=color)
+    embed = discord.Embed(title="🎶 Music queue", color=color)
 
     if current_summary is not None:
         embed.add_field(name="Now playing", value=current_summary, inline=False)
@@ -82,7 +82,7 @@ def build_247_status_embed(
     if color is None:
         color = discord.Color(_EMBED_COLOR)
     return discord.Embed(
-        title="24/7 channels",
+        title="📻 24/7 channels",
         description="\n".join(lines) if lines else "(none)",
         color=color,
     )

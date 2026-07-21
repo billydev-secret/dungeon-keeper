@@ -19,8 +19,6 @@ from bot_modules.games_traditional.logic import (
     summarize_asked_by_category,
 )
 
-_RESULTS_GRAY = 0x808080
-
 # Per-category card styling: (emoji, accent color). Truths are cool-toned
 # and inquisitive; dares are warm-toned and bold; the NSFW variants get
 # spicier glyphs and deeper colors so the card reads at a glance.
@@ -89,7 +87,7 @@ def build_recap_embed(
     embed compact.
     """
     if color is None:
-        color = discord.Color(_RESULTS_GRAY)
+        color = discord.Color(BRAND_COLOR)
     participants: list = payload.get("participants", [])
     asked: dict[str, str] = payload.get("asked", {})
     total_q = len(asked)

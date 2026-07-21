@@ -2081,6 +2081,24 @@ def _set_photo_config(db, *, channel_id=PHOTO_CHANNEL_ID) -> None:
         conn.commit()
 
 
+def _set_photo_schedule(db, *, channel_id=PHOTO_CHANNEL_ID, status="active") -> None:
+    """Insert a minimal photo schedule row (games_scheduled), no config row.
+
+    Mirrors the live desync where a schedule was created but the Photo
+    Challenge Setup panel (which owns the games_game_config channel) was
+    never saved, so the award listener must recover the channel here.
+    """
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO games_scheduled"
+            " (guild_id, channel_id, game_type, created_by, created_at,"
+            "  time_of_day, recurrence, status)"
+            " VALUES (?, ?, 'photo', 1, 0, 540, 'daily', ?)",
+            (GUILD_ID, channel_id, status),
+        )
+        conn.commit()
+
+
 def _today_period(db) -> str:
     with open_db(db) as conn:
         offset = get_tz_offset_hours(conn, GUILD_ID)
@@ -2129,6 +2147,52 @@ async def test_photo_post_participation_pays_without_quest(ctx, db):
 
     # A second photo the same day pays nothing more — once per local day.
     await cog._on_photo_post(_photo_msg(author=member, message_id=9200))
+    assert _balance(db, 501) == 5
+
+
+@pytest.mark.asyncio
+async def test_photo_post_pays_via_schedule_channel_without_config(ctx, db):
+    # Regression: a photo schedule exists but the Setup panel was never saved,
+    # so games_game_config has no 'photo' row. The award listener must recover
+    # the channel from the active schedule and still pay — no more silent misses.
+    _enable(db)  # participation 5, no config row written
+    _set_photo_schedule(db)  # active schedule points at PHOTO_CHANNEL_ID
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    msg = _photo_msg(author=member)
+    await cog._on_photo_post(msg)
+    assert _balance(db, 501) == 5
+    msg.add_reaction.assert_awaited_once_with("✅")
+
+
+@pytest.mark.asyncio
+async def test_photo_post_ignores_done_schedule_channel(ctx, db):
+    # A finished (status='done') schedule is not a live channel — the fallback
+    # only recovers from an *active* schedule, so a post here pays nothing.
+    _enable(db)  # participation 5, no config row
+    _set_photo_schedule(db, status="done")
+    cog = _make_cog(ctx)
+
+    await cog._on_photo_post(_photo_msg(author=_member(member_id=501)))
+    assert _balance(db, 501) == 0
+
+
+@pytest.mark.asyncio
+async def test_photo_post_config_channel_wins_over_schedule(ctx, db):
+    # When the config row carries a channel, it is authoritative even if a
+    # schedule points elsewhere — the fallback only fires on an empty config.
+    _enable(db)  # participation 5
+    _set_photo_config(db, channel_id=PHOTO_CHANNEL_ID)
+    _set_photo_schedule(db, channel_id=222)  # different channel
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    # A post in the schedule's channel is ignored (config channel is the gate).
+    await cog._on_photo_post(_photo_msg(author=member, channel_id=222))
+    assert _balance(db, 501) == 0
+    # A post in the configured channel pays.
+    await cog._on_photo_post(_photo_msg(author=member, message_id=9300))
     assert _balance(db, 501) == 5
 
 

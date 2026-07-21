@@ -425,7 +425,7 @@ def test_build_queue_embed_with_current_and_items():
         total_pages=1,
         loop_mode_value="off",
     )
-    assert embed.title == "Music queue"
+    assert embed.title == "🎶 Music queue"
     fields = {f.name: f.value or "" for f in embed.fields}
     assert fields["Now playing"] == "Now: X"
     assert "Up next (2 total)" in fields
@@ -499,7 +499,7 @@ def test_build_queue_embed_footer_reflects_loop_mode():
 def test_build_247_status_embed_basic():
     embed = build_247_status_embed(["• <#1>", "• <#2> (autoplay)"])
     assert isinstance(embed, discord.Embed)
-    assert embed.title == "24/7 channels"
+    assert embed.title == "📻 24/7 channels"
     assert "<#1>" in (embed.description or "")
     assert "(autoplay)" in (embed.description or "")
 

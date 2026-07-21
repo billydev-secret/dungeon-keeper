@@ -117,8 +117,11 @@ def extract_cah_game(window: Sequence[Mapping[str, Any]]) -> tuple[set[int], int
 # both orders. A "blessed … got doubled!" line means Cat Bot doubled the catch.
 
 # Rarity → tier → coins (defaults; a future dashboard panel can override).
+# Tapered against an earlier flatter table (3/8/20/50/120/300): a 75% cut on the
+# lowest tier scaling linearly to 0% at the top, so common catches barely pay
+# while the rare top-end keeps its pull.
 _TIER_COINS: dict[str, int] = {
-    "common": 3, "uncommon": 8, "rare": 20, "epic": 50, "mythic": 120, "divine": 300,
+    "common": 1, "uncommon": 3, "rare": 11, "epic": 35, "mythic": 102, "divine": 300,
 }
 # The 22 cat types grouped into tiers. NB the *Rare* cat sits in the *uncommon*
 # tier — the tier name and that cat's name collide but mean different things.

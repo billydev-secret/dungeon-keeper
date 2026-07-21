@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -102,6 +103,7 @@ class WYRRoundView(discord.ui.View):
         bot,
         host_name: str,
         advance_callback,
+        accent: "discord.Color | None" = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -114,6 +116,9 @@ class WYRRoundView(discord.ui.View):
         self.bot = bot
         self.host_name = host_name
         self.advance_callback = advance_callback
+        # Guild accent resolved once at view-creation time and reused for
+        # every live vote update (never re-resolved on the per-vote path).
+        self.accent = accent
         self.votes_a: list[int] = []
         self.votes_b: list[int] = []
         self.revealed = False
@@ -140,6 +145,7 @@ class WYRRoundView(discord.ui.View):
             self.round_num,
             closed=closed,
             revealed=self.revealed,
+            color=self.accent,
         )
 
     @discord.ui.button(label="🅰️ Option A", style=discord.ButtonStyle.primary, custom_id="wyr_a", row=0)
@@ -303,6 +309,26 @@ class WYRCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def _resolve_accent(self, channel) -> "discord.Color | None":
+        """Resolve the guild accent color once, safely.
+
+        Returns ``None`` (letting the embed builder fall back to its
+        default PHASE color) when there's no guild in scope, no bot ctx,
+        or accent resolution raises — a game must never fail to render
+        because branding lookup hiccuped.
+        """
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            return None
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return None
+        try:
+            return await resolve_accent_color(ctx.db_path, guild)
+        except Exception:
+            log.exception("WYR: accent resolution failed; using default color")
+            return None
+
     async def _voter_roster(self, game_id: str) -> list[int]:
         """Everyone who voted for either option in any completed round — the
         real participant set for economy payouts."""
@@ -346,6 +372,7 @@ class WYRCog(commands.Cog):
         rounds_data[str(round_num)] = {"a": [], "b": [], "q": f"{option_a} OR {option_b}"}
         await update_game_payload(self.db, game_id, payload)
 
+        accent = await self._resolve_accent(channel)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -356,6 +383,7 @@ class WYRCog(commands.Cog):
             option_b=option_b,
             anonymous=payload.get("anonymous", True),
             interaction=interaction,
+            accent=accent,
         )
         if carry_over_queue:
             view.queued_questions = carry_over_queue
@@ -385,6 +413,7 @@ class WYRCog(commands.Cog):
         option_b: str,
         anonymous: bool = True,
         interaction=None,
+        accent: "discord.Color | None" = None,
     ) -> "WYRRoundView":
         """Construct a round view with its advance callback wired.
 
@@ -448,6 +477,7 @@ class WYRCog(commands.Cog):
             bot=self.bot,
             host_name=host_name,
             advance_callback=advance,
+            accent=accent,
         )
         return view
 
@@ -466,6 +496,7 @@ class WYRCog(commands.Cog):
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
 
+        accent = await self._resolve_accent(channel)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -476,6 +507,7 @@ class WYRCog(commands.Cog):
             option_b=option_b,
             anonymous=payload.get("anonymous", True),
             interaction=None,
+            accent=accent,
         )
         view.votes_a = list(rd.get("a", []))
         view.votes_b = list(rd.get("b", []))

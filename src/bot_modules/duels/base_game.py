@@ -1108,7 +1108,8 @@ class BaseGame(commands.Cog):
         try:
             game = await self._db_get_game(game_id)
             winner_id = getattr(game, "winner_id", None) if game else None
-            await self._resolve_wagers(game_id, state, winner_id)
+            guild_id = getattr(game, "guild_id", None) if game else None
+            await self._resolve_wagers(game_id, state, winner_id, guild_id)
             if state not in _SETTLING_STATES:
                 return
             if game is None:
@@ -1128,7 +1129,11 @@ class BaseGame(commands.Cog):
             )
 
     async def _resolve_wagers(
-        self, game_id: int, state: str, winner_id: int | None
+        self,
+        game_id: int,
+        state: str,
+        winner_id: int | None,
+        guild_id: int | None = None,
     ) -> None:
         """Settle or refund this game's escrow, then announce the outcome."""
         ctx = getattr(self.bot, "ctx", None)
@@ -1149,18 +1154,23 @@ class BaseGame(commands.Cog):
                 return 0, 0, refunds, 0
 
         paid, rake, refunds, paid_to = await asyncio.to_thread(_work)
+        settings = await self._econ_settings(guild_id) if guild_id else None
+
+        def _coins(n: int) -> str:
+            return _fmt_coins(settings, n) if settings else f"**{n:,}**"
+
         if paid > 0:
             # The house cut is named right where the pot is paid — a raked
             # wager must never look like the full pot arrived.
             note = f" *(house kept {rake:,})*" if rake else ""
             await self._announce_wager_result(
-                game_id, f"💰 <@{paid_to}> takes the pot — **{paid:,}**!{note}"
+                game_id, f"💰 <@{paid_to}> takes the pot — {_coins(paid)}!{note}"
             )
         elif refunds:
             await self._announce_wager_result(
                 game_id,
                 f"↩️ Stakes refunded to {len(refunds)} player(s) — "
-                f"**{sum(refunds.values()):,}** returned.",
+                f"{_coins(sum(refunds.values()))} returned.",
             )
 
     async def _wager_precheck(

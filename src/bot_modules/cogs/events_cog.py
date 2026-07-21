@@ -1029,13 +1029,13 @@ class EventsCog(commands.Cog):
         unit = settings.currency_name if outcome.paid == 1 else settings.currency_plural
         streak_line = f"Day **{outcome.streak}** checked in"
         if outcome.paid > 0:
-            streak_line += f" — +**{outcome.paid:,}** {unit}"
+            streak_line += f" — {settings.currency_emoji} **+{outcome.paid:,}** {unit}"
         embed.description = f"{streak_line}."
         if outcome.milestone > 0:
             unit_m = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
             embed.add_field(
                 name=f"🏆 Day {outcome.streak} milestone!",
-                value=f"Bonus **{outcome.milestone:,}** {unit_m}",
+                value=f"Bonus {settings.currency_emoji} **{outcome.milestone:,}** {unit_m}",
                 inline=False,
             )
         if outcome.grace_consumed or outcome.shield_consumed:

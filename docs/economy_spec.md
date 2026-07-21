@@ -446,7 +446,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the *Game over!* winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
-| `cat_catch` | catching a cat with the external **Cat Bot** in a `/games track … kind:Cat Bot` channel — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 3 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |
+| `cat_catch` | catching a cat with the external **Cat Bot** in a `/games track … kind:Cat Bot` channel — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 1 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |
 | `confession` | member submits an anonymous confession (posts to the feed) | `confessions_cog.ConfessModal.on_submit` → `_fire_confession_trigger` (both forum + text paths) | `confession:<message_id>` — silent claim keeps the feed anonymous; only trace is the ledger |
 | `ama_ask` | member's AMA question becomes visible: on submit (unfiltered) or on host approval (screened; rejected never pays) | `games_ama_cog` `AskQuestionModal.on_submit` + `ScreenedQuestionView.approve` → `_fire_ama_ask_trigger` | `ama_ask:<game_id>:<q_idx>` |
 | `whisper` | member sends an anonymous whisper that is delivered | `whisper_cog.WhisperCog._send_impl` after the DM+feed post succeed | `whisper:<whisper_id>` |
@@ -717,7 +717,11 @@ participation award *or* ≥1 active `photo_post` quest). The `photo_post`
 income-source toggle gates **both** payouts. The channel is the standalone Photo
 Challenge feature's dedicated channel — `channel_id` in `games_game_config.options`
 (game type `photo`), owned by the **Photo Challenge → Setup** panel
-(`/api/photo-challenge/config`); the payout is dormant until it's set. The flat
+(`/api/photo-challenge/config`). When that config carries no channel but an
+**active photo schedule** does (a schedule created without the Setup panel ever
+being saved leaves the config row empty), the listener recovers the channel from
+`games_scheduled` so schedule-only setups still pay; the payout is dormant only
+when neither knows a channel. The flat
 rate is edited on the **Income Sources** page alongside the other faucets. *(The
 old reaction-gated model and its `react_threshold`/`auto_react` knobs are retired;
 migration 099 renames existing `photo_react` quests and income-source rows to

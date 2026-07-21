@@ -18,8 +18,6 @@ import discord
 from bot_modules.games.constants import (
     GAME_ICONS,
     PHASE_PLAYING,
-    PHASE_RECAP,
-    PHASE_RESULTS,
 )
 from bot_modules.games.utils.live_bar import build_bar
 
@@ -34,12 +32,18 @@ def build_wyr_embed(
     round_num: int,
     closed: bool = False,
     revealed: bool = False,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the main WYR round embed.
 
-    ``closed`` flips the title suffix to ``— ROUND OVER`` and switches
-    the color to the green results phase; ``revealed`` appends voter
-    mentions under each option's bar. Both flags can combine.
+    ``closed`` flips the title suffix to ``— ROUND OVER``; ``revealed``
+    appends voter mentions under each option's bar. Both flags can
+    combine.
+
+    Per the 2026-07-21 embed-color ruling, WYR (a voting game with no
+    single winner) always uses the guild accent — pass it via ``color``.
+    When ``color`` is ``None`` (no guild in scope, or accent resolution
+    failed) the embed falls back to the ``PHASE_PLAYING`` blue.
 
     ``host_name`` is currently accepted but not rendered — kept in the
     signature for parity with the other game embeds in this cluster.
@@ -51,7 +55,7 @@ def build_wyr_embed(
     title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER"
     if closed:
         title += " — ROUND OVER"
-    embed = discord.Embed(title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING)
+    embed = discord.Embed(title=title, color=color or discord.Color(PHASE_PLAYING))
     embed.add_field(name="Round", value=str(round_num), inline=False)
     esc = discord.utils.escape_markdown
     embed.add_field(name="🅰️", value=esc(option_a), inline=True)
@@ -82,14 +86,16 @@ def build_closed_embed(
     anonymous: bool,
     round_num: int,
     revealed: bool = False,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the final ``CLOSED`` embed used by the close-game flow.
 
     Starts from :func:`build_wyr_embed` with ``closed=True`` (so the
     bars and labels match the round-over state), then rewrites the title
-    suffix to ``— CLOSED`` and switches the color to the dark-gold
-    recap phase. Centralized so the cog doesn't need to mutate Embed
-    fields directly.
+    suffix to ``— CLOSED``. The guild accent (``color``) is threaded
+    through unchanged — the CLOSED variant no longer overrides to a
+    distinct recap color. Centralized so the cog doesn't need to mutate
+    Embed fields directly.
     """
     embed = build_wyr_embed(
         host_name=host_name,
@@ -101,7 +107,7 @@ def build_closed_embed(
         round_num=round_num,
         closed=True,
         revealed=revealed,
+        color=color,
     )
     embed.title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER — CLOSED"
-    embed.color = discord.Color(PHASE_RECAP)
     return embed

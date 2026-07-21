@@ -32,11 +32,17 @@ _NUM_EMOJI: tuple[str, str, str] = ("1️⃣", "2️⃣", "3️⃣")
 NameResolver = Callable[[str], str]
 
 
-def build_lobby_embed(prompt: str | None = None) -> discord.Embed:
+def build_lobby_embed(
+    prompt: str | None = None,
+    color: discord.Color | None = None,
+) -> discord.Embed:
     """Build the initial ``/twotruths`` lobby embed.
 
     The optional ``prompt`` is rendered above the explanation so the
     submission modal title and the lobby share the same context.
+
+    ``color`` is the resolved guild accent; when omitted (no guild /
+    resolution failed) the historical ``PHASE_JOINING`` gold is used.
     """
     description = (
         "Submit your three statements — two true, one lie.\n"
@@ -47,7 +53,7 @@ def build_lobby_embed(prompt: str | None = None) -> discord.Embed:
     embed = discord.Embed(
         title=f"{GAME_ICONS['ttl']} TWO TRUTHS AND A LIE",
         description=description,
-        color=PHASE_JOINING,
+        color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Players (0)", value="—", inline=True)
     embed.set_footer(text=f"{GAME_ICONS['ttl']} Two Truths and a Lie")
@@ -60,15 +66,22 @@ def build_guess_embed(
     votes: dict[int, int],
     closed: bool = False,
     prompt: str | None = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the per-round guessing embed (3 statements + live vote bars).
 
-    ``closed`` flips the title from ``GUESS THE LIE`` to ``REVEAL`` and
-    the color from PLAYING to RESULTS; the field layout is preserved so
-    the existing message can be edited in place when the round ends.
+    ``closed`` flips the title from ``GUESS THE LIE`` to ``REVEAL``; the
+    field layout is preserved so the existing message can be edited in
+    place when the round ends.
 
     ``prompt`` is repeated on every round so mid-game joiners (who never
     saw the lobby embed) still know what the statements answer.
+
+    ``color`` is the resolved guild accent; when omitted the historical
+    phase colors (PLAYING blue / RESULTS green) are used as a fallback.
+    Both the open and closed states share the accent — the reveal isn't
+    a single win/loss embed (it lists correct *and* fooled voters), so
+    it follows the guild accent rather than a semantic green.
     """
     title = f"{GAME_ICONS['ttl']} GUESS THE LIE — {subject_name}'s turn"
     if closed:
@@ -76,7 +89,7 @@ def build_guess_embed(
     embed = discord.Embed(
         title=title,
         description=f"**Prompt:** {prompt}" if prompt else None,
-        color=PHASE_RESULTS if closed else PHASE_PLAYING,
+        color=color or discord.Color(PHASE_RESULTS if closed else PHASE_PLAYING),
     )
 
     vote_counts = [0, 0, 0]
@@ -105,16 +118,22 @@ def build_reveal_embed(
     correct_voters: Iterable[int],
     fooled_voters: Iterable[int],
     name_resolver: NameResolver,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the post-round reveal embed showing the lie + winner lists.
 
     ``name_resolver`` maps a stringified voter uid to a display name —
     the cog passes a closure that hits ``guild.get_member``; tests pass
     an identity / dict-backed resolver.
+
+    ``color`` is the resolved guild accent; when omitted the historical
+    ``PHASE_RESULTS`` green is used. The embed lists both correct and
+    fooled voters (not a single winner), so it follows the accent rather
+    than a semantic win/loss color.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['ttl']} REVEAL — {subject_name}",
-        color=PHASE_RESULTS,
+        color=color or discord.Color(PHASE_RESULTS),
     )
     lie_stmt = statements[lie_index]
     lie_num = _NUM_EMOJI[lie_index]
@@ -135,6 +154,7 @@ def build_recap_embed(
     stats: dict[str, Any],
     name_resolver: NameResolver,
     mention_resolver: Callable[[str], str | None] | None = None,
+    color: discord.Color | None = None,
 ) -> tuple[discord.Embed, set[str]]:
     """Build the final-results embed from a precomputed ``stats`` dict.
 
@@ -156,10 +176,13 @@ def build_recap_embed(
     Returns ``(embed, mentions)``. ``mentions`` is the de-duplicated set
     of mention strings the cog joins into the message ``content`` to
     ping the winners.
+
+    ``color`` is the resolved guild accent; when omitted the historical
+    ``PHASE_RECAP`` dark gold is used.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['ttl']} TWO TRUTHS AND A LIE — FINAL RESULTS",
-        color=PHASE_RECAP,
+        color=color or discord.Color(PHASE_RECAP),
     )
     mentions: set[str] = set()
 

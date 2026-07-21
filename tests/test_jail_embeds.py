@@ -56,7 +56,7 @@ def test_initial_vote_embed_zero_voters():
     embed = build_policy_vote_initial_embed(
         channel_name="policy-test", vote_text="No bots in #general", eligible_ids=[],
     )
-    assert embed.title == "Policy Vote: policy-test"
+    assert embed.title == "🗳️ Policy Vote: policy-test"
     assert embed.color is not None and embed.color.value == MOD_POLICY
     assert _field_by_name(embed, "Votes Cast").value == "0/0"
     assert _field_by_name(embed, "Status").value == "🗳️ Voting"
@@ -115,7 +115,7 @@ def test_update_embed_running_tally():
         policy_title="Title", vote_text="Text",
         yes_ids=[10], no_ids=[], abstain_ids=[20], awaiting_ids=[30, 40],
     )
-    assert embed.title == "Policy Vote: Title"
+    assert embed.title == "🗳️ Policy Vote: Title"
     assert embed.color is not None and embed.color.value == MOD_POLICY
     assert _field_by_name(embed, "Status").value == "🗳️ Voting"
     assert _field_by_name(embed, "Votes Cast").value == "2/4"  # 1 yes + 1 abstain
@@ -227,7 +227,7 @@ def test_warnings_embed_active_only():
     embed = build_warnings_list_embed(
         "user#1234", [_warn(1, reason="spam")], ts_formatter=lambda ts: f"t{ts}",
     )
-    assert embed.title == "Warnings for user#1234"
+    assert embed.title == "⚠️ Warnings for user#1234"
     assert "**Active**" in embed.description
     assert "spam" in embed.description
     assert "t1000" in embed.description
@@ -290,7 +290,7 @@ def test_ticket_open_embed_basic():
     embed = build_ticket_open_embed(
         ticket_id=42, description="My issue", opener_mention="<@1>", now=now,
     )
-    assert embed.title == "Ticket #42"
+    assert embed.title == "🎫 Ticket #42"
     assert embed.description == "My issue"
     assert embed.timestamp == now
     assert _field_by_name(embed, "Opened by").value == "<@1>"
@@ -318,14 +318,14 @@ def test_setup_step_embed_takes_meta_dict():
         "placeholder": "Select…",
     }
     embed = build_setup_step_embed(meta)
-    assert embed.title == "Setup — Step 1/6"
+    assert embed.title == "⚙️ Setup — Step 1/6"
     assert embed.description == "Which roles?"
     assert embed.color is not None and embed.color.value == MOD_TICKET
 
 
 def test_setup_complete_embed():
     embed = build_setup_complete_embed()
-    assert embed.title == "Setup Complete"
+    assert embed.title == "⚙️ Setup Complete"
     assert embed.color is not None and embed.color.value == MOD_SUCCESS
 
 
@@ -351,7 +351,7 @@ def test_modinfo_embed_minimal_no_warnings_no_tickets():
         msgs_30d_total=0,
         ts_formatter=lambda ts: f"t{ts}" if ts else "N/A",
     )
-    assert embed.title == "Mod Info — u#1"
+    assert embed.title == "ℹ️ Mod Info — u#1"
     assert embed.color is not None and embed.color.value == MOD_INFO
     # Avatar None → no thumbnail
     assert embed.thumbnail.url is None or embed.thumbnail.url == ""
@@ -596,7 +596,7 @@ def test_adopted_policies_embed_listing():
             {"title": "P2", "description": "d2"},
         ]
     )
-    assert embed.title == "Adopted Policies from This Proposal"
+    assert embed.title == "📜 Adopted Policies from This Proposal"
     assert _field_by_name(embed, "P1").value == "d1"
     assert _field_by_name(embed, "P2").value == "d2"
     assert embed.color is not None and embed.color.value == MOD_SUCCESS

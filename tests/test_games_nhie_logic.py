@@ -9,8 +9,10 @@ module proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
+import discord
 import pytest
 
+from bot_modules.games.constants import PHASE_PLAYING, PHASE_RECAP, PHASE_RESULTS
 from bot_modules.games_nhie.embeds import (
     build_closed_embed,
     build_recap_embed,
@@ -390,6 +392,57 @@ def test_build_round_embed_has_footer():
     )
     assert embed.footer.text is not None
     assert "Round 3" in embed.footer.text
+
+
+# ── accent color threading ───────────────────────────────────────────
+
+ACCENT = discord.Color(0x123456)
+
+
+def test_build_round_embed_honors_passed_accent_active():
+    embed = build_round_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_round_embed_honors_passed_accent_when_closed():
+    """Accent wins even in the round-over state — no forced phase green."""
+    embed = build_round_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, closed=True, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_round_embed_falls_back_to_phase_color_without_accent():
+    active = build_round_embed(statement="x", guilty=[], innocent=[], round_num=1)
+    closed = build_round_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, closed=True
+    )
+    assert active.color == discord.Color(PHASE_PLAYING)
+    assert closed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_build_closed_embed_honors_passed_accent():
+    embed = build_closed_embed(
+        statement="x", guilty=[], innocent=[], round_num=1, color=ACCENT
+    )
+    assert embed.color == ACCENT
+
+
+def test_build_closed_embed_falls_back_to_recap_color_without_accent():
+    embed = build_closed_embed(statement="x", guilty=[], innocent=[], round_num=1)
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_build_recap_embed_honors_passed_accent():
+    embed = build_recap_embed(winner_id=42, guilt_scores={"42": 1}, color=ACCENT)
+    assert embed.color == ACCENT
+
+
+def test_build_recap_embed_falls_back_to_recap_color_without_accent():
+    embed = build_recap_embed(winner_id=42, guilt_scores={"42": 1})
+    assert embed.color == discord.Color(PHASE_RECAP)
 
 
 # ── build_closed_embed ───────────────────────────────────────────────

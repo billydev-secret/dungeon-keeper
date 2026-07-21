@@ -336,7 +336,7 @@ async def test_grant_audit_posts_card_and_stores_ref(grant_audit_setup):
 
     channel.send.assert_awaited_once()
     embed = channel.send.call_args.kwargs["embed"]
-    assert embed.title == "Grant audit — NSFW"
+    assert embed.title == "📋 Grant audit — NSFW"
     with open_db(db_path) as conn:
         ref = load_card_ref(conn, 12345)
     assert (ref.channel_id, ref.message_id) == (channel.id, message.id)

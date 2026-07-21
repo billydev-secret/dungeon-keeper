@@ -179,7 +179,7 @@ def build_confession_embed(content: str, *, color: "discord.Color") -> "discord.
     safe = defang_everyone_here(content)
     if len(safe) > MAX_EMBED_DESCRIPTION_LENGTH:
         safe = safe[:MAX_EMBED_DESCRIPTION_LENGTH - 1].rstrip() + "…"
-    return discord.Embed(title="Anonymous Confession", description=safe, color=color)
+    return discord.Embed(title="🤫 Anonymous Confession", description=safe, color=color)
 
 
 def build_anon_reply(

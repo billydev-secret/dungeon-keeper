@@ -1,6 +1,22 @@
 # Embed style-guide conformance sweep
 
-**Status:** in progress (started 2026-07-21)
+**Status:** COMPLETE — all stages shipped 2026-07-21.
+
+## Progress
+- Stage 0 — spec + tracker — `fe7991a`
+- Stage 1 — XP → accent — `099b647`
+- Stage 2 — welcome → accent — `673beff`
+- Stage 3 — duels accent lobby + wager currency — `25cf5d3`
+- Stage 4 — custom emoji out of footers — `3770ef1`
+- Stage 5 — games full-accent (8 modules) — `815cab1`
+- Stage 6 — wellness → WELLNESS_PRIMARY constant — `48852ab`
+- Stage 7 — cosmetic title glyphs — done
+- Follow-ups — MED/LOW tail — done: duel pot-win broadcast + accept-refusal
+  currency vocab (`base_game`/`base_duel`), streak-digest currency emoji
+  (`events_cog`), traditional/fantasies recap no-guild fallback gray → BRAND,
+  Name-Your-Price force-close embed → accent, and a content-type-color
+  semantic note added to the guide (Truth/Dare card coding stays).
+
 **Spec:** [`../embed_style_guide.md`](../embed_style_guide.md) — updated 2026-07-21 with
 the color rulings, currency vocabulary, ledger-row, footer, and title-glyph
 sections this sweep enforces.

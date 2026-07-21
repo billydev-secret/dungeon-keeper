@@ -7,6 +7,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -232,6 +233,7 @@ class TTLGuessView(discord.ui.View):
         host_name: str,
         advance_callback,
         prompt: str | None = None,
+        accent: discord.Color | None = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -244,6 +246,9 @@ class TTLGuessView(discord.ui.View):
         self.host_name = host_name
         self.advance_callback = advance_callback
         self.prompt = prompt
+        # Guild accent, resolved once when the round's view is built and
+        # reused for every live-bar rebuild — never re-resolved per vote.
+        self.accent = accent
         self.votes: dict[int, int] = {}
         self._updater = LiveBarUpdater()
         self._closed = False
@@ -259,7 +264,8 @@ class TTLGuessView(discord.ui.View):
 
     def _build_embed(self, subject_name: str, closed: bool = False) -> discord.Embed:
         return build_guess_embed(
-            subject_name, self.statements, self.votes, closed=closed, prompt=self.prompt,
+            subject_name, self.statements, self.votes,
+            closed=closed, prompt=self.prompt, color=self.accent,
         )
 
     def _build_reveal_embed(self, subject_name: str, correct_voters: list, fooled_voters: list, guild) -> discord.Embed:
@@ -279,6 +285,7 @@ class TTLGuessView(discord.ui.View):
             correct_voters=correct_voters,
             fooled_voters=fooled_voters,
             name_resolver=_resolver,
+            color=self.accent,
         )
 
     @discord.ui.button(label="1️⃣", style=discord.ButtonStyle.primary, custom_id="ttl_v1", row=0)
@@ -346,6 +353,21 @@ class TTLCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
+    async def _resolve_accent(self, guild) -> discord.Color | None:
+        """Best-effort guild accent; never raises.
+
+        Returns ``None`` when there's no guild or when resolution fails
+        (e.g. no ``bot.ctx``), so the embed builders fall back to their
+        historical phase colors instead of crashing the game.
+        """
+        if guild is None:
+            return None
+        try:
+            return await resolve_accent_color(self.bot.ctx.db_path, guild)
+        except Exception:
+            log.debug("ttl accent resolution failed", exc_info=True)
+            return None
+
     @app_commands.command(name="twotruths", description="Start a Two Truths and a Lie game!")
     @app_commands.describe(prompt="Optional topic prompt for players' statements")
     async def twotruths(self, interaction: discord.Interaction, prompt: str | None = None):
@@ -396,7 +418,8 @@ class TTLCog(commands.Cog):
             },
         )
 
-        embed = build_lobby_embed(prompt=prompt)
+        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        embed = build_lobby_embed(prompt=prompt, color=accent)
 
         log.info("Game %s (ttl) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         view = TTLSubmitView(game_id, host_id, self.db, self.bot, self, prompt=prompt)
@@ -423,6 +446,9 @@ class TTLCog(commands.Cog):
         resume: bool = False,
     ):
         guild = channel.guild if hasattr(channel, "guild") else None
+        # Resolve the guild accent once for the whole game; every round's
+        # view + the final recap reuse it (never re-resolved per vote).
+        accent = await self._resolve_accent(guild)
         # On resume after a restart, seed from persisted scores so already-played
         # subjects are skipped; the subject whose round was interrupted is still
         # "unplayed" and gets a fresh round.
@@ -506,6 +532,7 @@ class TTLCog(commands.Cog):
                 # the closure itself is fully annotated above.
                 advance_callback=advance,  # pyright: ignore[reportGeneralTypeIssues]
                 prompt=payload.get("prompt"),
+                accent=accent,
             )
             view._advanced_event = advanced
             self.bot.active_views[game_id] = view
@@ -558,7 +585,7 @@ class TTLCog(commands.Cog):
                 m = None
             return m.mention if m else None
 
-        embed, mentions = build_recap_embed(stats, _name_resolver, _mention_resolver)
+        embed, mentions = build_recap_embed(stats, _name_resolver, _mention_resolver, color=accent)
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
             await append_payout_footer(self.bot, embed, guild.id, "ttl")

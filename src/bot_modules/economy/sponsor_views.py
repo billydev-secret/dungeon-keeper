@@ -72,18 +72,18 @@ def render_sponsor_card_embed(
     """
     if state == "approved":
         embed = discord.Embed(
-            title="Sponsored question approved", color=discord.Color.green()
+            title="✅ Sponsored question approved", color=discord.Color.green()
         )
     elif state in ("denied", "expired"):
         embed = discord.Embed(
-            title="Sponsored question declined", color=discord.Color.red()
+            title="❌ Sponsored question declined", color=discord.Color.red()
         )
     elif state == "posted":
         embed = discord.Embed(
-            title="Sponsored question posted", color=discord.Color.green()
+            title="📮 Sponsored question posted", color=discord.Color.green()
         )
     else:
-        embed = discord.Embed(title="Sponsored question submitted", color=accent)
+        embed = discord.Embed(title="📋 Sponsored question submitted", color=accent)
 
     embed.add_field(name="👤 Sponsor", value=sponsor_mention, inline=True)
     embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)

@@ -130,7 +130,10 @@ class ClapbackJoinView(discord.ui.View):
     # (start_in) extends the first window past the advertised start time.
     LOBBY_TIMEOUT = 600
 
-    def __init__(self, game_id: str, host_id: int, db, bot, cog, config: dict):
+    def __init__(
+        self, game_id: str, host_id: int, db, bot, cog, config: dict,
+        accent: "discord.Color | None" = None,
+    ):
         timeout = float(self.LOBBY_TIMEOUT)
         start_epoch = config.get("start_epoch")
         if start_epoch:
@@ -142,6 +145,9 @@ class ClapbackJoinView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self.config = config
+        # Guild accent resolved once at game start; reused for every live
+        # lobby edit (join/leave) instead of re-resolving per button press.
+        self.accent = accent
         self.message: discord.Message | None = None
 
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
@@ -275,14 +281,13 @@ class ClapbackJoinView(discord.ui.View):
         host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
 
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_name=host_name,
             config=self.config,
             players=players,
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=self.config.get("start_epoch"),
-            color=color,
+            color=self.accent,
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -488,10 +493,28 @@ class ClapbackCog(commands.Cog):
         self._submit_events: dict[str, asyncio.Event] = {}
         self._vote_events: dict[str, asyncio.Event] = {}
         self._game_cancelled: set[str] = set()
+        # Guild accent resolved ONCE per game at start (or on recovery) and
+        # reused by every phase's embed — never re-resolved per vote / update.
+        self._accents: dict[str, "discord.Color | None"] = {}
 
     @property
     def db(self):
         return self.bot.games_db
+
+    async def _resolve_accent(self, guild) -> "discord.Color | None":
+        """Resolve the guild accent once, swallowing any failure to None.
+
+        Kept guild-tolerant: with no guild (headless / DM) or a resolver
+        error we return None and the builders fall back to their neutral
+        default rather than crashing the game loop.
+        """
+        if guild is None:
+            return None
+        try:
+            return await resolve_accent_color(self.bot.ctx.db_path, guild)
+        except Exception:
+            log.warning("clapback accent resolve failed for guild %s", getattr(guild, "id", "?"))
+            return None
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the game from the next un-played round after a restart.
@@ -506,6 +529,9 @@ class ClapbackCog(commands.Cog):
             return False
         game_id = row["game_id"]
         self._game_cancelled.discard(game_id)
+        # Accent cache is lost across a restart — re-resolve it once here so the
+        # resumed phases stay on-theme without re-resolving per update.
+        self._accents[game_id] = await self._resolve_accent(getattr(channel, "guild", None))
         resume_round = len(payload.get("round_history", [])) + 1
         await start_redrive(
             self.bot, game_id, message,
@@ -626,17 +652,20 @@ class ClapbackCog(commands.Cog):
         )
         log.info("Game %s (clapback) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        # Resolve the guild accent ONCE for the whole game and cache it; every
+        # phase (lobby / submit / vote / reveal / scoreboard / recap) reuses it.
+        accent = await self._resolve_accent(guild)
+        self._accents[game_id] = accent
         embed = build_lobby_embed(
             host_name=host_name,
             config=config,
             players=[],
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=config.get("start_epoch"),
-            color=color,
+            color=accent,
         )
 
-        view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config)
+        view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config, accent=accent)
         self.bot.active_views[game_id] = view
 
         try:
@@ -758,7 +787,7 @@ class ClapbackCog(commands.Cog):
                 await asyncio.sleep(2)  # between-round breather
             else:
                 # Show final summary scoreboard briefly before recap
-                await self._post_scoreboard(channel, payload, round_num, total_rounds, bye_player, final=True)
+                await self._post_scoreboard(game_id, channel, payload, round_num, total_rounds, bye_player, final=True)
 
         if self._is_cancelled(game_id):
             return
@@ -777,12 +806,6 @@ class ClapbackCog(commands.Cog):
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
-        submit_guild = getattr(channel, "guild", None)
-        color = (
-            await resolve_accent_color(self.bot.ctx.db_path, submit_guild)
-            if submit_guild
-            else None
-        )
         embed = build_submit_embed(
             prompt=prompt,
             round_num=round_num,
@@ -790,7 +813,7 @@ class ClapbackCog(commands.Cog):
             deadline_str=format_deadline(deadline),
             answers_in=0,
             total_players=len(players),
-            color=color,
+            color=self._accents.get(game_id),
         )
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
@@ -882,6 +905,7 @@ class ClapbackCog(commands.Cog):
         vote_timer = config["vote_timer"]
         deadline = now_plus(vote_timer)
 
+        accent = self._accents.get(game_id)
         embed = build_vote_embed(
             answer_a=answer_a,
             answer_b=answer_b,
@@ -891,6 +915,7 @@ class ClapbackCog(commands.Cog):
             deadline_str=format_deadline(deadline),
             vote_count=0,
             prompt=prompt,
+            color=accent,
         )
 
         view = ClapbackVoteView(
@@ -973,6 +998,7 @@ class ClapbackCog(commands.Cog):
             anonymous=anonymous,
             name_resolver=lambda uid: resolve_name(guild, uid),
             prompt=prompt,
+            color=accent,
         )
 
         # Edit message with reveal (buttons disabled)
@@ -1001,9 +1027,10 @@ class ClapbackCog(commands.Cog):
     async def _round_summary(
         self, game_id, channel, payload, round_num, total_rounds, host_id, bye_player,
     ):
-        guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=False, color=color)
+        embed = build_scoreboard_embed(
+            payload, round_num, total_rounds, bye_player,
+            final=False, color=self._accents.get(game_id),
+        )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
         msg = await channel.send(embed=embed, view=view)
@@ -1025,10 +1052,11 @@ class ClapbackCog(commands.Cog):
             pass
         return True
 
-    async def _post_scoreboard(self, channel, payload, round_num, total_rounds, bye_player, final=False):
-        guild = getattr(channel, "guild", None)
-        color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=final, color=color)
+    async def _post_scoreboard(self, game_id, channel, payload, round_num, total_rounds, bye_player, final=False):
+        embed = build_scoreboard_embed(
+            payload, round_num, total_rounds, bye_player,
+            final=final, color=self._accents.get(game_id),
+        )
         await channel.send(embed=embed)
 
     # ── Final recap ──────────────────────────────────────────────────────
@@ -1041,6 +1069,7 @@ class ClapbackCog(commands.Cog):
             payload=payload,
             config=config,
             name_resolver=lambda uid: resolve_name(guild, uid),
+            color=self._accents.get(game_id),
         )
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
@@ -1079,6 +1108,7 @@ class ClapbackCog(commands.Cog):
     def _cleanup(self, game_id: str):
         self._submit_events.pop(game_id, None)
         self._vote_events.pop(game_id, None)
+        self._accents.pop(game_id, None)
         self._game_cancelled.discard(game_id)
 
     # ── Mid-game join / leave (dispatched from /games join, /games leave) ──
