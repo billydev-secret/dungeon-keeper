@@ -457,6 +457,19 @@ def test_split_kinds_no_longer_collide_with_their_old_glyph_twins():
     assert _KIND_DISPLAY["wager_payout"][0] != _KIND_DISPLAY["milestone"][0]
 
 
+def test_footer_drops_a_custom_currency_emoji():
+    """Custom emoji render as raw text in a footer, so the balance footer omits
+    it (the amount in the description still carries it)."""
+    import dataclasses
+
+    settings = dataclasses.replace(
+        DEFAULT_ECON_SETTINGS, currency_emoji="<:doubloon:999>"
+    )
+    embed = build_register_embed(_entry(balance_after=330), settings, _names)
+    assert "<:doubloon:999>" not in (embed.footer.text or "")
+    assert "330" in (embed.footer.text or "")
+
+
 # ── embed ──────────────────────────────────────────────────────────────
 
 

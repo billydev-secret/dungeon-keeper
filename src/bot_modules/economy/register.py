@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.economy import quests as quest_logic
+from bot_modules.services.embeds import footer_emoji
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -449,5 +450,10 @@ def build_register_embed(
         timestamp=datetime.fromtimestamp(entry.created_at, tz=timezone.utc),
     )
     embed.set_author(name=header, icon_url=avatar_url)
-    embed.set_footer(text=f"{footer}{entry.balance_after:,} {emoji}")
+    # The currency emoji is guild-settable and may be custom; a custom emoji
+    # renders as raw text in a footer, so drop it there (it's still on the
+    # amount in the description). See embed_style_guide.md → Footers.
+    balance_emoji = footer_emoji(emoji)
+    balance_text = f"{entry.balance_after:,} {balance_emoji}".rstrip()
+    embed.set_footer(text=f"{footer}{balance_text}")
     return embed

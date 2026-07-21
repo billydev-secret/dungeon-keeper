@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import discord
 
-from bot_modules.services.embeds import STARBOARD_PRIMARY
+from bot_modules.services.embeds import STARBOARD_PRIMARY, footer_emoji
 
 
 def build_starboard_embed(
@@ -36,7 +36,8 @@ def build_starboard_embed(
         value=f"[Jump to message]({message.jump_url})",
         inline=False,
     )
-    embed.set_footer(text=f"{emoji} {star_count}")
+    # A custom star emoji renders as raw text in a footer; fall back to ⭐.
+    embed.set_footer(text=f"{footer_emoji(emoji, '⭐')} {star_count}")
 
     for attachment in message.attachments:
         if attachment.content_type and attachment.content_type.startswith("image/"):
