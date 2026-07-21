@@ -47,16 +47,16 @@ def nsfw_grant_role_id(grant_roles: dict) -> int:
 
 
 def candidates_missing_grant_check(
-    level_by_user: dict[int, int], inactive_user_ids: set[int]
+    level_by_user: dict[int, int], stripped_user_ids: set[int]
 ) -> list[tuple[int, int]]:
     """``(user_id, level)`` pairs worth checking for a missing grant role.
 
-    Excludes members currently on an inactive-channel hold: their roles were
-    stripped on purpose when they went inactive, not skipped by mistake, so
-    they shouldn't show up as "missing" a grant. Sorted highest level first.
+    Excludes members currently on an inactive-channel hold or jailed: their
+    roles were stripped on purpose, not skipped by mistake, so they shouldn't
+    show up as "missing" a grant. Sorted highest level first.
     """
     out = [
-        (uid, lvl) for uid, lvl in level_by_user.items() if uid not in inactive_user_ids
+        (uid, lvl) for uid, lvl in level_by_user.items() if uid not in stripped_user_ids
     ]
     out.sort(key=lambda p: -p[1])
     return out

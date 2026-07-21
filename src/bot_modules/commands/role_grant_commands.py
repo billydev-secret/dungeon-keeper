@@ -184,7 +184,10 @@ async def _execute_grant_missing(
     ctx: AppContext,
 ) -> None:
     """List members past a level who are missing a configured grant role."""
+    from bot_modules.core.db_utils import get_config_value
+    from bot_modules.core.xp_system import get_member_last_activity_map
     from bot_modules.inactive.store import active_inactive_user_ids
+    from bot_modules.services.moderation import active_jailed_user_ids
     from bot_modules.services.xp_service import candidates_missing_grant_check
 
     guild = interaction.guild
@@ -218,7 +221,7 @@ async def _execute_grant_missing(
 
     guild_id = guild.id
 
-    def _query() -> tuple[dict[int, int], set[int]]:
+    def _query() -> tuple[dict[int, int], set[int], int, int]:
         with ctx.open_db() as conn:
             levels = {
                 int(r["user_id"]): int(r["level"])
@@ -227,15 +230,60 @@ async def _execute_grant_missing(
                     (guild_id, min_level),
                 ).fetchall()
             }
-            inactive_ids = active_inactive_user_ids(conn, guild_id)
-        return levels, inactive_ids
+            stripped_ids = active_inactive_user_ids(conn, guild_id) | active_jailed_user_ids(
+                conn, guild_id
+            )
+            inactive_role_id = int(
+                get_config_value(conn, "inactive_role_id", "0", guild_id) or "0"
+            )
+            jailed_role_id = int(
+                get_config_value(conn, "jailed_role_id", "0", guild_id) or "0"
+            )
 
-    levels, inactive_ids = await asyncio.to_thread(_query)
+            # The inactivity-prune loop (inactivity_prune_service) auto-removes a
+            # configured role from anyone inactive past its threshold — a plain
+            # one-way removal with no snapshot/hold row anywhere. If it's *this*
+            # grant role, anyone it would currently prune is missing on purpose.
+            prune_rule = conn.execute(
+                "SELECT role_id, inactivity_days FROM inactivity_prune_rules WHERE guild_id=?",
+                (guild_id,),
+            ).fetchone()
+            if prune_rule is not None and int(prune_rule["role_id"]) == cfg["role_id"]:
+                exception_ids = {
+                    int(r["user_id"])
+                    for r in conn.execute(
+                        "SELECT user_id FROM inactivity_prune_exceptions WHERE guild_id=?",
+                        (guild_id,),
+                    ).fetchall()
+                }
+                cutoff_ts = discord.utils.utcnow().timestamp() - int(
+                    prune_rule["inactivity_days"]
+                ) * 86400
+                activity_map = get_member_last_activity_map(
+                    conn, guild_id, list(levels.keys())
+                )
+                for uid in levels:
+                    if uid in exception_ids:
+                        continue
+                    activity = activity_map.get(uid)
+                    if activity is not None and activity.created_at < cutoff_ts:
+                        stripped_ids.add(uid)
+        return levels, stripped_ids, inactive_role_id, jailed_role_id
+
+    levels, stripped_ids, inactive_role_id, jailed_role_id = await asyncio.to_thread(_query)
+
+    # A hold role held live in Discord counts even without a matching DB row —
+    # e.g. a mod who stripped roles by hand instead of going through
+    # /inactive mark or /jail. Ground truth is the member's current roles,
+    # not whether the bot happened to log the strip.
+    hold_role_ids = {rid for rid in (inactive_role_id, jailed_role_id) if rid > 0}
 
     missing: list[tuple[discord.Member, int]] = []
-    for user_id, level in candidates_missing_grant_check(levels, inactive_ids):
+    for user_id, level in candidates_missing_grant_check(levels, stripped_ids):
         member = guild.get_member(user_id)
         if member is None or member.bot or grant_role in member.roles:
+            continue
+        if hold_role_ids and any(r.id in hold_role_ids for r in member.roles):
             continue
         missing.append((member, level))
 
@@ -257,7 +305,11 @@ async def _execute_grant_missing(
         color=discord.Color.gold(),
     )
     embed.set_footer(
-        text="Excludes members on an active inactive-channel hold — their roles were stripped, not skipped."
+        text=(
+            "Excludes members on an active inactive-channel hold or jail, and "
+            "anyone the inactivity-prune loop would currently strip this role "
+            "from — stripped on purpose, not skipped."
+        )
     )
     await interaction.followup.send(
         embed=embed, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()

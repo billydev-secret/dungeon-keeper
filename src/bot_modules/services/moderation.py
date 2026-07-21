@@ -401,6 +401,15 @@ def get_active_jail(
     return dict(row) if row else None  # type: ignore[return-value]
 
 
+def active_jailed_user_ids(conn: sqlite3.Connection, guild_id: int) -> set[int]:
+    """Return the set of user IDs currently jailed in this guild."""
+    rows = conn.execute(
+        "SELECT user_id FROM jails WHERE guild_id = ? AND status = 'active'",
+        (guild_id,),
+    ).fetchall()
+    return {r["user_id"] for r in rows}
+
+
 def get_jail_by_channel(
     conn: sqlite3.Connection,
     channel_id: int,

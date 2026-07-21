@@ -261,6 +261,59 @@ def _seed_inactive(db_path, *, user_id: int, guild_id: int = GM_GUILD_ID):
     conn.close()
 
 
+def _seed_jail(db_path, *, user_id: int, guild_id: int = GM_GUILD_ID):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO jails (guild_id, user_id, moderator_id, stored_roles, created_at, status) "
+        "VALUES (?, ?, 0, '[]', 0, 'active')",
+        (guild_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_prune_rule(
+    db_path, *, role_id: int, inactivity_days: int = 30, guild_id: int = GM_GUILD_ID
+):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO inactivity_prune_rules (guild_id, role_id, inactivity_days) VALUES (?, ?, ?)",
+        (guild_id, role_id, inactivity_days),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_prune_exception(db_path, *, user_id: int, guild_id: int = GM_GUILD_ID):
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO inactivity_prune_exceptions (guild_id, user_id) VALUES (?, ?)",
+        (guild_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_activity(db_path, *, user_id: int, days_ago: float, guild_id: int = GM_GUILD_ID):
+    import sqlite3
+    import time
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO member_activity (guild_id, user_id, last_channel_id, last_message_id, last_message_at) "
+        "VALUES (?, ?, 1, 1, ?)",
+        (guild_id, user_id, time.time() - days_ago * 86400),
+    )
+    conn.commit()
+    conn.close()
+
+
 @pytest.fixture
 def grant_missing_setup(tmp_path):
     from bot_modules.core.db_utils import open_db
@@ -345,6 +398,91 @@ async def test_grant_missing_excludes_inactive_members(grant_missing_setup):
     await grant_missing(ix)
 
     assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
+
+
+async def test_grant_missing_excludes_jailed_members(grant_missing_setup):
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=205, level=9)
+    _seed_jail(db_path, user_id=205)
+    member = _make_member(user_id=205)
+    guild, _ = _gm_guild({205: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
+
+
+async def test_grant_missing_excludes_members_with_live_hold_role_but_no_db_row(
+    grant_missing_setup,
+):
+    """A mod who strips roles by hand (skipping /inactive mark or /jail) never
+
+    creates a DB row — the member's *current* Inactive role must still count.
+    """
+    import sqlite3
+
+    from bot_modules.core.db_utils import set_config_value
+
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=206, level=9)
+
+    inactive_role_id = 777
+    conn = sqlite3.connect(db_path)
+    set_config_value(conn, "inactive_role_id", str(inactive_role_id), GM_GUILD_ID)
+    conn.commit()
+    conn.close()
+
+    inactive_role = _MockRole(role_id=inactive_role_id)
+    member = _make_member(user_id=206, roles=[inactive_role])
+    guild, _ = _gm_guild({206: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
+
+
+async def test_grant_missing_excludes_members_auto_pruned_for_inactivity(
+    grant_missing_setup,
+):
+    """The inactivity-prune loop (30d default) auto-removes a configured role
+
+    from long-inactive members — a plain one-way removal with no hold row
+    anywhere. If it's *this* grant role, don't flag its own victims as missing.
+    """
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=207, level=5)
+    _seed_prune_rule(db_path, role_id=GM_NSFW_ROLE_ID, inactivity_days=30)
+    _seed_activity(db_path, user_id=207, days_ago=40)
+    member = _make_member(user_id=207)
+    guild, _ = _gm_guild({207: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    assert "nobody at level" in ix.followup.send.call_args[0][0].lower()
+
+
+async def test_grant_missing_still_lists_prune_exception_members(grant_missing_setup):
+    """A member on the prune exception list is never auto-pruned, so being
+
+    inactive and missing the role is a real gap worth a mod's attention.
+    """
+    ctx, grant_missing, db_path = grant_missing_setup
+    _seed_level(db_path, user_id=208, level=5)
+    _seed_prune_rule(db_path, role_id=GM_NSFW_ROLE_ID, inactivity_days=30)
+    _seed_activity(db_path, user_id=208, days_ago=40)
+    _seed_prune_exception(db_path, user_id=208)
+    member = _make_member(user_id=208)
+    guild, _ = _gm_guild({208: member})
+    ix = _make_interaction(guild=guild)
+
+    await grant_missing(ix)
+
+    embed = ix.followup.send.call_args[1]["embed"]
+    assert "level 5" in embed.description.lower()
+    assert member.mention in embed.description
 
 
 async def test_grant_missing_excludes_below_threshold(grant_missing_setup):
