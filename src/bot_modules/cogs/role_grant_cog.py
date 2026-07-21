@@ -9,7 +9,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.commands.role_grant_commands import _execute_grant
+from bot_modules.commands.role_grant_commands import (
+    _execute_grant,
+    _execute_grant_audit_post,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -72,6 +75,31 @@ class RoleGrantCog(commands.Cog):
             grant_message=cfg["grant_message"],
             ctx=ctx,
         )
+
+    @app_commands.command(
+        name="grant_audit",
+        description="Post (or refresh) the auto-updating grant-audit card (mods).",
+    )
+    @app_commands.describe(
+        role="Grant role to audit.",
+        min_level="Minimum XP level for the waiting bucket (default 5).",
+        channel="Where the card lives — defaults to this channel.",
+    )
+    @app_commands.autocomplete(role=_role_autocomplete)
+    async def grant_audit_cmd(
+        self,
+        interaction: discord.Interaction,
+        role: str = "nsfw",
+        min_level: int = 5,
+        channel: discord.TextChannel | None = None,
+    ) -> None:
+        ctx = self.ctx
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        await _execute_grant_audit_post(interaction, role, min_level, channel, ctx)
 
 
 async def setup(bot: Bot) -> None:

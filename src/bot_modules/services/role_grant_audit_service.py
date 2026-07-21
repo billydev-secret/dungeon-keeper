@@ -12,17 +12,28 @@ grant role into three buckets:
 ``restored_at`` is set the moment a mod re-grants (a discrete fact worth
 storing); "is this member active again" stays a live computation against
 ``get_member_last_activity_map`` since it's inherently a moving target.
+
+The same buckets also render as an auto-updating Discord embed — the
+**grant-audit card**, posted by ``/grant_audit`` and refreshed hourly in
+place by :func:`grant_audit_card_loop` (same channel-id/message-id config
+pattern as the economy leaderboard panel; deleting the message retires it).
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 import time
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Protocol
 
-if TYPE_CHECKING:
-    import discord
+import discord
+
+log = logging.getLogger("dungeonkeeper.grant_audit")
 
 
 class _HasCreatedAt(Protocol):
@@ -268,3 +279,382 @@ def backfill_prune_events_from_role_events(
         )
         inserted += 1
     return inserted
+
+
+# ---------------------------------------------------------------------------
+# Snapshot assembly (shared by the web route and the Discord card)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class GrantAuditGather:
+    """The DB half of a grant-audit read — no Discord state touched yet."""
+
+    levels: dict[int, int]
+    held_ids: set[int]
+    hold_role_ids: set[int]
+    open_events: list[tuple[int, float]]  # (user_id, pruned_at)
+    ever_pruned_ids: set[int]
+    inactivity_days: int
+    activity_map: Mapping[int, _HasCreatedAt]
+
+
+@dataclass(frozen=True)
+class GrantAuditSnapshot:
+    """Fully resolved buckets — rows are dicts with user_id/display_name/
+    level (waiting) plus pruned_at (the two stripped buckets)."""
+
+    min_level: int
+    inactivity_days: int
+    waiting: list[dict]
+    returned: list[dict]
+    inactive: list[dict]
+
+
+def gather_grant_audit(
+    conn: sqlite3.Connection, guild_id: int, role_id: int, min_level: int
+) -> GrantAuditGather:
+    """One sync read of everything the buckets need from the database."""
+    from bot_modules.core.xp_system import get_member_last_activity_map
+
+    levels = {
+        int(r["user_id"]): int(r["level"])
+        for r in conn.execute(
+            "SELECT user_id, level FROM member_xp WHERE guild_id=? AND level>=?",
+            (guild_id, min_level),
+        ).fetchall()
+    }
+    held_ids, hold_role_ids = get_hold_excluded_ids(conn, guild_id)
+    open_events = [
+        (int(ev["user_id"]), float(ev["pruned_at"]))
+        for ev in get_open_prune_events(conn, guild_id, role_id)
+    ]
+    ever_pruned = get_ever_pruned_ids(conn, guild_id, role_id)
+    rule = conn.execute(
+        "SELECT role_id, inactivity_days FROM inactivity_prune_rules WHERE guild_id=?",
+        (guild_id,),
+    ).fetchone()
+    days = (
+        int(rule["inactivity_days"])
+        if rule is not None and int(rule["role_id"]) == role_id
+        else 30
+    )
+    lookup_ids = set(levels) | {uid for uid, _ in open_events}
+    activity_map = get_member_last_activity_map(conn, guild_id, list(lookup_ids))
+    return GrantAuditGather(
+        levels=levels,
+        held_ids=held_ids,
+        hold_role_ids=hold_role_ids,
+        open_events=open_events,
+        ever_pruned_ids=ever_pruned,
+        inactivity_days=days,
+        activity_map=activity_map,
+    )
+
+
+def resolve_grant_audit_buckets(
+    guild: discord.Guild,
+    role: discord.Role,
+    gathered: GrantAuditGather,
+    min_level: int,
+    now_ts: float,
+) -> GrantAuditSnapshot:
+    """Cross the DB gather with live Discord state into the three buckets.
+
+    Excludes bots, members who left, current role holders, and anyone on an
+    inactive/jail hold — checked against both the DB hold rows and a hold
+    role held live in Discord (a mod may have stripped roles by hand without
+    a DB row).
+    """
+    granted_ids = {m.id for m in role.members}
+    cutoff_ts = now_ts - gathered.inactivity_days * 86400
+
+    def _resolve(uid: int) -> discord.Member | None:
+        if uid in gathered.held_ids:
+            return None
+        member = guild.get_member(uid)
+        if member is None or member.bot:
+            return None
+        if gathered.hold_role_ids and any(
+            r.id in gathered.hold_role_ids for r in member.roles
+        ):
+            return None
+        return member
+
+    waiting = []
+    for uid, level in compute_waiting_for_first_grant(
+        gathered.levels, granted_ids, gathered.ever_pruned_ids
+    ):
+        member = _resolve(uid)
+        if member is None:
+            continue
+        waiting.append(
+            {"user_id": uid, "display_name": member.display_name, "level": level}
+        )
+
+    def _event_rows(bucket: list[dict]) -> list[dict]:
+        rows = []
+        for entry in bucket:
+            member = _resolve(entry["user_id"])
+            if member is None:
+                continue
+            rows.append(
+                {
+                    "user_id": entry["user_id"],
+                    "display_name": member.display_name,
+                    "level": gathered.levels.get(entry["user_id"]),
+                    "pruned_at": entry["pruned_at"],
+                }
+            )
+        return rows
+
+    open_events = [
+        {"user_id": uid, "pruned_at": pruned_at}
+        for uid, pruned_at in gathered.open_events
+    ]
+    returned = _event_rows(
+        compute_stripped_returned(
+            open_events, granted_ids, gathered.activity_map, cutoff_ts
+        )
+    )
+    inactive = _event_rows(
+        compute_recent_inactive(
+            open_events, granted_ids, gathered.activity_map, cutoff_ts
+        )
+    )
+    return GrantAuditSnapshot(
+        min_level=min_level,
+        inactivity_days=gathered.inactivity_days,
+        waiting=waiting,
+        returned=returned,
+        inactive=inactive,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auto-updating Discord card
+# ---------------------------------------------------------------------------
+
+# Waiting can be arbitrarily long; the two stripped buckets are naturally
+# small (recent_inactive is capped at 10 upstream).
+_CARD_WAITING_CAP = 15
+
+_CARD_KEYS = (
+    "grant_audit_card_channel_id",
+    "grant_audit_card_message_id",
+    "grant_audit_card_grant_name",
+    "grant_audit_card_min_level",
+)
+
+
+def _rel(ts: float) -> str:
+    return f"<t:{int(ts)}:R>"
+
+
+def build_grant_audit_embed(
+    label: str,
+    snap: GrantAuditSnapshot,
+    *,
+    now_ts: float,
+    color: discord.Color | None = None,
+) -> discord.Embed:
+    """The mod-facing card: same three buckets as the dashboard panel."""
+    embed = discord.Embed(
+        title=f"Grant audit — {label}",
+        description=(
+            f"Members at level {snap.min_level}+ missing **{label}**, split by "
+            "why. Excludes inactive/jail holds."
+        ),
+        color=color,
+    )
+
+    waiting_lines = [
+        f"**{r['display_name']}** — level {r['level']}"
+        for r in snap.waiting[:_CARD_WAITING_CAP]
+    ]
+    extra = len(snap.waiting) - _CARD_WAITING_CAP
+    if extra > 0:
+        waiting_lines.append(f"…and {extra} more on the dashboard.")
+    embed.add_field(
+        name=f"🕐 Waiting for first grant ({len(snap.waiting)})",
+        value="\n".join(waiting_lines) or "Nobody — all clear.",
+        inline=False,
+    )
+
+    returned_lines = [
+        f"**{r['display_name']}**"
+        + (f" — level {r['level']}" if r["level"] is not None else "")
+        + f" · stripped {_rel(r['pruned_at'])}"
+        for r in snap.returned
+    ]
+    embed.add_field(
+        name=f"↩️ Stripped but came back ({len(snap.returned)})",
+        value="\n".join(returned_lines) or "Nobody — all clear.",
+        inline=False,
+    )
+
+    inactive_lines = [
+        f"{r['display_name']} · stripped {_rel(r['pruned_at'])}"
+        for r in snap.inactive
+    ]
+    embed.add_field(
+        name="💤 Recently stripped, still inactive",
+        value="\n".join(inactive_lines)
+        or f"Nobody stripped by the {snap.inactivity_days}d inactivity prune.",
+        inline=False,
+    )
+
+    embed.set_footer(
+        text=(
+            "Auto-updates hourly · repost with /grant_audit · "
+            "delete this message to retire the card"
+        )
+    )
+    embed.timestamp = datetime.fromtimestamp(now_ts, tz=timezone.utc)
+    return embed
+
+
+@dataclass(frozen=True)
+class CardRef:
+    channel_id: int
+    message_id: int
+    grant_name: str
+    min_level: int
+
+
+def load_card_ref(conn: sqlite3.Connection, guild_id: int) -> CardRef:
+    from bot_modules.core.db_utils import get_config_value
+
+    values = [
+        get_config_value(conn, key, "0", guild_id, allow_legacy_fallback=False)
+        for key in _CARD_KEYS
+    ]
+    return CardRef(
+        channel_id=int(values[0] or "0"),
+        message_id=int(values[1] or "0"),
+        grant_name=values[2] if values[2] != "0" else "",
+        min_level=max(1, int(values[3] or "0") or 5),
+    )
+
+
+def save_card_ref(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    grant_name: str,
+    min_level: int,
+) -> None:
+    from bot_modules.core.db_utils import set_config_value
+
+    for key, value in zip(
+        _CARD_KEYS, (str(channel_id), str(message_id), grant_name, str(min_level))
+    ):
+        set_config_value(conn, key, value, guild_id)
+
+
+def clear_card_ref(conn: sqlite3.Connection, guild_id: int) -> None:
+    from bot_modules.core.db_utils import delete_config_value
+
+    for key in _CARD_KEYS:
+        delete_config_value(conn, key, guild_id)
+
+
+def guilds_with_card(conn: sqlite3.Connection) -> list[int]:
+    rows = conn.execute(
+        "SELECT guild_id FROM config "
+        "WHERE key = 'grant_audit_card_message_id' AND value != '0'",
+    ).fetchall()
+    return [int(r["guild_id"]) for r in rows]
+
+
+async def refresh_grant_audit_card(
+    bot: discord.Client, db_path: Path, guild_id: int, *, now_ts: float | None = None
+) -> None:
+    """In-place refresh of a guild's grant-audit card.
+
+    A deleted card message (404) clears the stored ref so the loop stops
+    retrying — deleting the message is how mods retire the card. A missing
+    grant config or role also clears it (the card can't render sensibly).
+    Any other Discord error leaves the ref for the next tick.
+    """
+    from bot_modules.core.branding import resolve_accent_color
+    from bot_modules.core.db_utils import get_grant_roles, open_db
+
+    now = now_ts if now_ts is not None else time.time()
+
+    def _load():
+        with open_db(db_path) as conn:
+            ref = load_card_ref(conn, guild_id)
+            if not ref.message_id or not ref.grant_name:
+                return ref, None, None
+            cfg = get_grant_roles(conn, guild_id).get(ref.grant_name)
+            if cfg is None or int(cfg["role_id"]) <= 0:
+                return ref, None, None
+            gathered = gather_grant_audit(
+                conn, guild_id, int(cfg["role_id"]), ref.min_level
+            )
+            return ref, cfg, gathered
+
+    ref, cfg, gathered = await asyncio.to_thread(_load)
+    if not ref.message_id:
+        return
+
+    def _clear() -> None:
+        with open_db(db_path) as conn:
+            clear_card_ref(conn, guild_id)
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    role = guild.get_role(int(cfg["role_id"])) if cfg is not None else None
+    if cfg is None or gathered is None or role is None:
+        await asyncio.to_thread(_clear)
+        log.info(
+            "Grant audit card: config/role gone for guild %s — retired the card.",
+            guild_id,
+        )
+        return
+    channel = guild.get_channel(ref.channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    snap = resolve_grant_audit_buckets(guild, role, gathered, ref.min_level, now)
+    accent = await resolve_accent_color(db_path, guild)
+    embed = build_grant_audit_embed(str(cfg["label"]), snap, now_ts=now, color=accent)
+    try:
+        message = await channel.fetch_message(ref.message_id)
+        await message.edit(embed=embed)
+    except discord.NotFound:
+        await asyncio.to_thread(_clear)
+        log.info(
+            "Grant audit card: message gone in guild %s — retired the card.",
+            guild_id,
+        )
+    except discord.HTTPException:
+        log.warning("Grant audit card: refresh failed for guild %s.", guild_id)
+
+
+async def grant_audit_card_loop(bot: discord.Client, db_path: Path) -> None:
+    """Hourly in-place refresh of every posted grant-audit card."""
+
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            guild_ids = await asyncio.to_thread(
+                lambda: guilds_with_card_from_path(db_path)
+            )
+            for guild_id in guild_ids:
+                await refresh_grant_audit_card(bot, db_path, guild_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Grant audit card: unhandled error in refresh loop.")
+        await asyncio.sleep(3600)
+
+
+def guilds_with_card_from_path(db_path: Path) -> list[int]:
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        return guilds_with_card(conn)
