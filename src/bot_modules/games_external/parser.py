@@ -15,6 +15,7 @@ mentions (``<@id>``), so rosters and winners are reliable:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 # <@123> / <@!123>, tolerant of the nickname bang.
@@ -102,3 +103,82 @@ def extract_cah_game(window: Sequence[Mapping[str, Any]]) -> tuple[set[int], int
     if winner is not None:
         roster.add(winner)
     return roster, winner
+
+
+# ── Cat Bot (kind='catbot') ──────────────────────────────────────────────────
+#
+# Cat Bot catches are message *content* (no embeds). A catch names the catcher
+# by their Discord *username* (not a mention) next to the rarity emoji, e.g.
+#     efficientpanic cought <:wildcat:12…> Wild cat!!!!1!
+# Reverse cats print the whole line reversed but keep the emoji token intact:
+#     …cat Reverse <:reversecat:12…> cought ceilruxdealta
+# so the catcher is always the non-emoji token adjacent to "cought". Rarity is
+# read from the emoji name (``<:wildcat:…>`` → ``wild``), which is reliable in
+# both orders. A "blessed … got doubled!" line means Cat Bot doubled the catch.
+
+# Rarity → tier → coins (defaults; a future dashboard panel can override).
+_TIER_COINS: dict[str, int] = {
+    "common": 3, "uncommon": 8, "rare": 20, "epic": 50, "mythic": 120, "divine": 300,
+}
+# The 22 cat types grouped into tiers. NB the *Rare* cat sits in the *uncommon*
+# tier — the tier name and that cat's name collide but mean different things.
+_RARITY_TIER: dict[str, str] = {
+    "fine": "common", "nice": "common", "good": "common",
+    "rare": "uncommon", "wild": "uncommon", "gremlin": "uncommon",
+    "epic": "rare", "sus": "rare", "brave": "rare", "rickroll": "rare", "reverse": "rare",
+    "superior": "epic", "trash": "epic", "legendary": "epic",
+    "mythic": "mythic", "8bit": "mythic", "corrupt": "mythic", "professor": "mythic",
+    "divine": "divine", "real": "divine", "ultimate": "divine", "egirl": "divine",
+}
+_DEFAULT_TIER = "common"
+
+_CAT_EMOJI = re.compile(r"^<a?:(\w+?)cat:\d+>$", re.IGNORECASE)
+_BLESSED = "blessed your catch and it got doubled"
+
+
+def rarity_coins(rarity: str) -> int:
+    """Coins for catching a cat of ``rarity`` (unknown rarities fall to common)."""
+    tier = _RARITY_TIER.get(rarity.lower(), _DEFAULT_TIER)
+    return _TIER_COINS[tier]
+
+
+@dataclass(frozen=True)
+class CatCatch:
+    """One resolved Cat Bot catch. ``coins`` already folds in the blessed×2."""
+
+    username: str
+    rarity: str
+    doubled: bool
+    coins: int
+
+
+def parse_cat_catch(content: str) -> CatCatch | None:
+    """Extract (catcher username, rarity, doubled, coins) from a catch, or None.
+
+    Only an *individual* catch parses — spawns ("has appeared", no "cought") and
+    the bonus blurb ("Anyone who cought this cat…", where "cought" isn't next to
+    the emoji) return None, so they never pay.
+    """
+    if not content or "cought" not in content:
+        return None
+    tokens = content.split()
+    for i, tok in enumerate(tokens):
+        if tok != "cought":
+            continue
+        before = tokens[i - 1] if i > 0 else ""
+        after = tokens[i + 1] if i + 1 < len(tokens) else ""
+        m_after, m_before = _CAT_EMOJI.match(after), _CAT_EMOJI.match(before)
+        if m_after:            # normal: "{username} cought <:emoji> …"
+            username, rarity = before, m_after.group(1)
+        elif m_before:         # reverse: "… <:emoji> cought {username}"
+            username, rarity = after, m_before.group(1)
+        else:
+            continue           # "Anyone who cought this cat" — not an individual catch
+        username = username.strip(",.!?")
+        if not username or _CAT_EMOJI.match(username):
+            continue
+        rarity = rarity.lower()
+        doubled = _BLESSED in content
+        coins = rarity_coins(rarity) * (2 if doubled else 1)
+        return CatCatch(username=username, rarity=rarity, doubled=doubled, coins=coins)
+    return None

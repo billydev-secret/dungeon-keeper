@@ -39,11 +39,17 @@ on the Game-over message id (via `parse_status` / trigger occurrence) so a
 re-parse or restart never double-pays. `parse_status` marks each message
 `ok`/`skip`/`error`.
 
-**Stage 3 — Cat Bot parser + payout (#65).** Needs a real Cat Bot sample
-(captured via Stage 1). Catch signal: a Cat Bot message that mentions the
-catcher (`<@id>`) with the catch embed; rarity read from the embed (22 types:
-Fine…eGirl). New `cat_catch` trigger, tiered by rarity (amounts TBD with
-Billy). Keyed on the catch message id.
+**Stage 3 — Cat Bot parser + payout (#65). SHIPPED.** Real format (from 33
+banked messages, not embeds): catches are message *content*
+`{username} cought <:raritycat:id> {Rarity} cat`. The catcher is a plain
+Discord **username** (not a mention) — resolved to a member via
+`guild.get_member_named`; unresolved (left/renamed) pay nobody. Rarity from the
+emoji name; reverse cats print the line reversed but keep the emoji intact, so
+the catcher is the non-emoji token beside "cought". "blessed…got doubled" →
+×2. Tiers (locked with Billy): common 3, uncommon 8, rare 20, epic 50, mythic
+120, divine 300 (the 22 types grouped in `parser._RARITY_TIER`). `pay_cat_catch`
+credits the tiered coins (`apply_credit` kind `cat_catch`, booster-multiplied)
+and fires the new `cat_catch` trigger. Once per catch via the payout ledger.
 
 ## Notes
 

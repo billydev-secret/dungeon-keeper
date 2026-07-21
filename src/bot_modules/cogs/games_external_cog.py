@@ -21,7 +21,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.economy.game_rewards import pay_game_rewards
+from bot_modules.economy.game_rewards import pay_cat_catch, pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.games_external import logic, parser
@@ -83,11 +83,14 @@ class GamesExternalCog(commands.Cog):
         except Exception:
             log.exception("External game tracking: failed to store message %s", message.id)
             return
-        # Bank first, then pay: the payout reads the just-banked window back out.
+        # Bank first, then pay: the CAH payout reads the just-banked window back
+        # out; the Cat Bot payout keys off this message's content.
         if kind == "gamebot_cah" and parser.is_game_over(
             [e.to_dict() for e in message.embeds]
         ):
             await self._pay_cah_game(message)
+        elif kind == "catbot":
+            await self._pay_cat_catch(message)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -152,6 +155,45 @@ class GamesExternalCog(commands.Cog):
             )
         except Exception:
             log.exception("CAH payout failed for message %s", message.id)
+
+    async def _pay_cat_catch(self, message: discord.Message) -> None:
+        """Pay a Cat Bot catch: rarity-tiered coins + the cat_catch trigger.
+
+        Cat Bot names the catcher by username, not a mention, so we resolve it
+        to a guild member by name. Unresolvable catchers (left / renamed) and
+        non-catch messages (spawns, the bonus blurb) pay nobody. Idempotent via
+        the payout ledger, keyed on the catch message id.
+        """
+        guild = message.guild
+        if guild is None:
+            return
+        try:
+            catch = parser.parse_cat_catch(message.content or "")
+            if catch is None:
+                return
+            member = guild.get_member_named(catch.username)
+            if member is None or member.bot:
+                log.info(
+                    "Cat catch by unresolved user %r in guild %s — skipped",
+                    catch.username, guild.id,
+                )
+                return
+            first = await logic.claim_payout(self.db, message.id, guild.id, "catbot")
+            if not first:
+                return
+            await pay_cat_catch(
+                self.bot, guild.id, member.id,
+                coins=catch.coins, rarity=catch.rarity, doubled=catch.doubled,
+                occurrence=str(message.id),
+            )
+            await logic.mark_parsed(self.db, message.id, "ok")
+            log.info(
+                "Cat catch payout: guild %s %s caught a %s cat (%d coins%s)",
+                guild.id, member.id, catch.rarity, catch.coins,
+                ", doubled" if catch.doubled else "",
+            )
+        except Exception:
+            log.exception("Cat catch payout failed for message %s", message.id)
 
     # ── config commands: /games track … ───────────────────────────────────
     track = app_commands.Group(

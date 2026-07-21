@@ -90,3 +90,67 @@ def test_extract_handles_no_winner():
     roster, winner = parser.extract_cah_game([_standings({ALICE: 2, BOB: 2})])
     assert roster == {ALICE, BOB}
     assert winner is None
+
+
+# ── Cat Bot (#65) ─────────────────────────────────────────────────────────────
+
+_CATCH = (
+    "ceilruxdealta cought <:nicecat:1279106518423441478> Nice cat!!!!1!\n"
+    "You now have 208 cats of dat type!!!\n"
+    "this fella was cought in 2 minutes 7.00 seconds!!!!"
+)
+_CATCH_DOUBLED = (
+    "efficientpanic cought <:wildcat:1279106513129967750> Wild cat!!!!1!\n"
+    "You now have 138 cats of dat type!!!\n"
+    "this fella was cought in 6 minutes 33.05 seconds!!!!\n"
+    "💫 rjoy_26 blessed your catch and it got doubled!"
+)
+_CATCH_REVERSE = "!1!!!!cat Reverse <:reversecat:1279106519581069313> cought ceilruxdealta"
+_SPAWN = "** A <:finecat:1279106515894141019> @Cats! has appeared**\nCatch Fine for cuddles!!"
+_BONUS = (
+    "🎁 **BONUS <:reversecat:1279106519581069313> REVERSE CAT!**\n"
+    "Anyone who cought this cat can play a minigame and potentially **get +3 more!**"
+)
+
+
+def test_rarity_coins_tiers():
+    assert parser.rarity_coins("fine") == 3       # common
+    assert parser.rarity_coins("wild") == 8       # uncommon (the *Rare* cat lives here too)
+    assert parser.rarity_coins("rare") == 8
+    assert parser.rarity_coins("reverse") == 20   # rare tier
+    assert parser.rarity_coins("legendary") == 50
+    assert parser.rarity_coins("mythic") == 120
+    assert parser.rarity_coins("egirl") == 300
+    assert parser.rarity_coins("frobnicate") == 3  # unknown -> common
+
+
+def test_parse_cat_catch_normal():
+    catch = parser.parse_cat_catch(_CATCH)
+    assert catch is not None
+    assert catch.username == "ceilruxdealta"
+    assert catch.rarity == "nice"
+    assert catch.doubled is False
+    assert catch.coins == 3
+
+
+def test_parse_cat_catch_blessed_doubles_coins():
+    catch = parser.parse_cat_catch(_CATCH_DOUBLED)
+    assert catch is not None
+    assert catch.username == "efficientpanic"
+    assert catch.rarity == "wild"
+    assert catch.doubled is True
+    assert catch.coins == 16  # 8 (uncommon) x2
+
+
+def test_parse_cat_catch_reverse_cat():
+    catch = parser.parse_cat_catch(_CATCH_REVERSE)
+    assert catch is not None
+    assert catch.username == "ceilruxdealta"   # the non-emoji token by "cought"
+    assert catch.rarity == "reverse"
+    assert catch.coins == 20
+
+
+def test_spawn_and_bonus_are_not_catches():
+    assert parser.parse_cat_catch(_SPAWN) is None
+    assert parser.parse_cat_catch(_BONUS) is None
+    assert parser.parse_cat_catch("") is None

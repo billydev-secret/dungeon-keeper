@@ -106,6 +106,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "thread_deep": "Be part of a deep thread",
     "welcome": "Welcome a new member",
     "conversation_starter": "Start a conversation that takes off",
+    "cat_catch": "Catch a cat with Cat Bot",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -156,6 +157,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "thread_deep": "Posting in a thread that has reached 20+ messages — once per thread. Rewards sustaining a deep conversation; everyone who posts after the crossing gets their credit.",
     "welcome": "Replying to a member who joined within the last 7 days — occurrences are the newcomers, so counted = 'welcome N new faces'. The retention quest.",
     "conversation_starter": "Your message drawing replies from 3+ distinct members (self-replies and bots never count) — once per message, detected at reply ingest. Event cadence: once per qualifying message — use daily/weekly with a target count.",
+    "cat_catch": "Catching a cat with the external Cat Bot in a channel tracked via `/games track watch … kind:Cat Bot`. The catch also pays rarity-tiered coins directly (common→divine); this trigger is the quest hook on top. Event cadence: once per catch (keyed on the catch message).",
 }
 
 

@@ -28,6 +28,7 @@ from bot_modules.economy.quest_views import post_signoff_card
 from bot_modules.services.economy_quests_service import fire_trigger_quests
 from bot_modules.services.economy_service import (
     EconSettings,
+    apply_credit,
     award_game_reward,
     load_econ_settings,
     member_is_booster,
@@ -196,6 +197,61 @@ async def fire_member_trigger(
         log.exception(
             "fire_member_trigger failed for guild %s (%s)", guild_id, trigger_kind
         )
+
+
+async def pay_cat_catch(
+    bot: "Bot",
+    guild_id: int,
+    user_id: int,
+    *,
+    coins: int,
+    rarity: str,
+    doubled: bool,
+    occurrence: str,
+) -> None:
+    """Credit a Cat Bot catch: ``coins`` (rarity-tiered, blessed already folded)
+    plus the ``cat_catch`` quest trigger.
+
+    Same guarantees as the other faucets: no-op when the economy is off or the
+    member is a bot/unresolvable, booster multiplier applied, failures logged
+    not raised. Caller dedupes per catch (the payout ledger) — ``apply_credit``
+    is not occurrence-guarded, so this must fire at most once per catch.
+    """
+    try:
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return
+        member = guild.get_member(int(user_id))
+        if member is None or member.bot or coins < 1:
+            return
+
+        db_path = bot.ctx.db_path
+
+        def _load() -> EconSettings:
+            with open_db(db_path) as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            return
+
+        booster = member_is_booster(bot, guild_id, user_id)
+
+        def _credit() -> None:
+            with open_db(db_path) as conn:
+                apply_credit(
+                    conn, guild_id, user_id, coins, "cat_catch",
+                    meta={"rarity": rarity, "doubled": doubled},
+                    booster=booster, multiplier=settings.booster_multiplier,
+                )
+
+        await asyncio.to_thread(_credit)
+        await _fire_triggers(
+            bot, guild, settings, "cat_catch", [user_id],
+            {user_id: booster}, f"catbot:{occurrence}",
+        )
+    except Exception:
+        log.exception("pay_cat_catch failed for guild %s", guild_id)
 
 
 async def _fire_triggers(

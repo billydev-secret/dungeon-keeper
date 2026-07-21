@@ -107,3 +107,78 @@ async def test_cah_payout_lone_game_over_pays_the_winner(gdb):
     args, _ = pay.await_args
     assert set(args[2]) == {ALICE}
     assert args[3] == [ALICE]
+
+
+# ── Cat Bot payout (#65) ──────────────────────────────────────────────────────
+
+CATCHER = 1284869710847934544
+CATCH_MSG_ID = 7001
+
+_CAT_CATCH = (
+    "efficientpanic cought <:wildcat:1279106513129967750> Wild cat!!!!1!\n"
+    "You now have 138 cats of dat type!!!"
+)
+
+
+def _catch_message(content: str, member):
+    guild = SimpleNamespace(
+        id=GUILD, get_member_named=lambda name: member
+    )
+    return SimpleNamespace(
+        id=CATCH_MSG_ID, guild=guild,
+        channel=SimpleNamespace(id=CHAN), author=SimpleNamespace(id=966695034340663367),
+        created_at=datetime(2026, 7, 21, 4, 10, tzinfo=timezone.utc),
+        content=content, embeds=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_cat_catch_pays_the_resolved_catcher_once(gdb):
+    member = SimpleNamespace(id=CATCHER, bot=False)
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cat_catch", new=AsyncMock()
+    ) as pay:
+        await cog._pay_cat_catch(_catch_message(_CAT_CATCH, member))
+        await cog._pay_cat_catch(_catch_message(_CAT_CATCH, member))  # replay/edit
+
+    pay.assert_awaited_once()
+    args, kwargs = pay.await_args
+    assert args[1] == GUILD
+    assert args[2] == CATCHER
+    assert kwargs["rarity"] == "wild"
+    assert kwargs["coins"] == 8            # uncommon, not blessed here
+    assert kwargs["occurrence"] == str(CATCH_MSG_ID)
+
+
+@pytest.mark.asyncio
+async def test_cat_catch_unresolved_user_pays_nobody(gdb):
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cat_catch", new=AsyncMock()
+    ) as pay:
+        await cog._pay_cat_catch(_catch_message(_CAT_CATCH, None))  # name not in guild
+
+    pay.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_spawn_message_pays_nobody(gdb):
+    member = SimpleNamespace(id=CATCHER, bot=False)
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    spawn = "** A <:finecat:1279106515894141019> @Cats! has appeared**\nCatch Fine!"
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cat_catch", new=AsyncMock()
+    ) as pay:
+        await cog._pay_cat_catch(_catch_message(spawn, member))
+
+    pay.assert_not_awaited()
