@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+import statistics
 from datetime import date
 
 # Library slot limits per guild. Daily/weekly/monthly active quests form a
@@ -221,6 +222,28 @@ DYNAMIC_STRETCH = 1.15
 def dynamic_target(median_count: float, target_min: int, target_max: int) -> int:
     """Clamp a member's stretched trailing median into the author's band."""
     return max(target_min, min(target_max, round(median_count * DYNAMIC_STRETCH)))
+
+
+# Kinds whose personal target resolves at the member's own trailing-period
+# p25 instead of the stretched median. Reactions are passive one-click acts
+# with a heavy-tailed distribution — the goal is "at least your own
+# quiet-week level", so no stretch factor: median × 1.15 would turn the
+# freebie fix into a grind on a heavy reactor's off week.
+PERSONAL_P25_KINDS = frozenset({"reaction_given"})
+
+
+def p25_target(counts: list[int], target_min: int, target_max: int) -> int:
+    """Clamp a member's trailing-period p25 into the author's band.
+
+    The quantile runs over ALL trailing periods, zeros included — the same
+    convention as the median path, so a quiet week drags the target down
+    and it stays attainable in a typical-to-slow week. Never below 1.
+    """
+    if len(counts) >= 2:
+        p25 = statistics.quantiles(counts, n=4)[0]
+    else:
+        p25 = float(counts[0]) if counts else 0.0
+    return max(target_min, min(target_max, max(1, round(p25))))
 
 
 # ── Community-weekly beat sheets ──────────────────────────────────────

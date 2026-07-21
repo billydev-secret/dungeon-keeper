@@ -1023,9 +1023,10 @@ def resolve_member_target(
     once per (quest, member, period) and the result is STORED on the
     progress row — stable all period, and the wallet shows exactly what the
     fire path enforces. Resolution prefers the member's own pace (trailing
-    period median of the kind × DYNAMIC_STRETCH, clamped to the band) and
-    falls back to the deterministic Gaussian draw when they have fewer than
-    2 active trailing periods of that kind.
+    period median of the kind × DYNAMIC_STRETCH, clamped to the band; kinds
+    in PERSONAL_P25_KINDS use the member's trailing p25 instead, unstretched)
+    and falls back to the deterministic Gaussian draw when they have fewer
+    than 2 active trailing periods of that kind.
     """
     target_count = int(quest["target_count"])
     tmin, tmax = int(quest["target_min"]), int(quest["target_max"])
@@ -1047,7 +1048,10 @@ def resolve_member_target(
         str(quest["qtype"]), local_day,
     )
     if sum(1 for c in counts if c > 0) >= 2:
-        target = quests.dynamic_target(_stats.median(counts), tmin, tmax)
+        if str(quest["trigger_kind"]) in quests.PERSONAL_P25_KINDS:
+            target = quests.p25_target(counts, tmin, tmax)
+        else:
+            target = quests.dynamic_target(_stats.median(counts), tmin, tmax)
     else:
         target = quests.effective_target(
             target_count, tmin, tmax,

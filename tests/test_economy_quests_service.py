@@ -1753,6 +1753,49 @@ def test_resolve_target_clamps_to_band(db):
         ) == 10  # median ~1 × 1.15 floored at band min
 
 
+def test_resolve_target_reaction_kind_uses_own_p25(db):
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn, kind="reaction_given", lo=4, hi=40)
+        # Trailing W25..W28 sums 20/20/30/40 → p25 = 20, NOT median×1.15 = 29.
+        for day, n in (
+            ("2026-06-17", 20),  # W25
+            ("2026-06-24", 20),  # W26
+            ("2026-07-01", 30),  # W27
+            ("2026-07-08", 40),  # W28
+        ):
+            for _ in range(n):
+                record_kind_activity(conn, GUILD, USER, "reaction_given", day)
+        assert resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 20
+        # A member with two quiet trailing weeks floors at band min — the
+        # freebie is gone but the target stays attainable.
+        for day in ("2026-07-01", "2026-07-08"):
+            record_kind_activity(conn, GUILD, USER_2, "reaction_given", day)
+        assert resolve_member_target(
+            conn, GUILD, USER_2, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 4
+
+
+def test_resolve_target_reaction_kind_gaussian_fallback_cold_start(db):
+    from bot_modules.services.economy_quests_service import resolve_member_target
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn, kind="reaction_given", lo=4, hi=40)
+        got = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        expected = effective_target(
+            1, 4, 40, user_id=USER, quest_id=int(quest["id"]), period="2026-W29"
+        )
+        assert got == expected  # no history → same cold-start draw as any band
+
+
 def test_resolve_target_gaussian_fallback_without_history(db):
     from bot_modules.services.economy_quests_service import resolve_member_target
 

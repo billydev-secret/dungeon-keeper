@@ -648,6 +648,14 @@ active trailing periods of the kind fall back to the deterministic
 before migration 080's ledger accrued history. Sandbagging by going quiet
 floors out at `target_min` and is self-defeating (less activity is less
 income anyway).
+
+Kinds in `quests.PERSONAL_P25_KINDS` (currently `reaction_given`) resolve
+at the member's own trailing-period **p25 instead of the stretched median**
+(`quests.p25_target`, no `DYNAMIC_STRETCH`): reactions are passive
+one-click acts with a heavy-tailed distribution, so the target means "at
+least your own quiet-week level" — stretching past typical pace would turn
+the anti-freebie fix into a grind on a heavy reactor's off week. Zeros
+still count in the quantile, same as the median path.
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.

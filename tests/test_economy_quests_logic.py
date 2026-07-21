@@ -22,6 +22,7 @@ from bot_modules.economy.quests import (
     iso_week_for,
     message_matches_trigger,
     occurrence_period,
+    p25_target,
     parse_trigger_words,
     period_index,
     pick_rotation,
@@ -377,3 +378,30 @@ def test_effective_target_within_band_and_deterministic():
 
 def test_effective_target_never_below_one():
     assert effective_target(0, 0, 0, user_id=1, quest_id=1, period="p") == 1
+
+
+# ── p25_target: personal p25, band-clamped ────────────────────────────
+
+
+def test_p25_target_takes_quartile_not_median():
+    # sorted 20/20/30/40 → p25 = 20 (the median×1.15 path would give 29)
+    assert p25_target([20, 20, 30, 40], 4, 40) == 20
+
+
+def test_p25_target_zeros_drag_it_to_the_band_floor():
+    # two quiet trailing weeks pull p25 to 0 → floored at band min
+    assert p25_target([0, 0, 1, 2], 4, 40) == 4
+
+
+def test_p25_target_counts_partial_history():
+    # one active week among four: p25 = 7.5 → 8 (round-half-even)
+    assert p25_target([0, 30, 60, 90], 4, 40) == 8
+
+
+def test_p25_target_clamps_to_band_max():
+    assert p25_target([100, 100, 100, 100], 4, 40) == 40
+
+
+def test_p25_target_degenerate_inputs():
+    assert p25_target([3], 1, 40) == 3  # single period: use it as-is
+    assert p25_target([], 1, 40) == 1  # no history: band floor / never 0
