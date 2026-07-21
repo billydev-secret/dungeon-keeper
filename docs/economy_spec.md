@@ -645,7 +645,8 @@ branded notice when it is off. **Transfers do not mint** — the recipient's
 bonus); a transfer only moves existing currency between wallets. An optional
 **memo** rides `/bank pay` — collapsed to a single trimmed line and length-capped,
 stored verbatim under a `memo` key on both ledger rows and surfaced (escaped at
-render time) in the wallet ledger and the dashboard bank-manager ledger.
+render time) in the wallet ledger, the dashboard bank-manager ledger, and the
+public register feed's consolidated `A → B` transfer entry.
 
 ## 6. Sinks (The Perk Shop)
 

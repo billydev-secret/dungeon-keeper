@@ -360,6 +360,19 @@ def test_transfer_is_one_consolidated_entry():
     assert "'s wallet:" in (embed.footer.text or "")
 
 
+def test_transfer_shows_the_sender_memo():
+    """A transfer's memo — the whole point of the note — reaches the feed."""
+    entry = _entry(kind="transfer_out", amount=-25, meta={"to": 777, "memo": "lunch"})
+    assert render_memo(entry, _names) == "Transfer — lunch"
+    assert "lunch" in (build_register_embed(entry, DEFAULT_ECON_SETTINGS, _names).description or "")
+
+
+def test_transfer_blank_memo_falls_back_to_plain_transfer():
+    """An empty/whitespace memo doesn't leave a dangling em dash."""
+    entry = _entry(kind="transfer_out", amount=-25, meta={"to": 777, "memo": "   "})
+    assert render_memo(entry, _names) == "Transfer"
+
+
 def test_memo_login_includes_source_and_streak():
     entry = _entry(kind="login", meta={"source": "voice", "streak": 4})
     assert render_memo(entry, _names) == "Daily login (voice) — 4-day streak"

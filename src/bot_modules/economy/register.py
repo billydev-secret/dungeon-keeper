@@ -341,8 +341,10 @@ def render_memo(entry: RegisterEntry, resolve_name: Callable[[int], str]) -> str
         return f"Perk rental: **{perk}**"
 
     if kind == "transfer_out":
-        # Consolidated: the counterparty is named in the header, not here.
-        return "Transfer"
+        # Consolidated: the counterparty is named in the header, not here. The
+        # sender's memo — the whole point of the note — rides along when set.
+        note = str(meta.get("memo") or "").strip()
+        return f"Transfer — {note}" if note else "Transfer"
 
     if kind == "transfer_in":
         # Not posted (see SKIP_KINDS) — rendered only if something asks.
