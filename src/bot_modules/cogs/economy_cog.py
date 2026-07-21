@@ -1489,7 +1489,7 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
-            title="Notifications muted" if muted else "Notifications on",
+            title="🔔 Notifications muted" if muted else "🔔 Notifications on",
             description=(
                 "You won't get economy DMs anymore. Run this again to turn them back on."
                 if muted

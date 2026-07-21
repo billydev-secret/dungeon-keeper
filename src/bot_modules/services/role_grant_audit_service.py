@@ -507,7 +507,7 @@ def build_grant_audit_embed(
 ) -> discord.Embed:
     """The mod-facing card: same three buckets as the dashboard panel."""
     embed = discord.Embed(
-        title=f"Grant audit — {label}",
+        title=f"📋 Grant audit — {label}",
         description=(
             f"Members at level {snap.min_level}+ missing **{label}**, split by "
             "why. Excludes inactive/jail holds."

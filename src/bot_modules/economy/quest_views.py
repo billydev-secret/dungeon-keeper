@@ -140,11 +140,11 @@ def render_signoff_card_embed(
     resolution (green approved, red denied) and accent while pending.
     """
     if state == "paid":
-        embed = discord.Embed(title="Quest approved", color=discord.Color.green())
+        embed = discord.Embed(title="✅ Quest approved", color=discord.Color.green())
     elif state in ("denied", "expired"):
-        embed = discord.Embed(title="Quest denied", color=discord.Color.red())
+        embed = discord.Embed(title="❌ Quest denied", color=discord.Color.red())
     else:
-        embed = discord.Embed(title="Quest sign-off requested", color=accent)
+        embed = discord.Embed(title="📋 Quest sign-off requested", color=accent)
 
     embed.add_field(name="👤 Member", value=claimant_mention, inline=True)
     embed.add_field(name="🎯 Quest", value=quest_title, inline=True)
@@ -500,7 +500,7 @@ async def _dm_resolution(
     title = str(quest["title"])
     if approve:
         embed = discord.Embed(
-            title="Quest approved",
+            title="✅ Quest approved",
             description=(
                 f"Your claim for **{title}** was approved — "
                 f"{_reward_text(settings, paid)} added to your wallet."
@@ -509,7 +509,7 @@ async def _dm_resolution(
         )
     else:
         embed = discord.Embed(
-            title="Quest claim denied",
+            title="❌ Quest claim denied",
             description=(
                 f"Your claim for **{title}** was denied. You can try again."
             ),

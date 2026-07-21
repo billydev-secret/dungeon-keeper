@@ -312,7 +312,7 @@ def _game_embed(
     if color is None:
         color = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
-        title=f"Round #{round_id}",
+        title=f"🎭 Round #{round_id}",
         color=color,
     )
 
@@ -1679,7 +1679,7 @@ class GuessCog(commands.Cog):
 
         accent = await resolve_accent_color(db_path, interaction.guild)
         embed = discord.Embed(
-            title=f"Round #{round_row.id} — inspector",
+            title=f"🔍 Round #{round_row.id} — inspector",
             color=accent,
             description=(
                 f"**Status:** {status}\n"
@@ -1898,7 +1898,7 @@ class GuessCog(commands.Cog):
         )
 
         accent = await resolve_accent_color(db_path, interaction.guild)
-        embed = discord.Embed(title="Guess Leaderboard", color=accent)
+        embed = discord.Embed(title="🏆 Guess Leaderboard", color=accent)
         embed.add_field(name="Top Posters", value=poster_text, inline=False)
         embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
 

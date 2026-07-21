@@ -49,7 +49,7 @@ def build_reply_audit_embed(
     fields surface the participants and the whisper id for cross-reference.
     """
     embed = discord.Embed(
-        title="Whisper Reply",
+        title="💬 Whisper Reply",
         description=safe_codefence_content(content),
         timestamp=now or datetime.now(timezone.utc),
     )
@@ -80,7 +80,7 @@ def build_report_audit_embed(
     supplied reason, and the whisper id.
     """
     embed = discord.Embed(
-        title="Whisper Reported",
+        title="🚨 Whisper Reported",
         description=safe_codefence_content(whisper.message),
         color=discord.Color.red(),
         timestamp=now or datetime.now(timezone.utc),
@@ -113,7 +113,7 @@ def build_reply_report_audit_embed(
     recipient), the reason, and both the reply and whisper ids.
     """
     embed = discord.Embed(
-        title="Whisper Reply Reported",
+        title="🚨 Whisper Reply Reported",
         description=safe_codefence_content(reply.content),
         color=discord.Color.red(),
         timestamp=now or datetime.now(timezone.utc),
