@@ -141,6 +141,14 @@ class EconSettings:
     raffle_enabled: bool = False
     price_raffle_ticket: int = 10
     raffle_max_tickets: int = 10
+    # Weekly hoard tax (demurrage): at the ISO-week roll, wallets above the
+    # threshold lose rate% of the EXCESS (never the threshold itself — it's a
+    # protected floor, so 100 is a hard wealth cap, not confiscation). The
+    # only sink that works on members who buy nothing. Rate 0 = off (the
+    # dark-launch default); pricing it on the Sinks page is the launch
+    # switch — announce first.
+    demurrage_rate_pct: int = 0
+    demurrage_threshold: int = 500
     # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);
     # readable via GET /economy/config but deliberately absent from the
     # dashboard's editable-field whitelist.

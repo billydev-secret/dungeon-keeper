@@ -98,6 +98,10 @@ class EconomyConfigUpdate(BaseModel):
     raffle_enabled: bool | None = None
     price_raffle_ticket: int | None = Field(default=None, ge=0)
     raffle_max_tickets: int | None = Field(default=None, ge=0)
+    # Hoard tax: rate% of the excess above the threshold, weekly. 100 caps
+    # wealth at the threshold (the floor is protected), so it's a real bound.
+    demurrage_rate_pct: int | None = Field(default=None, ge=0, le=100)
+    demurrage_threshold: int | None = Field(default=None, ge=0)
     price_quest_reroll: int | None = Field(default=None, ge=0)
     quest_reroll_daily_cap: int | None = Field(default=None, ge=0)
     price_streak_shield: int | None = Field(default=None, ge=0)

@@ -76,6 +76,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "streak_shield": ("🛡️", "Streak shield"),
     "emoji_sponsor": ("😀", "Emoji sponsorship"),
     "raffle_ticket": ("🎟️", "Raffle tickets"),
+    "demurrage": ("🐉", "Hoard tax"),
     "wager_stake": ("⚔️", "Game wager staked"),
     "wager_payout": ("🏆", "Game wager won"),
     "wager_refund": ("↩️", "Game wager refunded"),

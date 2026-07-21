@@ -139,6 +139,12 @@ def build_guide_embed(
         footer_bits.append(
             f"Boosters earn ×{settings.booster_multiplier:g} on everything."
         )
+    if settings.demurrage_rate_pct > 0:
+        footer_bits.append(
+            f"A weekly 🐉 hoard tax collects {settings.demurrage_rate_pct}% of "
+            f"anything above {settings.demurrage_threshold:,} {plural} — "
+            "spending keeps a balance safe."
+        )
     footer_bits.append(
         "Rentals renew weekly — a short grace period covers a missed renewal."
     )

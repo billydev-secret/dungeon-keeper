@@ -43,6 +43,18 @@ const RAFFLE_FIELDS = [
   }],
 ];
 
+// Weekly hoard tax (demurrage): the only sink that works on members who buy
+// nothing. Rate 0 (the default) keeps it off — like the raffle, turning it
+// on is a communications decision, so announce before setting a rate.
+const DEMURRAGE_FIELDS = [
+  ["demurrage_rate_pct", "Hoard tax rate (%)", {
+    hint: "Percent of the excess above the threshold collected at each weekly roll. 0 (the default) = off; 100 = a hard wealth cap at the threshold. Suggested ≈ 2.",
+  }],
+  ["demurrage_threshold", "Protected floor", {
+    hint: "Balances at or below this are never touched — only the excess above it is taxed, so nobody can be taxed below the floor.",
+  }],
+];
+
 // Sponsored emojis: weekly rentals opened by mod approval (queue below).
 const EMOJI_FIELDS = [
   ["price_emoji", "Emoji / week", {
@@ -59,6 +71,7 @@ const EMOJI_FIELDS = [
 
 const ALL_NUM_FIELDS = [
   ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
+  ...DEMURRAGE_FIELDS,
 ];
 
 function numField(key, label, { hint } = {}, pricing) {
@@ -156,6 +169,15 @@ function render(container, cfg, pricing, icons) {
           Drawn at the ISO-week roll; the prize is a free weekly perk payment
           (a voucher, never coins) and the winner is announced by name on the
           leaderboard panel — announce the raffle before enabling it.
+        </div>
+        <div class="section-label" style="margin-top:16px;">Hoard tax</div>
+        <div class="field-row" style="flex-wrap:wrap;">
+          ${DEMURRAGE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+        </div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          Collected at the weekly roll from wallets above the floor; each
+          collection shows in the register feed like any other transaction —
+          announce the tax before setting a rate.
         </div>
         <div class="section-label" style="margin-top:16px;">Sponsored emojis</div>
         <div class="field-row" style="flex-wrap:wrap;">

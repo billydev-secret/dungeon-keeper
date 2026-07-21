@@ -101,6 +101,7 @@ from bot_modules.services.voice_master_service import (
     resolve_channel_name,
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
+from bot_modules.services import economy_demurrage_service as demurrage_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
@@ -328,6 +329,13 @@ def run_guild_day_roll(
         if raffle_svc.raffle_enabled(settings):
             raffle_result = raffle_svc.draw_raffle(
                 conn, guild_id, last_week, now=now_ts
+            )
+        # Collect the hoard tax for the week that just closed. Exactly-once
+        # via the sweeps PK (same pattern) — the register feed narrates each
+        # taxed member's ledger row, so no announcement happens here.
+        if demurrage_svc.demurrage_enabled(settings):
+            demurrage_svc.run_sweep(
+                conn, settings, guild_id, last_week, now=now_ts
             )
 
     # Marks advance LAST (both columns together) so any crash above replays the
