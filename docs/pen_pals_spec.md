@@ -81,7 +81,7 @@ In practice a default-length (24-hour) session shows only the opening question: 
 > {question}
 ```
 
-A manual swap does not reset the 12-hour auto-cadence clock. After the configured swap cap is used (default 3) the command is blocked: "You've used all N question swaps for this session."
+A manual swap does not reset the 24-hour auto-cadence clock. After the configured swap cap is used (default 3) the command is blocked: "You've used all N question swaps for this session."
 
 ### Match cooldown
 

@@ -120,7 +120,7 @@ state changes through `_db_set_state`, never call their db module's `set_game_st
 ```
    DUEL                              GROUP
    ┌─────────────┐                  ┌─────────────┐
-   │  CHALLENGE  │                  │    LOBBY    │  /games <game> start [stakes]
+   │  CHALLENGE  │                  │    LOBBY    │  /games <game> start [stakes] [wager]
    │  accept/    │                  │  join/leave/│
    │  decline    │                  │  start/     │
    └──────┬──────┘                  │  cancel     │
@@ -144,12 +144,12 @@ state changes through `_db_set_state`, never call their db module's `set_game_st
    └────────────────────────────────┘
 ```
 
-**Challenge (duel):** `/games <game> challenge @user [stakes]` posts an embed pinging the
+**Challenge (duel):** `/games <game> challenge @user [stakes] [wager]` posts an embed pinging the
 target with `✅ Accept` / `❌ Decline`. The target **must accept** before the game starts.
 A pending challenge is swept to `EXPIRED_PENDING` **60 seconds** after it was created (the
 challenge embed footer says "60 seconds to respond").
 
-**Lobby (group):** `/games <game> start [stakes]` posts a join lobby with `✋ Join`,
+**Lobby (group):** `/games <game> start [stakes] [wager]` posts a join lobby with `✋ Join`,
 `🚪 Leave`, `▶️ Start` (host only), `🚫 Cancel` (host only). The host starts once
 `min_players` is met. An idle lobby is swept to `EXPIRED_LOBBY`.
 
@@ -197,6 +197,8 @@ records `WAGER_STAKES_TEXT` ("Coins on the line — winner takes the pot.") as t
 `stakes_text`, so the game runs in custom-stakes mode end to end: no nickname preflight
 (Manage Nicknames / active-sentence / group cooldown checks are skipped), no rename button,
 terminal state `RESOLVED_NO_NICK` (which still pays the pot — it's in the settling set). The
+pot pays out minus an optional house rake (`wager_rake_pct`, economy-side, default 0 —
+named on the payout when priced). The
 nickname stake only ever applies when the default "name" stake is what's actually on the line.
 
 There is **no per-loser `stake_target` selection** in the current build: duels rename the one
@@ -327,13 +329,13 @@ Slugs: `pressure`, `quickdraw`, `hotpotato`, `hotpotatogroup`, `chicken`, `music
 
 | Command | Who | Effect |
 |---|---|---|
-| `challenge <user> [stakes]` | Anyone | Challenge a target (accept/decline). |
+| `challenge <user> [stakes] [wager]` | Anyone | Challenge a target (accept/decline). |
 
 **Group games** (`/games hotpotatogroup`, `/games chicken`, `/games musicalchairs`)
 
 | Command | Who | Effect |
 |---|---|---|
-| `start [stakes]` | Anyone | Open a join lobby. |
+| `start [stakes] [wager]` | Anyone | Open a join lobby. |
 
 **`cancel`/`stats`/`revert`/`config` — all removed, none were ever reachable.** Every one of
 these subcommands (plus `config`, see below) was stripped from each cog's command tree in
@@ -639,10 +641,11 @@ getting cosmetic standings only — is not implemented.
 
 - **Reputation / honor tracker** — cross-game character scores and titles; `elimination_order`
   already gives placement-based signal.
-- **Economy layer (betting/payouts by placement)** — games already pay participation/win
-  rewards through the terminal-state seam; wagering (economy-sinks round 2, stage 4b) and
-  placement payouts are not built. The seam's `_on_terminal_state` hook is the intended
-  attachment point for wager escrow settlement/refunds.
+- **Economy layer (payouts by placement)** — games already pay participation/win
+  rewards through the terminal-state seam, and wagering is **built** (economy-sinks
+  round 2, stage 4b: `econ_game_wagers` escrow, migration 094, optional `wager:` on
+  all six games, settled/refunded via the seam's `_on_terminal_state` hook).
+  Placement payouts remain parked.
 - **Per-game leaderboards & session recap** integration with the Poppy/DK session tracker.
 - **More games (cheap once `BaseGame` exists):** Russian Roulette, Higher/Lower, Tug of War,
   Odds Are, Last One Standing, Wheel of Fate, Werewolf/Mafia-lite (bigger build).

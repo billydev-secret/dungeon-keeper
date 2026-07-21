@@ -143,7 +143,7 @@ Read-only. For a selected survey:
 | `GET /api/surveys/{id}/export?fmt=csv\|json` | Download responses |
 | `DELETE /api/surveys/{id}` | Delete survey + cascade |
 
-## Stored data (migration `059_surveys.sql`)
+## Stored data (migration `<NNN>_surveys.sql` — use the next free migration number, 103+ at time of writing; check for a same-number file and bump per repo convention)
 
 ```sql
 CREATE TABLE IF NOT EXISTS surveys (
@@ -261,7 +261,7 @@ Following the existing package-per-feature layout (cf. `pen_pals`, `confessions`
 - `src/bot_modules/survey/` — `db.py` (queries + hashing), `logic.py` (state machine, validation, aggregation helpers), `embeds.py` (launcher + DM embeds), `views.py` (launcher button, per-question components).
 - `src/web_server/routes/surveys.py` — the dashboard API, registered in `server.py`.
 - `src/web_server/static/js/panels/surveys-builder.js` and `surveys-responses.js` — dashboard panels.
-- `src/migrations/059_surveys.sql` — schema above.
+- `src/migrations/<NNN>_surveys.sql` — schema above (next free migration number — 103+ at time of writing; `059` is taken by `059_docs.sql`, so check and bump per repo convention).
 - Persistent-view registration wired into `src/dungeonkeeper/__main__.py`.
 
 ---

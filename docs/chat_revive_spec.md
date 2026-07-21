@@ -88,7 +88,7 @@ Details of the moment:
 
 ## Explicitly out of scope for v1
 
-- Web panel management screen (bank and settings are command-managed at launch; panel comes later)
+- ~~Web panel management screen (bank and settings are command-managed at launch; panel comes later)~~ *(overtaken as built: the feature shipped dashboard-only — bank and settings live in the Config → Chat Revive panel, and the `/revive` command group was removed; see the implementation notes below)*
 - AI-generated or context-aware questions — v1 is bank-only so tone stays fully in the community's control
 - Per-member ping preferences beyond the simple opt-in role
 - Anything that replies to, reacts to, or follows up on its own revive
@@ -116,8 +116,9 @@ Details of the moment:
 - **Success metric:** ≥ 3 human messages from ≥ 2 distinct people within
   30 minutes of the revive.
 - **Ping scarcity** is a rolling 24 h per channel, not a calendar day.
-- **Opt-in role:** `/revive optin-post` publishes a persistent join/leave
-  button for the configured role. The Role Menus feature (landed the same
+- **Opt-in role:** the dashboard action `POST /api/chat-revive/optin-post`
+  publishes a persistent join/leave
+  button for the configured role (the `/revive` command group was removed). The Role Menus feature (landed the same
   day) is the richer alternative — a toggle-mode menu pointing at the same
   role works identically; use whichever fits the guild.
 - **Manual fire** skips every lull/frequency gate but keeps ping scarcity;

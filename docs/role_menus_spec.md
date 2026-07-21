@@ -1,8 +1,11 @@
 # Dungeon Keeper — Role Menus Product Spec (v1)
 
-**Status:** Draft for build
+**Status:** Built — the cog and the `role_menus/` package implement all five modes
+(toggle / unique / verify / drop / binding), with the dashboard surface in
+`routes/role_menus.py` + `panels/role-menus.js`. As-built deltas from this spec
+are recorded in `docs/plans/role-menus.md`.
 **Owner:** Ben
-**One-liner:** Members grant and remove roles on themselves by clicking buttons or picking from a dropdown on a DK-posted embed. Admins build, preview, and manage everything from the Oracle panel — no commands, no reactions.
+**One-liner:** Members grant and remove roles on themselves by clicking buttons or picking from a dropdown on a DK-posted embed. Admins build, preview, and manage everything from the dashboard Role Menus panel — no commands, no reactions.
 
 ---
 
@@ -45,9 +48,9 @@ Every interaction gets an **immediate private (ephemeral) response**: "✅ You n
 | Trying to change a permanent choice | "Your choice here is permanent." |
 | Something genuinely broke | A polite apology; mods are alerted automatically. |
 
-### 2.2 Admin experience (Oracle panel)
+### 2.2 Admin experience (dashboard Role Menus panel)
 
-A new **Role Menus** page in Oracle, gated to the existing mod/admin tier.
+A **Role Menus** page in the dashboard, gated to the existing mod/admin tier.
 
 **List view.** Every menu for the guild at a glance: title, channel (or *Draft*), button-vs-dropdown badge, mode badge, number of roles, an on/off toggle, and last-edited info. "New Menu" button to start fresh.
 
@@ -127,7 +130,7 @@ With the dropdown style, Unique naturally limits selection to one option, and a 
 ## 6. Success Criteria
 
 - A brand-new member can self-assign a role with zero instruction and know it worked.
-- Ben can build, preview, and publish a complete color-role menu from the Oracle panel in under five minutes without opening Discord.
+- Ben can build, preview, and publish a complete color-role menu from the dashboard Role Menus panel in under five minutes without opening Discord.
 - Zero "the role thing is broken" tickets attributable to silent failures.
 - Mods can answer "who picked what, when" from existing logs without SQL spelunking.
 
@@ -136,5 +139,5 @@ With the dropdown style, Unique naturally limits selection to one option, and a 
 - Petal-priced roles via the perk shop (design the menu UI to leave room for a price tag on a choice)
 - Roles that expire after a set time
 - Menu templates / cloning
-- An adoption analytics card on the Oracle dashboard (which choices are popular, over time)
+- An adoption analytics card on the dashboard (which choices are popular, over time)
 - Bigger-than-25 menus via multiple components

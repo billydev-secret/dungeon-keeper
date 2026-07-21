@@ -1,5 +1,11 @@
 # Dungeon Keeper — Duel Minigame Flows v2
 
+> **Status: historical design doc.** Chicken, Musical Chairs, and Hot Potato (group)
+> shipped, but with materially different rules than sketched here — see
+> `docs/dk_pvp_games_suite_spec.md` §9 for the as-built behavior. **Liar's Dice is the
+> only game from this doc that remains unbuilt**, and **Minesweeper was never built**
+> (in any version). Kept for the design intent, not as a description of the code.
+
 **New this version:** Chicken · Liar's Dice · Musical Chairs · Hot Potato (group)
 
 ---
@@ -16,7 +22,7 @@ BaseGame  (2..N players)
          guardrails, "🫡 I'll honor this"
    │
    ├── BaseDuel(BaseGame, n=2)   ← v1 games unchanged; just a fixed-roster special case
-   │       Pressure Cooker, Quickdraw, Minesweeper
+   │       Pressure Cooker, Quickdraw (Minesweeper was planned in v1 but never built)
    │
    └── BaseGame(n=2..N)
            Chicken (2..N), Hot Potato (2..N), Musical Chairs (3..N),
@@ -452,7 +458,7 @@ Pass it before it blows.
 |---|---|---|---|---|---|
 | Pressure Cooker | escalating gauge | 60–90s | pump (forced) | 2 | loser |
 | Quickdraw | reflex + nerve | ~10s | when to fire | 2 | loser |
-| Minesweeper | climbing odds | 30–60s | which tile / forfeit | 2 | loser |
+| Minesweeper *(never built)* | climbing odds | 30–60s | which tile / forfeit | 2 | loser |
 | Hot Potato (duel) | hidden fuse | 20–60s | when to pass | 2 | loser |
 | **Chicken** | mutual nerve | 10–40s | when to bail | 2..N | all holding at crash |
 | **Liar's Dice** | bluff / deduction | 2–6 min | raise or call | 2..N | last eliminated |

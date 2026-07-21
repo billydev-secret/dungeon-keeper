@@ -1,10 +1,12 @@
 # Economy & Perk Shop — Spec V3.1 (repo-grounded)
 
 **Brandable per-guild currency · Logins & streaks · XP conversion · Quests · Rentable perks**
-*Status: partially shipped — Stages 0–3 built (wallets/ledger/config, faucets,
-quests, and transfers + the rental engine + role perks + gifts). Metrics (Stage 4),
-soak/tuning (Stage 5), and private rooms (Stage 6) plus the v2 member dashboard and
-spotlight slots remain design-only. Implementation plan in
+*Status: largely shipped — Stages 0–4 built (wallets/ledger/config, faucets,
+quests, transfers, the rental engine + role perks + gifts, and the metrics
+dashboard), plus sinks rounds 1–3 (§6: gifting, streak shield, voice-style lease,
+emoji sponsorship, raffle, wagers, hoard tax — the last few shipped dark).
+Soak/tuning (Stage 5) is ongoing; private rooms (Stage 6) plus the v2 member
+dashboard and spotlight slots remain design-only. Implementation plan in
 `docs/plans/economy-and-perk-shop.md`. Supersedes the uploaded V3 draft. All numbers
 are per-guild-tunable defaults (§9).*
 
@@ -181,7 +183,8 @@ XP earned that local day converts to currency.
   their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
   mlt, nhie, price, rushmore, story, wyr). ffa and fantasies are excluded by design
   (anonymous submissions); photo has no per-player completion hook either, but pays
-  through the **photo-reply event quest** (§4.5) instead of `end_game`.
+  through the **`photo_post` faucet** (§4.5 — paid on the post itself) instead of
+  `end_game`.
 - **Game win +20:** paid for **both** game architectures in v1 (decided). Duel games
   read their explicit `winner_id` (chicken, hot potato, musical chairs, pressure
   cooker, quickdraw, …). Party games get a per-game-type winner resolver over the
@@ -607,8 +610,8 @@ meter read the same `effective_target`.
 Game-fired claims are **silent in-channel** (matching the participation faucet —
 a game recap followed by a dozen quest embeds would be noise); the wallet ledger
 and `/quests` carry the news, and sign-off claims still post the bank-channel
-card. The photo-reply and media-post listeners announce (✅/📝 on the member's
-own message — a 1:1 exchange). Hooks that fire inside another module's open
+card. The photo-post and media-post listeners announce (✅/📝 on the member's
+own message — the payout lands on the post itself). Hooks that fire inside another module's open
 transaction use `fire_trigger_inline` (savepoint-wrapped, never raises, no
 bank-card posting — pending sign-off claims still appear on the claims panel).
 
@@ -651,6 +654,8 @@ old reaction-gated model and its `react_threshold`/`auto_react` knobs are retire
 migration 099 renames existing `photo_react` quests and income-source rows to
 `photo_post`; migration 101 adds `econ_photo_rewards`.)*
 
+## 5. Transfers
+
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered
 (payer `transfer_out`, recipient `transfer_in`). Per-guild `transfers_enabled` toggle
@@ -686,8 +691,8 @@ takes effect on the next cycle, never retroactively.
 | Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`) |
 | Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
 | Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
-| Private text room | 200 | §8 (Stage 2) |
-| Private voice room | 200 | §8 (Stage 2) |
+| Private text room | 200 | §8 (Stage 6) |
+| Private voice room | 200 | §8 (Stage 6) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
 | Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
 | Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Sinks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
@@ -750,7 +755,8 @@ the member owns and gift rentals where they are the beneficiary.
 
 - **Discord is the entire v1 member surface** (decided — the member-facing dashboard
   wallet page and role studio are v2). One top-level group **`/bank`** (`wallet`,
-  `pay`, `quests`, `shop`, `gift`, `role`, `mute`, `grant` [mod], `post-guide` [mod])
+  `pay`, `quests`, `shop`, `gift`, `sponsor`, `emoji`, `role`, `mute`, `grant` [mod],
+  `post-guide` [mod], `post-leaderboard` [mod], `post-shop` [mod])
   plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
@@ -889,7 +895,7 @@ the member owns and gift rentals where they are the beneficiary.
   balance, XP-today, streak + grace, quests, rentals with next-bill countdown, 30-day
   history, mute toggle) and a role studio panel with live preview.
 
-## 8. Private Rooms (Stage 2)
+## 8. Private Rooms (Stage 6)
 
 As V3 §8 (owner as landlord: invite cap 25, block list persisting across re-rentals,
 rename/topic/NSFW/slowmode/user-limit/bitrate/lock, Manage Messages+Threads inside,
@@ -1072,8 +1078,8 @@ The hourly economy loop:
 | On tick | Action |
 |---|---|
 | Guild-local day rolled | XP→currency conversion (only the most recent marked local day — no retroactive backlog after an outage, §12); streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
-| Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; (v2) spotlight expiry; (rooms stage) room archive/purge |
-| Guild-local ISO week rolled | Weekly quest activation; community settlement; metrics rollup; (v2) spotlight inventory reset |
+| Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; QOTD-sponsor and emoji-sponsor pending-review expiry (auto-refund); (v2) spotlight expiry; (rooms stage) room archive/purge |
+| Guild-local ISO week rolled | Weekly quest activation; community settlement; raffle draw (§6); demurrage sweep (§6); metrics rollup; (v2) spotlight inventory reset |
 
 A second, lightweight startup task — `leaderboard_live_loop` — gives the
 leaderboard panel its near-real-time cadence: a 20 s poll over the
@@ -1111,7 +1117,7 @@ nothing and misses nothing (catch-up on next tick).
 - Game participation payouts cover 20 of 23 games — the six duel games,
   ttl/traditional/legitlibs, and the 11 party cogs whose rosters were enriched in
   Stage 2. ffa and fantasies stay excluded by design (anonymous submissions);
-  photo pays via the photo-reply event quest (§4.5), not `end_game`.
+  photo pays via the `photo_post` faucet (§4.5, on the post itself), not `end_game`.
 - Guild loses Level 2 / Enhanced Role Styles mid-rental: perk enters grace as if unpaid?
   No — billing pauses the affected perk (icon/gradient) and DMs the owner; auto-resumes
   when the feature returns (no charge while suspended).
@@ -1134,8 +1140,9 @@ nothing and misses nothing (catch-up on next tick).
 panel with live preview · spotlight slots.
 
 **Parking lot** (unchanged from V3 unless noted): auto-tracked quest criteria
-(partially delivered: trigger words §4.4 + the photo-reply event trigger §4.5;
-further trigger kinds — game wins, streaks — remain parked) ·
+(delivered: §4.4 trigger words plus the full §4.5 trigger-kind table —
+`photo_post`, `game_win`, `duel_win`, `active_day`, and the rest — nothing
+here remains parked) ·
 fines/tickets (Jail exists — integration stays parked by design call) ·
 room upgrades · streak-rental discount ·
 auctions/seasonal drops · per-quest contributors-only payout · scheduled/auto

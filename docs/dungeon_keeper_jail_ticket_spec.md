@@ -9,7 +9,6 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/setup` | Slash | Administrator | First-run interactive wizard for roles, categories, log channels |
-| `/config set <key> <value>` / `/config get <key>` / `/config list` | Slash | Administrator | Tweak individual settings after setup |
 | `/jail <user> [duration] [reason]` | Slash | Mod | Jail a member, optionally with a duration like `24h` or `7d` |
 | `/unjail <user> [reason]` | Slash | Mod | Release a jailed member |
 | `Jail User` | User context menu | Mod | Modal for duration + reason, then runs the jail flow |
@@ -21,6 +20,10 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | `/ticket delete` | Slash | Mod | Permanently delete a closed ticket (generates transcript) |
 | `/ticket claim` | Slash | Mod | Subscribe to DM alerts on new activity in this ticket |
 | `/ticket escalate [reason]` | Slash | Mod | Bring admin roles into the ticket |
+| `/policy open title:<title> [description]` | Slash | Admin | Open a policy proposal channel; title is required and capped at 200 chars (longer titles are trimmed with an ellipsis) |
+| `/policy vote` | Slash | Mod / Admin | Start the formal vote on the current policy proposal (opens a modal) |
+| `/policy close [reason]` | Slash | Admin | Close a policy proposal without voting |
+| `/policy list` | Slash | Mod / Admin | List all passed policies |
 | `/pull <user>` | Slash | Mod | Add a user into the current jail or ticket channel |
 | `/remove <user>` | Slash | Mod | Remove a previously pulled user |
 | `/warn <user> [reason]` | Slash | Mod | Record a warning and DM the member |
@@ -57,7 +60,7 @@ Discord and dashboard actions are *intended* to produce identical side-effects
 (real role + jail channel + DM), and `.../warn` and `.../claim` match their
 Discord counterparts (record-only).
 
-**Known gap (as of 2026-07-14):** the ticket-lifecycle routes
+**Known gap (still true as of 2026-07-21):** the ticket-lifecycle routes
 `POST .../close`, `.../reopen`, `.../dismiss`, and `.../escalate` are currently
 **DB-only** — they flip the ticket row and write an audit entry but do **not**
 reach Discord. Closing (or dismissing/reopening/escalating) a ticket from the
@@ -138,8 +141,8 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 **Bot needs:** Manage Roles (to assign / strip / restore roles and create `@Jailed`), Manage Channels (jail and ticket channel creation, lock/unlock, permission overwrites), View Channels and Send Messages in the configured log channels, Read Message History and Embed Links for embeds, Attach Files for transcript delivery. The bot's top role must sit above `@Jailed` for role-strip to work.
 
 **User needs:**
-- Mod role (configured via `/setup` or `/config`): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/warnings`, `/revokewarn`, `/modinfo`, `/ticket panel`, and the dashboard moderation routes.
-- Admin role: `/setup`, `/config`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Mod role (configured via `/setup` or the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/warnings`, `/revokewarn`, `/modinfo`, `/ticket panel`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
+- Admin role: `/setup`, `/policy open`, `/policy close`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
 ## User-visible errors
@@ -169,7 +172,7 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 
 ## Configuration
 
-Setup wizard sets most keys; the rest are tweaked with `/config set`.
+Setup wizard sets most keys; the rest live on the web dashboard.
 
 | Key | Purpose | Default |
 |---|---|---|
