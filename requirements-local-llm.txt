@@ -11,4 +11,4 @@
 #
 # Skipping it when the in-process backend IS in use is not fatal but is visible:
 # the model load fails and ollama_client.status() reports phase="error".
-llama-cpp-python>=0.3.0
+llama-cpp-python>=0.3.34
