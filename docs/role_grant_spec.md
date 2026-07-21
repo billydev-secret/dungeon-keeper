@@ -9,13 +9,31 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or mod | Give a configured community role to a member |
-| `/grant_missing role:<key> min_level:<n>` | Slash | Mod | List members at/above a level who don't have a configured grant role yet |
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
 
-### `/grant_missing`
+(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** panel, below.)
 
-A mod-only report, not a self-serve command. Defaults to `role:nsfw min_level:5` — surfaces members who hit the level-5 XP threshold (where the "promotion review" post fires, see `xp_spec.md`) but were never actually given the NSFW/adult-access role. Cross-references `member_xp.level` against live Discord role membership, and excludes anyone currently on an active inactive-channel hold (`inactive_members.status = 'active'`) — those members had every role stripped on purpose, so a missing grant there isn't an oversight. Replies ephemerally with an embed listing up to 40 members (mention + level), or a plain "nobody missing" message when the list is empty.
+## Grant Audit panel
+
+A moderator dashboard panel (Reports → Member Lists → Grant Audit, `GET /api/reports/grant-audit?grant_name=<key>&min_level=<n>`, default `nsfw` / level 5) that splits members missing a grant role into three buckets:
+
+| Bucket | Meaning |
+|---|---|
+| **Waiting for first grant** | At/above the level bar, never granted, and no prune history at all — the role was simply never given. Sorted highest level first. |
+| **Stripped but came back** | Stripped by the inactivity-prune loop (open `role_prune_events` row), active again since (last activity at/after the prune window's cutoff), but never re-granted — pruned fairly, returned, and nobody closed the loop. |
+| **Last 10 inactive stripped** | Most recent open prune events whose members are still inactive — the prune working as intended, shown for visibility. Newest first, capped at 10. |
+
+All buckets exclude bots, members who left, and anyone on an active inactive-channel hold or jail — checked against both the DB hold rows **and** a hold role held live in Discord (a mod may have stripped roles by hand without a DB row).
+
+### The `role_prune_events` ledger
+
+The inactivity-prune loop (`inactivity_prune_service`, see the prune rule config) removes the configured role from long-inactive members. Each removal now writes a durable row to `role_prune_events` (`guild_id`, `user_id`, `role_id`, `source = 'inactivity_prune'`, `pruned_at`, `restored_at`). The lifecycle:
+
+- **pruned** — the prune loop inserts an open row (`restored_at IS NULL`) per member it strips.
+- **restored** — a successful `/grant` of the same role closes any open rows for that member (`restored_at` set to the grant time). "Active again" is *not* stored — it stays a live computation against last-activity, since it's a moving target.
+
+A one-off backfill helper (`role_grant_audit_service.backfill_prune_events_from_role_events`) seeds the ledger from historical `role_events` removals, skipping removals the activity history disproves as prunes and inserting already-restored rows for members who hold the role again. It's idempotent and is run once per guild/role from a REPL after deploy.
 
 ## Behavior
 
@@ -74,3 +92,4 @@ Plus an allowlist of `(entity_type, entity_id)` entries — individual users and
 | `grant_roles` | One row per guild + grant key with the fields above |
 | `grant_role_permissions` | Allowlist entries: `(guild_id, grant_name, entity_type ∈ user/role, entity_id)` |
 | `role_events` | One row per successful grant: guild, user, role name, action `grant`, timestamp |
+| `role_prune_events` | Durable prune ledger: guild, user, role id, source, `pruned_at`, `restored_at` (NULL while open) — written by the inactivity-prune loop, closed by `/grant` |

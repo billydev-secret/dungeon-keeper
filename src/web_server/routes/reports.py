@@ -28,6 +28,7 @@ from web_server.schemas import (
     ChannelComparisonResponse,
     ChillingEffectResponse,
     DropoffResponse,
+    GrantAuditResponse,
     GreeterResponseResponse,
     InactiveResponse,
     InactiveRoleResponse,
@@ -1613,6 +1614,144 @@ async def inactive(
         "channel_id": channel_id,
         "total": len(rows),
         "members": rows,
+    }
+
+
+@router.get("/grant-audit", response_model=GrantAuditResponse)
+async def grant_audit(
+    request: Request,
+    grant_name: str = "nsfw",
+    min_level: int = 5,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Three-bucket audit of members missing a grant role, backed by the
+    role_prune_events ledger: waiting for their first grant, stripped by the
+    inactivity prune but active again, and recently stripped + still inactive."""
+    import time as _time
+
+    from bot_modules.services.role_grant_audit_service import (
+        compute_recent_inactive,
+        compute_stripped_returned,
+        compute_waiting_for_first_grant,
+        get_ever_pruned_ids,
+        get_hold_excluded_ids,
+        get_open_prune_events,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    cfg = ctx.guild_config(guild_id).grant_roles.get(grant_name)
+    if cfg is None or int(cfg["role_id"]) <= 0:
+        raise HTTPException(404, "Grant role not configured")
+    role = guild.get_role(int(cfg["role_id"]))
+    if role is None:
+        raise HTTPException(404, "Configured role no longer exists")
+
+    min_level = max(1, min_level)
+    role_id = role.id
+    granted_ids = {m.id for m in role.members}
+
+    def _q():
+        from bot_modules.core.xp_system import get_member_last_activity_map
+
+        with ctx.open_db() as conn:
+            levels = {
+                int(r["user_id"]): int(r["level"])
+                for r in conn.execute(
+                    "SELECT user_id, level FROM member_xp WHERE guild_id=? AND level>=?",
+                    (guild_id, min_level),
+                ).fetchall()
+            }
+            held_ids, hold_role_ids = get_hold_excluded_ids(conn, guild_id)
+            open_events = get_open_prune_events(conn, guild_id, role_id)
+            ever_pruned = get_ever_pruned_ids(conn, guild_id, role_id)
+            rule = conn.execute(
+                "SELECT role_id, inactivity_days FROM inactivity_prune_rules WHERE guild_id=?",
+                (guild_id,),
+            ).fetchone()
+            days = (
+                int(rule["inactivity_days"])
+                if rule is not None and int(rule["role_id"]) == role_id
+                else 30
+            )
+            lookup_ids = set(levels) | {int(ev["user_id"]) for ev in open_events}
+            activity_map = get_member_last_activity_map(conn, guild_id, list(lookup_ids))
+        return levels, held_ids, hold_role_ids, open_events, ever_pruned, days, activity_map
+
+    (
+        levels,
+        held_ids,
+        hold_role_ids,
+        open_events,
+        ever_pruned,
+        days,
+        activity_map,
+    ) = await run_query(_q)
+    cutoff_ts = _time.time() - days * 86400
+
+    def _resolve(uid: int):
+        """Live member, unless they left, are a bot, or sit on a hold.
+
+        Members on an inactive/jail hold had every role stripped on purpose —
+        checked against both the DB hold rows and the hold role held live in
+        Discord (a mod may have stripped roles by hand without a DB row).
+        """
+        if uid in held_ids:
+            return None
+        member = guild.get_member(uid)
+        if member is None or member.bot:
+            return None
+        if hold_role_ids and any(r.id in hold_role_ids for r in member.roles):
+            return None
+        return member
+
+    waiting_rows = []
+    for uid, level in compute_waiting_for_first_grant(levels, granted_ids, ever_pruned):
+        member = _resolve(uid)
+        if member is None:
+            continue
+        waiting_rows.append(
+            {"user_id": str(uid), "display_name": member.display_name, "level": level}
+        )
+
+    def _event_rows(bucket: list[dict]) -> list[dict]:
+        rows = []
+        for entry in bucket:
+            uid = entry["user_id"]
+            member = _resolve(uid)
+            if member is None:
+                continue
+            rows.append(
+                {
+                    "user_id": str(uid),
+                    "display_name": member.display_name,
+                    "level": levels.get(uid),
+                    "pruned_at": entry["pruned_at"],
+                }
+            )
+        return rows
+
+    returned_rows = _event_rows(
+        compute_stripped_returned(open_events, granted_ids, activity_map, cutoff_ts)
+    )
+    inactive_rows = _event_rows(
+        compute_recent_inactive(open_events, granted_ids, activity_map, cutoff_ts)
+    )
+
+    return {
+        "grant_name": grant_name,
+        "label": cfg["label"],
+        "role_id": str(role_id),
+        "min_level": min_level,
+        "inactivity_days": days,
+        "waiting_first_grant": waiting_rows,
+        "stripped_returned": returned_rows,
+        "recent_inactive": inactive_rows,
     }
 
 

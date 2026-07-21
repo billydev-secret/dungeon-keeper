@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.commands.role_grant_commands import _execute_grant, _execute_grant_missing
+from bot_modules.commands.role_grant_commands import _execute_grant
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -72,29 +72,6 @@ class RoleGrantCog(commands.Cog):
             grant_message=cfg["grant_message"],
             ctx=ctx,
         )
-
-    @app_commands.command(
-        name="grant_missing",
-        description="List members past a level who are missing a configured grant role.",
-    )
-    @app_commands.describe(
-        role="Grant role to check for.",
-        min_level="Minimum XP level to include (default 5).",
-    )
-    @app_commands.autocomplete(role=_role_autocomplete)
-    async def grant_missing_cmd(
-        self,
-        interaction: discord.Interaction,
-        role: str = "nsfw",
-        min_level: int = 5,
-    ) -> None:
-        ctx = self.ctx
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-        await _execute_grant_missing(interaction, role, min_level, ctx)
 
 
 async def setup(bot: Bot) -> None:

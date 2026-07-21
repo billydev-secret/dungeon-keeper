@@ -849,6 +849,24 @@ class OldestSfwResponse(BaseModel):
     members: list[MemberRowSchema]
 
 
+class GrantAuditMemberRow(BaseModel):
+    user_id: str
+    display_name: str = ""
+    level: int | None = None
+    pruned_at: float | None = None
+
+
+class GrantAuditResponse(BaseModel):
+    grant_name: str
+    label: str
+    role_id: str
+    min_level: int
+    inactivity_days: int
+    waiting_first_grant: list[GrantAuditMemberRow]
+    stripped_returned: list[GrantAuditMemberRow]
+    recent_inactive: list[GrantAuditMemberRow]
+
+
 # ── Welcome / leave preview ────────────────────────────────────────────
 
 
