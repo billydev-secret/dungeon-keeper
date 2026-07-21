@@ -19,6 +19,7 @@ rejects non-default ``temperature``/``top_p``/``top_k``).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -114,6 +115,17 @@ SYSTEM_INSTRUCTIONS = (
     "- Only reference channels, pins, docs, and announcements that appear in THIS "
     "SERVER — that list is already scoped to what the asker is allowed to see. "
     "Do not speculate about channels or content that aren't listed.\n"
+    "- The only settings you can see are those listed under THIS SERVER in a "
+    "\"Core saved settings\" section (shown to admins only). You may state those "
+    "values. For ANYTHING not listed there — including whether a feature is set "
+    "up — you CANNOT see it: say so and point them to the dashboard panel or "
+    "command to check or change it. Many features (economy, wellness, games, "
+    "announcements, docs, voice channels, and more) keep settings you can't see, "
+    "so never claim such a feature is or isn't configured unless it's listed.\n"
+    "- Make answers clickable. Channels in THIS SERVER are listed as "
+    "\"#name (<#id>)\"; when you mention one, write its <#id> form so it links. "
+    "When you send someone to the dashboard, include its URL (given below, if "
+    "any) and name the panel to open — don't guess deeper link paths.\n"
     "- Be concise and warm. Prefer short numbered steps. Name the exact slash "
     "command (e.g. `/qotd`) or dashboard panel when the source gives one.\n"
     "- The guide's headings are tagged like [economy-earning]. When useful, tell "
@@ -230,6 +242,12 @@ def load_manual_text(path: Path = _MANUAL_PATH) -> str:
     return text
 
 
+def dashboard_url() -> str:
+    """Public dashboard origin (for links), or '' when only a localhost dev URL."""
+    url = os.getenv("DASHBOARD_BASE_URL", "").strip().rstrip("/")
+    return "" if not url or url.startswith("http://localhost") else url
+
+
 def build_system(guild_context: str | None = None) -> list[dict]:
     """Assemble the system prompt.
 
@@ -239,8 +257,12 @@ def build_system(guild_context: str | None = None) -> list[dict]:
     """
     corpus = load_manual_text()
     guide = corpus if corpus else "(guide unavailable)"
+    instructions = SYSTEM_INSTRUCTIONS
+    url = dashboard_url()
+    if url:
+        instructions += f"\n\nThe web dashboard is at {url} — link to it when pointing someone to a dashboard panel."
     blocks: list[dict] = [
-        {"type": "text", "text": SYSTEM_INSTRUCTIONS},
+        {"type": "text", "text": instructions},
         {
             "type": "text",
             "text": "=== DUNGEON KEEPER GUIDE ===\n\n" + guide,

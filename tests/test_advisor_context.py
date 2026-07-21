@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import sqlite3
 
 from unittest.mock import AsyncMock
 
@@ -18,9 +19,10 @@ class FakePerms:
 
 
 class FakeRole:
-    def __init__(self, name: str = "@everyone", is_default: bool = True) -> None:
+    def __init__(self, name: str = "@everyone", is_default: bool = True, rid: int = 0) -> None:
         self.name = name
         self.is_default = is_default
+        self.id = rid
 
 
 class FakeChannel:
@@ -44,10 +46,18 @@ class FakeChannel:
 
 
 class FakeGuild:
-    def __init__(self, gid, channels, default_role=None):
+    def __init__(self, gid, channels, default_role=None, roles=None):
         self.id = gid
         self.text_channels = channels
         self.default_role = default_role or FakeRole()
+        self._by_id = {c.id: c for c in channels}
+        self._roles = {r.id: r for r in (roles or [])}
+
+    def get_channel(self, cid):
+        return self._by_id.get(cid)
+
+    def get_role(self, rid):
+        return self._roles.get(rid)
 
 
 class FakeGuildPerms:
@@ -164,16 +174,19 @@ def test_context_scopes_topics_pins_and_announcements_to_visibility(monkeypatch)
 
     ctx = ac.build_asker_context(guild, member, "db")
 
-    # Visible public content is present…
-    assert "#general — Chat here" in ctx
+    # Visible public content is present, with a clickable <#id> mention…
+    assert "Chat here" in ctx
+    assert "<#10>" in ctx
     assert "Read the rules" in ctx
     assert "Party Friday" in ctx
     assert "Be nice." in ctx  # docs always included
-    # …mod-only + NSFW + unsent content is NOT.
+    # …mod-only + NSFW + unsent content is NOT (not even the channel id).
     assert "Mods only" not in ctx
+    assert "<#20>" not in ctx
     assert "Mod secret" not in ctx
     assert "Mods meet" not in ctx
     assert "after-dark" not in ctx
+    assert "<#30>" not in ctx
     assert "18+ lounge" not in ctx
     assert "unsent" not in ctx
 
@@ -187,7 +200,17 @@ def test_context_insider_sees_staff_channel(monkeypatch):
 
     ctx = ac.build_asker_context(guild, insider, "db")
     assert "Mods only" in ctx
+    assert "<#20>" in ctx
     assert "Mod secret" in ctx
+
+
+def test_visible_text_channels_filters_by_viewer():
+    guild, public, staff, adult = _guild_with_mixed_channels()
+    outsider = FakeMember(7)
+    insider = FakeMember(99)
+    assert [c.id for c in ac.visible_text_channels(guild, outsider)] == [10]
+    assert [c.id for c in ac.visible_text_channels(guild, insider)] == [10, 20]
+    assert [c.id for c in ac.visible_text_channels(guild, None)] == [10]  # public
 
 
 def test_context_none_viewer_falls_back_to_public(monkeypatch):
@@ -206,6 +229,70 @@ def test_context_respects_hard_cap(monkeypatch):
     monkeypatch.setattr(ac, "MAX_CONTEXT_CHARS", 100)
     ctx = ac.build_asker_context(guild, None, "db")
     assert len(ctx) <= 100
+
+
+# ── build_config_summary (admin-only, secret-filtered) ──────────────────────
+
+
+def _conn_with_config(rows):
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER, key TEXT, value TEXT, "
+        "PRIMARY KEY(guild_id, key))"
+    )
+    conn.executemany("INSERT INTO config VALUES (1, ?, ?)", rows)
+    return conn
+
+
+def test_config_summary_admin_only():
+    conn = _conn_with_config([("welcome_enabled", "1")])
+    guild = FakeGuild(1, [])
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    member = FakeMember(2, perms=FakeGuildPerms())
+    assert "welcome_enabled = on" in ac.build_config_summary(conn, guild, admin)
+    assert ac.build_config_summary(conn, guild, member) == ""  # not an admin
+    assert ac.build_config_summary(conn, guild, None) == ""
+
+
+def test_config_summary_manage_guild_also_allowed():
+    conn = _conn_with_config([("xp_enabled", "0")])
+    guild = FakeGuild(1, [])
+    manager = FakeMember(1, perms=FakeGuildPerms(manage_guild=True))
+    assert "xp_enabled = off" in ac.build_config_summary(conn, guild, manager)
+
+
+def test_config_summary_filters_secrets_and_resolves_ids():
+    conn = _conn_with_config([
+        ("spotify_bot_refresh_token", "supersecret"),
+        ("welcome_channel_id", "10"),
+        ("greeter_role_id", "55"),
+        ("xp_enabled", "1"),
+        ("some_prompt", "x" * 500),
+    ])
+    guild = FakeGuild(
+        1,
+        [FakeChannel(10, "welcome")],
+        roles=[FakeRole(name="Greeter", is_default=False, rid=55)],
+    )
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    s = ac.build_config_summary(conn, guild, admin)
+    assert "supersecret" not in s  # secret value never surfaced
+    assert "refresh_token" not in s  # secret key filtered by name
+    assert "welcome_channel_id = #welcome" in s  # channel id → name
+    assert "greeter_role_id = @Greeter" in s  # role id → name
+    assert "xp_enabled = on" in s
+    assert "some_prompt" not in s  # over-long value skipped
+
+
+def test_context_inserts_config_summary_for_admin(monkeypatch):
+    guild, *_ = _guild_with_mixed_channels()
+    ac._pins.clear()
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(ac, "build_config_summary", lambda conn, g, m: "CFG: welcome=on")
+    admin = FakeMember(99, perms=FakeGuildPerms(administrator=True))
+    ctx = ac.build_asker_context(guild, admin, "db")
+    assert "CFG: welcome=on" in ctx
 
 
 # ── refresh_guild_pins ──────────────────────────────────────────────────────

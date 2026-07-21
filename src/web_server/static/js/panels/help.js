@@ -8,8 +8,26 @@ import { apiPost, esc } from "../api.js";
 
 // Render the advisor's plaintext answer with a safe markdown-lite pass. `esc`
 // runs first, so the tag substitutions below can only ever produce our own tags.
-function renderAnswerHtml(text) {
-  return esc(text)
+// `meta` carries { guild_id, channels } so Discord <#id> mentions and links
+// become clickable (channels is a {id: name} map of the asker's visible channels).
+function renderAnswerHtml(text, meta = {}) {
+  const guildId = meta.guild_id;
+  const channels = meta.channels || {};
+  let html = esc(text);
+  // Linkify plain URLs (e.g. the dashboard). Stop before an escaped entity so a
+  // URL directly followed by a <#id> mention doesn't swallow it.
+  html = html.replace(
+    /(https?:\/\/[^\s<&]+)/g,
+    (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`,
+  );
+  // Discord channel mentions: <#id> was escaped to &lt;#id&gt;.
+  html = html.replace(/&lt;#(\d+)&gt;/g, (_m, id) => {
+    const label = channels[id] ? `#${esc(channels[id])}` : "#channel";
+    return guildId
+      ? `<a href="https://discord.com/channels/${guildId}/${id}" target="_blank" rel="noopener">${label}</a>`
+      : label;
+  });
+  return html
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/`([^`]+?)`/g, "<code>$1</code>")
     .replace(/\n/g, "<br>");
@@ -55,7 +73,7 @@ function buildAskBox() {
     answer.textContent = "Thinking…";
     try {
       const res = await apiPost("/api/help/advisor", { question: q });
-      answer.innerHTML = renderAnswerHtml(res.answer || "");
+      answer.innerHTML = renderAnswerHtml(res.answer || "", res);
     } catch (err) {
       answer.textContent =
         err && /429/.test(String(err.message))

@@ -23,6 +23,7 @@ visibility gate is applied when the context is built, not when it's cached.
 from __future__ import annotations
 
 import logging
+import re
 import time
 
 import discord
@@ -69,9 +70,105 @@ def can_view(channel, viewer) -> bool:
         return False
 
 
+def visible_text_channels(guild, viewer) -> list:
+    """Text channels ``viewer`` may see (``viewer=None`` → public @everyone).
+
+    Shared by the context builder and the web surface (which uses it to label
+    ``<#id>`` mentions), so both agree on exactly what the asker can see.
+    """
+    vis = viewer if viewer is not None else getattr(guild, "default_role", None)
+    if vis is None:
+        return []
+    return [ch for ch in getattr(guild, "text_channels", []) if can_view(ch, vis)]
+
+
 # ---------------------------------------------------------------------------
 # Capability summary (what the asker can *do*)
 # ---------------------------------------------------------------------------
+
+
+def _can_see_config(member: discord.Member | None) -> bool:
+    """Config is admin-accessible, so only admins/manage-server get the summary."""
+    if member is None:
+        return False
+    p = member.guild_permissions
+    return bool(p.administrator or p.manage_guild)
+
+
+# Never surface these — the config KV table holds at least one secret
+# (spotify_bot_refresh_token), and future *_token/*_secret keys must stay hidden.
+_SECRET_KEY_RE = re.compile(
+    r"token|secret|refresh|password|passwd|api[_-]?key|webhook|oauth|credential",
+    re.I,
+)
+_CONFIG_VALUE_MAXLEN = 200
+_CONFIG_MAX_LINES = 80
+
+
+def _resolve_config_value(guild, key: str, value):
+    """Make a raw config value human/AI-readable (ids → names, flags → on/off)."""
+    v = ("" if value is None else str(value)).strip()
+    if not v:
+        return None
+    low = key.lower()
+    try:
+        if low.endswith(("channel_id", "channel")):
+            ch = guild.get_channel(int(v))
+            return f"#{ch.name}" if ch else f"channel {v}"
+        if low.endswith(("role_id", "role")):
+            r = guild.get_role(int(v))
+            return f"@{r.name}" if r else f"role {v}"
+    except (ValueError, TypeError, AttributeError):
+        pass
+    if v == "1":
+        return "on"
+    if v == "0":
+        return "off"
+    return v[:_CONFIG_VALUE_MAXLEN]
+
+
+def build_config_summary(conn, guild, member: discord.Member | None) -> str:
+    """A secret-filtered, name-resolved view of the guild's core (KV) settings.
+
+    Only returned to admins. Covers the settings kept in the shared ``config``
+    table (moderation/community-ops); feature areas with their own tables
+    (economy, wellness, games, …) are NOT here — the system prompt tells the
+    model to defer to the dashboard for those instead of guessing.
+    """
+    if not _can_see_config(member):
+        return ""
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM config WHERE guild_id = ? ORDER BY key",
+            (guild.id,),
+        ).fetchall()
+    except Exception:
+        log.exception("advisor config read failed for guild %s", getattr(guild, "id", "?"))
+        return ""
+
+    lines: list[str] = []
+    for row in rows:
+        key = row["key"]
+        if _SECRET_KEY_RE.search(key):
+            continue
+        raw = row["value"]
+        if raw is None or len(str(raw)) > _CONFIG_VALUE_MAXLEN:
+            continue  # skip long blobs (prompts / JSON) — noisy and large
+        resolved = _resolve_config_value(guild, key, raw)
+        if resolved is None:
+            continue
+        lines.append(f"{key} = {resolved}")
+        if len(lines) >= _CONFIG_MAX_LINES:
+            break
+
+    if not lines:
+        return ""
+    return (
+        "Core saved settings (you can see these because the asker is an admin; "
+        "these are the shared/config-table settings only — economy, wellness, "
+        "games, and other feature settings are NOT shown here):\n"
+        + "\n".join(lines)
+    )
 
 
 def capability_summary(member: discord.Member | None) -> str:
@@ -174,15 +271,14 @@ def build_asker_context(
     dashboard user we couldn't resolve to a guild member) we fall back to the
     guild's public (@everyone) visibility.
     """
-    vis = viewer if viewer is not None else getattr(guild, "default_role", None)
-    visible = [ch for ch in getattr(guild, "text_channels", []) if vis is not None and can_view(ch, vis)]
+    visible = visible_text_channels(guild, viewer)
     visible_ids = {ch.id for ch in visible}
 
     sections: list[str] = [capability_summary(viewer)]
 
-    # Channels the asker can see (name + topic).
+    # Channels the asker can see (name + <#id> mention + topic).
     topic_lines = [
-        f"#{ch.name} — {ch.topic.strip()[:MAX_TOPIC_CHARS]}"
+        f"#{ch.name} (<#{ch.id}>) — {ch.topic.strip()[:MAX_TOPIC_CHARS]}"
         for ch in visible
         if getattr(ch, "topic", None)
     ]
@@ -195,18 +291,24 @@ def build_asker_context(
     for ch in visible:
         texts = guild_pins.get(ch.id)
         if texts:
-            pin_blocks.append(f"Pinned in #{ch.name}:\n- " + "\n- ".join(texts))
+            pin_blocks.append(f"Pinned in #{ch.name} (<#{ch.id}>):\n- " + "\n- ".join(texts))
     if pin_blocks:
         sections.append("Pinned messages:\n" + "\n\n".join(pin_blocks))
 
-    # Server docs + announcements come from dedicated DB tables.
+    # Server docs, announcements, and (for admins) core settings come from the DB.
+    config_text = ""
     try:
         with open_db(db_path) as conn:
             docs = list_docs(conn, guild.id)
             anns = list_announcements(conn, guild.id)
+            config_text = build_config_summary(conn, guild, viewer)
     except Exception:
         log.exception("advisor context DB read failed for guild %s", getattr(guild, "id", "?"))
         docs, anns = [], []
+
+    # High-signal for admins — place right after the "who's asking" line.
+    if config_text:
+        sections.insert(1, config_text)
 
     doc_lines = []
     for d in docs[:MAX_DOCS]:

@@ -43,7 +43,10 @@ async def help_advisor(
     # Empty perm set = "any authenticated user" (help is not admin config).
     user: AuthenticatedUser = Depends(require_perms(set())),
 ):
-    from bot_modules.services.advisor_context import build_asker_context
+    from bot_modules.services.advisor_context import (
+        build_asker_context,
+        visible_text_channels,
+    )
     from bot_modules.services.advisor_service import (
         MODEL,
         answer_advisor,
@@ -57,6 +60,7 @@ async def help_advisor(
 
     model = MODEL
     guild_context = None
+    channels: dict[str, str] = {}
     if guild is not None:
         with ctx.open_db() as conn:
             model = get_advisor_model(conn, guild_id)
@@ -67,11 +71,19 @@ async def help_advisor(
             # they aren't a resolvable member.
             member = guild.get_member(user.user_id)
             guild_context = build_asker_context(guild, member, ctx.db_path)
+            # Only the asker's visible channels — used to turn <#id> mentions in
+            # the answer into links, and never a channel they can't see.
+            channels = {str(ch.id): ch.name for ch in visible_text_channels(guild, member)}
 
     result = await answer_advisor(
         body.question, body.history, model=model, guild_context=guild_context
     )
-    return {"ok": result.ok, "answer": result.answer}
+    return {
+        "ok": result.ok,
+        "answer": result.answer,
+        "guild_id": str(guild_id),
+        "channels": channels,
+    }
 
 
 # ── GET/PUT /config/advisor — the "Billy-bot" config panel ─────────────────
