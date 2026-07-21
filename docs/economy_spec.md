@@ -215,6 +215,37 @@ to currency.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger.
 
+### 3.5 Coin Drops (built — migration 105)
+- The bot drops a pouch of coins into `drops_channel_id` at random moments;
+  the **first member to press the drop message's Claim button** collects
+  it. The channel picker is the toggle (0 = off); everything is on the
+  dashboard's Economy Settings page (`drops_min_coins` 5 /
+  `drops_max_coins` 25, uniform roll; `drops_per_day` 4 as an *average*
+  cadence; `drops_expire_minutes` 60).
+- **Scheduling** (`economy_drops_loop`, 60 s tick, startup task factory):
+  each guild's next drop lands a jittered 0.5–1.5× of the average period
+  after the last, so members can't clock it. A due drop additionally waits
+  until (a) the channel isn't mid-game (`channel_is_busy`, the chat-revive
+  helper over `games_active_games` + `bot.game_busy_checks`), (b) the
+  guild holds no other open pouch, and (c) someone has spoken since the
+  bot's own newest message — a drop should land in conversation, not echo
+  into the void, so dead hours simply drop nothing (the due time stands).
+- **Claim** (`econ_drops`, `economy_drops_service`): `DropClaimButton` is a
+  stateless `DynamicItem` whose `custom_id` carries the drop id
+  (`econ_drop:claim:<id>`), so pouches survive restarts with no cache or
+  re-seed. The `econ_drops` row is created *before* the send (the button
+  needs the id; `message_id` starts 0 and is backfilled, or the open row
+  deleted if the send fails). The race is settled by a conditional UPDATE
+  (`status = 'open' AND expires_at > now`, rowcount 0 = lost — the
+  Guess-Who pattern, never check-then-write), then `apply_credit` kind
+  **`drop`** with the booster multiplier. Winner: the click edits the
+  embed to "claimed by X" and removes the button; losers get an ephemeral
+  "too slow". Claims only check `settings.enabled`, so a drop already
+  posted stays claimable even if the channel is re-pointed meanwhile.
+- **Expiry**: the tick sweeps overdue open drops (`status → 'expired'`,
+  select-then-conditional-update per row so a racing claim wins), edits the
+  message to "vanished" (button removed), and pays nobody.
+
 ## 4. Quest System
 
 ### 4.1 Authoring (Quests page, gated on `economy_manager_role` or admin —
@@ -1091,6 +1122,12 @@ The hourly economy loop:
 | Guild-local day rolled | XP→currency conversion (only the most recent marked local day — no retroactive backlog after an outage, §12); streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
 | Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; (v2) spotlight expiry; (rooms stage) room archive/purge |
 | Guild-local ISO week rolled | Weekly quest activation; community settlement; metrics rollup; (v2) spotlight inventory reset |
+
+The **coin-drops loop** (§3.5) is its own startup task on a 60 s tick:
+expiry sweep first, then the per-guild jittered drop scheduler. Its
+next-due times are deliberately in-memory — a restart just re-jitters each
+guild's next drop, and open pouches survive because their Claim button is
+a stateless `DynamicItem`.
 
 A second, lightweight startup task — `leaderboard_live_loop` — gives the
 leaderboard panel its near-real-time cadence: a 20 s poll over the

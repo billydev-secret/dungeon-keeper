@@ -76,6 +76,19 @@ class EconSettings:
     # (the quest, if any, still pays). Gated by the photo_post income-source
     # toggle like the quest is.
     reward_photo_post: int = 5
+    # Coin Drops (see economy_drops_service/_loop): the bot drops a pouch of
+    # coins in this channel at random moments; the first member to reply to
+    # the drop message claims it. The channel picker is the toggle — 0
+    # (default) = no drops. ``drops_per_day`` is an *average* cadence (each
+    # gap is jittered 0.5–1.5×, and a drop also waits for someone to have
+    # spoken since the bot's own last message, so dead hours drop nothing);
+    # amounts roll uniformly in [min, max]; unclaimed pouches expire after
+    # ``drops_expire_minutes`` and pay nobody.
+    drops_channel_id: int = 0
+    drops_min_coins: int = 5
+    drops_max_coins: int = 25
+    drops_per_day: int = 4
+    drops_expire_minutes: int = 60
     # How many quests of each cadence a member is shown (and can be paid for)
     # per period — their "personal board", drawn from that cadence's active
     # pool. Tuning these down is how a guild makes the board feel smaller

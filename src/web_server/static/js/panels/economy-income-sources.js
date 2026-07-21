@@ -155,6 +155,15 @@ function render(container, data, isAdmin) {
       </section>
 
       <section class="card">
+        <div class="section-label">Coin drops</div>
+        <div class="field-hint">The bot drops a random pouch of coins in a
+          configured channel at unpredictable moments — the first member to
+          press the drop's Claim button collects it; unclaimed pouches
+          expire. Channel, amounts, cadence and expiry are configured on
+          <a href="#/economy-config">Settings</a> (admin).</div>
+      </section>
+
+      <section class="card">
         <div class="section-label">Suggested sources (not built yet)</div>
         ${suggestions}
       </section>
