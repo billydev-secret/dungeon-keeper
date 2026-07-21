@@ -304,9 +304,9 @@ def test_embed_quest_board_summarizes_per_cadence():
     )
     board = next(f.value for f in embed.fields if f.name == "Quest board")
     assert board is not None
-    assert "`Daily  ` `3 yours · pool 14` 🪙 5–40 each" in board
+    assert "`Daily    3 yours · pool 14` 🪙 5–40 each" in board
     # A pool smaller than the configured size clamps to the pool.
-    assert "`Weekly ` `1 yours · pool 1 ` 🪙 30 each" in board
+    assert "`Weekly   1 yours · pool 1 ` 🪙 30 each" in board
     # A cadence sized 0 is off for this guild — no line at all.
     assert "Monthly" not in board
     # No individual titles leak into the summary.
@@ -325,7 +325,7 @@ def test_embed_quest_board_lists_event_quests():
     )
     board = next(f.value for f in embed.fields if f.name == "Quest board")
     assert board is not None
-    assert "`Anytime` `Secret Santa    ` 🪙 25 +⭐10xp" in board
+    assert "`Anytime  Secret Santa    ` 🪙 25 +⭐10xp" in board
     assert "Chatter" not in board
 
 

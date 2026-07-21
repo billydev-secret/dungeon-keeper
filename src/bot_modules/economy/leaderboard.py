@@ -563,8 +563,11 @@ def build_leaderboard_embed(
         body: list[str] = []
         if rows:
             desc_width = min(max(len(desc) for _, desc, _ in rows), 24)
+            # One monospace cell per row (cadence + description together) rather
+            # than two adjacent code spans — a single grey box keeps the columns
+            # squared up, while the payment stays outside for its emoji + bold.
             body = [
-                f"`{_pad(label, label_width)}` `{_pad(desc, desc_width)}` {pay}"
+                f"`{_pad(label, label_width)}  {_pad(desc, desc_width)}` {pay}"
                 for label, desc, pay in rows
             ]
         if overflow:
