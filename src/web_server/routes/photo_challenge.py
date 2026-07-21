@@ -49,8 +49,6 @@ class ConfigBody(BaseModel):
     channel_id: str = ""          # "" clears the dedicated channel
     ping_role_id: str = ""        # "" / "0" = no ping
     enabled: bool = True
-    react_threshold: int = 5      # distinct human reactors a post needs to pay
-    auto_react: str = ""          # emoji the bot seeds on each photo ("" = off)
 
 
 class ScheduleBody(BaseModel):
@@ -100,16 +98,12 @@ def _read_config(conn, guild_id: int) -> dict:
             "enabled": True,
             "channel_id": "",
             "ping_role_id": "",
-            "react_threshold": 5,
-            "auto_react": "",
         }
     opts = json.loads(row[1] or "{}")
     return {
         "enabled": bool(row[0]),
         "channel_id": str(opts.get("channel_id") or ""),
         "ping_role_id": str(opts.get("ping_role_id") or ""),
-        "react_threshold": int(opts.get("react_threshold") or 5),
-        "auto_react": str(opts.get("auto_react") or ""),
     }
 
 
@@ -158,10 +152,6 @@ async def set_config(
         role_raw = ""
     elif not role_raw.isdigit():
         raise HTTPException(status_code=400, detail="ping_role_id must be numeric")
-    # Reaction payout tuning (read by EconomyCog._on_photo_react): clamp the
-    # threshold to a sane 1..100, cap the auto-react emoji length.
-    threshold = max(1, min(100, int(body.react_threshold or 5)))
-    auto_react = (body.auto_react or "").strip()[:64]
 
     def _q():
         with ctx.open_db() as conn:
@@ -172,8 +162,6 @@ async def set_config(
             opts = json.loads(row[0] or "{}") if row else {}
             opts["channel_id"] = channel_raw
             opts["ping_role_id"] = role_raw
-            opts["react_threshold"] = threshold
-            opts["auto_react"] = auto_react
             enabled = int(body.enabled)
             if row is not None:
                 conn.execute(

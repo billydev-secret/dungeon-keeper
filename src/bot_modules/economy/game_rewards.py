@@ -168,7 +168,7 @@ async def fire_member_trigger(
     ``daily_occurrence=True`` keys the occurrence to the guild-local day
     (computed where the fire already derives it), making an event quest on
     this kind pay at most once per day by construction — the
-    voice_session/photo_react pattern for call sites without tz plumbing.
+    voice_session/photo_post pattern for call sites without tz plumbing.
     """
     try:
         guild = bot.get_guild(guild_id)
