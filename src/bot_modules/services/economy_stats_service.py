@@ -24,13 +24,17 @@ import statistics
 from typing import TYPE_CHECKING
 
 from bot_modules.economy import stats
-from bot_modules.economy.metrics import FAUCET_GROUPS
+from bot_modules.economy.metrics import FAUCET_GROUP_NAMES, FAUCET_GROUPS
 from bot_modules.services.economy_quests_service import active_member_ids
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
 
 _DAY = 86400.0
+
+# How many trailing 7-day buckets the income-source stacked bar spans. Eight
+# weeks is enough to see a trend without the chart turning into a hairline forest.
+_INCOME_WEEKS = 8
 
 
 def compute_stats(
@@ -56,12 +60,59 @@ def compute_stats(
         "supply": supply,
         "distribution": stats.balance_histogram(positive_balances),
         "flow_7d": _flow(conn, guild_id, cut7),
+        "income_sources": _income_sources(conn, guild_id, now),
         "members": _members(conn, guild_id, cut7, cut30, member_limit),
         "engagement": _engagement(conn, settings, guild_id, cut7, cut30, supply),
         "transfers_top": _transfers_top(conn, guild_id, cut30),
         "burn_top": _burn_top(conn, guild_id),
         "affordability": _affordability(conn, settings, guild_id, cut7),
     }
+
+
+# ── income sources (stacked bar over trailing weeks) ───────────────────
+
+
+def _income_sources(conn: sqlite3.Connection, guild_id: int, now: float) -> dict:
+    """Minted coins per faucet group over the last :data:`_INCOME_WEEKS`
+    trailing 7-day buckets — the composition of income over time.
+
+    Buckets are trailing epoch spans (no timezone math, per the module note):
+    bucket ``i`` (oldest first) covers ``[now - (n-i)·7d, now - (n-i-1)·7d)``.
+    Money follows the mint convention: positive credits excluding ``transfer_in``.
+    Kinds outside :data:`FAUCET_GROUPS` cannot mint, so they never appear.
+    """
+    span = 7 * _DAY
+    cut = now - _INCOME_WEEKS * span
+    # totals[bucket_index_from_recent][group] = coins. bucket 0 = most recent.
+    totals: list[dict[str, int]] = [
+        dict.fromkeys(FAUCET_GROUP_NAMES, 0) for _ in range(_INCOME_WEEKS)
+    ]
+    for r in conn.execute(
+        "SELECT kind, CAST((? - created_at) / ? AS INTEGER) AS bucket, "
+        "SUM(amount) AS s FROM econ_ledger "
+        "WHERE guild_id = ? AND amount > 0 AND kind != 'transfer_in' "
+        "AND created_at >= ? GROUP BY bucket, kind",
+        (now, span, guild_id, cut),
+    ):
+        b = int(r["bucket"])
+        group = FAUCET_GROUPS.get(str(r["kind"]))
+        # A credit exactly at ``cut`` lands in bucket _INCOME_WEEKS (out of range);
+        # clamp it into the oldest bucket rather than dropping it.
+        if group is None:
+            continue
+        b = min(b, _INCOME_WEEKS - 1)
+        totals[b][group] += int(r["s"])
+
+    # Emit oldest-first so the chart reads left→right in time.
+    buckets = []
+    for i in range(_INCOME_WEEKS - 1, -1, -1):
+        by_group = totals[i]
+        buckets.append({
+            "start": now - (i + 1) * span,
+            "totals": by_group,
+            "total": sum(by_group.values()),
+        })
+    return {"groups": list(FAUCET_GROUP_NAMES), "buckets": buckets}
 
 
 def _burn_top(

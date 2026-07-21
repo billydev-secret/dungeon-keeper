@@ -955,7 +955,11 @@ role or admin; member table capped at 500), complementing the weekly rollup with
 same-instant read of the ledger. It shows: **supply concentration** — total supply,
 holder count, median balance, top-10% share, and Gini, all computed over **positive
 balances only** (inequality of who-holds-what, not the zero-balance long tail); a
-fixed-bucket **balance histogram**; **7-day flow** — minted vs burned with a burn
+fixed-bucket **balance histogram**; an **income-sources stacked bar** — minted coins
+per faucet group (logins / activity / quests / games / grants, the same `FAUCET_GROUPS`
+split the rollup's `faucet_mix` uses) across the last **8 trailing 7-day buckets**, so the
+*composition* of income and how it shifts week to week is visible at a glance (`transfer_in`
+excluded, same as every other mint figure); **7-day flow** — minted vs burned with a burn
 rate, plus transfer volume and grants (money definitions match the rollup: mint /
 income exclude `transfer_in`, burn excludes `transfer_out`); a **per-member income
 velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend
