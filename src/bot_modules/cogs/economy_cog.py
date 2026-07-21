@@ -1293,6 +1293,12 @@ class EconomyCog(commands.Cog):
         self._guide_ref: dict[int, tuple[float, int, int]] = {}
         self._restick_tasks: dict[int, asyncio.Task[None]] = {}
         self._guide_locks: dict[int, asyncio.Lock] = {}
+        # The leaderboard/stats panel sticks to the bottom the same way; its own
+        # ref cache, debounce tasks, and per-guild lock (the lock also serialises
+        # a repost against the economy loop's in-place refresh via the panel id).
+        self._leaderboard_ref: dict[int, tuple[float, int, int]] = {}
+        self._lb_restick_tasks: dict[int, asyncio.Task[None]] = {}
+        self._leaderboard_locks: dict[int, asyncio.Lock] = {}
         # Photo Challenge channel id, TTL-cached so the on_message listener
         # costs a dict lookup, not a DB read, for every message in the guild:
         # guild_id → (monotonic expiry, channel_id).
@@ -1300,9 +1306,10 @@ class EconomyCog(commands.Cog):
         super().__init__()
 
     async def cog_unload(self) -> None:
-        for task in self._restick_tasks.values():
+        for task in (*self._restick_tasks.values(), *self._lb_restick_tasks.values()):
             task.cancel()
         self._restick_tasks.clear()
+        self._lb_restick_tasks.clear()
 
     @bank.command(name="wallet", description="Check your balance and recent activity.")
     async def bank_wallet(self, interaction: discord.Interaction) -> None:
@@ -3515,6 +3522,170 @@ class EconomyCog(commands.Cog):
             old_message_id=settings.guide_message_id,
         )
 
+    # ── leaderboard/stats panel sticky (keep it at the channel bottom) ────
+
+    async def _place_leaderboard_panel(
+        self,
+        guild: discord.Guild,
+        target: discord.TextChannel,
+        settings: EconSettings,
+        *,
+        old_channel_id: int,
+        old_message_id: int,
+    ) -> discord.Message | None:
+        """Delete the old leaderboard panel (if any) and post a fresh one at the
+        bottom of ``target`` with current data, persisting the new id. Returns
+        the message, or ``None`` when posting is forbidden. Serialised per guild
+        so ``/bank post-leaderboard``, a sticky repost, and the economy loop's
+        in-place refresh can't race into two panels.
+        """
+        lock = self._leaderboard_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            now_ts = time.time()
+
+            def _collect():
+                with self.ctx.open_db() as conn:
+                    data = collect_leaderboard_data(conn, guild.id, now_ts)
+                    known = get_known_users_bulk(
+                        conn, guild.id, [uid for uid, _ in data.top_earners]
+                    )
+                return data, known
+
+            data, known = await asyncio.to_thread(_collect)
+
+            def _name(uid: int) -> str:
+                member = guild.get_member(uid)
+                if member:
+                    return member.display_name
+                return known.get(uid) or f"User {uid}"
+
+            accent = await resolve_accent_color(self.ctx.db_path, guild)
+            embed = build_leaderboard_embed(
+                settings, data, _name, now_ts=now_ts, color=accent
+            )
+            if old_message_id and old_channel_id:
+                old_channel = guild.get_channel(old_channel_id)
+                if isinstance(old_channel, discord.TextChannel):
+                    try:
+                        old = await old_channel.fetch_message(old_message_id)
+                        await old.delete()
+                    except discord.HTTPException:
+                        pass
+            try:
+                message = await target.send(embed=embed, view=QuestBoardView())
+            except discord.Forbidden:
+                return None
+
+            # Record the new id before the DB-save await so our own repost's
+            # gateway event is recognised (and skipped) by the sticky listener.
+            self._leaderboard_ref[guild.id] = (
+                time.monotonic() + _GUIDE_STICKY_CACHE_TTL,
+                target.id,
+                message.id,
+            )
+
+            def _save() -> None:
+                with self.ctx.open_db() as conn:
+                    save_econ_settings(
+                        conn,
+                        guild.id,
+                        {
+                            "leaderboard_channel_id": target.id,
+                            "leaderboard_message_id": message.id,
+                        },
+                    )
+
+            await asyncio.to_thread(_save)
+            return message
+
+    @commands.Cog.listener("on_message")
+    async def _restick_leaderboard_panel(self, message: discord.Message) -> None:
+        """Arm a debounced repost when a member posts below the leaderboard
+        panel — same bottom-sticky behaviour as the guide panel."""
+        if message.guild is None or message.author.bot:
+            return
+        guild_id = message.guild.id
+        panel_channel_id, panel_message_id = await self._leaderboard_panel_ref(guild_id)
+        if not should_restick_guide(
+            message_channel_id=message.channel.id,
+            message_id=message.id,
+            panel_channel_id=panel_channel_id,
+            panel_message_id=panel_message_id,
+        ):
+            return
+        self._schedule_leaderboard_restick(guild_id)
+
+    async def _leaderboard_panel_ref(self, guild_id: int) -> tuple[int, int]:
+        """Cached ``(channel_id, message_id)`` of the leaderboard panel, or
+        ``(0, 0)`` when the economy is off or none is posted."""
+        entry = self._leaderboard_ref.get(guild_id)
+        now = time.monotonic()
+        if entry is not None and entry[0] > now:
+            return entry[1], entry[2]
+
+        def _load() -> tuple[int, int]:
+            with self.ctx.open_db() as conn:
+                s = load_econ_settings(conn, guild_id)
+            if not s.enabled:
+                return 0, 0
+            return s.leaderboard_channel_id, s.leaderboard_message_id
+
+        channel_id, message_id = await asyncio.to_thread(_load)
+        self._leaderboard_ref[guild_id] = (
+            now + _GUIDE_STICKY_CACHE_TTL,
+            channel_id,
+            message_id,
+        )
+        return channel_id, message_id
+
+    def _schedule_leaderboard_restick(self, guild_id: int) -> None:
+        existing = self._lb_restick_tasks.get(guild_id)
+        if existing is not None and not existing.done():
+            existing.cancel()
+        self._lb_restick_tasks[guild_id] = asyncio.create_task(
+            self._delayed_leaderboard_restick(guild_id)
+        )
+
+    async def _delayed_leaderboard_restick(self, guild_id: int) -> None:
+        try:
+            await asyncio.sleep(_GUIDE_STICKY_DELAY)
+        except asyncio.CancelledError:
+            return
+        try:
+            await self._restick_leaderboard_now(guild_id)
+        except Exception:
+            log.exception(
+                "econ leaderboard sticky: repost failed in guild %s", guild_id
+            )
+
+    async def _restick_leaderboard_now(self, guild_id: int) -> None:
+        """Repost the existing leaderboard panel at the bottom of its channel."""
+
+        def _load() -> EconSettings:
+            with self.ctx.open_db() as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        if (
+            not settings.enabled
+            or not settings.leaderboard_channel_id
+            or not settings.leaderboard_message_id
+        ):
+            return
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        channel = guild.get_channel(settings.leaderboard_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        await self._place_leaderboard_panel(
+            guild,
+            channel,
+            settings,
+            old_channel_id=settings.leaderboard_channel_id,
+            old_message_id=settings.leaderboard_message_id,
+        )
+
     # ── auto-updating leaderboard panel ──────────────────────────────────
 
     @bank.command(
@@ -3591,42 +3762,24 @@ class EconomyCog(commands.Cog):
                 )
                 return
 
-        # Moving or reposting: drop the stale panel if we can still find it.
-        if settings.leaderboard_message_id and settings.leaderboard_channel_id:
-            old_channel = guild.get_channel(settings.leaderboard_channel_id)
-            if isinstance(old_channel, discord.TextChannel):
-                try:
-                    old = await old_channel.fetch_message(
-                        settings.leaderboard_message_id
-                    )
-                    await old.delete()
-                except discord.HTTPException:
-                    pass
-
-        try:
-            message = await target.send(embed=embed, view=QuestBoardView())
-        except discord.Forbidden:
+        # Moving or reposting → drop the stale panel and post a fresh one at the
+        # bottom via the shared placer (also updates the sticky cache).
+        message = await self._place_leaderboard_panel(
+            guild,
+            target,
+            settings,
+            old_channel_id=settings.leaderboard_channel_id,
+            old_message_id=settings.leaderboard_message_id,
+        )
+        if message is None:
             await interaction.response.send_message(
                 f"I don't have permission to post in {target.mention}.",
                 ephemeral=True,
             )
             return
-
-        def _save() -> None:
-            with self.ctx.open_db() as conn:
-                save_econ_settings(
-                    conn,
-                    guild.id,
-                    {
-                        "leaderboard_channel_id": target.id,
-                        "leaderboard_message_id": message.id,
-                    },
-                )
-
-        await asyncio.to_thread(_save)
         await interaction.response.send_message(
             f"Posted the leaderboard panel in {target.mention} — it refreshes "
-            "itself live, within a couple of minutes of economy activity.",
+            "itself live and stays at the bottom of the channel.",
             ephemeral=True,
         )
 

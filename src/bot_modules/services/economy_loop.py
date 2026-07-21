@@ -1001,6 +1001,15 @@ async def run_guild_leaderboard(
         message = await channel.fetch_message(settings.leaderboard_message_id)
         await message.edit(embed=embed, view=QuestBoardView())
     except discord.NotFound:
+        # The bottom-sticky repost deletes the old panel and posts a new one, so
+        # a 404 here may just mean it moved. Re-read the id: if it changed, the
+        # panel is alive under a new message — don't retire it.
+        def _current_id() -> int:
+            with open_db(db_path) as conn:
+                return load_econ_settings(conn, guild_id).leaderboard_message_id
+
+        if await asyncio.to_thread(_current_id) != settings.leaderboard_message_id:
+            return
 
         def _clear() -> None:
             with open_db(db_path) as conn:

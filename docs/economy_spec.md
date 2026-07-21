@@ -847,8 +847,14 @@ the member owns and gift rentals where they are the beneficiary.
   panel at most once per 120 s — so the panel moves within ~2 minutes of
   the action while a busy hour stays ≤30 edits. The hourly economy-loop
   pass (`run_guild_leaderboard`) remains the backstop for restarts and
-  quiet drift; a 404 on the stored message clears the ids, so deleting the
-  panel message is how staff retire it. Collector + builder in
+  quiet drift. **Bottom-sticky:** like the guide panel, a member message in
+  the panel's channel arms a debounced repost (`_restick_leaderboard_panel` →
+  `_place_leaderboard_panel`, delete + repost fresh at the bottom, 6 s
+  debounce, per-guild lock), so the stats panel stays the channel's last
+  message. Because a re-stick changes the message id, the loop's 404 handler
+  re-reads the id and only clears when it's unchanged — a moved panel is not
+  a deleted one, so deleting the message (id still stored) is still how staff
+  retire it. Collector + builder in
   `economy/leaderboard.py` (pure — Discord I/O stays in the cog/loops);
   ids are bot-managed and not dashboard-editable.
 - **Manager surface (dashboard):** the **Economy** nav section, gated on
