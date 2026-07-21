@@ -16,6 +16,7 @@ export const HELP_GROUPS = [
     // Nav items are alphabetized within their group; these labels are chosen
     // so Getting Started sorts first.
     { page: "help-start",    anchor: "getting-started",   label: "Getting Started" },
+    { page: "help-ask",      anchor: "ask-guide",         label: "Ask the Guide (AI)" },
     { page: "help-overview", anchor: "functional-blocks", label: "Overview (Feature Map)" },
   ]},
   // Groups run audience-first — members, then moderators, then admins —
