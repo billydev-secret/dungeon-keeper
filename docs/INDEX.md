@@ -103,6 +103,7 @@ feature and also appear in the Design table above.
 | [plans/chat-revive-session-model.md](plans/chat-revive-session-model.md) | Session-gap lull model (replaces v1's rhythm fire threshold) | Built 2026-07-18 |
 | [plans/config-model-unification.md](plans/config-model-unification.md) | `guild_config` becomes the single source of truth (kills flat AppContext fields) | Implemented 2026-07-02 |
 | [plans/economy-and-perk-shop.md](plans/economy-and-perk-shop.md) | Economy core: wallets, quests, Bank Manager, rentals, metrics | Stages 0–4 built; stage 5 soak/tuning active |
+| [plans/embed-style-conformance.md](plans/embed-style-conformance.md) | Embed style-guide conformance sweep (color rulings, currency vocab, footers, games full-accent) from a 5-agent audit of all 272 embeds | Stage 0 (spec) done 2026-07-21; stages 1–7 in progress |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sinks: rerolls, QOTD sponsor, burn list, PvP wagers | All stages built (4b 2026-07-20) |
 | [plans/economy-sinks-round-3.md](plans/economy-sinks-round-3.md) | Sinks: gifts, shield, voice lease, emoji, raffle | All five stages built 2026-07-19 (lease + raffle ship dark) |
 | [plans/external-game-economy.md](plans/external-game-economy.md) | External-bot payouts (Gamebot CAH + Cat Bot) via multi-watch collector | Stages 1–3 shipped |

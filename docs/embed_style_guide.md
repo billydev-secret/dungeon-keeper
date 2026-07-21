@@ -8,11 +8,64 @@ server announcements, see `server_announcement_style.md`.)
 ## Color
 
 - New embeds take their color from **`resolve_accent_color(db_path, guild)`** —
-  the guild's brand accent. Don't hard-code a color.
+  the guild's brand accent. Don't hard-code a color. A builder that lives away
+  from the guild/db (an `embeds.py` module) takes the resolved color as a
+  `color=`/`accent` **param** and lets the cog resolve it; a hard-coded value as
+  a `color is None` fallback is fine, an *un-overridable* hard-code is not.
 - Keep **red / green / etc. only where the color *is* the information** — a
-  deliberate, commented exception. Examples: the economy register's
-  credit-green / debit-red / transfer-neutral, a semantic "danger" confirm.
-  If the color doesn't carry meaning, use the accent.
+  deliberate, commented exception. The sanctioned semantic set is
+  **green** = success / win / approved / credit, **red** = error / loss /
+  denied / debit / danger, **blurple** = neutral / transfer / no-guild fallback,
+  **orange-yellow** = warning / expired / caution. Anything outside that set,
+  or a semantic color on a surface where the state isn't actually that state, is
+  drift — use the accent. Example: the economy register's credit-green /
+  debit-red / transfer-blurple.
+- **Games follow the accent** (ruling 2026-07-21). A game embed is themed by its
+  guild accent like everything else; only true **win = green / loss = red**
+  (and warning-orange for expired/abandoned) stay semantic. The old per-phase
+  palette (lobby-gold / active-blue / results / recap) is retired — a builder
+  that hard-codes a phase color with no `color` param is the pattern to fix.
+- **Per-domain identity palettes are a deliberate exception.** A few features
+  carry a *fixed brand color* instead of the guild accent, as an intentional
+  visual identity — centralized in **`services/embeds.py`** and always used via
+  its named constant (never a raw hex literal copy). Sanctioned identities:
+  **bios** ember (also dashboard-configurable), **wellness** green
+  (`WELLNESS_PRIMARY`), the **moderation** palette (`MOD_JAIL` / `MOD_WARNING` /
+  `MOD_SUCCESS` / `MOD_INFO` / `MOD_TICKET` / `MOD_POLICY`), **starboard** gold,
+  **dm-perms** gold. A new feature does **not** get an identity color by
+  default — use the accent; granting one is a deliberate choice recorded here,
+  not something to invent per-embed.
+
+## Currency vocabulary
+
+- Render a coin amount as **`{settings.currency_emoji} **{n:,}** {unit}`** — the
+  configured emoji, the number **bolded with a thousands separator**, and a unit
+  that goes **singular at 1** (`currency_name` vs `currency_plural`, via the
+  `_reward_text` / `_unit` helpers). Never a bare `500 coins`, never an
+  always-plural `1 coins`, never an un-separated `1500`.
+- The currency emoji is guild-configurable and may be a **custom** emoji, so it
+  only renders in the **title / description / fields** — see Footers below.
+
+## Ledger rows
+
+- Any surface that lists `econ_ledger` rows (the register feed, `/bank wallet`)
+  renders a row's `kind` through **`register.kind_display(kind)`** — the shared
+  (glyph, human-label) map — never the raw snake_case `kind` string. One map
+  owns the vocabulary; an unmapped kind degrades to 🪙 + a title-cased name.
+
+## Footers & author names
+
+- Footer and author text render as **plain text**: a custom emoji `<:name:id>`
+  shows as its raw tag and markdown doesn't format. Keep custom/guild-settable
+  emoji and `**bold**` in the title / description / fields, not the footer.
+  **Unicode** emoji (🪙, 🔔) are fine in a footer.
+
+## Titles & field glyphs
+
+- Lead an embed **title** with a relevant emoji when its sibling cards in the
+  same feature do — a glyph-rich card with a bare title reads as half-styled.
+  Keep the glyph vocabulary consistent within a feature (one concept, one
+  glyph). Glyph-lead **field names** on cards whose other fields are glyph-led.
 
 ## Section spacing (breathing room)
 
