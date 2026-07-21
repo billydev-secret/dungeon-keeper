@@ -83,7 +83,8 @@ export function mount(container, initialParams) {
       columns.push({
         key: "pruned_at",
         label: "Days since stripped",
-        format: (v) => (v == null ? "—" : daysSince(v)),
+        // null = implicit strip: grant recorded, removal never was (bot downtime)
+        format: (v) => (v == null ? "unrecorded" : daysSince(v)),
       });
     }
     renderSortableTable(wrap, {

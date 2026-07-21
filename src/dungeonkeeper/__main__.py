@@ -26,6 +26,10 @@ from bot_modules.services.role_grant_audit_service import grant_audit_card_loop
 from bot_modules.announcements.buttons import AnnouncementRoleButton
 from bot_modules.chat_revive.actions import ReviveOptInButton
 from bot_modules.services.chat_revive_loop import chat_revive_loop
+from bot_modules.services.economy_drops_loop import (
+    DropClaimButton,
+    economy_drops_loop,
+)
 from bot_modules.services.economy_loop import (
     economy_loop,
     leaderboard_live_loop,
@@ -285,6 +289,10 @@ def main() -> None:
     # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
     bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)
 
+    # Register the persistent coin-drop Claim button — a pouch posted before a
+    # restart stays claimable after it.
+    bot.add_dynamic_items(DropClaimButton)
+
     # Register persistent Rules Watch label buttons for unlabeled events
     from bot_modules.rules_watch.alert import register_persistent_views as _rw_register_views
     _rw_register_views(bot, db_path)
@@ -336,6 +344,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: register_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: leaderboard_live_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: economy_drops_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: chat_revive_loop(bot, db_path))
 

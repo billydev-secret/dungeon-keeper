@@ -60,6 +60,7 @@ SKIP_KINDS: tuple[str, ...] = ("login", "conversion", "transfer_in")
 # meta carries nothing extra to say.
 _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "quest": ("💰", "Quest reward"),
+    "quest_bonus": ("🎉", "Quest board clear"),
     "quest_community": ("🤝", "Community quest"),
     "rental": ("🛒", "Perk rental"),
     "transfer_out": ("↔️", "Transfer sent"),
@@ -68,6 +69,7 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "milestone": ("🏆", "Streak milestone"),
     "conversion": ("✨", "XP conversion"),
     "qotd": ("💬", "Question of the day"),
+    "drop": ("🪂", "Coin drop claimed"),
     "photo_post": ("📸", "Photo Challenge post"),
     "game_participation": ("🎲", "Game participation"),
     "game_win": ("🥇", "Game win"),

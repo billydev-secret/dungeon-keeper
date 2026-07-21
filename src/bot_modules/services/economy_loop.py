@@ -1,12 +1,14 @@
-"""Nightly XP→currency conversion, driven by an hourly day-roll detector.
+"""Hourly day-roll detector: quest rotation, settlement, and (when enabled) an
+optional nightly XP→currency conversion.
 
 Each guild's local calendar day is tracked in ``econ_day_marks``. On the hour
 we compare the current guild-local day to the stored mark; when it rolls
-forward we sum the day-that-just-ended's ``xp_events`` per user and convert each
-via :func:`economy_service.process_conversion` (idempotent per user/day), then
-advance the mark **last** — so a crash mid-batch simply replays harmlessly on
-the next tick. First sight of a guild only records the mark (no retroactive
-conversion), and disabled guilds are skipped entirely.
+forward, and **only if the guild's ``xp_per_coin`` rate is positive** (the
+faucet ships off), we sum the day-that-just-ended's ``xp_events`` per user and
+convert each via :func:`economy_service.process_conversion` (idempotent per
+user/day). The mark advances **last** — so a crash mid-batch simply replays
+harmlessly on the next tick. First sight of a guild only records the mark (no
+retroactive conversion), and disabled guilds are skipped entirely.
 
 The same hourly tick also drives the quest surface (spec §4):
 
@@ -237,9 +239,10 @@ def run_guild_day_roll(
     """Detect and process a guild-local day (and ISO-week) roll.
 
     First sight of a guild just records both marks — nothing is converted,
-    rotated, or settled retroactively. On a day roll, every user with
-    ``xp_events`` on the day that just ended is converted (booster ceil per
-    member) and the daily rotate-tag pool advances one slot. When the ISO week
+    rotated, or settled retroactively. On a day roll, when the guild's
+    ``xp_per_coin`` rate is positive (the faucet is off by default), every user
+    with ``xp_events`` on the day that just ended is converted (booster ceil per
+    member); the daily rotate-tag pool advances one slot regardless. When the ISO week
     also changed, the weekly pool advances and completed community quests are
     settled. Both marks advance **last**, together — because conversion and
     settlement are idempotent, a crash before the mark update replays without
@@ -274,29 +277,33 @@ def run_guild_day_roll(
     week_rolled = False
 
     # ── day roll: convert the day that just ended, advance daily pool ──
-    start, end = logic.local_day_bounds(last_day, offset)
-    rows = conn.execute(
-        """
-        SELECT user_id, SUM(amount) AS xp
-        FROM xp_events
-        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
-        GROUP BY user_id
-        """,
-        (guild_id, start, end),
-    ).fetchall()
-    for r in rows:
-        user_id = int(r["user_id"])
-        xp = float(r["xp"] or 0.0)
-        booster = member_is_booster(bot, guild_id, user_id)
-        process_conversion(
-            conn,
-            settings,
-            guild_id,
-            user_id,
-            local_day=last_day,
-            xp=xp,
-            booster=booster,
-        )
+    # The XP→coin faucet is off when the rate is 0 (the default): skip it
+    # entirely so nothing is written or accumulated. Re-enabling (a positive
+    # rate on the dashboard) then resumes from that day, not a backlog.
+    if settings.xp_per_coin > 0:
+        start, end = logic.local_day_bounds(last_day, offset)
+        rows = conn.execute(
+            """
+            SELECT user_id, SUM(amount) AS xp
+            FROM xp_events
+            WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+            GROUP BY user_id
+            """,
+            (guild_id, start, end),
+        ).fetchall()
+        for r in rows:
+            user_id = int(r["user_id"])
+            xp = float(r["xp"] or 0.0)
+            booster = member_is_booster(bot, guild_id, user_id)
+            process_conversion(
+                conn,
+                settings,
+                guild_id,
+                user_id,
+                local_day=last_day,
+                xp=xp,
+                booster=booster,
+            )
 
     rotate_pool(conn, guild_id, "daily")
     prune_kind_activity(conn, guild_id, today)

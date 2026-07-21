@@ -216,6 +216,22 @@ def test_disabled_guild_skipped(db):
     assert _conversion_count(db) == 0
 
 
+def test_faucet_off_converts_nothing_but_still_rolls(db):
+    # xp_per_coin 0 (the shipped default) = faucet off: the day still rolls
+    # (mark advances) but no XP is converted and no conversion row is written —
+    # so a later re-enable resumes from that day rather than dumping a backlog.
+    _enable(db, xp_per_coin=0.0)
+    bot = _Bot([_Guild(GUILD)])
+    _roll(bot, db, _ts(D1))  # first run → mark D1
+
+    _add_xp(db, USER, 100.0, _ts(D1))
+    _roll(bot, db, _ts(D2))  # roll D1 → but faucet off
+
+    assert _mark(db) == D2  # the day still rolled
+    assert _balance(db) == 0  # nothing minted
+    assert _conversion_count(db) == 0  # nothing accumulated
+
+
 def test_booster_member_gets_ceil(db):
     _enable(db)  # booster_multiplier default 1.5
     bot = _Bot([_Guild(GUILD, {USER: _Member(booster=True)})])

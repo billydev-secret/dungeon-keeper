@@ -341,6 +341,23 @@ async def _alert_if_role_ceiling(
         log.warning("perk_actions: could not post role-ceiling alert in %s", guild.id)
 
 
+def should_revert_nick(
+    entitlements: set[str], desired_name: str, current_nick: str | None
+) -> bool:
+    """Whether a lapsed custom-name perk should also reset the server nickname.
+
+    The name perk (``set_role_name``) sets both the personal-role name and the
+    member's nick. When ``role_name`` is no longer entitled we revert the nick —
+    but only if it still equals the perk's name, so we never clobber a nick the
+    member changed since (e.g. a game name-penalty stake).
+    """
+    return (
+        "role_name" not in entitlements
+        and bool(desired_name)
+        and current_nick == desired_name
+    )
+
+
 async def revoke_role_perks(
     bot: discord.Client, db_path: Path, guild_id: int, user_id: int
 ) -> None:
@@ -358,6 +375,19 @@ async def revoke_role_perks(
         return ent, (dict(row) if row is not None else None)
 
     raw_ent, desired = await asyncio.to_thread(_read)
+
+    # Revert the nickname the name perk set — fires whether or not other perks
+    # remain (so a role_name-only lapse still resets it), before the re-project.
+    member = guild.get_member(user_id)
+    if (
+        member is not None
+        and desired
+        and should_revert_nick(raw_ent, str(desired["name"]), member.nick)
+    ):
+        try:
+            await member.edit(nick=None, reason="Economy custom-name perk lapsed")
+        except discord.HTTPException:
+            log.warning("perk_actions: could not reset nick for %s", user_id)
 
     if raw_ent:
         # Still entitled to something (e.g. gradient lapsed but color remains) —

@@ -252,13 +252,14 @@ async def _execute_grant_audit_post(
 
     guild_id = guild.id
     role_id = role.id
+    role_name = role.name
     now_ts = _time.time()
 
     def _load():
         with ctx.open_db() as conn:
             return (
                 load_card_ref(conn, guild_id),
-                gather_grant_audit(conn, guild_id, role_id, min_level),
+                gather_grant_audit(conn, guild_id, role_id, min_level, role_name),
             )
 
     ref, gathered = await asyncio.to_thread(_load)

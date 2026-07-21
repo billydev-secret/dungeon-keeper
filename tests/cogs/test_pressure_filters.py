@@ -3,10 +3,24 @@ from __future__ import annotations
 
 from bot_modules.duels.filters import (
     WAGER_STAKES_TEXT,
+    contains_disallowed_content,
     resolve_stakes_text,
     validate_nickname,
     validate_stakes,
 )
+
+
+# ── contains_disallowed_content (free-text guard: RR question/reply, confess) ──
+
+
+def test_contains_disallowed_content_passes_clean_text():
+    assert contains_disallowed_content("what's your favorite dessert?") is False
+
+
+def test_contains_disallowed_content_flags_caller_denylist_case_insensitively():
+    # Uses a caller-supplied pattern so no real slur is needed in the test.
+    assert contains_disallowed_content("please frobnicate", denylist=["frobnicate"]) is True
+    assert contains_disallowed_content("FROBNICATE now", denylist=["frobnicate"]) is True
 
 
 # ── validate_nickname ────────────────────────────────────────────────────────

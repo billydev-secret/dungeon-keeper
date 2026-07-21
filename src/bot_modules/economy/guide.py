@@ -103,10 +103,17 @@ def build_guide_embed(
     earn_lines = [
         f"`{_pad(label, width)}` {value}" for label, value in earn_rows
     ]
-    earn_lines.append(
-        f"Chatting earns XP all day — each night it converts into {plural} "
-        "automatically. `/bank quests` adds daily and weekly goals on top."
-    )
+    # The XP→coin conversion line only holds when the faucet is on (rate > 0);
+    # it ships off, so promise it only when a guild has re-enabled it.
+    if settings.xp_per_coin > 0:
+        earn_lines.append(
+            f"Chatting earns XP all day — each night it converts into {plural} "
+            "automatically. `/bank quests` adds daily and weekly goals on top."
+        )
+    else:
+        earn_lines.append(
+            "`/bank quests` adds daily and weekly goals — the surest way to earn."
+        )
     embed.add_field(
         name="Earning",
         value="\n".join(earn_lines) + "\n\u200b",

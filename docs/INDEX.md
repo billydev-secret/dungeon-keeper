@@ -29,6 +29,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
 | [docs_cog_spec.md](docs_cog_spec.md) | `/docs` cog: posts dashboard-authored docs into channels (not this docs/ folder) |
+| [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels (accent color, section spacing, monospace tables, persistent views, ping allow-listing) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
 | [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`). Photo Challenge left this suite — it's now a standalone scheduled dashboard feature (own channel + schedule, `/api/photo-challenge`, panel `photo-challenge.js`) |
@@ -48,6 +49,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [mobile_layout_testing.md](mobile_layout_testing.md) | Browser-driven responsive-layout gate: overflow/clip checks across every panel at phone/tablet/desktop; scoped per-commit, full nightly |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
+| [server_announcement_style.md](server_announcement_style.md) | Member/mod-facing guide for formatting server announcements & pinned posts (spacing, headings, links). A draft to post/pin in Discord, not bot behavior |
 | [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch functional spec (v0.3 + §12 ledger) |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |

@@ -231,17 +231,25 @@ DASHBOARD_PORT=8080
 **loopback-only** (`DASHBOARD_HOST=127.0.0.1`, port 8080) and is published to
 the internet through a **cloudflared tunnel** — Cloudflare terminates TLS and
 forwards to `http://127.0.0.1:8080`, so no port is ever exposed on the box.
-Discord OAuth is enabled (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
-`SESSION_SECRET` via
-`python -c "import secrets; print(secrets.token_urlsafe(32))"`, and
-`DASHBOARD_BASE_URL` set to the public tunnel hostname), with the `/callback`
-redirect URI registered in the Developer Portal.
+Discord OAuth handles login, with `DASHBOARD_BASE_URL` set to the public
+tunnel hostname. A classic reverse proxy (nginx/Caddy) terminating TLS also
+works in place of the tunnel.
 
-Alternatives: without OAuth it runs in **open LAN mode** (no login) — bind
-`0.0.0.0` only on a trusted LAN. A classic reverse proxy (nginx/Caddy)
-terminating TLS also works in place of the tunnel.
+**Auth fails closed.** The dashboard refuses to start unless auth is explicitly
+configured one of two ways:
 
-> **Do not expose the open-LAN dashboard to the internet** — it has no auth.
+- **Discord OAuth (public):** set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+  `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(32))"`),
+  and `DASHBOARD_BASE_URL`, add the `/callback` redirect URI in the Developer
+  Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
+- **Open LAN mode (no login):** set `DASHBOARD_OPEN_AUTH=1`. This serves a
+  **full-admin, no-auth** dashboard and is forced to a loopback bind. It must be
+  an explicit choice — a missing OAuth secret no longer silently falls back to
+  it, so a dropped env var can't publish an admin-to-everyone dashboard.
+
+> **Never expose open-LAN mode (`DASHBOARD_OPEN_AUTH=1`) to the internet** — it
+> has no auth, and a tunnel (e.g. cloudflared) bridging the loopback bind to the
+> public internet would expose full admin to everyone.
 
 ---
 

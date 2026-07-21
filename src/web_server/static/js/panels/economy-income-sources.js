@@ -20,7 +20,7 @@ const FAUCET_FIELDS = [
   ["reward_game_participation", "Game participation"],
   ["reward_game_win", "Game win bonus"],
   ["reward_photo_post", "Photo Challenge post (flat award)"],
-  ["xp_per_coin", "XP → coin conversion (XP per coin)"],
+  ["xp_per_coin", "XP → coin conversion (XP per coin; 0 = off)"],
 ];
 const FLOAT_FAUCETS = new Set(["xp_per_coin"]);
 
@@ -152,6 +152,15 @@ function render(container, data, isAdmin) {
       <section class="card">
         <div class="section-label">Built-in faucet rates</div>
         ${faucetSection(data, isAdmin)}
+      </section>
+
+      <section class="card">
+        <div class="section-label">Coin drops</div>
+        <div class="field-hint">The bot drops a random pouch of coins in a
+          configured channel at unpredictable moments — the first member to
+          press the drop's Claim button collects it; unclaimed pouches
+          expire. Channel, amounts, cadence and expiry are configured on
+          <a href="#/economy-config">Settings</a> (admin).</div>
       </section>
 
       <section class="card">

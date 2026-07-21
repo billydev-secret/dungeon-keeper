@@ -104,6 +104,45 @@ function render(container, cfg, channels, roles, members) {
           <div class="field-hint">Applied to faucet credits for server boosters (≥ 1).</div>
         </div>
 
+        <div class="section-label">Coin Drops</div>
+        <div class="field">
+          <label>Drop channel</label>
+          <span data-picker="drops_channel_id"></span>
+          <div class="field-hint">The bot drops a pouch of coins here at random
+            moments; the first member to press the drop's <em>Claim</em>
+            button collects it. Leave unset to turn drops off. Drops wait
+            for conversation — nothing lands while the channel is silent or
+            mid-game.</div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Min coins</label>
+            <input type="number" name="drops_min_coins" min="0" step="1"
+              value="${cfg.drops_min_coins}" style="max-width:120px;" />
+          </div>
+          <div class="field">
+            <label>Max coins</label>
+            <input type="number" name="drops_max_coins" min="0" step="1"
+              value="${cfg.drops_max_coins}" style="max-width:120px;" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Drops per day (average)</label>
+            <input type="number" name="drops_per_day" min="0" max="48" step="1"
+              value="${cfg.drops_per_day}" style="max-width:120px;" />
+          </div>
+          <div class="field">
+            <label>Expire after (minutes)</label>
+            <input type="number" name="drops_expire_minutes" min="1" step="1"
+              value="${cfg.drops_expire_minutes}" style="max-width:120px;" />
+          </div>
+        </div>
+        <div class="field-hint" style="margin-top:-6px;">Each pouch rolls a
+          random amount between min and max. The daily count is an average —
+          timing is jittered so members can't clock it. An unclaimed pouch
+          vanishes after the expiry window and pays nobody.</div>
+
         <div class="section-label">Branding</div>
         <div class="field-row">
           <div class="field">
@@ -160,6 +199,11 @@ function render(container, cfg, channels, roles, members) {
     roles,
     String(cfg.game_role_id),
   );
+  const dropsChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="drops_channel_id"]'),
+    channels,
+    String(cfg.drops_channel_id),
+  );
   const hostPicker = mountPicker(
     form.querySelector('[data-picker="community_host_user_id"]'),
     toMemberOptions(members),
@@ -171,6 +215,10 @@ function render(container, cfg, channels, roles, members) {
     "booster_multiplier",
     "quest_set_bonus_daily",
     "quest_set_bonus_weekly",
+    "drops_min_coins",
+    "drops_max_coins",
+    "drops_per_day",
+    "drops_expire_minutes",
   ];
   const floatKeys = new Set(["booster_multiplier"]);
   const strKeys = [
@@ -192,6 +240,7 @@ function render(container, cfg, channels, roles, members) {
       // Pydantic coerces the string to int losslessly server-side.
       bank_channel_id: channelPicker.getValue() || "0",
       register_channel_id: registerChannelPicker.getValue() || "0",
+      drops_channel_id: dropsChannelPicker.getValue() || "0",
       manager_role_id: rolePicker.getValue() || "0",
       game_role_id: gameRolePicker.getValue() || "0",
       community_host_user_id: hostPicker.getValue() || "0",

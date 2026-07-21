@@ -539,3 +539,101 @@ async def test_refresh_card_noop_without_stored_ref(db_path):
     bot, channel, message = _card_bot(guild)
     await refresh_grant_audit_card(bot, db_path, GUILD_ID)
     channel.fetch_message.assert_not_awaited()
+
+
+# ── implicit strips (grant recorded, removal never was — the Maju case) ──
+
+
+def _seed_grant_event(conn, user_id, granted_at, role_name="NSFW"):
+    conn.execute(
+        "INSERT INTO role_events (guild_id, user_id, role_name, action, granted_at) "
+        "VALUES (?, ?, ?, 'grant', ?)",
+        (GUILD_ID, user_id, role_name, granted_at),
+    )
+
+
+def test_unrecorded_strip_never_shows_as_waiting(db_path):
+    """A member with a grant row, no remove row, no ledger row, and no role
+    was stripped without a record (e.g. during bot downtime) — they must land
+    in a stripped bucket with an unknown date, not in "waiting for first
+    grant" (the live false positive: Maju)."""
+    now = time.time()
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO member_xp (guild_id, user_id, total_xp, level) "
+            "VALUES (?, 4001, 0, 15)",
+            (GUILD_ID,),
+        )
+        _seed_grant_event(conn, 4001, now - 120 * 86400)
+        _seed_activity(conn, 4001, now - 74 * 86400)  # inactive past the window
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5, "NSFW")
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(4001, "maju")])
+    snap = resolve_grant_audit_buckets(guild, guild._role, gathered, 5, now)  # type: ignore[arg-type]
+    assert snap.waiting == []
+    assert [r["user_id"] for r in snap.inactive] == [4001]
+    assert snap.inactive[0]["pruned_at"] is None
+
+
+def test_unrecorded_strip_active_member_lands_in_returned(db_path):
+    now = time.time()
+    with open_db(db_path) as conn:
+        _seed_grant_event(conn, 4002, now - 120 * 86400)
+        _seed_activity(conn, 4002, now - 86400)  # active yesterday
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5, "NSFW")
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(4002)])
+    snap = resolve_grant_audit_buckets(guild, guild._role, gathered, 5, now)  # type: ignore[arg-type]
+    assert [r["user_id"] for r in snap.returned] == [4002]
+    assert snap.returned[0]["pruned_at"] is None
+
+
+def test_current_holder_with_grant_row_is_not_an_implicit_strip(db_path):
+    now = time.time()
+    with open_db(db_path) as conn:
+        _seed_grant_event(conn, 4003, now - 10 * 86400)
+        _seed_activity(conn, 4003, now - 86400)
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5, "NSFW")
+    holder = _FakeMember(4003)
+    guild = _FakeGuild(_FakeRole(members=[holder]), [holder])
+    snap = resolve_grant_audit_buckets(guild, guild._role, gathered, 5, now)  # type: ignore[arg-type]
+    assert snap.waiting == snap.returned == snap.inactive == []
+
+
+def test_ledgered_member_not_duplicated_as_implicit(db_path):
+    now = time.time()
+    with open_db(db_path) as conn:
+        _seed_grant_event(conn, 4004, now - 120 * 86400)
+        record_prune_events(conn, GUILD_ID, [4004], ROLE_ID, now - 5 * 86400)
+        _seed_activity(conn, 4004, now - 86400)
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5, "NSFW")
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(4004)])
+    snap = resolve_grant_audit_buckets(guild, guild._role, gathered, 5, now)  # type: ignore[arg-type]
+    assert len(snap.returned) == 1
+    assert snap.returned[0]["pruned_at"] is not None  # real event wins
+
+
+def test_gather_without_role_name_skips_grant_history(db_path):
+    now = time.time()
+    with open_db(db_path) as conn:
+        _seed_grant_event(conn, 4005, now - 120 * 86400)
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5)
+    assert gathered.ever_granted_ids == set()
+
+
+def test_known_dates_sort_before_unknown_in_inactive_bucket():
+    events = [
+        {"user_id": 1, "pruned_at": None},
+        {"user_id": 2, "pruned_at": 100.0},
+        {"user_id": 3, "pruned_at": 200.0},
+    ]
+    out = compute_recent_inactive(events, set(), {}, CUTOFF)
+    assert [r["user_id"] for r in out] == [3, 2, 1]
+
+
+def test_embed_renders_unrecorded_strip_date():
+    snap = _snapshot(
+        returned=[{"user_id": 1, "display_name": "maju", "level": 15, "pruned_at": None}],
+        inactive=[{"user_id": 2, "display_name": "ghost", "level": None, "pruned_at": None}],
+    )
+    embed = build_grant_audit_embed("NSFW", snap, now_ts=1000.0)
+    assert "stripped (date unrecorded)" in str(embed.fields[1].value)
+    assert "stripped (date unrecorded)" in str(embed.fields[2].value)

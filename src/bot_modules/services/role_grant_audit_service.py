@@ -158,8 +158,25 @@ def compute_waiting_for_first_grant(
     return out
 
 
-def _open_event_pairs(open_events: Iterable) -> list[tuple[int, float]]:
-    return [(int(ev["user_id"]), float(ev["pruned_at"])) for ev in open_events]
+def _open_event_pairs(open_events: Iterable) -> list[tuple[int, float | None]]:
+    # pruned_at None = an *implicit* strip (grant evidence exists but the
+    # removal was never recorded — e.g. it happened while the bot was down).
+    return [
+        (
+            int(ev["user_id"]),
+            float(ev["pruned_at"]) if ev["pruned_at"] is not None else None,
+        )
+        for ev in open_events
+    ]
+
+
+def _newest_first(rows: list[dict]) -> list[dict]:
+    """Sort by pruned_at desc, unknown-date (implicit) strips last."""
+    rows.sort(
+        key=lambda r: r["pruned_at"] if r["pruned_at"] is not None else float("-inf"),
+        reverse=True,
+    )
+    return rows
 
 
 def compute_stripped_returned(
@@ -177,8 +194,7 @@ def compute_stripped_returned(
         and (a := activity_map.get(uid)) is not None
         and a.created_at >= cutoff_ts
     ]
-    out.sort(key=lambda r: -r["pruned_at"])
-    return out
+    return _newest_first(out)
 
 
 def compute_recent_inactive(
@@ -196,8 +212,7 @@ def compute_recent_inactive(
         if uid not in granted_ids
         and ((a := activity_map.get(uid)) is None or a.created_at < cutoff_ts)
     ]
-    out.sort(key=lambda r: -r["pruned_at"])
-    return out[:limit]
+    return _newest_first(out)[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +310,9 @@ class GrantAuditGather:
     hold_role_ids: set[int]
     open_events: list[tuple[int, float]]  # (user_id, pruned_at)
     ever_pruned_ids: set[int]
+    # Everyone with a role_events grant row for this role name — evidence they
+    # held the role once, even when the removal was never recorded.
+    ever_granted_ids: set[int]
     inactivity_days: int
     activity_map: Mapping[int, _HasCreatedAt]
 
@@ -312,9 +330,18 @@ class GrantAuditSnapshot:
 
 
 def gather_grant_audit(
-    conn: sqlite3.Connection, guild_id: int, role_id: int, min_level: int
+    conn: sqlite3.Connection,
+    guild_id: int,
+    role_id: int,
+    min_level: int,
+    role_name: str = "",
 ) -> GrantAuditGather:
-    """One sync read of everything the buckets need from the database."""
+    """One sync read of everything the buckets need from the database.
+
+    ``role_name`` keys the grant-history lookup in ``role_events`` (which
+    stores names, not ids); pass the role's current name. Note a role rename
+    orphans its older history — an accepted limitation of role_events.
+    """
     from bot_modules.core.xp_system import get_member_last_activity_map
 
     levels = {
@@ -330,6 +357,16 @@ def gather_grant_audit(
         for ev in get_open_prune_events(conn, guild_id, role_id)
     ]
     ever_pruned = get_ever_pruned_ids(conn, guild_id, role_id)
+    ever_granted: set[int] = set()
+    if role_name:
+        ever_granted = {
+            int(r["user_id"])
+            for r in conn.execute(
+                "SELECT DISTINCT user_id FROM role_events "
+                "WHERE guild_id=? AND role_name=? AND action='grant'",
+                (guild_id, role_name),
+            ).fetchall()
+        }
     rule = conn.execute(
         "SELECT role_id, inactivity_days FROM inactivity_prune_rules WHERE guild_id=?",
         (guild_id,),
@@ -339,7 +376,7 @@ def gather_grant_audit(
         if rule is not None and int(rule["role_id"]) == role_id
         else 30
     )
-    lookup_ids = set(levels) | {uid for uid, _ in open_events}
+    lookup_ids = set(levels) | {uid for uid, _ in open_events} | ever_granted
     activity_map = get_member_last_activity_map(conn, guild_id, list(lookup_ids))
     return GrantAuditGather(
         levels=levels,
@@ -347,6 +384,7 @@ def gather_grant_audit(
         hold_role_ids=hold_role_ids,
         open_events=open_events,
         ever_pruned_ids=ever_pruned,
+        ever_granted_ids=ever_granted,
         inactivity_days=days,
         activity_map=activity_map,
     )
@@ -381,9 +419,22 @@ def resolve_grant_audit_buckets(
             return None
         return member
 
+    # role_events isn't gapless (removals during bot downtime are never
+    # logged), so a member with grant evidence, no ledger row, and no role is
+    # an *implicit* open strip with an unknown date — bucketed by activity
+    # like any other open event, never shown as "waiting for first grant".
+    stripped_history_ids = gathered.ever_pruned_ids | gathered.ever_granted_ids
+    implicit_ids = (
+        gathered.ever_granted_ids - gathered.ever_pruned_ids - granted_ids
+    )
+    open_events: list[dict] = [
+        {"user_id": uid, "pruned_at": pruned_at}
+        for uid, pruned_at in gathered.open_events
+    ] + [{"user_id": uid, "pruned_at": None} for uid in sorted(implicit_ids)]
+
     waiting = []
     for uid, level in compute_waiting_for_first_grant(
-        gathered.levels, granted_ids, gathered.ever_pruned_ids
+        gathered.levels, granted_ids, stripped_history_ids
     ):
         member = _resolve(uid)
         if member is None:
@@ -408,10 +459,6 @@ def resolve_grant_audit_buckets(
             )
         return rows
 
-    open_events = [
-        {"user_id": uid, "pruned_at": pruned_at}
-        for uid, pruned_at in gathered.open_events
-    ]
     returned = _event_rows(
         compute_stripped_returned(
             open_events, granted_ids, gathered.activity_map, cutoff_ts
@@ -481,10 +528,19 @@ def build_grant_audit_embed(
         inline=False,
     )
 
+    def _stripped_when(pruned_at: float | None) -> str:
+        # None = implicit strip: grant evidence exists but the removal was
+        # never recorded (e.g. it happened during bot downtime).
+        return (
+            f"stripped {_rel(pruned_at)}"
+            if pruned_at is not None
+            else "stripped (date unrecorded)"
+        )
+
     returned_lines = [
         f"**{r['display_name']}**"
         + (f" — level {r['level']}" if r["level"] is not None else "")
-        + f" · stripped {_rel(r['pruned_at'])}"
+        + f" · {_stripped_when(r['pruned_at'])}"
         for r in snap.returned
     ]
     embed.add_field(
@@ -494,7 +550,7 @@ def build_grant_audit_embed(
     )
 
     inactive_lines = [
-        f"{r['display_name']} · stripped {_rel(r['pruned_at'])}"
+        f"{r['display_name']} · {_stripped_when(r['pruned_at'])}"
         for r in snap.inactive
     ]
     embed.add_field(
@@ -583,20 +639,17 @@ async def refresh_grant_audit_card(
 
     now = now_ts if now_ts is not None else time.time()
 
-    def _load():
+    def _load_ref():
         with open_db(db_path) as conn:
             ref = load_card_ref(conn, guild_id)
-            if not ref.message_id or not ref.grant_name:
-                return ref, None, None
-            cfg = get_grant_roles(conn, guild_id).get(ref.grant_name)
-            if cfg is None or int(cfg["role_id"]) <= 0:
-                return ref, None, None
-            gathered = gather_grant_audit(
-                conn, guild_id, int(cfg["role_id"]), ref.min_level
-            )
-            return ref, cfg, gathered
+            cfg = None
+            if ref.message_id and ref.grant_name:
+                cfg = get_grant_roles(conn, guild_id).get(ref.grant_name)
+                if cfg is not None and int(cfg["role_id"]) <= 0:
+                    cfg = None
+            return ref, cfg
 
-    ref, cfg, gathered = await asyncio.to_thread(_load)
+    ref, cfg = await asyncio.to_thread(_load_ref)
     if not ref.message_id:
         return
 
@@ -608,7 +661,7 @@ async def refresh_grant_audit_card(
     if guild is None:
         return
     role = guild.get_role(int(cfg["role_id"])) if cfg is not None else None
-    if cfg is None or gathered is None or role is None:
+    if cfg is None or role is None:
         await asyncio.to_thread(_clear)
         log.info(
             "Grant audit card: config/role gone for guild %s — retired the card.",
@@ -619,6 +672,15 @@ async def refresh_grant_audit_card(
     if not isinstance(channel, discord.TextChannel):
         return
 
+    role_id, role_name = role.id, role.name
+
+    def _gather():
+        with open_db(db_path) as conn:
+            return gather_grant_audit(
+                conn, guild_id, role_id, ref.min_level, role_name
+            )
+
+    gathered = await asyncio.to_thread(_gather)
     snap = resolve_grant_audit_buckets(guild, role, gathered, ref.min_level, now)
     accent = await resolve_accent_color(db_path, guild)
     embed = build_grant_audit_embed(str(cfg["label"]), snap, now_ts=now, color=accent)

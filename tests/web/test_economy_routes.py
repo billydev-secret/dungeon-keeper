@@ -66,7 +66,7 @@ def test_get_economy_config_returns_defaults(authed_client):
     assert data["currency_name"] == "Coin"
     assert data["currency_plural"] == "Coins"
     assert data["booster_multiplier"] == 1.5
-    assert data["xp_per_coin"] == 15.0
+    assert data["xp_per_coin"] == 0.0  # XP→coin faucet ships off (dormant knob)
     # Snowflakes leave as strings (see test_get_config_emits_snowflakes_as_
     # strings) — including the 0 sentinel, so the picker always sees one type.
     assert data["bank_channel_id"] == "0"
@@ -171,6 +171,20 @@ def test_put_streak_shield_price_roundtrips(authed_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
         cfg = load_econ_settings(conn, fake_ctx.guild_id)
     assert cfg.price_streak_shield == 45
+
+
+def test_put_qotd_sponsor_price_roundtrips(authed_client, fake_ctx):
+    # Regression: these two were missing from the update whitelist, so the QOTD
+    # sponsor price was stuck at its hardcoded default and untunable.
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={"price_qotd_sponsor": 25, "qotd_sponsor_expire_days": 10},
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.price_qotd_sponsor == 25
+    assert cfg.qotd_sponsor_expire_days == 10
 
 
 def test_put_partial_leaves_other_fields_unset(authed_client, fake_ctx):

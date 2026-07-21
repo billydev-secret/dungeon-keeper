@@ -25,6 +25,17 @@ const FAUCET_LABELS = {
   grants: "Grants",
 };
 
+// Per-source colors for the income-mix stacked bars. All defined dashboard
+// palette vars (distinct hues); grants sits in a muted grey to read as
+// staff-injected rather than player-earned.
+const FAUCET_COLORS = {
+  logins: "var(--blurple, #5865f2)",
+  activity: "var(--plum, #c07aa1)",
+  quests: "var(--gold-solid, #e6b84c)",
+  games: "var(--green, #23a55a)",
+  grants: "var(--ink-mute, #979ba3)",
+};
+
 // Member-table columns: [key, label, numeric?]. `name` sorts by resolved name.
 const MEMBER_COLS = [
   ["name", "Member", false],
@@ -92,17 +103,19 @@ function render(container, members) {
         <button class="btn" data-refresh>Refresh</button>
       </header>
 
-      <section class="card" data-live-card>
-        <div class="section-label">Happening now</div>
-        <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
-        <div data-live><div class="empty">Loading…</div></div>
-      </section>
-
       <div class="card-grid" data-summary style="margin-bottom:4px;"></div>
 
       <section class="card">
         <div class="section-label">Balance distribution</div>
         <div data-distribution><div class="empty">Loading…</div></div>
+      </section>
+
+      <section class="card">
+        <div class="section-label">Income sources</div>
+        <div class="field-hint">Coins minted per week by source (grants, quests,
+          logins, activity, games) over the last 8 weeks. Transfers move currency
+          sideways, so they aren't income and don't appear here.</div>
+        <div data-income-sources><div class="empty">Loading…</div></div>
       </section>
 
       <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));">
@@ -123,6 +136,12 @@ function render(container, members) {
         <div class="section-label">Top transfers (30d)</div>
         <div class="field-hint">One-way volume over 500 is flagged — a possible farming/laundering signal worth an audit.</div>
         <div data-transfers><div class="empty">Loading…</div></div>
+      </section>
+
+      <section class="card" data-live-card>
+        <div class="section-label">Happening now</div>
+        <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
+        <div data-live><div class="empty">Loading…</div></div>
       </section>
 
       <section class="card">
@@ -225,6 +244,7 @@ async function refresh(container, members) {
   }
   renderSummary(container, data);
   renderDistribution(container, data.distribution);
+  renderIncomeSources(container, data.income_sources);
   renderEngagement(container, data.engagement);
   renderAffordability(container, data.affordability);
   renderBurn(container, data.burn_top, members);
@@ -279,6 +299,67 @@ function renderDistribution(container, dist) {
         <div style="width:44px; text-align:right; font-variant-numeric:tabular-nums;">${fmtNum(b.count)}</div>
       </div>`;
   }).join("");
+}
+
+// ── income sources (stacked bars, pure DOM/CSS) ──────────────────────
+
+function weekLabel(startSec) {
+  // Short "Jul 14" tick from the bucket start epoch (seconds).
+  return new Date(startSec * 1000).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function renderIncomeSources(container, income) {
+  const host = container.querySelector("[data-income-sources]");
+  if (!host) return;
+  const groups = income?.groups || [];
+  const buckets = income?.buckets || [];
+  const max = Math.max(1, ...buckets.map((b) => b.total || 0));
+  if (!buckets.some((b) => (b.total || 0) > 0)) {
+    host.innerHTML = `<div class="empty">No income minted in the last 8 weeks.</div>`;
+    return;
+  }
+
+  // Legend: one swatch per source, only for sources that actually paid.
+  const active = groups.filter((g) => buckets.some((b) => (b.totals[g] || 0) > 0));
+  const legend = active.map((g) => `
+    <span style="display:inline-flex; align-items:center; gap:5px; margin-right:12px;">
+      <span style="width:11px; height:11px; border-radius:2px; background:${FAUCET_COLORS[g] || "var(--ink-dim)"};"></span>
+      <span class="field-hint">${esc(FAUCET_LABELS[g] || g)}</span>
+    </span>`).join("");
+
+  // Each bar is a fixed-height column; segments are height-proportional to the
+  // week's total, and the column's overall height is scaled to the busiest week.
+  const bars = buckets.map((b) => {
+    const total = b.total || 0;
+    const colH = Math.round((total / max) * 100); // % of the 120px track
+    const segs = groups.map((g) => {
+      const v = b.totals[g] || 0;
+      if (v <= 0) return "";
+      const h = (v / total) * 100;
+      return `<div title="${esc(FAUCET_LABELS[g] || g)}: ${fmtNum(v)}"
+        style="height:${h}%; background:${FAUCET_COLORS[g] || "var(--ink-dim)"};"></div>`;
+    }).join("");
+    return `
+      <div style="flex:1; min-width:22px; display:flex; flex-direction:column; align-items:center; gap:4px;">
+        <div style="width:100%; height:120px; display:flex; align-items:flex-end;">
+          <div title="${esc(weekLabel(b.start))}: ${fmtNum(total)} total"
+               style="width:100%; height:${colH}%; display:flex; flex-direction:column-reverse;
+                      border-radius:3px 3px 0 0; overflow:hidden; background:var(--rule-soft);">
+            ${segs}
+          </div>
+        </div>
+        <div class="field-hint" style="font-variant-numeric:tabular-nums; white-space:nowrap;">${esc(weekLabel(b.start))}</div>
+      </div>`;
+  }).join("");
+
+  host.innerHTML = `
+    <div style="margin-bottom:10px;">${legend}</div>
+    <div style="display:flex; align-items:flex-end; gap:6px; overflow-x:auto; padding-bottom:2px;">
+      ${bars}
+    </div>`;
 }
 
 // ── engagement ───────────────────────────────────────────────────────

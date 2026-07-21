@@ -1650,10 +1650,11 @@ async def grant_audit(
 
     min_level = max(1, min_level)
     role_id = role.id
+    role_name = role.name
 
     def _q():
         with ctx.open_db() as conn:
-            return gather_grant_audit(conn, guild_id, role_id, min_level)
+            return gather_grant_audit(conn, guild_id, role_id, min_level, role_name)
 
     gathered = await run_query(_q)
     snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, _time.time())

@@ -90,25 +90,39 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   at `_LOGIN_QUEST_RECAP_LIMIT`) so deciding what to do next is one glance, not a dig
   through `/bank quests`. Members without the role earn the same rewards with no DM.
 
-### 3.2 XP → Daily Conversion
-Members earn XP exactly as today (`xp_events` ledger: text per-word, replies,
-image-reacts, voice 1.67/min with ≥2 humans). At guild-local midnight, each member's
-XP earned that local day converts to currency.
+### 3.2 XP → Daily Conversion — dormant (off by default)
+**This faucet ships OFF.** `econ_xp_per_coin` defaults to **0**, and the day-roll
+driver skips the conversion entirely while the rate is 0 — earning XP no longer
+mints currency. The mechanism (`convert_xp` / `process_conversion` /
+`econ_conversions`) is retained intact so a guild can re-enable it by setting a
+positive rate on the Income Sources panel; it is not a code change. XP itself is
+unaffected (it still drives levels/leaderboards); it simply has no currency faucet.
 
-- **Conversion: `econ_xp_per_coin` XP → 1 currency** (default 15), rounded down;
-  fractional remainder carries to the next day (stored on the conversion row).
-- V3's flat XP table (3/post etc.) is **dropped**; the real rates rule. Reference with
-  real rates: a 2-hour qualifying voice hangout ≈ 200 XP ≈ 13 coins at the default rate.
-  The conversion rate and all XP coefficients are the scaling parameters in the config
-  menu (§9); income anchors are tuned there against the metrics card, not hardcoded.
-- **New XP source `reaction_given`** (live, Stage 1): reacting to someone else's message
+When re-enabled, the behaviour below applies. Members earn XP as today
+(`xp_events` ledger: text per-word, replies, image-reacts, voice 1.67/min with ≥2
+humans); at guild-local midnight, each member's XP earned that local day converts
+to currency.
+
+- **Conversion: `econ_xp_per_coin` XP → 1 currency** (0 = off; a former default
+  was 15), rounded down; fractional remainder carries to the next day (stored on
+  the conversion row).
+- Because the driver skips conversion while the rate is 0, turning the faucet off
+  does **not** accumulate a remainder backlog — re-enabling resumes from that day,
+  consistent with the no-retroactive-backlog rule (§ outage behaviour), rather than
+  paying out every skipped day at once.
+- V3's flat XP table (3/post etc.) is **dropped**; the real rates rule. Reference at
+  a rate of 15: a 2-hour qualifying voice hangout ≈ 200 XP ≈ 13 coins. The conversion
+  rate and all XP coefficients are the scaling parameters in the config menu (§9);
+  income anchors are tuned there against the metrics card, not hardcoded.
+- **XP source `reaction_given`** (live, Stage 1): reacting to someone else's message
   pays the *reactor* XP — default 0.34 (double the existing image-react rate), tunable via
   `xp_coeff_reaction_given_xp` on the dashboard XP panel. Feeds regular XP/leaderboards
-  *and* (via conversion) currency. Guards: no self-reactions, no bots, one award per
-  (message, reactor) ever (dedup table), so react/unreact can't farm. See [[xp-spec]].
-- Conversion is silent (ledger entry: "Daily activity"). Runs from the economy hourly
-  loop when a guild's local day rolls; idempotent via a per-(guild, user, local_day)
-  conversion row.
+  (and currency too, but only when the conversion faucet is on). Guards: no self-reactions,
+  no bots, one award per (message, reactor) ever (dedup table), so react/unreact can't farm.
+  See [[xp-spec]].
+- When on, conversion is silent (ledger entry: "Daily activity"). Runs from the economy
+  hourly loop when a guild's local day rolls; idempotent via a per-(guild, user,
+  local_day) conversion row.
 
 ### 3.3 Quests — per §4. Daily 10–20 · weekly 25–75 · community flat payout.
 
@@ -203,6 +217,37 @@ XP earned that local day converts to currency.
   WYR has no recap embed, so it stays footer-less.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger.
+
+### 3.5 Coin Drops (built — migration 105)
+- The bot drops a pouch of coins into `drops_channel_id` at random moments;
+  the **first member to press the drop message's Claim button** collects
+  it. The channel picker is the toggle (0 = off); everything is on the
+  dashboard's Economy Settings page (`drops_min_coins` 5 /
+  `drops_max_coins` 25, uniform roll; `drops_per_day` 4 as an *average*
+  cadence; `drops_expire_minutes` 60).
+- **Scheduling** (`economy_drops_loop`, 60 s tick, startup task factory):
+  each guild's next drop lands a jittered 0.5–1.5× of the average period
+  after the last, so members can't clock it. A due drop additionally waits
+  until (a) the channel isn't mid-game (`channel_is_busy`, the chat-revive
+  helper over `games_active_games` + `bot.game_busy_checks`), (b) the
+  guild holds no other open pouch, and (c) someone has spoken since the
+  bot's own newest message — a drop should land in conversation, not echo
+  into the void, so dead hours simply drop nothing (the due time stands).
+- **Claim** (`econ_drops`, `economy_drops_service`): `DropClaimButton` is a
+  stateless `DynamicItem` whose `custom_id` carries the drop id
+  (`econ_drop:claim:<id>`), so pouches survive restarts with no cache or
+  re-seed. The `econ_drops` row is created *before* the send (the button
+  needs the id; `message_id` starts 0 and is backfilled, or the open row
+  deleted if the send fails). The race is settled by a conditional UPDATE
+  (`status = 'open' AND expires_at > now`, rowcount 0 = lost — the
+  Guess-Who pattern, never check-then-write), then `apply_credit` kind
+  **`drop`** with the booster multiplier. Winner: the click edits the
+  embed to "claimed by X" and removes the button; losers get an ephemeral
+  "too slow". Claims only check `settings.enabled`, so a drop already
+  posted stays claimable even if the channel is re-pointed meanwhile.
+- **Expiry**: the tick sweeps overdue open drops (`status → 'expired'`,
+  select-then-conditional-update per row so a racing claim wins), edits the
+  message to "vanished" (button removed), and pays nobody.
 
 ## 4. Quest System
 
@@ -688,7 +733,7 @@ takes effect on the next cycle, never retroactively.
 | Perk | Per week | Repo grounding |
 |---|---|---|
 | Custom role color (solid) | 50 | `guild.create_role(color=…)` |
-| Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`) |
+| Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`). When the perk lapses, `revoke_role_perks` reverts the nick too (`should_revert_nick` — only if the nick still equals the perk's name, so a game name-penalty stake set since is never clobbered) |
 | Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
 | Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
 | Private text room | 200 | §8 (Stage 6) |
@@ -962,7 +1007,11 @@ role or admin; member table capped at 500), complementing the weekly rollup with
 same-instant read of the ledger. It shows: **supply concentration** — total supply,
 holder count, median balance, top-10% share, and Gini, all computed over **positive
 balances only** (inequality of who-holds-what, not the zero-balance long tail); a
-fixed-bucket **balance histogram**; **7-day flow** — minted vs burned with a burn
+fixed-bucket **balance histogram**; an **income-sources stacked bar** — minted coins
+per faucet group (logins / activity / quests / games / grants, the same `FAUCET_GROUPS`
+split the rollup's `faucet_mix` uses) across the last **8 trailing 7-day buckets**, so the
+*composition* of income and how it shifts week to week is visible at a glance (`transfer_in`
+excluded, same as every other mint figure); **7-day flow** — minted vs burned with a burn
 rate, plus transfer volume and grants (money definitions match the rollup: mint /
 income exclude `transfer_in`, burn excludes `transfer_out`); a **per-member income
 velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend
@@ -1080,6 +1129,12 @@ The hourly economy loop:
 | Guild-local day rolled | XP→currency conversion (only the most recent marked local day — no retroactive backlog after an outage, §12); streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
 | Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; QOTD-sponsor and emoji-sponsor pending-review expiry (auto-refund); (v2) spotlight expiry; (rooms stage) room archive/purge |
 | Guild-local ISO week rolled | Weekly quest activation; community settlement; raffle draw (§6); demurrage sweep (§6); metrics rollup; (v2) spotlight inventory reset |
+
+The **coin-drops loop** (§3.5) is its own startup task on a 60 s tick:
+expiry sweep first, then the per-guild jittered drop scheduler. Its
+next-due times are deliberately in-memory — a restart just re-jitters each
+guild's next drop, and open pouches survive because their Claim button is
+a stateless `DynamicItem`.
 
 A second, lightweight startup task — `leaderboard_live_loop` — gives the
 leaderboard panel its near-real-time cadence: a 20 s poll over the
