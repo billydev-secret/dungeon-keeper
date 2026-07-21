@@ -215,7 +215,7 @@ to currency.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger.
 
-### 3.5 Coin Drops (built — migration 104)
+### 3.5 Coin Drops (built — migration 105)
 - The bot drops a pouch of coins into `drops_channel_id` at random moments;
   the **first member to press the drop message's Claim button** collects
   it. The channel picker is the toggle (0 = off); everything is on the
