@@ -64,35 +64,21 @@ async def _collect_backfill_channels(
 
 def _resolve_leaderboard_timescale(
     timescale: str,
-) -> tuple[str, str, discord.Color, float | None]:
+) -> tuple[str, str, float | None]:
+    """(window label, subtitle, cutoff_ts) for a leaderboard window.
+
+    Color is intentionally *not* returned — the leaderboard embed follows the
+    guild accent like every other info surface (see embed_style_guide.md); the
+    window is conveyed by the title and subtitle, not by a decorative tint.
+    """
     now_ts = time.time()
-    mapping = {
-        "hour": (
-            "Hourly",
-            "Last 60 minutes",
-            discord.Color.dark_teal(),
-            now_ts - 60 * 60,
-        ),
-        "day": ("Daily", "Last 24 hours", discord.Color.blue(), now_ts - 24 * 60 * 60),
-        "week": (
-            "Weekly",
-            "Last 7 days",
-            discord.Color.teal(),
-            now_ts - 7 * 24 * 60 * 60,
-        ),
-        "month": (
-            "Monthly",
-            "Last 30 days",
-            discord.Color.orange(),
-            now_ts - 30 * 24 * 60 * 60,
-        ),
-        "year": (
-            "Yearly",
-            "Last 365 days",
-            discord.Color.brand_green(),
-            now_ts - 365 * 24 * 60 * 60,
-        ),
-        "alltime": ("All-Time", "Since tracking began", discord.Color.gold(), None),
+    mapping: dict[str, tuple[str, str, float | None]] = {
+        "hour": ("Hourly", "Last 60 minutes", now_ts - 60 * 60),
+        "day": ("Daily", "Last 24 hours", now_ts - 24 * 60 * 60),
+        "week": ("Weekly", "Last 7 days", now_ts - 7 * 24 * 60 * 60),
+        "month": ("Monthly", "Last 30 days", now_ts - 30 * 24 * 60 * 60),
+        "year": ("Yearly", "Last 365 days", now_ts - 365 * 24 * 60 * 60),
+        "alltime": ("All-Time", "Since tracking began", None),
     }
     return mapping[timescale]
 
@@ -141,7 +127,7 @@ def _build_xp_leaderboard_embed(
     cutoff: float | None,
 ) -> discord.Embed:
     embed = discord.Embed(
-        title=f"{window_name} XP Leaders",
+        title=f"🏆 {window_name} XP Leaders",
         description=subtitle,
         color=color,
     )
@@ -225,7 +211,8 @@ class XpCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        window_name, subtitle, color, cutoff = _resolve_leaderboard_timescale(timescale)
+        window_name, subtitle, cutoff = _resolve_leaderboard_timescale(timescale)
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         def _check_xp():
             with ctx.open_db() as conn:
@@ -242,9 +229,8 @@ class XpCog(commands.Cog):
                 if has_xp
                 else "No XP recorded yet."
             )
-            accent = await resolve_accent_color(ctx.db_path, guild)
             embed = discord.Embed(
-                title="XP Leaderboards",
+                title="🏆 XP Leaderboards",
                 description=description,
                 color=accent,
             )
@@ -271,7 +257,7 @@ class XpCog(commands.Cog):
             caller,
             window_name,
             subtitle,
-            color,
+            accent,
             cutoff,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)

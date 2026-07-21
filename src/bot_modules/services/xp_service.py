@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import format_user_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
@@ -231,6 +232,7 @@ async def maybe_log_level_5(
     settings: XpSettings = DEFAULT_XP_SETTINGS,
     *,
     nsfw_role_id: int = 0,
+    accent: discord.Color | None = None,
 ) -> None:
     """Log a level 5 achievement announcement."""
     if level_5_log_channel_id <= 0:
@@ -254,9 +256,9 @@ async def maybe_log_level_5(
         member.guild.get_role(level_5_role_id) if level_5_role_id > 0 else None
     )
     embed = discord.Embed(
-        title=f"Level {settings.role_grant_level} reached",
+        title=f"🎉 Level {settings.role_grant_level} reached",
         description=f"{member.mention} just reached level {settings.role_grant_level}.",
-        color=discord.Color.gold(),
+        color=accent or discord.Color.blurple(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="Total XP", value=f"{total_xp:.2f}", inline=True)
@@ -316,6 +318,8 @@ async def maybe_log_level_ups(
     level_up_log_channel_id: int,
     level_5_log_channel_id: int,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    *,
+    accent: discord.Color | None = None,
 ) -> int:
     """Announce every level the member has reached but not yet been told about.
 
@@ -369,9 +373,9 @@ async def maybe_log_level_ups(
             continue
 
         embed = discord.Embed(
-            title=f"Level {level} reached",
+            title=f"⭐ Level {level} reached",
             description=f"{member.mention} leveled up to level {level}.",
-            color=discord.Color.blue(),
+            color=accent or discord.Color.blurple(),
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="Total XP", value=f"{total_xp:.2f}", inline=True)
@@ -435,6 +439,8 @@ async def handle_level_progress(
         level_5_log_channel_id,
     )
 
+    accent = await resolve_accent_color(db_path, member.guild)
+
     if award.new_level >= settings.role_grant_level:
         await maybe_grant_level_role(
             member, award.new_level, level_5_role_id, settings, db_path
@@ -449,6 +455,7 @@ async def handle_level_progress(
             level_up_log_channel_id,
             level_5_log_channel_id,
             settings,
+            accent=accent,
         )
         if delivered > award.announced_level:
             from bot_modules.core.db_utils import open_db
@@ -499,6 +506,7 @@ async def handle_level_progress(
                     level_5_role_id,
                     settings,
                     nsfw_role_id=nsfw_role_id,
+                    accent=accent,
                 )
             else:
                 log.info(
@@ -565,6 +573,7 @@ async def promotion_review_recheck_loop(
 
                 if guild is not None and member is not None:
                     cfg = guild_config_for(guild_id)
+                    accent = await resolve_accent_color(db_path, guild)
                     await maybe_log_level_5(
                         member,
                         total_xp,
@@ -572,6 +581,7 @@ async def promotion_review_recheck_loop(
                         cfg.level_5_role_id,
                         cfg.xp_settings,
                         nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                        accent=accent,
                     )
 
                 with open_db(db_path) as conn:
