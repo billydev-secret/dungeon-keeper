@@ -651,6 +651,13 @@ def purchase_streak_shield(
     )
     if not ok:
         raise ValueError("insufficient")
+    # shop_purchase quest trigger (one-time setup kind). Deferred import —
+    # the quests service imports this module.
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
     return price
 
 

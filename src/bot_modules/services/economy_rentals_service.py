@@ -225,6 +225,17 @@ def rent_perk(
             # unwinds, so an unaffordable rent leaves zero writes.
             raise ValueError("insufficient")
 
+    # shop_purchase quest trigger (one-time setup kind) — the voluntary rent
+    # only; renewal billing in bill_rental never fires. Voucher-covered rents
+    # count too: the quest rewards engaging with the shop, not the spend
+    # itself. Deferred import (the quests service imports this module's
+    # sibling machinery).
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
+
     row = _get_rental(conn, rental_id)
     assert row is not None  # just inserted in this transaction
     return row

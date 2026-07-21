@@ -160,6 +160,36 @@ def was_acknowledged(
     return row is not None
 
 
+def pending_greetings_for(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_ids: tuple[int, ...],
+    target_ids: tuple[int, ...],
+) -> list[tuple[int, int]]:
+    """Unresolved greetings by any of ``target_ids`` in these channels.
+
+    The `greeting_answered` quest detector: a reply/mention landing on a
+    member with a pending greeting in the same channel is "answering the
+    hello". Pending ≈ within the window — the background loop resolves rows
+    shortly after their window closes, so anything still open is answerable.
+    Returns ``(message_id, author_id)`` pairs (the message id keys the quest
+    occurrence, so each greeting credits an answerer at most once).
+    """
+    if not channel_ids or not target_ids:
+        return []
+    ch = ",".join("?" * len(channel_ids))
+    tg = ",".join("?" * len(target_ids))
+    rows = conn.execute(
+        f"""
+        SELECT message_id, author_id FROM greeting_watch
+        WHERE guild_id = ? AND channel_id IN ({ch}) AND author_id IN ({tg})
+          AND resolved_at IS NULL
+        """,
+        (guild_id, *channel_ids, *target_ids),
+    ).fetchall()
+    return [(int(r[0]), int(r[1])) for r in rows]
+
+
 def mark_resolved(
     conn: sqlite3.Connection,
     guild_id: int,

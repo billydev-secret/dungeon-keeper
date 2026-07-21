@@ -124,6 +124,13 @@ def submit_sponsor(
         "VALUES (?, ?, ?, 'pending', ?, ?)",
         (guild_id, user_id, text, price, now),
     )
+    # shop_purchase quest trigger (one-time setup kind); deferred import —
+    # the quests service imports the wider economy machinery.
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
     return SponsorOutcome(submission_id=int(cur.lastrowid or 0), price=price)
 
 

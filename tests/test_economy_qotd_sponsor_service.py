@@ -413,3 +413,18 @@ def test_list_submissions_filters_by_state(db):
         assert [int(r["id"]) for r in list_submissions(conn, GUILD, "approved")] == [a]
         assert len(list_submissions(conn, GUILD, "pending")) == 1
         assert len(list_submissions(conn, GUILD)) == 2
+
+
+def test_submit_sponsor_fires_shop_purchase_trigger(db):
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        submit_sponsor(conn, SETTINGS, GUILD, USER, QUESTION)
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE guild_id = ? "
+            "AND user_id = ? AND kind = 'shop_purchase'",
+            (GUILD, USER),
+        ).fetchone()
+        assert row is not None

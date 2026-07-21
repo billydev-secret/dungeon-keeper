@@ -205,3 +205,18 @@ def test_expired_voucher_never_redeems(db):
             "SELECT state FROM econ_vouchers WHERE user_id = ?", (USER,)
         ).fetchone()
         assert row["state"] == "expired"  # lazily swept on the way through
+
+
+def test_buy_tickets_fires_shop_purchase_trigger(db):
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        _fund(conn, 100)
+        buy_tickets(conn, SETTINGS, GUILD, USER, WEEK, 1)
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE guild_id = ? "
+            "AND user_id = ? AND kind = 'shop_purchase'",
+            (GUILD, USER),
+        ).fetchone()
+        assert row is not None

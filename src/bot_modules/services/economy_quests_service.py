@@ -399,15 +399,33 @@ def board_sizes(settings: EconSettings) -> dict[str, int]:
     }
 
 
+# Ledger kinds that count as "a shop purchase" for the shop_purchase setup
+# quest: voluntary member spends only. Renewal billing shares the "rental"
+# kind, which is fine here — nobody's FIRST purchase is a renewal. Deliberate
+# omissions: quest_reroll (board mechanics), wager stakes (not a purchase),
+# transfers/gifts, admin adjustments.
+PURCHASE_LEDGER_KINDS: tuple[str, ...] = (
+    "rental",
+    "streak_shield",
+    "emoji_sponsor",
+    "qotd_sponsor",
+    "raffle_ticket",
+)
+
+
 def _setup_underlying_done(
     conn: sqlite3.Connection, guild_id: int, user_id: int, kind: str
 ) -> bool:
     """Whether the member has already done a one-time setup kind's real action.
 
     A direct existence check against the owning feature's table — a bio row
-    means they filled one out, a birthday row means they set it. Kept as
-    inline SQL (rather than importing the bios/birthday modules) so quest
-    assignment stays self-contained; these are stable core tables.
+    means they filled one out, a birthday row means they set it, a role-menu
+    grant or purchase-kind ledger row means they've picked/bought. Kept as
+    inline SQL (rather than importing the owning modules) so quest assignment
+    stays self-contained; these are stable core tables. role_pick has a known
+    soft edge: announcement-button grants aren't recorded in
+    ``role_menu_grants``, so those pickers stay visible until the paid-claim
+    backstop in ``_setup_quest_done`` catches them.
     """
     if kind == "bio_set":
         row = conn.execute(
@@ -419,6 +437,19 @@ def _setup_underlying_done(
             "SELECT 1 FROM member_birthdays WHERE guild_id = ? AND user_id = ? "
             "LIMIT 1",
             (guild_id, user_id),
+        ).fetchone()
+    elif kind == "role_pick":
+        row = conn.execute(
+            "SELECT 1 FROM role_menu_grants "
+            "WHERE guild_id = ? AND user_id = ? AND action = 'grant' LIMIT 1",
+            (guild_id, user_id),
+        ).fetchone()
+    elif kind == "shop_purchase":
+        placeholders = ",".join("?" * len(PURCHASE_LEDGER_KINDS))
+        row = conn.execute(
+            "SELECT 1 FROM econ_ledger WHERE guild_id = ? AND user_id = ? "
+            f"AND kind IN ({placeholders}) LIMIT 1",
+            (guild_id, user_id, *PURCHASE_LEDGER_KINDS),
         ).fetchone()
     else:
         return False

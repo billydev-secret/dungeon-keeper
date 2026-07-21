@@ -2419,6 +2419,75 @@ def test_birthday_setup_daily_behaves_like_bio(db):
         assert get_balance(conn, GUILD, USER) == 12
 
 
+def test_role_pick_setup_drops_off_board_with_menu_grant(db):
+    # role_pick hides once the member has any menu GRANT on record; a
+    # removal-only history (they shed a role) never counts as "picked".
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="role_pick", reward=10)
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        conn.execute(
+            "INSERT INTO role_menu_grants "
+            "(menu_id, guild_id, user_id, role_id, action, created_at) "
+            "VALUES (1, ?, ?, 42, 'remove', 0)",
+            (GUILD, USER),
+        )
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        conn.execute(
+            "INSERT INTO role_menu_grants "
+            "(menu_id, guild_id, user_id, role_id, action, created_at) "
+            "VALUES (1, ?, ?, 42, 'grant', 0)",
+            (GUILD, USER),
+        )
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        # Another member without a grant keeps seeing it.
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER_2, "daily", "2026-07-12", SETTINGS
+        )
+
+
+def test_shop_purchase_setup_drops_off_board_after_purchase(db):
+    # shop_purchase hides on any purchase-kind ledger row; non-purchase
+    # debits (a paid quest reroll here) never count.
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, created_at) "
+            "VALUES (?, ?, -5, 'quest_reroll', 0)",
+            (GUILD, USER),
+        )
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, created_at) "
+            "VALUES (?, ?, -50, 'rental', 0)",
+            (GUILD, USER),
+        )
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
+        )
+
+
+def test_shop_purchase_setup_claims_once_ever(db):
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=15)
+        for day in ("2026-07-12", "2026-07-12", "2026-08-01"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "shop_purchase", USER,
+                local_day=day, occurrence="set", booster=False,
+            )
+        assert get_balance(conn, GUILD, USER) == 15
+
+
 def test_setup_daily_excluded_from_clear_the_board_bonus(db):
     # A member shouldn't have to do their once-ever bio to earn the daily
     # set bonus: with an uncompleted bio quest and one normal daily on the

@@ -47,7 +47,9 @@ BOARD_CADENCES = frozenset({"daily", "weekly", "monthly"})
 #     who *haven't* done it ever see it.
 # Kept here (pure) as the single source of truth; the DB-facing completion
 # checks live in economy_quests_service.
-SETUP_QUEST_KINDS = frozenset({"bio_set", "birthday_set"})
+SETUP_QUEST_KINDS = frozenset(
+    {"bio_set", "birthday_set", "role_pick", "shop_purchase"}
+)
 
 # Default quests each member draws from each cadence's pool per period, when
 # a guild hasn't tuned its own (EconSettings.quest_board_*). The repeat gap
@@ -109,6 +111,13 @@ TRIGGER_KINDS: dict[str, str] = {
     "welcome": "Welcome a new member",
     "conversation_starter": "Start a conversation that takes off",
     "cat_catch": "Catch a cat with Cat Bot",
+    "greeting_answered": "Answer someone's hello",
+    "birthday_wish": "Wish a member happy birthday",
+    "drop_claim": "Catch a coin drop",
+    "guess_submit": "Submit a Guess Who photo",
+    "role_pick": "Pick your roles from a role menu",
+    "confession_reply": "Reply to a confession",
+    "shop_purchase": "Make your first shop purchase",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -161,6 +170,13 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "welcome": "Replying to a member who joined within the last 7 days — occurrences are the newcomers, so counted = 'welcome N new faces'. The retention quest.",
     "conversation_starter": "Your message drawing replies from 3+ distinct members (self-replies and bots never count) — once per message, detected at reply ingest. Event cadence: once per qualifying message — use daily/weekly with a target count.",
     "cat_catch": "Catching a cat with the external Cat Bot in a channel tracked via `/games track watch … kind:Cat Bot`. The catch also pays rarity-tiered coins directly (common→divine); this trigger is the quest hook on top. Event cadence: once per catch (keyed on the catch message).",
+    "greeting_answered": "Replying to or @mentioning a member whose greeting is still pending in Greeting Watch (same channel, inside the window). Needs Greeting Watch configured — no watched channels means this never fires. Event cadence: once per greeting.",
+    "birthday_wish": "Wishing a member happy birthday on a day their birthday was announced — a reply/mention of the birthday member, or a birthday-wish phrase anywhere. Only publicly-announced birthdays count, so quiet birthdays never become quest bait. Event cadence: once per birthday member per day.",
+    "drop_claim": "Winning a coin-drop Claim race. Pays beside the drop itself (the cat_catch pattern); the drop cadence is the natural rate limit. Event cadence: once per drop.",
+    "guess_submit": "Posting a Guess Who submission (✓ Post in the crop editor) — the content-supply twin of the `guess` play kind. The submit rate limit is the farm guard. Event cadence: once per round posted.",
+    "role_pick": "Self-assigning a role via a role menu or an announcement role button. One-time setup quest (the bio_set pattern): claims once ever, drops off the board once done. Event cadence: once ever.",
+    "confession_reply": "Posting an anonymous reply to someone ELSE's confession (replying to your own never fires). Credited privately like `confession` — no channel noise. Event cadence: once per reply — use daily/weekly with a target count.",
+    "shop_purchase": "Making a shop purchase: perk rental, streak shield, emoji or QOTD sponsorship, raffle tickets (automatic renewal billing never fires). One-time setup quest teaching the earn→spend loop. Event cadence: once ever.",
 }
 
 

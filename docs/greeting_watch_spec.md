@@ -74,6 +74,14 @@ greeting_watch(guild_id, message_id, channel_id, author_id,
 `skipped`}. Partial indexes cover the pending sweep and the per-author dedup
 lookup. No message content is ever stored.
 
+## Economy hook
+
+A reply/mention landing on a member whose greeting is still **pending** fires
+the `greeting_answered` quest trigger for the answerer
+(`pending_greetings_for`, wired in `events_cog._econ_work`; occurrence = the
+greeting message id, so one hello credits an answerer once). See
+`economy_spec.md` §4.5.
+
 ## Not built / possible follow-ups
 
 - **Silence variant.** Only the "ignored in a crowd" definition ships (nobody
