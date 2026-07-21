@@ -109,41 +109,55 @@ const SECTIONS = [
     // them. Exceptions: Birthday Calendar is genuinely moderator-level (read
     // only), Wellness config is gated on manage_server, not admin, and
     // Docs / Role Menus / Chat Revive are fully moderator-level features.
-    items: [
-      { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
-      { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
-      { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true },
-      { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
-      { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
-      { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
-      { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
-      { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
-      { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true },
-      { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true },
-      { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
-      { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true },
-      { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true },
-      { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
-      { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
-      { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js" },
-      { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
-      { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true },
-      { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
-      { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
-      { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js" },
-      { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
-      { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true },
-      { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
-      { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
-      { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
-      { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
-      { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
-      { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
-      { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
-      { id: "config-advisor",    label: "Billy-bot",         module: "./panels/config-advisor.js", adminOnly: true },
-      { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"] },
-      { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
-      { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
+    groups: [
+      { heading: "Server", items: [
+        { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
+        { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
+        { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
+        { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true },
+        { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
+      ]},
+      { heading: "Roles", items: [
+        { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
+        { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
+        { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
+        { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js" },
+      ]},
+      { heading: "Members", items: [
+        { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
+        { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
+        { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
+        { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
+        { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
+        { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"] },
+        { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true },
+        { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true },
+      ]},
+      { heading: "Moderation & Safety", items: [
+        { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
+        { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true },
+        { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true },
+        { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
+        { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
+        { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
+      ]},
+      { heading: "Channels & Messages", items: [
+        { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
+        { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true },
+        { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
+        { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
+        { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js" },
+        { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true },
+      ]},
+      { heading: "Voice", items: [
+        { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
+        { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
+      ]},
+      { heading: "AI & Maintenance", items: [
+        { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
+        { id: "config-advisor",    label: "Billy-bot",         module: "./panels/config-advisor.js", adminOnly: true },
+        { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
+      ]},
     ],
   },
   {
@@ -328,13 +342,22 @@ function rebuildIndex() {
   // those marked `primaryOnly` (genuinely-global settings like the AI models,
   // which live under guild_id=0 and apply bot-wide).
   if (isNonPrimaryGuild) {
+    const dropPrimaryOnly = (items) => (items || []).filter((it) => !it.primaryOnly);
     visibleSections = visibleSections
       .map((sec) =>
         sec.id === "config"
-          ? { ...sec, items: (sec.items || []).filter((it) => !it.primaryOnly) }
+          ? {
+              ...sec,
+              items: dropPrimaryOnly(sec.items),
+              groups: sec.groups
+                ? sec.groups
+                    .map((g) => ({ ...g, items: dropPrimaryOnly(g.items) }))
+                    .filter((g) => g.items.length > 0)
+                : sec.groups,
+            }
           : sec
       )
-      .filter((sec) => sec.id !== "config" || (sec.items && sec.items.length > 0));
+      .filter((sec) => sec.id !== "config" || allPages(sec).length > 0);
   }
 
   // Per-item permission gating. An item shows only if the user satisfies the
