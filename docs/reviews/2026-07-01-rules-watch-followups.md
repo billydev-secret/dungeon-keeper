@@ -1,7 +1,13 @@
 # Rules Watch — investigation outcome & deferred work (2026-07-01)
 
-Status: fixes committed on `96d3304` (needs bot restart to deploy). This note records
+Status: fixes committed on `96d3304`, long since deployed. This note records
 the root cause, what shipped, and the work intentionally deferred so it isn't lost.
+
+> **Partially superseded (2026-07-21):** see
+> [2026-07-20-rules-watch-tuning.md](2026-07-20-rules-watch-tuning.md) for the
+> follow-on investigation. In particular, the "model swap — rejected" verdict
+> below was revisited once GPU hardware (4060 eGPU serving inference over LAN)
+> replaced the CPU-only constraint it was based on.
 
 Related: `docs/ai_moderation_spec.md`, `src/bot_modules/rules_watch/`.
 

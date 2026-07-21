@@ -25,16 +25,22 @@ from bot_modules.games_hottakes.logic import (
 )
 
 
-def build_lobby_embed(host_name: str, submission_count: int = 0) -> discord.Embed:
+def build_lobby_embed(
+    host_name: str,
+    submission_count: int = 0,
+    color: discord.Color | None = None,
+) -> discord.Embed:
     """Build the initial lobby embed shown when ``/hottakes`` is invoked.
 
     ``submission_count`` is rendered in the Submissions field; the cog
     keeps this value live by editing the field in place as takes arrive.
+    ``color`` is the resolved guild accent; it falls back to the old
+    :data:`PHASE_JOINING` constant when no guild is in scope.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['hottakes']} HOT TAKES",
         description="Submit your spiciest take — all entries are anonymous.",
-        color=PHASE_JOINING,
+        color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Submissions", value=str(submission_count), inline=True)
@@ -48,20 +54,24 @@ def build_vote_embed(
     total_takes: int,
     votes_by_user: dict[int, int],
     closed: bool = False,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the per-round voting embed shown alongside the vote buttons.
 
     Renders the take text, a horizontal bar chart of vote counts per
     option, and a progress indicator. ``closed`` flips the title
-    suffix to ``— ROUND OVER`` and switches the color from
-    :data:`PHASE_PLAYING` to :data:`PHASE_RESULTS` so the message can
-    be edited in place when the round ends.
+    suffix to ``— ROUND OVER``. ``color`` is the resolved guild accent,
+    used for both the open and closed states (voting rounds are not a
+    win/loss, so both are accent); it falls back to the old
+    :data:`PHASE_PLAYING` / :data:`PHASE_RESULTS` constants when no
+    guild is in scope.
     """
     title = f"{GAME_ICONS['hottakes']} HOT TAKE #{take_num}"
     if closed:
         title += " — ROUND OVER"
     embed = discord.Embed(
-        title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING
+        title=title,
+        color=color or discord.Color(PHASE_RESULTS if closed else PHASE_PLAYING),
     )
     embed.add_field(
         name="Take", value=discord.utils.escape_markdown(take_text), inline=False
@@ -87,7 +97,10 @@ def build_vote_embed(
     return embed
 
 
-def build_recap_embed(results: list[dict[str, Any]]) -> discord.Embed | None:
+def build_recap_embed(
+    results: list[dict[str, Any]],
+    color: discord.Color | None = None,
+) -> discord.Embed | None:
     """Build the game-over recap embed for Hot Takes.
 
     Shows the hottest take, the coldest take, an optional Most Divisive
@@ -95,6 +108,11 @@ def build_recap_embed(results: list[dict[str, Any]]) -> discord.Embed | None:
     Voters tallies. Returns ``None`` when ``results`` is empty so the
     cog can skip sending an empty embed — matching the old early-return
     in ``_post_recap``.
+
+    ``color`` is the resolved guild accent. Hot Takes crowns a hottest
+    take but declares no win/loss, so the recap is accent (not semantic
+    green); it falls back to the old :data:`PHASE_RECAP` constant when
+    no guild is in scope.
     """
     summary = compute_recap_summary(results)
     if summary is None:
@@ -102,7 +120,7 @@ def build_recap_embed(results: list[dict[str, Any]]) -> discord.Embed | None:
 
     embed = discord.Embed(
         title=f"{GAME_ICONS['hottakes']} HOT TAKES — FINAL RESULTS",
-        color=PHASE_RECAP,
+        color=color or discord.Color(PHASE_RECAP),
     )
     hottest = summary["hottest"]
     coldest = summary["coldest"]

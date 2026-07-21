@@ -55,7 +55,7 @@ async def _ambient_status_handler(bot, interaction: discord.Interaction) -> None
     else:
         lines.append("Last post: —")
     lines.append(
-        f"Corpus: `{sim._chain.corpus_size}` messages / `{sim._chain.vocab_size}` bigrams"
+        f"Corpus: `{sim._chain.corpus_size}` canned lines / `{sim._chain.vocab_size}` unique words"
     )
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 

@@ -20,8 +20,11 @@ from bot_modules.economy.quests import (
     effective_target,
     has_board,
     iso_week_for,
+    apply_pair_bundles,
     message_matches_trigger,
     occurrence_period,
+    p25_target,
+    pair_map,
     parse_trigger_words,
     period_index,
     pick_rotation,
@@ -377,3 +380,74 @@ def test_effective_target_within_band_and_deterministic():
 
 def test_effective_target_never_below_one():
     assert effective_target(0, 0, 0, user_id=1, quest_id=1, period="p") == 1
+
+
+# ── p25_target: personal p25, band-clamped ────────────────────────────
+
+
+def test_p25_target_takes_quartile_not_median():
+    # sorted 20/20/30/40 → p25 = 20 (the median×1.15 path would give 29)
+    assert p25_target([20, 20, 30, 40], 4, 40) == 20
+
+
+def test_p25_target_zeros_drag_it_to_the_band_floor():
+    # two quiet trailing weeks pull p25 to 0 → floored at band min
+    assert p25_target([0, 0, 1, 2], 4, 40) == 4
+
+
+def test_p25_target_counts_partial_history():
+    # one active week among four: p25 = 7.5 → 8 (round-half-even)
+    assert p25_target([0, 30, 60, 90], 4, 40) == 8
+
+
+def test_p25_target_clamps_to_band_max():
+    assert p25_target([100, 100, 100, 100], 4, 40) == 40
+
+
+def test_p25_target_degenerate_inputs():
+    assert p25_target([3], 1, 40) == 3  # single period: use it as-is
+    assert p25_target([], 1, 40) == 1  # no history: band floor / never 0
+
+
+# ── paired board quests ───────────────────────────────────────────────
+
+
+def test_pair_map_exact_twos_only():
+    tagged = {1: "gw", 2: "gw", 3: "", 4: "wh", 5: "wh", 6: "wh", 7: "solo"}
+    pairs = pair_map(tagged)
+    assert pairs == {1: 2, 2: 1}  # 'wh' ×3 and 'solo' ×1 are inert
+
+
+def test_apply_pair_bundles_pulls_partner_in():
+    # drew {2, 9}; 2 pairs with 5 → 9 gives way to the partner
+    assert apply_pair_bundles([2, 9], {2: 5, 5: 2}) == [2, 5]
+
+
+def test_apply_pair_bundles_pair_already_complete():
+    assert apply_pair_bundles([2, 5], {2: 5, 5: 2}) == [2, 5]
+
+
+def test_apply_pair_bundles_no_tagged_quests_is_identity():
+    assert apply_pair_bundles([3, 7], {2: 5, 5: 2}) == [3, 7]
+
+
+def test_apply_pair_bundles_board_of_one_cannot_pair():
+    assert apply_pair_bundles([2], {2: 5, 5: 2}) == [2]
+
+
+def test_apply_pair_bundles_two_pairs_first_wins():
+    # Both drawn quests belong to different pairs on a 2-slot board: the
+    # lower id completes its pair; the other is displaced. Deterministic.
+    assert apply_pair_bundles([2, 8], {2: 5, 5: 2, 8: 9, 9: 8}) == [2, 5]
+
+
+def test_apply_pair_bundles_wider_board_keeps_unpaired():
+    # Board of 3: pair completes, the untagged quest keeps its slot.
+    assert apply_pair_bundles([2, 3, 9], {2: 5, 5: 2}) == [2, 3, 5]
+
+
+def test_apply_pair_bundles_never_splits_a_complete_pair():
+    # 8+9 arrived complete; 2 completing its own pair must displace the
+    # loose quest (3), not a member of the intact pair.
+    got = apply_pair_bundles([2, 3, 8, 9], {2: 5, 5: 2, 8: 9, 9: 8})
+    assert got == [2, 5, 8, 9]

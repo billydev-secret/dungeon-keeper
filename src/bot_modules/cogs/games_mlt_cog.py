@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -60,13 +61,16 @@ _MAX_QUEUED_PROMPTS = 15
 
 
 class MLTJoinView(discord.ui.View):
-    def __init__(self, game_id: str, host_id: int, db, bot, cog):
+    def __init__(self, game_id: str, host_id: int, db, bot, cog, accent=None):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
         self.db = db
         self.bot = bot
         self.cog = cog
+        # Guild accent resolved once at view creation; reused on every
+        # Join/Leave press so we never re-resolve per interaction.
+        self.accent = accent
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -89,7 +93,9 @@ class MLTJoinView(discord.ui.View):
         names = resolve_names(guild, players)
         host_member = guild.get_member(self.host_id) if guild else None
         embed = build_join_embed(
-            host_member.display_name if host_member else "Host", names
+            host_member.display_name if host_member else "Host",
+            names,
+            color=self.accent,
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've joined the pool!", ephemeral=True)
@@ -107,7 +113,9 @@ class MLTJoinView(discord.ui.View):
         names = resolve_names(guild, players)
         host_member = guild.get_member(self.host_id) if guild else None
         embed = build_join_embed(
-            host_member.display_name if host_member else "Host", names
+            host_member.display_name if host_member else "Host",
+            names,
+            color=self.accent,
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've left the pool.", ephemeral=True)
@@ -154,6 +162,7 @@ class MLTJoinView(discord.ui.View):
             players=players,
             channel=interaction.channel,
             custom_prompt=payload.get("opening_prompt"),
+            accent=self.accent,
         )
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mlt_htp")
@@ -208,6 +217,7 @@ class MLTVoteView(discord.ui.View):
         host_name: str,
         guild,
         advance_callback,
+        accent=None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -220,6 +230,9 @@ class MLTVoteView(discord.ui.View):
         self.host_name = host_name
         self.guild = guild
         self.advance_callback = advance_callback
+        # Guild accent resolved once at view creation; reused on every
+        # vote/edit so we never re-resolve per interaction.
+        self.accent = accent
         self.votes: dict[int, int] = {}
         self._closed = False
         self.queued_prompts: list[str] = []
@@ -276,6 +289,7 @@ class MLTVoteView(discord.ui.View):
             round_num=self.round_num,
             vote_count=len(self.votes),
             closed=closed,
+            color=self.accent,
         )
 
     def _build_results_embed(self, tally: dict) -> discord.Embed:
@@ -284,6 +298,7 @@ class MLTVoteView(discord.ui.View):
             round_num=self.round_num,
             tally=tally,
             guild=self.guild,
+            color=self.accent,
         )
 
     @discord.ui.button(label="✍️ Pose Prompt", style=discord.ButtonStyle.primary, custom_id="mlt_pose", row=1)
@@ -320,6 +335,21 @@ class MLTCog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
+
+    async def _resolve_accent(self, guild):
+        """Resolve the guild accent once, tolerating no guild / no ctx.
+
+        Returns ``None`` (embed builders fall back to phase colors) when
+        there's no guild or resolution fails, so a branding hiccup never
+        crashes the game.
+        """
+        if guild is None:
+            return None
+        try:
+            return await resolve_accent_color(self.bot.ctx.db_path, guild)
+        except Exception:
+            log.debug("MLT: accent resolution failed", exc_info=True)
+            return None
 
     @app_commands.command(name="mlt", description="Start a Most Likely To game!")
     @app_commands.describe(
@@ -384,8 +414,9 @@ class MLTCog(commands.Cog):
         )
 
         log.info("Game %s (mlt) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
-        embed = build_join_embed(host_name, [])
-        view = MLTJoinView(game_id, host_id, self.db, self.bot, self)
+        accent = await self._resolve_accent(getattr(channel, "guild", None))
+        embed = build_join_embed(host_name, [], color=accent)
+        view = MLTJoinView(game_id, host_id, self.db, self.bot, self, accent=accent)
         self.bot.active_views[game_id] = view
 
         try:
@@ -408,7 +439,8 @@ class MLTCog(commands.Cog):
             if not any(int(c) > 0 for c in crowns.values()):
                 return
             guild = getattr(channel, "guild", None)
-            embed = build_final_standings_embed(crowns, guild)
+            accent = await self._resolve_accent(guild)
+            embed = build_final_standings_embed(crowns, guild, color=accent)
             if guild:
                 from bot_modules.economy.game_rewards import append_payout_footer
                 await append_payout_footer(self.bot, embed, guild.id, "mlt")
@@ -438,6 +470,7 @@ class MLTCog(commands.Cog):
         channel,
         custom_prompt: str | None = None,
         carry_over_queue: list[str] | None = None,
+        accent=None,
     ):
         if custom_prompt:
             prompt = custom_prompt
@@ -470,6 +503,7 @@ class MLTCog(commands.Cog):
             channel=channel,
             prompt=prompt,
             interaction=interaction,
+            accent=accent,
         )
         if carry_over_queue:
             view.queued_prompts = carry_over_queue
@@ -506,11 +540,13 @@ class MLTCog(commands.Cog):
         channel,
         prompt: str,
         interaction=None,
+        accent=None,
     ) -> "MLTVoteView":
         """Construct a vote-round view with its advance callback wired.
 
         Shared by _run_round (fresh round) and recover_game (post-restart) so
-        round-to-round advancement behaves identically after a crash.
+        round-to-round advancement behaves identically after a crash. ``accent``
+        is resolved once by the caller and reused for every round's embeds.
         """
         guild = getattr(channel, "guild", None)
 
@@ -567,6 +603,7 @@ class MLTCog(commands.Cog):
                     channel=channel,
                     custom_prompt=next_custom,
                     carry_over_queue=remaining if remaining else None,
+                    accent=accent,
                 )
             except Exception:
                 log.exception("Error advancing MLT game %s to round %d", game_id, round_num + 1)
@@ -588,6 +625,7 @@ class MLTCog(commands.Cog):
             host_name=host_name,
             guild=guild,
             advance_callback=advance,
+            accent=accent,
         )
         return view
 
@@ -602,7 +640,10 @@ class MLTCog(commands.Cog):
         rounds = payload.get("rounds", {})
 
         if not rounds:
-            view = MLTJoinView(game_id, host_id, self.db, self.bot, self)
+            accent = await self._resolve_accent(getattr(channel, "guild", None))
+            view = MLTJoinView(
+                game_id, host_id, self.db, self.bot, self, accent=accent
+            )
             self.bot.active_views[game_id] = view
             self.bot.add_view(view, message_id=message.id)
             log.info("Recovered mlt game %s (join phase) in #%s", game_id, getattr(channel, "name", channel.id))
@@ -614,6 +655,7 @@ class MLTCog(commands.Cog):
         players = [int(p) for p in payload.get("players", [])]
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
+        accent = await self._resolve_accent(guild)
 
         view = self._build_vote_view(
             game_id=game_id,
@@ -624,6 +666,7 @@ class MLTCog(commands.Cog):
             channel=channel,
             prompt=prompt,
             interaction=None,
+            accent=accent,
         )
         view.votes = {int(k): int(v) for k, v in (rd.get("votes") or {}).items()}
         self.bot.active_views[game_id] = view

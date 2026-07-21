@@ -23,8 +23,10 @@ import discord
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
+from bot_modules.services.economy_service import EconSettings
+
 from . import db as duels_db
-from .base_game import _RATE_LIMIT_MAX, BaseGame
+from .base_game import _RATE_LIMIT_MAX, BaseGame, _fmt_coins
 from .filters import resolve_stakes_text, validate_stakes
 from .views import ChallengeView, ResultView
 
@@ -145,8 +147,9 @@ class BaseDuel(BaseGame):
             await self._declare_wager(guild.id, game_id, challenger.id, wager)
 
         accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        settings = await self._econ_settings(guild.id) if wager is not None else None
         embed = self._build_challenge_embed(
-            challenger, target, stakes_text, accent, wager=wager,  # type: ignore[arg-type]
+            challenger, target, stakes_text, accent, wager=wager, settings=settings,  # type: ignore[arg-type]
         )
         view = ChallengeView(
             game_id=game_id,
@@ -168,6 +171,7 @@ class BaseDuel(BaseGame):
         color: "discord.Color | None" = None,
         *,
         wager: int | None = None,
+        settings: EconSettings | None = None,
     ) -> discord.Embed:
         if color is None:
             color = discord.Color(COLOR_GOLD)
@@ -183,10 +187,14 @@ class BaseDuel(BaseGame):
         )
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
         if wager:
+            each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
+            takes = (
+                _fmt_coins(settings, wager * 2) if settings else f"**{wager * 2:,}**"
+            )
             embed.add_field(
                 name="💰 Wager",
                 value=(
-                    f"**{wager:,}** each — winner takes **{wager * 2:,}**.\n"
+                    f"{each} each — winner takes {takes}.\n"
                     "_Nothing is charged unless the challenge is accepted._"
                 ),
                 inline=False,
@@ -206,6 +214,8 @@ class BaseDuel(BaseGame):
 
         ante = await self._game_ante(game_id)
         if ante > 0:
+            settings = await self._econ_settings(game.guild_id)
+            ante_text = _fmt_coins(settings, ante) if settings else f"**{ante:,}**"
             # Both antes land at accept — no money moves while a challenge is
             # merely pending, so a decline or a timeout needs no refund. If
             # either side can't cover it now, the challenge is called off
@@ -219,7 +229,7 @@ class BaseDuel(BaseGame):
                     continue
                 await self._db_set_state(game_id, "DECLINED")  # refunds + drops
                 note = err if who == "you" else (
-                    f"The challenger can no longer cover the {ante:,} wager — "
+                    f"The challenger can no longer cover the {ante_text} wager — "
                     "challenge called off."
                 )
                 await interaction.response.edit_message(

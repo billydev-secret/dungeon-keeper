@@ -73,6 +73,7 @@ class QuestCreate(BaseModel):
     trigger_kind: str = Field(default="", max_length=32)
     target_count: int = Field(default=1, ge=1, le=10000)
     reward_xp: int = Field(default=0, ge=0, le=100000)
+    pair_tag: str = Field(default="", max_length=64)
 
 
 class QuestUpdate(BaseModel):
@@ -97,6 +98,7 @@ class QuestUpdate(BaseModel):
     trigger_kind: str | None = Field(default=None, max_length=32)
     target_count: int | None = Field(default=None, ge=1, le=10000)
     reward_xp: int | None = Field(default=None, ge=0, le=100000)
+    pair_tag: str | None = Field(default=None, max_length=64)
 
 
 class QuestGenerateBody(BaseModel):
@@ -166,6 +168,7 @@ def _quest_dict(row: sqlite3.Row | None) -> dict:
         "trigger_kind": row["trigger_kind"],
         "target_count": int(row["target_count"]),
         "reward_xp": int(row["reward_xp"]),
+        "pair_tag": row["pair_tag"],
         # Stringified: channel snowflakes overflow JS number precision.
         "trigger_channel_id": (
             str(row["trigger_channel_id"])
@@ -287,6 +290,7 @@ async def create_quest(
                     trigger_kind=body.trigger_kind,
                     target_count=body.target_count,
                     reward_xp=body.reward_xp,
+                    pair_tag=body.pair_tag,
                 )
             except ValueError as exc:
                 # Bad qtype/trigger_kind pairing from the service validator.

@@ -379,7 +379,7 @@ async def test_report_modal_posts_to_mod_log():
     log_channel.send.assert_awaited_once()
     sent_kwargs = log_channel.send.call_args.kwargs
     emb: discord.Embed = sent_kwargs["embed"]
-    assert emb.title == "Whisper Reported"
+    assert emb.title == "🚨 Whisper Reported"
     field_names = [f.name for f in emb.fields]
     assert "Sender" in field_names
     assert "Reporter (Target)" in field_names
@@ -556,7 +556,7 @@ async def test_reply_modal_posts_to_mod_log():
 
     log_channel.send.assert_awaited_once()
     emb: discord.Embed = log_channel.send.call_args.kwargs["embed"]
-    assert emb.title == "Whisper Reply"
+    assert emb.title == "💬 Whisper Reply"
     field_names = [f.name for f in emb.fields]
     assert "From" in field_names
     assert "To" in field_names

@@ -4,7 +4,7 @@ Turn the existing raw external-message collector (`/games track`, migration
 056, "stage 1") into economy payouts, and generalise it so more than one
 external bot can be tracked per guild.
 
-Locked with Billy (2026-07-21):
+Locked with Billy:
 
 - **Multiple watches per guild.** The one-bot-per-guild `games_external_watch`
   becomes multi-row, each carrying a `kind` (`gamebot_cah` | `catbot`) that
@@ -16,7 +16,7 @@ Locked with Billy (2026-07-21):
 
 ## Stages
 
-**Stage 1 — foundation (this stage).** Migration 097 rebuilds
+**Stage 1 — foundation. SHIPPED** (migration 097 merged). Migration 097 rebuilds
 `games_external_watch` with an `id` PK, a `kind` column (default `gamebot_cah`
 for the existing row), and `UNIQUE(guild_id, bot_user_id)`. `logic.py` gains
 multi-watch helpers (`list_watches`, `get_watch_for_bot`, per-bot enable). The
@@ -46,8 +46,9 @@ Discord **username** (not a mention) — resolved to a member via
 `guild.get_member_named`; unresolved (left/renamed) pay nobody. Rarity from the
 emoji name; reverse cats print the line reversed but keep the emoji intact, so
 the catcher is the non-emoji token beside "cought". "blessed…got doubled" →
-×2. Tiers (locked with Billy): common 3, uncommon 8, rare 20, epic 50, mythic
-120, divine 300 (the 22 types grouped in `parser._RARITY_TIER`). `pay_cat_catch`
+×2. Tiers (tapered 2026-07-21 — a 75%→0% linear cut from the bottom tier to the
+top, off an earlier flat 3/8/20/50/120/300): common 1, uncommon 3, rare 11, epic
+35, mythic 102, divine 300 (the 22 types grouped in `parser._RARITY_TIER`). `pay_cat_catch`
 credits the tiered coins (`apply_credit` kind `cat_catch`, booster-multiplied)
 and fires the new `cat_catch` trigger. Once per catch via the payout ledger.
 

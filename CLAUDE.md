@@ -133,4 +133,6 @@ SQLite-backed. Tests in `tests/`.
   add an interaction scenario if layout lives behind a click; measure with
   `scripts/mobile_layout_scan.py`.
 - New embeds take their color from `resolve_accent_color(db_path, guild)`;
-  keep red/green/etc. only where the color is semantic.
+  keep red/green/etc. only where the color is semantic. Fuller conventions
+  for bot embeds/panels (section spacing, monospace tables, persistent views,
+  ping allow-listing) live in `docs/embed_style_guide.md`.

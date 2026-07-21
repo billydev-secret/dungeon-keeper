@@ -175,7 +175,7 @@ async def test_report_reply_modal_happy_path_with_log_channel():
     sent_kwargs = log_channel.send.call_args.kwargs
     assert "embed" in sent_kwargs
     emb = sent_kwargs["embed"]
-    assert emb.title == "Whisper Reply Reported"
+    assert emb.title == "🚨 Whisper Reply Reported"
 
 
 @pytest.mark.asyncio

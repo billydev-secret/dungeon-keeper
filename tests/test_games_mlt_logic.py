@@ -12,10 +12,18 @@ proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
+import discord
 import pytest
 
+from bot_modules.games.constants import (
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
 from bot_modules.games_mlt.embeds import (
     build_closed_embed,
+    build_final_standings_embed,
     build_join_embed,
     build_results_embed,
     build_round_embed,
@@ -498,6 +506,79 @@ def test_build_results_embed_renders_vote_counts():
     assert embed.description is not None
     assert "5 votes" in embed.description
     assert "2 votes" in embed.description
+
+
+# ── accent color (guild accent vs. phase fallback) ───────────────────
+
+_ACCENT = discord.Color(0x112233)
+
+
+def test_join_embed_honors_passed_accent():
+    embed = build_join_embed("Alice", [], color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_join_embed_falls_back_to_phase_color():
+    embed = build_join_embed("Alice", [])
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_round_embed_active_honors_passed_accent():
+    embed = build_round_embed("x", round_num=1, vote_count=0, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_round_embed_closed_honors_passed_accent():
+    """Round-over is a voting phase, not a win — accent, not semantic green."""
+    embed = build_round_embed(
+        "x", round_num=1, vote_count=0, closed=True, color=_ACCENT
+    )
+    assert embed.color == _ACCENT
+
+
+def test_round_embed_falls_back_to_phase_colors():
+    active = build_round_embed("x", round_num=1, vote_count=0)
+    closed = build_round_embed("x", round_num=1, vote_count=0, closed=True)
+    assert active.color == discord.Color(PHASE_PLAYING)
+    assert closed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_closed_embed_honors_passed_accent():
+    embed = build_closed_embed("x", round_num=1, vote_count=0, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_closed_embed_falls_back_to_recap_color():
+    embed = build_closed_embed("x", round_num=1, vote_count=0)
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_results_embed_honors_passed_accent():
+    embed = build_results_embed(
+        prompt="x", round_num=1, tally={1: 3, 2: 1}, color=_ACCENT
+    )
+    assert embed.color == _ACCENT
+
+
+def test_results_embed_falls_back_to_phase_color():
+    embed = build_results_embed(prompt="x", round_num=1, tally={1: 1})
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_final_standings_embed_honors_passed_accent():
+    embed = build_final_standings_embed({"1": 2}, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_final_standings_embed_falls_back_to_phase_color():
+    embed = build_final_standings_embed({"1": 2})
+    assert embed.color == discord.Color(PHASE_RECAP)
+
+
+def test_final_standings_embed_empty_still_honors_accent():
+    """The no-crowns early-return path must still carry the accent."""
+    embed = build_final_standings_embed({}, color=_ACCENT)
+    assert embed.color == _ACCENT
 
 
 # ── sanity / integration ─────────────────────────────────────────────

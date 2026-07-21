@@ -47,7 +47,7 @@ The sidecar uses three different kinds of fake "users" depending on what the sce
 
 A background loop in the sidecar drives the three puppets to post realistic chat in the test guild. Cadence: roughly four posts per minute on base interval (15 s ± 20 % jitter); after each post a 30-second burst window kicks in where the next interval drops to 5 s. Multiplier env var or `/beta sim rate` lets a mod tester dial it up to 10× or down to a near-pause.
 
-Each puppet has a persona file (display name, avatar, activity weight, channel affinities, message length bias). On each tick the loop picks a puppet by activity-weight, picks a channel by that puppet's affinity, generates a Markov-chain message in the puppet's length bias, and posts it. Channel affinities reference channel names; missing channels get skipped with one WARNING log (not spammed). The loop survives any single bad tick — it sleeps 30 s on an unhandled exception and continues.
+Each puppet has a persona file (display name, avatar, activity weight, channel affinities, message length bias). On each tick the loop picks a puppet by activity-weight, picks a channel by that puppet's affinity, generates a message in the puppet's length bias, and posts it. Message text comes from `SillyTextSource` — a baked-in library of off-the-shelf joke "ipsum" (bacon, corporate, hipster, cupcake, pirate) assembled to fit the length bias. It needs no database or fixtures, so the sim is always available. Channel affinities reference channel names; missing channels get skipped with one WARNING log (not spammed). The loop survives any single bad tick — it sleeps 30 s on an unhandled exception and continues.
 
 ### Scenarios
 

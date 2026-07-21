@@ -109,7 +109,7 @@ def build_policy_vote_initial_embed(
     populated. Renders the ``"+N more"`` overflow when the roster is wider
     than ``max_mentions`` so the field stays under Discord's 1024-char cap.
     """
-    embed = discord.Embed(title=f"Policy Vote: {channel_name}", color=MOD_POLICY)
+    embed = discord.Embed(title=f"🗳️ Policy Vote: {channel_name}", color=MOD_POLICY)
     embed.add_field(name="📜 Policy Text", value=vote_text, inline=False)
     embed.add_field(
         name="Votes Cast", value=f"0/{len(list(eligible_ids))}", inline=True
@@ -162,7 +162,7 @@ def build_policy_vote_update_embed(
         color = MOD_POLICY
         status = "🗳️ Voting"
 
-    embed = discord.Embed(title=f"Policy Vote: {policy_title}", color=color)
+    embed = discord.Embed(title=f"🗳️ Policy Vote: {policy_title}", color=color)
     embed.add_field(name="📜 Policy Text", value=vote_text or "(no text)", inline=False)
     embed.add_field(
         name="Votes Cast", value=f"{voted_count}/{eligible_count}", inline=True
@@ -257,7 +257,7 @@ def build_warnings_list_embed(
             "Inspect via the dashboard for the full list.*"
         )
     embed = discord.Embed(
-        title=f"Warnings for {user_label}", description=description, color=MOD_WARNING,
+        title=f"⚠️ Warnings for {user_label}", description=description, color=MOD_WARNING,
     )
     active = sum(1 for w in warns if not w["revoked"])
     embed.set_footer(text=f"{active} active / {len(warns)} total")
@@ -297,7 +297,7 @@ def build_ticket_open_embed(
     if color is None:
         color = discord.Color(MOD_TICKET)
     embed = discord.Embed(
-        title=f"Ticket #{ticket_id}",
+        title=f"🎫 Ticket #{ticket_id}",
         description=description,
         color=color,
         timestamp=now or datetime.now(timezone.utc),
@@ -330,7 +330,7 @@ def build_setup_step_embed(
     if color is None:
         color = discord.Color(MOD_TICKET)
     return discord.Embed(
-        title=step_meta["title"],
+        title=f"⚙️ {step_meta['title']}",
         description=step_meta["description"],
         color=color,
     )
@@ -339,7 +339,7 @@ def build_setup_step_embed(
 def build_setup_complete_embed() -> discord.Embed:
     """Final "Setup Complete" embed shown after the wizard ends."""
     return discord.Embed(
-        title="Setup Complete",
+        title="⚙️ Setup Complete",
         description="All settings saved. Use `/config` to adjust later.",
         color=MOD_SUCCESS,
     )
@@ -381,7 +381,7 @@ def build_modinfo_embed(
 
     if color is None:
         color = discord.Color(MOD_INFO)
-    embed = discord.Embed(title=f"Mod Info — {user_label}", color=color)
+    embed = discord.Embed(title=f"ℹ️ Mod Info — {user_label}", color=color)
     if user_avatar_url:
         embed.set_thumbnail(url=user_avatar_url)
 
@@ -615,7 +615,7 @@ def build_adopted_policies_embed(
     adopted: Sequence[Mapping[str, Any]],
 ) -> discord.Embed:
     """Embed listing all policies that were adopted from a parent proposal."""
-    embed = discord.Embed(title="Adopted Policies from This Proposal", color=MOD_SUCCESS)
+    embed = discord.Embed(title="📜 Adopted Policies from This Proposal", color=MOD_SUCCESS)
     for p in adopted:
         embed.add_field(
             name=p["title"], value=p["description"][:1024], inline=False,

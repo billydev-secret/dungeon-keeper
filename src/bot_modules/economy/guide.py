@@ -78,7 +78,7 @@ def build_guide_embed(
     # used to point at <id:customize>, back when that role doubled as the
     # onboarding gate hiding these channels.)
     embed.add_field(
-        name="Notifications",
+        name="🔔 Notifications",
         value=(
             "Hit **🔔 Notifications** below to have your daily streak digest "
             "and raffle wins DMed to you. Toggle it off any time — it only "
@@ -115,7 +115,7 @@ def build_guide_embed(
             "`/bank quests` adds daily and weekly goals — the surest way to earn."
         )
     embed.add_field(
-        name="Earning",
+        name="💰 Earning",
         value="\n".join(earn_lines) + "\n\u200b",
         inline=False,
     )
@@ -131,7 +131,7 @@ def build_guide_embed(
     spend_lines = [
         f"`{_pad(cmd, width)}` {text}" for cmd, text in spend_rows
     ]
-    embed.add_field(name="Spending", value="\n".join(spend_lines), inline=False)
+    embed.add_field(name="🛍️ Spending", value="\n".join(spend_lines), inline=False)
 
     footer_bits = [
         f"Streaks add +1/day (up to +{settings.streak_bonus_cap}), with "
@@ -145,6 +145,12 @@ def build_guide_embed(
     if settings.booster_multiplier > 1:
         footer_bits.append(
             f"Boosters earn ×{settings.booster_multiplier:g} on everything."
+        )
+    if settings.demurrage_rate_pct > 0:
+        footer_bits.append(
+            f"A weekly 🐉 hoard tax collects {settings.demurrage_rate_pct}% of "
+            f"anything above {settings.demurrage_threshold:,} {plural} — "
+            "spending keeps a balance safe."
         )
     footer_bits.append(
         "Rentals renew weekly — a short grace period covers a missed renewal."

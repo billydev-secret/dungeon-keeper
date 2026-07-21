@@ -16,18 +16,20 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers |
 |---|---|
-| [README.md](README.md) | Feature overview + slash-command reference (recently corrected) |
+| [README.md](../README.md) | Feature overview + slash-command reference — moved to the repo root (currency pass 2026-07-21; broad-strokes accurate, verify individual command signatures against `/help` when it matters) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
+| [auto_role_spec.md](auto_role_spec.md) | Auto-role on join: dashboard-configured role set applied to new human members (apply-time hierarchy/managed filtering; jailed rejoiners skipped) |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
-| [birthday-announcement.md](birthday-announcement.md) | Birthday announcement message format |
-| [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration |
+| [booster_roles_spec.md](booster_roles_spec.md) | Booster cosmetic roles: swatch-synced gradient color roles, persistent claim buttons (boosters only, mutually exclusive), dashboard panel posting |
+| [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
 | [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders) |
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
 | [docs_cog_spec.md](docs_cog_spec.md) | `/docs` cog: posts dashboard-authored docs into channels (not this docs/ folder) |
+| [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
 | [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`). Photo Challenge left this suite — it's now a standalone scheduled dashboard feature (own channel + schedule, `/api/photo-challenge`, panel `photo-challenge.js`) |
@@ -38,6 +40,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [mod_spec.md](mod_spec.md) | Mod cog (`/help`, `/purge`) — distinct from tools_spec.md |
 | [needle_spec.md](needle_spec.md) | Needle auto-threading (`/close`, `/title`) |
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
+| [photo_challenge_spec.md](photo_challenge_spec.md) | Photo Challenge — standalone scheduled photo prompt (own channel/schedule, `/api/photo-challenge`, card via quote renderer) + post-gated economy payout (flat `reward_photo_post` + stacking `photo_post` quest) |
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
 | [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
@@ -46,12 +49,14 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [mobile_layout_testing.md](mobile_layout_testing.md) | Browser-driven responsive-layout gate: overflow/clip checks across every panel at phone/tablet/desktop; scoped per-commit, full nightly |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
+| [server_announcement_style.md](server_announcement_style.md) | Member/mod-facing guide for formatting server announcements & pinned posts (spacing, headings, links). A draft to post/pin in Discord, not bot behavior |
 | [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
-| [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch cog design |
+| [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch functional spec (v0.3 + §12 ledger) |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
 | [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo (`/todo` + context menu) |
+| [watch_spec.md](watch_spec.md) | Watch list: `/watch add\|remove\|list` relays a watched member's posts to the mod's DMs, AI-filtered to flagged posts when the local model is up (fail-open on AI error) |
 | [voice_master_spec.md](voice_master_spec.md) | Voice Master (hubs, profiles, trust/block) |
 | [voice_transcription_spec.md](voice_transcription_spec.md) | Voice-clip transcription listener (faster_whisper) — distinct from whisper_spec.md |
 | [whisper_spec.md](whisper_spec.md) | Whisper (anon send, 3-guess reveal) |
@@ -73,18 +78,56 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |
 | [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |
-| [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sink round 2: paid quest rerolls, sponsor-a-QOTD (mod-approved), burn list, PvP coin wagers | In progress 2026-07-19 |
+| [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sink round 2: paid quest rerolls, sponsor-a-QOTD (mod-approved), burn list, PvP coin wagers | All stages built (4b landed 2026-07-20) |
 | [events_spec.md](events_spec.md) | Events cog | |
-| [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
+| [music_spec.md](music_spec.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
 | [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–4 built (schema/service, cog, poster cards, dashboard, auto-archive sweep); bounty idea still open |
 | [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live leaderboard panel (today's pulse, pace, anonymous feed, event-driven debounced refresh) | Built 2026-07-18; awaiting live testing |
 | [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, dynamic targets, board add-ons | Built 2026-07-18 (all stages); awaiting live testing + post-restart seed script |
-| [plans/quest-community-hooks-round.md](plans/quest-community-hooks-round.md) | Quest round 3 (community hooks): 7 kinds — greeting_answered, birthday_wish, drop_claim, guess_submit, role_pick, confession_reply, shop_purchase; role_pick/shop_purchase join the setup kinds | Built 2026-07-21; library seeding is a follow-up |
+| [plans/quest-community-hooks-round.md](plans/quest-community-hooks-round.md) | Quest round 3 (community hooks): 7 kinds — greeting_answered, birthday_wish, drop_claim, guess_post (unified with the paired-boards round), role_pick, confession_reply, shop_purchase; role_pick/shop_purchase join the setup kinds | Built 2026-07-21; library seeding is a follow-up |
 | [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |
 | [survey_spec.md](survey_spec.md) | Anonymous Survey (launcher button, DM walkthrough, de-identified responses) | **Zero code** — no cog, no launcher, no DM session logic anywhere in `src/`. Pure design doc; not started. |
-| [TGM-Dashboard-Concept-Spec.md](TGM-Dashboard-Concept-Spec.md) | Web dashboard concept | |
+| [tgm_dashboard_concept.md](tgm_dashboard_concept.md) | Web dashboard concept | concept doc — the 12-tile dashboard it sketches is largely unbuilt; treat as aspirational-by-intent |
 | [tools_spec.md](tools_spec.md) | Bot tools | |
+
+## Implementation plans (`docs/plans/`)
+
+Stage-by-stage build plans. Each carries its own dated status header — trust
+that over this table if they drift. A few double as the primary doc for their
+feature and also appear in the Design table above.
+
+| Plan | What it covers | Status |
+|---|---|---|
+| [plans/ai-advisor.md](plans/ai-advisor.md) | Billy-bot: grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
+| [plans/chat-revive.md](plans/chat-revive.md) | Chat Revive ("Ember") v1: rhythm-aware lull questions | Built 2026-07-14 |
+| [plans/chat-revive-session-model.md](plans/chat-revive-session-model.md) | Session-gap lull model (replaces v1's rhythm fire threshold) | Built 2026-07-18 |
+| [plans/config-model-unification.md](plans/config-model-unification.md) | `guild_config` becomes the single source of truth (kills flat AppContext fields) | Implemented 2026-07-02 |
+| [plans/economy-and-perk-shop.md](plans/economy-and-perk-shop.md) | Economy core: wallets, quests, Bank Manager, rentals, metrics | Stages 0–4 built; stage 5 soak/tuning active |
+| [plans/embed-style-conformance.md](plans/embed-style-conformance.md) | Embed style-guide conformance sweep (color rulings, currency vocab, footers, games full-accent) from a 5-agent audit of all 272 embeds | Stage 0 (spec) done 2026-07-21; stages 1–7 in progress |
+| [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sinks: rerolls, QOTD sponsor, burn list, PvP wagers | All stages built (4b 2026-07-20) |
+| [plans/economy-sinks-round-3.md](plans/economy-sinks-round-3.md) | Sinks: gifts, shield, voice lease, emoji, raffle | All five stages built 2026-07-19 (lease + raffle ship dark) |
+| [plans/external-game-economy.md](plans/external-game-economy.md) | External-bot payouts (Gamebot CAH + Cat Bot) via multi-watch collector | Stages 1–3 shipped |
+| [plans/frontend-consolidation.md](plans/frontend-consolidation.md) | Dashboard JS: one fetch core, one `esc`, shared tab strips/states | Implemented 2026-07-02 |
+| [plans/game-config-knobs.md](plans/game-config-knobs.md) | Hardcoded game cooldowns/caps → per-guild dashboard settings | Done |
+| [plans/game-ux-round-2026-07-20.md](plans/game-ux-round-2026-07-20.md) | TTL join bug, Rushmore UX, winner payouts (from live-transcript review) | Shipped 2026-07-20 (2a0d4c1) |
+| [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live economy leaderboard: pulse, pace, anonymous feed | Built 2026-07-18 |
+| [plans/one-time-setup-dailies.md](plans/one-time-setup-dailies.md) | Bio/birthday setup quests inside the daily board | Code landed; prod enablement pending |
+| [plans/per-user-quest-board.md](plans/per-user-quest-board.md) | Personal per-member quest boards with repeat spacing | Code shipped; prod rollout pending |
+| [plans/photo-challenge-post-payout.md](plans/photo-challenge-post-payout.md) | Photo Challenge post-gated channel payout (flat award + quest bonus) | Shipped |
+| [plans/qa-tracker.md](plans/qa-tracker.md) | QA cards, volunteer verdict pay, admin void | Stages 0–4 shipped |
+| [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | 13 new quest kinds, tiered community weeklies, live tracker | Built 2026-07-18 |
+| [plans/role-menus.md](plans/role-menus.md) | Self-assign role menus + Oracle builder | Built 2026-07-14 |
+| [plans/timed-announcements.md](plans/timed-announcements.md) | Dashboard-queued announcements + role buttons | Built 2026-07-19/20 |
+| [plans/typed-bot-refactor.md](plans/typed-bot-refactor.md) | Typed `Bot`/`GameRuntime` — kill the monkey-patched registries | Implemented 2026-07-02 |
+
+## Testing checklists (`docs/testing/`)
+
+| Doc | What it covers |
+|---|---|
+| [testing/user_testing_checklist.md](testing/user_testing_checklist.md) | Member-facing live-testing checklist |
+| [testing/admin_testing_checklist.md](testing/admin_testing_checklist.md) | Admin/dashboard live-testing checklist |
+| [testing/mod_testing_checklist.md](testing/mod_testing_checklist.md) | Moderator live-testing checklist |
 
 ## Aspirational specs (⚠️ read with care — not fully built)
 
@@ -92,7 +135,7 @@ These describe features or shapes of the system that don't match reality. They'r
 
 | Doc | What it covers | Why it's aspirational |
 |---|---|---|
-| [duel_minigame_flows_v2.md](duel_minigame_flows_v2.md) | Duel minigame UX flows | **Partially aspirational** — Liar's Dice and Minesweeper flows are specced but unbuilt |
+| [duel_minigame_flows_v2.md](duel_minigame_flows_v2.md) | Duel minigame UX flows | **Partially aspirational** — Liar's Dice and Minesweeper flows are specced but unbuilt, and the games that *were* built (Chicken, Hot Potato group, Musical Chairs) shipped with different rules than described here. `dk_pvp_games_suite_spec.md` §9 is authoritative for current behavior |
 
 **2026-07-15 correction pass:** `dk_pvp_games_suite_spec.md`, `games_system_spec.md`, `guess_spec.md`, and `voice_master_spec.md` were rewritten to match current code and moved to the Reference table above; each now ends with (or, for `voice_master_spec.md`/`guess_spec.md`, never needed) a "Not Yet Built / Roadmap" section that preserves the design/unbuilt material they used to present as current (Minesweeper Duel, Liar's Dice, consent-gating, channel-allowlist admin commands, phantom `/guess` commands, etc.) instead of deleting it. `wellness_guardian_spec.md` got the same treatment but stays flagged above — its drift ran the opposite direction from expected (most of the doc's content turned out to be built, just dormant).
 

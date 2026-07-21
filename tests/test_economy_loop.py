@@ -1335,6 +1335,44 @@ def test_week_roll_raffle_disabled_draws_nothing(db):
         assert raffle_svc.get_draw(conn, GUILD, "2026-W28") is None
 
 
+# ── hoard tax at the week roll (demurrage, migration 100) ──────────────
+
+
+def test_week_roll_collects_hoard_tax_exactly_once(db):
+    from bot_modules.services import economy_demurrage_service as demurrage_svc
+
+    _enable(db, demurrage_rate_pct=10, demurrage_threshold=500)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 1500, "grant")
+    bot = _Bot([_Guild(GUILD)])
+
+    _roll(bot, db, _ts(D1))            # first sight → mark W28
+    _roll(bot, db, _ts("2026-07-13"))  # Monday → W29: week rolls, W28 swept
+
+    assert _balance(db) == 1400  # 10% of the 1000 over the floor
+    with open_db(db) as conn:
+        sweep = demurrage_svc.get_sweep(conn, GUILD, "2026-W28")
+        assert sweep is not None and int(sweep["total"]) == 100
+        # Replay: the sweeps PK refuses a re-collection of the same week.
+        settings = load_econ_settings(conn, GUILD)
+        assert demurrage_svc.run_sweep(conn, settings, GUILD, "2026-W28") is None
+    assert _balance(db) == 1400
+
+
+def test_week_roll_demurrage_disabled_collects_nothing(db):
+    from bot_modules.services import economy_demurrage_service as demurrage_svc
+
+    _enable(db)  # rate 0 (default)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 1500, "grant")
+    bot = _Bot([_Guild(GUILD)])
+    _roll(bot, db, _ts(D1))
+    _roll(bot, db, _ts("2026-07-13"))
+    assert _balance(db) == 1500
+    with open_db(db) as conn:
+        assert demurrage_svc.get_sweep(conn, GUILD, "2026-W28") is None
+
+
 # ── weekly flip announcement pings the economy game role (#72) ────────────────
 
 from bot_modules.services.economy_loop import flip_announcement_content  # noqa: E402

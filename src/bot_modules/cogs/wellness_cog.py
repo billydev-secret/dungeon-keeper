@@ -493,7 +493,7 @@ class WellnessCog(commands.Cog):
         if cfg is None or not cfg.role_id:
             await interaction.response.send_message(
                 "⚠️ Wellness Guardian isn't set up on this server yet. "
-                "Ask an admin to run `/wellness-admin setup`.",
+                "An admin can configure it from the web dashboard.",
                 ephemeral=True,
             )
             return

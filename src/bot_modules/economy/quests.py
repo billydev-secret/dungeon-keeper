@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import random
 import re
+import statistics
 from datetime import date
 
 # Library slot limits per guild. Daily/weekly/monthly active quests form a
@@ -92,6 +93,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "pen_pal_complete": "See a Pen Pals session through to the end",
     "whisper_guess": "Correctly guess who sent a whisper",
     "guess_win": "Win a Guess Who round",
+    "guess_post": "Submit a Guess Who round",
     "quoted": "Have your message turned into a quote card",
     "session_join": "Join a scheduled game session",
     "voice_message": "Post a voice message",
@@ -112,7 +114,6 @@ TRIGGER_KINDS: dict[str, str] = {
     "greeting_answered": "Answer someone's hello",
     "birthday_wish": "Wish a member happy birthday",
     "drop_claim": "Catch a coin drop",
-    "guess_submit": "Submit a Guess Who photo",
     "role_pick": "Pick your roles from a role menu",
     "confession_reply": "Reply to a confession",
     "shop_purchase": "Make your first shop purchase",
@@ -150,6 +151,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "pen_pal_complete": "A Pen Pals session you were in reaching its natural end — both members fire; sessions that end early don't. Event cadence: once per session.",
     "whisper_guess": "Correctly guessing who sent you an anonymous whisper. Event cadence: once per whisper.",
     "guess_win": "Winning a Guess Who round. Event cadence: once per round.",
+    "guess_post": "Submitting a Guess Who round for others to solve (confession rounds count too). Event cadence: once per submitted round.",
     "quoted": "Someone ELSE turning your message into a quote card (the quoted author is credited; self-quotes never fire). Event cadence: once per quoted message.",
     "session_join": "Joining a scheduled game session. Event cadence: once per session.",
     "voice_message": "Posting a voice message (the transcription listener is the detector). Event cadence: once per message — use daily/weekly with a target count.",
@@ -170,7 +172,6 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "greeting_answered": "Replying to or @mentioning a member whose greeting is still pending in Greeting Watch (same channel, inside the window). Needs Greeting Watch configured — no watched channels means this never fires. Event cadence: once per greeting.",
     "birthday_wish": "Wishing a member happy birthday on a day their birthday was announced — a reply/mention of the birthday member, or a birthday-wish phrase anywhere. Only publicly-announced birthdays count, so quiet birthdays never become quest bait. Event cadence: once per birthday member per day.",
     "drop_claim": "Winning a coin-drop Claim race. Pays beside the drop itself (the cat_catch pattern); the drop cadence is the natural rate limit. Event cadence: once per drop.",
-    "guess_submit": "Posting a Guess Who submission (✓ Post in the crop editor) — the content-supply twin of the `guess` play kind. The submit rate limit is the farm guard. Event cadence: once per round posted.",
     "role_pick": "Self-assigning a role via a role menu or an announcement role button. One-time setup quest (the bio_set pattern): claims once ever, drops off the board once done. Event cadence: once ever.",
     "confession_reply": "Posting an anonymous reply to someone ELSE's confession (replying to your own never fires). Credited privately like `confession` — no channel noise. Event cadence: once per reply — use daily/weekly with a target count.",
     "shop_purchase": "Making a shop purchase: perk rental, streak shield, emoji or QOTD sponsorship, raffle tickets (automatic renewal billing never fires). One-time setup quest teaching the earn→spend loop. Event cadence: once ever.",
@@ -251,6 +252,28 @@ DYNAMIC_STRETCH = 1.15
 def dynamic_target(median_count: float, target_min: int, target_max: int) -> int:
     """Clamp a member's stretched trailing median into the author's band."""
     return max(target_min, min(target_max, round(median_count * DYNAMIC_STRETCH)))
+
+
+# Kinds whose personal target resolves at the member's own trailing-period
+# p25 instead of the stretched median. Reactions are passive one-click acts
+# with a heavy-tailed distribution — the goal is "at least your own
+# quiet-week level", so no stretch factor: median × 1.15 would turn the
+# freebie fix into a grind on a heavy reactor's off week.
+PERSONAL_P25_KINDS = frozenset({"reaction_given"})
+
+
+def p25_target(counts: list[int], target_min: int, target_max: int) -> int:
+    """Clamp a member's trailing-period p25 into the author's band.
+
+    The quantile runs over ALL trailing periods, zeros included — the same
+    convention as the median path, so a quiet week drags the target down
+    and it stays attainable in a typical-to-slow week. Never below 1.
+    """
+    if len(counts) >= 2:
+        p25 = statistics.quantiles(counts, n=4)[0]
+    else:
+        p25 = float(counts[0]) if counts else 0.0
+    return max(target_min, min(target_max, max(1, round(p25))))
 
 
 # ── Community-weekly beat sheets ──────────────────────────────────────
@@ -504,6 +527,55 @@ def assigned_quest_ids(
     start = (index * n) % m
     picked = [shuffled[(start + i) % m] for i in range(n)]
     return sorted(picked)
+
+
+def pair_map(tagged: dict[int, str]) -> dict[int, int]:
+    """Quest-id → partner-id for tags shared by EXACTLY two quests.
+
+    ``tagged`` maps pool quest ids to their pair_tag ('' = untagged). A tag
+    carried by one quest (partner inactive/deleted) or by three-plus is
+    inert — a strict rule beats guessing which two of three were meant.
+    """
+    by_tag: dict[str, list[int]] = {}
+    for qid, tag in tagged.items():
+        if tag:
+            by_tag.setdefault(tag, []).append(qid)
+    out: dict[int, int] = {}
+    for ids in by_tag.values():
+        if len(ids) == 2:
+            a, b = sorted(ids)
+            out[a], out[b] = b, a
+    return out
+
+
+def apply_pair_bundles(picked: list[int], pairs: dict[int, int]) -> list[int]:
+    """Complete pairs on a drawn board: a picked quest pulls in its partner.
+
+    Walking picked ids in sorted order, a quest whose partner is absent
+    swaps the partner in for the LAST slot that isn't itself part of an
+    honored pair — deterministic, so the board stays a pure function of
+    (pool, member, period). A board of one can't hold a pair and is left
+    alone; if every other slot is already pair-locked, the odd quest keeps
+    its solo slot. Returns sorted ids, same length as ``picked``.
+    """
+    out = sorted(picked)
+    locked: set[int] = set()
+    # Pass 1: pairs the draw already completed are untouchable — another
+    # quest pulling ITS partner in must never split them.
+    for qid in out:
+        if qid in pairs and pairs[qid] in out:
+            locked.update((qid, pairs[qid]))
+    # Pass 2: complete the rest, lowest id first, displacing from the end.
+    for qid in list(out):
+        if qid in locked or qid not in pairs:
+            continue
+        partner = pairs[qid]
+        for i in range(len(out) - 1, -1, -1):
+            if out[i] != qid and out[i] not in locked:
+                out[i] = partner
+                locked.update((qid, partner))
+                break
+    return sorted(out)
 
 
 def has_board(qtype: str) -> bool:

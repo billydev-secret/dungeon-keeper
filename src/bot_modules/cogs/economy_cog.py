@@ -36,6 +36,7 @@ from bot_modules.economy.leaderboard import (
 )
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.register import kind_display
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -1131,6 +1132,8 @@ def _build_shop_embed(
     embed = discord.Embed(
         title="🛍️ Perk shop", description=description, color=accent
     )
+    if settings.currency_icon_url:
+        embed.set_thumbnail(url=settings.currency_icon_url)
 
     # The Voice tier exists only while the lease is priced (> 0 = the paywall
     # is armed); at the price-0 dark default the shop shows no trace of it.
@@ -1340,7 +1343,7 @@ class EconomyCog(commands.Cog):
         if shields > 0:
             description += "\n🛡️ Streak shield held"
         embed = discord.Embed(
-            title=settings.wallet_name,
+            title=f"{settings.currency_emoji} {settings.wallet_name}",
             description=description,
             color=accent,
         )
@@ -1351,11 +1354,12 @@ class EconomyCog(commands.Cog):
             lines = []
             for row in ledger:
                 amount = int(row["amount"])
-                sign = "+" if amount >= 0 else "-"
+                sign = "+" if amount >= 0 else "−"
                 ts = int(row["created_at"])
+                glyph, label = kind_display(str(row["kind"]))
                 line = (
                     f"{sign}{abs(amount):,} {settings.currency_emoji} · "
-                    f"{row['kind']} · <t:{ts}:R>"
+                    f"{glyph} {label} · <t:{ts}:R>"
                 )
                 memo = _memo_of(row["meta"])
                 if memo:
@@ -1441,13 +1445,15 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
-            title="Currency granted",
+            title=f"{settings.currency_emoji} Currency granted",
             description=(
                 f"{settings.currency_emoji} **{credited:,}** {_unit(settings, credited)} "
                 f"→ {member.mention}"
             ),
             color=accent,
         )
+        if settings.currency_icon_url:
+            embed.set_thumbnail(url=settings.currency_icon_url)
         if booster and credited != amount:
             embed.add_field(
                 name="Booster bonus",
@@ -1483,7 +1489,7 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
-            title="Notifications muted" if muted else "Notifications on",
+            title="🔔 Notifications muted" if muted else "🔔 Notifications on",
             description=(
                 "You won't get economy DMs anymore. Run this again to turn them back on."
                 if muted
@@ -1551,8 +1557,12 @@ class EconomyCog(commands.Cog):
             if memo:
                 desc += f"\n\n*{discord.utils.escape_markdown(memo)}*"
             confirm = discord.Embed(
-                title="Confirm payment", description=desc, color=accent
+                title=f"{settings.currency_emoji} Confirm payment",
+                description=desc,
+                color=accent,
             )
+            if settings.currency_icon_url:
+                confirm.set_thumbnail(url=settings.currency_icon_url)
             view = _PayConfirmView(self, settings, guild, sender, member, amount, memo)
             await interaction.response.send_message(
                 embed=confirm, view=view, ephemeral=True
@@ -1607,7 +1617,11 @@ class EconomyCog(commands.Cog):
         )
         if safe_memo:
             desc += f"\n\n*{safe_memo}*"
-        embed = discord.Embed(title="Payment sent", description=desc, color=accent)
+        embed = discord.Embed(
+            title=f"{settings.currency_emoji} Payment sent", description=desc, color=accent
+        )
+        if settings.currency_icon_url:
+            embed.set_thumbnail(url=settings.currency_icon_url)
         embed.set_footer(text=f"Your balance: {new_balance:,}")
         await self._reply_embed(interaction, embed, via_confirm=via_confirm)
 
@@ -2920,7 +2934,11 @@ class EconomyCog(commands.Cog):
         0 means the admin hasn't picked a Photo Challenge channel — the
         listener no-ops then, so the mechanic is dormant until one is set.
         Read from ``games_game_config`` (game_type 'photo'), the same
-        ``channel_id`` the standalone Photo Challenge Setup panel owns.
+        ``channel_id`` the standalone Photo Challenge Setup panel owns. When
+        that config carries no channel but an **active photo schedule** does
+        (a schedule created without the Setup panel ever being saved, which
+        leaves the config row empty), fall back to the schedule's channel so
+        posts there still earn instead of silently paying nothing.
         """
         with self.ctx.open_db() as conn:
             row = conn.execute(
@@ -2928,16 +2946,32 @@ class EconomyCog(commands.Cog):
                 " WHERE guild_id = ? AND game_type = 'photo'",
                 (guild_id,),
             ).fetchone()
-        opts: dict = {}
-        if row and row[0]:
+            opts: dict = {}
+            if row and row[0]:
+                try:
+                    opts = json.loads(row[0])
+                except (ValueError, TypeError):
+                    opts = {}
             try:
-                opts = json.loads(row[0])
+                channel_id = int(str(opts.get("channel_id")).strip() or 0)
             except (ValueError, TypeError):
-                opts = {}
-        try:
-            return int(str(opts.get("channel_id")).strip() or 0)
-        except (ValueError, TypeError):
-            return 0
+                channel_id = 0
+            if channel_id > 0:
+                return channel_id
+            # Config has no channel — recover the channel from an active photo
+            # schedule so a schedule-only setup isn't silently unpaid.
+            sched = conn.execute(
+                "SELECT channel_id FROM games_scheduled"
+                " WHERE guild_id = ? AND game_type = 'photo' AND status = 'active'"
+                " ORDER BY id ASC LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+        if sched and sched[0]:
+            try:
+                return int(sched[0])
+            except (ValueError, TypeError):
+                return 0
+        return 0
 
     async def _photo_channel(self, guild_id: int) -> int:
         """TTL-cached ``_read_photo_channel`` — one DB read per guild per TTL.

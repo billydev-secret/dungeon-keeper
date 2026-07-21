@@ -1,9 +1,12 @@
 """PvP coin wagers on the duel games — escrow, settlement, refunds.
 
 Economy sinks round 2, stage 4b (migration 094). Equal ante, winner takes the
-pot, **no rake** — this moves currency sideways between members and absorbs
-nothing, which is the round's deliberate trade (wagers make the games matter;
-the absorption target rests on the other stages).
+pot minus an optional house rake (``wager_rake_pct``, default 0). The round
+shipped deliberately rake-free — a pure sideways transfer that absorbs
+nothing — and 0 preserves exactly that; a guild that prices the rake on the
+Sinks page turns each settled pot into a partial burn. Refunds are never
+raked, and neither is a single-stake pot (a winner reclaiming their own ante
+after everyone else was refunded out isn't a contest).
 
 Two rules here invert the surrounding game code, both on purpose:
 
@@ -26,15 +29,25 @@ from __future__ import annotations
 import sqlite3
 import time
 
+from typing import NamedTuple
+
 from bot_modules.services.economy_service import (
     apply_credit,
     apply_debit,
     get_balance,
+    load_econ_settings,
 )
 
 STAKE_KIND = "wager_stake"
 PAYOUT_KIND = "wager_payout"
 REFUND_KIND = "wager_refund"
+
+
+class Settlement(NamedTuple):
+    """What a settled pot became: winner's credit + the house's evaporation."""
+
+    paid: int  # credited to the winner (pot minus rake)
+    rake: int  # burned — never credited anywhere
 
 _LIVE_STATES = ("pending", "held")
 
@@ -221,19 +234,25 @@ def refund_game(
 
 def settle(
     conn: sqlite3.Connection, game_type: str, game_id: int, winner_id: int | None
-) -> int:
-    """Pay the whole pot to the winner. Returns the amount paid.
+) -> Settlement:
+    """Pay the pot (minus any house rake) to the winner.
 
-    ``winner_id`` None (a wipeout, or nobody eligible) refunds instead — the
-    pot never evaporates. A winner who somehow holds no escrow row still gets
-    paid (they won the game; the pot is the pot), but a winner who isn't in
-    the game at all can't be conjured — callers pass the game's own winner.
-    Exactly-once: the settling UPDATE predicates on ``settled_at IS NULL``, so
-    a replayed terminal hook pays nothing the second time.
+    ``winner_id`` None (a wipeout, or nobody eligible) refunds instead — an
+    unwon pot never evaporates, rake included. A winner who somehow holds no
+    escrow row still gets paid (they won the game; the pot is the pot), but a
+    winner who isn't in the game at all can't be conjured — callers pass the
+    game's own winner. Exactly-once: the settling UPDATE predicates on
+    ``settled_at IS NULL``, so a replayed terminal hook pays nothing the
+    second time.
+
+    The rake reads the guild's CURRENT ``wager_rake_pct`` at settlement (the
+    rental-renewal rule — not snapshotted at stake time) and applies only to
+    a contested pot of two or more stakes; floor division, so a tiny pot can
+    round the cut to nothing.
     """
     if winner_id is None:
         refund_game(conn, game_type, game_id)
-        return 0
+        return Settlement(0, 0)
     now = time.time()
     rows = conn.execute(
         "UPDATE econ_game_wagers SET state = 'settled', settled_at = ? "
@@ -243,20 +262,31 @@ def settle(
         (now, game_type, game_id),
     ).fetchall()
     if not rows:
-        return 0
+        return Settlement(0, 0)
     pot = sum(int(r["amount"]) for r in rows)
     guild_id = int(rows[0]["guild_id"])
-    apply_credit(
-        conn, guild_id, winner_id, pot, PAYOUT_KIND,
-        meta={
-            "game_type": game_type,
-            "game_id": game_id,
-            "players": len(rows),
-        },
-        booster=False,  # a transfer between members must never mint
-    )
+
+    rake = 0
+    if len(rows) >= 2:
+        rake_pct = max(0, min(100, int(load_econ_settings(conn, guild_id).wager_rake_pct)))
+        rake = min(pot, pot * rake_pct // 100)
+
+    meta: dict[str, object] = {
+        "game_type": game_type,
+        "game_id": game_id,
+        "players": len(rows),
+    }
+    if rake:
+        meta["rake"] = rake
+    paid = pot - rake
+    if paid > 0:
+        apply_credit(
+            conn, guild_id, winner_id, paid, PAYOUT_KIND,
+            meta=meta,
+            booster=False,  # a transfer between members must never mint
+        )
     drop_pending(conn, game_type, game_id)
-    return pot
+    return Settlement(paid, rake)
 
 
 def live_stakes_for_member(

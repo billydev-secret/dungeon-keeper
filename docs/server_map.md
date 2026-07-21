@@ -3,7 +3,9 @@
 > **Snapshot, not live-synced.** Pulled directly from the Discord API on
 > 2026-07-18 (77 channels, 109 roles at the time). Channels/roles change as
 > the server evolves — treat this as a point-in-time reference, not a
-> mirror. Re-generate rather than hand-editing when it drifts.
+> mirror. Re-generate rather than hand-editing when it drifts. (No
+> generator script is checked in — the 2026-07-18 snapshot was produced
+> ad hoc; small factual rot has been spot-fixed since, last 2026-07-21.)
 
 A guided tour of the server's channels and roles, organized the way a
 member sees them. Channel descriptions below are the server's own channel
@@ -117,12 +119,12 @@ temporarily relocates channels here; see `docs/hidden_channels_spec.md`)*
 | 👋│moderation-team-bios | Mod team bios. |
 
 ### Bio-writer
-*(empty at snapshot time — working category for the Bios cog's profile-wizard threads)*
+*(empty at snapshot time — working category for the Bios cog's private per-member profile-wizard channels)*
 
 ### dev *(staff-only)*
 | Channel | Notes |
 |---|---|
-| testing-queue | Mirror of `docs/TESTING_QUEUE.md` — live-test checkboxes post here. |
+| testing-queue | QA Tracker cards post here (from each commit's `Testing:` section; the old `docs/TESTING_QUEUE.md` mirror was retired 2026-07-18). |
 | admin-tests / moderator-tests / user-tests | Role-scoped QA checklists. |
 | dev-discussion | Dev coordination. |
 

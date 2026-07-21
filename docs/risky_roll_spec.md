@@ -88,6 +88,13 @@ Active rounds, pending questions, and posted questions are all stored in SQLite.
 | **Reply** when question message was deleted | "The question message no longer exists." |
 | Dashboard sends negative min-game-seconds | HTTP 400 |
 
+## Economy integration
+
+Pressing **Roll** fires the `risky_roll` economy quest trigger (once per member
+per round, keyed on the game id — `bot_modules/services/risky_roll/views.py:337-341`,
+via `fire_member_trigger`). The roll itself is the qualifying act, so it fires at
+roll time, not round close. Best-effort: an economy failure never blocks the roll.
+
 ## Non-goals
 
 - **No leaderboards.** Wins / losses aren't aggregated; closed rounds delete their state.
@@ -96,7 +103,7 @@ Active rounds, pending questions, and posted questions are all stored in SQLite.
 - **No editing / cancelling an already-asked question.** Once submitted, the question is locked.
 - **No multi-reply chains.** First valid reply finalises the question.
 - **No spectator participation.** Only members who clicked Roll appear in the round.
-- **No XP integration.** Round outcomes don't feed [[xp-spec]].
+- **No XP.** Round outcomes don't feed [[xp-spec]]; the economy quest trigger above fires on Roll instead.
 
 ## Configuration
 

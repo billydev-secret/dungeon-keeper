@@ -1099,13 +1099,13 @@ class EventsCog(commands.Cog):
         unit = settings.currency_name if outcome.paid == 1 else settings.currency_plural
         streak_line = f"Day **{outcome.streak}** checked in"
         if outcome.paid > 0:
-            streak_line += f" — +**{outcome.paid:,}** {unit}"
+            streak_line += f" — {settings.currency_emoji} **+{outcome.paid:,}** {unit}"
         embed.description = f"{streak_line}."
         if outcome.milestone > 0:
             unit_m = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
             embed.add_field(
                 name=f"🏆 Day {outcome.streak} milestone!",
-                value=f"Bonus **{outcome.milestone:,}** {unit_m}",
+                value=f"Bonus {settings.currency_emoji} **{outcome.milestone:,}** {unit_m}",
                 inline=False,
             )
         if outcome.grace_consumed or outcome.shield_consumed:
@@ -1386,6 +1386,7 @@ class EventsCog(commands.Cog):
         if cfg.welcome_ping_member:
             ping_parts.append(member.mention)
         ping = " ".join(ping_parts) or None
+        accent = await resolve_accent_color(self.ctx.db_path, member.guild)
         try:
             await channel.send(
                 content=ping,
@@ -1399,6 +1400,7 @@ class EventsCog(commands.Cog):
                     server_guide_mention=server_guide_mention_for(
                         server_guide_channel_id
                     ),
+                    color=accent,
                 ),
             )
         except discord.Forbidden:
@@ -1615,6 +1617,7 @@ class EventsCog(commands.Cog):
         else:
             member_bio_link = ""
 
+        accent = await resolve_accent_color(self.ctx.db_path, member.guild)
         try:
             await channel.send(
                 embed=build_leave_embed(
@@ -1626,6 +1629,7 @@ class EventsCog(commands.Cog):
                     server_guide_mention=server_guide_mention_for(
                         server_guide_channel_id
                     ),
+                    color=accent,
                 )
             )
         except discord.Forbidden:

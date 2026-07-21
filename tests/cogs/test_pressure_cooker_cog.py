@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import discord
 import pytest_asyncio
 
 from bot_modules.cogs.pressure_cooker import db as pdb
@@ -34,8 +36,15 @@ def _econ_cog(db: GamesDb, db_path: Path) -> PressureCookerDuel:
     return PressureCookerDuel(bot)  # type: ignore[arg-type]
 
 
-async def test_bust_resolves_and_pays(db, sync_db_path):
+async def test_bust_resolves_and_pays(db, sync_db_path, monkeypatch):
     cog = _econ_cog(db, sync_db_path)
+    # FakeGuild has no awaitable avatar, so stub the accent resolve; the bust
+    # gauge card now takes the guild accent (was a red/yellow/green gradient).
+    accent = discord.Color(0x123456)
+    monkeypatch.setattr(
+        "bot_modules.cogs.pressure_cooker.cog.resolve_accent_color",
+        AsyncMock(return_value=accent),
+    )
     gid = await pdb.create_game(db, GUILD, CH, P1, P2, None)
     # Gauge at 99: any roll busts, so the press below always loses for P1.
     await pdb.set_game_state(db, gid, "ACTIVE", active_player=P1, gauge=99)
@@ -48,6 +57,14 @@ async def test_bust_resolves_and_pays(db, sync_db_path):
     assert g.state == "RESOLVED"
     assert g.winner_id == P2
     assert g.loser_id == P1
+    # The busted gauge card carries the guild accent...
+    bust_embed = interaction.edit_original_response.call_args.kwargs["embed"]
+    assert bust_embed.title == "🔥 PRESSURE COOKER"
+    assert bust_embed.color == accent
+    # ...while the BOOM result embed stays red (the genuine loss).
+    result_embed = interaction.followup.send.call_args.kwargs["embed"]
+    assert result_embed.title == "💥 BOOM."
+    assert result_embed.color == discord.Color(0xF23F43)
     with open_db(sync_db_path) as conn:
         assert get_balance(conn, GUILD, P2) == 25   # participation + win
         assert get_balance(conn, GUILD, P1) == 5    # participation only

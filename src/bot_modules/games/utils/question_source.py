@@ -179,8 +179,8 @@ async def get_photo_prompt(
     """Return a random Photo Challenge prompt from the bank, or None if empty.
 
     Bank-only by design: photo prompts are curated in the web Games Studio
-    (no AI fallback at launch). The cog posts a "no prompts available" notice
-    when this returns None.
+    (no AI fallback at launch). The cog logs and skips the round when this
+    returns None — nothing is posted to the channel.
     """
     return await _get_bank_question(db, "photo", tags=tags, allow_nsfw=allow_nsfw)
 

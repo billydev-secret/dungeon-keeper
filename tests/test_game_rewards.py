@@ -322,6 +322,26 @@ async def test_footer_appends_below_existing_footer(db_path):
     )
 
 
+async def test_footer_drops_custom_currency_emoji(db_path):
+    """A custom <:coin:id> renders as raw text in a footer, so it's dropped."""
+    from bot_modules.economy.game_rewards import append_payout_footer
+    _enable(db_path, currency_emoji="<:doubloon:999>")
+    bot: Any = _Bot(db_path, [])
+    embed = _embed()
+    await append_payout_footer(bot, embed, GUILD, "ttl")
+    assert embed.footer.text == "+20 to winners · +5 to everyone who played"
+    assert "<:doubloon:999>" not in (embed.footer.text or "")
+
+
+def test_footer_emoji_passes_unicode_and_strips_custom():
+    from bot_modules.services.embeds import footer_emoji
+
+    assert footer_emoji("🪙") == "🪙"
+    assert footer_emoji("<:doubloon:999>") == ""
+    assert footer_emoji("<a:spin:12345>", "⭐") == "⭐"
+    assert footer_emoji("⭐", "🪙") == "⭐"
+
+
 async def test_footer_respects_configured_amounts(db_path):
     from bot_modules.economy.game_rewards import append_payout_footer
     _enable(db_path, reward_game_win=50, reward_game_participation=0)

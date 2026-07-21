@@ -1,6 +1,6 @@
 """Music cog -- YouTube and Spotify playback via wavelink + Lavalink.
 
-Spec: MUSIC_COG_CLAUDE_CODE_SPEC.md (overrides documented in
+Spec: docs/music_spec.md (overrides documented in
 ~/.claude/plans/take-a-look-at-zippy-lemur.md).
 """
 

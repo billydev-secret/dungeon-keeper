@@ -75,6 +75,7 @@ _UPDATABLE_FIELDS = frozenset(
         "target_min",
         "target_max",
         "reward_xp",
+        "pair_tag",
     }
 )
 
@@ -123,6 +124,7 @@ def create_quest(
     target_min: int = 0,
     target_max: int = 0,
     reward_xp: int = 0,
+    pair_tag: str = "",
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
     if qtype not in ("daily", "weekly", "monthly", "community", "event"):
@@ -137,8 +139,9 @@ def create_quest(
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
              created_by, created_at, trigger_words, trigger_channel_id,
-             trigger_kind, target_count, target_min, target_max, reward_xp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             trigger_kind, target_count, target_min, target_max, reward_xp,
+             pair_tag)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -161,6 +164,7 @@ def create_quest(
             int(target_min),
             int(target_max),
             int(reward_xp),
+            pair_tag,
         ),
     )
     return int(cur.lastrowid or 0)
@@ -537,9 +541,21 @@ def assigned_board_ids(
     n = quests.board_size(qtype, sizes)
     if n <= 0 or not quests.has_board(qtype):
         return set()
-    pool = list_active_pool_ids(conn, guild_id, qtype)
+    tagged = {
+        int(r["id"]): str(r["pair_tag"])
+        for r in conn.execute(
+            "SELECT id, pair_tag FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
+            (guild_id, qtype),
+        )
+    }
+    pool = sorted(tagged)
     idx = quests.period_index(qtype, local_day)
-    board = set(quests.assigned_quest_ids(pool, user_id, idx, n))
+    picked = quests.assigned_quest_ids(pool, user_id, idx, n)
+    # Paired quests land together: a drawn quest pulls its partner into the
+    # remaining slot (producer/consumer pairs — hosts and players prompted
+    # the same period). Rerolls apply after, so a member can still opt out.
+    board = set(quests.apply_pair_bundles(picked, quests.pair_map(tagged)))
     # Reroll overrides sit on top of the pure draw: from → to per slot, this
     # period only. A replacement that has since left the active pool falls
     # back to the pure slot rather than dropping the board below size.
@@ -1054,9 +1070,10 @@ def resolve_member_target(
     once per (quest, member, period) and the result is STORED on the
     progress row — stable all period, and the wallet shows exactly what the
     fire path enforces. Resolution prefers the member's own pace (trailing
-    period median of the kind × DYNAMIC_STRETCH, clamped to the band) and
-    falls back to the deterministic Gaussian draw when they have fewer than
-    2 active trailing periods of that kind.
+    period median of the kind × DYNAMIC_STRETCH, clamped to the band; kinds
+    in PERSONAL_P25_KINDS use the member's trailing p25 instead, unstretched)
+    and falls back to the deterministic Gaussian draw when they have fewer
+    than 2 active trailing periods of that kind.
     """
     target_count = int(quest["target_count"])
     tmin, tmax = int(quest["target_min"]), int(quest["target_max"])
@@ -1078,18 +1095,23 @@ def resolve_member_target(
         conn, guild_id, user_id, kind, str(quest["qtype"]), local_day,
     )
     if sum(1 for c in counts if c > 0) >= 2:
-        median = float(_stats.median(counts))
-        # Channel-scoped quest on a message-shaped kind: the member's kind
-        # activity is all-channel, so scale their median by THEIR share of
-        # traffic in the scoped channel — "send N messages in #the-meadow"
-        # sizes to their meadow pace, not their whole-server pace. The band
-        # clamp below still bounds the result either way.
-        scope = quest["trigger_channel_id"]
-        if scope is not None and kind in quests.CHANNEL_SHARE_KINDS:
-            median *= channel_message_share(
-                conn, guild_id, int(scope), local_day, user_id=user_id
-            )
-        target = quests.dynamic_target(median, tmin, tmax)
+        if kind in quests.PERSONAL_P25_KINDS:
+            target = quests.p25_target(counts, tmin, tmax)
+        else:
+            median = float(_stats.median(counts))
+            # Channel-scoped quest on a message-shaped kind: the member's
+            # kind activity is all-channel, so scale their median by THEIR
+            # share of traffic in the scoped channel — "send N messages in
+            # #the-meadow" sizes to their meadow pace, not their
+            # whole-server pace. The band clamp still bounds the result.
+            # (PERSONAL_P25_KINDS and CHANNEL_SHARE_KINDS are disjoint, so
+            # the p25 branch never needs the scaling.)
+            scope = quest["trigger_channel_id"]
+            if scope is not None and kind in quests.CHANNEL_SHARE_KINDS:
+                median *= channel_message_share(
+                    conn, guild_id, int(scope), local_day, user_id=user_id
+                )
+            target = quests.dynamic_target(median, tmin, tmax)
     else:
         target = quests.effective_target(
             target_count, tmin, tmax,

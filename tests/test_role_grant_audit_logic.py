@@ -430,7 +430,7 @@ def test_embed_has_three_buckets_with_counts():
         ],
     )
     embed = build_grant_audit_embed("NSFW", snap, now_ts=1000.0)
-    assert embed.title == "Grant audit — NSFW"
+    assert embed.title == "📋 Grant audit — NSFW"
     names = [f.name for f in embed.fields]
     assert names[0] == "🕐 Waiting for first grant (1)"
     assert names[1] == "↩️ Stripped but came back (1)"
@@ -512,7 +512,7 @@ async def test_refresh_card_edits_message_in_place(db_path):
     channel.fetch_message.assert_awaited_once_with(666000)
     message.edit.assert_awaited_once()
     embed = message.edit.call_args.kwargs["embed"]
-    assert embed.title == "Grant audit — NSFW"
+    assert embed.title == "📋 Grant audit — NSFW"
     assert "member-3001" in embed.fields[0].value
 
 

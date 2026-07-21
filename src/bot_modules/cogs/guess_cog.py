@@ -312,7 +312,7 @@ def _game_embed(
     if color is None:
         color = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
-        title=f"Round #{round_id}",
+        title=f"🎭 Round #{round_id}",
         color=color,
     )
 
@@ -984,6 +984,15 @@ class CropEditorView(discord.ui.View):
             candidate_count=self._candidate_count,
         )
 
+        # Quest hook: submitting a round is the producer half of the
+        # guess-who quest pair (the guesses themselves fire "guess").
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            self.bot, self.guild_id, self._submitter_id,
+            "guess_post", occurrence=str(round_id),
+        )
+
         if self._original_bytes:
             orig_path = _GUESS_ORIG_DIR / f"{round_id}{self._original_ext}"
 
@@ -1020,15 +1029,6 @@ class CropEditorView(discord.ui.View):
             guild_id=self.guild_id, actor_id=self._submitter_id,
             action="submit", round_id=round_id,
             details={"difficulty": self._difficulty},
-        )
-
-        # guess_submit quest trigger — feeding the pool is the scarce
-        # resource; the submit rate limit is the farm guard.
-        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
-
-        await fire_member_trigger(
-            self.bot, self.guild_id, self._submitter_id,
-            "guess_submit", occurrence=str(round_id),
         )
 
         await interaction.edit_original_response(
@@ -1436,6 +1436,14 @@ class ConfessionPreviewView(discord.ui.View):
             confession_text=self._text,
         )
 
+        # Quest hook: a confession round is still a submitted round.
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            self._bot, self._guild_id, self._submitter_id,
+            "guess_post", occurrence=str(round_id),
+        )
+
         card_bytes = await asyncio.to_thread(
             render_quote, self._text, footer=f"Guess #{round_id}"
         )
@@ -1688,7 +1696,7 @@ class GuessCog(commands.Cog):
 
         accent = await resolve_accent_color(db_path, interaction.guild)
         embed = discord.Embed(
-            title=f"Round #{round_row.id} — inspector",
+            title=f"🔍 Round #{round_row.id} — inspector",
             color=accent,
             description=(
                 f"**Status:** {status}\n"
@@ -1907,7 +1915,7 @@ class GuessCog(commands.Cog):
         )
 
         accent = await resolve_accent_color(db_path, interaction.guild)
-        embed = discord.Embed(title="Guess Leaderboard", color=accent)
+        embed = discord.Embed(title="🏆 Guess Leaderboard", color=accent)
         embed.add_field(name="Top Posters", value=poster_text, inline=False)
         embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
 

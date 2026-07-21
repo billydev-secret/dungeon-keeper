@@ -8,13 +8,16 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+import discord
 import pytest_asyncio
 
 from bot_modules.cogs.quickdraw import db as qdb
 from bot_modules.cogs.quickdraw.cog import QuickdrawDuel
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import get_balance, save_econ_settings
+from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 from bot_modules.services.games_db import GamesDb
 from tests.fakes import FakeEconGamesBot, fake_interaction
 
@@ -59,6 +62,95 @@ async def test_void_when_nobody_fires_pays_nothing(db, sync_db_path):
     with open_db(sync_db_path) as conn:
         assert get_balance(conn, GUILD, P1) == 0
         assert get_balance(conn, GUILD, P2) == 0
+
+
+# ── Colors: accent for neutral phases, semantic win=green / loss=red ────────────
+
+async def test_void_embed_uses_accent(db, sync_db_path):
+    cog = _econ_cog(db, sync_db_path)
+    game = await _active_game(db, qd_state="DRAW", fired_at=time.time())
+    accent = discord.Color(0x336699)
+    captured: dict = {}
+
+    async def _cap(cid, mid, embed, view):
+        captured["embed"] = embed
+
+    cog._edit_message_silent = _cap  # type: ignore[method-assign]
+    # FakeGuild has no awaitable avatar, so stub the resolver.
+    with patch(
+        "bot_modules.cogs.quickdraw.cog.resolve_accent_color",
+        AsyncMock(return_value=accent),
+    ):
+        await cog._fire_void(game.id)
+    assert captured["embed"].title == "🌵 Nobody Drew"
+    assert captured["embed"].color == accent
+
+
+async def test_void_embed_falls_back_when_accent_errors(db, sync_db_path):
+    cog = _econ_cog(db, sync_db_path)
+    game = await _active_game(db, qd_state="DRAW", fired_at=time.time())
+    captured: dict = {}
+
+    async def _cap(cid, mid, embed, view):
+        captured["embed"] = embed
+
+    cog._edit_message_silent = _cap  # type: ignore[method-assign]
+    with patch(
+        "bot_modules.cogs.quickdraw.cog.resolve_accent_color",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        await cog._fire_void(game.id)
+    # Guard: a resolve failure never crashes the game; old color is kept.
+    assert captured["embed"].color.value == COLOR_YELLOW
+
+
+async def test_render_game_state_colors(db, sync_db_path):
+    cog = _econ_cog(db, sync_db_path)
+    guild = cog.bot.guild
+    accent = discord.Color(0x336699)
+
+    # WAITING → accent when resolved, gold as the old-color fallback.
+    waiting = await _active_game(db, qd_state="WAITING")
+    assert cog.render_game_state(waiting, guild).color.value == COLOR_GOLD
+    cog._accents[waiting.id] = accent
+    assert cog.render_game_state(waiting, guild).color == accent
+
+    # DRAW (active phase, not a result) → accent, red fallback.
+    draw = await _active_game(db, qd_state="DRAW", fired_at=time.time())
+    assert cog.render_game_state(draw, guild).color.value == COLOR_RED
+    cog._accents[draw.id] = accent
+    assert cog.render_game_state(draw, guild).color == accent
+
+    # COMPLETE clean draw → green (win) even with an accent cached.
+    win = await _active_game(
+        db, qd_state="COMPLETE",
+        winner_id=P1, loser_id=P2, fired_at=time.time(), resolved_at=time.time(),
+    )
+    cog._accents[win.id] = accent
+    assert cog.render_game_state(win, guild).color.value == COLOR_GREEN
+
+    # COMPLETE false start (fired_at is None) → red (loss).
+    false_start = await _active_game(
+        db, qd_state="COMPLETE", winner_id=P1, loser_id=P2,
+    )
+    cog._accents[false_start.id] = accent
+    assert cog.render_game_state(false_start, guild).color.value == COLOR_RED
+
+
+async def test_render_result_state_colors(db, sync_db_path):
+    cog = _econ_cog(db, sync_db_path)
+    guild = cog.bot.guild
+
+    win = await _active_game(
+        db, qd_state="COMPLETE",
+        winner_id=P1, loser_id=P2, fired_at=time.time(), resolved_at=time.time(),
+    )
+    assert cog.render_result_state(win, guild).color.value == COLOR_GREEN
+
+    false_start = await _active_game(
+        db, qd_state="COMPLETE", winner_id=P1, loser_id=P2,
+    )
+    assert cog.render_result_state(false_start, guild).color.value == COLOR_RED
 
 
 # ── False start: presser loses immediately ─────────────────────────────────────

@@ -7,6 +7,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -42,6 +43,26 @@ from bot_modules.games_hottakes.logic import (
 )
 
 log = logging.getLogger(__name__)
+
+
+async def _resolve_accent(bot, guild) -> "discord.Color | None":
+    """Resolve the guild accent color once, tolerantly.
+
+    Returns ``None`` (embed builders fall back to their old PHASE_*
+    color) when there's no guild, no bot.ctx/db_path, or resolution
+    fails for any reason — never raises into a game path.
+    """
+    if guild is None:
+        return None
+    ctx = getattr(bot, "ctx", None)
+    db_path = getattr(ctx, "db_path", None)
+    if db_path is None:
+        return None
+    try:
+        return await resolve_accent_color(db_path, guild)
+    except Exception as e:  # pragma: no cover - defensive
+        log.debug("hottakes accent resolve failed: %s", e)
+        return None
 
 
 class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
@@ -191,6 +212,7 @@ class HotTakeVoteView(discord.ui.View):
         bot,
         host_name: str,
         advance_callback,
+        accent: "discord.Color | None" = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -202,6 +224,7 @@ class HotTakeVoteView(discord.ui.View):
         self.bot = bot
         self.host_name = host_name
         self.advance_callback = advance_callback
+        self.accent = accent
         self.votes: dict[int, int] = {}  # user_id -> 0-4 index
         self._updater = LiveBarUpdater()
         self._closed = False
@@ -222,6 +245,7 @@ class HotTakeVoteView(discord.ui.View):
             total_takes=self.total_takes,
             votes_by_user=self.votes,
             closed=closed,
+            color=self.accent,
         )
 
     @discord.ui.button(label="🧊", style=discord.ButtonStyle.secondary, custom_id="ht_v0", row=0)
@@ -277,7 +301,7 @@ class HotTakeVoteView(discord.ui.View):
 
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
-        embed = build_recap_embed(results)
+        embed = build_recap_embed(results, color=self.accent)
         if embed is None:
             return
         guild = getattr(channel, "guild", None)
@@ -334,7 +358,8 @@ class HotTakesCog(commands.Cog):
             payload={"takes": [], "results": []},
         )
 
-        embed = build_lobby_embed(host_name)
+        accent = await _resolve_accent(self.bot, getattr(channel, "guild", None))
+        embed = build_lobby_embed(host_name, color=accent)
 
         log.info("Game %s (hottakes) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         view = HotTakesSubmitView(game_id, host_id, self.db, self.bot, self)
@@ -370,6 +395,10 @@ class HotTakesCog(commands.Cog):
         else:
             results = []
             processed = 0
+
+        # Resolve the guild accent once for the whole game — never per vote /
+        # per round. Every vote view + the recap reuse this cached value.
+        accent = await _resolve_accent(self.bot, getattr(channel, "guild", None))
 
         view: HotTakeVoteView | None = None
         while True:
@@ -431,6 +460,7 @@ class HotTakesCog(commands.Cog):
                 bot=self.bot,
                 host_name=host_name,
                 advance_callback=advance,
+                accent=accent,
             )
             view._advanced_event = advanced
             self.bot.active_views[game_id] = view

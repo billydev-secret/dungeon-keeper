@@ -97,4 +97,4 @@ def test_solved_game_view_omits_chips():
 def test_game_embed_has_no_anonymous_description():
     embed = _game_embed(42)
     assert embed.description in (None, "")
-    assert embed.title == "Round #42"
+    assert embed.title == "🎭 Round #42"

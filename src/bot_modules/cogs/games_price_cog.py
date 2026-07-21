@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -318,6 +319,7 @@ class PriceGameView(discord.ui.View):
         bot,
         cog: "PriceCog",
         expected_players: int | None = None,
+        accent: discord.Color | None = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -331,6 +333,9 @@ class PriceGameView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self.expected_players = expected_players
+        # Guild accent resolved once at view creation and reused on every
+        # refresh — never re-resolve per modal submit / per embed refresh.
+        self.accent = accent
         self.prices: dict[int, int] = {}
         self._msg: discord.Message | None = None
         self._timer: GameTimer | None = None
@@ -353,6 +358,7 @@ class PriceGameView(discord.ui.View):
             self._timer.remaining if self._timer else self.timer_secs,
             len(self.prices),
             self.expected_players,
+            color=self.accent,
         )
 
     async def refresh_embed(self):
@@ -531,6 +537,22 @@ class PriceCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
+    async def _resolve_accent(self, guild) -> discord.Color | None:
+        """Resolve the guild accent once at game start; ``None`` on any miss.
+
+        Falls back to ``None`` (embeds then use their PHASE_* fallback) when
+        there is no guild, no ``bot.ctx``, or accent resolution raises — never
+        crash the round loop over branding.
+        """
+        ctx = getattr(self.bot, "ctx", None)
+        if guild is None or ctx is None:
+            return None
+        try:
+            return await resolve_accent_color(ctx.db_path, guild)
+        except Exception as e:  # branding must never break the game
+            log.debug("price: accent resolution failed: %s", e)
+            return None
+
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the round loop from the next un-played round after a restart.
 
@@ -560,13 +582,14 @@ class PriceCog(commands.Cog):
             await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
         except discord.HTTPException:
             pass
+        accent = await self._resolve_accent(guild)
         if start_round > total_rounds:
-            asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings))
+            asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings, accent=accent))
         else:
             asyncio.create_task(self._run_round(
                 game_id=game_id, host_id=host_id, host_name=host_name,
                 channel=channel, guild=guild, round_num=start_round,
-                settings=settings, msg=message,
+                settings=settings, msg=message, accent=accent,
             ))
         log.info(
             "Recovering price game %s (resuming at round %d) in #%s",
@@ -576,7 +599,7 @@ class PriceCog(commands.Cog):
 
     async def _advance_round(
         self, game_id, host_id, host_name, channel, guild, round_num, settings, msg,
-        *, pre_round_delay: int = 0,
+        *, pre_round_delay: int = 0, accent: discord.Color | None = None,
     ):
         """Finish round_num: checkpoint scores, then go to the next round / recap.
 
@@ -593,9 +616,9 @@ class PriceCog(commands.Cog):
         if round_num < total_rounds:
             if pre_round_delay:
                 await asyncio.sleep(pre_round_delay)
-            await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
+            await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg, accent=accent)
         else:
-            await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+            await self._show_recap(game_id, host_id, host_name, channel, guild, settings, accent=accent)
 
     # ── Slash command ────────────────────────────────────────────────
 
@@ -684,7 +707,10 @@ class PriceCog(commands.Cog):
         )
         log.info("Game %s (price) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        embed = build_start_embed(host_name, 1, rounds)
+        # Resolve the guild accent once for the whole game; threaded into every
+        # non-winner embed builder below. Never re-resolved per round/guess.
+        accent = await self._resolve_accent(guild)
+        embed = build_start_embed(host_name, 1, rounds, color=accent)
         try:
             msg = await channel.send(embed=embed)
         except discord.Forbidden:
@@ -705,6 +731,7 @@ class PriceCog(commands.Cog):
             round_num=1,
             settings=settings,
             msg=msg,
+            accent=accent,
         ))
         return game_id
 
@@ -805,6 +832,7 @@ class PriceCog(commands.Cog):
         round_num: int,
         settings: dict,
         msg: discord.Message,
+        accent: discord.Color | None = None,
     ):
         """Execute one full round: scenario → submit → reveal → vote → results."""
         # Check if game still exists
@@ -830,7 +858,7 @@ class PriceCog(commands.Cog):
             except discord.HTTPException:
                 pass
             # Advance to next round or end
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=2)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=2, accent=accent)
             return
 
         # ── Submission phase ──
@@ -845,6 +873,7 @@ class PriceCog(commands.Cog):
             db=self.db,
             bot=self.bot,
             cog=self,
+            accent=accent,
         )
         self.bot.active_views[game_id] = game_view
 
@@ -904,13 +933,13 @@ class PriceCog(commands.Cog):
                 await channel.send("Nobody submitted a price this round. Moving on...")
             except discord.HTTPException:
                 pass
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3, accent=accent)
             return
 
         # ── Reveal phase ──
         ladder = build_ladder(prices)
         named_ladder = [(resolve_name(guild, uid), amt) for uid, amt in ladder]
-        reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder)
+        reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder, color=accent)
 
         try:
             await msg.edit(embed=reveal_embed, view=None)
@@ -923,7 +952,7 @@ class PriceCog(commands.Cog):
             except discord.HTTPException:
                 pass
             await asyncio.sleep(3)
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
             return
 
         # 5s pause for reactions
@@ -949,13 +978,13 @@ class PriceCog(commands.Cog):
         )
         self.bot.active_views[game_id] = vote_view
 
-        vote_embed = build_vote_embed(host_name, scenario, round_num, total_rounds, settings["vote_timer"])
+        vote_embed = build_vote_embed(host_name, scenario, round_num, total_rounds, settings["vote_timer"], color=accent)
         try:
             vote_msg = await channel.send(embed=vote_embed, view=vote_view)
             vote_view._msg = vote_msg
         except Exception:
             # Can't send vote view — skip voting
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
             return
 
         vote_done = asyncio.Event()
@@ -1035,11 +1064,11 @@ class PriceCog(commands.Cog):
 
         # ── Next round or recap ──
         await asyncio.sleep(5)
-        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
+        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
 
     # ── Recap ────────────────────────────────────────────────────────
 
-    async def _show_recap(self, game_id: str, host_id: int, host_name: str, channel, guild, settings: dict):
+    async def _show_recap(self, game_id: str, host_id: int, host_name: str, channel, guild, settings: dict, accent: discord.Color | None = None):
         payload = await get_game_payload(self.db, game_id)
         rounds_data = payload.get("rounds", {})
         scores = payload.get("scores", {"reasonable_wins": {}, "unhinged_wins": {}})
@@ -1064,7 +1093,7 @@ class PriceCog(commands.Cog):
                 f"{format_price(lo)} to {format_price(hi_amt)}"
             )
 
-        recap_embed = build_recap_embed(host_name, rounds_played, len(all_players), awards, highlight)
+        recap_embed = build_recap_embed(host_name, rounds_played, len(all_players), awards, highlight, color=accent)
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
             await append_payout_footer(self.bot, recap_embed, guild.id, "price")
@@ -1094,10 +1123,14 @@ class PriceCog(commands.Cog):
             del self.bot.active_views[game_id]
         if game_msg:
             try:
+                guild = getattr(channel, "guild", None) or getattr(
+                    game_msg, "guild", None
+                )
+                accent = await self._resolve_accent(guild)
                 embed = discord.Embed(
                     title=f"{GAME_ICONS['price']} NAME YOUR PRICE — CLOSED",
                     description="This game was closed by the host.",
-                    color=PHASE_RECAP,
+                    color=accent or discord.Color(PHASE_RECAP),
                 )
                 await game_msg.edit(embed=embed, view=None)
             except Exception:

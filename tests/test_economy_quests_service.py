@@ -106,6 +106,7 @@ def _make(
     target_min=0,
     target_max=0,
     reward_xp=0,
+    pair_tag="",
     title="Quest",
 ):
     qid = create_quest(
@@ -129,6 +130,7 @@ def _make(
         target_min=target_min,
         target_max=target_max,
         reward_xp=reward_xp,
+        pair_tag=pair_tag,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -1643,6 +1645,43 @@ def test_fire_only_pays_quests_on_members_board(db):
         assert claimed == board
 
 
+def test_board_pairs_land_together(db):
+    # Two pair-tagged dailies in a pool of 8: any member whose draw touches
+    # either one gets both — the host prompt and the play prompt travel as
+    # a unit, every period, for every member.
+    with open_db(db) as conn:
+        host = _make(conn, qtype="daily", trigger_kind="guess_post",
+                     pair_tag="guesswho", title="Host")
+        play = _make(conn, qtype="daily", trigger_kind="guess", target_count=1,
+                     pair_tag="guesswho", title="Play")
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        for uid in range(100, 140):
+            for day in ("2026-07-13", "2026-07-14", "2026-07-15"):
+                board = assigned_board_ids(conn, GUILD, uid, "daily", day)
+                assert not (host in board) ^ (play in board)
+
+
+def test_board_pair_inert_when_partner_inactive(db):
+    # The partner got deactivated: the tag maps to one active quest, so the
+    # survivor draws like any untagged quest instead of dragging a ghost in.
+    with open_db(db) as conn:
+        host = _make(conn, qtype="daily", trigger_kind="guess_post",
+                     pair_tag="guesswho", title="Host")
+        play = _make(conn, qtype="daily", trigger_kind="guess",
+                     pair_tag="guesswho", title="Play", active=False)
+        for _ in range(4):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        boards = [
+            assigned_board_ids(conn, GUILD, uid, "daily", day)
+            for uid in range(100, 130)
+        ]
+        assert all(play not in b for b in boards)
+        assert any(host in b for b in boards)
+        assert all(len(b) == 2 for b in boards)
+
+
 def test_board_size_is_per_guild_configurable(db):
     # The guild's quest_board_* settings size the board, not the default 2.
     with open_db(db) as conn:
@@ -1916,6 +1955,49 @@ def test_resolve_target_scoped_quest_scales_by_member_channel_share(db):
         )
         assert target == dynamic_target(25 * 0.2, 2, 60)  # 5 × 1.15 → 6
         assert target < dynamic_target(25, 2, 60)  # meaningfully below unscoped
+
+
+def test_resolve_target_reaction_kind_uses_own_p25(db):
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn, kind="reaction_given", lo=4, hi=40)
+        # Trailing W25..W28 sums 20/20/30/40 → p25 = 20, NOT median×1.15 = 29.
+        for day, n in (
+            ("2026-06-17", 20),  # W25
+            ("2026-06-24", 20),  # W26
+            ("2026-07-01", 30),  # W27
+            ("2026-07-08", 40),  # W28
+        ):
+            for _ in range(n):
+                record_kind_activity(conn, GUILD, USER, "reaction_given", day)
+        assert resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 20
+        # A member with two quiet trailing weeks floors at band min — the
+        # freebie is gone but the target stays attainable.
+        for day in ("2026-07-01", "2026-07-08"):
+            record_kind_activity(conn, GUILD, USER_2, "reaction_given", day)
+        assert resolve_member_target(
+            conn, GUILD, USER_2, quest, period="2026-W29", local_day="2026-07-14"
+        ) == 4
+
+
+def test_resolve_target_reaction_kind_gaussian_fallback_cold_start(db):
+    from bot_modules.services.economy_quests_service import resolve_member_target
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn, kind="reaction_given", lo=4, hi=40)
+        got = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        expected = effective_target(
+            1, 4, 40, user_id=USER, quest_id=int(quest["id"]), period="2026-W29"
+        )
+        assert got == expected  # no history → same cold-start draw as any band
 
 
 def test_resolve_target_gaussian_fallback_without_history(db):

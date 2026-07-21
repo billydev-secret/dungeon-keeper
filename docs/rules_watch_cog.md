@@ -2,7 +2,7 @@
 
 **Alert-only moderation gate with consent-aware priority scoring and label capture.**
 
-Version 0.3 — functional spec. Focuses on what the system *does* and why each signal behaves the way it does. Implementation mechanics (hosting, config, build sequencing) are deliberately out of scope here. This version adds the historical tuning protocol (§5a), the known structural risks surfaced in review (§10), and an honest statement of what the system is actually calibrated to detect (§11).
+Version 0.4 — functional spec. Focuses on what the system *does* and why each signal behaves the way it does. Implementation mechanics (hosting, config, build sequencing) are deliberately out of scope here. Version 0.3 added the historical tuning protocol (§5a), the known structural risks surfaced in review (§10), and an honest statement of what the system is actually calibrated to detect (§11); this version adds the ledger (§12, 2026-07-20).
 
 ---
 
@@ -149,6 +149,8 @@ Message text and conversation windows are retained only as long as needed for la
 2. **Accumulating:** confirmed labels build the real-positive dataset the space currently lacks — correctly labeled, drawn from the genuinely hard boundary cases, reflecting *this community's* consent norms.
 3. **Later:** a classifier trained on those labels — with all the context signals above available as inputs — learns the weighting directly and becomes the engine, with the guard model kept as a comparison signal. This is the only path to something that actually understands consent in this space, because that understanding exists in no public dataset and has to be learned from here.
 
+*Forward pointer (2026-07-20):* the trained-classifier endgame is superseded — three detection attempts failed to discriminate at a realistic base rate, human reporting is now primary, and what survives is the ledger. See §12 and `docs/reviews/2026-07-20-rules-watch-tuning.md`.
+
 ---
 
 ## 9. Honest limitations
@@ -275,6 +277,19 @@ nothing about the rapport-curve pattern that §4.1 identifies as load-bearing.
 Detection of that pattern remains unsolved and human reporting stays primary —
 §12.2c is unchanged by anything here. What the ledger does is make two specific,
 recurring evasions permanently citable at near-zero cost and near-zero risk.
+
+### 12.4a Human reporting: the "Report Rule Violation" context menu
+
+Since human reporting stays primary (§12.4), it needs a capture path that costs a
+mod nothing — and that path is the mod-only **Report Rule Violation** message
+context menu (`cogs/rules_watch_cog.py`). Right-clicking any member message
+opens a modal (optional rule number + note) and, on submit, inserts a manual
+`immediate`-tier event for that message with the guard verdict `manual` and
+priority reason "Manually reported by moderator", pre-labeled as a **confirmed
+violation** under the reporting mod's ID. Because stored content is dropped by
+default, the excerpt is pulled from the live message object at report time.
+Each report is a high-value positive training example that entered the label set
+without the detection pipeline having to surface anything.
 
 ### 12.5 The exemption that nearly buried the case it was built for
 

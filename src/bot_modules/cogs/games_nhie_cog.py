@@ -6,6 +6,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -91,6 +92,7 @@ class NHIERoundView(discord.ui.View):
         eliminated: set[int] | None = None,
         guild=None,
         max_lives: int = DEFAULT_LIVES,
+        accent: discord.Color | None = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -110,6 +112,9 @@ class NHIERoundView(discord.ui.View):
         self.eliminated = eliminated or set()
         self.guild = guild
         self.max_lives = max_lives
+        # Guild accent, resolved once at view-construction time and reused
+        # for every round-embed edit — never re-resolved on the per-vote path.
+        self.accent = accent
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -130,6 +135,7 @@ class NHIERoundView(discord.ui.View):
             eliminated=self.eliminated,
             guild=self.guild,
             max_lives=self.max_lives,
+            color=self.accent,
         )
 
     @discord.ui.button(label="😈 Guilty", style=discord.ButtonStyle.danger, custom_id="nhie_guilty", row=0)
@@ -200,6 +206,25 @@ class NHIECog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
+
+    async def _resolve_accent(self, guild) -> discord.Color | None:
+        """Best-effort guild accent for NHIE embeds.
+
+        Returns ``None`` (embeds fall back to the phase palette) when
+        there's no guild, no bot context, or accent resolution fails —
+        a branding lookup must never take a game down.
+        """
+        if guild is None:
+            return None
+        ctx = getattr(self.bot, "ctx", None)
+        db_path = getattr(ctx, "db_path", None)
+        if db_path is None:
+            return None
+        try:
+            return await resolve_accent_color(db_path, guild)
+        except Exception:
+            log.debug("nhie accent resolution failed for guild %s", getattr(guild, "id", "?"), exc_info=True)
+            return None
 
     @app_commands.command(name="nhie", description="Start a Never Have I Ever game!")
     @app_commands.describe(
@@ -331,6 +356,7 @@ class NHIECog(commands.Cog):
         rounds_data[str(round_num)] = {"guilty": [], "innocent": [], "stmt": statement}
         await update_game_payload(self.db, game_id, payload)
 
+        accent = await self._resolve_accent(guild)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -343,6 +369,7 @@ class NHIECog(commands.Cog):
             eliminated=eliminated,
             max_lives=max_lives,
             interaction=interaction,
+            accent=accent,
         )
         if carry_over_queue:
             view.queued_statements = carry_over_queue
@@ -375,6 +402,7 @@ class NHIECog(commands.Cog):
         eliminated: set[int] | None,
         max_lives: int,
         interaction=None,
+        accent: discord.Color | None = None,
     ) -> "NHIERoundView":
         """Construct a round view with its advance callback wired.
 
@@ -439,6 +467,7 @@ class NHIECog(commands.Cog):
                                 winner_id=winner_id,
                                 guilt_scores=guilt_scores,
                                 guild=guild,
+                                color=view.accent,
                             )
                             if guild:
                                 from bot_modules.economy.game_rewards import append_payout_footer
@@ -499,6 +528,7 @@ class NHIECog(commands.Cog):
             eliminated=eliminated,
             guild=guild,
             max_lives=max_lives,
+            accent=accent,
         )
         return view
 
@@ -517,6 +547,7 @@ class NHIECog(commands.Cog):
         host_name = resolve_name(guild, host_id) if guild else "Host"
         lives, eliminated, max_lives = payload_to_round_state(payload)
 
+        accent = await self._resolve_accent(guild)
         view = self._build_round_view(
             game_id=game_id,
             host_id=host_id,
@@ -529,6 +560,7 @@ class NHIECog(commands.Cog):
             eliminated=eliminated,
             max_lives=max_lives,
             interaction=None,
+            accent=accent,
         )
         view.guilty = list(rd.get("guilty", []))
         view.innocent = list(rd.get("innocent", []))

@@ -1,0 +1,116 @@
+{
+  "generated": "2026-07-20",
+  "guild_id": "1469491362444480666",
+  "week": "2026-07-13..2026-07-19",
+  "wallets": 104,
+  "float_total": 26471,
+  "balance": {
+    "p50": 171,
+    "p75": 333,
+    "p90": 550,
+    "p95": 691
+  },
+  "top_wallets": [
+    {
+      "user_id": "1407937323529928774",
+      "balance": 2421
+    },
+    {
+      "user_id": "1384378931981058068",
+      "balance": 2097
+    },
+    {
+      "user_id": "528528363602837527",
+      "balance": 954
+    },
+    {
+      "user_id": "1236049683416088658",
+      "balance": 721
+    },
+    {
+      "user_id": "384882704023420949",
+      "balance": 699
+    },
+    {
+      "user_id": "715934180705304718",
+      "balance": 691
+    },
+    {
+      "user_id": "1284869710847934544",
+      "balance": 656
+    },
+    {
+      "user_id": "203866639005908992",
+      "balance": 633
+    },
+    {
+      "user_id": "335545890485829635",
+      "balance": 604
+    },
+    {
+      "user_id": "83699131368865792",
+      "balance": 567
+    }
+  ],
+  "weekly_earners": 101,
+  "weekly_income": {
+    "p50": 155,
+    "p75": 276,
+    "p90": 479,
+    "p95": 673
+  },
+  "minted_week": 22839,
+  "burned_week": 885,
+  "burn_ratio_pct": 3.9,
+  "spenders_week": 6,
+  "faucet_mix": {
+    "quest": 13289,
+    "login": 3935,
+    "conversion": 2152,
+    "qotd": 1480,
+    "milestone": 904,
+    "qa_reward": 600,
+    "game_participation": 179,
+    "quest_bonus": 160,
+    "game_win": 140
+  },
+  "sink_mix": {
+    "rental": 855,
+    "streak_shield": 30
+  },
+  "demurrage_grid": [
+    {
+      "floor": 300,
+      "wallets_hit": 30,
+      "excess": 9518,
+      "burn_at_2pct": 190,
+      "burn_at_5pct": 475,
+      "burn_at_10pct": 951
+    },
+    {
+      "floor": 500,
+      "wallets_hit": 14,
+      "excess": 5141,
+      "burn_at_2pct": 102,
+      "burn_at_5pct": 257,
+      "burn_at_10pct": 514
+    },
+    {
+      "floor": 750,
+      "wallets_hit": 3,
+      "excess": 3222,
+      "burn_at_2pct": 64,
+      "burn_at_5pct": 161,
+      "burn_at_10pct": 322
+    },
+    {
+      "floor": 1000,
+      "wallets_hit": 2,
+      "excess": 2518,
+      "burn_at_2pct": 50,
+      "burn_at_5pct": 125,
+      "burn_at_10pct": 251
+    }
+  ],
+  "hoard_weeks": 1.1
+}

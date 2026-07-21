@@ -41,7 +41,7 @@ def build_profile_show_embed(
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(
-        title="Your Voice Master profile",
+        title="👤 Your Voice Master profile",
         color=color,
     )
     embed.add_field(
@@ -78,7 +78,7 @@ def build_admin_audit_mirror_embed(
     actions visually with other domain entries.
     """
     embed = discord.Embed(
-        title=f"Voice Master · {action}",
+        title=f"🛡️ Voice Master · {action}",
         description=summary,
         color=discord.Color.orange(),
     )
@@ -126,7 +126,7 @@ def build_panel_embed(color: "discord.Color | None" = None) -> discord.Embed:
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(
-        title="Voice Master controls",
+        title="🎛️ Voice Master controls",
         description=(
             "Join the Hub voice channel to spin up your own room.\n"
             "Use the menus below to manage **the channel you currently own**.\n\n"
@@ -151,7 +151,7 @@ def build_inline_panel_embed(
     if color is None:
         color = discord.Color.blurple()
     return discord.Embed(
-        title="Your voice channel is ready",
+        title="✅ Your voice channel is ready",
         description=(
             f"Welcome, {owner_mention}. Use the menus below to manage "
             "**this channel** — set its access (open, NSFW, locked, or "

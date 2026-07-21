@@ -42,6 +42,17 @@ log = logging.getLogger("dungeonkeeper.economy")
 MANAGE_DENIED_MSG = "You don't have permission to review sponsored questions."
 
 
+def _reward_text(settings: EconSettings, amount: int) -> str:
+    """``🪙 **500** coins`` — the currency vocabulary every economy card uses.
+
+    Mirrors ``quest_views._reward_text`` so a sponsored question's Paid/Refund
+    fields read like the rest of the economy: emoji, bold amount with thousands
+    separators, and a unit that goes singular at 1.
+    """
+    unit = settings.currency_name if abs(amount) == 1 else (settings.currency_plural or "coins")
+    return f"{settings.currency_emoji} **{amount:,}** {unit}"
+
+
 def render_sponsor_card_embed(
     accent: discord.Color,
     settings: EconSettings,
@@ -61,23 +72,22 @@ def render_sponsor_card_embed(
     """
     if state == "approved":
         embed = discord.Embed(
-            title="Sponsored question approved", color=discord.Color.green()
+            title="✅ Sponsored question approved", color=discord.Color.green()
         )
     elif state in ("denied", "expired"):
         embed = discord.Embed(
-            title="Sponsored question declined", color=discord.Color.red()
+            title="❌ Sponsored question declined", color=discord.Color.red()
         )
     elif state == "posted":
         embed = discord.Embed(
-            title="Sponsored question posted", color=discord.Color.green()
+            title="📮 Sponsored question posted", color=discord.Color.green()
         )
     else:
-        embed = discord.Embed(title="Sponsored question submitted", color=accent)
+        embed = discord.Embed(title="📋 Sponsored question submitted", color=accent)
 
-    unit = settings.currency_plural or "coins"
-    embed.add_field(name="Sponsor", value=sponsor_mention, inline=True)
-    embed.add_field(name="Paid", value=f"{price} {unit}", inline=True)
-    embed.add_field(name="Question", value=question[:1024], inline=False)
+    embed.add_field(name="👤 Sponsor", value=sponsor_mention, inline=True)
+    embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)
+    embed.add_field(name="❓ Question", value=question[:1024], inline=False)
     if state == "approved":
         embed.add_field(
             name="Next",
@@ -91,7 +101,11 @@ def render_sponsor_card_embed(
             embed.add_field(name="Declined by", value=f"<@{resolver_id}>", inline=True)
         if deny_reason:
             embed.add_field(name="Reason", value=deny_reason[:1024], inline=False)
-        embed.add_field(name="Refund", value=f"{price} {unit} returned", inline=True)
+        embed.add_field(
+            name="↩️ Refund",
+            value=f"{_reward_text(settings, price)} returned",
+            inline=True,
+        )
     if state != "pending":
         embed.timestamp = discord.utils.utcnow()
     return embed

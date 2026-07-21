@@ -1,10 +1,12 @@
 # Economy & Perk Shop — Spec V3.1 (repo-grounded)
 
 **Brandable per-guild currency · Logins & streaks · XP conversion · Quests · Rentable perks**
-*Status: partially shipped — Stages 0–3 built (wallets/ledger/config, faucets,
-quests, and transfers + the rental engine + role perks + gifts). Metrics (Stage 4),
-soak/tuning (Stage 5), and private rooms (Stage 6) plus the v2 member dashboard and
-spotlight slots remain design-only. Implementation plan in
+*Status: largely shipped — Stages 0–4 built (wallets/ledger/config, faucets,
+quests, transfers, the rental engine + role perks + gifts, and the metrics
+dashboard), plus sinks rounds 1–3 (§6: gifting, streak shield, voice-style lease,
+emoji sponsorship, raffle, wagers, hoard tax — the last few shipped dark).
+Soak/tuning (Stage 5) is ongoing; private rooms (Stage 6) plus the v2 member
+dashboard and spotlight slots remain design-only. Implementation plan in
 `docs/plans/economy-and-perk-shop.md`. Supersedes the uploaded V3 draft. All numbers
 are per-guild-tunable defaults (§9).*
 
@@ -195,7 +197,8 @@ to currency.
   their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
   mlt, nhie, price, rushmore, story, wyr). ffa and fantasies are excluded by design
   (anonymous submissions); photo has no per-player completion hook either, but pays
-  through the **photo-reply event quest** (§4.5) instead of `end_game`.
+  through the **`photo_post` faucet** (§4.5 — paid on the post itself) instead of
+  `end_game`.
 - **Game win +20:** paid for **both** game architectures in v1 (decided). Duel games
   read their explicit `winner_id` (chicken, hot potato, musical chairs, pressure
   cooker, quickdraw, …). Party games get a per-game-type winner resolver over the
@@ -452,7 +455,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the *Game over!* winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
-| `cat_catch` | catching a cat with the external **Cat Bot** in a `/games track … kind:Cat Bot` channel — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 3 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |
+| `cat_catch` | catching a cat with the external **Cat Bot** in a `/games track … kind:Cat Bot` channel — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 1 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |
 | `confession` | member submits an anonymous confession (posts to the feed) | `confessions_cog.ConfessModal.on_submit` → `_fire_confession_trigger` (both forum + text paths) | `confession:<message_id>` — silent claim keeps the feed anonymous; only trace is the ledger |
 | `ama_ask` | member's AMA question becomes visible: on submit (unfiltered) or on host approval (screened; rejected never pays) | `games_ama_cog` `AskQuestionModal.on_submit` + `ScreenedQuestionView.approve` → `_fire_ama_ask_trigger` | `ama_ask:<game_id>:<q_idx>` |
 | `whisper` | member sends an anonymous whisper that is delivered | `whisper_cog.WhisperCog._send_impl` after the DM+feed post succeed | `whisper:<whisper_id>` |
@@ -464,6 +467,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `pen_pal_complete` | a Pen Pals session reaches its natural 24 h expiry (both members fire; `early`/`channel_missing` closes never fire) | `pen_pals_cog` expiry sweep | `pen_pal_complete:<session_id>` |
 | `whisper_guess` | member correctly guesses a whisper's sender (fires after the race-consumed check, so a two-tab solve pays once) | `whisper_cog._handle_guess_outcome` | `whisper_guess:<whisper_id>` |
 | `guess_win` | member wins a Guess Who round (stretch twin of `guess`; fires only for the solve-race winner) | `guess_cog` solved path | `guess_win:<round_id>` |
+| `guess_post` | member submits a Guess Who round for others to solve (confession rounds included — producer half of the guess-who pair, see §4.6 pairing) | `guess_cog` both `_do_insert_round` call sites | `guess_post:<round_id>` |
 | `session_join` | member appears in a game-night session's roster (end_game now merges the real roster into `games_session_tracker`, which start-time calls only seeded with the host) | `game_manager._fire_session_join` | `session_join:<session_id>` — later games in the same session collide silently |
 | `voice_message` | member posts a voice message (fires before the transcription config gate — the quest is the post, not the transcript) | `voice_transcription_cog._on_message` | `voice_message:<message_id>` — use daily/weekly with a target count |
 | `music_request` | member's `/play` adds ≥1 track | `music_cog.play` via `daily_occurrence=True` | `music_request:<local_day>` (once/day by construction — a 30-track playlist and 30 requests look the same) |
@@ -482,7 +486,6 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `greeting_answered` | member replies to / @mentions someone whose greeting is still pending in Greeting Watch, same channel (pending ≈ inside the window — the loop resolves rows right after it closes). Self-gates on the feature: no watched channels, no fires | `events_cog._econ_work` via `greeting_watch_service.pending_greetings_for` | `greeting_answered:<greeting_message_id>` — one hello credits an answerer once |
 | `birthday_wish` | member wishes a happy birthday on a day a birthday was **announced** (`birthday_announcements` row — quiet/unset birthdays never become quest bait; pre-09:00 wishes miss, documented soft edge): a reply/mention of the birthday member, or a wish phrase (`birthday_service.is_birthday_wish`) anywhere when no target resolved. One fire per message; the wisher can't be the birthday member | `events_cog._econ_work` | `birthday_wish:<target_id>:<local_day>` (phrase fallback: `birthday_wish:day:<local_day>`) |
 | `drop_claim` | member wins a coin-drop Claim race — pays beside the drop's own credit (the `cat_catch` double-pay pattern); drop cadence is the natural rate limit | `economy_drops_service.try_claim_drop` after the credit | `drop_claim:<drop_id>` |
-| `guess_submit` | member's Guess Who submission posts as a round (✓ Post in the crop editor) — the content-supply twin of `guess`; the submit rate limit is the farm guard | `guess_cog.CropEditorView._on_post` after the audit row | `guess_submit:<round_id>` |
 | `role_pick` | member self-assigns a role via a role menu **grant** (removals never fire) or an announcement role button grant. Setup kind (see below) | `role_menus/views._apply_outcome` + `announcements/buttons._apply` | `role_pick:set` (once ever) |
 | `confession_reply` | member posts an anonymous reply to someone ELSE's confession (OP self-replies never fire; both thread and channel reply paths). Same privacy contract as `confession` — silent claim, no channel noise | `confessions_cog.ReplyModal.on_submit` → `_fire_confession_trigger(kind="confession_reply")` | `confession_reply:<reply_message_id>` — use daily/weekly with a target count |
 | `shop_purchase` | member makes a voluntary shop purchase: perk rent (voucher-covered counts — the quest rewards shop engagement, not the spend), streak shield, emoji sponsorship, QOTD sponsorship, raffle tickets. Renewal billing (`bill_rental`) deliberately never fires. Setup kind (see below) | each purchase service beside its `apply_debit` | `shop_purchase:set` (once ever) |
@@ -603,6 +606,21 @@ approximate otherwise — e.g. a 5-daily pool at N=2 recurs some dailies every 2
 days; small pools where `N ≥ poolsize` degrade to "everyone sees everything"). Community and event quests are **not** personalized (community is a
 guild-wide objective; event pays per occurrence).
 
+**Paired quests** (migration 106, `pair_tag`): two active quests of the same
+cadence sharing a non-empty `pair_tag` are drawn as a **bundle** — when the
+pure draw picks either, `quests.apply_pair_bundles` swaps its partner in for
+the last unpaired slot, so producer/consumer prompts (submit a Guess Who
+round + play one; send a whisper + unmask one) land on a member's board the
+same period. Pairs the draw already completed are never split; a tag carried
+by one active quest or by three-plus is inert (strict exactly-two rule,
+`quests.pair_map`); a board of one can't hold a pair and is left alone.
+Reroll overrides apply **after** pairing — a member can still opt out of half
+a pair, and that's their call. Note the frequency effect: a paired quest
+appears whenever *either* member of the pair is drawn, roughly doubling how
+often each shows up relative to an untagged pool-mate. Tag editing is on the
+dashboard Quests page (Pair tag field); like any pool change, edit at the
+period boundary or boards reshuffle mid-period.
+
 Both surfaces filter to the member's board: `fire_trigger_quests` and the
 trigger-word `on_message` path skip any daily/weekly/monthly quest not on the
 board this period (so a member only *earns* a kind when its quest is on their
@@ -670,6 +688,7 @@ active trailing periods of the kind fall back to the deterministic
 `(user, quest, period)`) — the cold-start behavior, and the entire behavior
 before migration 080's ledger accrued history. Sandbagging by going quiet
 floors out at `target_min` and is self-defeating (less activity is less
+<<<<<<< HEAD
 income anyway). **Channel-scoped band quests** on message-shaped kinds
 (`quests.CHANNEL_SHARE_KINDS`: message_sent, reply_sent, media_post) scale
 the member's median by *their own* share of traffic in the scoped channel
@@ -680,6 +699,17 @@ is never scaled (the author wrote the band for the channel already).
 Thread messages archive under the thread's id while scoped fires credit
 the parent, so shares read slightly low in thready channels — targets err
 forgiving.
+=======
+income anyway).
+
+Kinds in `quests.PERSONAL_P25_KINDS` (currently `reaction_given`) resolve
+at the member's own trailing-period **p25 instead of the stretched median**
+(`quests.p25_target`, no `DYNAMIC_STRETCH`): reactions are passive
+one-click acts with a heavy-tailed distribution, so the target means "at
+least your own quiet-week level" — stretching past typical pace would turn
+the anti-freebie fix into a grind on a heavy reactor's off week. Zeros
+still count in the quantile, same as the median path.
+>>>>>>> main
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.
@@ -687,8 +717,8 @@ meter read the same `effective_target`.
 Game-fired claims are **silent in-channel** (matching the participation faucet —
 a game recap followed by a dozen quest embeds would be noise); the wallet ledger
 and `/quests` carry the news, and sign-off claims still post the bank-channel
-card. The photo-reply and media-post listeners announce (✅/📝 on the member's
-own message — a 1:1 exchange). Hooks that fire inside another module's open
+card. The photo-post and media-post listeners announce (✅/📝 on the member's
+own message — the payout lands on the post itself). Hooks that fire inside another module's open
 transaction use `fire_trigger_inline` (savepoint-wrapped, never raises, no
 bank-card posting — pending sign-off claims still appear on the claims panel).
 
@@ -725,11 +755,17 @@ participation award *or* ≥1 active `photo_post` quest). The `photo_post`
 income-source toggle gates **both** payouts. The channel is the standalone Photo
 Challenge feature's dedicated channel — `channel_id` in `games_game_config.options`
 (game type `photo`), owned by the **Photo Challenge → Setup** panel
-(`/api/photo-challenge/config`); the payout is dormant until it's set. The flat
+(`/api/photo-challenge/config`). When that config carries no channel but an
+**active photo schedule** does (a schedule created without the Setup panel ever
+being saved leaves the config row empty), the listener recovers the channel from
+`games_scheduled` so schedule-only setups still pay; the payout is dormant only
+when neither knows a channel. The flat
 rate is edited on the **Income Sources** page alongside the other faucets. *(The
 old reaction-gated model and its `react_threshold`/`auto_react` knobs are retired;
 migration 099 renames existing `photo_react` quests and income-source rows to
 `photo_post`; migration 101 adds `econ_photo_rewards`.)*
+
+## 5. Transfers
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered
@@ -766,14 +802,15 @@ takes effect on the next cycle, never retroactively.
 | Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`). When the perk lapses, `revoke_role_perks` reverts the nick too (`should_revert_nick` — only if the nick still equals the perk's name, so a game name-penalty stake set since is never clobbered) |
 | Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
 | Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
-| Private text room | 200 | §8 (Stage 2) |
-| Private voice room | 200 | §8 (Stage 2) |
+| Private text room | 200 | §8 (Stage 6) |
+| Private voice room | 200 | §8 (Stage 6) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
 | Streak shield | 30 once | One-shot consumable, not a rental — §3.1; shop "One-shot" row + panel button, wallet shows "held" |
 | Sponsored emoji | 60/wk (animated 90) | **Sinks round 3, stage 4.** `/bank emoji image: name:` escrows week one (`emoji_sponsor` kind); mod approves on the Sinks page queue → two-phase claim-then-upload opens a real `econ_rentals` row (perk `emoji`, meta carries `animated` so renewals bill the right rate); deny/cancel/expiry refund exactly-once (`emoji_sponsor_refund`, `refunded_at` predicate); lapse deletes the emoji and frees the slot + name. Caps: `emoji_sponsor_slots` (default 5) + never the guild's last free emoji slot of that kind. One in flight per member and one claim per name via partial unique indexes (migration 092). Names: 2–32 `[A-Za-z0-9_]` + the shared blocklist. `price_emoji` 0 disables new sponsorships; pending reviews auto-refund after `emoji_sponsor_expire_days` (default 14, QOTD-sponsor sweep pattern) |
 | Voice style | **0 (dark)**, suggested 30 | Leases Voice Master **rename + user limit** (sinks round 3, stage 3). Price 0 = paywall off (the shipped default AND the per-guild opt-out); pricing it on the Sinks page is the launch switch — announce first. Armed only while the economy is enabled. Entitlement is beneficiary-based (giftable); saved VM profiles stay stored but only re-apply while leased; lapse best-effort walks a live temp channel back to the template name + default limit (no role involved). Access dial / invite / kick / transfer / reset stay free. Verdict is pure (`voice_master/logic.style_lease_blocks`), enforced in `_apply_rename`/`_apply_limit` (one choke point for slash + panel) and the spawn profile loader |
-| PvP game wager | player-chosen, uncapped | **Sinks round 2, stage 4b** (built 2026-07-20). Optional `wager:` on all six duel/group games: equal ante, winner takes the pot, **no rake — so this absorbs nothing** (a transfer between members, deliberately: it makes the games matter; see that round's own note). Escrow in `econ_game_wagers` (migration 094) keyed to (game_type, game_id, user_id); duels declare at challenge and debit both sides at accept (decline/timeout costs nothing), lobbies debit on join and refund on leave. Settlement/refund rides the stage-4a terminal seam, exactly-once via `settled_at`. Every non-settling terminal state (ABANDONED / VOID / EXPIRED_LOBBY / DECLINED) and a `winner_id` of None refunds; a guild-leaver's stake is refunded by the economy cog's member-remove listener. Ledger kinds `wager_stake` / `wager_payout` / `wager_refund`, payout and refund unboosted so a wager can never mint |
+| PvP game wager | player-chosen, uncapped | **Sinks round 2, stage 4b** (built 2026-07-20). Optional `wager:` on all six duel/group games: equal ante, winner takes the pot minus the optional house rake — `wager_rake_pct`, default **0 (dark)**, capped 50, added 2026-07-20 revising the round's original no-rake stance (at 0 a wager is still the pure transfer that made the games matter; a priced rake evaporates its cut of every settled pot, read at settlement time like rental renewals, never snapshotted). Refunds are never raked, nor is a single-stake pot (a winner reclaiming their own ante isn't a contest); the payout announcement and register memo both name the cut (`meta.rake`) so the arithmetic visibly adds up. Escrow in `econ_game_wagers` (migration 094) keyed to (game_type, game_id, user_id); duels declare at challenge and debit both sides at accept (decline/timeout costs nothing), lobbies debit on join and refund on leave. Settlement/refund rides the stage-4a terminal seam, exactly-once via `settled_at`. Every non-settling terminal state (ABANDONED / VOID / EXPIRED_LOBBY / DECLINED) and a `winner_id` of None refunds; a guild-leaver's stake is refunded by the economy cog's member-remove listener. Ledger kinds `wager_stake` / `wager_payout` / `wager_refund`, payout and refund unboosted so a wager can never mint |
 | Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the leaderboard panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
+| Hoard tax (demurrage) | **0% (dark)**, suggested 2%/wk over a 500 floor | **Built 2026-07-20 (migration 100).** The only sink that needs no buyer: at the ISO-week roll, every wallet above `demurrage_threshold` loses `demurrage_rate_pct`% of the **excess** only — the floor is protected, so nobody is taxed below it and 100% is a hard wealth cap, not a wipe. Floor-division grace: a tax that rounds to 0 goes uncollected. Exactly-once via the `econ_demurrage_sweeps` (guild, week) PK — claim-before-debit, the raffle-draw pattern — with per-sweep totals recorded for metrics. Ledger kind `demurrage` (meta: closed week + pre-tax balance) narrated by the register feed (🐉 "Hoard tax") — no separate announcement. Rate 0 default = off; both knobs on the Sinks page; enabling is a comms decision, announce first (`economy_demurrage_service.py`, swept from the week roll beside the raffle draw) |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon
@@ -829,7 +866,8 @@ the member owns and gift rentals where they are the beneficiary.
 
 - **Discord is the entire v1 member surface** (decided — the member-facing dashboard
   wallet page and role studio are v2). One top-level group **`/bank`** (`wallet`,
-  `pay`, `quests`, `shop`, `gift`, `role`, `mute`, `grant` [mod], `post-guide` [mod])
+  `pay`, `quests`, `shop`, `gift`, `sponsor`, `emoji`, `role`, `mute`, `grant` [mod],
+  `post-guide` [mod], `post-leaderboard` [mod], `post-shop` [mod])
   plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
@@ -968,7 +1006,7 @@ the member owns and gift rentals where they are the beneficiary.
   balance, XP-today, streak + grace, quests, rentals with next-bill countdown, 30-day
   history, mute toggle) and a role studio panel with live preview.
 
-## 8. Private Rooms (Stage 2)
+## 8. Private Rooms (Stage 6)
 
 As V3 §8 (owner as landlord: invite cap 25, block list persisting across re-rentals,
 rename/topic/NSFW/slowmode/user-limit/bitrate/lock, Manage Messages+Threads inside,
@@ -1155,8 +1193,8 @@ The hourly economy loop:
 | On tick | Action |
 |---|---|
 | Guild-local day rolled | XP→currency conversion (only the most recent marked local day — no retroactive backlog after an outage, §12); streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
-| Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; (v2) spotlight expiry; (rooms stage) room archive/purge |
-| Guild-local ISO week rolled | Weekly quest activation; community settlement; metrics rollup; (v2) spotlight inventory reset |
+| Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; QOTD-sponsor and emoji-sponsor pending-review expiry (auto-refund); (v2) spotlight expiry; (rooms stage) room archive/purge |
+| Guild-local ISO week rolled | Weekly quest activation; community settlement; raffle draw (§6); demurrage sweep (§6); metrics rollup; (v2) spotlight inventory reset |
 
 The **coin-drops loop** (§3.5) is its own startup task on a 60 s tick:
 expiry sweep first, then the per-guild jittered drop scheduler. Its
@@ -1200,7 +1238,7 @@ nothing and misses nothing (catch-up on next tick).
 - Game participation payouts cover 20 of 23 games — the six duel games,
   ttl/traditional/legitlibs, and the 11 party cogs whose rosters were enriched in
   Stage 2. ffa and fantasies stay excluded by design (anonymous submissions);
-  photo pays via the photo-reply event quest (§4.5), not `end_game`.
+  photo pays via the `photo_post` faucet (§4.5, on the post itself), not `end_game`.
 - Guild loses Level 2 / Enhanced Role Styles mid-rental: perk enters grace as if unpaid?
   No — billing pauses the affected perk (icon/gradient) and DMs the owner; auto-resumes
   when the feature returns (no charge while suspended).
@@ -1223,8 +1261,9 @@ nothing and misses nothing (catch-up on next tick).
 panel with live preview · spotlight slots.
 
 **Parking lot** (unchanged from V3 unless noted): auto-tracked quest criteria
-(partially delivered: trigger words §4.4 + the photo-reply event trigger §4.5;
-further trigger kinds — game wins, streaks — remain parked) ·
+(delivered: §4.4 trigger words plus the full §4.5 trigger-kind table —
+`photo_post`, `game_win`, `duel_win`, `active_day`, and the rest — nothing
+here remains parked) ·
 fines/tickets (Jail exists — integration stays parked by design call) ·
 room upgrades · streak-rental discount ·
 auctions/seasonal drops · per-quest contributors-only payout · scheduled/auto

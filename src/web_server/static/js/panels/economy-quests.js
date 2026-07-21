@@ -145,6 +145,9 @@ function render(container, channels, cfg) {
               <div class="field-hint">Auto-sized when the scheduler kicks the run off — a typical week lands ~75%, a push clears it. No manual override.</div></div>
             <div class="field" data-rotate-field><label>Rotate tag</label>
               <input type="text" name="rotate_tag" maxlength="64" style="max-width:160px;" /></div>
+            <div class="field"><label>Pair tag</label>
+              <input type="text" name="pair_tag" maxlength="64" style="max-width:160px;" />
+              <div class="field-hint">Exactly two active quests of the same cadence sharing a tag land on boards together (e.g. host + play).</div></div>
           </div>
           <div class="field-row">
             <div class="field"><label>Starts (optional)</label>
@@ -486,6 +489,7 @@ function wireAuthoring(container, channels) {
     form.querySelector("[name=reward_xp]").value = q.reward_xp ?? 0;
     form.querySelector("[name=signoff]").checked = !!q.signoff;
     form.querySelector("[name=rotate_tag]").value = q.rotate_tag || "";
+    form.querySelector("[name=pair_tag]").value = q.pair_tag || "";
     form.querySelector("[name=starts_at]").value = fromEpoch(q.starts_at);
     form.querySelector("[name=ends_at]").value = fromEpoch(q.ends_at);
     form.querySelector("[name=community_target]").value = q.community_target ?? "";
@@ -515,6 +519,7 @@ function wireAuthoring(container, channels) {
       reward_xp: parseInt(form.querySelector("[name=reward_xp]").value, 10) || 0,
       signoff: form.querySelector("[name=signoff]").checked,
       rotate_tag: form.querySelector("[name=rotate_tag]").value.trim(),
+      pair_tag: form.querySelector("[name=pair_tag]").value.trim(),
       starts_at: toEpoch(form.querySelector("[name=starts_at]").value),
       ends_at: toEpoch(form.querySelector("[name=ends_at]").value),
       // Always sent so an edit that switches completion mode clears the

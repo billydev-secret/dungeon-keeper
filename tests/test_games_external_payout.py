@@ -150,7 +150,7 @@ async def test_cat_catch_pays_the_resolved_catcher_once(gdb):
     assert args[1] == GUILD
     assert args[2] == CATCHER
     assert kwargs["rarity"] == "wild"
-    assert kwargs["coins"] == 8            # uncommon, not blessed here
+    assert kwargs["coins"] == 3            # uncommon, not blessed here
     assert kwargs["occurrence"] == str(CATCH_MSG_ID)
 
 

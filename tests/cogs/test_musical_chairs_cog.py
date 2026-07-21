@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
+import discord
 import pytest_asyncio
 
+from bot_modules.cogs.musical_chairs import cog as mc_cog
 from bot_modules.cogs.musical_chairs import db as mcdb
 from bot_modules.cogs.musical_chairs.cog import MusicalChairsCog
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import get_balance, save_econ_settings
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 from bot_modules.services.games_db import GamesDb
 from tests.fakes import FakeEconGamesBot, FakeGuild, fake_interaction
 
@@ -64,6 +68,62 @@ def test_cog_exposes_group(db):
 def test_build_view_has_sit_button(db):
     view = MusicalChairsCog(FakeBot(db)).build_game_view(8)  # type: ignore[arg-type]
     assert "mc_sit:8" in [getattr(c, "custom_id", None) for c in view.children]
+
+
+# ── embed colors: accent-aware round / win=green / loss=red ────────────────────
+
+async def test_round_active_embed_uses_guild_accent(db, sync_db_path, monkeypatch):
+    accent = discord.Color(0x3FA7FF)
+    monkeypatch.setattr(mc_cog, "resolve_accent_color", AsyncMock(return_value=accent))
+    cog = _econ_cog(db, sync_db_path)  # bot has ctx + a resolvable guild
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    guild = cog.bot.get_guild(GUILD)
+    await cog._resolve_accent(game.id, guild)  # resolve once, cache
+    embed = cog.render_game_state(game, guild)
+    assert embed.color == accent
+    assert cog._accents[game.id] == accent  # cached for reuse across edits
+
+
+async def test_round_active_embed_falls_back_without_accent(cog, db):
+    # No accent resolved (plain FakeBot: no ctx / guild) → old COLOR_YELLOW.
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    embed = cog.render_game_state(game, FakeGuild())
+    assert embed.color.value == COLOR_YELLOW
+
+
+async def test_resolve_accent_guards_no_guild_no_ctx(cog, db):
+    # FakeBot has no ctx; guild None → fall back, cache nothing, never crash.
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    assert await cog._resolve_accent(game.id, None) == discord.Color(COLOR_YELLOW)
+    assert await cog._resolve_accent(game.id, FakeGuild()) == discord.Color(COLOR_YELLOW)
+    assert game.id not in cog._accents
+
+
+async def test_resolve_accent_error_falls_back(db, sync_db_path, monkeypatch):
+    monkeypatch.setattr(
+        mc_cog, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("boom"))
+    )
+    cog = _econ_cog(db, sync_db_path)
+    game = await _game(db, phase="MUSIC", alive=[1, 2, 3])
+    assert await cog._resolve_accent(game.id, cog.bot.get_guild(GUILD)) == discord.Color(COLOR_YELLOW)
+    assert game.id not in cog._accents
+
+
+async def test_scramble_embed_stays_red(cog, db):
+    # SCRAMBLE marks the elimination round — stays COLOR_RED regardless of accent.
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2, 3], seated=[])
+    cog._accents[game.id] = discord.Color(0x3FA7FF)
+    embed = cog.render_game_state(game, FakeGuild())
+    assert embed.color.value == COLOR_RED
+
+
+def test_winner_embed_is_green(cog, db):
+    game = mc_cog.MusicalChairsGame(
+        id=1, guild_id=GUILD, channel_id=CH, host_id=1, state="RESOLVED",
+        winner_id=2, loser_id=1, roster=[1, 2, 3], stakes_text="loser sings",
+    )
+    embed = cog.render_result_state(game, FakeGuild())
+    assert embed.color.value == COLOR_GREEN
 
 
 # ── _close_round_locked ────────────────────────────────────────────────────────

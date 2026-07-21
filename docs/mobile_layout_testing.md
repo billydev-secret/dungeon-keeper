@@ -44,7 +44,8 @@ failure reads like a bug report: `[phone] qa-tracker: off-screen — button[data
   change. It reports faults; it never fails a build.
 - **Gate** — `tests/web/test_mobile_layout.py`, marked `browser` (and `mobile`)
   and excluded
-  from the default suite (`-m "not mobile"` in `pyproject.toml`). It auto-skips
+  from the default suite (`-m 'not browser'` in `pyproject.toml`'s `addopts`).
+  It auto-skips
   where Playwright or Chromium isn't installed, so the ordinary suite and
   per-push CI (which have no browser) are unaffected.
 

@@ -233,6 +233,12 @@ class RulesWatchCog(commands.Cog):
         verdict="'violation' or 'fp' (false positive).",
         corrected_rule="Optional: the correct rule number if the guard was wrong.",
     )
+    @app_commands.choices(
+        verdict=[
+            app_commands.Choice(name="violation", value="violation"),
+            app_commands.Choice(name="fp", value="fp"),
+        ]
+    )
     async def rw_label(
         self,
         interaction: discord.Interaction,

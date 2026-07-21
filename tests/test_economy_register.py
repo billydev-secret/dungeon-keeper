@@ -13,9 +13,11 @@ from bot_modules.economy.register import (
     DEBIT_COLOUR,
     SKIP_KINDS,
     TRANSFER_COLOUR,
+    _KIND_DISPLAY,
     RegisterEntry,
     build_register_embed,
     collect_register_entries,
+    kind_display,
     render_memo,
 )
 from bot_modules.services import economy_quests_service as quests_svc
@@ -416,6 +418,56 @@ def test_memo_unknown_kind_degrades_gracefully():
     """A future payout kind must never render a blank memo."""
     entry = _entry(kind="mystery_bonus")
     assert render_memo(entry, _names) == "Mystery bonus"
+
+
+def test_quest_board_clear_bonus_has_its_own_glyph_and_memo():
+    """The full-board bonus is a mapped kind, not the generic coin fallback."""
+    entry = _entry(kind="quest_bonus", meta={"qtype": "daily", "period": "2026-07-21"})
+    assert render_memo(entry, _names) == "Quest board clear"
+    embed = build_register_embed(entry, DEFAULT_ECON_SETTINGS, _names)
+    assert "🎉" in (embed.description or "")
+    assert "Quest board clear" in (embed.description or "")
+
+
+# ── kind_display: the shared glyph/label vocabulary ────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("kind", "glyph", "label"),
+    [
+        ("cat_catch", "🐱", "Cat caught"),
+        ("qa_reward", "🧪", "QA testing reward"),
+        ("quest_community_bonus", "🤝", "Community quest bonus"),
+        ("quest_reroll", "🔁", "Quest reroll"),
+        ("wager_payout", "🎰", "Game wager won"),
+    ],
+)
+def test_kind_display_maps_known_kinds(kind, glyph, label):
+    assert kind_display(kind) == (glyph, label)
+
+
+def test_kind_display_unknown_kind_degrades_to_coin_and_title_case():
+    """An unmapped kind never leaks its raw snake_case token."""
+    assert kind_display("qa_void") == ("🪙", "Qa void")
+
+
+def test_split_kinds_no_longer_collide_with_their_old_glyph_twins():
+    """quest_reroll left 🎲 (game_participation); wager_payout left 🏆 (milestone)."""
+    assert _KIND_DISPLAY["quest_reroll"][0] != _KIND_DISPLAY["game_participation"][0]
+    assert _KIND_DISPLAY["wager_payout"][0] != _KIND_DISPLAY["milestone"][0]
+
+
+def test_footer_drops_a_custom_currency_emoji():
+    """Custom emoji render as raw text in a footer, so the balance footer omits
+    it (the amount in the description still carries it)."""
+    import dataclasses
+
+    settings = dataclasses.replace(
+        DEFAULT_ECON_SETTINGS, currency_emoji="<:doubloon:999>"
+    )
+    embed = build_register_embed(_entry(balance_after=330), settings, _names)
+    assert "<:doubloon:999>" not in (embed.footer.text or "")
+    assert "330" in (embed.footer.text or "")
 
 
 # ── embed ──────────────────────────────────────────────────────────────

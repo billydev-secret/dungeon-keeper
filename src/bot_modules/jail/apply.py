@@ -368,7 +368,7 @@ async def apply_jail(
         else ""
     )
     embed = discord.Embed(
-        title="Moderation Hold",
+        title="🔒 Moderation Hold",
         description=(
             f"{target.mention}, you have been placed in a moderation hold.\n\n"
             f"**Moderator:** {moderator.mention}\n"

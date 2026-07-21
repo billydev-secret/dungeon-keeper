@@ -38,17 +38,25 @@ from bot_modules.games.constants import (
 from bot_modules.games.utils.game_manager import resolve_name
 
 
-def build_join_embed(host_name: str, players: list[str]) -> discord.Embed:
+def build_join_embed(
+    host_name: str,
+    players: list[str],
+    color: discord.Color | None = None,
+) -> discord.Embed:
     """Build the lobby embed shown above the Join/Leave/Start buttons.
 
     ``players`` is a list of pre-resolved display names (the cog calls
     ``resolve_names`` first so this embed builder stays Discord-API
     free). An em-dash is shown when no one has joined yet so the field
     never renders empty.
+
+    ``color`` is the guild accent (resolved once by the cog); when
+    ``None`` it falls back to the phase color so the builder stays usable
+    with no guild.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['mlt']} MOST LIKELY TO",
-        color=PHASE_JOINING,
+        color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(
@@ -65,20 +73,20 @@ def build_round_embed(
     round_num: int,
     vote_count: int,
     closed: bool = False,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the active-round (or finished-round) vote embed.
 
-    When ``closed=True`` the title gains a ``— ROUND OVER`` suffix
-    and the color shifts from "playing" blue to "results" green.
-    All other fields render identically — the cog reuses this builder
-    when editing the message after the round resolves.
+    A round is a voting phase, not a win/loss, so it takes the guild
+    accent when ``color`` is supplied. When ``color`` is ``None`` it
+    falls back to the phase colors (playing blue / results green) so the
+    active vs. closed states stay visually distinct with no guild.
     """
     title = f"{GAME_ICONS['mlt']} MOST LIKELY TO..."
     if closed:
         title += " — ROUND OVER"
-    embed = discord.Embed(
-        title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING
-    )
+    fallback = PHASE_RESULTS if closed else PHASE_PLAYING
+    embed = discord.Embed(title=title, color=color or discord.Color(fallback))
     embed.add_field(
         name="Prompt",
         value=discord.utils.escape_markdown(prompt),
@@ -99,18 +107,24 @@ def build_closed_embed(
     prompt: str,
     round_num: int,
     vote_count: int,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the "host stopped the game" embed.
 
     Thin reskin of :func:`build_round_embed`: the title flips to
-    ``— CLOSED`` and the color shifts to the recap dark gold so the
-    closed state is visually distinct from a regular round-over.
+    ``— CLOSED`` and, with no guild ``color``, the color shifts to the
+    recap dark gold so the closed state is visually distinct from a
+    regular round-over.
     """
     embed = build_round_embed(
-        prompt=prompt, round_num=round_num, vote_count=vote_count, closed=True
+        prompt=prompt,
+        round_num=round_num,
+        vote_count=vote_count,
+        closed=True,
+        color=color,
     )
     embed.title = f"{GAME_ICONS['mlt']} MOST LIKELY TO — CLOSED"
-    embed.color = discord.Color(PHASE_RECAP)
+    embed.color = color or discord.Color(PHASE_RECAP)
     return embed
 
 
@@ -119,6 +133,7 @@ def build_results_embed(
     round_num: int,
     tally: dict[int, int],
     guild: Any = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the per-round results embed shown after votes are tallied.
 
@@ -126,10 +141,14 @@ def build_results_embed(
     get a 👑 crown prefix (multiple crowns appear on a tie). When
     ``tally`` is empty (no votes were cast) the description renders a
     placeholder so the embed is never blank.
+
+    This is a voting-round result, not a win/loss, so it takes the guild
+    accent when ``color`` is supplied and falls back to the phase color
+    otherwise.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['mlt']} MOST LIKELY TO {prompt}",
-        color=PHASE_RESULTS,
+        color=color or discord.Color(PHASE_RESULTS),
     )
     sorted_tally = sorted(tally.items(), key=lambda x: -x[1])
     max_votes = sorted_tally[0][1] if sorted_tally else 0
@@ -147,15 +166,21 @@ def build_results_embed(
     return embed
 
 
-def build_final_standings_embed(crowns: dict, guild: Any = None) -> discord.Embed:
+def build_final_standings_embed(
+    crowns: dict,
+    guild: Any = None,
+    color: discord.Color | None = None,
+) -> discord.Embed:
     """Final cumulative-crown standings shown when a game ends.
 
     ``crowns`` maps ``str(user_id) -> crown count``. Players are ranked by
-    crown count; ties at the top all get 👑.
+    crown count; ties at the top all get 👑. Cumulative standings are not a
+    win/loss outcome, so this takes the guild accent when ``color`` is
+    supplied and falls back to the phase color otherwise.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['mlt']} Most Likely To — Final Standings",
-        color=PHASE_RECAP,
+        color=color or discord.Color(PHASE_RECAP),
     )
     items = sorted(
         ((int(uid), int(c)) for uid, c in (crowns or {}).items() if int(c) > 0),

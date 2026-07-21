@@ -12,9 +12,10 @@ import random
 import discord
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
-from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
 
 from . import db as pdb
 from .game import PressureGame, apply_pump
@@ -32,6 +33,35 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         name="pressure",
         description="Pressure Cooker — a high-stakes nickname duel",
     )
+
+    def __init__(self, bot: Bot) -> None:
+        super().__init__(bot)
+        # game_id -> resolved guild accent, computed once per game and reused
+        # across every edit of that game's message.
+        self._accent_cache: dict[int, discord.Color | int] = {}
+
+    async def _resolve_accent(
+        self, guild: discord.Guild | None, game_id: int
+    ) -> discord.Color | int:
+        """Resolve the guild accent once per game and cache it.
+
+        Reused across the game's message edits. Any failure (no guild, no
+        bot context, avatar read error) falls back to the old gauge color so
+        a live game never crashes over branding.
+        """
+        cached = self._accent_cache.get(game_id)
+        if cached is not None:
+            return cached
+        color: discord.Color | int = COLOR_YELLOW
+        ctx = getattr(self.bot, "ctx", None)
+        if guild is not None and ctx is not None:
+            try:
+                color = await resolve_accent_color(ctx.db_path, guild)
+            except Exception:  # never crash a game over accent resolution
+                log.debug("pressure accent resolve failed; using fallback", exc_info=True)
+                color = COLOR_YELLOW
+        self._accent_cache[game_id] = color
+        return color
 
     # ── DB hooks ──────────────────────────────────────────────────────────────
 
@@ -77,17 +107,19 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
     async def on_game_start(self, game: PressureGame) -> None:
         first_player = random.choice([game.challenger_id, game.target_id])
         await self._db_set_state(game.id, "ACTIVE", active_player=first_player)
+        # Warm the accent cache before the first game-state card renders.
+        await self._resolve_accent(self.bot.get_guild(game.guild_id), game.id)
+
+    async def on_game_resolved(self, game_id: int) -> None:
+        await super().on_game_resolved(game_id)
+        self._accent_cache.pop(game_id, None)
 
     def render_game_state(
         self, game: PressureGame, guild: discord.Guild
     ) -> discord.Embed:
-        if game.gauge >= 75:
-            color = COLOR_RED
-        elif game.gauge >= 50:
-            color = COLOR_YELLOW
-        else:
-            color = COLOR_GREEN
-
+        # Pressure level is shown by the gauge bar/number below — the embed
+        # color follows the guild accent, not a red→green pressure gradient.
+        color = self._accent_cache.get(game.id, COLOR_YELLOW)
         embed = discord.Embed(title="🔥 PRESSURE COOKER", color=color)
 
         p1 = guild.get_member(game.challenger_id)
@@ -178,6 +210,10 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         if interaction.user.id != game.active_player:
             await interaction.followup.send("It's not your turn.", ephemeral=True)
             return ("rejected", None)
+
+        # Warm the accent cache before any game-state card re-renders (covers the
+        # continue edit in base_duel and the bust card below, incl. resumed games).
+        await self._resolve_accent(interaction.guild, game.id)
 
         result = apply_pump(game, interaction.user.id)
         await pdb.save_pump(self.db, game)

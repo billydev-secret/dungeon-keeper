@@ -380,3 +380,52 @@ def test_existing_fill_values_ignores_unassigned_ids():
     # caller's blank_ids only includes "a" — "b" prior must not leak
     out = existing_fill_values(blanks, fills, ["a"])
     assert out == {"a": "x"}
+
+
+# ── rendering builders follow the guild accent ───────────────────────
+#
+# The Classic embeds (fill / rescue / rescue-fill / reveal) now take a
+# ``color`` the cog threads in from ``resolve_accent_color``. When accent
+# resolution fails the cog passes ``None`` and each builder falls back to
+# its original phase color, so a branding hiccup never crashes a game.
+
+import discord  # noqa: E402
+
+from bot_modules.cogs.games_legitlibs import rendering as ll_rendering  # noqa: E402
+from bot_modules.games.constants import PHASE_PLAYING, PHASE_RECAP  # noqa: E402
+
+
+def test_build_classic_fill_embed_uses_passed_accent():
+    accent = discord.Color(0x112233)
+    embed = ll_rendering.build_classic_fill_embed("Host", "T", 2, 3, 0, 111, color=accent)
+    assert embed.color == accent
+
+
+def test_build_classic_fill_embed_falls_back_without_accent():
+    embed = ll_rendering.build_classic_fill_embed("Host", "T", 2, 3, 0, 111)
+    assert embed.color == discord.Color(PHASE_PLAYING)
+
+
+def test_build_classic_rescue_embed_uses_passed_accent():
+    accent = discord.Color(0x778899)
+    embed = ll_rendering.build_classic_rescue_embed("T", 2, 2, [], 111, color=accent)
+    assert embed.color == accent
+
+
+def test_build_classic_rescue_fill_embed_uses_passed_accent():
+    accent = discord.Color(0xAA00BB)
+    embed = ll_rendering.build_classic_rescue_fill_embed("T", 2, 0, 1, 111, color=accent)
+    assert embed.color == accent
+
+
+def test_build_classic_reveal_embed_uses_passed_accent():
+    """Classic produces one collaborative filled story with contributors —
+    no single winner — so the reveal follows the accent, not green."""
+    accent = discord.Color(0x654321)
+    embed = ll_rendering.build_classic_reveal_embed("T", 2, "filled", ["A"], color=accent)
+    assert embed.color == accent
+
+
+def test_build_classic_reveal_embed_falls_back_without_accent():
+    embed = ll_rendering.build_classic_reveal_embed("T", 2, "filled", ["A"])
+    assert embed.color == discord.Color(PHASE_RECAP)
