@@ -109,6 +109,12 @@ class EconomyConfigUpdate(BaseModel):
     price_quest_reroll: int | None = Field(default=None, ge=0)
     quest_reroll_daily_cap: int | None = Field(default=None, ge=0)
     price_streak_shield: int | None = Field(default=None, ge=0)
+    # Sponsored QOTD: charged at submit, refunded on denial/expiry. These were
+    # absent from the whitelist, so the price sat at the hardcoded default and
+    # couldn't be tuned from the dashboard — hence exposed here + on the Sinks
+    # panel.
+    price_qotd_sponsor: int | None = Field(default=None, ge=0)
+    qotd_sponsor_expire_days: int | None = Field(default=None, ge=0)
 
 
 def _stringify_snowflakes(cfg: dict) -> dict:
