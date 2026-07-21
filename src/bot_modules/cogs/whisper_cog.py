@@ -417,6 +417,7 @@ class WhisperShareButton(
             _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_SHARED
         )
 
+        feed_jump_url: str | None = None
         guild = interaction.guild or self.bot.get_guild(whisper.guild_id)
         if guild:
             cfg = await asyncio.to_thread(
@@ -436,6 +437,7 @@ class WhisperShareButton(
                         embed=build_share_feed_embed(whisper, color=accent),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
+                    feed_jump_url = new_msg.jump_url
                     await asyncio.to_thread(
                         _do_set_message_ids,
                         self.bot.ctx.db_path,
@@ -464,9 +466,10 @@ class WhisperShareButton(
             except discord.HTTPException:
                 log.warning("Failed to edit DM view after share")
 
-        await interaction.response.send_message(
-            "Shared to the whisper feed.", ephemeral=True
-        )
+        confirm = "Shared to the whisper feed."
+        if feed_jump_url:
+            confirm = f"[Shared to the whisper feed.]({feed_jump_url})"
+        await interaction.response.send_message(confirm, ephemeral=True)
 
 
 class WhisperDeleteButton(
