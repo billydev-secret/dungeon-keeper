@@ -91,3 +91,26 @@ existed in `TRIGGER_KINDS` (dead since seeding); now `guess_submit`, still
 dark with the 47–50 paired-dailies batch. Seed script in the session
 scratchpad (`seed_round3_quests.py`). Rewards follow library conventions
 (setup 25 like birthday_set; weeklies 35–40; events 5–15).
+
+## Community extension (done 2026-07-21)
+
+- **Greeting Watch configured** (main guild): watching 💛│the-meadow +
+  🕊️│welcome-chat, 10-min window, notify member unset (0 = no DM; pending
+  rows still record/retire, which is all the quest detector needs — pick a
+  notify member on the dashboard to get the "left hanging" alerts). Quest 51
+  Hello Back activated with it.
+- **Community rotation rows seeded** (ids 58–62, reward 10/tier, inactive —
+  the gap-week scheduler activates them): Nobody Greets Alone
+  (greeting_answered), Stock the Pool (guess_submit), Shopping Spree
+  (shop_purchase), Leave No Pouch Behind (drop_claim), Voices from the Dark
+  (confession_reply). `next_community_weekly` orders by `last_run_week, id`,
+  so these queue behind never-run 42–46: on-weeks land W31→42 … W39→46,
+  **W41→58 onward** — by which time `econ_kind_activity` has real 4-week
+  history for auto-sizing (floor 10 backstops regardless).
+- **Anonymous-kind guard** shipped for the confession row:
+  `ANON_COMMUNITY_KINDS` (confession, confession_reply, whisper) pay flat
+  tiers only — no top-contributor bonus, name-free beat sheet.
+- Not extended: birthday_wish (too lumpy for weekly targets — a birthday-day
+  flash goal would need a 24 h community cadence, future round), role_pick
+  (once-ever setup shape; a "N members made their first pick" distinct-member
+  variant is a possible one-off campaign).
