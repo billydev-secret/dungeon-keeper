@@ -1317,3 +1317,23 @@ def test_week_roll_raffle_disabled_draws_nothing(db):
     _roll(bot, db, _ts("2026-07-13"))
     with open_db(db) as conn:
         assert raffle_svc.get_draw(conn, GUILD, "2026-W28") is None
+
+
+# ── weekly flip announcement pings the economy game role (#72) ────────────────
+
+from bot_modules.services.economy_loop import flip_announcement_content  # noqa: E402
+
+
+def test_flip_pings_game_role_when_set():
+    content, ping = flip_announcement_content(5, "Answer the QOTD", game_role_id=42)
+    assert ping == 42
+    assert content.startswith("<@&42>\n")
+    assert "This week's quests are up" in content
+    assert "Spotlight" in content and "Answer the QOTD" in content
+
+
+def test_flip_has_no_ping_without_a_role():
+    content, ping = flip_announcement_content(3, None, game_role_id=0)
+    assert ping == 0
+    assert "<@&" not in content
+    assert "Spotlight" not in content  # no spotlight line when none is featured

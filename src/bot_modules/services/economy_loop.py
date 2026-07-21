@@ -475,6 +475,27 @@ def _seconds_to_next_week_start(
     return max(0.0, start_ts - now_ts)
 
 
+def flip_announcement_content(
+    pool: int, spot_label: str | None, game_role_id: int
+) -> tuple[str, int]:
+    """The weekly flip body + the role id to ping (0 = none).
+
+    Opted-in members hold the economy game role, so the flip pings it — the one
+    recurring economy post that reaches them without a DM. The caller allow-lists
+    exactly that role so a copied body can never mint an @everyone ping.
+    """
+    lines = [
+        f"📋 **This week's quests are up!** {pool} weeklies in the pool — "
+        f"`/quests` shows yours.",
+    ]
+    if spot_label:
+        lines.append(f"⚡ **Spotlight:** {spot_label} pays **double** all week.")
+    body = "\n".join(lines)
+    if game_role_id:
+        return f"<@&{game_role_id}>\n{body}", game_role_id
+    return body, 0
+
+
 async def _post_flip_announcement(
     bot: discord.Client, db_path: Path, guild_id: int, now_ts: float
 ) -> None:
@@ -500,15 +521,17 @@ async def _post_flip_announcement(
     channel = guild.get_channel(channel_id) if guild else None
     if not isinstance(channel, discord.TextChannel):
         return
-    lines = [
-        f"📋 **This week's quests are up!** {pool} weeklies in the pool — "
-        f"`/quests` shows yours.",
-    ]
-    if spot:
-        label = quests.TRIGGER_KINDS.get(spot, spot)
-        lines.append(f"⚡ **Spotlight:** {label} pays **double** all week.")
+    spot_label = quests.TRIGGER_KINDS.get(spot, spot) if spot else None
+    content, ping_role = flip_announcement_content(
+        pool, spot_label, settings.game_role_id
+    )
+    mentions = (
+        discord.AllowedMentions(roles=[discord.Object(id=ping_role)])
+        if ping_role
+        else discord.AllowedMentions.none()
+    )
     try:
-        await channel.send("\n".join(lines))
+        await channel.send(content, allowed_mentions=mentions)
     except discord.HTTPException:
         log.warning("flip announcement failed to send in %s", channel_id)
 

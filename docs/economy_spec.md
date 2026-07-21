@@ -578,7 +578,10 @@ fragments mid-period.
 - **Flip announcement** — at the ISO-week roll the loop posts "this week's
   quests are up" (+ the spotlight reveal) to the leaderboard panel's
   channel, bank channel fallback (`_post_flip_announcement`; skipped when
-  neither is configured).
+  neither is configured). It **pings the economy game role** (`game_role_id`,
+  the notifications opt-in) when set — the one recurring economy post that
+  reaches opted-in members without a DM — allow-listing exactly that role
+  (`flip_announcement_content`).
 
 **Dynamic target band:** a counted quest may carry a target *band*
 (`0 < target_min < target_max`) instead of a fixed `target_count`. Each
