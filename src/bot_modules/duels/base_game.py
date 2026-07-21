@@ -55,6 +55,12 @@ _TERMINAL_STATES = frozenset({
 # the pot never evaporates and never pays a half-finished game.
 _SETTLING_STATES = frozenset({"RESOLVED", "RESOLVED_NO_NICK"})
 
+# A coin wager with no custom stakes text is its own stake: the pot replaces
+# the nickname forfeit. Recording this as the game's stakes_text at creation
+# is what routes every downstream consumer (nick preflights, the rename
+# button, per-cog embed fallbacks) into announce-only mode.
+WAGER_STAKES_TEXT = "Coins on the line — winner takes the pot."
+
 
 class BaseGame(commands.Cog):
     """Abstract base for all nickname-stake games (2..N players).
@@ -608,8 +614,9 @@ class BaseGame(commands.Cog):
             )
             return
 
-        # Nickname-mode preflight only applies when no custom stakes are set.
-        if stakes_text is None:
+        # Nickname-mode preflight only applies when nicknames are the stake —
+        # no custom stakes text AND no wager (a wager becomes the stake below).
+        if stakes_text is None and wager is None:
             err = await self._check_bot_can_nick(guild, [host])  # type: ignore[list-item]
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
@@ -647,6 +654,8 @@ class BaseGame(commands.Cog):
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
+            if stakes_text is None:
+                stakes_text = WAGER_STAKES_TEXT
 
         min_players, max_players, _timeout = await self.get_lobby_params(guild.id)
         game_id = await self._db_create_lobby(

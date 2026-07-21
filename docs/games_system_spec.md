@@ -122,6 +122,12 @@ every error because economy must never block game flow, but an escrow
 **debit** raises and refuses the join/accept — you cannot enter a wagered
 game you can't pay for.
 
+A wager replaces the nickname stake: a wagered game with no custom `stakes:`
+text records "Coins on the line — winner takes the pot." as its stakes and
+resolves announce-only — no rename button, no nickname preflight. The rename
+flow only runs when neither `stakes:` nor `wager:` is given (the default
+"name" stake); see `docs/dk_pvp_games_suite_spec.md` §4.
+
 ## Economy integration
 
 Games are wired into the economy quest system. Quest-relevant actions call `fire_member_trigger` (`bot_modules.economy.game_rewards`) to credit a member's economy quest progress — for example AMA credits an `ama_ask` trigger when a question actually becomes visible (on submit in unfiltered mode, on host approval in screened mode; AI-seeded idle questions and rejected questions never pay). Photo Challenge payout is reaction-gated by the economy directly (`EconomyCog._on_photo_react`): a member's image post in the configured photo channel pays the `photo_react` quest once it earns enough distinct reactions — the card itself just sets the prompt. Several other game cogs (`ffa`, `clapback`, `mlt`, `price`, `rushmore`, `traditional`, `nhie`, `wyr`) import the same game-rewards path. Credit is best-effort: an economy failure never unwinds a game.

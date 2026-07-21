@@ -165,8 +165,8 @@ rejoins before expiry, `on_member_join` re-applies the nick so they can't dodge 
 
 ## 4. The nickname stake mechanic
 
-The signature mechanic: in **nickname mode** (no custom stakes given) the winner replaces the
-loser's nickname for `sentence_hours` (default 24h).
+The signature mechanic: in **nickname mode** (no custom stakes given **and no wager**) the
+winner replaces the loser's nickname for `sentence_hours` (default 24h).
 
 - On resolution, the result embed carries one persistent **`📝 Name the loser`** button
   (`ResultView`), clickable **only by the winner**. Pressing it opens a `NicknameModal`
@@ -191,6 +191,13 @@ loser's nickname for `sentence_hours` (default 24h).
 game runs in **custom-stakes mode** — the result is announced only, no `📝 Name the loser`
 button, no rename, no expiry sweep. Enforcement is honor-based. Custom stakes are validated
 (≤ `max_stakes_length`, default 200, run through the denylist).
+
+**Wager without stakes text:** a `wager:` with no custom stakes is its own stake — creation
+records `WAGER_STAKES_TEXT` ("Coins on the line — winner takes the pot.") as the game's
+`stakes_text`, so the game runs in custom-stakes mode end to end: no nickname preflight
+(Manage Nicknames / active-sentence / group cooldown checks are skipped), no rename button,
+terminal state `RESOLVED_NO_NICK` (which still pays the pot — it's in the settling set). The
+nickname stake only ever applies when the default "name" stake is what's actually on the line.
 
 There is **no per-loser `stake_target` selection** in the current build: duels rename the one
 loser; group games rename a single deterministic loser (see per-game specs). The multi-target
