@@ -28,13 +28,21 @@ it can't invent commands or promise unbuilt features.
   @everyone as the public fallback) and NSFW channels are always excluded, so an
   open `/ask` can't surface content the asker can't see. Answers are also
   tailored to the asker's permissions (`capability_summary`).
-- **Config awareness (admins only):** `build_config_summary` adds a secret-filtered
-  (drops `*token*`/`*secret*`/`*refresh*` etc.), id-resolved view of the shared
-  `config` KV table so admins get correct "is X set up?" answers. It is *partial*
-  by design — feature areas keep settings in ~40 own-tables (economy, wellness,
-  games, …) with no reusable serializer, so the prompt tells the model to defer
-  to the panel for anything not listed rather than guess (fixing the "says it's
-  not configured when it is" bug). Deeper per-feature config is a follow-up.
+- **Config awareness (admins only):** `build_config_summary` gives admins a
+  secret-filtered (drops `*token*`/`*secret*`/`*refresh*` etc.), id-resolved view
+  of the guild's settings so they get correct "is X set up?" answers. It combines
+  the shared `config` KV table with a **getter registry** (`_FEATURE_LOADERS`)
+  over the per-feature service loaders (`load_econ_settings`, `load_xp_settings`,
+  `load_voice_master_config`, `get_wellness_config`, …) — Strategy B from the
+  investigation, since there's no reusable full-config serializer and the web
+  layer's `_section` helpers would drag FastAPI+cogs into the bot path and miss
+  the headline features. A generic `_to_flat_dict` + `_fmt_value` serializes any
+  dataclass/Row/dict/list; each loader is failure-isolated (a bad/missing one
+  just drops its section), overall size is capped. The prompt says: answer from
+  the listed settings; if something isn't listed, say you can't see it and point
+  to the panel — never invent a value. Still-uncovered: the 6 async per-game
+  configs (need the `GamesDb` aiosqlite wrapper) and a few private-cog loaders
+  (needle/bump/pen-pals) — add getters as needed.
 - **Linking:** the context lists channels as `#name (<#id>)` and the (env)
   `DASHBOARD_BASE_URL`; the prompt tells the model to emit `<#id>` mentions and
   the dashboard URL. Discord renders both natively; the web Ask box converts
