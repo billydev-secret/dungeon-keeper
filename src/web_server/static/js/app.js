@@ -113,9 +113,7 @@ const SECTIONS = [
       { heading: "Server", items: [
         { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
         { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
-        { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
         { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true },
-        { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
       ]},
       { heading: "Roles", items: [
         { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
@@ -124,6 +122,7 @@ const SECTIONS = [
         { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js" },
       ]},
       { heading: "Members", items: [
+        { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
         { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
         { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
@@ -140,6 +139,7 @@ const SECTIONS = [
         { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
         { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
         { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
+        { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
       ]},
       { heading: "Channels & Messages", items: [
         { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
