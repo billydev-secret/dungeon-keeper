@@ -242,6 +242,16 @@ async def run_prune_for_guild(
         )
 
     if pruned:
+        from bot_modules.services.role_grant_audit_service import record_prune_events
+
+        with open_db(db_path) as conn:
+            record_prune_events(
+                conn,
+                guild_id,
+                [m.id for m in pruned],
+                role_id,
+                discord.utils.utcnow().timestamp(),
+            )
         log.info(
             "Inactivity prune: removed @%s from %d member(s) in guild %s: %s",
             role.name,

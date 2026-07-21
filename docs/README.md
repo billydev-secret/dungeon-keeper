@@ -239,7 +239,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Role Grants** (configurable allowlist)
 - `/grant role:<key> member:<@member>` — Give a configured community role
-- `/grant_missing role:<key> min_level:<n>` — (mod) List members past a level who are missing a configured grant role (defaults to the NSFW role, level 5); skips anyone on an active inactive-channel hold
+- *The missing-grant audit lives in the web dashboard (Reports → Member Lists → Grant Audit).*
 
 **XP**
 - `/xp_give @member` — Manually award 20 XP (mod or allowlisted users)

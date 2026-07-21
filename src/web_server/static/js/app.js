@@ -76,6 +76,7 @@ const SECTIONS = [
         { id: "inactive-role",        label: "Inactive Role",        module: "./panels/inactive-role.js" },
         { id: "inactive",             label: "Inactive Members",     module: "./panels/inactive.js" },
         { id: "oldest-sfw",           label: "Oldest SFW",           module: "./panels/oldest-sfw.js" },
+        { id: "grant-audit",          label: "Grant Audit",          module: "./panels/grant-audit.js" },
       ]},
     ],
   },
