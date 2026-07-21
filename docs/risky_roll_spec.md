@@ -43,6 +43,8 @@ After resolution, the **Roll / Close** view is disabled and replaced with an **A
 
 **Ask Question** opens a 300-character modal. On submit, the bot posts the question (in a thread for room/69 questions, in the channel for direct questions) with a **Reply** button. **Reply** opens a 300-character reply modal; the first valid reply edits the original question message in place to embed the reply text, and closes the reply window.
 
+Both the question **and** the reply are public free text, so both are screened against the shared slur/abuse denylist (`duels/filters.contains_disallowed_content`) — a match is rejected with an ephemeral "contains disallowed content" and nothing is posted.
+
 ### Cooldown / minimum game time
 
 A configurable min-game-time floor (default 30 minutes) prevents premature closes. `/risky start_no_ping` bypasses it.

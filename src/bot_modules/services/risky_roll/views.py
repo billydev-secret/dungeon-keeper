@@ -668,6 +668,15 @@ class QuestionReplyModal(discord.ui.Modal, title="Reply"):
                 await interaction.response.send_message("Enter a reply before sending it.", ephemeral=True)
                 return
 
+            # The reply is posted publicly, so it needs the same slur/abuse
+            # guard the question already gets — this was the unfiltered half.
+            if contains_disallowed_content(reply_text):
+                await interaction.response.send_message(
+                    "That reply contains disallowed content. Please rephrase.",
+                    ephemeral=True,
+                )
+                return
+
             await interaction.response.defer(ephemeral=True)
 
             reply_content = build_question_reply_content(state, interaction.user.id, reply_text)
