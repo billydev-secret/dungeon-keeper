@@ -137,7 +137,10 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                     disabled_view,
                 )
 
-            result_view = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
+            # Same two stake modes as _finalize_result: nickname (no custom
+            # stakes → rename button) vs announce-only. The timer path used to
+            # skip this gate and always post the rename view.
+            nick_mode = game.stakes_text is None
             channel = self.bot.get_channel(game.channel_id)
             result_message_id = None
             if channel and guild:
@@ -146,16 +149,24 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
                 result_embed = self.render_result_state(game, guild)
                 try:
-                    result_msg = await channel.send(  # type: ignore[union-attr]
-                        content=ping_content, embed=result_embed, view=result_view
-                    )
-                    self.bot.add_view(result_view, message_id=result_msg.id)
+                    if nick_mode:
+                        result_view = ResultView(
+                            game.id, winner_id, loser_id, self._handle_set_nick
+                        )
+                        result_msg = await channel.send(  # type: ignore[union-attr]
+                            content=ping_content, embed=result_embed, view=result_view
+                        )
+                        self.bot.add_view(result_view, message_id=result_msg.id)
+                    else:
+                        result_msg = await channel.send(  # type: ignore[union-attr]
+                            content=ping_content, embed=result_embed
+                        )
                     result_message_id = result_msg.id
                 except (discord.Forbidden, discord.HTTPException):
                     pass
 
             await self._db_set_state(
-                game_id, "RESOLVED",
+                game_id, "RESOLVED" if nick_mode else "RESOLVED_NO_NICK",
                 winner_id=winner_id,
                 loser_id=loser_id,
                 pass_log=json.dumps(new_log),

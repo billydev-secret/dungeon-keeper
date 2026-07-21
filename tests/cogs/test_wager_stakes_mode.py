@@ -11,6 +11,7 @@ group resolution seam.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -124,5 +125,44 @@ async def test_wager_stakes_game_resolves_without_rename_button(db, sync_db_path
 
 async def test_nickname_game_still_gets_rename_button(db, sync_db_path):
     game, sent = await _resolve_group_game(db, sync_db_path, None)
+    assert game.state == "RESOLVED"
+    assert sent.get("view") is not None
+
+
+# ── Duel timer path — Hot Potato's hand-rolled _explode bypasses
+# _finalize_result, so its stake-mode gate needs its own pin.
+
+async def _explode_duel(db, sync_db_path, stakes_text):
+    bot = FakeEconGamesBot(db, sync_db_path, [1, 2], with_channel=True)
+    cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
+    gid = await hpdb.create_game(db, GUILD, CH, 1, 2, stakes_text)
+    now = time.time()
+    await hpdb.set_game_state(
+        db, gid, "ACTIVE",
+        holder_id=2, started_at=now - 10.0, timer_seconds=10.0,
+        pass_log=json.dumps(
+            [{"holder_id": 2, "received_at": now - 3.0, "passed_at": None}]
+        ),
+        last_action_at=now,
+    )
+    await cog._explode(gid)
+    assert bot.channel is not None
+    return await hpdb.get_game(db, gid), bot.channel.sent[-1]
+
+
+async def test_explode_custom_stakes_resolves_without_rename_button(db, sync_db_path):
+    game, sent = await _explode_duel(db, sync_db_path, "loser sings a song")
+    assert game.state == "RESOLVED_NO_NICK"
+    assert "view" not in sent
+
+
+async def test_explode_wager_stakes_resolves_without_rename_button(db, sync_db_path):
+    game, sent = await _explode_duel(db, sync_db_path, WAGER_STAKES_TEXT)
+    assert game.state == "RESOLVED_NO_NICK"
+    assert "view" not in sent
+
+
+async def test_explode_nickname_mode_still_gets_rename_button(db, sync_db_path):
+    game, sent = await _explode_duel(db, sync_db_path, None)
     assert game.state == "RESOLVED"
     assert sent.get("view") is not None
