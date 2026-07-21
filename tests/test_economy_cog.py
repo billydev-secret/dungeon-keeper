@@ -133,11 +133,13 @@ async def test_wallet_shows_balance_branding_and_ledger(ctx, db):
     kwargs = interaction.response.send_message.await_args.kwargs
     assert kwargs["ephemeral"] is True
     embed = kwargs["embed"]
-    assert embed.title == "Vault"
+    assert embed.title == "💎 Vault"
     assert "30" in embed.description and "Gems" in embed.description
     assert "💎" in embed.description
     activity = embed.fields[0]
-    assert "grant" in activity.value and "+30" in activity.value
+    # The feed renders the register's glyph + human label, not the raw kind.
+    assert "🎁 Staff grant" in activity.value and "+30" in activity.value
+    assert "· grant ·" not in activity.value  # never the bare snake_case token
 
 
 @pytest.mark.asyncio
@@ -2314,7 +2316,7 @@ async def test_pay_memo_reaches_ledger_embed_and_dm(ctx, db):
 
     # Sender's confirmation embed carries the normalised memo.
     embed = interaction.response.send_message.await_args.kwargs["embed"]
-    assert embed.title == "Payment sent"
+    assert (embed.title or "").endswith("Payment sent")
     assert "rent money" in embed.description
 
     # Recipient's DM carries it too.
@@ -2342,7 +2344,7 @@ async def test_pay_without_memo_is_unchanged(ctx, db):
         await _pay(cog, interaction, _member(member_id=600), 20)
 
     embed = interaction.response.send_message.await_args.kwargs["embed"]
-    assert embed.title == "Payment sent"
+    assert (embed.title or "").endswith("Payment sent")
     # A memo would appear as its own trailing paragraph; the base line has none.
     assert "\n\n" not in embed.description
     assert '"' not in notify.await_args.kwargs["content"]
@@ -2378,7 +2380,7 @@ async def test_pay_memo_survives_the_large_amount_confirm_gate(ctx, db):
 
     # Over the threshold we get a confirm view, not a transfer.
     kwargs = interaction.response.send_message.await_args.kwargs
-    assert kwargs["embed"].title == "Confirm payment"
+    assert (kwargs["embed"].title or "").endswith("Confirm payment")
     assert "big one" in kwargs["embed"].description
     view = kwargs["view"]
     assert view.memo == "big one"

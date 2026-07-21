@@ -63,10 +63,14 @@ _CLAIM_VIEW_TIMEOUT = 180  # seconds; the ephemeral claim select is short-lived.
 # Member-facing explainer per quest state / trigger kind — shown in the
 # per-quest detail view (the /bank quests list itself stays one line per
 # quest; this is where the long form lives).
+# Glyphs for the three live states stay in lock-step with the one-line
+# board (_quest_line_status in economy_cog): 🔶 = your move / claimable,
+# ⏳ = awaiting sign-off, ✅ = done. Sharing the vocabulary keeps ✅ from
+# meaning "claimable" here and "done" on the board.
 QUEST_STATE_LABEL = {
-    "claimable": "✅ Ready to claim",
+    "claimable": "🔶 Ready to claim",
     "pending": "⏳ Awaiting sign-off",
-    "done": "☑️ Completed this period",
+    "done": "✅ Completed this period",
     "trigger": "🗣️ Completes automatically when you say its trigger phrase",
     "photo_post": "📸 Completes automatically when you post a photo in the Photo Challenge channel",
     "party_game": "🎲 Completes automatically when you finish a party game",
@@ -142,11 +146,11 @@ def render_signoff_card_embed(
     else:
         embed = discord.Embed(title="Quest sign-off requested", color=accent)
 
-    embed.add_field(name="Member", value=claimant_mention, inline=True)
-    embed.add_field(name="Quest", value=quest_title, inline=True)
-    embed.add_field(name="Reward", value=_reward_text(settings, reward), inline=True)
+    embed.add_field(name="👤 Member", value=claimant_mention, inline=True)
+    embed.add_field(name="🎯 Quest", value=quest_title, inline=True)
+    embed.add_field(name="💰 Reward", value=_reward_text(settings, reward), inline=True)
     if criteria:
-        embed.add_field(name="Criteria", value=criteria, inline=False)
+        embed.add_field(name="📋 Criteria", value=criteria, inline=False)
     if deny_count > 0:
         embed.add_field(
             name="Prior denials/expirations", value=str(deny_count), inline=True
@@ -747,13 +751,15 @@ class QuestClaimSelect(discord.ui.Select):
             paid = int(getattr(outcome, "paid", 0))
             accent = await resolve_accent_color(self.ctx.db_path, self.guild)
             embed = discord.Embed(
-                title="Quest complete!",
+                title="🎉 Quest complete!",
                 description=(
                     f"**{meta['title']}** — {_reward_text(settings, paid)} "
                     "added to your wallet."
                 ),
                 color=accent,
             )
+            if settings.currency_icon_url:
+                embed.set_thumbnail(url=settings.currency_icon_url)
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 

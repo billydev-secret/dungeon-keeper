@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import pytest
 
 from bot_modules.core.xp_system import AwardResult, init_xp_tables
@@ -20,6 +21,18 @@ from bot_modules.services.xp_service import (
 
 THRESHOLD = 5
 ROLE_ID = 777
+
+# The level announcements now thread the guild accent; these tests drive
+# MagicMock guilds whose avatar.read() isn't awaitable, so stub the lookup.
+_STUB_ACCENT = discord.Color(0x123456)
+
+
+@pytest.fixture(autouse=True)
+def _stub_resolve_accent(monkeypatch):
+    monkeypatch.setattr(
+        "bot_modules.services.xp_service.resolve_accent_color",
+        AsyncMock(return_value=_STUB_ACCENT),
+    )
 
 _GRANT_OK: dict[str, Any] = dict(
     new_level=THRESHOLD,
@@ -373,6 +386,48 @@ async def test_level_5_post_shows_spicy_access_not_granted():
     embed = channel.send.await_args.kwargs["embed"]
     field = next(f for f in embed.fields if f.name == "Spicy access")
     assert field.value == "❌ Not granted"
+
+
+@pytest.mark.asyncio
+async def test_level_5_post_uses_accent_and_glyph_title():
+    """The milestone card follows the guild accent, not a hard-coded gold."""
+    from bot_modules.services.xp_service import maybe_log_level_5
+
+    member = _FakeMember()
+    channel = AsyncMock()
+    with patch(
+        "bot_modules.services.xp_service.get_guild_channel_or_thread",
+        return_value=channel,
+    ):
+        await maybe_log_level_5(
+            member, 500.0, LOG_CHANNEL, 0, accent=_STUB_ACCENT
+        )
+
+    embed = channel.send.await_args.kwargs["embed"]
+    assert embed.color == _STUB_ACCENT
+    assert embed.color != discord.Color.gold()
+    assert (embed.title or "").startswith("🎉")
+
+
+@pytest.mark.asyncio
+async def test_level_up_post_uses_accent_and_glyph_title():
+    """Ordinary level-up cards follow the accent, not a hard-coded blue."""
+    from bot_modules.services.xp_service import maybe_log_level_ups
+
+    member = _FakeMember()
+    channel = AsyncMock()
+    with patch(
+        "bot_modules.services.xp_service.get_guild_channel_or_thread",
+        return_value=channel,
+    ):
+        await maybe_log_level_ups(
+            member, 2, 3, 120.0, LOG_CHANNEL, 0, accent=_STUB_ACCENT
+        )
+
+    embed = channel.send.await_args.kwargs["embed"]
+    assert embed.color == _STUB_ACCENT
+    assert embed.color != discord.Color.blue()
+    assert (embed.title or "").startswith("⭐")
 
 
 @pytest.mark.asyncio

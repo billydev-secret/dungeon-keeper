@@ -26,6 +26,7 @@ from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.quest_views import post_signoff_card
 from bot_modules.services.economy_quests_service import fire_trigger_quests
+from bot_modules.services.embeds import footer_emoji
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -460,7 +461,9 @@ async def append_payout_footer(bot: "Bot", embed: discord.Embed, guild_id: int, 
             parts.append(f"+{settings.reward_game_participation} to everyone who played")
         if not parts:
             return
-        line = f"{settings.currency_emoji} {' · '.join(parts)}"
+        # Custom currency emoji render as raw text in a footer — drop it there.
+        prefix = footer_emoji(settings.currency_emoji)
+        line = f"{prefix} {' · '.join(parts)}".lstrip()
         existing = embed.footer.text if embed.footer else None
         embed.set_footer(text=f"{existing}\n{line}" if existing else line)
     except Exception:

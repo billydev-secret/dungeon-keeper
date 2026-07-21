@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import discord
+import pytest
 import pytest_asyncio
 
 from bot_modules.cogs.hot_potato_group import db as hpgdb
@@ -45,6 +47,17 @@ class FakeBot:
 @pytest_asyncio.fixture
 async def db(sync_db_path: Path) -> GamesDb:
     return GamesDb(sync_db_path)
+
+
+@pytest.fixture(autouse=True)
+def _stub_lobby_accent():
+    """The lobby embed now resolves the guild accent; the FakeGuild here has no
+    real avatar to read, so stub the lookup."""
+    with patch(
+        "bot_modules.duels.base_game.resolve_accent_color",
+        new=AsyncMock(return_value=discord.Color.blurple()),
+    ):
+        yield
 
 
 @pytest_asyncio.fixture

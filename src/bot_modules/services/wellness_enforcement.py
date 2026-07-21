@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 import discord
 
+from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
     COOLDOWN_DURATION_SECONDS,
     NUDGE_SUPPRESSION_SECONDS,
@@ -356,7 +357,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
                             "*Adjust your settings anytime with `/wellness settings`.*"
                         ),
-                        color=discord.Color.from_str("#7BC97B"),
+                        color=discord.Color(WELLNESS_PRIMARY),
                     ),
                 )
                 if not dm_ok:
@@ -415,7 +416,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
                             "*Adjust your settings anytime with `/wellness settings`.*"
                         ),
-                        color=discord.Color.from_str("#7BC97B"),
+                        color=discord.Color(WELLNESS_PRIMARY),
                     ),
                 )
                 if not dm_ok:
@@ -607,7 +608,7 @@ async def _handle_away_mentions(ctx, message: discord.Message) -> None:
         embed = discord.Embed(
             title=f"💚 {mentioned.display_name} is away",
             description=text,
-            color=discord.Color.from_str("#7BC97B"),
+            color=discord.Color(WELLNESS_PRIMARY),
         )
         embed.set_footer(text="Wellness Guardian — auto-reply")
         try:

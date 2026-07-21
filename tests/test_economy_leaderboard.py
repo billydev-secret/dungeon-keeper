@@ -234,7 +234,7 @@ def test_embed_ranks_earners_with_names_and_branding():
 
     assert "Gems" in (embed.title or "")
     fields = {f.name: f.value or "" for f in embed.fields}
-    top = fields[f"Top earners (last {ROLLING_DAYS} days)"]
+    top = fields[f"🏆 Top earners (last {ROLLING_DAYS} days)"]
     assert top.index("Alice") < top.index("Bob")
     assert "🥇" in top and "🥈" in top and "💎 `120`" in top
     assert embed.color == discord.Color(0x123456)
@@ -274,12 +274,13 @@ def test_embed_sections_stack_full_width():
     layout = [(f.name, f.inline) for f in embed.fields]
     assert layout == [
         ("📡 Today's pulse", False),
-        (f"Top earners (last {ROLLING_DAYS} days)", False),
-        ("Community goals — everyone gets paid when we hit them", False),
-        ("Quest board", False),
+        (f"🏆 Top earners (last {ROLLING_DAYS} days)", False),
+        ("🎯 Community goals — everyone gets paid when we hit them", False),
+        ("📋 Quest board", False),
         ("📰 Live feed — today", False),
-        ("Your progress", False),
+        ("👤 Your progress", False),
     ]
+    # (glyph-led section headings; see build_leaderboard_embed)
     # Breathing room: the description and every field but the last end in a
     # zero-width blank line, so each section heading has space above it.
     assert (embed.description or "").endswith("\n\u200b")
@@ -302,7 +303,7 @@ def test_embed_quest_board_summarizes_per_cadence():
     embed = build_leaderboard_embed(
         settings, LeaderboardData([], [], quests), _names({}), now_ts=NOW
     )
-    board = next(f.value for f in embed.fields if f.name == "Quest board")
+    board = next(f.value for f in embed.fields if f.name == "📋 Quest board")
     assert board is not None
     assert "`Daily    3 yours · pool 14` 🪙 5–40 each" in board
     # A pool smaller than the configured size clamps to the pool.
@@ -323,7 +324,7 @@ def test_embed_quest_board_lists_event_quests():
     embed = build_leaderboard_embed(
         EconSettings(), LeaderboardData([], [], quests), _names({}), now_ts=NOW
     )
-    board = next(f.value for f in embed.fields if f.name == "Quest board")
+    board = next(f.value for f in embed.fields if f.name == "📋 Quest board")
     assert board is not None
     assert "`Anytime  Secret Santa    ` 🪙 25 +⭐10xp" in board
     assert "Chatter" not in board
@@ -334,10 +335,10 @@ def test_embed_empty_states_and_personal_blurb():
         EconSettings(), LeaderboardData([], [], []), _names({}), now_ts=NOW
     )
     fields = {f.name: f.value or "" for f in embed.fields}
-    assert "be the first" in fields[f"Top earners (last {ROLLING_DAYS} days)"]
-    assert "No quests running" in fields["Quest board"]
+    assert "be the first" in fields[f"🏆 Top earners (last {ROLLING_DAYS} days)"]
+    assert "No quests running" in fields["📋 Quest board"]
     assert not any("Community goals" in (n or "") for n in fields)
-    personal = fields["Your progress"]
+    personal = fields["👤 Your progress"]
     assert "/quests" in personal and "/bank wallet" in personal
     assert "only you" in personal
 
@@ -615,7 +616,7 @@ def test_embed_pulse_deltas_feed_and_clocks():
     assert f"`Dailies reset  ` <t:{int(NOW + 3600)}:R>" in pulse
     assert f"`New weeklies   ` <t:{int(NOW + 7200)}:R>" in pulse
 
-    top = fields[f"Top earners (last {ROLLING_DAYS} days)"]
+    top = fields[f"🏆 Top earners (last {ROLLING_DAYS} days)"]
     # name and amount are fixed-width cells so the columns align
     assert "🥇 `Alice` 🪙 `120` (+40 today)" in top
     assert top.splitlines()[1] == "🥈 `Bob  ` 🪙 ` 80`"  # padded, no delta
@@ -651,7 +652,7 @@ def test_embed_community_pace_crowd_and_deadline():
         _names({}),
         now_ts=NOW,
     )
-    goals = _fields(embed)["Community goals — everyone gets paid when we hit them"]
+    goals = _fields(embed)["🎯 Community goals — everyone gets paid when we hit them"]
     # ceil(70×0.7) = 49 — float noise must not round the threshold to 50.
     assert "🏁 tier 1/3 secured · next at 49" in goals
     assert "🐢 needs a push" in goals
@@ -669,7 +670,7 @@ def test_embed_spotlight_gets_countdown():
         week_roll_ts=NOW + 7200,
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
-    board = _fields(embed)["Quest board"]
+    board = _fields(embed)["📋 Quest board"]
     assert f"pays **double** — until <t:{int(NOW + 7200)}:R>!" in board
     # The banner names the doubled kind; the summary no longer lists titles.
     assert "Chatter" not in board

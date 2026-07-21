@@ -1317,6 +1317,10 @@ async def welcome_preview(
     except Exception:
         member_bio_link = ""
 
+    from bot_modules.core.branding import resolve_accent_color
+
+    accent = await resolve_accent_color(ctx.db_path, guild)
+
     welcome_embed = build_welcome_embed(
         member,
         welcome_msg,
@@ -1324,6 +1328,7 @@ async def welcome_preview(
         bios_channel_mention=bios_channel_mention,
         member_bio_link=member_bio_link,
         server_guide_mention=server_guide_mention,
+        color=accent,
     )
     leave_embed = build_leave_embed(
         member,
@@ -1332,6 +1337,7 @@ async def welcome_preview(
         bios_channel_mention=bios_channel_mention,
         member_bio_link=member_bio_link,
         server_guide_mention=server_guide_mention,
+        color=accent,
     )
 
     def _to_dict(e) -> dict:

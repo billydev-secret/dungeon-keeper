@@ -1220,7 +1220,14 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
     bot.get_guild = MagicMock(return_value=guild)
     fake_ctx.bot = bot
 
-    resp = authed_client.get("/api/config/welcome/preview")
+    import discord
+    from unittest.mock import AsyncMock, patch
+
+    with patch(
+        "bot_modules.core.branding.resolve_accent_color",
+        new=AsyncMock(return_value=discord.Color(0x123456)),
+    ):
+        resp = authed_client.get("/api/config/welcome/preview")
     # 200 happy path; the route's build_*_embed helpers are exercised. If the
     # preview shape changes later, this is a useful regression bait.
     assert resp.status_code == 200

@@ -36,6 +36,7 @@ from bot_modules.economy.leaderboard import (
 )
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.register import kind_display
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -1131,6 +1132,8 @@ def _build_shop_embed(
     embed = discord.Embed(
         title="🛍️ Perk shop", description=description, color=accent
     )
+    if settings.currency_icon_url:
+        embed.set_thumbnail(url=settings.currency_icon_url)
 
     # The Voice tier exists only while the lease is priced (> 0 = the paywall
     # is armed); at the price-0 dark default the shop shows no trace of it.
@@ -1340,7 +1343,7 @@ class EconomyCog(commands.Cog):
         if shields > 0:
             description += "\n🛡️ Streak shield held"
         embed = discord.Embed(
-            title=settings.wallet_name,
+            title=f"{settings.currency_emoji} {settings.wallet_name}",
             description=description,
             color=accent,
         )
@@ -1351,11 +1354,12 @@ class EconomyCog(commands.Cog):
             lines = []
             for row in ledger:
                 amount = int(row["amount"])
-                sign = "+" if amount >= 0 else "-"
+                sign = "+" if amount >= 0 else "−"
                 ts = int(row["created_at"])
+                glyph, label = kind_display(str(row["kind"]))
                 line = (
                     f"{sign}{abs(amount):,} {settings.currency_emoji} · "
-                    f"{row['kind']} · <t:{ts}:R>"
+                    f"{glyph} {label} · <t:{ts}:R>"
                 )
                 memo = _memo_of(row["meta"])
                 if memo:
@@ -1441,13 +1445,15 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
-            title="Currency granted",
+            title=f"{settings.currency_emoji} Currency granted",
             description=(
                 f"{settings.currency_emoji} **{credited:,}** {_unit(settings, credited)} "
                 f"→ {member.mention}"
             ),
             color=accent,
         )
+        if settings.currency_icon_url:
+            embed.set_thumbnail(url=settings.currency_icon_url)
         if booster and credited != amount:
             embed.add_field(
                 name="Booster bonus",
@@ -1551,8 +1557,12 @@ class EconomyCog(commands.Cog):
             if memo:
                 desc += f"\n\n*{discord.utils.escape_markdown(memo)}*"
             confirm = discord.Embed(
-                title="Confirm payment", description=desc, color=accent
+                title=f"{settings.currency_emoji} Confirm payment",
+                description=desc,
+                color=accent,
             )
+            if settings.currency_icon_url:
+                confirm.set_thumbnail(url=settings.currency_icon_url)
             view = _PayConfirmView(self, settings, guild, sender, member, amount, memo)
             await interaction.response.send_message(
                 embed=confirm, view=view, ephemeral=True
@@ -1607,7 +1617,11 @@ class EconomyCog(commands.Cog):
         )
         if safe_memo:
             desc += f"\n\n*{safe_memo}*"
-        embed = discord.Embed(title="Payment sent", description=desc, color=accent)
+        embed = discord.Embed(
+            title=f"{settings.currency_emoji} Payment sent", description=desc, color=accent
+        )
+        if settings.currency_icon_url:
+            embed.set_thumbnail(url=settings.currency_icon_url)
         embed.set_footer(text=f"Your balance: {new_balance:,}")
         await self._reply_embed(interaction, embed, via_confirm=via_confirm)
 

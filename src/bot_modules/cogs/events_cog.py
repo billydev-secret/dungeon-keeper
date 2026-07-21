@@ -1316,6 +1316,7 @@ class EventsCog(commands.Cog):
         if cfg.welcome_ping_member:
             ping_parts.append(member.mention)
         ping = " ".join(ping_parts) or None
+        accent = await resolve_accent_color(self.ctx.db_path, member.guild)
         try:
             await channel.send(
                 content=ping,
@@ -1329,6 +1330,7 @@ class EventsCog(commands.Cog):
                     server_guide_mention=server_guide_mention_for(
                         server_guide_channel_id
                     ),
+                    color=accent,
                 ),
             )
         except discord.Forbidden:
@@ -1545,6 +1547,7 @@ class EventsCog(commands.Cog):
         else:
             member_bio_link = ""
 
+        accent = await resolve_accent_color(self.ctx.db_path, member.guild)
         try:
             await channel.send(
                 embed=build_leave_embed(
@@ -1556,6 +1559,7 @@ class EventsCog(commands.Cog):
                     server_guide_mention=server_guide_mention_for(
                         server_guide_channel_id
                     ),
+                    color=accent,
                 )
             )
         except discord.Forbidden:

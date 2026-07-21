@@ -541,6 +541,11 @@ def _patch_join_deps():
             return_value=(None, None),
         ),
         patch("bot_modules.cogs.events_cog.build_welcome_embed", return_value="<embed>"),
+        patch(
+            "bot_modules.cogs.events_cog.resolve_accent_color",
+            new_callable=AsyncMock,
+            return_value=discord.Color.blurple(),
+        ),
     ]
 
 
@@ -549,6 +554,11 @@ def _patch_leave_deps():
         patch("bot_modules.cogs.events_cog.mark_member_left"),
         patch("bot_modules.cogs.events_cog.record_member_event"),
         patch("bot_modules.cogs.events_cog.build_leave_embed", return_value="<embed>"),
+        patch(
+            "bot_modules.cogs.events_cog.resolve_accent_color",
+            new_callable=AsyncMock,
+            return_value=discord.Color.blurple(),
+        ),
     ]
 
 

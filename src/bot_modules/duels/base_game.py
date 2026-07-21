@@ -24,9 +24,14 @@ from typing import Any
 import discord
 from discord.ext import commands, tasks
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.services import economy_wager_service as wager_svc
-from bot_modules.services.economy_service import get_balance, load_econ_settings
+from bot_modules.services.economy_service import (
+    EconSettings,
+    get_balance,
+    load_econ_settings,
+)
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
@@ -36,6 +41,16 @@ from .modals import NicknameModal
 from .views import ResultView
 
 log = logging.getLogger("dungeonkeeper.duels")
+
+
+def _fmt_coins(settings: EconSettings, n: int) -> str:
+    """A wager amount in the shared currency vocabulary: ``🪙 **500** coins``.
+
+    Singular unit at 1. Used for wager fields so the duel pot reads like every
+    other economy surface (see embed_style_guide.md → Currency vocabulary).
+    """
+    unit = settings.currency_name if abs(n) == 1 else settings.currency_plural
+    return f"{settings.currency_emoji} **{n:,}** {unit}"
 
 _RATE_LIMIT_WINDOW = 3600
 _RATE_LIMIT_MAX = 3
@@ -538,6 +553,9 @@ class BaseGame(commands.Cog):
         min_players: int,
         max_players: int,
         ante: int = 0,
+        *,
+        color: discord.Color | None = None,
+        settings: EconSettings | None = None,
     ) -> discord.Embed:
         names = []
         for uid in game.roster:
@@ -548,7 +566,7 @@ class BaseGame(commands.Cog):
         embed = discord.Embed(
             title=f"🎮 {self.GAME_DISPLAY_NAME.upper()} — LOBBY",
             description="Press **✋ Join** to get in. Host presses **▶️ Start** when ready.",
-            color=COLOR_GOLD,
+            color=color or discord.Color(COLOR_GOLD),
         )
         embed.add_field(
             name=f"👥 Players ({len(game.roster)}/{max_players})",
@@ -558,17 +576,59 @@ class BaseGame(commands.Cog):
         stakes = game.stakes_text or "Last one standing wins; the final loser surrenders their nickname for 24h."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
         if ante > 0:
+            join = _fmt_coins(settings, ante) if settings else f"**{ante:,}**"
+            pot = (
+                _fmt_coins(settings, ante * len(game.roster))
+                if settings
+                else f"**{ante * len(game.roster):,}**"
+            )
             embed.add_field(
                 name="💰 Wager",
                 value=(
-                    f"**{ante:,}** to join — pot is **{ante * len(game.roster):,}** "
-                    f"and grows with each player.\n"
+                    f"{join} to join — pot is {pot} and grows with each player.\n"
                     "_Leaving the lobby refunds you._"
                 ),
                 inline=False,
             )
         embed.set_footer(text=f"Host: {host_name} • Need {min_players}+ players to start.")
         return embed
+
+    async def _lobby_embed(
+        self,
+        game: Any,
+        guild: discord.Guild,
+        min_players: int,
+        max_players: int,
+        ante: int = 0,
+    ) -> discord.Embed:
+        """Build the lobby embed with the guild accent + currency vocabulary.
+
+        The async companion to :meth:`_render_lobby` — resolves the accent and
+        (for a wagered lobby) loads the econ settings so the wager field reads
+        ``🪙 **500** coins``, then hands both to the sync builder.
+        """
+        ctx = getattr(self.bot, "ctx", None)
+        accent = (
+            await resolve_accent_color(ctx.db_path, guild) if ctx is not None else None
+        )
+        settings = await self._econ_settings(guild.id) if ante > 0 else None
+        return self._render_lobby(
+            game, guild, min_players, max_players, ante,
+            color=accent, settings=settings,
+        )
+
+    async def _econ_settings(self, guild_id: int) -> EconSettings | None:
+        """Load this guild's econ settings off-thread (for currency vocabulary),
+        or ``None`` when there's no app context (economy unavailable)."""
+        ctx = getattr(self.bot, "ctx", None)
+        if ctx is None:
+            return None
+
+        def _load() -> EconSettings:
+            with ctx.open_db() as conn:
+                return load_econ_settings(conn, guild_id)
+
+        return await asyncio.to_thread(_load)
 
     async def _base_lobby(
         self,
@@ -672,7 +732,7 @@ class BaseGame(commands.Cog):
                 return
 
         game = await self._db_get_game(game_id)
-        embed = self._render_lobby(
+        embed = await self._lobby_embed(
             game, guild, min_players, max_players, wager or 0
         )
         view = self._build_lobby_view(game_id, host.id)
@@ -734,7 +794,7 @@ class BaseGame(commands.Cog):
                 game_id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time()
             )
             game.roster = new_roster
-            embed = self._render_lobby(game, guild, min_players, max_players, ante)
+            embed = await self._lobby_embed(game, guild, min_players, max_players, ante)
             await interaction.response.edit_message(
                 embed=embed, view=self._build_lobby_view(game_id, game.host_id)
             )
@@ -771,7 +831,7 @@ class BaseGame(commands.Cog):
                 )
             game.roster = new_roster
             ante = await self._game_ante(game_id)
-            embed = self._render_lobby(game, guild, min_players, max_players, ante)
+            embed = await self._lobby_embed(game, guild, min_players, max_players, ante)
             await interaction.response.edit_message(
                 embed=embed, view=self._build_lobby_view(game_id, game.host_id)
             )
@@ -1127,8 +1187,8 @@ class BaseGame(commands.Cog):
                 have = get_balance(conn, guild_id, user_id)
                 if have < wager:
                     return (
-                        f"You need {wager:,} {settings.currency_plural} to "
-                        f"stake that — you have {have:,}."
+                        f"You need {_fmt_coins(settings, wager)} to "
+                        f"stake that — you have {_fmt_coins(settings, have)}."
                     )
             return None
 
