@@ -10,6 +10,7 @@ from bot_modules.services.greeting_watch_service import (
     is_greeting,
     list_due_greetings,
     mark_resolved,
+    pending_greetings_for,
     record_greeting,
     was_acknowledged,
 )
@@ -182,3 +183,40 @@ def test_mark_resolved_is_idempotent(db_path):
         ).fetchone()
         assert row["resolved_at"] == 1000
         assert row["outcome"] == "unanswered"
+
+
+# ── pending_greetings_for (the greeting_answered quest detector) ─────
+
+
+def test_pending_greetings_for_matches_channel_and_target(db_path):
+    with open_db(db_path) as conn:
+        record_greeting(conn, GUILD, 1, CHANNEL, GREETER, created_ts=100)
+        assert pending_greetings_for(
+            conn, GUILD, (CHANNEL,), (GREETER,)
+        ) == [(1, GREETER)]
+        # Wrong channel or wrong target: no match.
+        assert pending_greetings_for(conn, GUILD, (9999,), (GREETER,)) == []
+        assert pending_greetings_for(conn, GUILD, (CHANNEL,), (OTHER,)) == []
+
+
+def test_pending_greetings_for_ignores_resolved(db_path):
+    with open_db(db_path) as conn:
+        record_greeting(conn, GUILD, 1, CHANNEL, GREETER, created_ts=100)
+        mark_resolved(conn, GUILD, 1, "unanswered", now_ts=1000)
+        assert pending_greetings_for(conn, GUILD, (CHANNEL,), (GREETER,)) == []
+
+
+def test_pending_greetings_for_empty_inputs(db_path):
+    with open_db(db_path) as conn:
+        record_greeting(conn, GUILD, 1, CHANNEL, GREETER, created_ts=100)
+        assert pending_greetings_for(conn, GUILD, (), (GREETER,)) == []
+        assert pending_greetings_for(conn, GUILD, (CHANNEL,), ()) == []
+
+
+def test_pending_greetings_for_multiple_targets(db_path):
+    # A message replying to one greeter while mentioning another answers both.
+    with open_db(db_path) as conn:
+        record_greeting(conn, GUILD, 1, CHANNEL, GREETER, created_ts=100)
+        record_greeting(conn, GUILD, 2, CHANNEL, OTHER, created_ts=110)
+        got = pending_greetings_for(conn, GUILD, (CHANNEL,), (GREETER, OTHER))
+        assert sorted(got) == [(1, GREETER), (2, OTHER)]

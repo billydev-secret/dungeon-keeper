@@ -973,3 +973,18 @@ def test_login_hopeless_gap_keeps_shield(db):
         assert out.reset is True
         assert out.shield_consumed is False
         assert get_streak_shields(conn, GUILD, USER) == 1
+
+
+def test_purchase_shield_fires_shop_purchase_trigger(db):
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        purchase_streak_shield(conn, S, GUILD, USER)
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE guild_id = ? "
+            "AND user_id = ? AND kind = 'shop_purchase'",
+            (GUILD, USER),
+        ).fetchone()
+        assert row is not None

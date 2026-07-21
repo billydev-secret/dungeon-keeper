@@ -614,3 +614,41 @@ def test_personal_role_delete(db):
         delete_personal_role(conn, GUILD, USER)
     with open_db(db) as conn:
         assert get_personal_role(conn, GUILD, USER) is None
+
+
+# ── shop_purchase quest trigger ───────────────────────────────────────
+
+
+def _shop_activity(db, user):
+    with open_db(db) as conn:
+        return conn.execute(
+            "SELECT COALESCE(SUM(count), 0) AS n FROM econ_kind_activity "
+            "WHERE guild_id = ? AND user_id = ? AND kind = 'shop_purchase'",
+            (GUILD, user),
+        ).fetchone()["n"]
+
+
+def test_rent_fires_shop_purchase_trigger(db):
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    _fund(db, USER, 500)
+    _rent(db, USER, "role_color")
+    assert _shop_activity(db, USER) == 1
+
+
+def test_renewal_billing_never_fires_shop_purchase(db):
+    # The voluntary rent fires; the loop's automatic weekly charge must not —
+    # no quest credit for a charge the member didn't act on.
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_color")
+    with open_db(db) as conn:
+        conn.execute("DELETE FROM econ_kind_activity")
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS + 1)
+    assert res.action == "charge"
+    assert _shop_activity(db, USER) == 0

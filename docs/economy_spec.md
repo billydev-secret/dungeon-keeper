@@ -470,6 +470,23 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `thread_deep` | member posts in a thread at ≥ `THREAD_DEEP_MIN` (20) messages (`Thread.message_count` at ingest — no storage) | `events_cog._econ_work` | `thread_deep:<thread_id>` — once per thread; everyone posting after the crossing gets credit |
 | `welcome` | member replies to someone who joined within `WELCOME_WINDOW_SECONDS` (7 days) | `events_cog._econ_work` | `welcome:<newcomer_id>` — counted = "welcome N new faces"; the retention quest |
 | `conversation_starter` | member's message draws replies from `CONVERSATION_STARTER_REPLIERS` (3) distinct humans — distinct-replier rows accrue in `econ_msg_replies` (migration 085, ingest-derived since content is never stored; pruned to 14 days on the day roll) and the fire happens exactly on the crossing | `events_cog._econ_work` reply path, fired for the target author | `conversation_starter:<message_id>` |
+| `greeting_answered` | member replies to / @mentions someone whose greeting is still pending in Greeting Watch, same channel (pending ≈ inside the window — the loop resolves rows right after it closes). Self-gates on the feature: no watched channels, no fires | `events_cog._econ_work` via `greeting_watch_service.pending_greetings_for` | `greeting_answered:<greeting_message_id>` — one hello credits an answerer once |
+| `birthday_wish` | member wishes a happy birthday on a day a birthday was **announced** (`birthday_announcements` row — quiet/unset birthdays never become quest bait; pre-09:00 wishes miss, documented soft edge): a reply/mention of the birthday member, or a wish phrase (`birthday_service.is_birthday_wish`) anywhere when no target resolved. One fire per message; the wisher can't be the birthday member | `events_cog._econ_work` | `birthday_wish:<target_id>:<local_day>` (phrase fallback: `birthday_wish:day:<local_day>`) |
+| `drop_claim` | member wins a coin-drop Claim race — pays beside the drop's own credit (the `cat_catch` double-pay pattern); drop cadence is the natural rate limit | `economy_drops_service.try_claim_drop` after the credit | `drop_claim:<drop_id>` |
+| `guess_submit` | member's Guess Who submission posts as a round (✓ Post in the crop editor) — the content-supply twin of `guess`; the submit rate limit is the farm guard | `guess_cog.CropEditorView._on_post` after the audit row | `guess_submit:<round_id>` |
+| `role_pick` | member self-assigns a role via a role menu **grant** (removals never fire) or an announcement role button grant. Setup kind (see below) | `role_menus/views._apply_outcome` + `announcements/buttons._apply` | `role_pick:set` (once ever) |
+| `confession_reply` | member posts an anonymous reply to someone ELSE's confession (OP self-replies never fire; both thread and channel reply paths). Same privacy contract as `confession` — silent claim, no channel noise | `confessions_cog.ReplyModal.on_submit` → `_fire_confession_trigger(kind="confession_reply")` | `confession_reply:<reply_message_id>` — use daily/weekly with a target count |
+| `shop_purchase` | member makes a voluntary shop purchase: perk rent (voucher-covered counts — the quest rewards shop engagement, not the spend), streak shield, emoji sponsorship, QOTD sponsorship, raffle tickets. Renewal billing (`bill_rental`) deliberately never fires. Setup kind (see below) | each purchase service beside its `apply_debit` | `shop_purchase:set` (once ever) |
+
+**One-time setup kinds** (`SETUP_QUEST_KINDS`): `bio_set`, `birthday_set`,
+`role_pick`, `shop_purchase`. Board-cadence quests on these kinds claim once
+ever on a constant period (occurrence `set`), pay on completion even when not
+drawn on the member's board, and drop off the board once the underlying thing
+is done (`_setup_underlying_done`: bio row / birthday row / any
+`role_menu_grants` grant row / any `econ_ledger` row with a purchase kind —
+`PURCHASE_LEDGER_KINDS`). Known soft edge: announcement-button grants aren't
+recorded in `role_menu_grants`, so those pickers stay board-visible until the
+paid-claim backstop catches them.
 
 **Kind activity ledger.** Every `fire_trigger_quests` call — before the
 income-source switch and the personal-board filter — bumps

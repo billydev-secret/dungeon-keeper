@@ -2,11 +2,48 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 
 # Max valid day per month; Feb capped at 28 (Feb 29 skips 3/4 years)
 MAX_DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+# Matched anywhere in a message for the `birthday_wish` quest detector — the
+# is_greeting pattern: a heuristic vocabulary, not a classifier; widen as real
+# misses surface. Kept deliberately narrow ("happy birthday", "hbd", "happy
+# bday/b-day/cake day") so ordinary chat on a birthday can't fire it.
+_BIRTHDAY_WISH_RE = re.compile(
+    r"\b(?:"
+    r"hap+y+\s*(?:birthday+|bday+|b-day+|cake\s*day+)"
+    r"|hbd"
+    r"|feliz\s*cumplea[ñn]os"
+    r"|joyeux\s*anniversaire"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_birthday_wish(content: str) -> bool:
+    """True if *content* reads as a happy-birthday wish."""
+    return bool(content) and _BIRTHDAY_WISH_RE.search(content) is not None
+
+
+def announced_birthday_ids(
+    conn: sqlite3.Connection, guild_id: int, local_day: str
+) -> set[int]:
+    """Members whose birthday was publicly announced on this guild-local day.
+
+    The `birthday_wish` quest gates on this rather than raw `member_birthdays`
+    rows so a member with a quiet/unset birthday never becomes quest bait —
+    only birthdays the bot itself put in front of the server count.
+    """
+    rows = conn.execute(
+        "SELECT user_id FROM birthday_announcements "
+        "WHERE guild_id = ? AND announced_date = ?",
+        (guild_id, local_day),
+    ).fetchall()
+    return {int(r[0]) for r in rows}
 
 
 def upsert_birthday(

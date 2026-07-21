@@ -313,3 +313,18 @@ def test_expire_refunds_stale_pending_only(db):
         assert get_balance(conn, GUILD, USER_2) == 40  # untouched
         # Sweep off at 0 days.
         assert expire_stale_submissions(conn, NOW, expire_days=0) == []
+
+
+def test_submit_sponsorship_fires_shop_purchase_trigger(db):
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        _fund(conn, 200)
+        _submit(conn)
+        row = conn.execute(
+            "SELECT 1 FROM econ_kind_activity WHERE guild_id = ? "
+            "AND user_id = ? AND kind = 'shop_purchase'",
+            (GUILD, USER),
+        ).fetchone()
+        assert row is not None

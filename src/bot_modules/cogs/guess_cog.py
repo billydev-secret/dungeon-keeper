@@ -1022,6 +1022,15 @@ class CropEditorView(discord.ui.View):
             details={"difficulty": self._difficulty},
         )
 
+        # guess_submit quest trigger — feeding the pool is the scarce
+        # resource; the submit rate limit is the farm guard.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, self.guild_id, self._submitter_id,
+            "guess_submit", occurrence=str(round_id),
+        )
+
         await interaction.edit_original_response(
             content=f"✅ Posted to {guess_channel.mention}!",
             embed=None,

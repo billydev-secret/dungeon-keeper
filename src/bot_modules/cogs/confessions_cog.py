@@ -59,16 +59,17 @@ log = logging.getLogger(__name__)
 
 
 async def _fire_confession_trigger(
-    interaction: discord.Interaction, *, occurrence: str
+    interaction: discord.Interaction, *, occurrence: str, kind: str = "confession"
 ) -> None:
-    """Credit the confessor's ``confession`` economy quest trigger — privately.
+    """Credit a confession-feed economy quest trigger — privately.
 
-    Trigger-kind claims make no channel noise, so the confession stays
-    anonymous in the feed; the payout surfaces only in the member's own
+    ``confession`` for posting one, ``confession_reply`` for anonymously
+    replying to someone else's. Trigger-kind claims make no channel noise, so
+    the feed stays anonymous; the payout surfaces only in the member's own
     /quests log (the sole remaining trace is the staff-side ledger). Guarded
     and non-raising by ``fire_member_trigger`` — a no-op when the economy is
-    off. ``occurrence`` is the posted message/thread id so each confession
-    pays at most once.
+    off. ``occurrence`` is the posted message/thread id so each post pays at
+    most once.
     """
     from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
 
@@ -78,7 +79,7 @@ async def _fire_confession_trigger(
         cast("Bot", interaction.client),
         interaction.guild.id,
         interaction.user.id,
-        "confession",
+        kind,
         occurrence=occurrence,
     )
 
@@ -393,6 +394,13 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                     parent_channel_id=parent_channel_id, parent_message_id=self.parent_message_id,
                     reply_channel_id=reply_channel.id, reply_message_id=reply_msg.id, content=content,
                 )
+            if not is_op:
+                # confession_reply quest — engaging with someone ELSE's
+                # confession; the OP replying to their own thread never fires.
+                await _fire_confession_trigger(
+                    interaction, occurrence=str(reply_msg.id),
+                    kind="confession_reply",
+                )
             await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=parent_channel_id)
             await self.cog._safe_complete(interaction)
             return
@@ -439,6 +447,11 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
                 parent_channel_id=dest_channel.id, parent_message_id=parent_msg.id,
                 reply_channel_id=dest_channel.id, reply_message_id=reply_msg.id, content=content,
+            )
+        if not is_op:
+            # confession_reply quest — same rule as the thread path above.
+            await _fire_confession_trigger(
+                interaction, occurrence=str(reply_msg.id), kind="confession_reply"
             )
         await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
         await self.cog._safe_complete(interaction)

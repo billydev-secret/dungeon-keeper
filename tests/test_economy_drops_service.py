@@ -184,6 +184,48 @@ def test_second_claim_loses_the_race(db):
         assert get_balance(conn, GUILD, BOB) == 0
 
 
+def test_claim_fires_drop_claim_quest(db):
+    # Winning the race pays the drop AND the drop_claim quest trigger; the
+    # loser gets neither. Settings must be enabled in the DB — the inline
+    # fire re-reads them there (the prod path).
+    from bot_modules.services.economy_quests_service import (
+        create_quest,
+        set_quest_active,
+    )
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        qid = create_quest(
+            conn, GUILD, title="Catch a drop", description="", qtype="event",
+            reward=7, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=1,
+            trigger_kind="drop_claim",
+        )
+        set_quest_active(conn, GUILD, qid, True)
+        drop_id = _drop(conn, amount=10)
+        credited = try_claim_drop(
+            conn, LIVE, drop_id, GUILD, ALICE, now_ts=1500.0, booster=False
+        )
+        assert credited == 10
+        quest_row = conn.execute(
+            "SELECT amount FROM econ_ledger "
+            "WHERE guild_id = ? AND user_id = ? AND kind = 'quest'",
+            (GUILD, ALICE),
+        ).fetchone()
+        # Reward left loose: the weekly ⚡ spotlight can double it.
+        assert quest_row is not None and int(quest_row["amount"]) >= 7
+        # The race loser gets no quest credit either.
+        assert try_claim_drop(
+            conn, LIVE, drop_id, GUILD, BOB, now_ts=1501.0, booster=False
+        ) is None
+        assert conn.execute(
+            "SELECT 1 FROM econ_ledger "
+            "WHERE guild_id = ? AND user_id = ? AND kind = 'quest'",
+            (GUILD, BOB),
+        ).fetchone() is None
+
+
 def test_claim_after_expiry_pays_nothing(db):
     with open_db(db) as conn:
         drop_id = _drop(conn, now_ts=1000.0, expire_minutes=1)

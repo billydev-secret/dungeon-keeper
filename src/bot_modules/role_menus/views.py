@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 
@@ -35,7 +35,7 @@ from bot_modules.role_menus.logic import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext
+    from bot_modules.core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.role_menus")
 
@@ -423,6 +423,15 @@ async def _apply_outcome(
                 menus_db.set_menu_alerted(conn, menu_id, 0)
 
     await asyncio.to_thread(_persist)
+    if add_roles:
+        # role_pick quest trigger — a one-time setup kind (the bio_set
+        # pattern): grants only, constant occurrence so it pays once ever.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            cast("Bot", interaction.client), guild_id, member_id,
+            "role_pick", occurrence="set",
+        )
     await _mod_log(ctx, guild, member, menu, add_roles, remove_roles)
     await _reply(interaction, _confirmation_text(menu, add_roles, remove_roles))
 
