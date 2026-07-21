@@ -45,13 +45,17 @@ def build_round_embed(
     eliminated: set[int] | None = None,
     guild: Any = None,
     max_lives: int = DEFAULT_LIVES,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the main round embed (active OR finished round).
 
-    When ``closed=True`` the title gains a "ROUND OVER" suffix and the
-    color shifts from "playing" blue to "results" green. All other
-    fields render identically — the cog re-uses this same embed when
-    editing the message after the round resolves.
+    When ``closed=True`` the title gains a "ROUND OVER" suffix. All
+    other fields render identically — the cog re-uses this same embed
+    when editing the message after the round resolves.
+
+    The embed color follows the guild accent (``color``) when supplied;
+    absent a guild it falls back to the phase palette (blue while
+    playing, green once the round is over).
 
     When ``lives`` is supplied (non-empty) a "Still Standing" section
     is rendered with heart pips per player and a separate "Eliminated"
@@ -65,7 +69,8 @@ def build_round_embed(
     if closed:
         title += " — ROUND OVER"
     embed = discord.Embed(
-        title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING
+        title=title,
+        color=color or discord.Color(PHASE_RESULTS if closed else PHASE_PLAYING),
     )
     embed.add_field(name="Round", value=str(round_num), inline=False)
     embed.add_field(
@@ -124,12 +129,15 @@ def build_closed_embed(
     eliminated: set[int] | None = None,
     guild: Any = None,
     max_lives: int = DEFAULT_LIVES,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the "host stopped the game" embed.
 
     This is a thin reskin of :func:`build_round_embed` with a
-    "CLOSED" title and the recap color. The cog edits the live
-    message with this embed when the close-confirmation flow fires.
+    "CLOSED" title. The color follows the guild accent (``color``) when
+    supplied, otherwise falls back to the recap palette (dark gold).
+    The cog edits the live message with this embed when the
+    close-confirmation flow fires.
     """
     embed = build_round_embed(
         statement=statement,
@@ -141,9 +149,10 @@ def build_closed_embed(
         eliminated=eliminated,
         guild=guild,
         max_lives=max_lives,
+        color=color,
     )
     embed.title = f"{GAME_ICONS['nhie']} NEVER HAVE I EVER — CLOSED"
-    embed.color = discord.Color(PHASE_RECAP)
+    embed.color = color or discord.Color(PHASE_RECAP)
     return embed
 
 
@@ -151,6 +160,7 @@ def build_recap_embed(
     winner_id: int | None,
     guilt_scores: dict[str, int],
     guild: Any = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Build the game-over recap embed.
 
@@ -171,7 +181,7 @@ def build_recap_embed(
     embed = discord.Embed(
         title=f"{GAME_ICONS['nhie']} NEVER HAVE I EVER — GAME OVER",
         description=description,
-        color=PHASE_RECAP,
+        color=color or discord.Color(PHASE_RECAP),
     )
     if guilt_scores:
         lines = [

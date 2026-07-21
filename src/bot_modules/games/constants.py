@@ -9,12 +9,6 @@ PHASE_PLAYING  = 0x4E9AF1   # blue       — active round
 PHASE_RESULTS  = 0x57F287   # green      — round results
 PHASE_RECAP    = 0xB8860B   # dark gold  — final recap / game over
 
-# Clapback-specific colors
-CLAPBACK_COLOR = 0xFF4500       # Orange-red (main game)
-CLAPBACK_VOTE_COLOR = 0x5865F2  # Blurple (voting phase)
-CLAPBACK_WIN_COLOR = 0xFFD700   # Gold (winner / CLAPBACK moments)
-CLAPBACK_TIE_COLOR = 0x99AAB5   # Gray (ties)
-
 GAME_ICONS = {
     'ffa': '🎭',
     'ffa_banner': '🃏',

@@ -13,20 +13,22 @@ from typing import Any, Callable
 
 import discord
 
-from bot_modules.games.constants import (
-    CLAPBACK_COLOR,
-    CLAPBACK_TIE_COLOR,
-    CLAPBACK_VOTE_COLOR,
-    CLAPBACK_WIN_COLOR,
-    GAME_ICONS,
-)
+from bot_modules.games.constants import GAME_ICONS
 from bot_modules.games_clapback.logic import (
     find_best_answer_record,
     find_closest_matchup_record,
     sort_scores,
 )
+from bot_modules.services.embeds import COLOR_BLURPLE, COLOR_GREEN
 
 ICON = GAME_ICONS["clapback"]
+
+# Games follow the guild accent (ruling 2026-07-21); the old per-phase palette
+# (orange-red / blurple / gold / gray) is retired. When no accent is resolvable
+# (no guild), fall back to the sanctioned neutral no-guild fallback (blurple).
+FALLBACK_COLOR = discord.Color(COLOR_BLURPLE)
+# Semantic: a decided matchup is a win → green (the one sanctioned exception).
+WIN_COLOR = discord.Color(COLOR_GREEN)
 
 NameResolver = Callable[[int], str]
 
@@ -47,7 +49,7 @@ def build_lobby_embed(
     send and the live ``_update_embed`` edit in the join view.
     """
     if color is None:
-        color = discord.Color(CLAPBACK_COLOR)
+        color = FALLBACK_COLOR
     embed = discord.Embed(
         title=f"{ICON} CLAPBACK",
         description=(
@@ -99,7 +101,7 @@ def build_submit_embed(
     the builder stays free of timer / datetime imports.
     """
     if color is None:
-        color = discord.Color(CLAPBACK_COLOR)
+        color = FALLBACK_COLOR
     embed = discord.Embed(
         title=f"{ICON} CLAPBACK — Round {round_num}/{total_rounds}",
         description=f'**"{prompt}"**',
@@ -122,6 +124,7 @@ def build_vote_embed(
     deadline_str: str,
     vote_count: int = 0,
     prompt: str | None = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the head-to-head voting embed for a single matchup.
 
@@ -143,7 +146,7 @@ def build_vote_embed(
             f"          ⚔️ VS ⚔️\n\n"
             f"🅱️ *\"{discord.utils.escape_markdown(answer_b)}\"*"
         ),
-        color=CLAPBACK_VOTE_COLOR,
+        color=color or FALLBACK_COLOR,
     )
     embed.add_field(name="Timer", value=deadline_str, inline=True)
     embed.add_field(name="Votes", value=str(vote_count), inline=True)
@@ -159,6 +162,7 @@ def build_reveal_embed(
     anonymous: bool,
     name_resolver: NameResolver,
     prompt: str | None = None,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the post-vote reveal embed for a finished matchup.
 
@@ -188,9 +192,10 @@ def build_reveal_embed(
         w_pts = result["scores"][winner_id]
         l_pts = result["scores"][loser_id]
 
+        # A clapback is a decisive win → green stays semantic (accent ignored).
         reveal = discord.Embed(
-            title="⚡ C L A P B A C K ⚡",
-            color=CLAPBACK_WIN_COLOR,
+            title=f"{ICON} C L A P B A C K",
+            color=WIN_COLOR,
         )
         reveal.add_field(
             name="🏆 Winner",
@@ -219,9 +224,10 @@ def build_reveal_embed(
         answer_b = answers.get(str(player_b), "???")
         a_name = "???" if anonymous else name_resolver(player_a)
         b_name = "???" if anonymous else name_resolver(player_b)
+        # A tie has no winner → neutral, so it follows the guild accent.
         reveal = discord.Embed(
             title=f"{ICON} MATCHUP RESULT — TIE!",
-            color=CLAPBACK_TIE_COLOR,
+            color=color or FALLBACK_COLOR,
         )
         reveal.add_field(
             name="🤝",
@@ -247,9 +253,10 @@ def build_reveal_embed(
         w_pct = round((vc[winner_id] / total_v) * 100) if total_v else 0
         l_pct = 100 - w_pct
 
+        # A decided matchup is a win → green stays semantic (accent ignored).
         reveal = discord.Embed(
             title=f"{ICON} MATCHUP RESULT",
-            color=CLAPBACK_WIN_COLOR,
+            color=WIN_COLOR,
         )
         reveal.add_field(
             name="🏆 Winner",
@@ -293,7 +300,7 @@ def build_scoreboard_embed(
     implementation didn't actually branch on it, so we don't either.
     """
     if color is None:
-        color = discord.Color(CLAPBACK_COLOR)
+        color = FALLBACK_COLOR
     scores = payload.get("scores", {})
     sorted_scores = sort_scores(scores)
 
@@ -335,6 +342,7 @@ def build_recap_embed(
     payload: dict[str, Any],
     config: dict[str, Any],
     name_resolver: NameResolver,
+    color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the final-results recap embed shown after the last round.
 
@@ -366,7 +374,7 @@ def build_recap_embed(
     embed = discord.Embed(
         title=f"{ICON} CLAPBACK — FINAL RESULTS",
         description=f"{rounds_played} rounds | {len(players)} players",
-        color=CLAPBACK_WIN_COLOR,
+        color=color or FALLBACK_COLOR,
     )
     embed.add_field(
         name=f"🏆 WINNER: {winner_name}",

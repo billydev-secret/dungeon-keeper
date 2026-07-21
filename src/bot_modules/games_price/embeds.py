@@ -26,6 +26,7 @@ from bot_modules.games.constants import (
     PHASE_RESULTS,
 )
 from bot_modules.games.utils.timer import format_deadline, now_plus
+from bot_modules.services.embeds import COLOR_GREEN
 from bot_modules.games_price.logic import (
     format_price,
     ladder_stats,
@@ -38,11 +39,17 @@ def _footer(host_name: str) -> str:
 
 
 def build_start_embed(
-    host_name: str, round_num: int, total_rounds: int
+    host_name: str,
+    round_num: int,
+    total_rounds: int,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Initial "starting up" embed shown the instant ``/price`` is invoked.
 
     Holds the message slot while the first scenario is fetched.
+
+    ``color`` is the guild accent (lobby is a non-winner phase); the
+    ``PHASE_JOINING`` fallback is used only when no guild/accent is available.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['price']} NAME YOUR PRICE",
@@ -50,7 +57,7 @@ def build_start_embed(
             f"Hosted by: **{discord.utils.escape_markdown(host_name)}** | "
             f"Round {round_num}/{total_rounds}"
         ),
-        color=PHASE_JOINING,
+        color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(
         name="Status",
@@ -69,19 +76,22 @@ def build_scenario_embed(
     timer_secs: int,
     submitted: int,
     total_players: int | None = None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Per-round submission embed shown alongside the Name-Your-Price button.
 
     ``timer_secs`` is rendered as a Discord countdown timestamp.
     ``submitted`` / ``total_players`` drive the live submission counter
-    that the cog refreshes after every modal submit.
+    that the cog refreshes after every modal submit. ``color`` is the guild
+    accent (playing is a non-winner phase); ``PHASE_PLAYING`` is the no-guild
+    fallback.
     """
     embed = discord.Embed(
         title=(
             f"{GAME_ICONS['price']} NAME YOUR PRICE — "
             f"Round {round_num}/{total_rounds}"
         ),
-        color=PHASE_PLAYING,
+        color=color or discord.Color(PHASE_PLAYING),
     )
     embed.add_field(
         name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False
@@ -105,17 +115,20 @@ def build_reveal_embed(
     round_num: int,
     total_rounds: int,
     ladder: list[tuple[str, int]],
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Reveal embed shown after the submission timer expires.
 
     ``ladder`` is a list of ``(display_name, amount)`` already sorted
     by the cog (using :func:`logic.build_ladder` then resolving uids).
     Builds the price-ladder column and an optional stats footer when
-    at least one price was submitted.
+    at least one price was submitted. The reveal is a non-winner phase
+    (no vote yet), so ``color`` is the guild accent; ``PHASE_RESULTS`` is the
+    no-guild fallback.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['price']} REVEAL — Round {round_num}/{total_rounds}",
-        color=PHASE_RESULTS,
+        color=color or discord.Color(PHASE_RESULTS),
     )
     embed.add_field(
         name="Scenario",
@@ -160,15 +173,17 @@ def build_vote_embed(
     round_num: int,
     total_rounds: int,
     timer_secs: int,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Voting embed shown alongside the Reasonable/Unhinged select menus.
 
     Recaps the scenario and prompts voters to pick from the two
-    categories.
+    categories. Voting is a non-winner phase, so ``color`` is the guild
+    accent; ``PHASE_PLAYING`` is the no-guild fallback.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['price']} VOTE — Round {round_num}/{total_rounds}",
-        color=PHASE_PLAYING,
+        color=color or discord.Color(PHASE_PLAYING),
     )
     embed.add_field(
         name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False
@@ -197,11 +212,18 @@ def build_round_results_embed(
     unhinged_winner: str,
     unhinged_price: int,
     unhinged_votes: int,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
-    """Round-results embed shown after voting closes."""
+    """Round-results embed shown after voting closes.
+
+    This is the round's **winner** embed (the room voted a Most Reasonable /
+    Most Unhinged winner), so it stays a semantic ``COLOR_GREEN`` — the cog
+    deliberately does not pass the guild accent here. ``color`` still overrides
+    when explicitly supplied.
+    """
     embed = discord.Embed(
         title=f"{GAME_ICONS['price']} ROUND {round_num} RESULTS",
-        color=PHASE_RESULTS,
+        color=color or discord.Color(COLOR_GREEN),
     )
     embed.add_field(
         name="🎯 Most Reasonable",
@@ -231,6 +253,7 @@ def build_recap_embed(
     player_count: int,
     awards: dict[str, tuple[str, str, str]],
     highlight: str | None,
+    color: discord.Color | None = None,
 ) -> discord.Embed:
     """Game-over recap embed.
 
@@ -238,11 +261,13 @@ def build_recap_embed(
     — note the second element is already a resolved display name (the
     cog turns :func:`logic.compute_recap_awards`'s uid lists into names
     before calling this builder). ``highlight`` is the prebuilt
-    sentence or ``None`` to omit the field.
+    sentence or ``None`` to omit the field. The recap celebrates the whole
+    room (not a single winner), so ``color`` is the guild accent;
+    ``PHASE_RECAP`` is the no-guild fallback.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['price']} NAME YOUR PRICE — GAME OVER",
-        color=PHASE_RECAP,
+        color=color or discord.Color(PHASE_RECAP),
     )
     embed.add_field(
         name="Summary",

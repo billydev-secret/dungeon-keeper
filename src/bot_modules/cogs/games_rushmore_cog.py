@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -207,7 +208,7 @@ class RushmoreVoteSelect(discord.ui.Select):
 # ── Views ────────────────────────────────────────────────────────────────────
 
 class RushmoreJoinView(discord.ui.View):
-    def __init__(self, game_id: str, host_id: int, host_name: str, topic: str | None, source: str, db, bot, cog, mode: str = "snake"):
+    def __init__(self, game_id: str, host_id: int, host_name: str, topic: str | None, source: str, db, bot, cog, mode: str = "snake", accent: "discord.Color | None" = None):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
@@ -218,6 +219,9 @@ class RushmoreJoinView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
+        # Guild accent, resolved once at launch/recovery and reused for every
+        # embed rebuild — never re-resolved per join/leave click.
+        self.accent = accent
         self.players: list[int] = []
         self._msg: discord.Message | None = None
 
@@ -242,7 +246,7 @@ class RushmoreJoinView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _add)
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
-        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode)
+        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode, color=self.accent)
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've joined!", ephemeral=True)
 
@@ -257,7 +261,7 @@ class RushmoreJoinView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _remove)
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
-        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode)
+        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode, color=self.accent)
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("You've left.", ephemeral=True)
 
@@ -333,6 +337,7 @@ class RushmoreJoinView(discord.ui.View):
             guild=interaction.guild,
             msg=self._msg,
             settings=await self.cog._get_settings(self.game_id),
+            accent=self.accent,
         )
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="rushmore_htp", row=0)
@@ -346,7 +351,7 @@ class RushmoreDraftView(discord.ui.View):
 
     def __init__(self, game_id: str, host_id: int, host_name: str, topic: str,
                  players: list[int], timer_secs: int, guild, db, bot, cog,
-                 mode: str = "snake"):
+                 mode: str = "snake", accent: "discord.Color | None" = None):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
@@ -359,6 +364,9 @@ class RushmoreDraftView(discord.ui.View):
         self.bot = bot
         self.cog = cog
         self.mode = mode
+        # Guild accent resolved once at game start; threaded into every embed
+        # rebuild (board updates, final boards, vote, recap) — never per-pick.
+        self.accent = accent
 
         # Draft state
         random.shuffle(self.players)
@@ -425,6 +433,7 @@ class RushmoreDraftView(discord.ui.View):
             return build_draft_embed(
                 self.host_name, self.topic, self._player_tuples(),
                 self.boards, None, None, rnd, self.timer_secs,
+                color=self.accent,
             )
         if self.current_pick_index < len(self.draft_order):
             rnd, pid = self.draft_order[self.current_pick_index]
@@ -434,6 +443,7 @@ class RushmoreDraftView(discord.ui.View):
         return build_draft_embed(
             self.host_name, self.topic, self._player_tuples(),
             self.boards, pid, name, rnd, self.timer_secs,
+            color=self.accent,
         )
 
     async def handle_pick_click(self, interaction: discord.Interaction):
@@ -646,10 +656,12 @@ class RushmoreCog(commands.Cog):
 
         if row["state"] == "joining":
             settings = payload.get("settings", {})
+            accent = await self._resolve_accent(guild)
             view = RushmoreJoinView(
                 game_id, host_id, host_name,
                 payload.get("topic"), settings.get("source", "host"),
                 self.db, self.bot, self, mode=settings.get("mode", "snake"),
+                accent=accent,
             )
             view.players = list(payload.get("players", []))
             view._msg = message
@@ -678,6 +690,24 @@ class RushmoreCog(commands.Cog):
     async def _get_settings(self, game_id: str) -> dict:
         payload = await get_game_payload(self.db, game_id)
         return payload.get("settings", {})
+
+    async def _resolve_accent(self, guild) -> "discord.Color | None":
+        """Resolve the guild's brand accent once, tolerating any failure.
+
+        Returns ``None`` when there's no guild, no bot context, or the
+        branding lookup raises — callers fall back to each builder's
+        no-guild default color, so a resolution miss never crashes a game.
+        """
+        if guild is None:
+            return None
+        db_path = getattr(getattr(self.bot, "ctx", None), "db_path", None)
+        if db_path is None:
+            return None
+        try:
+            return await resolve_accent_color(db_path, guild)
+        except Exception:
+            log.debug("rushmore: accent resolve failed for guild %s", getattr(guild, "id", "?"), exc_info=True)
+            return None
 
     # ── Slash command ────────────────────────────────────────────────
 
@@ -770,11 +800,16 @@ class RushmoreCog(commands.Cog):
         )
         log.info("Game %s (rushmore) created by host %s", game_id, host_id)
 
+        # Resolve the guild accent once, here at game start, and thread it
+        # through every view/builder for the whole game — never per-update.
+        accent = await self._resolve_accent(getattr(channel, "guild", None))
+
         join_view = RushmoreJoinView(
             game_id, host_id, host_name,
             topic, source, self.db, self.bot, self, mode=mode,
+            accent=accent,
         )
-        embed = build_join_embed(host_name, [], topic, mode=mode)
+        embed = build_join_embed(host_name, [], topic, mode=mode, color=accent)
         try:
             msg = await channel.send(embed=embed, view=join_view)
         except discord.Forbidden:
@@ -801,6 +836,7 @@ class RushmoreCog(commands.Cog):
         guild,
         msg: discord.Message,
         settings: dict,
+        accent: "discord.Color | None" = None,
     ):
         await update_game_state(self.db, game_id, "playing")
         payload = await get_game_payload(self.db, game_id)
@@ -811,7 +847,7 @@ class RushmoreCog(commands.Cog):
         draft_view = RushmoreDraftView(
             game_id, host_id, host_name, topic,
             players, settings.get("timer", 30), guild, self.db, self.bot, self,
-            mode=mode,
+            mode=mode, accent=accent,
         )
         self.bot.active_views[game_id] = draft_view
 
@@ -1097,6 +1133,7 @@ class RushmoreCog(commands.Cog):
 
     async def _show_final_boards(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
         game_id = draft_view.game_id
+        accent = getattr(draft_view, "accent", None)
         # All-skip boards are left off the final display (they're already
         # excluded from the vote) — no sense parading an empty board.
         with_picks = set(eligible_voters(draft_view.players, draft_view.boards))
@@ -1107,6 +1144,7 @@ class RushmoreCog(commands.Cog):
 
         final_embed = build_final_boards_embed(
             draft_view.host_name, draft_view.topic, player_tuples, draft_view.boards,
+            color=accent,
         )
         try:
             await channel.send(embed=final_embed)
@@ -1138,7 +1176,7 @@ class RushmoreCog(commands.Cog):
         self.bot.active_views[game_id] = vote_view
 
         vote_timer = settings.get("vote_timer", 30)
-        vote_embed = build_vote_embed(draft_view.host_name, draft_view.topic, vote_timer)
+        vote_embed = build_vote_embed(draft_view.host_name, draft_view.topic, vote_timer, color=accent)
 
         try:
             vote_msg = await channel.send(embed=vote_embed, view=vote_view)
@@ -1228,6 +1266,7 @@ class RushmoreCog(commands.Cog):
         recap_embed = build_recap_embed(
             draft_view.host_name, draft_view.topic, len(draft_view.players),
             duration, winner_names, max_votes, winner_boards_list, stats,
+            color=getattr(draft_view, "accent", None),
         )
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer

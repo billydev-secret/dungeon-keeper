@@ -12,8 +12,15 @@ from __future__ import annotations
 
 import random
 
+import discord
 import pytest
 
+from bot_modules.games.constants import (
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
 from bot_modules.games_ttl.embeds import (
     build_guess_embed,
     build_lobby_embed,
@@ -641,3 +648,75 @@ def test_modal_never_edits_without_explicit_origin_message():
     # the message explicitly handed to it.
     modal = _modal()
     assert modal._origin_message is None
+
+
+# ── guild accent color migration ─────────────────────────────────────
+#
+# Every embed follows the resolved guild accent when a color is passed,
+# and falls back to its historical PHASE_* constant when it isn't (no
+# guild / accent resolution failed). No TTL embed is semantically green
+# or red: the reveal lists correct *and* fooled voters, so it's a mixed
+# state, not a single win/loss.
+
+_ACCENT = discord.Color(0x8E44AD)  # a distinctive test accent (purple)
+
+
+def test_lobby_embed_honors_passed_accent():
+    embed = build_lobby_embed(color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_lobby_embed_falls_back_to_phase_joining():
+    embed = build_lobby_embed()
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_guess_embed_honors_passed_accent_open_and_closed():
+    open_embed = build_guess_embed("Alice", ["s1", "s2", "s3"], {}, color=_ACCENT)
+    closed_embed = build_guess_embed(
+        "Alice", ["s1", "s2", "s3"], {}, closed=True, color=_ACCENT
+    )
+    assert open_embed.color == _ACCENT
+    assert closed_embed.color == _ACCENT
+
+
+def test_guess_embed_falls_back_to_phase_colors():
+    open_embed = build_guess_embed("Alice", ["s1", "s2", "s3"], {})
+    closed_embed = build_guess_embed("Alice", ["s1", "s2", "s3"], {}, closed=True)
+    assert open_embed.color == discord.Color(PHASE_PLAYING)
+    assert closed_embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_reveal_embed_honors_passed_accent():
+    embed = build_reveal_embed(
+        subject_name="Alice",
+        statements=["t1", "t2", "LIE"],
+        lie_index=2,
+        correct_voters=[1],
+        fooled_voters=[2],
+        name_resolver=str,
+        color=_ACCENT,
+    )
+    assert embed.color == _ACCENT
+
+
+def test_reveal_embed_falls_back_to_phase_results():
+    embed = build_reveal_embed(
+        subject_name="Alice",
+        statements=["t1", "t2", "LIE"],
+        lie_index=2,
+        correct_voters=[1],
+        fooled_voters=[2],
+        name_resolver=str,
+    )
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_recap_embed_honors_passed_accent():
+    embed, _ = build_recap_embed({}, name_resolver=str, color=_ACCENT)
+    assert embed.color == _ACCENT
+
+
+def test_recap_embed_falls_back_to_phase_recap():
+    embed, _ = build_recap_embed({}, name_resolver=str)
+    assert embed.color == discord.Color(PHASE_RECAP)
