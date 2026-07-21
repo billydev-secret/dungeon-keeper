@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 
+import discord
 import pytest
 
 from bot_modules.games_traditional.embeds import (
@@ -370,6 +371,20 @@ def test_build_recap_embed_shows_totals():
     assert by_name["Participants"] == "3"
     assert embed.title is not None
     assert "GAME OVER" in embed.title
+
+
+def test_build_recap_embed_no_color_falls_back_to_brand_not_gray():
+    from bot_modules.games.constants import BRAND_COLOR
+
+    embed = build_recap_embed({"participants": [1], "asked": {}})
+    assert embed.color == discord.Color(BRAND_COLOR)
+    assert embed.color != discord.Color(0x808080)
+
+
+def test_build_recap_embed_honors_passed_accent():
+    accent = discord.Color(0x123456)
+    embed = build_recap_embed({"participants": [1], "asked": {}}, color=accent)
+    assert embed.color == accent
 
 
 def test_build_recap_embed_only_shows_nonzero_category_breakdowns():

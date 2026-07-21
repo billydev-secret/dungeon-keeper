@@ -11,6 +11,7 @@ pieces work without spinning up Discord.
 
 from __future__ import annotations
 
+import discord
 import pytest
 
 from bot_modules.games_fantasies.embeds import (
@@ -514,6 +515,24 @@ def test_build_recap_embed_single_result_includes_all_sections():
     assert "🏔️ Biggest Outlier" in by_name
     assert by_name["Total Submissions"] == "1"
     assert by_name["Total Voters"] == "2"
+
+
+def test_build_recap_embed_no_color_falls_back_to_brand_not_gray():
+    from bot_modules.games.constants import BRAND_COLOR
+
+    results = [{"text": "x", "same_pct": 0.5, "voters": [1], "category": "Fantasy"}]
+    embed = build_recap_embed(results)
+    assert embed is not None
+    assert embed.color == discord.Color(BRAND_COLOR)
+    assert embed.color != discord.Color(0x808080)
+
+
+def test_build_recap_embed_honors_passed_accent():
+    accent = discord.Color(0x123456)
+    results = [{"text": "x", "same_pct": 0.5, "voters": [1], "category": "Fantasy"}]
+    embed = build_recap_embed(results, color=accent)
+    assert embed is not None
+    assert embed.color == accent
 
 
 def test_build_recap_embed_formats_pct_as_percent():

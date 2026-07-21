@@ -15,10 +15,6 @@ from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games.utils.live_bar import build_bar
 from bot_modules.games_fantasies.logic import compute_recap_summary
 
-# Recap embed uses a neutral gray (matches the cog's old hard-coded
-# ``color=0x808080``); kept here so tests don't reach into the cog.
-RECAP_COLOR = 0x808080
-
 
 def build_lobby_embed(host_name: str, color: "discord.Color | None" = None) -> discord.Embed:
     """Build the lobby embed shown when ``/fantasies`` is invoked."""
@@ -104,7 +100,7 @@ def build_recap_embed(results: list[dict[str, Any]], color: "discord.Color | Non
     ``_post_recap``.
     """
     if color is None:
-        color = discord.Color(RECAP_COLOR)
+        color = discord.Color(BRAND_COLOR)
     summary = compute_recap_summary(results)
     if summary is None:
         return None

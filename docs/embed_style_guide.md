@@ -25,6 +25,11 @@ server announcements, see `server_announcement_style.md`.)
   (and warning-orange for expired/abandoned) stay semantic. The old per-phase
   palette (lobby-gold / active-blue / results / recap) is retired — a builder
   that hard-codes a phase color with no `color` param is the pattern to fix.
+  One narrow extra semantic is allowed: a **content-type affordance** where the
+  color itself tells the player what kind of card they're looking at — Truth vs
+  Dare card coding (Truth or Dare, FFA) — since there the color *is*
+  information, the same test win/loss passes. Everything else in a game follows
+  the accent.
 - **Per-domain identity palettes are a deliberate exception.** A few features
   carry a *fixed brand color* instead of the guild accent, as an intentional
   visual identity — centralized in **`services/embeds.py`** and always used via

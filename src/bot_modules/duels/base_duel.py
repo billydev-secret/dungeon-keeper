@@ -214,6 +214,8 @@ class BaseDuel(BaseGame):
 
         ante = await self._game_ante(game_id)
         if ante > 0:
+            settings = await self._econ_settings(game.guild_id)
+            ante_text = _fmt_coins(settings, ante) if settings else f"**{ante:,}**"
             # Both antes land at accept — no money moves while a challenge is
             # merely pending, so a decline or a timeout needs no refund. If
             # either side can't cover it now, the challenge is called off
@@ -227,7 +229,7 @@ class BaseDuel(BaseGame):
                     continue
                 await self._db_set_state(game_id, "DECLINED")  # refunds + drops
                 note = err if who == "you" else (
-                    f"The challenger can no longer cover the {ante:,} wager — "
+                    f"The challenger can no longer cover the {ante_text} wager — "
                     "challenge called off."
                 )
                 await interaction.response.edit_message(

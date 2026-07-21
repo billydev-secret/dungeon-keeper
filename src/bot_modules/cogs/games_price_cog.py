@@ -1123,10 +1123,14 @@ class PriceCog(commands.Cog):
             del self.bot.active_views[game_id]
         if game_msg:
             try:
+                guild = getattr(channel, "guild", None) or getattr(
+                    game_msg, "guild", None
+                )
+                accent = await self._resolve_accent(guild)
                 embed = discord.Embed(
                     title=f"{GAME_ICONS['price']} NAME YOUR PRICE — CLOSED",
                     description="This game was closed by the host.",
-                    color=PHASE_RECAP,
+                    color=accent or discord.Color(PHASE_RECAP),
                 )
                 await game_msg.edit(embed=embed, view=None)
             except Exception:
