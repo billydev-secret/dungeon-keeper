@@ -25,7 +25,7 @@ it can't invent commands or promise unbuilt features.
   ephemeral) so repeat calls bill the corpus at ~0.1x. Grounding on shipped-only
   docs structurally prevents promising the Aspirational specs INDEX.md warns of.
 - **Two surfaces, one brain:**
-  - Dashboard: an "Ask the Guide" box inside the existing Help panel
+  - Dashboard: an "Ask Billy-bot" box inside the existing Help panel
     (`help.js`), `POST /api/help/advisor`, gated to any authenticated user
     (`require_perms(set())`), rate-limited on the existing `ai` tier.
   - Discord: `/ask <question>` — ephemeral, per-user cooldown
@@ -38,7 +38,7 @@ it can't invent commands or promise unbuilt features.
                  ┌───────────────┴───────────────┐        (advisor_service.py)
    POST /api/help/advisor                    /ask (ephemeral)
    (routes/advisor.py)                       (cogs/advisor_cog.py)
-   → Help panel "Ask the Guide"              → Discord members
+   → Help panel "Ask Billy-bot"              → Discord members
 ```
 
 - `advisor_service.py` owns corpus extraction (mtime-cached), system-prompt

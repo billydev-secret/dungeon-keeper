@@ -1,9 +1,9 @@
-"""`/ask` — member self-service help, answered by the grounded AI advisor.
+"""`/ask` — member self-service help, answered by Billy-bot.
 
 Thin glue over ``bot_modules.services.advisor_service``; the same brain powers
-the dashboard Help panel's "Ask the Guide" box. Answers are grounded in the user
-manual, so the advisor can't invent commands. Ephemeral + per-user cooldown so
-one member can't spend the shared Anthropic budget.
+the dashboard Help panel's "Ask Billy-bot" box. Answers are grounded in the user
+manual, so Billy-bot can't invent commands. Ephemeral + per-user cooldown so one
+member can't spend the shared Anthropic budget.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class AdvisorCog(commands.Cog):
 
     @app_commands.command(
         name="ask",
-        description="Ask how to use Dungeon Keeper — games, commands, settings.",
+        description="Ask Billy-bot how to use the server — games, commands, settings.",
     )
     @app_commands.describe(question="What do you want to know how to do?")
     @app_commands.checks.cooldown(1, 12.0, key=lambda i: i.user.id)
@@ -54,11 +54,11 @@ class AdvisorCog(commands.Cog):
             else None
         )
         embed = discord.Embed(
-            title="📖 Dungeon Keeper Guide",
+            title="🤖 Billy-bot",
             description=answer,
             color=color,
         )
-        embed.set_footer(text="Grounded in the server guide • not always perfect")
+        embed.set_footer(text="Billy-bot • grounded in the server guide, not always perfect")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def cog_app_command_error(
