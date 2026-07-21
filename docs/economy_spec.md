@@ -693,7 +693,11 @@ participation award *or* ≥1 active `photo_post` quest). The `photo_post`
 income-source toggle gates **both** payouts. The channel is the standalone Photo
 Challenge feature's dedicated channel — `channel_id` in `games_game_config.options`
 (game type `photo`), owned by the **Photo Challenge → Setup** panel
-(`/api/photo-challenge/config`); the payout is dormant until it's set. The flat
+(`/api/photo-challenge/config`). When that config carries no channel but an
+**active photo schedule** does (a schedule created without the Setup panel ever
+being saved leaves the config row empty), the listener recovers the channel from
+`games_scheduled` so schedule-only setups still pay; the payout is dormant only
+when neither knows a channel. The flat
 rate is edited on the **Income Sources** page alongside the other faucets. *(The
 old reaction-gated model and its `react_threshold`/`auto_react` knobs are retired;
 migration 099 renames existing `photo_react` quests and income-source rows to

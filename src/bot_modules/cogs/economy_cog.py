@@ -2934,7 +2934,11 @@ class EconomyCog(commands.Cog):
         0 means the admin hasn't picked a Photo Challenge channel — the
         listener no-ops then, so the mechanic is dormant until one is set.
         Read from ``games_game_config`` (game_type 'photo'), the same
-        ``channel_id`` the standalone Photo Challenge Setup panel owns.
+        ``channel_id`` the standalone Photo Challenge Setup panel owns. When
+        that config carries no channel but an **active photo schedule** does
+        (a schedule created without the Setup panel ever being saved, which
+        leaves the config row empty), fall back to the schedule's channel so
+        posts there still earn instead of silently paying nothing.
         """
         with self.ctx.open_db() as conn:
             row = conn.execute(
@@ -2942,16 +2946,32 @@ class EconomyCog(commands.Cog):
                 " WHERE guild_id = ? AND game_type = 'photo'",
                 (guild_id,),
             ).fetchone()
-        opts: dict = {}
-        if row and row[0]:
+            opts: dict = {}
+            if row and row[0]:
+                try:
+                    opts = json.loads(row[0])
+                except (ValueError, TypeError):
+                    opts = {}
             try:
-                opts = json.loads(row[0])
+                channel_id = int(str(opts.get("channel_id")).strip() or 0)
             except (ValueError, TypeError):
-                opts = {}
-        try:
-            return int(str(opts.get("channel_id")).strip() or 0)
-        except (ValueError, TypeError):
-            return 0
+                channel_id = 0
+            if channel_id > 0:
+                return channel_id
+            # Config has no channel — recover the channel from an active photo
+            # schedule so a schedule-only setup isn't silently unpaid.
+            sched = conn.execute(
+                "SELECT channel_id FROM games_scheduled"
+                " WHERE guild_id = ? AND game_type = 'photo' AND status = 'active'"
+                " ORDER BY id ASC LIMIT 1",
+                (guild_id,),
+            ).fetchone()
+        if sched and sched[0]:
+            try:
+                return int(sched[0])
+            except (ValueError, TypeError):
+                return 0
+        return 0
 
     async def _photo_channel(self, guild_id: int) -> int:
         """TTL-cached ``_read_photo_channel`` — one DB read per guild per TTL.
