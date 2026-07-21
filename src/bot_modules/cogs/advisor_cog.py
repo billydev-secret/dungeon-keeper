@@ -16,7 +16,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.services.advisor_service import answer_advisor
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.advisor_context import build_asker_context
+from bot_modules.services.advisor_service import (
+    MODEL,
+    answer_advisor,
+    get_advisor_context_enabled,
+    get_advisor_model,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -43,7 +50,23 @@ class AdvisorCog(commands.Cog):
         log.info("%s used /ask: %.80s", interaction.user.display_name, question)
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        result = await answer_advisor(question)
+        guild = interaction.guild
+        model = MODEL
+        guild_context: str | None = None
+        if guild is not None:
+            db_path = self.ctx.db_path
+            with open_db(db_path) as conn:
+                model = get_advisor_model(conn, guild.id)
+                context_on = get_advisor_context_enabled(conn, guild.id)
+            if context_on:
+                member = (
+                    interaction.user
+                    if isinstance(interaction.user, discord.Member)
+                    else None
+                )
+                guild_context = build_asker_context(guild, member, db_path)
+
+        result = await answer_advisor(question, model=model, guild_context=guild_context)
         answer = result.answer
         if len(answer) > _MAX_DESC:
             answer = answer[:_MAX_DESC].rstrip() + "…"

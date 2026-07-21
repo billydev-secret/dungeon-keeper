@@ -139,6 +139,7 @@ const SECTIONS = [
       { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
       { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
+      { id: "config-advisor",    label: "Billy-bot",         module: "./panels/config-advisor.js", adminOnly: true },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"] },
       { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
       { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },

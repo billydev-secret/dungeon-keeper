@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
 from anthropic.types import TextBlock
 
 from bot_modules.services import advisor_service as adv
+
+
+def _config_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, "
+        "value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
+    )
+    return conn
 
 
 # ── manual extraction ──────────────────────────────────────────────────────
@@ -83,6 +94,52 @@ def test_build_system_survives_missing_manual(monkeypatch):
     monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "")
     system = adv.build_system()
     assert "guide unavailable" in system[1]["text"]
+
+
+def test_build_system_appends_uncached_server_context(monkeypatch):
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    system = adv.build_system("SERVER CTX HERE")
+    assert len(system) == 3
+    assert "SERVER CTX HERE" in system[2]["text"]
+    # Volatile per-asker block sits after the cache breakpoint (uncached).
+    assert "cache_control" not in system[2]
+    assert system[1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_build_system_no_context_block_when_absent(monkeypatch):
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    assert len(adv.build_system()) == 2
+
+
+# ── config: model + server-context toggle ───────────────────────────────────
+
+
+def test_get_advisor_model_defaults_and_ignores_unknown():
+    conn = _config_conn()
+    assert adv.get_advisor_model(conn) == adv.MODEL
+    conn.execute("INSERT INTO config VALUES (0, 'advisor_model', 'bogus-model')")
+    assert adv.get_advisor_model(conn) == adv.MODEL  # unknown falls back to default
+
+
+def test_set_advisor_model_roundtrip_and_validation():
+    conn = _config_conn()
+    adv.set_advisor_model(conn, "claude-opus-4-8")
+    assert adv.get_advisor_model(conn) == "claude-opus-4-8"
+    try:
+        adv.set_advisor_model(conn, "not-a-model")
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+
+def test_server_context_toggle_defaults_off():
+    conn = _config_conn()
+    assert adv.get_advisor_context_enabled(conn) is False
+    adv.set_advisor_context_enabled(conn, True)
+    assert adv.get_advisor_context_enabled(conn) is True
+    adv.set_advisor_context_enabled(conn, False)
+    assert adv.get_advisor_context_enabled(conn) is False
 
 
 # ── history sanitisation ────────────────────────────────────────────────────

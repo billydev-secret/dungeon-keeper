@@ -37,6 +37,7 @@ from bot_modules.services.wellness_partners import (
     WellnessPartnerDeclineButton,
 )
 from bot_modules.services.db_backup import db_backup_loop
+from bot_modules.services.advisor_context import guild_pins_loop
 from bot_modules.services.xp_service import (
     handle_level_progress,
     nsfw_grant_role_id,
@@ -338,6 +339,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: greeting_watch_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: db_backup_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: guild_pins_loop(bot, db_path))
 
     # ==============================
     # Games — crash recovery (re-register in-flight views/timers on boot)
