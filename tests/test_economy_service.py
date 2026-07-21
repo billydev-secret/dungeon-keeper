@@ -445,11 +445,15 @@ def test_process_login_booster_ceil(db):
 
 # ── XP conversion ─────────────────────────────────────────────────────
 
+# The conversion faucet ships off (xp_per_coin default 0); these tests cover
+# the retained mechanism with it explicitly re-enabled at the old rate of 15.
+S_CONV = EconSettings(xp_per_coin=15.0)
+
 
 def test_process_conversion_basic_credit(db):
     with open_db(db) as conn:
         credited = process_conversion(
-            conn, S, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+            conn, S_CONV, GUILD, USER, local_day=DAY, xp=31.0, booster=False
         )
         assert credited == 2  # 31 / 15
         rows = get_ledger(conn, GUILD, USER)
@@ -465,10 +469,10 @@ def test_process_conversion_basic_credit(db):
 def test_process_conversion_idempotent_per_day(db):
     with open_db(db) as conn:
         assert process_conversion(
-            conn, S, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+            conn, S_CONV, GUILD, USER, local_day=DAY, xp=31.0, booster=False
         ) == 2
         assert process_conversion(
-            conn, S, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+            conn, S_CONV, GUILD, USER, local_day=DAY, xp=31.0, booster=False
         ) == 0
         assert get_balance(conn, GUILD, USER) == 2
         assert len(get_ledger(conn, GUILD, USER)) == 1
@@ -476,9 +480,9 @@ def test_process_conversion_idempotent_per_day(db):
 
 def test_process_conversion_remainder_carries_across_days(db):
     with open_db(db) as conn:
-        process_conversion(conn, S, GUILD, USER, local_day=PREV, xp=10.0, booster=False)
+        process_conversion(conn, S_CONV, GUILD, USER, local_day=PREV, xp=10.0, booster=False)
         credited = process_conversion(
-            conn, S, GUILD, USER, local_day=DAY, xp=6.0, booster=False
+            conn, S_CONV, GUILD, USER, local_day=DAY, xp=6.0, booster=False
         )
         # 10 carried + 6 = 16 -> 1 coin, 1 XP remainder.
         assert credited == 1
@@ -493,7 +497,7 @@ def test_process_conversion_remainder_carries_across_days(db):
 def test_process_conversion_zero_coins_writes_row_no_ledger(db):
     with open_db(db) as conn:
         assert process_conversion(
-            conn, S, GUILD, USER, local_day=DAY, xp=7.0, booster=False
+            conn, S_CONV, GUILD, USER, local_day=DAY, xp=7.0, booster=False
         ) == 0
         assert get_ledger(conn, GUILD, USER) == []
         row = conn.execute(
@@ -506,7 +510,7 @@ def test_process_conversion_zero_coins_writes_row_no_ledger(db):
 def test_process_conversion_booster_ceil(db):
     with open_db(db) as conn:
         credited = process_conversion(
-            conn, S, GUILD, USER, local_day=DAY, xp=45.0, booster=True
+            conn, S_CONV, GUILD, USER, local_day=DAY, xp=45.0, booster=True
         )
         # 3 coins -> ceil(3 * 1.5) == 5
         assert credited == 5

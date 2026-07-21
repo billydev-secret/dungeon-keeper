@@ -53,7 +53,13 @@ class EconSettings:
     wallet_name: str = "Wallet"
     transfers_enabled: bool = True
     booster_multiplier: float = 1.5
-    xp_per_coin: float = 15.0
+    # XP → coin conversion rate (XP per coin). Ships at 0 = the faucet is OFF:
+    # earning XP no longer mints currency. An admin re-enables it by setting a
+    # positive rate on the Income Sources panel; the day-roll driver skips the
+    # conversion entirely while the rate is 0, so nothing accumulates and a
+    # later re-enable resumes cleanly from that day rather than dumping a
+    # backlog. The mechanism (convert_xp/process_conversion) is retained intact.
+    xp_per_coin: float = 0.0
     login_text_base: int = 5
     login_voice_base: int = 15
     streak_bonus_cap: int = 10

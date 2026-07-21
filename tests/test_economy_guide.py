@@ -46,8 +46,11 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert embed.color == discord.Color(0x123456)
     fields = {f.name: f.value or "" for f in embed.fields}
     earning = fields["Earning"]
-    # what-pays-what rows are aligned: label cell, payment outside
-    assert "`First message of the day` 🪙 5" in earning
+    # what-pays-what rows are aligned: label in a code cell (padded to the
+    # widest row), payment outside it — so match the label and pay separately
+    # rather than pin the exact padding, which shifts as rows are added.
+    assert "First message of the day" in earning
+    assert "🪙 5" in earning  # text login base
     assert "🪙 15" in earning  # voice-first login base
     assert "/bank quests" in earning
     spending = fields["Spending"]
@@ -58,6 +61,20 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     # fine print (streak cap, booster, rental grace) collapses to the footer
     footer = embed.footer.text or ""
     assert "+10" in footer and "×1.5" in footer and "grace" in footer
+
+
+def test_guide_embed_conversion_line_gated_on_rate():
+    # The XP→coin faucet ships off (rate 0): the guide must not promise a
+    # nightly conversion that no longer happens.
+    off = build_guide_embed(EconSettings())  # default xp_per_coin == 0.0
+    off_earning = {f.name: f.value or "" for f in off.fields}["Earning"]
+    assert "converts into" not in off_earning
+    assert "/bank quests" in off_earning  # quests are still surfaced
+
+    # Re-enabled (a positive rate): the conversion copy comes back.
+    on = build_guide_embed(EconSettings(xp_per_coin=15.0))
+    on_earning = {f.name: f.value or "" for f in on.fields}["Earning"]
+    assert "converts into" in on_earning
 
 
 def test_guide_embed_offers_notifications_not_channel_access():
