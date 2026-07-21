@@ -120,3 +120,18 @@ complete than guess_submit's single hook) and pairing it with `guess` via
   flash goal would need a 24 h community cadence, future round), role_pick
   (once-ever setup shape; a "N members made their first pick" distinct-member
   variant is a possible one-off campaign).
+
+## Channel-scoped sizing + Meadow Buzz (done 2026-07-21)
+
+Channel-scoped quests always *counted* correctly but both sizers read
+`econ_kind_activity`, which has no channel dimension — a meadow-scoped
+community week would have been sized against 100% of guild messages while
+the-meadow carries ~43%. `channel_message_share` (trailing 28 d of
+`processed_messages`, guild-wide or per-member) now scales both the
+community auto-target and the personal band median for scoped quests on
+`CHANNEL_SHARE_KINDS` (message_sent, reply_sent, media_post). Fixed-target
+scoped quests ("Send 35 messages in the-meadow", authorable on the
+dashboard today) were always fine — the scaling is for the automatic
+sizers. Seeded **Meadow Buzz** (community id 63, message_sent scoped to
+💛│the-meadow) at the rotation tail (~W51 at current cadence, or sooner as
+the library reorders after first runs).
