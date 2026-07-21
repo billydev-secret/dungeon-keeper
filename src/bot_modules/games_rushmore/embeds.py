@@ -91,7 +91,7 @@ def build_join_embed(
     ride in the embed itself. ``mode`` flips the line between snake
     ("when it's your turn") and blitz ("everyone picks at once").
     """
-    title = f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT"
+    title = f"{GAME_ICONS['rushmore']} Mt. Rushmore Draft"
     desc = f"Hosted by: **{discord.utils.escape_markdown(host_name)}**"
     if topic:
         desc += (
@@ -143,7 +143,7 @@ def build_draft_embed(
     from bot_modules.games.utils.timer import format_deadline, now_plus
     embed = discord.Embed(
         title=(
-            f"{GAME_ICONS['rushmore']} MT. RUSHMORE OF: "
+            f"{GAME_ICONS['rushmore']} Mt. Rushmore of: "
             f"{discord.utils.escape_markdown(topic)}"
         ),
         color=color or discord.Color(PHASE_PLAYING),
@@ -185,8 +185,8 @@ def build_final_boards_embed(
     """
     embed = discord.Embed(
         title=(
-            f"{GAME_ICONS['rushmore']} MT. RUSHMORE OF: "
-            f"{discord.utils.escape_markdown(topic)} — FINAL BOARDS"
+            f"{GAME_ICONS['rushmore']} Mt. Rushmore of: "
+            f"{discord.utils.escape_markdown(topic)} — Final Boards"
         ),
         color=color or discord.Color(PHASE_RESULTS),
     )
@@ -218,7 +218,7 @@ def build_vote_embed(
     from bot_modules.games.utils.timer import format_deadline, now_plus
     embed = discord.Embed(
         title=(
-            f"{GAME_ICONS['rushmore']} VOTE — Best Mt. Rushmore of "
+            f"{GAME_ICONS['rushmore']} Vote — Best Mt. Rushmore of "
             f"{discord.utils.escape_markdown(topic)}"
         ),
         color=color or discord.Color(PHASE_PLAYING),
@@ -257,7 +257,7 @@ def build_winner_embed(
     """
     embed = discord.Embed(
         title=(
-            f"{GAME_ICONS['rushmore']} WINNER — Mt. Rushmore of "
+            f"{GAME_ICONS['rushmore']} Winner — Mt. Rushmore of "
             f"{discord.utils.escape_markdown(topic)}"
         ),
         color=color or discord.Color(COLOR_GREEN),
@@ -321,7 +321,7 @@ def build_recap_embed(
     mins = int(duration_secs // 60)
     secs = int(duration_secs % 60)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT — GAME OVER",
+        title=f"{GAME_ICONS['rushmore']} Mt. Rushmore Draft — Game Over",
         color=color or discord.Color(PHASE_RECAP),
     )
     winner_label = " & ".join(

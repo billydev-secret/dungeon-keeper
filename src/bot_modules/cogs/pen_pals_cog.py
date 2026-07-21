@@ -521,12 +521,12 @@ async def _post_intro(
         color = discord.Color.blurple()
     embed = discord.Embed(title="🖊️ Pen Pals", color=color)
     embed.add_field(
-        name="Matched with",
+        name="Matched With",
         value=f"{user1.mention} × {user2.mention}",
         inline=False,
     )
     embed.add_field(
-        name="Session ends",
+        name="Session Ends",
         value=f"<t:{int(expiry_at)}:F> (<t:{int(expiry_at)}:R>)",
         inline=False,
     )
@@ -948,7 +948,7 @@ async def _refresh_panel_locked(
 
 async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
     if not interaction.guild:
-        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        await interaction.response.send_message("❌ This only works in a server.", ephemeral=True)
         return
 
     guild = interaction.guild
@@ -962,7 +962,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
     cfg = await asyncio.to_thread(_load_cfg)
     if cfg is None or not cfg["enabled"]:
         await interaction.response.send_message(
-            "Pen Pals isn't set up yet — ask an admin.", ephemeral=True
+            "❌ Pen Pals isn't set up yet — ask an admin.", ephemeral=True
         )
         return
 
@@ -971,7 +971,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
         member = guild.get_member(user_id)
         if role is not None and (member is None or role not in member.roles):
             await interaction.response.send_message(
-                f"You need the **{role.name}** role to join Pen Pals.", ephemeral=True
+                f"❌ You need the **{role.name}** role to join Pen Pals.", ephemeral=True
             )
             return
 
@@ -990,12 +990,12 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
 
     if status == "active":
         await interaction.response.send_message(
-            "You already have an active pen pal. Use `/penpals status` to see it.", ephemeral=True
+            "❌ You already have an active pen pal. Use `/penpals status` to see it.", ephemeral=True
         )
         return
     if status == "in_pool":
         await interaction.response.send_message(
-            "You're already in the pool. Use `/penpals status` to check your position.", ephemeral=True
+            "❌ You're already in the pool. Use `/penpals status` to check your position.", ephemeral=True
         )
         return
 
@@ -1035,7 +1035,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
 
 async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None:
     if not interaction.guild:
-        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        await interaction.response.send_message("❌ This only works in a server.", ephemeral=True)
         return
 
     guild_id = interaction.guild.id
@@ -1054,7 +1054,7 @@ async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None
         await _refresh_panel(interaction.client, db_path, guild_id)
     else:
         await interaction.response.send_message(
-            "You're not in the pool. Use `/penpals status` to check your status.", ephemeral=True
+            "❌ You're not in the pool. Use `/penpals status` to check your status.", ephemeral=True
         )
 
 
@@ -1217,7 +1217,7 @@ class _PenPalsBlockView(discord.ui.View):
 
 async def _handle_block(interaction: discord.Interaction, db_path: Path) -> None:
     if not interaction.guild:
-        await interaction.response.send_message("This only works in a server.", ephemeral=True)
+        await interaction.response.send_message("❌ This only works in a server.", ephemeral=True)
         return
 
     guild = interaction.guild
@@ -1256,7 +1256,7 @@ class _EndConfirmView(discord.ui.View):
     @discord.ui.button(label="End Session", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if interaction.user.id != self.invoker_id:
-            await interaction.response.send_message("Only the person who initiated can confirm.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the person who initiated can confirm.", ephemeral=True)
             return
         self._done = True
         self.stop()
@@ -1409,7 +1409,7 @@ class PenPalsCog(commands.Cog):
     @penpals.command(name="status", description="Check your current Pen Pals status.")
     async def penpals_status(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
 
         guild_id = interaction.guild.id
@@ -1463,12 +1463,12 @@ class PenPalsCog(commands.Cog):
     @penpals.command(name="new-question", description="Swap the current question for a fresh one (limited swaps per session).")
     async def penpals_new_question(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
 
         db_path = self.ctx.db_path
         if interaction.channel_id is None:
-            await interaction.response.send_message("This command only works in an active pen pal channel.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in an active pen pal channel.", ephemeral=True)
             return
         channel_id: int = interaction.channel_id
 
@@ -1481,20 +1481,20 @@ class PenPalsCog(commands.Cog):
         session, cfg = await asyncio.to_thread(_load)
         if session is None:
             await interaction.response.send_message(
-                "This command only works in an active pen pal channel.", ephemeral=True
+                "❌ This command only works in an active pen pal channel.", ephemeral=True
             )
             return
 
         if interaction.user.id not in (session["user1_id"], session["user2_id"]):
             await interaction.response.send_message(
-                "Only the two pen pals can swap the question.", ephemeral=True
+                "❌ Only the two pen pals can swap the question.", ephemeral=True
             )
             return
 
         max_swaps = cfg["max_question_swaps"] if cfg else _MAX_SWAPS
         if session["question_swaps_used"] >= max_swaps:
             await interaction.response.send_message(
-                f"You've used all {max_swaps} question swaps for this session.", ephemeral=True
+                f"❌ You've used all {max_swaps} question swaps for this session.", ephemeral=True
             )
             return
 
@@ -1531,13 +1531,13 @@ class PenPalsCog(commands.Cog):
     @penpals.command(name="end", description="End your current pen pal session early.")
     async def penpals_end(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
 
         db_path = self.ctx.db_path
         user_id = interaction.user.id
         if interaction.channel_id is None:
-            await interaction.response.send_message("This command only works in your active pen pal channel.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in your active pen pal channel.", ephemeral=True)
             return
         channel_id: int = interaction.channel_id
 
@@ -1548,13 +1548,13 @@ class PenPalsCog(commands.Cog):
         session = await asyncio.to_thread(_load)
         if session is None or user_id not in (session["user1_id"], session["user2_id"]):
             await interaction.response.send_message(
-                "This command only works in your active pen pal channel.", ephemeral=True
+                "❌ This command only works in your active pen pal channel.", ephemeral=True
             )
             return
 
         chan = interaction.channel
         if not isinstance(chan, discord.TextChannel):
-            await interaction.response.send_message("This command only works in your active pen pal channel.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in your active pen pal channel.", ephemeral=True)
             return
 
         other_id = session["user2_id"] if session["user1_id"] == user_id else session["user1_id"]
@@ -1583,10 +1583,10 @@ class PenPalsCog(commands.Cog):
         user2: discord.Member,
     ) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
         if user1 == user2:
-            await interaction.response.send_message("You can't pair someone with themselves.", ephemeral=True)
+            await interaction.response.send_message("❌ You can't pair someone with themselves.", ephemeral=True)
             return
 
         db_path = self.ctx.db_path
@@ -1605,11 +1605,11 @@ class PenPalsCog(commands.Cog):
 
         status, data = await asyncio.to_thread(_check)
         if status == "disabled":
-            await interaction.response.send_message("Pen Pals isn't enabled on this server.", ephemeral=True)
+            await interaction.response.send_message("❌ Pen Pals isn't enabled on this server.", ephemeral=True)
             return
         if status == "blocked":
             await interaction.response.send_message(
-                "These two can't be paired — one has blocked the other, or they're "
+                "❌ These two can't be paired — one has blocked the other, or they're "
                 "on the Pen Pals separations list. Clear the block first if this is intended.",
                 ephemeral=True,
             )
@@ -1618,10 +1618,10 @@ class PenPalsCog(commands.Cog):
         assert data is not None
         s1, s2 = data
         if s1:
-            await interaction.response.send_message(f"{user1.mention} already has an active pen pal.", ephemeral=True)
+            await interaction.response.send_message(f"❌ {user1.mention} already has an active pen pal.", ephemeral=True)
             return
         if s2:
-            await interaction.response.send_message(f"{user2.mention} already has an active pen pal.", ephemeral=True)
+            await interaction.response.send_message(f"❌ {user2.mention} already has an active pen pal.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -1631,7 +1631,7 @@ class PenPalsCog(commands.Cog):
                 f"✅ Paired {user1.mention} × {user2.mention}.", ephemeral=True
             )
         else:
-            await interaction.followup.send("Failed to create the channel — check bot permissions.", ephemeral=True)
+            await interaction.followup.send("❌ Failed to create the channel — check bot permissions.", ephemeral=True)
 
     # ── /penpals round (admin) ────────────────────────────────────────
 
@@ -1639,7 +1639,7 @@ class PenPalsCog(commands.Cog):
     @app_commands.default_permissions(manage_guild=True)
     async def penpals_round(self, interaction: discord.Interaction) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)

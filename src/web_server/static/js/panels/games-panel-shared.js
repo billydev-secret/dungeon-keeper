@@ -225,10 +225,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
       '<div class="field" style="margin:0;min-width:180px;"><label>' + tagWord + '<div data-ctrl="filter-tags"></div></label></div>' +
       matchHtml +
-      '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="search" placeholder="Filter..." /></label></div>' +
+      '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="search" placeholder="Filter…" /></label></div>' +
       '<button class="btn" data-action="search-btn">Search</button>' +
       "</div>" +
-      '<div data-region="bank-list">' + renderLoading("Loading...") + "</div>" +
+      '<div data-region="bank-list">' + renderLoading("Loading…") + "</div>" +
       '<div data-region="bank-pagination" style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;"></div>' +
       "</div>" +
       '<div style="width:300px;flex-shrink:0;">' +
@@ -247,7 +247,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
       '<div class="section-label mb-10">Global Pool</div>' +
       '<div class="field-hint" style="margin-bottom:10px;">A question pool shared by every game. Each question’s <strong>Pool</strong> button copies it there; browse the pool to import questions into this bank.</div>' +
-      '<button class="btn" data-action="toggle-pool">Browse pool</button>' +
+      '<button class="btn" data-action="toggle-pool">Browse Pool</button>' +
       "</section></div></div>" +
       buildPoolBrowserHtml() +
       "</section>";
@@ -261,13 +261,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div class="section-label mb-10">Global Pool</div>' +
       '<div class="field-hint" style="margin-bottom:10px;">' + importHint + "</div>" +
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">' +
-      '<div class="field m-0" style="flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="pool-search" placeholder="Filter..." /></label></div>' +
+      '<div class="field m-0" style="flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="pool-search" placeholder="Filter…" /></label></div>' +
       '<button class="btn" data-action="pool-search-btn">Search</button>' +
       (catMode ? '<div class="field m-0"><label>Import as<div data-ctrl="pool-cat"></div></label></div>' : "") +
-      '<button class="btn btn-primary" data-action="pool-import">Import selected</button>' +
+      '<button class="btn btn-primary" data-action="pool-import">Import Selected</button>' +
       '<span data-status="pool" class="save-status"></span>' +
       "</div>" +
-      '<div data-region="pool-list">' + renderLoading("Loading...") + "</div>" +
+      '<div data-region="pool-list">' + renderLoading("Loading…") + "</div>" +
       "</div>";
   }
 
@@ -294,7 +294,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
     async function loadBank() {
       const el = region("bank-list");
-      el.innerHTML = renderLoading("Loading...");
+      el.innerHTML = renderLoading("Loading…");
       const params = new URLSearchParams({ game_type: gameType, page: currentPage, per_page: 50 });
       currentTags.forEach(t => params.append("tag", t));
       if (currentTags.length > 1) params.set("match", ctrl("filter-match").value);
@@ -442,13 +442,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const reg = region("pool-browser");
       const open = reg.style.display !== "none";
       reg.style.display = open ? "none" : "";
-      e.target.textContent = open ? "Browse pool" : "Hide pool";
+      e.target.textContent = open ? "Browse Pool" : "Hide Pool";
       if (!open && !poolLoaded) { poolLoaded = true; loadPool(); }
     });
 
     async function loadPool() {
       const el = region("pool-list");
-      el.innerHTML = renderLoading("Loading...");
+      el.innerHTML = renderLoading("Loading…");
       const params = new URLSearchParams({ game_type: "global", per_page: 200 });
       const search = ctrl("pool-search").value.trim();
       if (search) params.set("search", search);

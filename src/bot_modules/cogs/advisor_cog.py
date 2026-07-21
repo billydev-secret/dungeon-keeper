@@ -90,7 +90,7 @@ class AdvisorCog(commands.Cog):
         error: app_commands.AppCommandError,
     ) -> None:
         if isinstance(error, app_commands.CommandOnCooldown):
-            msg = f"Give me a sec — try again in {error.retry_after:.0f}s."
+            msg = f"❌ Give me a sec — try again in {error.retry_after:.0f}s."
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
             else:

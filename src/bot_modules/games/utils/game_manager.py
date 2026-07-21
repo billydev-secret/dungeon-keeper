@@ -63,7 +63,7 @@ class ConfirmCloseView(discord.ui.View):
         super().__init__(timeout=30)
         self._callback = callback
 
-    @discord.ui.button(label="Yes, end game", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Yes, End Game", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         disable_all_items(self)

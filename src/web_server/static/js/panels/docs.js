@@ -154,7 +154,7 @@ export function mount(container) {
             <label class="doc-ed-lbl">Markdown source
               <span class="field-hint" style="font-weight:400">A line of <code>---</code> starts a new message. A leading <code>#</code> heading becomes the embed title. An image sits at the bottom of its embed — put it in its own <code>---</code> section for a top banner.</span>
             </label>
-            <textarea class="doc-ed-area" data-body spellcheck="true" placeholder="# Server Rules&#10;&#10;1. Be kind.&#10;&#10;---&#10;&#10;## FAQ&#10;...">${esc(doc.body_md)}</textarea>
+            <textarea class="doc-ed-area" data-body spellcheck="true" placeholder="# Server Rules&#10;&#10;1. Be kind.&#10;&#10;---&#10;&#10;## FAQ&#10;…">${esc(doc.body_md)}</textarea>
             <div class="doc-ed-actions">
               <button class="act-btn" data-save>Save &amp; sync</button>
               <button class="act-btn ghost" data-img-btn title="Upload an image and insert it at the cursor">🖼 Image</button>
@@ -171,13 +171,13 @@ export function mount(container) {
         </div>
         <div class="doc-placements">
           <div class="doc-place-head">
-            <h4>Posted in</h4>
+            <h4>Posted In</h4>
             <button class="act-btn ghost" data-sync>Re-sync all</button>
           </div>
           <div data-place-list>${renderPlacements(doc)}</div>
           <div class="doc-add-row">
             <span data-ch-picker></span>
-            <button class="act-btn" data-add-place>Post to channel</button>
+            <button class="act-btn" data-add-place>Post to Channel</button>
           </div>
         </div>
       </div>`;

@@ -271,7 +271,7 @@ def test_build_lobby_embed_shows_host_name_and_zero_submissions():
     assert by_name["Host"] == "Alice"
     assert by_name["Submissions"] == "0"
     assert embed.title is not None
-    assert "HOT TAKES" in embed.title
+    assert "Hot Takes" in embed.title
 
 
 def test_build_lobby_embed_uses_provided_submission_count():
@@ -292,8 +292,8 @@ def test_build_lobby_embed_has_anonymous_footer():
 def test_build_vote_embed_open_has_playing_title_no_suffix():
     embed = build_vote_embed("My take", take_num=1, total_takes=3, votes_by_user={})
     assert embed.title is not None
-    assert "HOT TAKE #1" in embed.title
-    assert "ROUND OVER" not in embed.title
+    assert "Hot Take #1" in embed.title
+    assert "Round Over" not in embed.title
 
 
 def test_build_vote_embed_closed_appends_round_over():
@@ -301,7 +301,7 @@ def test_build_vote_embed_closed_appends_round_over():
         "My take", take_num=2, total_takes=4, votes_by_user={1: 4}, closed=True
     )
     assert embed.title is not None
-    assert "ROUND OVER" in embed.title
+    assert "Round Over" in embed.title
 
 
 def test_build_vote_embed_escapes_markdown_in_take_text():

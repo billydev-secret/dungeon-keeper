@@ -1,7 +1,7 @@
 import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading wellness...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading wellness…</div></div>`;
 
   (async () => {
     let d;

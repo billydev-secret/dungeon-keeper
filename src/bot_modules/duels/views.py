@@ -99,7 +99,7 @@ class ResultView(discord.ui.View):
         self._on_set_nick = on_set_nick
 
         nick_btn = discord.ui.Button(
-            label="Name the loser",
+            label="Name the Loser",
             style=discord.ButtonStyle.primary,
             emoji="📝",
             custom_id=f"set_nick:{game_id}",

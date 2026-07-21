@@ -746,7 +746,7 @@ class TicketReopenButton(
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "Only moderators can reopen tickets.", ephemeral=True
+                "❌ Only moderators can reopen tickets.", ephemeral=True
             )
             return
 
@@ -848,7 +848,7 @@ class TicketDeleteButton(
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "Only moderators can delete tickets.", ephemeral=True
+                "❌ Only moderators can delete tickets.", ephemeral=True
             )
             return
 
@@ -1108,11 +1108,11 @@ async def _handle_policy_vote(
     member = interaction.user
     guild = interaction.guild
     if not isinstance(member, discord.Member) or not guild:
-        await interaction.response.send_message("Server-only.", ephemeral=True)
+        await interaction.response.send_message("❌ Server-only.", ephemeral=True)
         return
     if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
         await interaction.response.send_message(
-            "Only mods and admins can vote.", ephemeral=True
+            "❌ Only mods and admins can vote.", ephemeral=True
         )
         return
 
@@ -1123,7 +1123,7 @@ async def _handle_policy_vote(
     policy = await asyncio.to_thread(_get_policy)
     if not policy or policy["status"] != "voting":
         await interaction.response.send_message(
-            "This vote is no longer active.", ephemeral=True
+            "❌ This vote is no longer active.", ephemeral=True
         )
         return
 
@@ -1296,7 +1296,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
             await interaction.response.send_message(
-                "This only works in a server.", ephemeral=True
+                "❌ This only works in a server.", ephemeral=True
             )
             return
 
@@ -1304,7 +1304,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "Ticket category is not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category is not configured. Ask an admin to run `/setup`.",
                 ephemeral=True,
             )
             return
@@ -1449,7 +1449,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             return
         if not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "Only moderators can close tickets.", ephemeral=True
+                "❌ Only moderators can close tickets.", ephemeral=True
             )
             return
 
@@ -1479,7 +1479,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
         ticket = await asyncio.to_thread(_close)
         if ticket is None:
             await interaction.response.send_message(
-                "This ticket is not open.", ephemeral=True
+                "❌ This ticket is not open.", ephemeral=True
             )
             return
 
@@ -1594,14 +1594,14 @@ async def _do_jail(
     guild = interaction.guild
     mod = interaction.user
     if guild is None or not isinstance(mod, discord.Member):
-        await interaction.response.send_message("Server-only command.", ephemeral=True)
+        await interaction.response.send_message("❌ Server-only command.", ephemeral=True)
         return
 
     # Cheap precondition checks → initial response (no defer required).
     precheck = check_jail_preconditions(ctx, guild, target, mod)
     if precheck is not None:
         await interaction.response.send_message(
-            precheck.error_message or "Cannot jail this user.", ephemeral=True
+            "❌ " + (precheck.error_message or "Cannot jail this user."), ephemeral=True
         )
         return
 
@@ -1621,7 +1621,7 @@ async def _do_jail(
 
     if not result.ok:
         await interaction.followup.send(
-            result.error_message or "Failed to jail user.", ephemeral=True
+            "❌ " + (result.error_message or "Failed to jail user."), ephemeral=True
         )
         return
 
@@ -2006,14 +2006,14 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
-            await interaction.response.send_message("Server only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
 
         cat_id = _get_config(ctx, "ticket_category_id", guild_id=guild.id)
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "Ticket category not configured.", ephemeral=True
+                "❌ Ticket category not configured.", ephemeral=True
             )
             return
 

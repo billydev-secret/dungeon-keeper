@@ -76,7 +76,7 @@ export function mount(container, params = {}) {
             <button class="btn btn-primary" data-action="generate">Generate</button>
           </div>
           <div class="mt-8">
-            <button class="btn" data-action="toggle-custom" style="font-size:12px;padding:2px 8px;">Custom prompt</button>
+            <button class="btn" data-action="toggle-custom" style="font-size:12px;padding:2px 8px;">Custom Prompt</button>
             <div data-region="custom-prompt" style="display:none;margin-top:6px;">
               <textarea class="w-full" data-ctrl="custom-prompt" rows="3" placeholder="Override the user prompt sent to the AI (optional)"></textarea>
             </div>
@@ -197,7 +197,7 @@ export function mount(container, params = {}) {
       const customPrompt = ctrl("custom-prompt").value.trim();
 
       btn.disabled = true;
-      btn.textContent = "Generating...";
+      btn.textContent = "Generating…";
       region("results").innerHTML = `<div class="empty">Generating ${count} question(s)…</div>`;
       region("add-selected").style.display = "none";
       pendingResults = [];

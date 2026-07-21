@@ -52,7 +52,7 @@ def build_start_embed(
     ``PHASE_JOINING`` fallback is used only when no guild/accent is available.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} NAME YOUR PRICE",
+        title=f"{GAME_ICONS['price']} Name Your Price",
         description=(
             f"Hosted by: **{discord.utils.escape_markdown(host_name)}** | "
             f"Round {round_num}/{total_rounds}"
@@ -88,7 +88,7 @@ def build_scenario_embed(
     """
     embed = discord.Embed(
         title=(
-            f"{GAME_ICONS['price']} NAME YOUR PRICE — "
+            f"{GAME_ICONS['price']} Name Your Price — "
             f"Round {round_num}/{total_rounds}"
         ),
         color=color or discord.Color(PHASE_PLAYING),
@@ -127,7 +127,7 @@ def build_reveal_embed(
     no-guild fallback.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} REVEAL — Round {round_num}/{total_rounds}",
+        title=f"{GAME_ICONS['price']} Reveal — Round {round_num}/{total_rounds}",
         color=color or discord.Color(PHASE_RESULTS),
     )
     embed.add_field(
@@ -182,7 +182,7 @@ def build_vote_embed(
     accent; ``PHASE_PLAYING`` is the no-guild fallback.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} VOTE — Round {round_num}/{total_rounds}",
+        title=f"{GAME_ICONS['price']} Vote — Round {round_num}/{total_rounds}",
         color=color or discord.Color(PHASE_PLAYING),
     )
     embed.add_field(
@@ -222,7 +222,7 @@ def build_round_results_embed(
     when explicitly supplied.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} ROUND {round_num} RESULTS",
+        title=f"{GAME_ICONS['price']} Round {round_num} Results",
         color=color or discord.Color(COLOR_GREEN),
     )
     embed.add_field(
@@ -266,7 +266,7 @@ def build_recap_embed(
     ``PHASE_RECAP`` is the no-guild fallback.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} NAME YOUR PRICE — GAME OVER",
+        title=f"{GAME_ICONS['price']} Name Your Price — Game Over",
         color=color or discord.Color(PHASE_RECAP),
     )
     embed.add_field(

@@ -299,7 +299,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 name = resolve_name(guild, int(uid))
                 filled = render_filled_body(template["body"], blanks, fills)
                 embed = build_reveal_embed(template["title"], tier, filled, 1, 1)
-                embed.set_footer(text=f"📝 LegitLibs  •  by {name}")
+                embed.set_footer(text=f"📝 LegitLibs • by {name}")
                 await channel.send(embed=embed)
             else:
                 await channel.send(f"**Revealing {total} submissions…**")
@@ -316,7 +316,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                     for i, uid in enumerate(uid_list, 1)
                 ]
                 cast_embed = discord.Embed(
-                    title=f"{_GAME_ICONS_LL} WHO WROTE WHAT",
+                    title=f"{_GAME_ICONS_LL} Who Wrote What",
                     description="\n".join(cast_lines),
                     color=await resolve_accent_color(cog.bot.ctx.db_path, guild),
                 )

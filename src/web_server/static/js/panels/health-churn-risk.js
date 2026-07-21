@@ -12,7 +12,7 @@ function timeAgo(ts) {
 const TIER_COLORS = { critical: "#9E3B2E", declining: "#E6B84C", watch: "#B88A2C" };
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading churn risk data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading churn risk data…</div></div>';
   const charts = [];
 
   async function load() {

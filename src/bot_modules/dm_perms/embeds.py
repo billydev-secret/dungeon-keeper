@@ -33,7 +33,7 @@ def build_stale_request_embed() -> discord.Embed:
     don't try to disambiguate because the underlying row is gone.
     """
     return discord.Embed(
-        title="⌛ Request no longer active",
+        title="⌛ Request No Longer Active",
         description=(
             "This DM request has already been answered, expired, "
             "or was cancelled."
@@ -50,7 +50,7 @@ def build_guild_unavailable_embed() -> discord.Embed:
     than leaving the buttons dead.
     """
     return discord.Embed(
-        title="❌ Server unavailable",
+        title="❌ Server Unavailable",
         description=(
             "The server this request belongs to is no longer reachable."
         ),
@@ -73,7 +73,7 @@ def build_acceptance_embed(
     the target, and the original button message stay consistent.
     """
     embed = discord.Embed(
-        title="✅ Connection accepted!",
+        title="✅ Connection Accepted!",
         color=DM_ACCEPT,
     )
     embed.description = (
@@ -95,14 +95,14 @@ def build_denial_embed_for_view(
     can see the note they sent to the requester.
     """
     embed = discord.Embed(
-        title="❌ Request declined",
+        title="❌ Request Declined",
         description="No worries — the request was turned down.",
         color=DM_DENY,
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
     if reply:
-        embed.add_field(name="Your reply", value=safe_field_text(reply), inline=False)
+        embed.add_field(name="Your Reply", value=safe_field_text(reply), inline=False)
     return embed
 
 
@@ -121,7 +121,7 @@ def build_denial_embed_for_requester(
     denier included a ``reply``, it is shown as a message from them.
     """
     embed = discord.Embed(
-        title="❌ Request declined",
+        title="❌ Request Declined",
         description=(
             f"Your {type_label.lower()} request "
             f"to **{target_display_name}** "
@@ -154,7 +154,7 @@ def build_request_dm_embed(
     if color is None:
         color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
-        title="📨 Someone wants to connect with you",
+        title="📨 Someone Wants to Connect With You",
         description=(
             f"A member of **{guild_name}** would like to connect.\n\n"
             f"This request expires in {request_timeout_label}."
@@ -183,7 +183,7 @@ def build_request_sent_embed(
     if color is None:
         color = discord.Color(DM_PRIMARY)
     embed = discord.Embed(
-        title="📨 Request sent!",
+        title="📨 Request Sent!",
         description=(
             f"Your {type_label.lower()} request to **{target_display_name}** "
             f"in **{guild_name}** has been delivered.\n\n"
@@ -206,7 +206,7 @@ def build_expired_embed(
 ) -> discord.Embed:
     """Embed DM'd to a requester whose pending request aged out unanswered."""
     return discord.Embed(
-        title="⌛ Request expired",
+        title="⌛ Request Expired",
         description=(
             f"Your {type_label.lower()} request to "
             f"**{target_display_name}** in **{guild_name}** "
@@ -229,7 +229,7 @@ def build_revoked_embed(
     lost (older rows without it); ``safe_field_text`` renders the em-dash.
     """
     embed = discord.Embed(
-        title="🚫 Connection removed",
+        title="🚫 Connection Removed",
         description=(
             f"**{requester_display_name}** ↔ **{target_display_name}**\n\n"
             "The DM connection between you two has been removed."
@@ -298,7 +298,7 @@ def build_mode_updated_embed(
     if color is None:
         color = discord.Color(DM_PRIMARY)
     return discord.Embed(
-        title="DM preference updated",
+        title="DM Preference Updated",
         description=f"You're now set to **{mode.upper()}**.",
         color=color,
     )

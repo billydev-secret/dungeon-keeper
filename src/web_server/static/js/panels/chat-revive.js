@@ -74,7 +74,7 @@ function render(container) {
       </section>
 
       <section class="card">
-        <div class="section-label">Question bank</div>
+        <div class="section-label">Question Bank</div>
         <div data-bank><div class="empty">Loading…</div></div>
       </section>
 
@@ -142,11 +142,11 @@ function renderSettings(container, overview) {
       </label>
     </div>
     <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-      <button class="btn primary" data-save-settings>Save settings</button>
+      <button class="btn primary" data-save-settings>Save Settings</button>
       <span class="field-hint">Bank: ${overview.bank_size} question(s)${overview.bank_size === 0 ? " — enabling seeds the starter pack" : ""}</span>
       <span style="flex:1"></span>
       <select data-optin-channel>${chanOptions("")}</select>
-      <button class="btn" data-optin-post>Post opt-in button</button>
+      <button class="btn" data-optin-post>Post Opt-In Button</button>
     </div>`;
 
   host.querySelector("[data-save-settings]").addEventListener("click", async () => {
@@ -222,7 +222,7 @@ function renderChannels(container, rows) {
     </table>
     <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
       <select data-add-channel>${addable.map((c) => `<option value="${c.id}">#${esc(c.name)}</option>`).join("")}</select>
-      <button class="btn" data-add>Enable channel</button>
+      <button class="btn" data-add>Enable Channel</button>
       <span data-channels-status></span>
     </div>`;
 
@@ -346,7 +346,7 @@ async function renderBank(container) {
     <details style="margin-top:8px;">
       <summary class="field-hint">Bulk add (one per line; "deep: text" tags a category, "spicy,nsfw: text" flags adult-only)</summary>
       <textarea data-bulk rows="5" style="width:100%; margin-top:6px;"></textarea>
-      <button class="btn" data-bulk-add style="margin-top:6px;">Add all</button>
+      <button class="btn" data-bulk-add style="margin-top:6px;">Add All</button>
     </details>`;
 
   const status = () => host.querySelector("[data-bank-status]");
@@ -430,10 +430,10 @@ async function renderStats(container) {
         </tbody></table>
       </div>
       <div>
-        <div class="section-label">Carrying the team</div>
+        <div class="section-label">Carrying the Team</div>
         <table class="data-table"><tbody>${(s.top_questions || []).map((q) => qRow(q, true)).join("") || `<tr><td class="empty">—</td></tr>`}</tbody></table>
         ${(s.dud_questions || []).length ? `
-          <div class="section-label" style="margin-top:8px;">Dead weight (consider retiring)</div>
+          <div class="section-label" style="margin-top:8px;">Dead Weight (consider retiring)</div>
           <table class="data-table"><tbody>${s.dud_questions.map((q) => qRow(q, false)).join("")}</tbody></table>` : ""}
       </div>
     </div>`;

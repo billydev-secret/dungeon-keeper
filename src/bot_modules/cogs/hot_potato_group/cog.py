@@ -226,7 +226,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         elapsed = max(0.0, time.time() - game.phase_started_at) if game.phase_started_at else 0.0
         emoji = shake_emoji(elapsed, game.fuse_seconds or 0.0)
 
-        embed = discord.Embed(title=f"{emoji} HOT POTATO", color=COLOR_YELLOW)
+        embed = discord.Embed(title=f"{emoji} Hot Potato", color=COLOR_YELLOW)
         embed.add_field(name="Still in", value=alive_names, inline=False)
         if game.elimination_order:
             embed.add_field(

@@ -272,7 +272,7 @@ def test_filter_whispers_no_match_empty():
 def test_build_share_feed_embed_mentions_target_and_message():
     w = _whisper(target_id=42, message="secret")
     emb = build_share_feed_embed(w)
-    assert "fresh Whisper was shared" in (emb.title or "")
+    assert "Fresh Whisper Was Shared" in (emb.title or "")
     assert "<@42>" in (emb.description or "")
     assert "secret" in (emb.description or "")
 

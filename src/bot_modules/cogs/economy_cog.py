@@ -140,11 +140,11 @@ _MAX_ICON_BYTES = 256 * 1024
 
 # Human labels for the rentable perks (shop rows, wallet field, DMs).
 _PERK_LABELS = {
-    "role_color": "Custom role color",
-    "role_name": "Custom role name",
-    "role_icon": "Role icon",
-    "role_gradient": "Gradient role",
-    "voice_style": "Voice style",
+    "role_color": "Custom Role Color",
+    "role_name": "Custom Role Name",
+    "role_icon": "Role Icon",
+    "role_gradient": "Gradient Role",
+    "voice_style": "Voice Style",
 }
 # The role perks a member rents for themselves, in shop display order. Every
 # giftable perk (these + the voice-style lease) is gifted as the same perk
@@ -459,7 +459,7 @@ class _PayConfirmView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.sender.id:
             await interaction.response.send_message(
-                "This confirmation isn't yours.", ephemeral=True
+                "❌ This confirmation isn't yours.", ephemeral=True
             )
             return False
         return True
@@ -511,12 +511,12 @@ class _GiftConfirmView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.gifter.id:
             await interaction.response.send_message(
-                "This confirmation isn't yours.", ephemeral=True
+                "❌ This confirmation isn't yours.", ephemeral=True
             )
             return False
         return True
 
-    @discord.ui.button(label="Gift anyway", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Gift Anyway", style=discord.ButtonStyle.success)
     async def _confirm(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
@@ -536,7 +536,7 @@ class _GiftConfirmView(discord.ui.View):
         )
 
 
-class _RaffleBuyModal(discord.ui.Modal, title="Weekly raffle tickets"):
+class _RaffleBuyModal(discord.ui.Modal, title="Weekly Raffle Tickets"):
     quantity = discord.ui.TextInput(
         label="How many tickets?", min_length=1, max_length=3, placeholder="1"
     )
@@ -564,12 +564,12 @@ class _EmojiCancelView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "This isn't your submission.", ephemeral=True
+                "❌ This isn't your submission.", ephemeral=True
             )
             return False
         return True
 
-    @discord.ui.button(label="Cancel & refund", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Cancel & Refund", style=discord.ButtonStyle.danger)
     async def _cancel(
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
@@ -577,7 +577,7 @@ class _EmojiCancelView(discord.ui.View):
         await self.cog.do_cancel_emoji(interaction, self.submission_id)
 
 
-class _RoleNameModal(discord.ui.Modal, title="Set your custom name"):
+class _RoleNameModal(discord.ui.Modal, title="Set Your Custom Name"):
     text = discord.ui.TextInput(
         label="Name",
         min_length=1,
@@ -593,7 +593,7 @@ class _RoleNameModal(discord.ui.Modal, title="Set your custom name"):
         await self.cog.set_role_name(interaction, str(self.text.value))
 
 
-class _RoleColorModal(discord.ui.Modal, title="Custom role color"):
+class _RoleColorModal(discord.ui.Modal, title="Custom Role Color"):
     hex_value = discord.ui.TextInput(
         label="Hex color", min_length=3, max_length=9, placeholder="#7B2FF7"
     )
@@ -606,7 +606,7 @@ class _RoleColorModal(discord.ui.Modal, title="Custom role color"):
         await self.cog.set_role_color(interaction, str(self.hex_value.value))
 
 
-class _RoleGradientModal(discord.ui.Modal, title="Gradient role"):
+class _RoleGradientModal(discord.ui.Modal, title="Gradient Role"):
     hex1 = discord.ui.TextInput(
         label="First hex color", min_length=3, max_length=9, placeholder="#7B2FF7"
     )
@@ -624,7 +624,7 @@ class _RoleGradientModal(discord.ui.Modal, title="Gradient role"):
         )
 
 
-class _RoleIconModal(discord.ui.Modal, title="Role icon"):
+class _RoleIconModal(discord.ui.Modal, title="Role Icon"):
     emoji = discord.ui.TextInput(
         label="Server emoji",
         min_length=1,
@@ -651,10 +651,10 @@ _CFG_MODALS = {
 
 # Short button labels for the customise flows (the perk label is on the row).
 _CUSTOMISE_LABELS = {
-    "role_color": "Set color",
-    "role_name": "Set name",
-    "role_gradient": "Set gradient",
-    "role_icon": "Set icon",
+    "role_color": "Set Color",
+    "role_name": "Set Name",
+    "role_gradient": "Set Gradient",
+    "role_icon": "Set Icon",
 }
 
 
@@ -716,7 +716,7 @@ class _IconCatalogView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "Open your own shop with /bank shop.", ephemeral=True
+                "❌ Open your own shop with /bank shop.", ephemeral=True
             )
             return False
         return True
@@ -817,7 +817,7 @@ class _ShopView(discord.ui.View):
             # as "you have one", not as the button being broken.
             held = shields_held > 0
             button = discord.ui.Button(
-                label="🛡️ Shield held" if held else "🛡️ Shield",
+                label="🛡️ Shield Held" if held else "🛡️ Shield",
                 style=(
                     discord.ButtonStyle.success
                     if held
@@ -832,7 +832,7 @@ class _ShopView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "Open your own shop with /bank shop.", ephemeral=True
+                "❌ Open your own shop with /bank shop.", ephemeral=True
             )
             return False
         return True
@@ -920,13 +920,13 @@ async def _rent_perk_flow(
 
             bal = await asyncio.to_thread(_bal)
             text = (
-                f"You need {settings.currency_emoji} "
+                f"❌ You need {settings.currency_emoji} "
                 f"{_perk_price(settings, perk):,} but only have {bal:,}."
             )
         elif "already rented" in msg:
-            text = "You're already renting that perk."
+            text = "❌ You're already renting that perk."
         else:
-            text = "That perk isn't available."
+            text = "❌ That perk isn't available."
         await interaction.response.send_message(text, ephemeral=True)
         return
 
@@ -934,7 +934,7 @@ async def _rent_perk_flow(
         # No personal role to project and no customise modal — the perk's
         # controls ARE Voice Master's rename/limit, live again from now on.
         await interaction.response.send_message(
-            "Rented **Voice style**! Renaming and sizing your voice channel "
+            "Rented **Voice Style**! Renaming and sizing your voice channel "
             "are unlocked — your saved name and limit apply the next time "
             "you spin one up.",
             ephemeral=True,
@@ -1000,7 +1000,7 @@ class ShopRentButton(
             and self.perk not in ("voice_style", "streak_shield", "raffle_ticket")
         ):
             await interaction.response.send_message(
-                "That perk isn't available.", ephemeral=True
+                "❌ That perk isn't available.", ephemeral=True
             )
             return
         bot = cast("Bot", interaction.client)
@@ -1018,34 +1018,34 @@ class ShopRentButton(
             bot, guild.id, self.perk
         ):
             await interaction.response.send_message(
-                "That perk needs a server feature that isn't enabled here.",
+                "❌ That perk needs a server feature that isn't enabled here.",
                 ephemeral=True,
             )
             return
         cog = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
         if cog is None:  # cog unloaded mid-flight; the panel button outlives it
             await interaction.response.send_message(
-                "That perk isn't available right now.", ephemeral=True
+                "❌ That perk isn't available right now.", ephemeral=True
             )
             return
         if self.perk == "voice_style" and settings.price_voice_style <= 0:
             # The lease shipped dark (price 0) — a stale panel button from a
             # priced era refuses rather than renting a perk that gates nothing.
             await interaction.response.send_message(
-                "The voice-style lease isn't active here right now.",
+                "❌ The voice-style lease isn't active here right now.",
                 ephemeral=True,
             )
             return
         if self.perk == "raffle_ticket":
             if not raffle_svc.raffle_enabled(settings):
                 await interaction.response.send_message(
-                    "The raffle isn't running here right now.", ephemeral=True
+                    "❌ The raffle isn't running here right now.", ephemeral=True
                 )
                 return
             cog2 = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
             if cog2 is None:
                 await interaction.response.send_message(
-                    "That isn't available right now.", ephemeral=True
+                    "❌ That isn't available right now.", ephemeral=True
                 )
                 return
             await interaction.response.send_modal(
@@ -1057,7 +1057,7 @@ class ShopRentButton(
             # a panel that predates a price-0 (disabled) change refuses here.
             if settings.price_streak_shield <= 0:
                 await interaction.response.send_message(
-                    "Streak shields aren't for sale here right now.",
+                    "❌ Streak shields aren't for sale here right now.",
                     ephemeral=True,
                 )
                 return
@@ -1130,7 +1130,7 @@ def _build_shop_embed(
         + "\n​"
     )
     embed = discord.Embed(
-        title="🛍️ Perk shop", description=description, color=accent
+        title="🛍️ Perk Shop", description=description, color=accent
     )
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
@@ -1188,7 +1188,7 @@ def _build_shop_embed(
         )
     if raffle_svc.raffle_enabled(settings):
         embed.add_field(
-            name="Weekly raffle",
+            name="Weekly Raffle",
             value=(
                 f"🎟️ Tickets — {settings.currency_emoji} "
                 f"**{settings.price_raffle_ticket:,}** each, up to "
@@ -1199,7 +1199,7 @@ def _build_shop_embed(
             inline=False,
         )
     embed.add_field(
-        name="For a friend",
+        name="For a Friend",
         value=(
             "🎁 Any perk above can be gifted at its listed price — "
             "you pay the weekly rent, they wear it. Send one with `/bank gift`."
@@ -1234,7 +1234,7 @@ def _shop_panel_view(
             view.add_item(
                 ShopRentButton(
                     perk,
-                    label="🖼️ Browse icons",
+                    label="🖼️ Browse Icons",
                     style=discord.ButtonStyle.secondary,
                     disabled=perk in gated,
                 )
@@ -1366,17 +1366,17 @@ class EconomyCog(commands.Cog):
                     line += f" — *{discord.utils.escape_markdown(_ellipsis(memo))}*"
                 lines.append(line)
             embed.add_field(
-                name="Recent activity", value=_fit_lines(lines), inline=False
+                name="Recent Activity", value=_fit_lines(lines), inline=False
             )
         else:
             embed.add_field(
-                name="Recent activity", value="_No activity yet._", inline=False
+                name="Recent Activity", value="_No activity yet._", inline=False
             )
 
         rental_lines = _rental_lines(settings, rentals, user_id)
         if rental_lines:
             embed.add_field(
-                name="Active rentals", value="\n".join(rental_lines), inline=False
+                name="Active Rentals", value="\n".join(rental_lines), inline=False
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1408,19 +1408,19 @@ class EconomyCog(commands.Cog):
 
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
-                "You don't have permission to grant currency.", ephemeral=True
+                "❌ You don't have permission to grant currency.", ephemeral=True
             )
             return
 
         if member.bot:
             await interaction.response.send_message(
-                "Bots don't have wallets.", ephemeral=True
+                "❌ Bots don't have wallets.", ephemeral=True
             )
             return
 
         if amount < 1:
             await interaction.response.send_message(
-                "The amount must be at least 1.", ephemeral=True
+                "❌ The amount must be at least 1.", ephemeral=True
             )
             return
 
@@ -1445,7 +1445,7 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
-            title=f"{settings.currency_emoji} Currency granted",
+            title=f"{settings.currency_emoji} Currency Granted",
             description=(
                 f"{settings.currency_emoji} **{credited:,}** {_unit(settings, credited)} "
                 f"→ {member.mention}"
@@ -1456,7 +1456,7 @@ class EconomyCog(commands.Cog):
             embed.set_thumbnail(url=settings.currency_icon_url)
         if booster and credited != amount:
             embed.add_field(
-                name="Booster bonus",
+                name="Booster Bonus",
                 value=f"Base {amount:,} × {settings.booster_multiplier:g}",
                 inline=False,
             )
@@ -1489,7 +1489,7 @@ class EconomyCog(commands.Cog):
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
-            title="🔔 Notifications muted" if muted else "🔔 Notifications on",
+            title="🔔 Notifications Muted" if muted else "🔔 Notifications On",
             description=(
                 "You won't get economy DMs anymore. Run this again to turn them back on."
                 if muted
@@ -1529,22 +1529,22 @@ class EconomyCog(commands.Cog):
             return
         if not settings.transfers_enabled:
             await interaction.response.send_message(
-                "Transfers are turned off on this server.", ephemeral=True
+                "❌ Transfers are turned off on this server.", ephemeral=True
             )
             return
         if member.bot:
             await interaction.response.send_message(
-                "Bots don't have wallets.", ephemeral=True
+                "❌ Bots don't have wallets.", ephemeral=True
             )
             return
         if member.id == sender.id:
             await interaction.response.send_message(
-                "You can't pay yourself.", ephemeral=True
+                "❌ You can't pay yourself.", ephemeral=True
             )
             return
         if amount < 1:
             await interaction.response.send_message(
-                "The amount must be at least 1.", ephemeral=True
+                "❌ The amount must be at least 1.", ephemeral=True
             )
             return
 
@@ -1557,7 +1557,7 @@ class EconomyCog(commands.Cog):
             if memo:
                 desc += f"\n\n*{discord.utils.escape_markdown(memo)}*"
             confirm = discord.Embed(
-                title=f"{settings.currency_emoji} Confirm payment",
+                title=f"{settings.currency_emoji} Confirm Payment",
                 description=desc,
                 color=accent,
             )
@@ -1618,7 +1618,7 @@ class EconomyCog(commands.Cog):
         if safe_memo:
             desc += f"\n\n*{safe_memo}*"
         embed = discord.Embed(
-            title=f"{settings.currency_emoji} Payment sent", description=desc, color=accent
+            title=f"{settings.currency_emoji} Payment Sent", description=desc, color=accent
         )
         if settings.currency_icon_url:
             embed.set_thumbnail(url=settings.currency_icon_url)
@@ -1697,16 +1697,16 @@ class EconomyCog(commands.Cog):
             if "insufficient" in msg:
                 bal = await asyncio.to_thread(self._balance, guild.id, user_id)
                 text = (
-                    f"You need {settings.currency_emoji} "
+                    f"❌ You need {settings.currency_emoji} "
                     f"{settings.price_streak_shield:,} but only have {bal:,}."
                 )
             elif "already holding" in msg:
                 text = (
-                    "You're already holding a 🛡️ shield — it burns "
+                    "❌ You're already holding a 🛡️ shield — it burns "
                     "automatically if a missed day would break your streak."
                 )
             else:
-                text = "That isn't available right now."
+                text = "❌ That isn't available right now."
             await interaction.response.send_message(text, ephemeral=True)
             return
 
@@ -1731,7 +1731,7 @@ class EconomyCog(commands.Cog):
             quantity = int(raw_quantity.strip())
         except ValueError:
             await interaction.response.send_message(
-                "Give a whole number of tickets.", ephemeral=True
+                "❌ Give a whole number of tickets.", ephemeral=True
             )
             return
 
@@ -1788,7 +1788,7 @@ class EconomyCog(commands.Cog):
             return
         if not sponsor_enabled(settings):
             await interaction.response.send_message(
-                "Sponsoring a question of the day isn't enabled here.",
+                "❌ Sponsoring a question of the day isn't enabled here.",
                 ephemeral=True,
             )
             return
@@ -1855,7 +1855,7 @@ class EconomyCog(commands.Cog):
             return
         if not emoji_svc.sponsoring_enabled(settings):
             await interaction.response.send_message(
-                "Emoji sponsorship isn't enabled here.", ephemeral=True
+                "❌ Emoji sponsorship isn't enabled here.", ephemeral=True
             )
             return
 
@@ -1870,12 +1870,12 @@ class EconomyCog(commands.Cog):
         ctype = (image.content_type or "").split(";")[0].strip()
         if ctype not in content_types:
             await interaction.response.send_message(
-                "Emoji images are PNG, JPEG, WEBP, or GIF.", ephemeral=True
+                "❌ Emoji images are PNG, JPEG, WEBP, or GIF.", ephemeral=True
             )
             return
         if image.size > emoji_svc.MAX_IMAGE_BYTES:
             await interaction.response.send_message(
-                "Discord caps emoji images at 256KB — that one's too big.",
+                "❌ Discord caps emoji images at 256KB — that one's too big.",
                 ephemeral=True,
             )
             return
@@ -2025,25 +2025,25 @@ class EconomyCog(commands.Cog):
             return
         if member.bot:
             await interaction.response.send_message(
-                "Bots can't wear perks.", ephemeral=True
+                "❌ Bots can't wear perks.", ephemeral=True
             )
             return
         if member.id == gifter.id:
             await interaction.response.send_message(
-                "Rent your own perks with /bank shop.", ephemeral=True
+                "❌ Rent your own perks with /bank shop.", ephemeral=True
             )
             return
         if perk_key in _FEATURE_GATED and not await feature_gate_ok(
             self.bot, guild.id, perk_key
         ):
             await interaction.response.send_message(
-                "That perk needs a server feature that isn't enabled here.",
+                "❌ That perk needs a server feature that isn't enabled here.",
                 ephemeral=True,
             )
             return
         if perk_key == "voice_style" and settings.price_voice_style <= 0:
             await interaction.response.send_message(
-                "The voice-style lease isn't active here right now.",
+                "❌ The voice-style lease isn't active here right now.",
                 ephemeral=True,
             )
             return
@@ -2096,13 +2096,13 @@ class EconomyCog(commands.Cog):
             if "insufficient" in msg:
                 bal = await asyncio.to_thread(self._balance, guild.id, gifter.id)
                 text = (
-                    f"You need {settings.currency_emoji} "
+                    f"❌ You need {settings.currency_emoji} "
                     f"{_perk_price(settings, perk):,} but only have {bal:,}."
                 )
             elif "already rented" in msg:
-                text = f"You're already gifting them **{label}**."
+                text = f"❌ You're already gifting them **{label}**."
             else:
-                text = "That gift isn't available."
+                text = "❌ That gift isn't available."
             await self._reply(interaction, text, via_confirm=via_confirm)
             return
 
@@ -2150,13 +2150,13 @@ class EconomyCog(commands.Cog):
         """Show the curated icon picker (rent a new icon or switch the rented one)."""
         if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
             await interaction.response.send_message(
-                "This server doesn't support role icons right now.", ephemeral=True
+                "❌ This server doesn't support role icons right now.", ephemeral=True
             )
             return
         icons = await asyncio.to_thread(self._load_catalog, guild.id)
         if not icons:
             await interaction.response.send_message(
-                "No rentable icons are set up here yet.", ephemeral=True
+                "❌ No rentable icons are set up here yet.", ephemeral=True
             )
             return
         note = ""
@@ -2203,13 +2203,13 @@ class EconomyCog(commands.Cog):
             return
         if icon is None:
             await interaction.response.send_message(
-                "That icon isn't available anymore — open the shop again.",
+                "❌ That icon isn't available anymore — open the shop again.",
                 ephemeral=True,
             )
             return
         if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
             await interaction.response.send_message(
-                "This server doesn't support role icons right now.", ephemeral=True
+                "❌ This server doesn't support role icons right now.", ephemeral=True
             )
             return
 
@@ -2234,13 +2234,13 @@ class EconomyCog(commands.Cog):
                 if "insufficient" in msg:
                     bal = await asyncio.to_thread(self._balance, guild.id, user_id)
                     text = (
-                        f"You need {settings.currency_emoji} {icon['price']:,} but "
+                        f"❌ You need {settings.currency_emoji} {icon['price']:,} but "
                         f"only have {bal:,}."
                     )
                 elif "already rented" in msg:
-                    text = "You're already renting a role icon."
+                    text = "❌ You're already renting a role icon."
                 else:
-                    text = "That icon isn't available."
+                    text = "❌ That icon isn't available."
                 await interaction.response.send_message(text, ephemeral=True)
                 return
             verb = "Rented"
@@ -2277,19 +2277,19 @@ class EconomyCog(commands.Cog):
             return
         if "role_name" not in ent:
             await interaction.response.send_message(
-                "Rent the **Custom role name** perk first (/bank shop).", ephemeral=True
+                "❌ Rent the **Custom Role Name** perk first (/bank shop).", ephemeral=True
             )
             return
         text = text.strip()
         if not text or len(text) > _MAX_ROLE_NAME_LEN:
             await interaction.response.send_message(
-                f"Role names must be 1–{_MAX_ROLE_NAME_LEN} characters.", ephemeral=True
+                f"❌ Role names must be 1–{_MAX_ROLE_NAME_LEN} characters.", ephemeral=True
             )
             return
         patterns = await asyncio.to_thread(self._name_blocklist, guild.id)
         if name_is_blocked(text, patterns):
             await interaction.response.send_message(
-                "That name isn't allowed here.", ephemeral=True
+                "❌ That name isn't allowed here.", ephemeral=True
             )
             return
         await asyncio.to_thread(
@@ -2334,20 +2334,20 @@ class EconomyCog(commands.Cog):
             return
         if "role_color" not in ent:
             await interaction.response.send_message(
-                "Rent the **Custom role color** perk or get one gifted (/bank shop).",
+                "❌ Rent the **Custom Role Color** perk or get one gifted (/bank shop).",
                 ephemeral=True,
             )
             return
         value = parse_hex_color(hex)
         if value is None:
             await interaction.response.send_message(
-                "Give a color as a hex code like `#7B2FF7`.", ephemeral=True
+                "❌ Give a color as a hex code like `#7B2FF7`.", ephemeral=True
             )
             return
         clash = find_color_clash(guild, value)
         if clash is not None:
             await interaction.response.send_message(
-                f"That color is too close to **{clash.name}** — pick another.",
+                f"❌ That color is too close to **{clash.name}** — pick another.",
                 ephemeral=True,
             )
             return
@@ -2372,24 +2372,24 @@ class EconomyCog(commands.Cog):
             return
         if "role_gradient" not in ent:
             await interaction.response.send_message(
-                "Rent the **Gradient role** perk first (/bank shop).", ephemeral=True
+                "❌ Rent the **Gradient Role** perk first (/bank shop).", ephemeral=True
             )
             return
         if not await feature_gate_ok(self.bot, guild.id, "role_gradient"):
             await interaction.response.send_message(
-                "This server doesn't support gradient roles right now.", ephemeral=True
+                "❌ This server doesn't support gradient roles right now.", ephemeral=True
             )
             return
         v1, v2 = parse_hex_color(hex1), parse_hex_color(hex2)
         if v1 is None or v2 is None:
             await interaction.response.send_message(
-                "Give both colors as hex codes like `#7B2FF7`.", ephemeral=True
+                "❌ Give both colors as hex codes like `#7B2FF7`.", ephemeral=True
             )
             return
         clash = find_color_clash(guild, v1) or find_color_clash(guild, v2)
         if clash is not None:
             await interaction.response.send_message(
-                f"That color is too close to **{clash.name}** — pick another.",
+                f"❌ That color is too close to **{clash.name}** — pick another.",
                 ephemeral=True,
             )
             return
@@ -2416,24 +2416,24 @@ class EconomyCog(commands.Cog):
             return
         if "role_icon" not in ent:
             await interaction.response.send_message(
-                "Rent the **Role icon** perk first (/bank shop).", ephemeral=True
+                "❌ Rent the **Role Icon** perk first (/bank shop).", ephemeral=True
             )
             return
         if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
             await interaction.response.send_message(
-                "This server doesn't support role icons right now.", ephemeral=True
+                "❌ This server doesn't support role icons right now.", ephemeral=True
             )
             return
         if await asyncio.to_thread(self._has_catalog, guild.id):
             await interaction.response.send_message(
-                "This server uses a curated icon catalog — pick one from /bank shop.",
+                "❌ This server uses a curated icon catalog — pick one from /bank shop.",
                 ephemeral=True,
             )
             return
         emoji = _resolve_guild_emoji(guild, raw)
         if emoji is None:
             await interaction.response.send_message(
-                "That doesn't match a custom emoji on this server — type its "
+                "❌ That doesn't match a custom emoji on this server — type its "
                 "name like `:party_parrot:`. For an image icon, upload one "
                 "with `/bank role icon`.",
                 ephemeral=True,
@@ -2441,7 +2441,7 @@ class EconomyCog(commands.Cog):
             return
         if emoji.animated:
             await interaction.response.send_message(
-                "Animated emojis can't be role icons — pick a static one.",
+                "❌ Animated emojis can't be role icons — pick a static one.",
                 ephemeral=True,
             )
             return
@@ -2449,13 +2449,13 @@ class EconomyCog(commands.Cog):
             data = await emoji.read()
         except discord.HTTPException:
             await interaction.response.send_message(
-                "I couldn't fetch that emoji's image — try again shortly.",
+                "❌ I couldn't fetch that emoji's image — try again shortly.",
                 ephemeral=True,
             )
             return
         if len(data) > _MAX_ICON_BYTES:
             await interaction.response.send_message(
-                "That emoji's image is too big — 256KB max.", ephemeral=True
+                "❌ That emoji's image is too big — 256KB max.", ephemeral=True
             )
             return
         path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
@@ -2489,23 +2489,23 @@ class EconomyCog(commands.Cog):
             return
         if "role_icon" not in ent:
             await interaction.response.send_message(
-                "Rent the **Role icon** perk first (/bank shop).", ephemeral=True
+                "❌ Rent the **Role Icon** perk first (/bank shop).", ephemeral=True
             )
             return
         if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
             await interaction.response.send_message(
-                "This server doesn't support role icons right now.", ephemeral=True
+                "❌ This server doesn't support role icons right now.", ephemeral=True
             )
             return
         if await asyncio.to_thread(self._has_catalog, guild.id):
             await interaction.response.send_message(
-                "This server uses a curated icon catalog — pick one from /bank shop.",
+                "❌ This server uses a curated icon catalog — pick one from /bank shop.",
                 ephemeral=True,
             )
             return
         if image.size > _MAX_ICON_BYTES:
             await interaction.response.send_message(
-                "That image is too big — 256KB max.", ephemeral=True
+                "❌ That image is too big — 256KB max.", ephemeral=True
             )
             return
         data = await image.read()
@@ -3230,7 +3230,7 @@ class EconomyCog(commands.Cog):
             return
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
-                "You don't have permission to post a question of the day.",
+                "❌ You don't have permission to post a question of the day.",
                 ephemeral=True,
             )
             return
@@ -3238,7 +3238,7 @@ class EconomyCog(commands.Cog):
         channel = interaction.channel
         if not isinstance(channel, discord.abc.Messageable):
             await interaction.response.send_message(
-                "I can't post a question here.", ephemeral=True
+                "❌ I can't post a question here.", ephemeral=True
             )
             return
 
@@ -3254,7 +3254,7 @@ class EconomyCog(commands.Cog):
             queued = await asyncio.to_thread(self._claim_sponsored, guild_id)
             if queued is None:
                 await interaction.followup.send(
-                    "No sponsored questions are waiting. Type a question to post "
+                    "❌ No sponsored questions are waiting. Type a question to post "
                     "your own.",
                     ephemeral=True,
                 )
@@ -3323,7 +3323,7 @@ class EconomyCog(commands.Cog):
             if submission_id:
                 await asyncio.to_thread(self._release_sponsored, submission_id)
             await interaction.followup.send(
-                "I don't have permission to post in this channel.", ephemeral=True
+                "❌ I don't have permission to post in this channel.", ephemeral=True
             )
             return
         except Exception:
@@ -3380,7 +3380,7 @@ class EconomyCog(commands.Cog):
             return
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
-                "You don't have permission to post the guide panel.",
+                "❌ You don't have permission to post the guide panel.",
                 ephemeral=True,
             )
             return
@@ -3388,7 +3388,7 @@ class EconomyCog(commands.Cog):
         target = channel or interaction.channel
         if not isinstance(target, discord.TextChannel):
             await interaction.response.send_message(
-                "Pick a regular text channel for the guide panel.", ephemeral=True
+                "❌ Pick a regular text channel for the guide panel.", ephemeral=True
             )
             return
 
@@ -3423,7 +3423,7 @@ class EconomyCog(commands.Cog):
         )
         if message is None:
             await interaction.response.send_message(
-                f"I don't have permission to post in {target.mention}.",
+                f"❌ I don't have permission to post in {target.mention}.",
                 ephemeral=True,
             )
             return
@@ -3780,7 +3780,7 @@ class EconomyCog(commands.Cog):
             return
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
-                "You don't have permission to post the leaderboard panel.",
+                "❌ You don't have permission to post the leaderboard panel.",
                 ephemeral=True,
             )
             return
@@ -3788,7 +3788,7 @@ class EconomyCog(commands.Cog):
         target = channel or interaction.channel
         if not isinstance(target, discord.TextChannel):
             await interaction.response.send_message(
-                "Pick a regular text channel for the leaderboard panel.",
+                "❌ Pick a regular text channel for the leaderboard panel.",
                 ephemeral=True,
             )
             return
@@ -3844,7 +3844,7 @@ class EconomyCog(commands.Cog):
         )
         if message is None:
             await interaction.response.send_message(
-                f"I don't have permission to post in {target.mention}.",
+                f"❌ I don't have permission to post in {target.mention}.",
                 ephemeral=True,
             )
             return
@@ -3877,7 +3877,7 @@ class EconomyCog(commands.Cog):
             return
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
-                "You don't have permission to post the shop panel.",
+                "❌ You don't have permission to post the shop panel.",
                 ephemeral=True,
             )
             return
@@ -3885,7 +3885,7 @@ class EconomyCog(commands.Cog):
         target = channel or interaction.channel
         if not isinstance(target, discord.TextChannel):
             await interaction.response.send_message(
-                "Pick a regular text channel for the shop panel.", ephemeral=True
+                "❌ Pick a regular text channel for the shop panel.", ephemeral=True
             )
             return
 
@@ -3931,7 +3931,7 @@ class EconomyCog(commands.Cog):
             message = await target.send(embed=embed, view=view)
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"I don't have permission to post in {target.mention}.",
+                f"❌ I don't have permission to post in {target.mention}.",
                 ephemeral=True,
             )
             return

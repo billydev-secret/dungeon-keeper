@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.economy import quests as quest_logic
-from bot_modules.services.embeds import footer_emoji
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, footer_emoji
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 # Credit/debit colours are semantic here (money in vs money out), so they stay
 # fixed rather than following the guild accent. A transfer is neither — the
 # currency only moves sideways between members — so it gets its own neutral.
-CREDIT_COLOUR = discord.Colour(0x2ECC71)
-DEBIT_COLOUR = discord.Colour(0xE74C3C)
+CREDIT_COLOUR = discord.Colour(COLOR_GREEN)
+DEBIT_COLOUR = discord.Colour(COLOR_RED)
 TRANSFER_COLOUR = discord.Colour(0x5865F2)
 
 # Ledger kinds the register never posts.
@@ -445,7 +445,7 @@ def build_register_embed(
         footer = f"{settings.wallet_name}: "
 
     embed = discord.Embed(
-        colour=colour,
+        color=colour,
         description=f"{glyph} {amount_text} · {render_memo(entry, resolve_name)}",
         timestamp=datetime.fromtimestamp(entry.created_at, tz=timezone.utc),
     )

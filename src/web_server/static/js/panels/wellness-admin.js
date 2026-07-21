@@ -2,7 +2,7 @@ import { wGet, wPost, wDelete, esc, showStatus } from "../wellness-helpers.js";
 import { toast } from "../ui.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading wellness admin...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading wellness admin…</div></div>`;
 
   (async () => {
     let dash, defaults, users, exempt;

@@ -22,8 +22,8 @@ DESCRIPTION_LIMIT = 4096
 
 STATUS_COLORS = {
     "pending": 0x95A5A6,   # gray
-    "passed": 0x2ECC71,    # green
-    "failed": 0xE74C3C,    # red
+    "passed": 0x23A55A,    # green — services/embeds.py COLOR_GREEN (kept literal:
+    "failed": 0xF23F43,    # red   — this module stays import-free for the REST hook)
     "blocked": 0xE67E22,   # amber
     "archived": 0x7F8C8D,  # dark gray
 }

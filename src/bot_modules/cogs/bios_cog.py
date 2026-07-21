@@ -92,7 +92,7 @@ class BiosCog(commands.Cog):
     async def _start_or_resume(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message(
-                "Bios are only available inside the server.", ephemeral=True
+                "❌ Bios are only available inside the server.", ephemeral=True
             )
             return
 
@@ -112,7 +112,7 @@ class BiosCog(commands.Cog):
 
         if not cfg.configured or not has_active_field:
             await interaction.response.send_message(
-                "Bios aren't set up yet — ask an admin to finish the dashboard config.",
+                "❌ Bios aren't set up yet — ask an admin to finish the dashboard config.",
                 ephemeral=True,
             )
             return
@@ -130,12 +130,12 @@ class BiosCog(commands.Cog):
             try:
                 if interaction.response.is_done():
                     await interaction.followup.send(
-                        "Couldn't start your bio wizard — please try again.",
+                        "❌ Couldn't start your bio wizard — please try again.",
                         ephemeral=True,
                     )
                 else:
                     await interaction.response.send_message(
-                        "Couldn't start your bio wizard — please try again.",
+                        "❌ Couldn't start your bio wizard — please try again.",
                         ephemeral=True,
                     )
             except discord.HTTPException:
@@ -151,7 +151,7 @@ class BiosCog(commands.Cog):
         session = await build_session(self, member, cfg)
         if not session.state.fields:
             await interaction.followup.send(
-                "Bios aren't set up yet — ask an admin to add at least one field.",
+                "❌ Bios aren't set up yet — ask an admin to add at least one field.",
                 ephemeral=True,
             )
             return
@@ -161,7 +161,7 @@ class BiosCog(commands.Cog):
         except discord.Forbidden:
             self._sessions.pop((member.guild.id, member.id), None)
             await interaction.followup.send(
-                "I don't have permission to create the wizard channel. "
+                "❌ I don't have permission to create the wizard channel. "
                 "Ask an admin to give me Manage Channels in the configured category.",
                 ephemeral=True,
             )
@@ -169,7 +169,7 @@ class BiosCog(commands.Cog):
         except RuntimeError:
             self._sessions.pop((member.guild.id, member.id), None)
             await interaction.followup.send(
-                "Wizard category not found — ask an admin to fix the bios config.",
+                "❌ Wizard category not found — ask an admin to fix the bios config.",
                 ephemeral=True,
             )
             return
@@ -234,7 +234,7 @@ class BiosCog(commands.Cog):
         session = await build_session(self, member, cfg)
         if not session.state.fields:
             await interaction.followup.send(
-                "Bios aren't set up yet — ask an admin to add at least one field.",
+                "❌ Bios aren't set up yet — ask an admin to add at least one field.",
                 ephemeral=True,
             )
             return
@@ -244,7 +244,7 @@ class BiosCog(commands.Cog):
         except (discord.Forbidden, RuntimeError):
             self._sessions.pop((member.guild.id, member.id), None)
             await interaction.followup.send(
-                "Couldn't recreate the wizard channel. Ask an admin to verify the config.",
+                "❌ Couldn't recreate the wizard channel. Ask an admin to verify the config.",
                 ephemeral=True,
             )
             return

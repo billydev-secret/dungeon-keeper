@@ -86,7 +86,7 @@ function faucetSection(data, isAdmin) {
           </table>
         </div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-          <button type="submit" class="btn btn-primary">Save rates</button>
+          <button type="submit" class="btn btn-primary">Save Rates</button>
           <span data-status-faucets></span>
         </div>
       </form>`;
@@ -133,7 +133,7 @@ function render(container, data, isAdmin) {
       </header>
 
       <section class="card">
-        <div class="section-label">Quest trigger sources</div>
+        <div class="section-label">Quest Trigger Sources</div>
         <div class="field-hint" style="margin-bottom:8px;">
           Turning a source off stops it firing immediately (quests that use it
           stay in the library, they just wait). Attach a source to a quest on
@@ -155,7 +155,7 @@ function render(container, data, isAdmin) {
       </section>
 
       <section class="card">
-        <div class="section-label">Coin drops</div>
+        <div class="section-label">Coin Drops</div>
         <div class="field-hint">The bot drops a random pouch of coins in a
           configured channel at unpredictable moments — the first member to
           press the drop's Claim button collects it; unclaimed pouches
@@ -164,7 +164,7 @@ function render(container, data, isAdmin) {
       </section>
 
       <section class="card">
-        <div class="section-label">Suggested sources (not built yet)</div>
+        <div class="section-label">Suggested Sources (not built yet)</div>
         ${suggestions}
       </section>
     </div>`;

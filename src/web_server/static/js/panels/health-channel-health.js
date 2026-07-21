@@ -16,7 +16,7 @@ const STATUS_COLORS = {
 };
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading channel health...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading channel health…</div></div>';
   const charts = [];
 
   async function load() {

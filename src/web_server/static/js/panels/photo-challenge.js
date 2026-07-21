@@ -78,13 +78,13 @@ export function mount(container) {
           <div class="field-hint">When off, scheduled challenges are skipped.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-          <button class="btn btn-primary" data-action="save-config">Save setup</button>
+          <button class="btn btn-primary" data-action="save-config">Save Setup</button>
           <span data-status="config" class="save-status"></span>
         </div>
       </section>
 
       <section>
-        <div class="section-label" data-region="form-title">Add schedule</div>
+        <div class="section-label" data-region="form-title">Add Schedule</div>
         <div class="form" style="max-width:none;">
           <div style="display:flex;flex-wrap:wrap;gap:12px;">
             <div class="field" style="flex:1;min-width:160px;">
@@ -112,7 +112,7 @@ export function mount(container) {
             <div data-region="weekdays" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;"></div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-            <button class="btn btn-primary" data-action="save-schedule">Create schedule</button>
+            <button class="btn btn-primary" data-action="save-schedule">Create Schedule</button>
             <button class="btn" data-action="cancel-edit" style="display:none;">Cancel</button>
             <span data-status="schedule" class="save-status"></span>
           </div>
@@ -224,8 +224,8 @@ async function saveSchedule(root, state) {
 
 function resetForm(root, state) {
   state.editingId = null;
-  root.querySelector('[data-region="form-title"]').textContent = "Add schedule";
-  root.querySelector('[data-action="save-schedule"]').textContent = "Create schedule";
+  root.querySelector('[data-region="form-title"]').textContent = "Add Schedule";
+  root.querySelector('[data-action="save-schedule"]').textContent = "Create Schedule";
   root.querySelector('[data-action="cancel-edit"]').style.display = "none";
   root.querySelector('[data-ctrl="recurrence"]').value = "once";
   root.querySelector('[data-ctrl="time"]').value = "20:00";
@@ -237,7 +237,7 @@ function resetForm(root, state) {
 function startEdit(root, state, row) {
   state.editingId = row.id;
   root.querySelector('[data-region="form-title"]').textContent = `Editing #${row.id}`;
-  root.querySelector('[data-action="save-schedule"]').textContent = "Save changes";
+  root.querySelector('[data-action="save-schedule"]').textContent = "Save Changes";
   root.querySelector('[data-action="cancel-edit"]').style.display = "";
   root.querySelector('[data-ctrl="recurrence"]').value = row.recurrence;
   root.querySelector('[data-ctrl="time"]').value = fmtTime(row.time_of_day);
@@ -278,7 +278,7 @@ async function refreshList(root, state) {
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;">
-          ${done ? "" : `<button class="btn" data-act="run-now" data-id="${r.id}">Run now</button>`}
+          ${done ? "" : `<button class="btn" data-act="run-now" data-id="${r.id}">Run Now</button>`}
           ${done ? "" : (paused
             ? `<button class="btn" data-act="resume" data-id="${r.id}">Resume</button>`
             : `<button class="btn" data-act="pause" data-id="${r.id}">Pause</button>`)}

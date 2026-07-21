@@ -390,7 +390,7 @@ def test_build_lobby_embed_shows_host_name():
 def test_build_lobby_embed_has_title_and_footer():
     embed = build_lobby_embed("Alice")
     assert embed.title is not None
-    assert "FANTASIES" in embed.title
+    assert "Fantasies" in embed.title
     assert embed.footer.text is not None
     assert "Fantasies" in embed.footer.text
 
@@ -401,7 +401,7 @@ def test_build_lobby_embed_has_title_and_footer():
 def test_build_round_submit_embed_includes_round_num_in_title():
     embed = build_round_submit_embed(3)
     assert embed.title is not None
-    assert "ROUND 3" in embed.title
+    assert "Round 3" in embed.title
 
 
 def test_build_round_submit_embed_has_description():
@@ -436,7 +436,7 @@ def test_build_vote_embed_closed_appends_vote_closed_suffix():
         closed=True,
     )
     assert embed.title is not None
-    assert "VOTE CLOSED" in embed.title
+    assert "Vote Closed" in embed.title
     assert "Dealbreaker #2" in embed.title
 
 

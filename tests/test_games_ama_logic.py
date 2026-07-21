@@ -583,7 +583,7 @@ def test_remaining_questions_text_custom_per_turn():
 def test_build_lobby_embed_basic_fields():
     embed = build_lobby_embed("Alice", "unfiltered")
     assert embed.title is not None
-    assert "ANONYMOUS AMA" in embed.title
+    assert "Anonymous AMA" in embed.title
     by_name = {f.name: f.value for f in embed.fields}
     assert by_name.get("Host") == "Alice"
     assert by_name.get("Hot Seat") == "—"
@@ -715,7 +715,7 @@ def test_build_question_embed_includes_text():
     assert embed.description is not None
     assert "What is your favorite color?" in embed.description
     assert embed.title is not None
-    assert "QUESTION" in embed.title
+    assert "Question" in embed.title
 
 
 def test_build_question_embed_escapes_markdown():
@@ -793,7 +793,7 @@ def test_build_recap_embed_handles_zero_questions():
 def test_build_recap_embed_has_game_over_title_and_footer():
     embed = build_recap_embed("unfiltered", compute_recap_stats({}))
     assert embed.title is not None
-    assert "GAME OVER" in embed.title
+    assert "Game Over" in embed.title
     assert embed.footer.text is not None
     assert "Thanks for playing" in embed.footer.text
 

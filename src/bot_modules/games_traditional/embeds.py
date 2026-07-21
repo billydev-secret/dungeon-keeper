@@ -41,9 +41,9 @@ def build_tod_embed(
     """Build the main lobby embed shown alongside the host/player buttons."""
     if color is None:
         color = discord.Color(BRAND_COLOR)
-    title = f"{GAME_ICONS['traditional']} TRUTH OR DARE"
+    title = f"{GAME_ICONS['traditional']} Truth or Dare"
     if closed:
-        title += " — GAME OVER"
+        title += " — Game Over"
     embed = discord.Embed(title=title, color=color)
     embed.add_field(name="Host", value=host_name, inline=True)
 
@@ -94,7 +94,7 @@ def build_recap_embed(
     by_cat = summarize_asked_by_category(asked)
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['traditional']} TRUTH OR DARE — GAME OVER",
+        title=f"{GAME_ICONS['traditional']} Truth or Dare — Game Over",
         color=color,
     )
     embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
@@ -128,7 +128,7 @@ def build_lobby_embed(
         else "Select your preferences below to join!"
     )
     embed = discord.Embed(
-        title=f"{GAME_ICONS['traditional']} TRUTH OR DARE",
+        title=f"{GAME_ICONS['traditional']} Truth or Dare",
         description=description,
         color=color,
     )

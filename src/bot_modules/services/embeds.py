@@ -42,12 +42,13 @@ WELLNESS_OVERVIEW = 0x5A8A6B   # darker forest for admin overview
 
 # ──────────────────────────────────────────────────────────────────
 # Moderation — high-visibility for enforcement actions
-# (preserves existing CLR_* values from commands/jail_commands.py)
+# (CLR_* names from commands/jail_commands.py re-export these; MOD_SUCCESS
+# is the canonical semantic green per the 2026-07-21 style-guide ruling)
 # ──────────────────────────────────────────────────────────────────
 MOD_JAIL    = 0xE74C3C   # bright red — locked-in enforcement
 MOD_TICKET  = 0x3498DB   # blue — open question / conversation
 MOD_POLICY  = 0x9B59B6   # purple — formal policy
-MOD_SUCCESS = 0x2ECC71   # green — resolved / approved
+MOD_SUCCESS = COLOR_GREEN  # green — resolved / approved (canonical semantic success)
 MOD_INFO    = 0x95A5A6   # gray — informational
 MOD_WARNING = 0xF1C40F   # yellow — pending warning
 

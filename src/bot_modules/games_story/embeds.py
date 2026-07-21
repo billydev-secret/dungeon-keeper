@@ -33,7 +33,7 @@ def build_lobby_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['story']} STORY BUILDER",
+        title=f"{GAME_ICONS['story']} Story Builder",
         description="Join to contribute to the story!",
         color=color,
     )
@@ -67,7 +67,7 @@ def build_turn_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['story']} STORY IN PROGRESS",
+        title=f"{GAME_ICONS['story']} Story in Progress",
         color=color,
     )
     current_name = name_resolver(current_player_id)
@@ -108,7 +108,7 @@ def build_complete_story_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['story']} THE COMPLETE STORY",
+        title=f"{GAME_ICONS['story']} The Complete Story",
         color=color,
     )
     embed.description = f"*{story_text}*"
@@ -136,7 +136,7 @@ def build_attribution_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['story']} WHO WROTE WHAT",
+        title=f"{GAME_ICONS['story']} Who Wrote What",
         color=color,
     )
     for i, chunk in enumerate(chunks, start=1):

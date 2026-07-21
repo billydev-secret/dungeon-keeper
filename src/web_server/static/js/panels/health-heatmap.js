@@ -163,7 +163,7 @@ function dowBarChartHTML(grid) {
 }
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading heatmap...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading heatmap…</div></div>';
 
   async function load() {
     const d = await api("/api/health/heatmap");

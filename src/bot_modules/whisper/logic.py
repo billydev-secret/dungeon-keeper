@@ -203,14 +203,14 @@ def prune_recent_target_sends(
 def format_cooldown_message(remaining_seconds: int) -> str:
     """The user-facing 'slow down' message for the per-sender cooldown."""
     return (
-        f"Slow down — wait {remaining_seconds}s before sending another whisper."
+        f"❌ Slow down — wait {remaining_seconds}s before sending another whisper."
     )
 
 
 def format_hourly_cap_message(cap: int) -> str:
     """The user-facing message when a sender hits the per-target hourly cap."""
     return (
-        f"You've sent {cap} whispers to that user in the last hour. "
+        f"❌ You've sent {cap} whispers to that user in the last hour. "
         "Try again later."
     )
 

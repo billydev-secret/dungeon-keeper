@@ -65,9 +65,9 @@ def build_round_embed(
     bar_g, pct_g = build_bar(len(guilty), total)
     bar_i, pct_i = build_bar(len(innocent), total)
 
-    title = f"{GAME_ICONS['nhie']} NEVER HAVE I EVER"
+    title = f"{GAME_ICONS['nhie']} Never Have I Ever"
     if closed:
-        title += " — ROUND OVER"
+        title += " — Round Over"
     embed = discord.Embed(
         title=title,
         color=color or discord.Color(PHASE_RESULTS if closed else PHASE_PLAYING),
@@ -151,7 +151,7 @@ def build_closed_embed(
         max_lives=max_lives,
         color=color,
     )
-    embed.title = f"{GAME_ICONS['nhie']} NEVER HAVE I EVER — CLOSED"
+    embed.title = f"{GAME_ICONS['nhie']} Never Have I Ever — Closed"
     embed.color = color or discord.Color(PHASE_RECAP)
     return embed
 
@@ -179,7 +179,7 @@ def build_recap_embed(
         description = "Everyone's been eliminated! No winner this time."
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['nhie']} NEVER HAVE I EVER — GAME OVER",
+        title=f"{GAME_ICONS['nhie']} Never Have I Ever — Game Over",
         description=description,
         color=color or discord.Color(PHASE_RECAP),
     )

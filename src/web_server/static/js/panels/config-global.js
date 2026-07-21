@@ -2,7 +2,7 @@ import { api, esc } from "../api.js";
 import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading config...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
   (async () => {
     const [config, channels, roles, supportResp] = await Promise.all([

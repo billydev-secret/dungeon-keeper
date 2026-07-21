@@ -244,7 +244,7 @@ class FantasiesVoteView(discord.ui.View):
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
-    @discord.ui.button(label="❌ Not for me", style=discord.ButtonStyle.danger, custom_id="fan_nope", row=0)
+    @discord.ui.button(label="❌ Not for Me", style=discord.ButtonStyle.danger, custom_id="fan_nope", row=0)
     async def vote_nope(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:

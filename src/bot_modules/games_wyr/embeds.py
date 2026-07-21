@@ -52,9 +52,9 @@ def build_wyr_embed(
     bar_a, pct_a = build_bar(len(votes_a), total)
     bar_b, pct_b = build_bar(len(votes_b), total)
 
-    title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER"
+    title = f"{GAME_ICONS['wyr']} Would You Rather"
     if closed:
-        title += " — ROUND OVER"
+        title += " — Round Over"
     embed = discord.Embed(title=title, color=color or discord.Color(PHASE_PLAYING))
     embed.add_field(name="Round", value=str(round_num), inline=False)
     esc = discord.utils.escape_markdown
@@ -72,8 +72,8 @@ def build_wyr_embed(
         b_label += f"\n{b_names}"
 
     embed.add_field(name="Votes", value=f"{a_label}\n{b_label}", inline=False)
-    anon_badge = "  •  👁 Anonymous" if anonymous else ""
-    embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather  •  Round {round_num}{anon_badge}")
+    anon_badge = " • 👁 Anonymous" if anonymous else ""
+    embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather • Round {round_num}{anon_badge}")
     return embed
 
 
@@ -109,5 +109,5 @@ def build_closed_embed(
         revealed=revealed,
         color=color,
     )
-    embed.title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER — CLOSED"
+    embed.title = f"{GAME_ICONS['wyr']} Would You Rather — Closed"
     return embed

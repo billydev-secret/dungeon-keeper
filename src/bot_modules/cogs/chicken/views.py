@@ -22,7 +22,7 @@ class ChickenView(discord.ui.View):
         self._on_press = on_press
 
         btn = discord.ui.Button(
-            label="BAIL",
+            label="Bail",
             style=discord.ButtonStyle.danger,
             emoji="🐔",
             custom_id=f"chicken_bail:{game_id}",

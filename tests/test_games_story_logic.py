@@ -384,7 +384,7 @@ def test_chunk_attribution_lines_oversized_single_line_kept_intact():
 def test_build_lobby_embed_has_expected_fields():
     embed = build_lobby_embed(host_name="Alice", visibility="blind", max_sentences=10)
     assert embed.title is not None
-    assert "STORY BUILDER" in embed.title
+    assert "Story Builder" in embed.title
     by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
     assert "Writers (0)" in by_name
     assert by_name["Writers (0)"] == "—"
@@ -458,7 +458,7 @@ def test_build_complete_story_embed_renders_description_and_summary():
     )
     assert embed.description == "*A short story.*"
     assert embed.title is not None
-    assert "COMPLETE STORY" in embed.title
+    assert "Complete Story" in embed.title
     by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
     assert "A Community Original" in by_name
     assert "4 writers" in by_name["A Community Original"]
@@ -471,7 +471,7 @@ def test_build_complete_story_embed_renders_description_and_summary():
 def test_build_attribution_embed_single_chunk_unsuffixed():
     embed = build_attribution_embed([["**Alice:** *hi*", "**Bob:** *yo*"]])
     assert embed.title is not None
-    assert "WHO WROTE WHAT" in embed.title
+    assert "Who Wrote What" in embed.title
     names = [f.name for f in embed.fields]
     assert names == ["Sentences"]
     assert embed.fields[0].value is not None

@@ -35,7 +35,7 @@ def build_lobby_embed(host_name: str, participants: list[str], color: "discord.C
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['compliment']} SPIN THE COMPLIMENT",
+        title=f"{GAME_ICONS['compliment']} Spin the Compliment",
         color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
@@ -70,7 +70,7 @@ def build_pairings_embed(pairing_lines: list[str], color: "discord.Color | None"
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['compliment']} COMPLIMENT PAIRINGS",
+        title=f"{GAME_ICONS['compliment']} Compliment Pairings",
         color=color,
     )
     body = "\n".join(pairing_lines)

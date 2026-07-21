@@ -37,7 +37,7 @@ def build_session_recap_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title="📋 GAME NIGHT SESSION RECAP",
+        title="📋 Game Night Session Recap",
         color=color,
     )
     embed.add_field(name="🎮 Games Played", value=str(game_count), inline=True)

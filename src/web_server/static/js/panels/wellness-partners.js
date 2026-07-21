@@ -2,7 +2,7 @@ import { wGet, wPost, wDelete, esc } from "../wellness-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading partners...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading partners…</div></div>`;
 
   async function load() {
     let d;

@@ -38,13 +38,13 @@ def build_lobby_embed(
     :data:`PHASE_JOINING` constant when no guild is in scope.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['hottakes']} HOT TAKES",
+        title=f"{GAME_ICONS['hottakes']} Hot Takes",
         description="Submit your spiciest take — all entries are anonymous.",
         color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Submissions", value=str(submission_count), inline=True)
-    embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes  •  👁 Anonymous")
+    embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes • 👁 Anonymous")
     return embed
 
 
@@ -66,9 +66,9 @@ def build_vote_embed(
     :data:`PHASE_PLAYING` / :data:`PHASE_RESULTS` constants when no
     guild is in scope.
     """
-    title = f"{GAME_ICONS['hottakes']} HOT TAKE #{take_num}"
+    title = f"{GAME_ICONS['hottakes']} Hot Take #{take_num}"
     if closed:
-        title += " — ROUND OVER"
+        title += " — Round Over"
     embed = discord.Embed(
         title=title,
         color=color or discord.Color(PHASE_RESULTS if closed else PHASE_PLAYING),
@@ -93,7 +93,7 @@ def build_vote_embed(
         value=f"Take {take_num}/{total_takes}",
         inline=False,
     )
-    embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes  •  👁 Anonymous")
+    embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes • 👁 Anonymous")
     return embed
 
 
@@ -119,7 +119,7 @@ def build_recap_embed(
         return None
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['hottakes']} HOT TAKES — FINAL RESULTS",
+        title=f"{GAME_ICONS['hottakes']} Hot Takes — Final Results",
         color=color or discord.Color(PHASE_RECAP),
     )
     hottest = summary["hottest"]

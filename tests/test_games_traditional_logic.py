@@ -301,8 +301,8 @@ def test_build_tod_embed_shows_zero_counts_for_empty_payload():
     assert by_name["Participants"] == "0"
     assert by_name["Questions Asked"] == "0"
     assert embed.title is not None
-    assert "TRUTH OR DARE" in embed.title
-    assert "GAME OVER" not in embed.title
+    assert "Truth or Dare" in embed.title
+    assert "Game Over" not in embed.title
 
 
 def test_build_tod_embed_counts_participants_and_asked():
@@ -333,7 +333,7 @@ def test_build_tod_embed_shows_progress_against_pref_pool():
 def test_build_tod_embed_closed_flag_changes_title():
     embed = build_tod_embed("Alice", {}, closed=True)
     assert embed.title is not None
-    assert "GAME OVER" in embed.title
+    assert "Game Over" in embed.title
 
 
 def test_build_tod_embed_has_footer():
@@ -370,7 +370,7 @@ def test_build_recap_embed_shows_totals():
     assert by_name["Total Questions Asked"] == "2"
     assert by_name["Participants"] == "3"
     assert embed.title is not None
-    assert "GAME OVER" in embed.title
+    assert "Game Over" in embed.title
 
 
 def test_build_recap_embed_no_color_falls_back_to_brand_not_gray():

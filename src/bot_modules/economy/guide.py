@@ -44,11 +44,11 @@ NOTIFY_OFF_MSG = (
     "you just won't get the DMs. Click again to turn them back on."
 )
 NOTIFY_UNCONFIGURED_MSG = (
-    "Notifications aren't set up in this server yet — ask a mod to pick the "
+    "❌ Notifications aren't set up in this server yet — ask a mod to pick the "
     "economy notification role on the dashboard."
 )
 NOTIFY_FAILED_MSG = (
-    "I couldn't update your roles just now — my role may sit below the "
+    "❌ I couldn't update your roles just now — my role may sit below the "
     "notification role. Ask a mod to check, then try again."
 )
 
@@ -61,7 +61,7 @@ def build_guide_embed(
     plural = settings.currency_plural
 
     embed = discord.Embed(
-        title=f"{emoji} {plural} — how it works",
+        title=f"{emoji} {plural} — How It Works",
         description=(
             f"Being active here earns you **{plural}**, which you can spend on "
             "role perks and gifts. Check your balance and recent activity any "

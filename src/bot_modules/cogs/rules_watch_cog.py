@@ -16,6 +16,7 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -119,11 +120,11 @@ class RulesWatchCog(commands.Cog):
             interaction: discord.Interaction, message: discord.Message
         ) -> None:
             if not ctx.is_mod(interaction):
-                await interaction.response.send_message("Permission denied.", ephemeral=True)
+                await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
                 return
             if message.author.bot:
                 await interaction.response.send_message(
-                    "Can't report a bot message.", ephemeral=True
+                    "❌ Can't report a bot message.", ephemeral=True
                 )
                 return
             await interaction.response.send_modal(_ReportViolationModal(message, ctx))
@@ -151,7 +152,7 @@ class RulesWatchCog(commands.Cog):
     )
     async def rw_digest(self, interaction: discord.Interaction) -> None:
         if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
         guild = interaction.guild
@@ -183,7 +184,7 @@ class RulesWatchCog(commands.Cog):
     )
     async def rw_stats(self, interaction: discord.Interaction) -> None:
         if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
 
@@ -247,7 +248,7 @@ class RulesWatchCog(commands.Cog):
         corrected_rule: str | None = None,
     ) -> None:
         if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
             return
 
         is_violation = verdict.lower().startswith("v")
@@ -257,7 +258,7 @@ class RulesWatchCog(commands.Cog):
             ev = service.get_event(conn, event_id)
             if ev is None:
                 await interaction.response.send_message(
-                    f"Event #{event_id} not found.", ephemeral=True
+                    f"❌ Event #{event_id} not found.", ephemeral=True
                 )
                 return
             service.upsert_label(
@@ -280,7 +281,7 @@ class RulesWatchCog(commands.Cog):
     @rules_watch.command(name="status", description="Show whether Rules Watch is currently active.")
     async def rw_status(self, interaction: discord.Interaction) -> None:
         if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Permission denied.", ephemeral=True)
+            await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
 

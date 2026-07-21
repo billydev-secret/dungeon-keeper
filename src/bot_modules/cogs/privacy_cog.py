@@ -37,6 +37,7 @@ from bot_modules.privacy.logic import (
     should_throttle,
 )
 from bot_modules.services.discord_scan import find_user_messages
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -59,7 +60,7 @@ class _ConfirmDeleteView(discord.ui.View):
     @discord.ui.button(label="Yes, delete my messages", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if interaction.user.id != self.actor_id:
-            await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
+            await interaction.response.send_message("❌ This isn't your confirmation.", ephemeral=True)
             return
         self.confirmed = True
         disable_all_items(self)
@@ -71,7 +72,7 @@ class _ConfirmDeleteView(discord.ui.View):
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if interaction.user.id != self.actor_id:
-            await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
+            await interaction.response.send_message("❌ This isn't your confirmation.", ephemeral=True)
             return
         self.confirmed = False
         await interaction.response.edit_message(content="Cancelled.", view=None)
@@ -417,13 +418,13 @@ class PrivacyCog(commands.Cog):
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
         if interaction.user.id in self._active_deletions:
             await interaction.response.send_message(
-                "A deletion is already running for your account — please wait for it to finish.",
+                "❌ A deletion is already running for your account — please wait for it to finish.",
                 ephemeral=True,
             )
             return
@@ -482,19 +483,19 @@ class PrivacyCog(commands.Cog):
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
         if not self.ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
         if member.id in self._active_deletions:
             await interaction.response.send_message(
-                f"A deletion is already running for {member.mention} — please wait for it to finish.",
+                f"❌ A deletion is already running for {member.mention} — please wait for it to finish.",
                 ephemeral=True,
             )
             return

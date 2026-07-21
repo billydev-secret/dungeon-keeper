@@ -45,10 +45,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.qa")
 
-_DISABLED_MSG = "The QA tracker is disabled on this server."
-_NO_ROLE_MSG = "You need the QA-crew role to record verdicts."
-_ARCHIVED_MSG = "This test is archived — verdicts are closed."
-_GUILD_ONLY_MSG = "This only works in a server."
+_DISABLED_MSG = "❌ The QA tracker is disabled on this server."
+_NO_ROLE_MSG = "❌ You need the QA-crew role to record verdicts."
+_ARCHIVED_MSG = "❌ This test is archived — verdicts are closed."
+_GUILD_ONLY_MSG = "❌ This only works in a server."
 
 _VERDICT_LABELS = {"fail": "Failed", "blocked": "Blocked"}
 
@@ -212,7 +212,7 @@ class _QANoteModal(discord.ui.Modal):
         self, test_id: int, verdict: str, message: discord.Message | None
     ) -> None:
         super().__init__(
-            title="What went wrong?" if verdict == "fail" else "What's in the way?"
+            title="What Went Wrong?" if verdict == "fail" else "What's in the Way?"
         )
         self.test_id = test_id
         self.verdict = verdict

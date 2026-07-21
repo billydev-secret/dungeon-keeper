@@ -1559,13 +1559,13 @@ class _ResetConfirmView(discord.ui.View):
             return
         await _apply_reset(interaction, channel, row, also_profile=also_profile)
 
-    @discord.ui.button(label="Reset just this channel", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Reset Just This Channel", style=discord.ButtonStyle.primary)
     async def reset_channel_only(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await self._run(interaction, also_profile=False)
 
-    @discord.ui.button(label="Reset channel + my saved profile", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Reset Channel + My Saved Profile", style=discord.ButtonStyle.danger)
     async def reset_with_profile(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:

@@ -21,7 +21,7 @@ def build_lobby_embed(host_name: str, color: "discord.Color | None" = None) -> d
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['fantasies']} FANTASIES & DEALBREAKERS",
+        title=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers",
         description="Submit anonymously each round, then vote!",
         color=color,
     )
@@ -35,7 +35,7 @@ def build_round_submit_embed(round_num: int, color: "discord.Color | None" = Non
     if color is None:
         color = discord.Color(BRAND_COLOR)
     return discord.Embed(
-        title=f"{GAME_ICONS['fantasies']} ROUND {round_num}",
+        title=f"{GAME_ICONS['fantasies']} Round {round_num}",
         description="Submit your fantasy or dealbreaker anonymously!",
         color=color,
     )
@@ -67,7 +67,7 @@ def build_vote_embed(
 
     title = f"{GAME_ICONS['fantasies']} {category} #{entry_num}"
     if closed:
-        title += " — VOTE CLOSED"
+        title += " — Vote Closed"
     embed = discord.Embed(title=title, color=color)
     embed.add_field(
         name="Entry",
@@ -106,7 +106,7 @@ def build_recap_embed(results: list[dict[str, Any]], color: "discord.Color | Non
         return None
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['fantasies']} FANTASIES & DEALBREAKERS — RESULTS",
+        title=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers — Results",
         color=color,
     )
 

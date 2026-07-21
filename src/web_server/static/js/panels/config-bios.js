@@ -78,9 +78,9 @@ async function renderConfigTab(pane) {
   pane.innerHTML = `
     <form class="form" data-form></form>
     <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border, #333);">
-      <h3 style="margin-top:0">Trigger button</h3>
+      <h3 style="margin-top:0">Trigger Button</h3>
       <p>Posts the persistent <strong>📝 Create / Update Bio</strong> button into the configured bios channel, using the <strong>Trigger title</strong> and <strong>Trigger message</strong> above. Members tap it to start the wizard. Re-post after editing the copy to refresh the live message.</p>
-      <button type="button" class="btn btn-secondary" data-post-btn>Post trigger button</button>
+      <button type="button" class="btn btn-secondary" data-post-btn>Post Trigger Button</button>
       <span data-post-status></span>
     </div>
   `;
@@ -241,7 +241,7 @@ async function renderFieldsTab(pane) {
         <tbody>${rows || emptyRow}</tbody>
       </table>
       <div style="margin-top:1rem;">
-        <button type="button" class="btn btn-primary" data-add>Add field</button>
+        <button type="button" class="btn btn-primary" data-add>Add Field</button>
         <span data-add-status></span>
       </div>
       <div data-editor></div>
@@ -315,7 +315,7 @@ async function renderFieldsTab(pane) {
     const choicesText = (f.choices || []).join("\n");
     editor.innerHTML = `
       <div class="panel" style="margin-top:1rem; padding:1rem; border:1px solid var(--border, #333);">
-        <h3 style="margin-top:0">${isNew ? "Add field" : "Edit field"}</h3>
+        <h3 style="margin-top:0">${isNew ? "Add Field" : "Edit Field"}</h3>
         <form class="form" data-editor-form>
           <div class="field">
             <label>Label</label>

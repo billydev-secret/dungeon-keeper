@@ -151,7 +151,7 @@ export function mount(container) {
     const primary = buildChannelBlock(
       form,
       {
-        title: "Primary channel",
+        title: "Primary Channel",
         chanName: "birthday_channel_id",
         msgName: "birthday_message",
         pinName: "birthday_pin",
@@ -164,7 +164,7 @@ export function mount(container) {
     const secondary = buildChannelBlock(
       form,
       {
-        title: "Second channel (optional)",
+        title: "Second Channel (optional)",
         chanName: "birthday_channel_id_2",
         msgName: "birthday_message_2",
         pinName: "birthday_pin_2",

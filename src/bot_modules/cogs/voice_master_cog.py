@@ -1094,11 +1094,11 @@ class VoiceMasterCog(commands.Cog):
     async def voice_claim(self, interaction: discord.Interaction) -> None:
         member = interaction.user
         if not isinstance(member, discord.Member) or member.voice is None or member.voice.channel is None:
-            await _ephemeral(interaction, "You're not in a voice channel.")
+            await _ephemeral(interaction, "❌ You're not in a voice channel.")
             return
         channel = member.voice.channel
         if not isinstance(channel, discord.VoiceChannel):
-            await _ephemeral(interaction, "That isn't a managed voice channel.")
+            await _ephemeral(interaction, "❌ That isn't a managed voice channel.")
             return
         _guild_id = member.guild.id
         _channel_id = channel.id
@@ -1112,7 +1112,7 @@ class VoiceMasterCog(commands.Cog):
 
         cfg, row = await asyncio.to_thread(_fetch_claim_data)
         if row is None:
-            await _ephemeral(interaction, "This channel isn't managed by Voice Master.")
+            await _ephemeral(interaction, "❌ This channel isn't managed by Voice Master.")
             return
         owner = member.guild.get_member(row.owner_id)
         decision = classify_claim_attempt(
@@ -1144,7 +1144,7 @@ class VoiceMasterCog(commands.Cog):
                 member, overwrite=overwrite, reason="Voice Master: claim"
             )
         except (discord.Forbidden, discord.HTTPException):
-            await _ephemeral(interaction, "Couldn't grant you ownership permissions.")
+            await _ephemeral(interaction, "❌ Couldn't grant you ownership permissions.")
             return
         _prev_owner_id = row.owner_id
         _claimer_id = member.id
@@ -1189,11 +1189,11 @@ class VoiceMasterCog(commands.Cog):
             if existing is not None:
                 await _ephemeral(interaction, "Sleep-kick cancelled.")
             else:
-                await _ephemeral(interaction, "No active sleep-kick to cancel.")
+                await _ephemeral(interaction, "❌ No active sleep-kick to cancel.")
             return
 
         if not (0 < hours <= 24):
-            await _ephemeral(interaction, "Hours must be between 0 and 24.")
+            await _ephemeral(interaction, "❌ Hours must be between 0 and 24.")
             return
 
         task = self.bot.loop.create_task(
@@ -1304,7 +1304,7 @@ class VoiceMasterCog(commands.Cog):
         if removed:
             await _ephemeral(interaction, f"Removed {member.mention} from your trust list.")
         else:
-            await _ephemeral(interaction, f"{member.mention} wasn't on your trust list.")
+            await _ephemeral(interaction, f"❌ {member.mention} wasn't on your trust list.")
 
     @voice_blocked.command(name="list", description="Show your saved blocked members.")
     async def blocked_list(self, interaction: discord.Interaction) -> None:
@@ -1381,7 +1381,7 @@ class VoiceMasterCog(commands.Cog):
         if removed:
             await _ephemeral(interaction, f"Removed {member.mention} from your blocklist.")
         else:
-            await _ephemeral(interaction, f"{member.mention} wasn't on your blocklist.")
+            await _ephemeral(interaction, f"❌ {member.mention} wasn't on your blocklist.")
 
     @voice.command(
         name="knock",
@@ -1404,17 +1404,17 @@ class VoiceMasterCog(commands.Cog):
         row = await asyncio.to_thread(_fetch_knock_row)
         if row is None:
             await _ephemeral(
-                interaction, "That channel isn't managed by Voice Master."
+                interaction, "❌ That channel isn't managed by Voice Master."
             )
             return
         if row.owner_id == interaction.user.id:
-            await _ephemeral(interaction, "You already own that channel.")
+            await _ephemeral(interaction, "❌ You already own that channel.")
             return
         owner = interaction.guild.get_member(row.owner_id)
         if owner is None:
             await _ephemeral(
                 interaction,
-                "The owner isn't in this server right now — try `/voice claim` if eligible.",
+                "❌ The owner isn't in this server right now — try `/voice claim` if eligible.",
             )
             return
         if not isinstance(interaction.user, discord.Member):
@@ -1430,7 +1430,7 @@ class VoiceMasterCog(commands.Cog):
         else:
             await _ephemeral(
                 interaction,
-                "Couldn't deliver the knock — the owner's DMs are closed and "
+                "❌ Couldn't deliver the knock — the owner's DMs are closed and "
                 "there's no control channel to fall back to.",
             )
 
@@ -1540,7 +1540,7 @@ class VoiceMasterCog(commands.Cog):
     async def voice_owner(self, interaction: discord.Interaction) -> None:
         member = interaction.user
         if not isinstance(member, discord.Member) or member.voice is None or member.voice.channel is None:
-            await _ephemeral(interaction, "You're not in a voice channel.")
+            await _ephemeral(interaction, "❌ You're not in a voice channel.")
             return
         channel = member.voice.channel
         _owner_channel_id = channel.id
@@ -1553,7 +1553,7 @@ class VoiceMasterCog(commands.Cog):
         if row is None:
             await _ephemeral(
                 interaction,
-                "This channel isn't managed by Voice Master.",
+                "❌ This channel isn't managed by Voice Master.",
             )
             return
         owner = interaction.guild.get_member(row.owner_id) if interaction.guild else None
@@ -1570,10 +1570,10 @@ class VoiceMasterCog(commands.Cog):
     )
     async def post_panel_cmd(self, interaction: discord.Interaction) -> None:
         if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
+            await interaction.response.send_message("❌ Administrator only.", ephemeral=True)
             return
         if interaction.guild is None:
-            await interaction.response.send_message("Server only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
         _pp_guild_id = interaction.guild.id
 
@@ -1584,7 +1584,7 @@ class VoiceMasterCog(commands.Cog):
         cfg = await asyncio.to_thread(_fetch_pp_cfg)
         if not cfg.control_channel_id:
             await interaction.response.send_message(
-                "No control channel set. Configure it in the web dashboard first.",
+                "❌ No control channel set. Configure it in the web dashboard first.",
                 ephemeral=True,
             )
             return
@@ -1595,7 +1595,7 @@ class VoiceMasterCog(commands.Cog):
         )
         if not isinstance(channel, discord.TextChannel):
             await interaction.response.send_message(
-                "Configured control channel is missing or not a text channel.",
+                "❌ Configured control channel is missing or not a text channel.",
                 ephemeral=True,
             )
             return

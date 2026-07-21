@@ -49,7 +49,7 @@ function render(container, cfg, roles) {
       </form>
 
       <section class="card">
-        <div class="section-label">How it works</div>
+        <div class="section-label">How It Works</div>
         <div class="field-hint">
           A mod asks the question two ways: type it normally and <strong>tag the QOTD
           role</strong> in the message, or run <code>/qotd post &lt;question&gt;</code>

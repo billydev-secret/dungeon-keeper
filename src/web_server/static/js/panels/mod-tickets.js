@@ -147,7 +147,7 @@ function renderActions(t) {
         <button class="act-btn" data-action="note">${ICON_NOTE}Add note</button>
         <span class="act-spacer"></span>
         <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
-        <button class="act-btn warn" data-action="reopen">Reopen ticket</button>
+        <button class="act-btn warn" data-action="reopen">Reopen Ticket</button>
       </div>
     `;
   }
@@ -556,7 +556,7 @@ export function mount(container) {
     }
     if (action === "warn") {
       const reason = await promptDialog("Reason for warning?", {
-        title: "Warn member", confirmLabel: "Warn", required: true, danger: true,
+        title: "Warn Member", confirmLabel: "Warn", required: true, danger: true,
       });
       if (reason === null) return;
       await apiPost(`${base}/warn`, { reason });
@@ -564,7 +564,7 @@ export function mount(container) {
     }
     if (action === "jail") {
       const reason = await promptDialog("Reason for 24h jail? (blank = no reason)", {
-        title: "Jail member", confirmLabel: "Jail", danger: true,
+        title: "Jail Member", confirmLabel: "Jail", danger: true,
       });
       if (reason === null) return;
       await apiPost(`${base}/jail`, { duration: "24h", reason });
@@ -572,11 +572,11 @@ export function mount(container) {
     }
     if (action === "jail-custom") {
       const duration = await promptDialog("Jail duration? (e.g. 30m, 2h, 7d)", {
-        title: "Jail member", confirmLabel: "Next", value: "24h", required: true, danger: true,
+        title: "Jail Member", confirmLabel: "Next", value: "24h", required: true, danger: true,
       });
       if (duration === null) return;
       const reason = await promptDialog("Reason? (blank = no reason)", {
-        title: "Jail member", confirmLabel: "Jail", danger: true,
+        title: "Jail Member", confirmLabel: "Jail", danger: true,
       });
       if (reason === null) return;
       await apiPost(`${base}/jail`, { duration, reason });
@@ -584,7 +584,7 @@ export function mount(container) {
     }
     if (action === "note") {
       const body = await promptDialog("Note body?", {
-        title: "Add note", confirmLabel: "Add note", required: true,
+        title: "Add Note", confirmLabel: "Add Note", required: true,
       });
       if (body === null) return;
       await apiPost(`${base}/note`, { body });
@@ -592,7 +592,7 @@ export function mount(container) {
     }
     if (action === "dismiss") {
       const reason = await promptDialog("Dismissal reason? (optional)", {
-        title: "Dismiss ticket", confirmLabel: "Dismiss",
+        title: "Dismiss Ticket", confirmLabel: "Dismiss",
       });
       if (reason === null) return;
       await apiPost(`${base}/dismiss`, { reason });
@@ -600,7 +600,7 @@ export function mount(container) {
     }
     if (action === "close") {
       const reason = await promptDialog("Reason for closing? (optional)", {
-        title: "Close ticket", confirmLabel: "Close",
+        title: "Close Ticket", confirmLabel: "Close",
       });
       if (reason === null) return;
       await apiPost(`${base}/close`, { reason });

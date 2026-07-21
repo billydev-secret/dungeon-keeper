@@ -75,19 +75,19 @@ def check_inactive_preconditions(
     """
     if target.bot:
         return InactiveOutcome(
-            ok=False, error_kind="bot_target", error_message="Cannot move a bot."
+            ok=False, error_kind="bot_target", error_message="❌ Cannot move a bot."
         )
     if target.id == moderator.id:
         return InactiveOutcome(
             ok=False,
             error_kind="self_target",
-            error_message="Cannot move yourself to the inactive channel.",
+            error_message="❌ Cannot move yourself to the inactive channel.",
         )
 
     cfg = ctx.guild_config(guild.id)
     if target.guild_permissions.administrator or cfg.member_is_admin(target):
         return InactiveOutcome(
-            ok=False, error_kind="admin_target", error_message="Cannot move an admin."
+            ok=False, error_kind="admin_target", error_message="❌ Cannot move an admin."
         )
 
     target_is_mod = (
@@ -102,7 +102,7 @@ def check_inactive_preconditions(
         return InactiveOutcome(
             ok=False,
             error_kind="mod_target",
-            error_message="Only admins can move a moderator.",
+            error_message="❌ Only admins can move a moderator.",
         )
 
     with ctx.open_db() as conn:
@@ -110,7 +110,7 @@ def check_inactive_preconditions(
             return InactiveOutcome(
                 ok=False,
                 error_kind="already_inactive",
-                error_message=f"{target} is already in the inactive channel.",
+                error_message=f"❌ {target} is already in the inactive channel.",
             )
 
     return None
@@ -206,7 +206,7 @@ async def apply_inactive(
         return InactiveOutcome(
             ok=False,
             error_kind="no_role_perms",
-            error_message="Missing **Manage Roles** — can't create the Inactive role.",
+            error_message="❌ Missing **Manage Roles** — can't create the Inactive role.",
         )
 
     # Snapshot everything except @everyone and the Inactive role itself. Exclude
@@ -229,7 +229,7 @@ async def apply_inactive(
             ok=False,
             error_kind="no_member_perms",
             error_message=(
-                "Missing permission to manage this user's roles — check that my "
+                "❌ Missing permission to manage this user's roles — check that my "
                 "top role is above theirs and above the Inactive role."
             ),
         )
@@ -265,7 +265,7 @@ async def apply_inactive(
     chan_id = await asyncio.to_thread(_read_channel_id, ctx, guild_id)
     channel_line = f"\nHead to <#{chan_id}> and open a ticket to restore your access." if chan_id else ""
     dm_embed = discord.Embed(
-        title="You've been moved to the inactive channel",
+        title="You've Been Moved to the Inactive Channel",
         description=(
             f"You've been moved to the inactive area of **{guild.name}** due to "
             f"inactivity. **Your roles are saved** and will be restored when you're "
@@ -320,7 +320,7 @@ async def reactivate_member(
 
     row = await asyncio.to_thread(_fetch)
     if not row:
-        return f"{target} is not currently in the inactive channel."
+        return f"❌ {target} is not currently in the inactive channel."
 
     stored = json.loads(row["stored_roles"])
     available_role_ids = {r.id for r in guild.roles}
@@ -341,7 +341,7 @@ async def reactivate_member(
         if inactive_role and inactive_role in target.roles:
             await target.remove_roles(inactive_role, reason=f"Reactivated: {reason}")
     except discord.Forbidden:
-        return "Could not fully restore roles — missing permissions. Try again."
+        return "❌ Could not fully restore roles — missing permissions. Try again."
 
     inactive_id = row["id"]
 
@@ -360,7 +360,7 @@ async def reactivate_member(
     await asyncio.to_thread(_release)
 
     dm_embed = discord.Embed(
-        title="You've been reactivated",
+        title="You've Been Reactivated",
         description=(
             f"Your access to **{guild.name}** has been restored and your roles "
             f"are back." + (f"\n**Note:** {reason}" if reason else "")

@@ -78,22 +78,22 @@ def classify_dm_request(
     """
     if not target_in_guild:
         return (
-            "I couldn't check that user's DM preference — they may not be in this server."
+            "❌ I couldn't check that user's DM preference — they may not be in this server."
         )
     if is_self:
-        return "You can't send a request to yourself!"
+        return "❌ You can't send a request to yourself!"
     if target_is_bot:
-        return "Bots don't accept DM requests."
+        return "❌ Bots don't accept DM requests."
     if target_mode == "closed":
-        return f"{target_display_name} isn't accepting DM requests right now."
+        return f"❌ {target_display_name} isn't accepting DM requests right now."
     if target_mode == "open":
         return (
-            f"{target_display_name} has their DMs open — no request needed, just message them!"
+            f"❌ {target_display_name} has their DMs open — no request needed, just message them!"
         )
     if is_mutual:
-        return "You two already have a connection — no need to request again."
+        return "❌ You two already have a connection — no need to request again."
     if has_pending:
-        return "You already have a pending request to them — wait for them to respond."
+        return "❌ You already have a pending request to them — wait for them to respond."
     return None
 
 

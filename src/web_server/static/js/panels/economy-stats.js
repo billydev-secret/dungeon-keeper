@@ -106,12 +106,12 @@ function render(container, members) {
       <div class="card-grid" data-summary style="margin-bottom:4px;"></div>
 
       <section class="card">
-        <div class="section-label">Balance distribution</div>
+        <div class="section-label">Balance Distribution</div>
         <div data-distribution><div class="empty">Loading…</div></div>
       </section>
 
       <section class="card">
-        <div class="section-label">Income sources</div>
+        <div class="section-label">Income Sources</div>
         <div class="field-hint">Coins minted per week by source (grants, quests,
           logins, activity, games) over the last 8 weeks. Transfers move currency
           sideways, so they aren't income and don't appear here.</div>
@@ -127,19 +127,19 @@ function render(container, members) {
       </div>
 
       <section class="card">
-        <div class="section-label">Biggest spenders (all time)</div>
+        <div class="section-label">Biggest Spenders (all time)</div>
         <div class="field-hint">Lifetime currency burned — rentals, consumables and other sinks. Transfers and staff clawbacks don't count: a transfer moves currency sideways rather than removing it.</div>
         <div data-burn><div class="empty">Loading…</div></div>
       </section>
 
       <section class="card">
-        <div class="section-label">Top transfers (30d)</div>
+        <div class="section-label">Top Transfers (30d)</div>
         <div class="field-hint">One-way volume over 500 is flagged — a possible farming/laundering signal worth an audit.</div>
         <div data-transfers><div class="empty">Loading…</div></div>
       </section>
 
       <section class="card" data-live-card>
-        <div class="section-label">Happening now</div>
+        <div class="section-label">Happening Now</div>
         <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
         <div data-live><div class="empty">Loading…</div></div>
       </section>
@@ -227,7 +227,7 @@ async function refreshLive(container) {
   bits.push(`
     <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
       ${cadCols}
-      <div><div class="section-label">Event quests</div>${eventRows}</div>
+      <div><div class="section-label">Event Quests</div>${eventRows}</div>
     </div>`);
 
   host.innerHTML = bits.join("");

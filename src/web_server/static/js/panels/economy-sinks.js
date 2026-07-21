@@ -165,7 +165,7 @@ function render(container, cfg, pricing, icons) {
       </header>
 
       <form class="form card" data-price-form>
-        <div class="section-label">Perk prices</div>
+        <div class="section-label">Perk Prices</div>
         <div class="field-row" style="flex-wrap:wrap;">
           ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
@@ -173,7 +173,7 @@ function render(container, cfg, pricing, icons) {
         <div class="field-row" style="flex-wrap:wrap;">
           ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
-        <div class="section-label" style="margin-top:16px;">Weekly raffle</div>
+        <div class="section-label" style="margin-top:16px;">Weekly Raffle</div>
         <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
           <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
             <input type="checkbox" name="raffle_enabled" /> Enabled
@@ -195,7 +195,7 @@ function render(container, cfg, pricing, icons) {
           wager pot. Every collection shows in the register feed like any
           other transaction — announce before setting either rate.
         </div>
-        <div class="section-label" style="margin-top:16px;">Sponsored emojis</div>
+        <div class="section-label" style="margin-top:16px;">Sponsored Emojis</div>
         <div class="field-row" style="flex-wrap:wrap;">
           ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
@@ -204,13 +204,13 @@ function render(container, cfg, pricing, icons) {
           ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
         </div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
-          <button type="submit" class="btn btn-primary">Save prices</button>
+          <button type="submit" class="btn btn-primary">Save Prices</button>
           <span data-price-status></span>
         </div>
       </form>
 
       <section class="form card" style="margin-top:1.5rem;">
-        <div class="section-label">Emoji approval queue</div>
+        <div class="section-label">Emoji Approval Queue</div>
         <div class="field-hint" style="margin-bottom:1rem;">
           Member-sponsored emojis waiting for review. Approving uploads the
           emoji and starts its weekly rental (the escrow already paid week
@@ -222,7 +222,7 @@ function render(container, cfg, pricing, icons) {
       </section>
 
       <section class="form card" style="margin-top:1.5rem;">
-        <div class="section-label">Rentable icon catalog</div>
+        <div class="section-label">Rentable Icon Catalog</div>
         <div class="field-hint" style="margin-bottom:1rem;">
           Curated role icons members rent from <code>/bank shop</code>, each with its own
           weekly price. Renting bills the icon's price; a price change applies at the
@@ -238,7 +238,7 @@ function render(container, cfg, pricing, icons) {
         </div>
 
         <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
-          <div class="section-label">Add an icon</div>
+          <div class="section-label">Add an Icon</div>
           <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
             <div class="field">
               <label>Name</label>
@@ -252,7 +252,7 @@ function render(container, cfg, pricing, icons) {
               <label>Image (PNG/WEBP)</label>
               <input type="file" data-add-file accept="image/png,image/webp,image/jpeg,image/gif" />
             </div>
-            <button type="button" class="btn btn-primary" data-add>Add icon</button>
+            <button type="button" class="btn btn-primary" data-add>Add Icon</button>
             <span data-add-status></span>
           </div>
         </div>

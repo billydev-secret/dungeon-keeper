@@ -15,6 +15,7 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.settings import AUTO_DELETE_SETTINGS
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -446,7 +447,7 @@ class ModCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -478,7 +479,7 @@ class ModCog(commands.Cog):
                     else "UTC"
                 )
                 await interaction.response.send_message(
-                    f"Invalid time format. Use `HH:MM` or `HH:MM:SS` (server time is {tz_label}), e.g. `19:35`.",
+                    f"❌ Invalid time format. Use `HH:MM` or `HH:MM:SS` (server time is {tz_label}), e.g. `19:35`.",
                     ephemeral=True,
                 )
                 return
@@ -486,14 +487,14 @@ class ModCog(commands.Cog):
         channel = interaction.channel
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             await interaction.response.send_message(
-                "This command only works in text channels and threads.", ephemeral=True
+                "❌ This command only works in text channels and threads.", ephemeral=True
             )
             return
 
         bot_member = channel.guild.me if hasattr(channel, "guild") else None
         if bot_member and not channel.permissions_for(bot_member).manage_messages:
             await interaction.response.send_message(
-                "I need the **Manage Messages** permission in this channel to delete messages.",
+                "❌ I need the **Manage Messages** permission in this channel to delete messages.",
                 ephemeral=True,
             )
             return

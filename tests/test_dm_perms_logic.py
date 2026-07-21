@@ -365,7 +365,7 @@ def test_build_denial_embed_for_view_uses_no_worries_copy():
     assert by_name["Request Type"] == "Direct Message"
     assert "not now" in by_name["Reason"]
     # No reply given → no reply field.
-    assert "Your reply" not in by_name
+    assert "Your Reply" not in by_name
 
 
 def test_build_denial_embed_for_view_shows_reply_when_given():
@@ -373,7 +373,7 @@ def test_build_denial_embed_for_view_shows_reply_when_given():
         type_label="Direct Message", reason="not now", reply="maybe later, ok?",
     )
     by_name = {f.name: f.value or "" for f in embed.fields}
-    assert "maybe later, ok?" in by_name["Your reply"]
+    assert "maybe later, ok?" in by_name["Your Reply"]
 
 
 # ── build_denial_embed_for_requester ─────────────────────────────────

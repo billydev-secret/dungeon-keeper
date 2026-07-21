@@ -4,7 +4,7 @@ import { loadConfig, apiPut, showStatus, escapeHtml } from "../config-helpers.js
 const DEFAULT_ACCENT = "#5865F2";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading branding...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading branding…</div></div>`;
 
   (async () => {
     const config = await loadConfig();

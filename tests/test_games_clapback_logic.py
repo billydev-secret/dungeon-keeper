@@ -607,7 +607,7 @@ def test_build_reveal_embed_clapback_branch():
         name_resolver=_name_resolver,
     )
     assert embed.title is not None
-    assert "C L A P B A C K" in embed.title
+    assert "Clapback" in embed.title
     field_names = [f.name for f in embed.fields]
     assert "🏆 Winner" in field_names
     assert "💀 Defeated" in field_names
@@ -680,7 +680,7 @@ def test_build_reveal_embed_tie_branch():
         name_resolver=_name_resolver,
     )
     assert embed.title is not None
-    assert "TIE" in embed.title
+    assert "Tie" in embed.title
     # Tie field shows both answers + names
     tie_field = next(f for f in embed.fields if f.name == "🤝")
     assert tie_field.value is not None
@@ -709,9 +709,9 @@ def test_build_reveal_embed_regular_win_branch():
         name_resolver=_name_resolver,
     )
     assert embed.title is not None
-    assert "MATCHUP RESULT" in embed.title
+    assert "Matchup Result" in embed.title
     # No "C L A P B A C K" prefix
-    assert "C L A P B A C K" not in embed.title
+    assert "Clapback" not in embed.title
 
 
 def test_build_reveal_embed_shows_prompt_when_supplied():
@@ -733,7 +733,7 @@ def test_build_reveal_embed_shows_prompt_when_supplied():
     assert embed.description is not None
     assert "The worst superpower to have on a first date" in embed.description
     assert embed.title is not None
-    assert "C L A P B A C K" not in embed.title
+    assert "Clapback" not in embed.title
     winner_field = next(f for f in embed.fields if f.name == "🏆 Winner")
     assert winner_field.value is not None
     assert "winner answer" in winner_field.value
@@ -815,7 +815,7 @@ def test_build_recap_embed_winner_field_uses_highest_scorer():
     }
     embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver)
     winner_field_name = next(
-        n for n in (f.name for f in embed.fields) if n and "WINNER" in n
+        n for n in (f.name for f in embed.fields) if n and "Winner" in n
     )
     assert "User10" in winner_field_name
 
@@ -931,8 +931,8 @@ def test_build_recap_embed_includes_total_clapbacks_when_nonzero():
     }
     embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver)
     field_names = [f.name for f in embed.fields]
-    assert "⚡ Total CLAPBACKS" in field_names
-    total_field = next(f for f in embed.fields if f.name == "⚡ Total CLAPBACKS")
+    assert "⚡ Total Clapbacks" in field_names
+    total_field = next(f for f in embed.fields if f.name == "⚡ Total Clapbacks")
     assert total_field.value == "3"
 
 
@@ -945,7 +945,7 @@ def test_build_recap_embed_omits_total_clapbacks_when_zero():
     }
     embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver)
     field_names = [f.name for f in embed.fields]
-    assert "⚡ Total CLAPBACKS" not in field_names
+    assert "⚡ Total Clapbacks" not in field_names
 
 
 # ── accent-color threading (2026-07-21 ruling: games follow guild accent) ──
@@ -1044,7 +1044,7 @@ def test_reveal_clapback_title_leads_with_game_icon_not_wordmark():
     assert embed.title is not None
     assert embed.title.startswith(GAME_ICONS["clapback"])
     assert "⚡" not in embed.title
-    assert "C L A P B A C K" in embed.title
+    assert "Clapback" in embed.title
 
 
 @pytest.mark.parametrize("rounds,timer,vote_timer", [

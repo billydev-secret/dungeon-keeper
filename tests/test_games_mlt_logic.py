@@ -344,7 +344,7 @@ def test_pop_next_prompt_single_item_leaves_empty_remaining():
 def test_build_join_embed_title_contains_game_name():
     embed = build_join_embed("Alice", [])
     assert embed.title is not None
-    assert "MOST LIKELY TO" in embed.title
+    assert "Most Likely To" in embed.title
 
 
 def test_build_join_embed_renders_host_and_players():
@@ -373,8 +373,8 @@ def test_build_join_embed_has_footer():
 def test_build_round_embed_active_title_no_suffix():
     embed = build_round_embed("staring contest", round_num=1, vote_count=0)
     assert embed.title is not None
-    assert "MOST LIKELY TO" in embed.title
-    assert "ROUND OVER" not in embed.title
+    assert "Most Likely To" in embed.title
+    assert "Round Over" not in embed.title
 
 
 def test_build_round_embed_closed_title_has_suffix():
@@ -382,7 +382,7 @@ def test_build_round_embed_closed_title_has_suffix():
         "staring contest", round_num=1, vote_count=0, closed=True
     )
     assert embed.title is not None
-    assert "ROUND OVER" in embed.title
+    assert "Round Over" in embed.title
 
 
 def test_build_round_embed_renders_prompt_and_round_fields():
@@ -417,7 +417,7 @@ def test_build_round_embed_active_vs_closed_color_differs():
 def test_build_closed_embed_title_says_closed():
     embed = build_closed_embed("x", round_num=1, vote_count=0)
     assert embed.title is not None
-    assert "CLOSED" in embed.title
+    assert "Closed" in embed.title
 
 
 def test_build_closed_embed_color_differs_from_round_over():

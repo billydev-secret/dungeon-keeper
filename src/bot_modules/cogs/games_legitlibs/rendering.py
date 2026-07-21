@@ -25,7 +25,7 @@ def build_join_embed(
 ) -> discord.Embed:
     mode_label = {"quiplash": "Quiplash", "classic": "Classic", "hotseat": "Hot Seat"}.get(mode, mode.title())
     embed = discord.Embed(
-        title=f"{_ICON} LEGITLIBS  —  {mode_label.upper()}",
+        title=f"{_ICON} LegitLibs — {mode_label}",
         description=f'**"{template_title}"**',
         color=_TIER_COLORS.get(tier, PHASE_JOINING),
     )
@@ -37,7 +37,7 @@ def build_join_embed(
         value=f"{player_count} joined" + (f" (need {player_min})" if player_count < player_min else " ✓"),
         inline=False,
     )
-    embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  Host: {host_name}")
+    embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
     return embed
 
 
@@ -55,7 +55,7 @@ def build_fill_embed(
         description += f"\n\n{redacted_body}"
     description += "\n\n*Click **Submit Fills** to fill in the blanks.*"
     embed = discord.Embed(
-        title=f"{_ICON} LEGITLIBS  —  FILL PHASE",
+        title=f"{_ICON} LegitLibs — Fill Phase",
         description=description,
         color=PHASE_PLAYING,
     )
@@ -63,7 +63,7 @@ def build_fill_embed(
     embed.add_field(name="Submitted", value=f"{submitted_count} / {player_count}", inline=True)
     if deadline_ts:
         embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
-    embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  Host: {host_name}")
+    embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
     return embed
 
 
@@ -79,17 +79,17 @@ def build_reveal_embed(
         description=filled_body,
         color=PHASE_RESULTS,
     )
-    embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  {HEAT_ICONS[tier]} {template_title}")
+    embed.set_footer(text=f"{_ICON} {_GAME_NAME} • {HEAT_ICONS[tier]} {template_title}")
     return embed
 
 
 def build_no_submissions_embed(template_title: str, tier: int) -> discord.Embed:
     embed = discord.Embed(
-        title=f"{_ICON} NO SUBMISSIONS",
+        title=f"{_ICON} No Submissions",
         description="Nobody filled in the blanks in time.",
         color=PHASE_RECAP,
     )
-    embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  {template_title}")
+    embed.set_footer(text=f"{_ICON} {_GAME_NAME} • {template_title}")
     return embed
 
 
@@ -154,14 +154,14 @@ def build_classic_fill_embed(
         "Click **Submit Fills** to fill in yours.*"
     )
     embed = discord.Embed(
-        title=f"{_ICON} LEGITLIBS  —  CLASSIC — FILL PHASE",
+        title=f"{_ICON} LegitLibs — Classic — Fill Phase",
         description=description,
         color=PHASE_PLAYING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Players done", value=f"{done_count} / {player_count}", inline=True)
     embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
-    embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  Host: {host_name}")
+    embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
     return embed
 
 
@@ -180,7 +180,7 @@ def build_classic_rescue_embed(
         "unfilled blanks will be split across all volunteers.*"
     )
     embed = discord.Embed(
-        title=f"{_ICON} LEGITLIBS  —  CLASSIC — RESCUE ROUND",
+        title=f"{_ICON} LegitLibs — Classic — Rescue Round",
         description=description,
         color=PHASE_PLAYING,
     )
@@ -210,7 +210,7 @@ def build_classic_rescue_fill_embed(
         "*Volunteers: click **Submit Fills** to fill in the rescued blanks.*"
     )
     embed = discord.Embed(
-        title=f"{_ICON} LEGITLIBS  —  CLASSIC — RESCUE FILL",
+        title=f"{_ICON} LegitLibs — Classic — Rescue Fill",
         description=description,
         color=PHASE_PLAYING,
     )
@@ -239,6 +239,6 @@ def build_classic_reveal_embed(
     )
     contribs = ", ".join(contributor_names) if contributor_names else "—"
     embed.set_footer(
-        text=f"{_ICON} {_GAME_NAME}  •  Classic  •  {HEAT_ICONS[tier]}  •  Contributors: {contribs}"
+        text=f"{_ICON} {_GAME_NAME} • Classic • {HEAT_ICONS[tier]} • Contributors: {contribs}"
     )
     return embed

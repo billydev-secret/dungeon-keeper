@@ -42,7 +42,7 @@ OTHER_CHANNEL_ID = 222
 def test_guide_embed_defaults_cover_earning_and_spending():
     embed = build_guide_embed(EconSettings(), color=discord.Color(0x123456))
 
-    assert "Coins — how it works" in (embed.title or "")
+    assert "Coins — How It Works" in (embed.title or "")
     assert embed.color == discord.Color(0x123456)
     fields = {f.name: f.value or "" for f in embed.fields}
     earning = fields["💰 Earning"]

@@ -70,7 +70,7 @@ export function mount(container) {
       </section>
 
       <section class="card">
-        <div class="section-label">Top testers</div>
+        <div class="section-label">Top Testers</div>
         <div data-testers>${renderLoading("Loading…")}</div>
       </section>
 

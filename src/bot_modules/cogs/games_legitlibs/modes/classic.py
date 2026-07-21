@@ -137,7 +137,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             if uid == host_id:
                 await action_interaction.response.send_message(
                     "You're the host! If you leave, the game will be cancelled. "
-                    "Use **✕ Cancel** instead.", ephemeral=True,
+                    "Use **Cancel** instead.", ephemeral=True,
                 )
                 return
             if uid not in payload["players"]:

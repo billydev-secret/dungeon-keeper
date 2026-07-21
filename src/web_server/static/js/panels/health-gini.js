@@ -3,7 +3,7 @@ import { makeLineChart, makeHorizontalBarChart, makeDoughnutChart } from "../cha
 
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading Gini data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading Gini data…</div></div>';
   const charts = [];
 
   async function load() {

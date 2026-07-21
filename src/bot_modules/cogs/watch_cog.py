@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.services.watch_service import add_watched_user, remove_watched_user
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -41,23 +42,23 @@ class WatchCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
         if user.bot:
             await interaction.response.send_message(
-                "You cannot watch bots.", ephemeral=True
+                "❌ You cannot watch bots.", ephemeral=True
             )
             return
         if user.id == interaction.user.id:
             await interaction.response.send_message(
-                "You cannot watch yourself.", ephemeral=True
+                "❌ You cannot watch yourself.", ephemeral=True
             )
             return
 
         if interaction.guild_id is None:
             await interaction.response.send_message(
-                "This command must be used in a server.", ephemeral=True
+                "❌ This command must be used in a server.", ephemeral=True
             )
             return
 
@@ -91,13 +92,13 @@ class WatchCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
         if interaction.guild_id is None:
             await interaction.response.send_message(
-                "This command must be used in a server.", ephemeral=True
+                "❌ This command must be used in a server.", ephemeral=True
             )
             return
 
@@ -127,7 +128,7 @@ class WatchCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 

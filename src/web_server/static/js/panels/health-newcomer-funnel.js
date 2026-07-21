@@ -2,7 +2,7 @@ import { api, esc } from "../api.js";
 
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading newcomer data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading newcomer data…</div></div>';
 
   async function load() {
     const d = await api("/api/health/newcomer-funnel");

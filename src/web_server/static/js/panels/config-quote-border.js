@@ -110,7 +110,7 @@ export function mount(container) {
               style="width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;line-height:1.45"></textarea>
           </div>
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">
-            <button type="button" class="btn btn-secondary" data-copy-prompt>Copy prompt</button>
+            <button type="button" class="btn btn-secondary" data-copy-prompt>Copy Prompt</button>
           </div>
           <div class="field">
             <label>Negative prompt <span style="font-weight:400;opacity:.6">(optional — for Stable Diffusion &amp; similar)</span></label>
@@ -118,7 +118,7 @@ export function mount(container) {
               style="width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;line-height:1.45"></textarea>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
-            <button type="button" class="btn btn-secondary" data-copy-negative>Copy negative</button>
+            <button type="button" class="btn btn-secondary" data-copy-negative>Copy Negative</button>
           </div>
         </section>
       </div>

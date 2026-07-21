@@ -71,7 +71,7 @@ def classify_claim_attempt(
         return ClaimDecision(
             eligible=False,
             retry_seconds=None,
-            error_message="You already own this channel.",
+            error_message="❌ You already own this channel.",
         )
     if not owner_present:
         return ClaimDecision(eligible=True, retry_seconds=None, error_message=None)
@@ -86,14 +86,14 @@ def classify_claim_attempt(
             eligible=False,
             retry_seconds=wait,
             error_message=(
-                f"The owner left {int(elapsed)}s ago — "
+                f"❌ The owner left {int(elapsed)}s ago — "
                 f"claim available in {wait}s."
             ),
         )
     return ClaimDecision(
         eligible=False,
         retry_seconds=None,
-        error_message="The owner is still active in or watching the channel.",
+        error_message="❌ The owner is still active in or watching the channel.",
     )
 
 
@@ -117,12 +117,12 @@ def validate_trust_add(
     in the alternate world where saves get re-enabled.
     """
     if target_is_bot:
-        return "Can't trust bots."
+        return "❌ Can't trust bots."
     if target_is_self:
-        return "You're always trusted by yourself."
+        return "❌ You're always trusted by yourself."
     if disable_saves or "trusted" not in set(saveable_fields):
         return (
-            "Saving the trust list is disabled by an admin on this server."
+            "❌ Saving the trust list is disabled by an admin on this server."
         )
     return None
 
@@ -140,12 +140,12 @@ def validate_block_add(
     (you can't block yourself; trusting yourself is a no-op).
     """
     if target_is_bot:
-        return "Can't block bots."
+        return "❌ Can't block bots."
     if target_is_self:
-        return "Can't block yourself."
+        return "❌ Can't block yourself."
     if disable_saves or "blocked" not in set(saveable_fields):
         return (
-            "Saving the blocklist is disabled by an admin on this server."
+            "❌ Saving the blocklist is disabled by an admin on this server."
         )
     return None
 
@@ -162,7 +162,7 @@ def format_trust_add_result(
     ``evicted_id`` is the oldest entry kicked out when the cap is hit.
     """
     if not added:
-        return f"{target_mention} is already on your trust list."
+        return f"❌ {target_mention} is already on your trust list."
     msg = f"Added {target_mention} to your trust list."
     if evicted_id is not None:
         msg += f" (Cap reached — removed <@{evicted_id}>.)"
@@ -177,7 +177,7 @@ def format_block_add_result(
 ) -> str:
     """Mirror of ``format_trust_add_result`` for the blocklist."""
     if not added:
-        return f"{target_mention} is already on your blocklist."
+        return f"❌ {target_mention} is already on your blocklist."
     msg = f"Added {target_mention} to your blocklist."
     if evicted_id is not None:
         msg += f" (Cap reached — removed <@{evicted_id}>.)"
@@ -785,7 +785,7 @@ def validate_rename_input(
     cleaned = raw_name.strip()
     if not cleaned:
         return RenameValidation(
-            cleaned="", error_message="Channel name can't be empty."
+            cleaned="", error_message="❌ Channel name can't be empty."
         )
     if len(cleaned) > max_len:
         cleaned = cleaned[:max_len]
@@ -796,7 +796,7 @@ def validate_rename_input(
         return RenameValidation(
             cleaned=cleaned,
             error_message=(
-                "That name matches a server-wide content filter — "
+                "❌ That name matches a server-wide content filter — "
                 "pick another."
             ),
         )
@@ -806,7 +806,7 @@ def validate_rename_input(
 def validate_limit_value(value: int) -> str | None:
     """Validate a /limit input. ``None`` ⇒ accept; otherwise error to show."""
     if value < 0 or value > 99:
-        return "User limit must be between 0 and 99 (0 = no cap)."
+        return "❌ User limit must be between 0 and 99 (0 = no cap)."
     return None
 
 
@@ -815,7 +815,7 @@ def parse_limit_input(raw: str) -> tuple[int | None, str | None]:
     try:
         value = int(raw.strip())
     except ValueError:
-        return None, "Limit must be a whole number."
+        return None, "❌ Limit must be a whole number."
     return value, None
 
 
@@ -827,11 +827,11 @@ def validate_transfer_target(
 ) -> str | None:
     """Validate ``/transfer`` target. ``None`` ⇒ accept; else error string."""
     if target_is_bot:
-        return "Can't transfer ownership to a bot."
+        return "❌ Can't transfer ownership to a bot."
     if target_is_current_owner:
-        return "You're already the owner."
+        return "❌ You're already the owner."
     if not target_in_channel:
-        return "The new owner must currently be in the voice channel."
+        return "❌ The new owner must currently be in the voice channel."
     return None
 
 
@@ -842,9 +842,9 @@ def validate_invite_target(
 ) -> str | None:
     """Validate ``/invite`` target. ``None`` ⇒ accept; else error string."""
     if target_is_bot:
-        return "Can't invite bots."
+        return "❌ Can't invite bots."
     if target_is_owner:
-        return "You're already the owner."
+        return "❌ You're already the owner."
     return None
 
 
@@ -855,9 +855,9 @@ def validate_kick_target(
 ) -> str | None:
     """Validate ``/kick`` target. ``None`` ⇒ accept; else error string."""
     if target_is_bot:
-        return "Can't kick bots."
+        return "❌ Can't kick bots."
     if target_is_self_owner:
-        return "You can't kick yourself — transfer ownership first."
+        return "❌ You can't kick yourself — transfer ownership first."
     return None
 
 

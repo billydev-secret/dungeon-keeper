@@ -100,7 +100,7 @@ async def test_forget_me_confirm_deletes_data():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     view = WhisperForgetMeConfirmView(bot, guild_id=GUILD_ID, user_id=USER_A)
-    confirm_button = _find_button_by_label(view, "Yes, delete my data")
+    confirm_button = _find_button_by_label(view, "Yes, Delete My Data")
 
     interaction = fake_interaction(user=FakeMember(id=USER_A))
     interaction.response.edit_message = AsyncMock()

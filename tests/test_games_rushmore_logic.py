@@ -442,7 +442,7 @@ def test_render_draft_board_uses_default_empty_board_for_missing_uid():
 def test_build_join_embed_no_topic():
     embed = build_join_embed("Alice", [], topic=None)
     assert embed.title is not None
-    assert "MT. RUSHMORE DRAFT" in embed.title
+    assert "Mt. Rushmore Draft" in embed.title
     assert embed.description is not None
     assert "snake draft" in embed.description.lower()
     # Players field present with count 0
@@ -549,7 +549,7 @@ def test_build_final_boards_embed_handles_missing_board():
 def test_build_vote_embed_has_vote_field():
     embed = build_vote_embed("Host", "Snacks", timer_secs=30)
     assert embed.title is not None
-    assert "VOTE" in embed.title
+    assert "Vote" in embed.title
     field_names = [f.name for f in embed.fields]
     assert "Timer" in field_names
     assert "Vote" in field_names

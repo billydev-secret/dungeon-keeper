@@ -212,7 +212,7 @@ def _apply_variables(
 # ── Persistent welcome-message view ──────────────────────────────────────────
 
 
-class NeedleTitleModal(discord.ui.Modal, title="Edit thread title"):
+class NeedleTitleModal(discord.ui.Modal, title="Edit Thread Title"):
     new_title: discord.ui.TextInput = discord.ui.TextInput(
         label="New title",
         required=True,
@@ -221,11 +221,11 @@ class NeedleTitleModal(discord.ui.Modal, title="Edit thread title"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if not isinstance(interaction.channel, discord.Thread):
-            await interaction.response.send_message("Not in a thread.", ephemeral=True)
+            await interaction.response.send_message("❌ Not in a thread.", ephemeral=True)
             return
         name = str(self.new_title.value).strip()[:100]
         if not name:
-            await interaction.response.send_message("Title can't be empty.", ephemeral=True)
+            await interaction.response.send_message("❌ Title can't be empty.", ephemeral=True)
             return
         await interaction.channel.edit(name=name)
         await interaction.response.send_message(f"Renamed to **{name}**.", ephemeral=True)
@@ -238,7 +238,7 @@ class NeedleThreadView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="Archive thread",
+        label="Archive Thread",
         style=discord.ButtonStyle.success,
         custom_id="needle:close",
     )
@@ -246,12 +246,12 @@ class NeedleThreadView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         if not isinstance(interaction.channel, discord.Thread):
-            await interaction.response.send_message("Not in a thread.", ephemeral=True)
+            await interaction.response.send_message("❌ Not in a thread.", ephemeral=True)
             return
         thread = interaction.channel
         if not _has_thread_perm(interaction.user, thread):
             await interaction.response.send_message(
-                "Only the thread owner or a moderator can archive this thread.",
+                "❌ Only the thread owner or a moderator can archive this thread.",
                 ephemeral=True,
             )
             return
@@ -259,7 +259,7 @@ class NeedleThreadView(discord.ui.View):
         await thread.edit(archived=True, locked=False)
 
     @discord.ui.button(
-        label="Edit title",
+        label="Edit Title",
         style=discord.ButtonStyle.primary,
         custom_id="needle:title",
     )
@@ -267,11 +267,11 @@ class NeedleThreadView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         if not isinstance(interaction.channel, discord.Thread):
-            await interaction.response.send_message("Not in a thread.", ephemeral=True)
+            await interaction.response.send_message("❌ Not in a thread.", ephemeral=True)
             return
         if not _has_thread_perm(interaction.user, interaction.channel):
             await interaction.response.send_message(
-                "Only the thread owner or a moderator can rename this thread.",
+                "❌ Only the thread owner or a moderator can rename this thread.",
                 ephemeral=True,
             )
             return
@@ -578,13 +578,13 @@ class NeedleCog(commands.Cog):
     async def close(self, interaction: discord.Interaction) -> None:
         if not isinstance(interaction.channel, discord.Thread):
             await interaction.response.send_message(
-                "This command can only be used inside a thread.", ephemeral=True
+                "❌ This command can only be used inside a thread.", ephemeral=True
             )
             return
         thread = interaction.channel
         if not _has_thread_perm(interaction.user, thread):
             await interaction.response.send_message(
-                "Only the thread owner or a moderator can close this thread.", ephemeral=True
+                "❌ Only the thread owner or a moderator can close this thread.", ephemeral=True
             )
             return
         await interaction.response.send_message("Thread archived.")
@@ -600,17 +600,17 @@ class NeedleCog(commands.Cog):
     async def title(self, interaction: discord.Interaction, name: str) -> None:
         if not isinstance(interaction.channel, discord.Thread):
             await interaction.response.send_message(
-                "This command can only be used inside a thread.", ephemeral=True
+                "❌ This command can only be used inside a thread.", ephemeral=True
             )
             return
         if not _has_thread_perm(interaction.user, interaction.channel):
             await interaction.response.send_message(
-                "Only the thread owner or a moderator can rename this thread.", ephemeral=True
+                "❌ Only the thread owner or a moderator can rename this thread.", ephemeral=True
             )
             return
         name = name.strip()[:100]
         if not name:
-            await interaction.response.send_message("Title can't be empty.", ephemeral=True)
+            await interaction.response.send_message("❌ Title can't be empty.", ephemeral=True)
             return
         await interaction.channel.edit(name=name)
         await interaction.response.send_message(f"Thread renamed to **{name}**.", ephemeral=True)

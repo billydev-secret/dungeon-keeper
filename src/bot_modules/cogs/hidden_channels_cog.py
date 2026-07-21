@@ -83,14 +83,14 @@ class HiddenChannelsCog(commands.Cog):
     ) -> tuple[discord.Guild, discord.Member] | str:
         """Shared admin + bot-permission gate. Returns (guild, me) or an error."""
         if not self.ctx.is_admin(interaction):
-            return "You need to be an admin to use this command."
+            return "❌ You need to be an admin to use this command."
         guild = interaction.guild
         if guild is None or guild.me is None:
-            return "This command can only be used in a server."
+            return "❌ This command can only be used in a server."
         perms = guild.me.guild_permissions
         if not (perms.manage_channels and perms.manage_roles):
             return (
-                "I need the **Manage Channels** and **Manage Roles** permissions "
+                "❌ I need the **Manage Channels** and **Manage Roles** permissions "
                 "to move channels and edit their permissions."
             )
         return guild, guild.me
@@ -110,7 +110,7 @@ class HiddenChannelsCog(commands.Cog):
             existing = get_active_hidden(conn, guild.id, channel.id)
         if existing is not None:
             await interaction.response.send_message(
-                f"{channel.mention} is already hidden. Use `/hidden restore` to bring it back.",
+                f"❌ {channel.mention} is already hidden. Use `/hidden restore` to bring it back.",
                 ephemeral=True,
             )
             return
@@ -134,7 +134,7 @@ class HiddenChannelsCog(commands.Cog):
             )
         except discord.Forbidden:
             await interaction.followup.send(
-                "I'm not allowed to move or edit that channel — check my role's "
+                "❌ I'm not allowed to move or edit that channel — check my role's "
                 "position and permissions.",
                 ephemeral=True,
             )
@@ -142,7 +142,7 @@ class HiddenChannelsCog(commands.Cog):
         except discord.HTTPException:
             log.exception("Failed to hide channel %s", channel.id)
             await interaction.followup.send(
-                "Something went wrong talking to Discord. Please try again.",
+                "❌ Something went wrong talking to Discord. Please try again.",
                 ephemeral=True,
             )
             return
@@ -181,7 +181,7 @@ class HiddenChannelsCog(commands.Cog):
             row = get_active_hidden(conn, guild.id, channel.id)
         if row is None:
             await interaction.response.send_message(
-                f"{channel.mention} isn't currently hidden.", ephemeral=True
+                f"❌ {channel.mention} isn't currently hidden.", ephemeral=True
             )
             return
 
@@ -203,7 +203,7 @@ class HiddenChannelsCog(commands.Cog):
             await channel.edit(category=parent, overwrites=rebuilt, reason=reason)
         except discord.Forbidden:
             await interaction.followup.send(
-                "I'm not allowed to move or edit that channel — check my role's "
+                "❌ I'm not allowed to move or edit that channel — check my role's "
                 "position and permissions.",
                 ephemeral=True,
             )
@@ -211,7 +211,7 @@ class HiddenChannelsCog(commands.Cog):
         except discord.HTTPException:
             log.exception("Failed to restore channel %s", channel.id)
             await interaction.followup.send(
-                "Something went wrong talking to Discord. Please try again.",
+                "❌ Something went wrong talking to Discord. Please try again.",
                 ephemeral=True,
             )
             return

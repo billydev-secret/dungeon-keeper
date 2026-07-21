@@ -28,7 +28,7 @@ class _CancelConfirmView(discord.ui.View):
         super().__init__(timeout=60)
         self._on_confirm = on_confirm
 
-    @discord.ui.button(label="Yes, cancel round", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Yes, Cancel Round", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         disable_all_items(self)
@@ -38,7 +38,7 @@ class _CancelConfirmView(discord.ui.View):
             pass
         await self._on_confirm(interaction)
 
-    @discord.ui.button(label="Keep playing", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Keep Playing", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         await interaction.response.edit_message(content="Cancel aborted.", view=None)
@@ -74,7 +74,7 @@ class JoinView(discord.ui.View):
             return
         await self._on_start(interaction, action="start")
 
-    @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_lobby", row=0)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_lobby", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
@@ -109,7 +109,7 @@ class QuiplashFillView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._on_submit(interaction)
 
-    @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_fill", row=0)
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ml_cancel_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
@@ -147,7 +147,7 @@ class ClassicFillView(discord.ui.View):
                  channel_name(interaction.channel))
         await self._on_submit(interaction)
 
-    @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary,
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary,
                        custom_id="ml_cl_cancel_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
@@ -187,7 +187,7 @@ class ClassicRescueView(discord.ui.View):
                  channel_name(interaction.channel))
         await self._on_volunteer(interaction)
 
-    @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary,
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary,
                        custom_id="ml_cl_cancel_rescue", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
@@ -219,7 +219,7 @@ class ClassicRescueFillView(discord.ui.View):
                  channel_name(interaction.channel))
         await self._on_submit(interaction)
 
-    @discord.ui.button(label="✕ Cancel", style=discord.ButtonStyle.secondary,
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary,
                        custom_id="ml_cl_cancel_rescue_fill", row=0)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
@@ -257,7 +257,7 @@ class _ReportModal(discord.ui.Modal):
     )
 
     def __init__(self, db, game_id: str, snapshot: dict):
-        super().__init__(title="Report this round")
+        super().__init__(title="Report This Round")
         self.db = db
         self.game_id = game_id
         self.snapshot = snapshot

@@ -92,7 +92,7 @@ async def test_share_target_pending_deletes_old_and_posts_new_to_feed():
     old_msg.delete.assert_awaited_once()
     feed_channel.send.assert_awaited_once()
     sent_embed = feed_channel.send.call_args.kwargs["embed"]
-    assert "fresh Whisper was shared" in (sent_embed.title or "")
+    assert "Fresh Whisper Was Shared" in (sent_embed.title or "")
     assert _w().message in (sent_embed.description or "")
     set_ids.assert_called_once_with(
         ":memory:", 42, channel_msg_id=77777, dm_msg_id=DM_MSG_ID

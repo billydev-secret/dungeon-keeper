@@ -25,6 +25,7 @@ from bot_modules.services.risky_roll.views import (
     disable_round_message,
     schedule_auto_close,
 )
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -102,10 +103,10 @@ class RiskyRollCog(commands.Cog):
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
     ) -> None:
         if isinstance(error, app_commands.MissingPermissions):
-            msg = "You do not have permission to use that command."
+            msg = NO_PERMISSION
         else:
             log.exception("Unhandled risky command error", exc_info=error)
-            msg = "The command failed. Check the bot logs for details."
+            msg = "❌ The command failed. Check the bot logs for details."
 
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
@@ -167,7 +168,7 @@ class RiskyRollCog(commands.Cog):
     ) -> None:
         if interaction.guild is None or interaction.channel is None:
             await interaction.response.send_message(
-                "This command can only be used in a server channel.", ephemeral=True
+                "❌ This command can only be used in a server channel.", ephemeral=True
             )
             return
 
@@ -182,7 +183,7 @@ class RiskyRollCog(commands.Cog):
         ]
         if missing:
             await interaction.response.send_message(
-                f"I'm missing permissions in this channel: {', '.join(missing)}. "
+                f"❌ I'm missing permissions in this channel: {', '.join(missing)}. "
                 "Please fix my permissions before starting a round.",
                 ephemeral=True,
             )
@@ -198,7 +199,7 @@ class RiskyRollCog(commands.Cog):
             )
             if active_in_channel >= max_games:
                 await interaction.response.send_message(
-                    f"This channel already has {max_games} active games. "
+                    f"❌ This channel already has {max_games} active games. "
                     "Close one before starting another.",
                     ephemeral=True,
                 )
@@ -362,7 +363,7 @@ class RiskyRollCog(commands.Cog):
     async def risky_reset_state(self, interaction: discord.Interaction) -> None:
         if interaction.channel is None:
             await interaction.response.send_message(
-                "This command can only be used in a server channel.", ephemeral=True
+                "❌ This command can only be used in a server channel.", ephemeral=True
             )
             return
 
@@ -378,7 +379,7 @@ class RiskyRollCog(commands.Cog):
 
             if not game_ids and not question_ids and not posted_message_ids:
                 await interaction.response.send_message(
-                    "No active or pending Risky Rolls state was found in this channel.",
+                    "❌ No active or pending Risky Rolls state was found in this channel.",
                     ephemeral=True,
                 )
                 return

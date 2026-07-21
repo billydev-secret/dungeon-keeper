@@ -121,7 +121,7 @@ class AskConsentView(discord.ui.View):
         await self._handle_click(interaction, accepted=False)
 
     @discord.ui.button(
-        label="Deny with reply",
+        label="Deny With Reply",
         style=discord.ButtonStyle.secondary,
         custom_id=DM_CONSENT_DENY_REPLY_CUSTOM_ID,
     )
@@ -142,7 +142,7 @@ class AskConsentView(discord.ui.View):
         message = interaction.message
         if message is None:
             await interaction.response.send_message(
-                "Couldn't find the request for this button.", ephemeral=True
+                "❌ Couldn't find the request for this button.", ephemeral=True
             )
             return
 
@@ -158,7 +158,7 @@ class AskConsentView(discord.ui.View):
 
         if interaction.user.id != record["target_id"]:
             await interaction.response.send_message(
-                "This request isn't for you.", ephemeral=True
+                "❌ This request isn't for you.", ephemeral=True
             )
             return
 
@@ -170,7 +170,7 @@ class AskConsentView(discord.ui.View):
         message = interaction.message
         if message is None:
             await interaction.response.send_message(
-                "Couldn't find the request for this button.", ephemeral=True
+                "❌ Couldn't find the request for this button.", ephemeral=True
             )
             return
 
@@ -192,7 +192,7 @@ class AskConsentView(discord.ui.View):
 
         if interaction.user.id != target_id:
             await interaction.response.send_message(
-                "This request isn't for you.", ephemeral=True
+                "❌ This request isn't for you.", ephemeral=True
             )
             return
 
@@ -254,7 +254,7 @@ class AskConsentView(discord.ui.View):
     ) -> None:
         if requester is None or target is None:
             await interaction.response.send_message(
-                "Couldn't find one or both users in this server.", ephemeral=True
+                "❌ Couldn't find one or both users in this server.", ephemeral=True
             )
             return
 
@@ -425,7 +425,7 @@ class DmRequestLookupView(discord.ui.View):
     @discord.ui.button(label="Continue", style=discord.ButtonStyle.success, row=2)
     async def continue_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if self._selected_user is None:
-            await interaction.response.send_message("Please select a user first.", ephemeral=True)
+            await interaction.response.send_message("❌ Please select a user first.", ephemeral=True)
             return
         await interaction.response.send_modal(
             DmRequestReasonModal(self.cog, self._selected_user, self._request_type)
@@ -453,7 +453,7 @@ class DmRequestReasonModal(discord.ui.Modal, title="DM Request"):
         )
 
 
-class DmDenyReplyModal(discord.ui.Modal, title="Decline with a reply"):
+class DmDenyReplyModal(discord.ui.Modal, title="Decline With a Reply"):
     """Lets the target deny a request while sending a short note to the requester.
 
     Opened from the "Deny with reply" button. Carries the source DM message so
@@ -482,14 +482,14 @@ class DmDenyReplyModal(discord.ui.Modal, title="Decline with a reply"):
         record = load_request_by_message_id(view.cog.ctx.db_path, self._message.id)
         if record is None:
             await interaction.response.send_message(
-                "That request is no longer pending.", ephemeral=True
+                "❌ That request is no longer pending.", ephemeral=True
             )
             return
 
         guild = view.cog.bot.get_guild(record["guild_id"])
         if guild is None:
             await interaction.response.send_message(
-                "That server is no longer available.", ephemeral=True
+                "❌ That server is no longer available.", ephemeral=True
             )
             return
 
@@ -510,7 +510,7 @@ class DmDenyReplyModal(discord.ui.Modal, title="Decline with a reply"):
         except discord.HTTPException:
             log.warning("dm_perms: failed to edit source DM on deny-with-reply")
             await interaction.response.send_message(
-                "Something went wrong updating the request — nothing was changed, "
+                "❌ Something went wrong updating the request — nothing was changed, "
                 "please try again.",
                 ephemeral=True,
             )
@@ -772,7 +772,7 @@ class DmPermsCog(commands.Cog):
         )
         if pending_count >= MAX_PENDING_PER_REQUESTER:
             limit_msg = (
-                f"You already have {pending_count} pending DM requests. "
+                f"❌ You already have {pending_count} pending DM requests. "
                 f"Wait for some to be answered or expire (max {MAX_PENDING_PER_REQUESTER})."
             )
             if interaction.response.is_done():
@@ -799,7 +799,7 @@ class DmPermsCog(commands.Cog):
         message = await _safe_dm(user, embed=embed, view=AskConsentView(self))
         if message is None:
             await interaction.followup.send(
-                "I couldn't DM that user — they may have DMs disabled.", ephemeral=True
+                "❌ I couldn't DM that user — they may have DMs disabled.", ephemeral=True
             )
             return
 
@@ -961,7 +961,7 @@ class DmPermsCog(commands.Cog):
                 self._mode_roles_for(interaction.user.guild.id),
             )
         except discord.Forbidden:
-            await interaction.followup.send("I don't have permission to manage roles here.", ephemeral=True)
+            await interaction.followup.send("❌ I don't have permission to manage roles here.", ephemeral=True)
             return
         accent = await resolve_accent_color(self.ctx.db_path, interaction.user.guild)
         await interaction.followup.send(
@@ -991,7 +991,7 @@ class DmPermsCog(commands.Cog):
 
         if not (db_removed or in_memory_removed):
             await interaction.response.send_message(
-                f"You don't have a connection with {user.display_name}.", ephemeral=True
+                f"❌ You don't have a connection with {user.display_name}.", ephemeral=True
             )
             return
 

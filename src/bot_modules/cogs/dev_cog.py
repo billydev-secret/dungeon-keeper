@@ -105,11 +105,11 @@ class DevCog(commands.Cog):
     @app_commands.autocomplete(extension=_ext_autocomplete)
     async def reload_cog(self, interaction: discord.Interaction, extension: str) -> None:
         if not await self.bot.is_owner(interaction.user):
-            await interaction.response.send_message("Bot owner only.", ephemeral=True)
+            await interaction.response.send_message("❌ Bot owner only.", ephemeral=True)
             return
         if extension not in self.bot.extensions:
             await interaction.response.send_message(
-                f"Unknown extension `{extension}`.", ephemeral=True
+                f"❌ Unknown extension `{extension}`.", ephemeral=True
             )
             return
         await interaction.response.defer(ephemeral=True)
@@ -138,7 +138,7 @@ class DevCog(commands.Cog):
         except Exception as exc:
             log.exception("Reload failed for %s", extension)
             await interaction.followup.send(
-                f"Reload failed: `{type(exc).__name__}: {exc}`", ephemeral=True
+                f"❌ Reload failed: `{type(exc).__name__}: {exc}`", ephemeral=True
             )
             return
 
@@ -154,7 +154,7 @@ class DevCog(commands.Cog):
     )
     async def spotify_authorize(self, interaction: discord.Interaction) -> None:
         if not await self.bot.is_owner(interaction.user):
-            await interaction.response.send_message("Bot owner only.", ephemeral=True)
+            await interaction.response.send_message("❌ Bot owner only.", ephemeral=True)
             return
         base = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
         if base.endswith("/callback"):

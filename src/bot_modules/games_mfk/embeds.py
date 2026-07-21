@@ -51,7 +51,7 @@ def build_lobby_embed(
     labels = labels or DEFAULT_LABELS
     title_str = _title_for(labels)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['mfk']} {title_str.upper()}",
+        title=f"{GAME_ICONS['mfk']} {title_str}",
         color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
@@ -98,7 +98,7 @@ def build_assignments_embed(
     labels = labels or DEFAULT_LABELS
     title_str = _title_for(labels)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['mfk']} {title_str.upper()} — YOUR THREE NAMES",
+        title=f"{GAME_ICONS['mfk']} {title_str} — Your Three Names",
         description=f"Reply with your {title_str} picks!",
         color=color,
     )

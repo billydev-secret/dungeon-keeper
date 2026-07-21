@@ -38,7 +38,7 @@ def build_lobby_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
+        title=f"{GAME_ICONS['ama']} Anonymous AMA",
         description="Who's taking the hot seat?",
         color=color,
     )
@@ -81,7 +81,7 @@ def build_main_embed(
         hot_seat_str = hot_seat_name
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
+        title=f"{GAME_ICONS['ama']} Anonymous AMA",
         description=desc,
         color=color,
     )
@@ -166,7 +166,7 @@ def build_panel_embed(
         desc = "Tap 🙋 **Volunteer** to join the panel and take anonymous questions."
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
+        title=f"{GAME_ICONS['ama']} Anonymous AMA",
         description=desc,
         color=color,
     )
@@ -211,7 +211,7 @@ def build_question_embed(
     if color is None:
         color = discord.Color(BRAND_COLOR)
     return discord.Embed(
-        title=f"{GAME_ICONS['ama']} QUESTION",
+        title=f"{GAME_ICONS['ama']} Question",
         description=f'"{discord.utils.escape_markdown(question_text)}"',
         color=color,
     )
@@ -234,7 +234,7 @@ def build_answered_embed(
     q_escaped = discord.utils.escape_markdown(question_text)
     a_escaped = discord.utils.escape_markdown(answer_text)
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ama']} QUESTION + ANSWER",
+        title=f"{GAME_ICONS['ama']} Question + Answer",
         description=f'**Q:** "{q_escaped}"\n\n**A:** "{a_escaped}"',
         color=color,
     )
@@ -282,7 +282,7 @@ def build_recap_embed(
     unique_askers = stats.get("unique_askers", 0)
 
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ama']} ANONYMOUS AMA — GAME OVER",
+        title=f"{GAME_ICONS['ama']} Anonymous AMA — Game Over",
         description="Thanks for playing! Here's how the session went:",
         color=color,
     )

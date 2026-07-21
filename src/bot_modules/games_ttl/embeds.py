@@ -51,7 +51,7 @@ def build_lobby_embed(
     if prompt:
         description = f"**Prompt:** {prompt}\n\n{description}"
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ttl']} TWO TRUTHS AND A LIE",
+        title=f"{GAME_ICONS['ttl']} Two Truths and a Lie",
         description=description,
         color=color or discord.Color(PHASE_JOINING),
     )
@@ -83,9 +83,9 @@ def build_guess_embed(
     a single win/loss embed (it lists correct *and* fooled voters), so
     it follows the guild accent rather than a semantic green.
     """
-    title = f"{GAME_ICONS['ttl']} GUESS THE LIE — {subject_name}'s turn"
+    title = f"{GAME_ICONS['ttl']} Guess the Lie — {subject_name}'s Turn"
     if closed:
-        title = f"{GAME_ICONS['ttl']} REVEAL — {subject_name}"
+        title = f"{GAME_ICONS['ttl']} Reveal — {subject_name}"
     embed = discord.Embed(
         title=title,
         description=f"**Prompt:** {prompt}" if prompt else None,
@@ -132,7 +132,7 @@ def build_reveal_embed(
     than a semantic win/loss color.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ttl']} REVEAL — {subject_name}",
+        title=f"{GAME_ICONS['ttl']} Reveal — {subject_name}",
         color=color or discord.Color(PHASE_RESULTS),
     )
     lie_stmt = statements[lie_index]
@@ -181,7 +181,7 @@ def build_recap_embed(
     ``PHASE_RECAP`` dark gold is used.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ttl']} TWO TRUTHS AND A LIE — FINAL RESULTS",
+        title=f"{GAME_ICONS['ttl']} Two Truths and a Lie — Final Results",
         color=color or discord.Color(PHASE_RECAP),
     )
     mentions: set[str] = set()

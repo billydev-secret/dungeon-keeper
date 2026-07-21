@@ -291,19 +291,19 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
             d = int(self.day.value.strip())
         except ValueError:
             await interaction.response.send_message(
-                "Month and day must be whole numbers.", ephemeral=True
+                "❌ Month and day must be whole numbers.", ephemeral=True
             )
             return
 
         if not (1 <= m <= 12):
             await interaction.response.send_message(
-                "Month must be between 1 and 12.", ephemeral=True
+                "❌ Month must be between 1 and 12.", ephemeral=True
             )
             return
 
         if not (1 <= d <= _MAX_DAYS[m]):
             await interaction.response.send_message(
-                f"{calendar.month_name[m]} has at most {_MAX_DAYS[m]} days.",
+                f"❌ {calendar.month_name[m]} has at most {_MAX_DAYS[m]} days.",
                 ephemeral=True,
             )
             return
@@ -311,7 +311,7 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
         guild_id = interaction.guild_id
         if guild_id is None:
             await interaction.response.send_message(
-                "Set your birthday from inside a server, not a DM.",
+                "❌ Set your birthday from inside a server, not a DM.",
                 ephemeral=True,
             )
             return
@@ -380,7 +380,7 @@ class BirthdayCog(commands.Cog):
         guild_id = interaction.guild_id
         if guild_id is None:
             await interaction.response.send_message(
-                "Run this from inside a server, not a DM.", ephemeral=True
+                "❌ Run this from inside a server, not a DM.", ephemeral=True
             )
             return
 

@@ -564,7 +564,7 @@ class BaseGame(commands.Cog):
         host = guild.get_member(game.host_id)
         host_name = host.display_name if host else str(game.host_id)
         embed = discord.Embed(
-            title=f"🎮 {self.GAME_DISPLAY_NAME.upper()} — LOBBY",
+            title=f"🎮 {self.GAME_DISPLAY_NAME} — Lobby",
             description="Press **✋ Join** to get in. Host presses **▶️ Start** when ready.",
             color=color or discord.Color(COLOR_GOLD),
         )

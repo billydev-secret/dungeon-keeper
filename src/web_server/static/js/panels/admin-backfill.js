@@ -10,16 +10,16 @@ export function mount(container) {
       </header>
 
       <div class="form">
-        <h3>Role events</h3>
+        <h3>Role Events</h3>
         <p class="field-hint">Sync the role_events log with current server state. Adds missing grant/remove events. Idempotent and fast.</p>
-        <button class="btn btn-primary" data-action="roles">Run role backfill</button>
+        <button class="btn btn-primary" data-action="roles">Run Role Backfill</button>
         <div data-status="roles" style="margin-top:8px;"></div>
       </div>
 
       <hr style="margin:20px 0;">
 
       <div class="form">
-        <h3>XP history</h3>
+        <h3>XP History</h3>
         <p class="field-hint">Scan past messages and award any XP that wasn't recorded. Already-processed messages are skipped (re-runnable).</p>
         <label>Days to scan (0 = all available)
           <input type="number" data-control="xp-days" min="0" max="3650" value="30" />
@@ -31,7 +31,7 @@ export function mount(container) {
       <hr style="margin:20px 0;">
 
       <div class="form">
-        <h3>Interaction graph</h3>
+        <h3>Interaction Graph</h3>
         <p class="field-hint">Backfill replies + mentions for the connection web / interaction heatmap. Use <em>reset</em> if counts look inflated.</p>
         <label>Days (0 = all available)
           <input type="number" data-control="int-days" min="0" max="3650" value="0" />
@@ -40,7 +40,7 @@ export function mount(container) {
           <input type="text" data-control="int-channel" placeholder="leave blank for all readable channels" />
         </label>
         <label><input type="checkbox" data-control="int-reset" /> Reset existing data first</label>
-        <button class="btn btn-primary" data-action="interactions">Start interaction backfill</button>
+        <button class="btn btn-primary" data-action="interactions">Start Interaction Backfill</button>
         <div data-status="interactions" style="margin-top:8px;"></div>
       </div>
     </div>

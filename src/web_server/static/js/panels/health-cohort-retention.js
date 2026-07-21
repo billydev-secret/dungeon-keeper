@@ -3,7 +3,7 @@ import { makeLineChart, ROLE_COLORS } from "../charts.js";
 
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading retention data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading retention data…</div></div>';
   const charts = [];
 
   async function load() {

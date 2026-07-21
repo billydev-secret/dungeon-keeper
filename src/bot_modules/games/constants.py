@@ -1,7 +1,9 @@
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+
 BRAND_COLOR = 0xDAA520  # Goldenrod
 WARNING_COLOR = 0xFF6B35
-SUCCESS_COLOR = 0x57F287
-ERROR_COLOR = 0xED4245
+SUCCESS_COLOR = COLOR_GREEN  # canonical semantic success green (services.embeds)
+ERROR_COLOR = COLOR_RED      # canonical semantic danger red (services.embeds)
 
 # Game phase colors — used consistently across all cogs
 PHASE_JOINING  = 0xDAA520   # goldenrod  — lobby / join

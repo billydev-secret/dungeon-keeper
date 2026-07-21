@@ -39,7 +39,7 @@ _CH_KEY = "bios_trigger_channel_id"
 _TITLE_KEY = "bios_trigger_title"
 _BODY_KEY = "bios_trigger_body"
 
-DEFAULT_TRIGGER_TITLE = "📝 Share your bio"
+DEFAULT_TRIGGER_TITLE = "📝 Share Your Bio"
 DEFAULT_TRIGGER_BODY = (
     "Tap the button below to create or update your member bio. "
     "I'll spin up a private wizard channel and walk you through it."

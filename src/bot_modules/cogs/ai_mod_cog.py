@@ -16,13 +16,14 @@ from bot_modules.services.ai_moderation_service import (
     ai_review_user,
     ai_scan_channel,
 )
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
 
 def _ollama_unavailable_msg() -> str:
-    return "OLLAMA_BASE_URL is not set — AI features require a local Ollama instance."
+    return "❌ OLLAMA_BASE_URL is not set — AI features require a local Ollama instance."
 
 
 class AiModCog(commands.Cog):
@@ -57,7 +58,7 @@ class AiModCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -68,7 +69,7 @@ class AiModCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
@@ -96,7 +97,7 @@ class AiModCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -107,14 +108,14 @@ class AiModCog(commands.Cog):
         channel = interaction.channel
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             await interaction.response.send_message(
-                "This command only works in text channels and threads.", ephemeral=True
+                "❌ This command only works in text channels and threads.", ephemeral=True
             )
             return
 
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
@@ -144,7 +145,7 @@ class AiModCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -155,14 +156,14 @@ class AiModCog(commands.Cog):
         target = channel or interaction.channel
         if not isinstance(target, (discord.TextChannel, discord.Thread)):
             await interaction.response.send_message(
-                "This command only works in text channels and threads.", ephemeral=True
+                "❌ This command only works in text channels and threads.", ephemeral=True
             )
             return
 
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
@@ -197,7 +198,7 @@ class AiModCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_admin(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -208,7 +209,7 @@ class AiModCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 

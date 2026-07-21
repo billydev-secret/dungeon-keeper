@@ -278,7 +278,7 @@ def test_embed_sections_stack_full_width():
         ("🎯 Community goals — everyone gets paid when we hit them", False),
         ("📋 Quest board", False),
         ("📰 Live feed — today", False),
-        ("👤 Your progress", False),
+        ("👤 Your Progress", False),
     ]
     # (glyph-led section headings; see build_leaderboard_embed)
     # Breathing room: the description and every field but the last end in a
@@ -338,7 +338,7 @@ def test_embed_empty_states_and_personal_blurb():
     assert "be the first" in fields[f"🏆 Top earners (last {ROLLING_DAYS} days)"]
     assert "No quests running" in fields["📋 Quest board"]
     assert not any("Community goals" in (n or "") for n in fields)
-    personal = fields["👤 Your progress"]
+    personal = fields["👤 Your Progress"]
     assert "/quests" in personal and "/bank wallet" in personal
     assert "only you" in personal
 

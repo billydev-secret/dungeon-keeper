@@ -98,7 +98,7 @@ function renderStats(container, data) {
       </div>
     </div>
 
-    <div class="section-label">Network interfaces</div>
+    <div class="section-label">Network Interfaces</div>
     <div class="table-scroll">
       <table class="data-table">
         <thead>
@@ -132,7 +132,7 @@ export function mount(container) {
     if (alive) timer = setTimeout(poll, 3000);
   }
 
-  container.innerHTML = `<div class="panel"><div class="empty">Loading system stats...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading system stats…</div></div>`;
   poll();
 
   return {

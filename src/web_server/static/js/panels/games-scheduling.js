@@ -356,7 +356,7 @@ async function refreshList(root) {
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;">
-          ${done ? "" : `<button class="btn" data-act="run-now" data-id="${r.id}">Run now</button>`}
+          ${done ? "" : `<button class="btn" data-act="run-now" data-id="${r.id}">Run Now</button>`}
           ${done ? "" : (paused
             ? `<button class="btn" data-act="resume" data-id="${r.id}">Resume</button>`
             : `<button class="btn" data-act="pause" data-id="${r.id}">Pause</button>`)}

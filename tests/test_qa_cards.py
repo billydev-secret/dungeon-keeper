@@ -46,8 +46,8 @@ def _verdict(verdict: str, *, user_id: int = 1, voided: bool = False) -> dict:
     ("status", "color"),
     [
         ("pending", 0x95A5A6),
-        ("passed", 0x2ECC71),
-        ("failed", 0xE74C3C),
+        ("passed", 0x23A55A),
+        ("failed", 0xF23F43),
         ("blocked", 0xE67E22),
         ("archived", 0x7F8C8D),
     ],

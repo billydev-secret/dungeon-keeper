@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.economy")
 
-MANAGE_DENIED_MSG = "You don't have permission to review sponsored questions."
+MANAGE_DENIED_MSG = "❌ You don't have permission to review sponsored questions."
 
 
 def _reward_text(settings: EconSettings, amount: int) -> str:
@@ -72,18 +72,18 @@ def render_sponsor_card_embed(
     """
     if state == "approved":
         embed = discord.Embed(
-            title="✅ Sponsored question approved", color=discord.Color.green()
+            title="✅ Sponsored Question Approved", color=discord.Color.green()
         )
     elif state in ("denied", "expired"):
         embed = discord.Embed(
-            title="❌ Sponsored question declined", color=discord.Color.red()
+            title="❌ Sponsored Question Declined", color=discord.Color.red()
         )
     elif state == "posted":
         embed = discord.Embed(
-            title="📮 Sponsored question posted", color=discord.Color.green()
+            title="📮 Sponsored Question Posted", color=discord.Color.green()
         )
     else:
-        embed = discord.Embed(title="📋 Sponsored question submitted", color=accent)
+        embed = discord.Embed(title="📋 Sponsored Question Submitted", color=accent)
 
     embed.add_field(name="👤 Sponsor", value=sponsor_mention, inline=True)
     embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)
@@ -146,7 +146,7 @@ class SponsorApproveButton(
         )
 
 
-class _DenyReasonModal(discord.ui.Modal, title="Decline this question"):
+class _DenyReasonModal(discord.ui.Modal, title="Decline This Question"):
     """Reason is optional but strongly encouraged — the member gets it in a DM."""
 
     reason: discord.ui.TextInput = discord.ui.TextInput(
@@ -246,7 +246,7 @@ async def _handle_resolution(
         log.debug("econ sponsor: failed to defer resolution", exc_info=True)
 
     if guild is None or not isinstance(member, discord.Member):
-        await _safe_ephemeral(interaction, "This only works in a server.")
+        await _safe_ephemeral(interaction, "❌ This only works in a server.")
         return
 
     def _load() -> tuple[EconSettings, object] | None:
@@ -261,11 +261,11 @@ async def _handle_resolution(
     except Exception:
         log.exception("econ sponsor: failed to load submission %s", submission_id)
         await _safe_ephemeral(
-            interaction, "Couldn't load that submission — try again."
+            interaction, "❌ Couldn't load that submission — try again."
         )
         return
     if loaded is None:
-        await _safe_ephemeral(interaction, "That submission no longer exists.")
+        await _safe_ephemeral(interaction, "❌ That submission no longer exists.")
         return
     settings, row = loaded
 
@@ -295,7 +295,7 @@ async def _handle_resolution(
         return
     except Exception:
         log.exception("econ sponsor: failed to resolve %s", submission_id)
-        await _safe_ephemeral(interaction, "Couldn't resolve that — try again.")
+        await _safe_ephemeral(interaction, "❌ Couldn't resolve that — try again.")
         return
 
     await _edit_card(card, accent, settings, fresh)

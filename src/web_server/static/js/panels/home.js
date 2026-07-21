@@ -39,7 +39,7 @@ function saveLayout(userId, layout) {
 export function mount(container) {
   container.innerHTML = `
     <div class="panel home-panel">
-      <div class="home-loading">Loading dashboard...</div>
+      <div class="home-loading">Loading dashboard…</div>
     </div>
   `;
 

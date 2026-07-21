@@ -466,7 +466,7 @@ def build_leaderboard_embed(
     plural = settings.currency_plural
 
     embed = discord.Embed(
-        title=f"{emoji} {plural} — leaderboard & quest board",
+        title=f"{emoji} {plural} — Leaderboard & Quest Board",
         description=(
             "Who's earning, what's running, and what there is to do — live."
             "\n\u200b"
@@ -587,7 +587,7 @@ def build_leaderboard_embed(
     _add_section("📰 Live feed — today", _feed_lines(data))
 
     embed.add_field(
-        name="👤 Your progress",
+        name="👤 Your Progress",
         value=(
             "`/quests` shows your own quest progress and claims, and "
             f"`/bank wallet` your {plural} balance and recent earnings — "

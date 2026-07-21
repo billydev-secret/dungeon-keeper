@@ -278,14 +278,14 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         pct = meter_pct(time.time(), game.climb_started_at, game.climb_duration)
 
         embed = discord.Embed(
-            title="🐔 CHICKEN",
+            title="🐔 Chicken",
             description="First to bail is safe — but ride to 100% and you **crash**.",
             color=COLOR_YELLOW,
         )
         embed.add_field(name="Still holding", value=holders, inline=False)
         embed.add_field(name="Bailed", value=bailed, inline=False)
         embed.add_field(
-            name=f"⚡ METER — {pct:.0f}%",
+            name=f"⚡ Meter — {pct:.0f}%",
             value=f"`{_meter_bar(pct)}`\n↑ crash at 100%. blink first or ride it out.",
             inline=False,
         )
@@ -307,7 +307,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             crashers = ", ".join(self._name(guild, u) for u in game.alive) or "—"
             loser_name = self._name(guild, game.loser_id)
             embed = discord.Embed(
-                title="💥 CRASH at 100%!",
+                title="💥 Crash at 100%!",
                 description=f"😵 Still holding when it blew: {crashers}",
                 color=COLOR_RED,
             )

@@ -16,6 +16,7 @@ from discord.ext import commands
 
 from bot_modules.docs import db as docs_db
 from bot_modules.docs import sync as docs_sync
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -62,7 +63,7 @@ class DocsCog(commands.Cog):
     async def _guard(self, interaction: discord.Interaction) -> bool:
         if not self.ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return False
         return True
@@ -116,14 +117,14 @@ class DocsCog(commands.Cog):
         target = channel or interaction.channel
         if guild is None or not isinstance(target, discord.TextChannel):
             await interaction.response.send_message(
-                "Pick a text channel to post into.", ephemeral=True
+                "❌ Pick a text channel to post into.", ephemeral=True
             )
             return
 
         doc = await self._load_doc(guild.id, doc_key)
         if doc is None:
             await interaction.response.send_message(
-                f"No doc named `{doc_key}`. Create it on the dashboard first.",
+                f"❌ No doc named `{doc_key}`. Create it on the dashboard first.",
                 ephemeral=True,
             )
             return
@@ -147,7 +148,7 @@ class DocsCog(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
@@ -157,7 +158,7 @@ class DocsCog(commands.Cog):
             doc = await self._load_doc(guild.id, doc_key)
             if doc is None:
                 await interaction.followup.send(
-                    f"No doc named `{doc_key}`.", ephemeral=True
+                    f"❌ No doc named `{doc_key}`.", ephemeral=True
                 )
                 return
             results = await docs_sync.sync_doc(self.ctx, guild, doc)
@@ -207,13 +208,13 @@ class DocsCog(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
         doc = await self._load_doc(guild.id, doc_key)
         if doc is None:
             await interaction.response.send_message(
-                f"No doc named `{doc_key}`.", ephemeral=True
+                f"❌ No doc named `{doc_key}`.", ephemeral=True
             )
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -225,7 +226,7 @@ class DocsCog(commands.Cog):
             )
         else:
             await interaction.followup.send(
-                f"**{doc['title'] or doc_key}** wasn't posted in {channel.mention}.",
+                f"❌ **{doc['title'] or doc_key}** wasn't posted in {channel.mention}.",
                 ephemeral=True,
             )
 
@@ -238,7 +239,7 @@ class DocsCog(commands.Cog):
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 

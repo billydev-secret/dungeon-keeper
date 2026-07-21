@@ -181,12 +181,12 @@ class InactiveCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
         if not _inactive_channel_id(ctx, guild.id):
             await interaction.response.send_message(
-                "No inactive channel is set up yet. Run `/inactive panel` first so "
+                "❌ No inactive channel is set up yet. Run `/inactive panel` first so "
                 "moved members have somewhere to land.",
                 ephemeral=True,
             )
@@ -195,7 +195,7 @@ class InactiveCog(commands.Cog):
         precheck = check_inactive_preconditions(ctx, guild, user, member)
         if precheck is not None:
             await interaction.response.send_message(
-                precheck.error_message or "Cannot move this user.", ephemeral=True
+                precheck.error_message or "❌ Cannot move this user.", ephemeral=True
             )
             return
 
@@ -205,7 +205,7 @@ class InactiveCog(commands.Cog):
         )
         if not result.ok:
             await interaction.followup.send(
-                result.error_message or "Failed to move user.", ephemeral=True
+                result.error_message or "❌ Failed to move user.", ephemeral=True
             )
             return
         await interaction.followup.send(
@@ -228,7 +228,7 @@ class InactiveCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
         result = await reactivate_member(ctx, guild, user, reason=reason or "", actor=member)
@@ -249,7 +249,7 @@ class InactiveCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member) or not _is_admin(member, ctx):
-            await interaction.response.send_message("Admin only.", ephemeral=True)
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -262,7 +262,7 @@ class InactiveCog(commands.Cog):
         role = await ensure_inactive_role(ctx, guild)
         if role is None:
             await interaction.followup.send(
-                "Missing **Manage Roles** — can't create the Inactive role.",
+                "❌ Missing **Manage Roles** — can't create the Inactive role.",
                 ephemeral=True,
             )
             return
@@ -272,7 +272,7 @@ class InactiveCog(commands.Cog):
             )
         except discord.Forbidden:
             await interaction.followup.send(
-                f"Couldn't grant the Inactive role access to {channel.mention} — "
+                f"❌ Couldn't grant the Inactive role access to {channel.mention} — "
                 "check my channel permissions.",
                 ephemeral=True,
             )
@@ -280,7 +280,7 @@ class InactiveCog(commands.Cog):
 
         accent = await resolve_accent_color(ctx.db_path, guild)
         embed = discord.Embed(
-            title="💤 You're in the inactive channel",
+            title="💤 You're in the Inactive Channel",
             description=(
                 "You've been moved here because you've been inactive for a while.\n\n"
                 "**Your roles are safe** — nothing has been deleted. When you're "
@@ -314,12 +314,12 @@ class InactiveCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member) or not _is_admin(member, ctx):
-            await interaction.response.send_message("Admin only.", ephemeral=True)
+            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
 
         if not _inactive_channel_id(ctx, guild.id):
             await interaction.response.send_message(
-                "No inactive channel is set up yet. Run `/inactive panel` first.",
+                "❌ No inactive channel is set up yet. Run `/inactive panel` first.",
                 ephemeral=True,
             )
             return

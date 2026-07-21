@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 from discord.ext import commands
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -55,7 +56,7 @@ class ReportsCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -85,7 +86,7 @@ class ReportsCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -104,7 +105,7 @@ class ReportsCog(commands.Cog):
             )
         else:
             await interaction.response.send_message(
-                f"{member.mention} was not on leave.", ephemeral=True
+                f"❌ {member.mention} was not on leave.", ephemeral=True
             )
 
     @quality_leave.command(
@@ -114,14 +115,14 @@ class ReportsCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 

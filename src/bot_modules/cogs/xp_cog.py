@@ -25,6 +25,7 @@ from bot_modules.core.xp_system import (
     has_any_member_xp,
     has_any_xp_events,
 )
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -195,7 +196,7 @@ class XpCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
 
@@ -206,7 +207,7 @@ class XpCog(commands.Cog):
         )
         if caller is None:
             await interaction.response.send_message(
-                "Could not resolve your member record in this guild.", ephemeral=True
+                "❌ Could not resolve your member record in this server.", ephemeral=True
             )
             return
 
@@ -270,27 +271,27 @@ class XpCog(commands.Cog):
         ctx = self.ctx
         if not ctx.can_use_xp_grant(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
         guild = interaction.guild
         if not guild:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
+                "❌ This command only works in a server.", ephemeral=True
             )
             return
         cfg = ctx.guild_config(guild.id)
 
         if member.bot:
             await interaction.response.send_message(
-                "Bots cannot receive XP grants.", ephemeral=True
+                "❌ Bots cannot receive XP grants.", ephemeral=True
             )
             return
 
         if member.id == interaction.user.id:
             await interaction.response.send_message(
-                "You can't grant XP to yourself.", ephemeral=True
+                "❌ You can't grant XP to yourself.", ephemeral=True
             )
             return
 

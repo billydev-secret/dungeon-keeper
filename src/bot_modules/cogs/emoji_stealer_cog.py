@@ -128,7 +128,7 @@ class _ConfirmDupeView(discord.ui.View):
         self._data = data
         self._invoker_id = invoker_id
 
-        add: discord.ui.Button = discord.ui.Button(label="Add anyway", style=discord.ButtonStyle.primary)  # type: ignore[type-arg]
+        add: discord.ui.Button = discord.ui.Button(label="Add Anyway", style=discord.ButtonStyle.primary)  # type: ignore[type-arg]
         add.callback = self._on_add
         self.add_item(add)
 
@@ -138,7 +138,7 @@ class _ConfirmDupeView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._invoker_id:
-            await interaction.response.send_message("This menu isn't for you.", ephemeral=True)
+            await interaction.response.send_message("❌ This menu isn't for you.", ephemeral=True)
             return False
         return True
 
@@ -190,7 +190,7 @@ class _GuildPickView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._invoker_id:
-            await interaction.response.send_message("This menu isn't for you.", ephemeral=True)
+            await interaction.response.send_message("❌ This menu isn't for you.", ephemeral=True)
             return False
         return True
 
@@ -273,7 +273,7 @@ class _StealView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._invoker_id:
-            await interaction.response.send_message("This menu isn't for you.", ephemeral=True)
+            await interaction.response.send_message("❌ This menu isn't for you.", ephemeral=True)
             return False
         return True
 
@@ -323,7 +323,7 @@ class _StealView(discord.ui.View):
                 added.append(await self._cog._upload_and_add(guild, name, data))
             except discord.Forbidden:
                 await interaction.edit_original_response(
-                    content=f"I don't have **Manage Expressions** in **{guild.name}**."
+                    content=f"❌ I don't have **Manage Expressions** in **{guild.name}**."
                 )
                 return
             except discord.HTTPException as exc:
@@ -450,14 +450,14 @@ class EmojiStealerCog(commands.Cog):
             new_emoji = await self._upload_and_add(guild, name, data)
         except discord.Forbidden:
             await interaction.edit_original_response(
-                content=f"I don't have **Manage Expressions** in **{guild.name}**."
+                content=f"❌ I don't have **Manage Expressions** in **{guild.name}**."
             )
             return
         except discord.HTTPException as exc:
-            await interaction.edit_original_response(content=f"Discord rejected it: {exc.text}")
+            await interaction.edit_original_response(content=f"❌ Discord rejected it: {exc.text}")
             return
         except ValueError as exc:
-            await interaction.edit_original_response(content=str(exc))
+            await interaction.edit_original_response(content=f"❌ {exc}")
             return
         await interaction.edit_original_response(
             content=f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!"
@@ -471,7 +471,7 @@ class EmojiStealerCog(commands.Cog):
         try:
             data = await _fetch_bytes(url)
         except httpx.HTTPError as exc:
-            await interaction.edit_original_response(content=f"Couldn't download the emoji: {exc}")
+            await interaction.edit_original_response(content=f"❌ Couldn't download the emoji: {exc}")
             return
         dupe = await self._find_duplicate(guild, name, data)
         if dupe is not None:
@@ -493,7 +493,7 @@ class EmojiStealerCog(commands.Cog):
         guilds = _eligible_guilds(self.bot, interaction.user.id)
         if not guilds:
             await interaction.response.send_message(
-                "I don't have **Manage Expressions** in any server.", ephemeral=True
+                "❌ I don't have **Manage Expressions** in any server.", ephemeral=True
             )
             return
 
@@ -506,7 +506,7 @@ class EmojiStealerCog(commands.Cog):
         )
         if not emojis:
             await interaction.response.send_message(
-                "No custom emojis found in that message or its reactions.", ephemeral=True
+                "❌ No custom emojis found in that message or its reactions.", ephemeral=True
             )
             return
 
@@ -547,19 +547,19 @@ class EmojiStealerCog(commands.Cog):
     ) -> None:
         if not is_https_url(url):
             await interaction.response.send_message(
-                "URL must start with `https://`.", ephemeral=True
+                "❌ URL must start with `https://`.", ephemeral=True
             )
             return
 
         ok, clean_name, error_msg = validate_emoji_name(name)
         if not ok:
-            await interaction.response.send_message(error_msg, ephemeral=True)
+            await interaction.response.send_message(f"❌ {error_msg}", ephemeral=True)
             return
 
         guilds = _eligible_guilds(self.bot, interaction.user.id)
         if not guilds:
             await interaction.response.send_message(
-                "I don't have **Manage Expressions** in any server.", ephemeral=True
+                "❌ I don't have **Manage Expressions** in any server.", ephemeral=True
             )
             return
 

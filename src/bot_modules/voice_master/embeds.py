@@ -41,16 +41,16 @@ def build_profile_show_embed(
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(
-        title="👤 Your Voice Master profile",
+        title="👤 Your Voice Master Profile",
         color=color,
     )
     embed.add_field(
-        name="Saved name",
+        name="Saved Name",
         value=saved_name or "*(template default)*",
         inline=False,
     )
     embed.add_field(
-        name="User limit",
+        name="User Limit",
         value=str(saved_limit) if saved_limit else "no cap",
         inline=True,
     )
@@ -74,11 +74,11 @@ def build_admin_audit_mirror_embed(
     """Embed posted to mod-log for any web admin force-* action.
 
     ``action`` is the short label (e.g. ``"force-delete"``); the title
-    prefixes with ``Voice Master ·`` so the audit feed groups our
+    prefixes with ``Voice Master —`` so the audit feed groups our
     actions visually with other domain entries.
     """
     embed = discord.Embed(
-        title=f"🛡️ Voice Master · {action}",
+        title=f"🛡️ Voice Master — {action}",
         description=summary,
         color=discord.Color.orange(),
     )
@@ -97,7 +97,7 @@ def build_claim_prompt_embed(
     if color is None:
         color = discord.Color.gold()
     embed = discord.Embed(
-        title="👑 Channel up for grabs",
+        title="👑 Channel Up for Grabs",
         description=(
             "The owner left and didn't come back. Anyone in this channel can "
             "take it over — claim it to rename, invite, and manage the room."
@@ -113,7 +113,7 @@ def build_claim_done_embed(
 ) -> discord.Embed:
     """Replaces the claim prompt once someone takes ownership."""
     embed = discord.Embed(
-        title="👑 Channel claimed",
+        title="👑 Channel Claimed",
         description=f"{claimer_mention} is now the owner of this channel.",
         color=discord.Color.green(),
     )
@@ -126,7 +126,7 @@ def build_panel_embed(color: "discord.Color | None" = None) -> discord.Embed:
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(
-        title="🎛️ Voice Master controls",
+        title="🎛️ Voice Master Controls",
         description=(
             "Join the Hub voice channel to spin up your own room.\n"
             "Use the menus below to manage **the channel you currently own**.\n\n"
@@ -151,7 +151,7 @@ def build_inline_panel_embed(
     if color is None:
         color = discord.Color.blurple()
     return discord.Embed(
-        title="✅ Your voice channel is ready",
+        title="✅ Your Voice Channel Is Ready",
         description=(
             f"Welcome, {owner_mention}. Use the menus below to manage "
             "**this channel** — set its access (open, NSFW, locked, or "
@@ -226,7 +226,7 @@ def build_knock_request_embed(
     if guild_name:
         where += f" in **{guild_name}**"
     return discord.Embed(
-        title="🔔 Voice channel knock",
+        title="🔔 Voice Channel Knock",
         description=(
             f"{requester_mention} is asking to join {where}.\n"
             f"Owner: {owner_mention} — choose below."

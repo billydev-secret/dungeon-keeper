@@ -57,7 +57,7 @@ export function mount(container) {
       </div>
 
       <div class="table-scroll" data-table-wrap>
-        ${renderLoading("Loading...")}
+        ${renderLoading("Loading…")}
       </div>
     </div>
   `;

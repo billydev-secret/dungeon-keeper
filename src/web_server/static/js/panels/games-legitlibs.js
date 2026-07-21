@@ -48,7 +48,7 @@ export function mount(container) {
           </div>
           <div class="field m-0">
             <label>Tag / title
-              <input type="text" data-ctrl="filter-tag" placeholder="search..." style="width:120px;" />
+              <input type="text" data-ctrl="filter-tag" placeholder="Search…" style="width:120px;" />
             </label>
           </div>
           <button class="btn btn-primary" data-action="filter">Filter</button>
@@ -243,7 +243,7 @@ export function mount(container) {
     }
     const tierEl = formEl.querySelector(`[data-ctrl="${prefix}-tier"]`);
     const tier = parseInt(tierEl?.value) || 2;
-    resultsEl.innerHTML = `<div class="empty" style="font-size:12px;">Checking...</div>`;
+    resultsEl.innerHTML = `<div class="empty" style="font-size:12px;">Checking…</div>`;
     try {
       const data = await apiPost("/api/games/legitlibs/resolve", { blanks, tier });
       const rows = (data.resolutions || []).map((r) => {

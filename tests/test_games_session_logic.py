@@ -272,6 +272,6 @@ def test_build_session_recap_embed_truncates_highlights_to_eight():
 def test_build_session_recap_embed_has_footer_and_title():
     embed = build_session_recap_embed(0, [], "0m", [])
     assert embed.title is not None
-    assert "SESSION RECAP" in embed.title
+    assert "Session Recap" in embed.title
     assert embed.footer.text is not None
     assert "Session Recap" in embed.footer.text

@@ -152,8 +152,8 @@ def _field_by_name(embed) -> dict[str, str]:
 def test_build_wyr_embed_title_when_open():
     embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1)
     assert embed.title is not None
-    assert "WOULD YOU RATHER" in embed.title
-    assert "ROUND OVER" not in embed.title
+    assert "Would You Rather" in embed.title
+    assert "Round Over" not in embed.title
     assert embed.color is not None
     assert embed.color.value == PHASE_PLAYING
 
@@ -161,7 +161,7 @@ def test_build_wyr_embed_title_when_open():
 def test_build_wyr_embed_title_when_closed():
     embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1, closed=True)
     assert embed.title is not None
-    assert "ROUND OVER" in embed.title
+    assert "Round Over" in embed.title
     # Per the 2026-07-21 ruling WYR is a voting game with no winner, so the
     # closed state no longer flips to a semantic results color — with no
     # accent passed it falls back to the PHASE_PLAYING default.
@@ -265,8 +265,8 @@ def test_build_wyr_embed_renders_game_icon_in_title():
 def test_build_closed_embed_title_says_closed():
     embed = build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1)
     assert embed.title is not None
-    assert "CLOSED" in embed.title
-    assert "ROUND OVER" not in embed.title  # CLOSED overrides the ROUND-OVER suffix
+    assert "Closed" in embed.title
+    assert "Round Over" not in embed.title  # CLOSED overrides the ROUND-OVER suffix
 
 
 def test_build_closed_embed_defaults_to_phase_playing():

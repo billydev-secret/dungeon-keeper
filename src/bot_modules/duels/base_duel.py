@@ -177,7 +177,7 @@ class BaseDuel(BaseGame):
             color = discord.Color(COLOR_GOLD)
         stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
         embed = discord.Embed(
-            title=f"⚔️ {self.GAME_DISPLAY_NAME.upper()} CHALLENGE",
+            title=f"⚔️ {self.GAME_DISPLAY_NAME} Challenge",
             color=color,
         )
         embed.add_field(

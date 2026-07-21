@@ -561,7 +561,7 @@ class GuessSelectView(discord.ui.View):
 
         round_row = await asyncio.to_thread(_do_load_round, db_path, self.round_id)
         if round_row is None:
-            await interaction.edit_original_response(content="Round not found.", view=None)
+            await interaction.edit_original_response(content="❌ Round not found.", view=None)
             return
 
         correct = guessed_user_id == round_row.answer_id
@@ -743,27 +743,27 @@ class GameView(discord.ui.View):
         round_row = await asyncio.to_thread(_do_load_round, db_path, self.round_id)
         if round_row and round_row.answer_optout:
             await interaction.followup.send(
-                "This round is no longer solvable — the answer opted out.",
+                "❌ This round is no longer solvable — the answer opted out.",
                 ephemeral=True,
             )
             return
         if round_row and interaction.user.id == round_row.submitter_id:
             await interaction.followup.send(
-                "You can't guess on your own round.", ephemeral=True
+                "❌ You can't guess on your own round.", ephemeral=True
             )
             return
 
         guess_role = interaction.guild.get_role(config.guess_role_id)
         if guess_role is None:
             await interaction.followup.send(
-                "Guess role not found — ask an admin to configure it.", ephemeral=True
+                "❌ Guess role not found — ask an admin to configure it.", ephemeral=True
             )
             return
 
         guess_members = [m for m in guess_role.members if not m.bot]
         if not guess_members:
             await interaction.followup.send(
-                "No opted-in members to guess from.", ephemeral=True
+                "❌ No opted-in members to guess from.", ephemeral=True
             )
             return
 
@@ -948,14 +948,14 @@ class CropEditorView(discord.ui.View):
         assert interaction.guild
         async with self._post_lock:
             if self._posted:
-                await interaction.response.send_message("Already posted.", ephemeral=True)
+                await interaction.response.send_message("❌ Already posted.", ephemeral=True)
                 return
 
         await interaction.response.defer(ephemeral=True)
 
         async with self._post_lock:
             if self._posted:
-                await interaction.followup.send("Already posted.", ephemeral=True)
+                await interaction.followup.send("❌ Already posted.", ephemeral=True)
                 return
             self._posted = True
 
@@ -965,7 +965,7 @@ class CropEditorView(discord.ui.View):
         ):
             self.stop()
             await interaction.followup.send(
-                "Guess channel not found — ask an admin to check the config.", ephemeral=True
+                "❌ Guess channel not found — ask an admin to check the config.", ephemeral=True
             )
             return
 
@@ -1137,11 +1137,11 @@ async def _pipeline_and_open_editor(
             _validate_dimensions, image_bytes, config.min_image_dimension_px
         )
     except Exception:
-        await interaction.followup.send("That doesn't appear to be a valid image.", ephemeral=True)
+        await interaction.followup.send("❌ That doesn't appear to be a valid image.", ephemeral=True)
         return
     if not dim_ok:
         await interaction.followup.send(
-            f"Image too small. Minimum dimension is {config.min_image_dimension_px}px.",
+            f"❌ Image too small. Minimum dimension is {config.min_image_dimension_px}px.",
             ephemeral=True,
         )
         return
@@ -1230,7 +1230,7 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             await interaction.followup.send(
-                "Please provide an http or https URL.", ephemeral=True
+                "❌ Please provide an http or https URL.", ephemeral=True
             )
             return
 
@@ -1239,7 +1239,7 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
 
         if config.guess_role_id == 0 or config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess is not fully configured. Ask an admin to set it up in the web dashboard.",
+                "❌ Guess is not fully configured. Ask an admin to set it up in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1247,7 +1247,7 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
         member = interaction.guild.get_member(interaction.user.id)
         if not member or not _has_guess_role(member, config.guess_role_id):
             await interaction.followup.send(
-                "You need the Guess role to submit.", ephemeral=True
+                "❌ You need the Guess role to submit.", ephemeral=True
             )
             return
 
@@ -1257,13 +1257,13 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
             )
         except Exception as exc:
             await interaction.followup.send(
-                f"Could not download that URL: {exc}", ephemeral=True
+                f"❌ Could not download that URL: {exc}", ephemeral=True
             )
             return
 
         if not _validate_size(len(image_bytes), config.max_image_size_mb):
             await interaction.followup.send(
-                f"Image too large. Maximum is {config.max_image_size_mb} MB.",
+                f"❌ Image too large. Maximum is {config.max_image_size_mb} MB.",
                 ephemeral=True,
             )
             return
@@ -1400,14 +1400,14 @@ class ConfessionPreviewView(discord.ui.View):
         assert interaction.guild
         async with self._post_lock:
             if self._posted:
-                await interaction.response.send_message("Already posted.", ephemeral=True)
+                await interaction.response.send_message("❌ Already posted.", ephemeral=True)
                 return
 
         await interaction.response.defer(ephemeral=True)
 
         async with self._post_lock:
             if self._posted:
-                await interaction.followup.send("Already posted.", ephemeral=True)
+                await interaction.followup.send("❌ Already posted.", ephemeral=True)
                 return
             self._posted = True
 
@@ -1417,7 +1417,7 @@ class ConfessionPreviewView(discord.ui.View):
         ):
             self.stop()
             await interaction.followup.send(
-                "Guess channel not found — ask an admin to check the config.", ephemeral=True
+                "❌ Guess channel not found — ask an admin to check the config.", ephemeral=True
             )
             return
 
@@ -1605,21 +1605,21 @@ class GuessCog(commands.Cog):
 
         if config.guess_role_id == 0:
             await interaction.followup.send(
-                "Guess role is not configured. Ask an admin to set it in the web dashboard.",
+                "❌ Guess role is not configured. Ask an admin to set it in the web dashboard.",
                 ephemeral=True,
             )
             return
 
         if config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess channel is not configured. Ask an admin to set it in the web dashboard.", ephemeral=True
+                "❌ Guess channel is not configured. Ask an admin to set it in the web dashboard.", ephemeral=True
             )
             return
 
         member = interaction.guild.get_member(interaction.user.id)
         if not member or not _has_guess_role(member, config.guess_role_id):
             await interaction.followup.send(
-                "You need the Guess role to submit.", ephemeral=True
+                "❌ You need the Guess role to submit.", ephemeral=True
             )
             return
 
@@ -1629,19 +1629,19 @@ class GuessCog(commands.Cog):
             window_seconds=config.submit_window_seconds,
         ):
             await interaction.followup.send(
-                f"You've hit the submission limit ({config.submit_max_per_window} per "
+                f"❌ You've hit the submission limit ({config.submit_max_per_window} per "
                 f"{config.submit_window_seconds}s). Please wait a bit before submitting again.",
                 ephemeral=True,
             )
             return
 
         if not _validate_mime(image.content_type):
-            await interaction.followup.send("Please submit an image file.", ephemeral=True)
+            await interaction.followup.send("❌ Please submit an image file.", ephemeral=True)
             return
 
         if not _validate_size(image.size, config.max_image_size_mb):
             await interaction.followup.send(
-                f"Image too large. Maximum is {config.max_image_size_mb} MB.", ephemeral=True
+                f"❌ Image too large. Maximum is {config.max_image_size_mb} MB.", ephemeral=True
             )
             return
 
@@ -1667,7 +1667,7 @@ class GuessCog(commands.Cog):
         member = interaction.guild.get_member(interaction.user.id)
         if not (member and member.guild_permissions.manage_guild):
             await interaction.followup.send(
-                "Only mods (manage_guild permission) can inspect rounds.",
+                "❌ Only mods (manage_guild permission) can inspect rounds.",
                 ephemeral=True,
             )
             return
@@ -1676,7 +1676,7 @@ class GuessCog(commands.Cog):
         round_row = await asyncio.to_thread(_do_load_round, db_path, round_id)
         if round_row is None or round_row.guild_id != interaction.guild.id:
             await interaction.followup.send(
-                f"Round #{round_id} not found.", ephemeral=True
+                f"❌ Round #{round_id} not found.", ephemeral=True
             )
             return
 
@@ -1733,7 +1733,7 @@ class GuessCog(commands.Cog):
 
         if round_row.deleted_at is not None:
             await interaction.followup.send(
-                f"Round #{round_id} is already deleted.", ephemeral=True
+                f"❌ Round #{round_id} is already deleted.", ephemeral=True
             )
             return
 
@@ -1742,7 +1742,7 @@ class GuessCog(commands.Cog):
         is_mod = bool(member and member.guild_permissions.manage_guild)
         if not (is_submitter or is_mod):
             await interaction.followup.send(
-                "Only the submitter or a mod can delete this round.", ephemeral=True
+                "❌ Only the submitter or a mod can delete this round.", ephemeral=True
             )
             return
 
@@ -1785,7 +1785,7 @@ class GuessCog(commands.Cog):
 
         if config.guess_role_id == 0:
             await interaction.followup.send(
-                "Guess role is not configured. Ask an admin to set it in the web dashboard.",
+                "❌ Guess role is not configured. Ask an admin to set it in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1793,7 +1793,7 @@ class GuessCog(commands.Cog):
         role = interaction.guild.get_role(config.guess_role_id)
         if role is None:
             await interaction.followup.send(
-                "Guess role is configured but no longer exists. "
+                "❌ Guess role is configured but no longer exists. "
                 "Ask an admin to fix the Guess config in the web dashboard.",
                 ephemeral=True,
             )
@@ -1802,13 +1802,13 @@ class GuessCog(commands.Cog):
         member = interaction.guild.get_member(interaction.user.id)
         if member is None:
             await interaction.followup.send(
-                "Couldn't find you in this guild.", ephemeral=True
+                "❌ Couldn't find you in this server.", ephemeral=True
             )
             return
 
         if _has_guess_role(member, config.guess_role_id):
             await interaction.followup.send(
-                f"You're already in the Guess pool ({role.mention}).",
+                f"❌ You're already in the Guess pool ({role.mention}).",
                 ephemeral=True,
             )
             return
@@ -1817,7 +1817,7 @@ class GuessCog(commands.Cog):
             await member.add_roles(role, reason="Guess opt-in")
         except discord.Forbidden:
             await interaction.followup.send(
-                "I don't have permission to add that role. "
+                "❌ I don't have permission to add that role. "
                 "Ask an admin to check my role permissions and hierarchy.",
                 ephemeral=True,
             )
@@ -1845,7 +1845,7 @@ class GuessCog(commands.Cog):
 
         if config.guess_role_id == 0 or config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess is not fully configured. Ask an admin to set it up in the web dashboard.",
+                "❌ Guess is not fully configured. Ask an admin to set it up in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1853,18 +1853,18 @@ class GuessCog(commands.Cog):
         member = interaction.guild.get_member(interaction.user.id)
         if not member or not _has_guess_role(member, config.guess_role_id):
             await interaction.followup.send(
-                "You need the Guess role to submit a confession.", ephemeral=True
+                "❌ You need the Guess role to submit a confession.", ephemeral=True
             )
             return
 
         text = text.strip()
         if not text:
-            await interaction.followup.send("Confession text cannot be empty.", ephemeral=True)
+            await interaction.followup.send("❌ Confession text cannot be empty.", ephemeral=True)
             return
 
         if contains_disallowed_content(text):
             await interaction.followup.send(
-                "That confession contains disallowed content. Please rephrase.", ephemeral=True
+                "❌ That confession contains disallowed content. Please rephrase.", ephemeral=True
             )
             return
 
@@ -1933,7 +1933,7 @@ class GuessCog(commands.Cog):
 
         if config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess channel is not configured. Set it in the web dashboard first.",
+                "❌ Guess channel is not configured. Set it in the web dashboard first.",
                 ephemeral=True,
             )
             return

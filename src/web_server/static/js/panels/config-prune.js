@@ -124,7 +124,7 @@ export function mount(container) {
 
         <div class="section-label">
           <span>Preview</span>
-          <button type="button" class="btn btn-sm" data-preview-btn>Refresh preview</button>
+          <button type="button" class="btn btn-sm" data-preview-btn>Refresh Preview</button>
           <span data-preview-status style="color:var(--ink-dim); font-size:12px; text-transform:none; letter-spacing:0; font-weight:400;"></span>
         </div>
         <div class="field-hint" style="margin-bottom:10px;">

@@ -23,7 +23,7 @@ export function mount(container, initialParams = {}) {
           </select>
         </label>
       </div>
-      <div class="panel-loading" data-body>Loading...</div>
+      <div class="panel-loading" data-body>Loading…</div>
     </div>
   `;
 
@@ -43,7 +43,7 @@ export function mount(container, initialParams = {}) {
   async function refresh() {
     const days = daysEl.value;
     history.replaceState(null, "", `#/health-mod-engagement?days=${days}`);
-    bodyEl.innerHTML = `<div class="panel-loading">Loading...</div>`;
+    bodyEl.innerHTML = `<div class="panel-loading">Loading…</div>`;
     destroyCharts();
 
     let d;

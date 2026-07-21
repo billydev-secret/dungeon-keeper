@@ -3,7 +3,7 @@ import { api, esc } from "../api.js";
 const DIM_COLORS = ["#E6B84C", "#B88A2C", "#7F8F3A", "#B36A92", "#9E3B2E", "#949ba4"];
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading health score...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading health score…</div></div>';
   const charts = [];
 
   async function load() {

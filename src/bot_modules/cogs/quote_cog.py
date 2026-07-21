@@ -39,6 +39,7 @@ from bot_modules.services.quote_renderer import (
     theme_from_accent,
 )
 from bot_modules.services.starboard_service import get_starboard_config
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -447,7 +448,7 @@ class QuoteCog(commands.Cog):
     ) -> None:
         if not message.content or not message.content.strip():
             await interaction.response.send_message(
-                "That message has no text to quote.", ephemeral=True
+                "❌ That message has no text to quote.", ephemeral=True
             )
             return
 
@@ -456,7 +457,7 @@ class QuoteCog(commands.Cog):
             discord.MessageType.reply,
         ):
             await interaction.response.send_message(
-                "Can't quote system messages.", ephemeral=True
+                "❌ Can't quote system messages.", ephemeral=True
             )
             return
 
@@ -496,7 +497,7 @@ class QuoteCog(commands.Cog):
         ctx = self.bot.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
@@ -506,14 +507,14 @@ class QuoteCog(commands.Cog):
             channel, discord.TextChannel | discord.Thread | discord.VoiceChannel
         ):
             await interaction.response.send_message(
-                "This command can only be used in a server text channel.", ephemeral=True
+                "❌ This command can only be used in a server text channel.", ephemeral=True
             )
             return
 
         text = text.strip()
         if not text:
             await interaction.response.send_message(
-                "Give me some text to put on the banner.", ephemeral=True
+                "❌ Give me some text to put on the banner.", ephemeral=True
             )
             return
 
@@ -545,7 +546,7 @@ class QuoteCog(commands.Cog):
                 avatar_bytes = None
         if avatar_bytes is None:
             await interaction.followup.send(
-                content="Couldn't fetch an image to use as the banner background.",
+                content="❌ Couldn't fetch an image to use as the banner background.",
                 ephemeral=True,
             )
             return
@@ -566,7 +567,7 @@ class QuoteCog(commands.Cog):
         except Exception:
             log.exception("banner: render_quote_card failed")
             await interaction.followup.send(
-                content="Failed to render the banner.", ephemeral=True
+                content="❌ Failed to render the banner.", ephemeral=True
             )
             return
 
@@ -576,7 +577,7 @@ class QuoteCog(commands.Cog):
         except discord.HTTPException:
             log.exception("banner: failed to post card to channel")
             await interaction.followup.send(
-                content="Couldn't post the banner in this channel.", ephemeral=True
+                content="❌ Couldn't post the banner in this channel.", ephemeral=True
             )
             return
 
@@ -594,13 +595,13 @@ class QuoteCog(commands.Cog):
     async def quote_role(self, interaction: discord.Interaction) -> None:
         if not self.bot.ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+                "❌ This command can only be used in a server.", ephemeral=True
             )
             return
 
@@ -615,7 +616,7 @@ class QuoteCog(commands.Cog):
                     )
                 except discord.HTTPException:
                     await interaction.response.send_message(
-                        f"The {existing.mention} role exists but I couldn't make it "
+                        f"❌ The {existing.mention} role exists but I couldn't make it "
                         "mentionable — check that my role sits above it and I have "
                         "**Manage Roles**.",
                         ephemeral=True,
@@ -636,13 +637,13 @@ class QuoteCog(commands.Cog):
             )
         except discord.Forbidden:
             await interaction.response.send_message(
-                "I need the **Manage Roles** permission to create the role.",
+                "❌ I need the **Manage Roles** permission to create the role.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException:
             await interaction.response.send_message(
-                "Couldn't create the role — please try again.", ephemeral=True
+                "❌ Couldn't create the role — please try again.", ephemeral=True
             )
             return
 

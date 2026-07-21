@@ -182,7 +182,7 @@ export function mount(container) {
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
     saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save settings";
+    saveBtn.textContent = "Save Settings";
     const saveStatus = document.createElement("span");
     saveRow.appendChild(saveBtn);
     saveRow.appendChild(saveStatus);
@@ -222,7 +222,7 @@ export function mount(container) {
     // ── How-to guide ──────────────────────────────────────────────────
     const howtoHeader = document.createElement("div");
     howtoHeader.className = "section-label";
-    howtoHeader.textContent = "Post how-to guide";
+    howtoHeader.textContent = "Post How-To Guide";
     panel.appendChild(howtoHeader);
 
     const howtoForm = document.createElement("form");
@@ -237,7 +237,7 @@ export function mount(container) {
     const howtoBtn = document.createElement("button");
     howtoBtn.type = "submit";
     howtoBtn.className = "btn";
-    howtoBtn.textContent = "Post guide";
+    howtoBtn.textContent = "Post Guide";
     const howtoStatus = document.createElement("span");
     howtoRow.appendChild(howtoBtn);
     howtoRow.appendChild(howtoStatus);
@@ -262,7 +262,7 @@ export function mount(container) {
     // ── Name blocklist ────────────────────────────────────────────────
     const blHeader = document.createElement("div");
     blHeader.className = "section-label";
-    blHeader.textContent = "Channel-name blocklist";
+    blHeader.textContent = "Channel-Name Blocklist";
     panel.appendChild(blHeader);
 
     const blForm = document.createElement("form");

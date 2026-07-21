@@ -55,7 +55,7 @@ def build_join_embed(
     with no guild.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['mlt']} MOST LIKELY TO",
+        title=f"{GAME_ICONS['mlt']} Most Likely To",
         color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Host", value=host_name, inline=True)
@@ -82,9 +82,9 @@ def build_round_embed(
     falls back to the phase colors (playing blue / results green) so the
     active vs. closed states stay visually distinct with no guild.
     """
-    title = f"{GAME_ICONS['mlt']} MOST LIKELY TO..."
+    title = f"{GAME_ICONS['mlt']} Most Likely To..."
     if closed:
-        title += " — ROUND OVER"
+        title += " — Round Over"
     fallback = PHASE_RESULTS if closed else PHASE_PLAYING
     embed = discord.Embed(title=title, color=color or discord.Color(fallback))
     embed.add_field(
@@ -98,7 +98,7 @@ def build_round_embed(
         inline=False,
     )
     embed.set_footer(
-        text=f"{GAME_ICONS['mlt']} Most Likely To  •  Round {round_num}"
+        text=f"{GAME_ICONS['mlt']} Most Likely To • Round {round_num}"
     )
     return embed
 
@@ -123,7 +123,7 @@ def build_closed_embed(
         closed=True,
         color=color,
     )
-    embed.title = f"{GAME_ICONS['mlt']} MOST LIKELY TO — CLOSED"
+    embed.title = f"{GAME_ICONS['mlt']} Most Likely To — Closed"
     embed.color = color or discord.Color(PHASE_RECAP)
     return embed
 
@@ -147,7 +147,7 @@ def build_results_embed(
     otherwise.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['mlt']} MOST LIKELY TO {prompt}",
+        title=f"{GAME_ICONS['mlt']} Most Likely To {prompt}",
         color=color or discord.Color(PHASE_RESULTS),
     )
     sorted_tally = sorted(tally.items(), key=lambda x: -x[1])
@@ -161,7 +161,7 @@ def build_results_embed(
         )
     embed.description = "\n".join(lines) if lines else "No votes cast."
     embed.set_footer(
-        text=f"{GAME_ICONS['mlt']} Most Likely To  •  Round {round_num} Results"
+        text=f"{GAME_ICONS['mlt']} Most Likely To • Round {round_num} Results"
     )
     return embed
 
@@ -197,5 +197,5 @@ def build_final_standings_embed(
         plural = "crown" if count == 1 else "crowns"
         lines.append(f"{prefix}**{discord.utils.escape_markdown(name)}** — {count} {plural}")
     embed.description = "\n".join(lines)
-    embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To  •  Final crown tally")
+    embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To • Final crown tally")
     return embed

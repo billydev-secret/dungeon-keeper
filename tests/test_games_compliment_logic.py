@@ -175,7 +175,7 @@ def test_build_lobby_embed_lists_participants():
 def test_build_lobby_embed_title_uses_compliment_label():
     embed = build_lobby_embed("Alice", [])
     assert embed.title is not None
-    assert "SPIN THE COMPLIMENT" in embed.title
+    assert "Spin the Compliment" in embed.title
 
 
 def test_build_lobby_embed_has_footer():
@@ -205,7 +205,7 @@ def test_format_pairing_line_preserves_raw_strings():
 def test_build_pairings_embed_title_and_color():
     embed = build_pairings_embed(["<@1> → <@2>"])
     assert embed.title is not None
-    assert "COMPLIMENT PAIRINGS" in embed.title
+    assert "Compliment Pairings" in embed.title
 
 
 def test_build_pairings_embed_joins_lines_with_newlines():

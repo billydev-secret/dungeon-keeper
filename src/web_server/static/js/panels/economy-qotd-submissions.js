@@ -40,13 +40,13 @@ function render(container, members) {
       </header>
 
       <section class="card">
-        <div class="section-label">Awaiting review</div>
+        <div class="section-label">Awaiting Review</div>
         <div class="field-hint" style="margin-bottom:8px;">Declining refunds the sponsor automatically.</div>
         <div data-pending><div class="empty">Loading…</div></div>
       </section>
 
       <section class="card">
-        <div class="section-label">Ready to post</div>
+        <div class="section-label">Ready to Post</div>
         <div class="field-hint" style="margin-bottom:8px;">Queued oldest-first; the next <code>/qotd post</code> takes the top one. Withdrawing refunds it.</div>
         <div data-approved><div class="empty">Loading…</div></div>
       </section>

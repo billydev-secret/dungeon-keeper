@@ -117,7 +117,7 @@ export function mount(container) {
             <label>Member B</label>
             <span data-picker="sep_b"></span>
           </div>
-          <button type="button" class="btn btn-primary" data-add-sep>Add separation</button>
+          <button type="button" class="btn btn-primary" data-add-sep>Add Separation</button>
         </div>
         <div data-sep-list style="display:flex;flex-direction:column;gap:6px;"></div>
         <span data-sep-status></span>

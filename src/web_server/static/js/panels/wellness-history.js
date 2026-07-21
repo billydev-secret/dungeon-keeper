@@ -1,7 +1,7 @@
 import { wGet, esc } from "../wellness-helpers.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading history...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading history…</div></div>`;
 
   (async () => {
     let d;

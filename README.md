@@ -43,7 +43,7 @@ enable/disable, channel allowlists, and an AI question-bank fallback.
 - **Hot Takes** — Submit spicy anonymous opinions, then rate each one on a 5-step 🧊-to-🔥 temperature scale. The average heat for every take is revealed at the end.
 - **Story Builder** — Write a story together one sentence at a time on alternating turns. Choose blind mode (see only the previous line) for chaos or full visibility for coherence.
 - **Anonymous AMA** — One player takes the hot seat and fields anonymous questions from the room. Run it unfiltered or host-screened, with DM pings when a questioner gets a reply.
-- **Fantasies & Dealbreakers** — Anonymously submit what you'd love or hate, then vote "Same" or "Not for me" on each entry. The host runs as many rounds as the vibe can sustain.
+- **Fantasies & Dealbreakers** — Anonymously submit what you'd love or hate, then vote "Same" or "Not for Me" on each entry. The host runs as many rounds as the vibe can sustain.
 - **Name Your Price** — Name the secret price it would take you to do a given scenario. Prices reveal low-to-high, then the room votes Most Reasonable and Most Unhinged.
 - **Mt. Rushmore Draft** — Snake-draft your top four picks for a topic, with no duplicates allowed once a pick is gone. Everyone reveals their board and the room votes on the best lineup.
 - **Clapback** — A prompt drops and everyone writes their funniest anonymous one-liner. Answers go head-to-head for votes, and sweeping every vote earns a "CLAPBACK!" bonus.
@@ -61,7 +61,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 ### Economy & perk shop
 - **Coins & wallet** — Earn server currency from daily logins, chatting, voice, games, reactions, and QOTD answers, all recorded in a full ledger. `/bank wallet` shows your balance and recent activity.
 - **Quests & daily boards** — A personal quest board (daily/weekly/monthly) draws each member their own random slice of the guild's quest pool, plus tiered community weeklies the whole server works toward with a live tracker.
-- **Perk shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
+- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
 - **Sinks & stakes** — Coin wagers on duel and group games, paid quest rerolls, raffles, and other sinks keep the currency circulating. Mods post the guide/shop/leaderboard panels and can grant coins directly. `docs/economy_spec.md` is the deep doc.
 
 ### Engagement & content

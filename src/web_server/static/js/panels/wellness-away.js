@@ -1,7 +1,7 @@
 import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading away settings...</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading away settings…</div></div>`;
 
   (async () => {
     let d;
@@ -32,7 +32,7 @@ export function mount(container) {
         </div>
         <div class="field">
           <label>Message <span data-charcount class="w-charcount">${(d.message || "").length}/${d.max_len}</span></label>
-          <textarea name="message" rows="4" maxlength="${d.max_len}" placeholder="e.g. Stepping back today...">${esc(d.message || "")}</textarea>
+          <textarea name="message" rows="4" maxlength="${d.max_len}" placeholder="e.g. Stepping back today…">${esc(d.message || "")}</textarea>
         </div>
         <div class="w-preview" data-preview>
           <div class="w-preview-label">Preview</div>

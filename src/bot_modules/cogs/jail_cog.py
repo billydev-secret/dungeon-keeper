@@ -92,6 +92,7 @@ from bot_modules.services.activity_graphs import (
     query_xp_activity_with_breakdown,
     render_activity_chart,
 )
+from bot_modules.services.replies import NO_PERMISSION
 
 
 # Discord caps the embed *title* at 256 chars; we trim our policy titles
@@ -201,13 +202,13 @@ class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Conte
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
-            await interaction.response.send_message("Server only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
 
         target = guild.get_member(self.source_message.author.id)
         if target is None:
             await interaction.response.send_message(
-                "That user is no longer in this server.", ephemeral=True
+                "❌ That user is no longer in this server.", ephemeral=True
             )
             return
 
@@ -310,7 +311,7 @@ class JailCog(commands.Cog):
         ) -> None:
             member = interaction.user
             if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-                await interaction.response.send_message("Mod only.", ephemeral=True)
+                await interaction.response.send_message("❌ Mod only.", ephemeral=True)
                 return
             await interaction.response.send_modal(_JailModal(user, ctx))
 
@@ -335,16 +336,16 @@ class JailCog(commands.Cog):
         ) -> None:
             invoker = interaction.user
             if not isinstance(invoker, discord.Member) or not _is_mod(invoker, ctx):
-                await interaction.response.send_message("Mod only.", ephemeral=True)
+                await interaction.response.send_message("❌ Mod only.", ephemeral=True)
                 return
             if message.author.bot:
                 await interaction.response.send_message(
-                    "Can't warn a bot.", ephemeral=True
+                    "❌ Can't warn a bot.", ephemeral=True
                 )
                 return
             if not message.content or not message.content.strip():
                 await interaction.response.send_message(
-                    "That message has no text content to use as a warning reason.",
+                    "❌ That message has no text content to use as a warning reason.",
                     ephemeral=True,
                 )
                 return
@@ -404,7 +405,7 @@ class JailCog(commands.Cog):
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "You don't have permission.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
         await _do_jail(
@@ -433,7 +434,7 @@ class JailCog(commands.Cog):
             or not _is_mod(member, ctx)
         ):
             await interaction.response.send_message(
-                "You don't have permission.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
         await interaction.response.defer(ephemeral=True)
@@ -456,7 +457,7 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
         accent = await resolve_accent_color(ctx.db_path, guild)
@@ -480,14 +481,14 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
-            await interaction.response.send_message("Server-only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
             return
 
         cat_id = _get_config(ctx, "ticket_category_id", guild_id=guild.id)
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "Ticket category not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category not configured. Ask an admin to run `/setup`.",
                 ephemeral=True,
             )
             return
@@ -589,7 +590,7 @@ class JailCog(commands.Cog):
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "Only moderators can close tickets.", ephemeral=True
+                "❌ Only moderators can close tickets.", ephemeral=True
             )
             return
         def _fetch_close_ticket():
@@ -599,7 +600,7 @@ class JailCog(commands.Cog):
         ticket = await asyncio.to_thread(_fetch_close_ticket)
         if not ticket or ticket["status"] != "open":
             await interaction.response.send_message(
-                "This is not an open ticket channel.", ephemeral=True
+                "❌ This is not an open ticket channel.", ephemeral=True
             )
             return
         tid = ticket["id"]
@@ -673,7 +674,7 @@ class JailCog(commands.Cog):
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "Only moderators can reopen tickets.", ephemeral=True
+                "❌ Only moderators can reopen tickets.", ephemeral=True
             )
             return
         def _fetch_reopen_ticket():
@@ -683,7 +684,7 @@ class JailCog(commands.Cog):
         ticket = await asyncio.to_thread(_fetch_reopen_ticket)
         if not ticket or ticket["status"] != "closed":
             await interaction.response.send_message(
-                "This is not a closed ticket channel.", ephemeral=True
+                "❌ This is not a closed ticket channel.", ephemeral=True
             )
             return
 
@@ -756,7 +757,7 @@ class JailCog(commands.Cog):
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
-                "Only moderators can delete tickets.", ephemeral=True
+                "❌ Only moderators can delete tickets.", ephemeral=True
             )
             return
         def _fetch_delete_ticket():
@@ -766,7 +767,7 @@ class JailCog(commands.Cog):
         ticket = await asyncio.to_thread(_fetch_delete_ticket)
         if not ticket or ticket["status"] != "closed":
             await interaction.response.send_message(
-                "Ticket must be closed before deleting.", ephemeral=True
+                "❌ Ticket must be closed before deleting.", ephemeral=True
             )
             return
 
@@ -786,7 +787,7 @@ class JailCog(commands.Cog):
         ctx = self.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
         def _fetch_claim_ticket():
             with ctx.open_db() as conn:
@@ -794,7 +795,7 @@ class JailCog(commands.Cog):
 
         ticket = await asyncio.to_thread(_fetch_claim_ticket)
         if not ticket:
-            await interaction.response.send_message("Not a ticket channel.", ephemeral=True)
+            await interaction.response.send_message("❌ Not a ticket channel.", ephemeral=True)
             return
         claim_ticket_id = ticket["id"]
 
@@ -830,7 +831,7 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
         def _fetch_esc_ticket():
             with ctx.open_db() as conn:
@@ -838,11 +839,11 @@ class JailCog(commands.Cog):
 
         ticket = await asyncio.to_thread(_fetch_esc_ticket)
         if not ticket:
-            await interaction.response.send_message("Not a ticket channel.", ephemeral=True)
+            await interaction.response.send_message("❌ Not a ticket channel.", ephemeral=True)
             return
         if ticket["escalated"]:
             await interaction.response.send_message(
-                "This ticket is already escalated.", ephemeral=True
+                "❌ This ticket is already escalated.", ephemeral=True
             )
             return
 
@@ -920,11 +921,11 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
-            await interaction.response.send_message("Server-only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
             return
         if not _is_admin(user, ctx):
             await interaction.response.send_message(
-                "Only admins can open policy proposals.", ephemeral=True
+                "❌ Only admins can open policy proposals.", ephemeral=True
             )
             return
 
@@ -932,7 +933,7 @@ class JailCog(commands.Cog):
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "Ticket category not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category not configured. Ask an admin to run `/setup`.",
                 ephemeral=True,
             )
             return
@@ -1040,11 +1041,11 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
-            await interaction.response.send_message("Server-only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
             return
         if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
             await interaction.response.send_message(
-                "Only mods and admins can start a policy vote.", ephemeral=True
+                "❌ Only mods and admins can start a policy vote.", ephemeral=True
             )
             return
 
@@ -1055,12 +1056,12 @@ class JailCog(commands.Cog):
         policy = await asyncio.to_thread(_fetch_vote_policy)
         if not policy:
             await interaction.response.send_message(
-                "This is not an active policy proposal channel.", ephemeral=True
+                "❌ This is not an active policy proposal channel.", ephemeral=True
             )
             return
         if policy["status"] != "open":
             await interaction.response.send_message(
-                f"This policy is already in '{policy['status']}' state.", ephemeral=True
+                f"❌ This policy is already in '{policy['status']}' state.", ephemeral=True
             )
             return
 
@@ -1079,11 +1080,11 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
-            await interaction.response.send_message("Server-only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
             return
         if not _is_admin(member, ctx):
             await interaction.response.send_message(
-                "Only admins can close policy proposals.", ephemeral=True
+                "❌ Only admins can close policy proposals.", ephemeral=True
             )
             return
 
@@ -1094,7 +1095,7 @@ class JailCog(commands.Cog):
         policy = await asyncio.to_thread(_fetch_close_policy)
         if not policy:
             await interaction.response.send_message(
-                "This is not an active policy proposal channel.", ephemeral=True
+                "❌ This is not an active policy proposal channel.", ephemeral=True
             )
             return
 
@@ -1186,11 +1187,11 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
-            await interaction.response.send_message("Server-only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
             return
         if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
             await interaction.response.send_message(
-                "Only mods and admins can view policies.", ephemeral=True
+                "❌ Only mods and admins can view policies.", ephemeral=True
             )
             return
 
@@ -1230,11 +1231,11 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
         if not isinstance(channel, discord.TextChannel):
             await interaction.response.send_message(
-                "Use this inside a jail or ticket channel.", ephemeral=True
+                "❌ Use this inside a jail or ticket channel.", ephemeral=True
             )
             return
 
@@ -1250,7 +1251,7 @@ class JailCog(commands.Cog):
         jail, ticket = await asyncio.to_thread(_fetch_pull_records)
         if not jail and not ticket:
             await interaction.response.send_message(
-                "This is not a jail or ticket channel.", ephemeral=True
+                "❌ This is not a jail or ticket channel.", ephemeral=True
             )
             return
 
@@ -1313,7 +1314,7 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
         if not isinstance(channel, discord.TextChannel):
             return
@@ -1330,14 +1331,14 @@ class JailCog(commands.Cog):
         jail, ticket = await asyncio.to_thread(_fetch_rm_records)
         if not jail and not ticket:
             await interaction.response.send_message(
-                "Not a jail or ticket channel.", ephemeral=True
+                "❌ Not a jail or ticket channel.", ephemeral=True
             )
             return
 
         primary_id = jail["user_id"] if jail else ticket["user_id"]  # type: ignore[index]
         if user.id == primary_id:
             await interaction.response.send_message(
-                "Cannot remove the primary user from their own channel.", ephemeral=True
+                "❌ Cannot remove the primary user from their own channel.", ephemeral=True
             )
             return
 
@@ -1396,7 +1397,7 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
         reason_text = reason or ""
@@ -1467,7 +1468,7 @@ class JailCog(commands.Cog):
         ctx = self.ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
         guild = interaction.guild
@@ -1517,7 +1518,7 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
         reason_text = reason or ""
@@ -1557,19 +1558,19 @@ class JailCog(commands.Cog):
         rw_status, count = await asyncio.to_thread(_revoke)
         if rw_status == "not_found":
             await interaction.response.send_message(
-                f"Warning #{warning_id} doesn't belong to {user.mention} "
+                f"❌ Warning #{warning_id} doesn't belong to {user.mention} "
                 f"in this server.",
                 ephemeral=True,
             )
             return
         if rw_status == "already_revoked":
             await interaction.response.send_message(
-                f"Warning #{warning_id} is already revoked.", ephemeral=True
+                f"❌ Warning #{warning_id} is already revoked.", ephemeral=True
             )
             return
         if rw_status == "race":
             await interaction.response.send_message(
-                "Couldn't revoke that warning — it may have just been "
+                "❌ Couldn't revoke that warning — it may have just been "
                 "revoked by someone else.",
                 ephemeral=True,
             )
@@ -1609,7 +1610,7 @@ class JailCog(commands.Cog):
             or guild is None
             or not _is_mod(member, ctx)
         ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
+            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)

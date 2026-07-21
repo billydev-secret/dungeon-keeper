@@ -27,17 +27,17 @@ export function mount(container, initialParams) {
       </div>
       <div data-status></div>
       <section data-bucket="waiting" style="margin-top:16px;">
-        <h3 style="margin-bottom:4px;">Waiting for first grant</h3>
+        <h3 style="margin-bottom:4px;">Waiting for First Grant</h3>
         <div class="subtitle">At or above the level bar, never granted, never stripped by the prune loop</div>
         <div data-table-wrap style="margin-top:8px; max-height:320px; overflow-y:auto;"></div>
       </section>
       <section data-bucket="returned" style="margin-top:16px;">
-        <h3 style="margin-bottom:4px;">Stripped but came back</h3>
+        <h3 style="margin-bottom:4px;">Stripped but Came Back</h3>
         <div class="subtitle">Pruned for inactivity, active again, still not re-granted</div>
         <div data-table-wrap style="margin-top:8px; max-height:320px; overflow-y:auto;"></div>
       </section>
       <section data-bucket="inactive" style="margin-top:16px;">
-        <h3 style="margin-bottom:4px;">Last 10 inactive stripped</h3>
+        <h3 style="margin-bottom:4px;">Last 10 Inactive Stripped</h3>
         <div class="subtitle">Most recently pruned members who are still inactive — working as intended</div>
         <div data-table-wrap style="margin-top:8px; max-height:320px; overflow-y:auto;"></div>
       </section>

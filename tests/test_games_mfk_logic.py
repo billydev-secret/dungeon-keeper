@@ -197,18 +197,17 @@ def test_serialize_assignments_empty():
 def test_build_lobby_embed_default_labels_in_title():
     embed = build_lobby_embed("Alice", [])
     assert embed.title is not None
-    # Title is the upper-case version of "Marry, Fornicate, Kiss"
-    assert "MARRY" in embed.title
-    assert "FORNICATE" in embed.title
-    assert "KISS" in embed.title
+    assert "Marry" in embed.title
+    assert "Fornicate" in embed.title
+    assert "Kiss" in embed.title
 
 
 def test_build_lobby_embed_custom_labels_in_title():
     embed = build_lobby_embed("Alice", [], labels=["Cruise", "Wedding", "Vacation"])
     assert embed.title is not None
-    assert "CRUISE" in embed.title
-    assert "WEDDING" in embed.title
-    assert "VACATION" in embed.title
+    assert "Cruise" in embed.title
+    assert "Wedding" in embed.title
+    assert "Vacation" in embed.title
 
 
 def test_build_lobby_embed_empty_pool_shows_dash():
@@ -269,7 +268,7 @@ def test_build_assignments_embed_one_field_per_player():
 def test_build_assignments_embed_title_mentions_three_names():
     embed = build_assignments_embed([], labels=DEFAULT_LABELS)
     assert embed.title is not None
-    assert "YOUR THREE NAMES" in embed.title
+    assert "Your Three Names" in embed.title
 
 
 def test_build_assignments_embed_description_lists_categories():

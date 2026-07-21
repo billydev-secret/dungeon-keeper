@@ -151,7 +151,7 @@ def build_send_feed_embed(
     if color is None:
         color = discord.Color.blurple()
     return discord.Embed(
-        title="\U0001f4ec Someone sent a Whisper",
+        title="\U0001f4ec Someone Sent a Whisper",
         description=f"Someone sent <@{target_id}> an anonymous message.",
         color=color,
     )
@@ -172,7 +172,7 @@ def build_share_feed_embed(
         color = discord.Color.blurple()
     safe = discord.utils.escape_markdown(whisper.message)
     embed = discord.Embed(
-        title="\U0001f4ec A fresh Whisper was shared",
+        title="\U0001f4ec A Fresh Whisper Was Shared",
         description=(
             f"Someone sent <@{whisper.target_id}> an anonymous message!\n\n"
             f"“{safe}”"

@@ -24,7 +24,7 @@ class TodoCog(commands.Cog):
     @app_commands.describe(task="The task to add.")
     async def todo(self, interaction: discord.Interaction, task: str) -> None:
         if not interaction.guild:
-            await interaction.response.send_message("Server only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
         # The todo list is a mod worklist, curated from the dashboard — only
         # moderators may add to it (the web endpoints are mod-gated too).
@@ -32,16 +32,16 @@ class TodoCog(commands.Cog):
             interaction.user, discord.Member
         ) or not has_mod_or_admin_permissions(interaction.user.guild_permissions):
             await interaction.response.send_message(
-                "Only moderators can add to the todo list.", ephemeral=True
+                "❌ Only moderators can add to the todo list.", ephemeral=True
             )
             return
         task = task.strip()
         if not task:
-            await interaction.response.send_message("Task cannot be empty.", ephemeral=True)
+            await interaction.response.send_message("❌ Task cannot be empty.", ephemeral=True)
             return
         if len(task) > TASK_MAX_LEN:
             await interaction.response.send_message(
-                f"Task must be {TASK_MAX_LEN} characters or fewer.", ephemeral=True
+                f"❌ Task must be {TASK_MAX_LEN} characters or fewer.", ephemeral=True
             )
             return
         guild_id = interaction.guild.id

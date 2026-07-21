@@ -309,7 +309,7 @@ class WhisperGuessButton(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
         if interaction.user.id != whisper.target_id:
             await interaction.response.send_message(ERROR_GUESS_NOT_TARGET, ephemeral=True)
@@ -335,19 +335,19 @@ class WhisperGuessButton(
         guild = interaction.guild or self.bot.get_guild(whisper.guild_id)
         if guild is None:
             await interaction.response.send_message(
-                "Couldn't find the server — try again.", ephemeral=True
+                "❌ Couldn't find the server — try again.", ephemeral=True
             )
             return
         cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, whisper.guild_id)
         if cfg.role_id == 0:
             await interaction.response.send_message(
-                "Whisper role isn't configured.", ephemeral=True
+                "❌ Whisper role isn't configured.", ephemeral=True
             )
             return
         role = guild.get_role(cfg.role_id)
         if role is None:
             await interaction.response.send_message(
-                "Whisper role no longer exists.", ephemeral=True
+                "❌ Whisper role no longer exists.", ephemeral=True
             )
             return
 
@@ -357,7 +357,7 @@ class WhisperGuessButton(
         )
         if not members:
             await interaction.response.send_message(
-                "No other opted-in members to guess from.", ephemeral=True
+                "❌ No other opted-in members to guess from.", ephemeral=True
             )
             return
 
@@ -405,7 +405,7 @@ class WhisperShareButton(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
         try:
             validate_share(whisper, invoker_id=interaction.user.id)
@@ -508,7 +508,7 @@ class WhisperDeleteButton(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
         try:
             validate_delete(whisper, invoker_id=interaction.user.id)
@@ -574,7 +574,7 @@ class WhisperExposeButton(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
         try:
             validate_expose(whisper, invoker_id=interaction.user.id)
@@ -655,7 +655,7 @@ class WhisperReplyButton(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
         reply_count = await asyncio.to_thread(
             _do_count_replies, self.bot.ctx.db_path, self.whisper_id
@@ -712,11 +712,11 @@ class WhisperReportButton(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
         if interaction.user.id != whisper.target_id:
             await interaction.response.send_message(
-                "Only the recipient can report a whisper.", ephemeral=True
+                "❌ Only the recipient can report a whisper.", ephemeral=True
             )
             return
         await interaction.response.send_modal(
@@ -727,7 +727,7 @@ class WhisperReportButton(
 # ── Reply / Report modals ────────────────────────────────────────────────────
 
 
-class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
+class WhisperReplyModal(discord.ui.Modal, title="Reply Anonymously"):
     reply_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Your reply",
         style=discord.TextStyle.long,
@@ -747,7 +747,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
         )
         if whisper is None:
             await interaction.response.send_message(
-                "Whisper not found.", ephemeral=True
+                "❌ Whisper not found.", ephemeral=True
             )
             return
         reply_count = await asyncio.to_thread(
@@ -772,7 +772,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
         content = str(self.reply_input.value).strip()
         if not content:
             await interaction.response.send_message(
-                "Reply can't be empty.", ephemeral=True
+                "❌ Reply can't be empty.", ephemeral=True
             )
             return
 
@@ -799,7 +799,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
         except (discord.Forbidden, discord.HTTPException):
             await asyncio.to_thread(_do_delete_reply, self.bot.ctx.db_path, reply_id)
             await interaction.response.send_message(
-                "Couldn't deliver — they have DMs disabled.", ephemeral=True
+                "❌ Couldn't deliver — they have DMs disabled.", ephemeral=True
             )
             return
 
@@ -844,7 +844,7 @@ class WhisperReplyDmView(discord.ui.View):
             self.add_item(WhisperReportReplyButton(bot, reply_id))
 
 
-class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
+class WhisperReportModal(discord.ui.Modal, title="Report Whisper"):
     reason_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Reason (optional)",
         style=discord.TextStyle.long,
@@ -863,12 +863,12 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
         )
         if whisper is None:
             await interaction.response.send_message(
-                "Whisper not found.", ephemeral=True
+                "❌ Whisper not found.", ephemeral=True
             )
             return
         if interaction.user.id != whisper.target_id:
             await interaction.response.send_message(
-                "Only the recipient can report a whisper.", ephemeral=True
+                "❌ Only the recipient can report a whisper.", ephemeral=True
             )
             return
 
@@ -885,7 +885,7 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
         )
         if not inserted:
             await interaction.response.send_message(
-                "You've already reported this whisper.", ephemeral=True
+                "❌ You've already reported this whisper.", ephemeral=True
             )
             return
 
@@ -909,7 +909,7 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
         )
 
 
-class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
+class WhisperReportReplyModal(discord.ui.Modal, title="Report Reply"):
     reason_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Reason (optional)",
         style=discord.TextStyle.long,
@@ -927,11 +927,11 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
             _do_get_reply, self.bot.ctx.db_path, self.reply_id
         )
         if reply is None:
-            await interaction.response.send_message("Reply not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Reply not found.", ephemeral=True)
             return
         if interaction.user.id != reply.to_user_id:
             await interaction.response.send_message(
-                "Only the recipient can report a reply.", ephemeral=True
+                "❌ Only the recipient can report a reply.", ephemeral=True
             )
             return
 
@@ -939,7 +939,7 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
             _do_load_whisper, self.bot.ctx.db_path, reply.whisper_id
         )
         if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
             return
 
         reason = str(self.reason_input.value).strip() or "(no reason provided)"
@@ -955,7 +955,7 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
         )
         if not inserted:
             await interaction.response.send_message(
-                "You've already reported this reply.", ephemeral=True
+                "❌ You've already reported this reply.", ephemeral=True
             )
             return
 
@@ -1012,11 +1012,11 @@ class WhisperReportReplyButton(
             _do_get_reply, self.bot.ctx.db_path, self.reply_id
         )
         if reply is None:
-            await interaction.response.send_message("Reply not found.", ephemeral=True)
+            await interaction.response.send_message("❌ Reply not found.", ephemeral=True)
             return
         if interaction.user.id != reply.to_user_id:
             await interaction.response.send_message(
-                "Only the recipient can report a reply.", ephemeral=True
+                "❌ Only the recipient can report a reply.", ephemeral=True
             )
             return
         await interaction.response.send_modal(
@@ -1086,7 +1086,7 @@ async def _handle_guess_outcome(
     )
     if not consumed:
         await interaction.response.edit_message(
-            content="This whisper was solved by another tab.", view=None
+            content="❌ This whisper was solved by another tab.", view=None
         )
         return
 
@@ -1160,7 +1160,7 @@ class WhisperGuessUserSelect(discord.ui.UserSelect):  # type: ignore[type-arg]
         )
         if whisper is None:
             await interaction.response.edit_message(
-                content="Whisper not found.", view=None
+                content="❌ Whisper not found.", view=None
             )
             return
         if whisper.solved:
@@ -1176,7 +1176,7 @@ class WhisperGuessUserSelect(discord.ui.UserSelect):  # type: ignore[type-arg]
         # A stray pick (bot) must not burn an attempt — bail before evaluating.
         if getattr(guessed, "bot", False):
             await interaction.response.edit_message(
-                content="That's a bot — pick a real member.", view=None
+                content="❌ That's a bot — pick a real member.", view=None
             )
             return
         await _handle_guess_outcome(interaction, self.bot, whisper, guessed.id)
@@ -1193,7 +1193,7 @@ class WhisperGuessUserSelectView(discord.ui.View):
 _GUESS_PAGE_SIZE = 25
 
 
-class _WhisperFilterModal(discord.ui.Modal, title="Filter names"):
+class _WhisperFilterModal(discord.ui.Modal, title="Filter Names"):
     query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Search",
         placeholder="Type a name…",
@@ -1246,7 +1246,7 @@ class WhisperGuessMemberSelect(discord.ui.Select):
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
         if whisper is None:
-            await interaction.response.edit_message(content="Whisper not found.", view=None)
+            await interaction.response.edit_message(content="❌ Whisper not found.", view=None)
             return
         if whisper.solved:
             await interaction.response.edit_message(
@@ -1405,7 +1405,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
 # ── Inbox dropdown view (received + sent) ────────────────────────────────────
 
 
-class _WhisperInboxFilterModal(discord.ui.Modal, title="Filter whispers"):
+class _WhisperInboxFilterModal(discord.ui.Modal, title="Filter Whispers"):
     query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Search by content",
         placeholder="Type a few words from the message…",
@@ -1461,7 +1461,7 @@ class WhisperInboxSelectView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._invoker_id:
             await interaction.response.send_message(
-                "This inbox isn't yours.", ephemeral=True
+                "❌ This inbox isn't yours.", ephemeral=True
             )
             return False
         return True
@@ -1702,7 +1702,7 @@ class WhisperInboxSelectView(discord.ui.View):
             return
         if interaction.user.id != selected.target_id:
             await interaction.response.send_message(
-                "Only the recipient can report a whisper.", ephemeral=True
+                "❌ Only the recipient can report a whisper.", ephemeral=True
             )
             return
         await interaction.response.send_modal(
@@ -1716,7 +1716,7 @@ class WhisperInboxSelectView(discord.ui.View):
 _SEND_PICKER_PAGE_SIZE = 25
 
 
-class WhisperSendComposeModal(discord.ui.Modal, title="Send anonymous whisper"):
+class WhisperSendComposeModal(discord.ui.Modal, title="Send Anonymous Whisper"):
     message_input: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Your message",
         style=discord.TextStyle.long,
@@ -1733,13 +1733,13 @@ class WhisperSendComposeModal(discord.ui.Modal, title="Send anonymous whisper"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(
-                "Whisper can only be used in a server.", ephemeral=True
+                "❌ Whisper can only be used in a server.", ephemeral=True
             )
             return
         member = interaction.guild.get_member(self._target_id)
         if member is None:
             await interaction.response.send_message(
-                "That member isn't in this server any more.", ephemeral=True
+                "❌ That member isn't in this server any more.", ephemeral=True
             )
             return
         content = str(self.message_input.value)
@@ -1781,7 +1781,7 @@ class _WhisperSendTargetSelect(discord.ui.Select):  # type: ignore[type-arg]
         )
 
 
-class _WhisperSendFilterModal(discord.ui.Modal, title="Filter members"):
+class _WhisperSendFilterModal(discord.ui.Modal, title="Filter Members"):
     query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Search",
         placeholder="Type a name…",
@@ -1828,7 +1828,7 @@ class WhisperSendTargetSelectView(discord.ui.View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._invoker_id:
             await interaction.response.send_message(
-                "This picker isn't for you.", ephemeral=True
+                "❌ This picker isn't for you.", ephemeral=True
             )
             return False
         return True
@@ -1957,7 +1957,7 @@ class WhisperFeedView(discord.ui.View):
         cog = self.bot.get_cog("WhisperCog")
         if not isinstance(cog, WhisperCog):
             await interaction.response.send_message(
-                "Whisper cog isn't loaded. Tell an admin.", ephemeral=True
+                "❌ Whisper cog isn't loaded. Tell an admin.", ephemeral=True
             )
             return
         await cog._open_send_picker(interaction)
@@ -2036,7 +2036,7 @@ class WhisperForgetMeConfirmView(discord.ui.View):
         self.guild_id = guild_id
         self.user_id = user_id
 
-    @discord.ui.button(label="Yes, delete my data", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Yes, Delete My Data", style=discord.ButtonStyle.danger)
     async def confirm(
         self,
         interaction: discord.Interaction,
@@ -2085,7 +2085,7 @@ class WhisperOptinConfirmView(discord.ui.View):
             await interaction.user.add_roles(self.role, reason="Whisper opt-in")  # type: ignore[union-attr]
         except discord.Forbidden:
             await interaction.response.edit_message(
-                content="I don't have permission to assign that role.", view=None
+                content="❌ I don't have permission to assign that role.", view=None
             )
             return
         await interaction.response.edit_message(
@@ -2245,13 +2245,13 @@ class WhisperCog(commands.Cog):
         cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
         if cfg.role_id == 0:
             await interaction.response.send_message(
-                "Whisper role hasn't been configured yet.", ephemeral=True
+                "❌ Whisper role hasn't been configured yet.", ephemeral=True
             )
             return
         role = interaction.guild.get_role(cfg.role_id)
         if role is None:
             await interaction.response.send_message(
-                "Whisper role no longer exists. Ask an admin to fix the config.",
+                "❌ Whisper role no longer exists. Ask an admin to fix the config.",
                 ephemeral=True,
             )
             return
@@ -2267,7 +2267,7 @@ class WhisperCog(commands.Cog):
         cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
         if cfg.role_id == 0:
             await interaction.response.send_message(
-                "Whisper role hasn't been configured yet.", ephemeral=True
+                "❌ Whisper role hasn't been configured yet.", ephemeral=True
             )
             return
         role = interaction.guild.get_role(cfg.role_id)
@@ -2276,7 +2276,7 @@ class WhisperCog(commands.Cog):
                 await interaction.user.remove_roles(role, reason="Whisper opt-out")  # type: ignore[union-attr]
             except discord.Forbidden:
                 await interaction.response.send_message(
-                    "I don't have permission to remove that role.", ephemeral=True
+                    "❌ I don't have permission to remove that role.", ephemeral=True
                 )
                 return
         await interaction.response.send_message(
@@ -2290,7 +2290,7 @@ class WhisperCog(commands.Cog):
     async def whisper_forget_me(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+                "❌ This command can only be used in a server.", ephemeral=True
             )
             return
         await interaction.response.send_message(
@@ -2315,7 +2315,7 @@ class WhisperCog(commands.Cog):
     async def whisper_sent(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+                "❌ This command can only be used in a server.", ephemeral=True
             )
             return
         whispers = await asyncio.to_thread(
@@ -2387,14 +2387,14 @@ class WhisperCog(commands.Cog):
 
         if getattr(target, "is_timed_out", lambda: False)():
             await interaction.response.send_message(
-                "Can't whisper a member who's currently timed out.", ephemeral=True
+                "❌ Can't whisper a member who's currently timed out.", ephemeral=True
             )
             return
 
         feed_channel = interaction.guild.get_channel(cfg.channel_id)
         if not isinstance(feed_channel, discord.TextChannel):
             await interaction.response.send_message(
-                "Whisper feed channel is missing or invalid. Tell an admin to fix the config.",
+                "❌ Whisper feed channel is missing or invalid. Tell an admin to fix the config.",
                 ephemeral=True,
             )
             return
@@ -2462,7 +2462,7 @@ class WhisperCog(commands.Cog):
         both the feed-launcher button and the /whisper send slash command."""
         if interaction.guild is None:
             await interaction.response.send_message(
-                "Whisper can only be used in a server.", ephemeral=True
+                "❌ Whisper can only be used in a server.", ephemeral=True
             )
             return
         await interaction.response.defer(ephemeral=True)
@@ -2475,13 +2475,13 @@ class WhisperCog(commands.Cog):
         role = interaction.guild.get_role(cfg.role_id)
         if role is None:
             await interaction.followup.send(
-                "Whisper role no longer exists. Ask an admin to fix the config.",
+                "❌ Whisper role no longer exists. Ask an admin to fix the config.",
                 ephemeral=True,
             )
             return
         if cfg.role_id not in {r.id for r in getattr(interaction.user, "roles", [])}:
             await interaction.followup.send(
-                "You need the Whisper role first. Use `/whisper optin` to join.",
+                "❌ You need the Whisper role first. Use `/whisper optin` to join.",
                 ephemeral=True,
             )
             return
@@ -2491,7 +2491,7 @@ class WhisperCog(commands.Cog):
         )
         if not members:
             await interaction.followup.send(
-                "No other opted-in members to whisper to yet.", ephemeral=True
+                "❌ No other opted-in members to whisper to yet.", ephemeral=True
             )
             return
         view = WhisperSendTargetSelectView(

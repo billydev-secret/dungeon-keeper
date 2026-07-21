@@ -53,7 +53,7 @@ class PersistentTriggerView(discord.ui.View):
         cog = bot.get_cog("BiosCog")
         if cog is None:
             await interaction.response.send_message(
-                "Bios are temporarily unavailable. Try again in a moment.",
+                "❌ Bios are temporarily unavailable. Try again in a moment.",
                 ephemeral=True,
             )
             return
@@ -207,7 +207,7 @@ class CombinedStepView(discord.ui.View):
         if on_back is not None:
             self._add_ctrl_btn("Back", discord.ButtonStyle.secondary, on_back)
         if on_keep is not None:
-            self._add_ctrl_btn("Keep current", discord.ButtonStyle.success, on_keep)
+            self._add_ctrl_btn("Keep Current", discord.ButtonStyle.success, on_keep)
         self._add_ctrl_btn("Cancel", discord.ButtonStyle.danger, on_cancel)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -311,7 +311,7 @@ class BrowseQuestionsView(discord.ui.View):
 
         if on_back is not None:
             back_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Back to fields",
+                label="Back to Fields",
                 style=discord.ButtonStyle.secondary,
                 row=1,
             )

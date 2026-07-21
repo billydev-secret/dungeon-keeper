@@ -112,7 +112,7 @@ def build_ffa_embed(
     if len(quoted) > MAX_EMBED_DESCRIPTION:
         quoted = quoted[: MAX_EMBED_DESCRIPTION - 1].rstrip() + "…"
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ffa']} {label}",
+        title=f"{GAME_ICONS['ffa']} {label.title()}",
         description=quoted,
         color=color,
     )

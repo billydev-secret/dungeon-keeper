@@ -461,7 +461,7 @@ class BumpTrackerCog(commands.Cog):
         cfg, log_rows = await asyncio.to_thread(_load)
         if cfg is None or log_rows is None:
             await interaction.response.send_message(
-                f"No site named **{name}** found.", ephemeral=True
+                f"❌ No site named **{name}** found.", ephemeral=True
             )
             return
 

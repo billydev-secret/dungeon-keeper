@@ -24,12 +24,12 @@ CONFESSION_HEADER_LENGTH = 2
 MAX_DISCORD_MESSAGE_LENGTH = 2000
 MAX_EMBED_DESCRIPTION_LENGTH = 4096
 
-ERROR_NOT_CONFIGURED = "Bot is not configured. Ask an admin to set destination/log channels."
-ERROR_CONFIG_INVALID = "Bot configuration is invalid. Contact an administrator."
-ERROR_PANIC_MODE = "Confessions are temporarily disabled."
-ERROR_USER_BLOCKED = "You can't submit confessions on this server."
-ERROR_REPLIES_DISABLED = "Anonymous replies are disabled on this server."
-ERROR_NOT_SETUP = "Guild not configured: run /confession set-dest and /confession set-log first."
+ERROR_NOT_CONFIGURED = "❌ Bot is not configured. Ask an admin to set destination/log channels."
+ERROR_CONFIG_INVALID = "❌ Bot configuration is invalid. Contact an administrator."
+ERROR_PANIC_MODE = "❌ Confessions are temporarily disabled."
+ERROR_USER_BLOCKED = "❌ You can't submit confessions on this server."
+ERROR_REPLIES_DISABLED = "❌ Anonymous replies are disabled on this server."
+ERROR_NOT_SETUP = "❌ Not configured yet: run /confession set-dest and /confession set-log first."
 
 
 def now_ts() -> int:

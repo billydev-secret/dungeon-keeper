@@ -393,7 +393,7 @@ class WizardSession:
             if len(content) > max_len:
                 try:
                     await self.channel.send(
-                        f"That's {len(content)} chars; please keep it under {max_len}."
+                        f"❌ That's {len(content)} chars; please keep it under {max_len}."
                     )
                 except discord.HTTPException:
                     pass
@@ -644,7 +644,7 @@ class WizardSession:
     # ── Embed builders for the in-wizard prompts ─────────────────────
 
     def _build_intro_embed(self) -> discord.Embed:
-        mode_text = "Update your bio" if self.state.mode == "edit" else "Create your bio"
+        mode_text = "Update Your Bio" if self.state.mode == "edit" else "Create Your Bio"
         n_fields = len(self.state.fields)
         n_q = self.state.target_questions
         e = discord.Embed(
@@ -680,7 +680,7 @@ class WizardSession:
         # Admin-authored example, if one is set — the biggest unblocker for
         # members who aren't sure what to write.
         if f.hint:
-            e.add_field(name="💡 For example", value=f.hint[:256], inline=False)
+            e.add_field(name="💡 For Example", value=f.hint[:256], inline=False)
         if not f.required:
             e.add_field(
                 name="​",
@@ -730,7 +730,7 @@ class WizardSession:
                 name=f"Answered ({answered})", value="\n".join(lines)[:1024], inline=False
             )
         if total_pages > 1:
-            e.set_footer(text=f"Pool page {page + 1} of {total_pages}")
+            e.set_footer(text=f"Page {page + 1}/{total_pages}")
         return e
 
     def _build_render_payload(self) -> BioRenderPayload:

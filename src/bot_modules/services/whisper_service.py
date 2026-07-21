@@ -19,31 +19,31 @@ def safe_codefence_content(s: str) -> str:
     """Replace triple-backticks with homoglyphs so user content can't break out of a ``` block."""
     return s.replace("```", "ʼʼʼ")
 
-ERROR_NOT_CONFIGURED = "Whispers aren't set up in this server yet."
+ERROR_NOT_CONFIGURED = "❌ Whispers aren't set up in this server yet."
 ERROR_SENDER_NEEDS_ROLE = (
-    "You need the Whisper role to send whispers. Use `/whisper optin` to join."
+    "❌ You need the Whisper role to send whispers. Use `/whisper optin` to join."
 )
-ERROR_TARGET_NEEDS_ROLE = "That member hasn't opted in to receive whispers."
-ERROR_SELF_TARGET = "You can't whisper yourself."
-ERROR_EMPTY_MESSAGE = "Whisper can't be empty."
-ERROR_MESSAGE_TOO_LONG = f"Whisper too long (max {MAX_MESSAGE_LENGTH} chars)."
-ERROR_BOT_DM_FAILED = "Couldn't deliver — that user has DMs disabled."
+ERROR_TARGET_NEEDS_ROLE = "❌ That member hasn't opted in to receive whispers."
+ERROR_SELF_TARGET = "❌ You can't whisper yourself."
+ERROR_EMPTY_MESSAGE = "❌ Whisper can't be empty."
+ERROR_MESSAGE_TOO_LONG = f"❌ Whisper too long (max {MAX_MESSAGE_LENGTH} chars)."
+ERROR_BOT_DM_FAILED = "❌ Couldn't deliver — that user has DMs disabled."
 
-ERROR_GUESS_NOT_TARGET = "Only the recipient can guess."
-ERROR_GUESS_SELF = "You can't guess yourself."
-ERROR_GUESS_ALREADY_SOLVED = "This whisper has already been solved."
-ERROR_GUESS_NO_ATTEMPTS = "No more guesses left."
-ERROR_GUESS_LOCKED = "This whisper is too old — guesses are locked."
+ERROR_GUESS_NOT_TARGET = "❌ Only the recipient can guess."
+ERROR_GUESS_SELF = "❌ You can't guess yourself."
+ERROR_GUESS_ALREADY_SOLVED = "❌ This whisper has already been solved."
+ERROR_GUESS_NO_ATTEMPTS = "❌ No more guesses left."
+ERROR_GUESS_LOCKED = "❌ This whisper is too old — guesses are locked."
 
-ERROR_ALREADY_DECIDED = "Already decided."
-ERROR_EXPOSE_NOT_TARGET = "Only the recipient can expose this."
-ERROR_EXPOSE_NEEDS_SOLVE = "Can only expose a solved whisper."
+ERROR_ALREADY_DECIDED = "❌ Already decided."
+ERROR_EXPOSE_NOT_TARGET = "❌ Only the recipient can expose this."
+ERROR_EXPOSE_NEEDS_SOLVE = "❌ Can only expose a solved whisper."
 
-ERROR_DELETE_NOT_TARGET = "Only the recipient can delete a whisper."
-ERROR_ALREADY_DELETED = "This whisper is already deleted."
+ERROR_DELETE_NOT_TARGET = "❌ Only the recipient can delete a whisper."
+ERROR_ALREADY_DELETED = "❌ This whisper is already deleted."
 
-ERROR_REPLY_NOT_PARTICIPANT = "Only the sender or recipient can reply."
-ERROR_REPLY_ALREADY_USED = "This whisper has already been replied to."
+ERROR_REPLY_NOT_PARTICIPANT = "❌ Only the sender or recipient can reply."
+ERROR_REPLY_ALREADY_USED = "❌ This whisper has already been replied to."
 
 
 class SendValidationError(Exception):

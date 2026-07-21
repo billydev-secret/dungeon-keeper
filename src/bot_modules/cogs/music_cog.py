@@ -162,18 +162,18 @@ class MusicCog(commands.Cog):
     ) -> wavelink.Player | None:
         """Ensure the bot is in the same voice channel as the user; return Player."""
         if self._starting:
-            await self._ephemeral(interaction, "Music is warming up, try again in a moment.")
+            await self._ephemeral(interaction, "❌ Music is warming up, try again in a moment.")
             return None
         if self._disabled:
-            await self._ephemeral(interaction, "Music is currently unavailable.")
+            await self._ephemeral(interaction, "❌ Music is currently unavailable.")
             return None
         guild = interaction.guild
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if guild is None or member is None:
-            await self._ephemeral(interaction, "Use this command in a server.")
+            await self._ephemeral(interaction, "❌ Use this command in a server.")
             return None
         if member.voice is None or member.voice.channel is None:
-            await self._ephemeral(interaction, "Join a voice channel first.")
+            await self._ephemeral(interaction, "❌ Join a voice channel first.")
             return None
 
         existing = self._player(guild)
@@ -181,7 +181,7 @@ class MusicCog(commands.Cog):
             if existing.channel.id != member.voice.channel.id:
                 await self._ephemeral(
                     interaction,
-                    f"I'm currently in {existing.channel.mention}. "
+                    f"❌ I'm currently in {existing.channel.mention}. "
                     "Join me there or wait for the queue to finish.",
                 )
                 return None
@@ -192,7 +192,7 @@ class MusicCog(commands.Cog):
             player = await member.voice.channel.connect(cls=wavelink.Player)
         except (discord.ClientException, asyncio.TimeoutError) as exc:
             log.warning("voice connect failed: %s", exc)
-            await self._ephemeral(interaction, f"Couldn't join voice: {exc}")
+            await self._ephemeral(interaction, f"❌ Couldn't join voice: {exc}")
             return None
         await player.set_volume(_DEFAULT_VOLUME)
         q = self._queue(guild.id)
@@ -232,10 +232,10 @@ class MusicCog(commands.Cog):
     @app_commands.describe(query="YouTube URL, Spotify URL/playlist, or search terms.")
     async def play(self, interaction: discord.Interaction, query: str) -> None:
         if self._starting:
-            await self._ephemeral(interaction, "Music is warming up, try again in a moment.")
+            await self._ephemeral(interaction, "❌ Music is warming up, try again in a moment.")
             return
         if self._disabled:
-            await self._ephemeral(interaction, "Music is currently unavailable.")
+            await self._ephemeral(interaction, "❌ Music is currently unavailable.")
             return
         player = await self._ensure_voice(interaction)
         if player is None:
@@ -259,12 +259,12 @@ class MusicCog(commands.Cog):
                 )
         except Exception as exc:
             log.exception("play failed for query=%r", query)
-            await interaction.followup.send(f"Error: {exc}", ephemeral=True)
+            await interaction.followup.send(f"❌ Error: {exc}", ephemeral=True)
             return
 
         if tracks_added == 0:
             await interaction.followup.send(
-                "Nothing found for that query.", ephemeral=True
+                "❌ Nothing found for that query.", ephemeral=True
             )
             return
 
@@ -386,7 +386,7 @@ class MusicCog(commands.Cog):
     async def skip(self, interaction: discord.Interaction) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         guild, player = sv
         queue = self._queue(guild.id)
@@ -402,7 +402,7 @@ class MusicCog(commands.Cog):
     async def shuffle_cmd(self, interaction: discord.Interaction) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         guild, _player = sv
         queue = self._queue(guild.id)
@@ -420,7 +420,7 @@ class MusicCog(commands.Cog):
     ) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         guild, _player = sv
         queue = self._queue(guild.id)
@@ -434,7 +434,7 @@ class MusicCog(commands.Cog):
     ) -> None:
         guild = interaction.guild
         if guild is None:
-            await self._ephemeral(interaction, "Use in a server.")
+            await self._ephemeral(interaction, "❌ Use in a server.")
             return
         queue = self._queue(guild.id)
         total = len(queue.tracks)
@@ -462,7 +462,7 @@ class MusicCog(commands.Cog):
     async def pause_cmd(self, interaction: discord.Interaction) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         _guild, player = sv
         await player.pause(True)
@@ -472,7 +472,7 @@ class MusicCog(commands.Cog):
     async def resume_cmd(self, interaction: discord.Interaction) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         _guild, player = sv
         await player.pause(False)
@@ -482,7 +482,7 @@ class MusicCog(commands.Cog):
     async def stop_cmd(self, interaction: discord.Interaction) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         guild, player = sv
         queue = self._queue(guild.id)
@@ -505,7 +505,7 @@ class MusicCog(commands.Cog):
     async def now_playing_cmd(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
-            await self._ephemeral(interaction, "Use in a server.")
+            await self._ephemeral(interaction, "❌ Use in a server.")
             return
         queue = self._queue(guild.id)
         player = self._player(guild)
@@ -531,7 +531,7 @@ class MusicCog(commands.Cog):
     async def disconnect_cmd(self, interaction: discord.Interaction) -> None:
         sv = self._same_voice(interaction)
         if sv is None:
-            await self._ephemeral(interaction, "Join the bot's voice channel first.")
+            await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         guild, player = sv
         ch_id = player.channel.id if player.channel else None
@@ -579,20 +579,20 @@ class MusicCog(commands.Cog):
         autoplay_playlist: str | None = None,
     ) -> None:
         if not self.ctx.is_mod(interaction):
-            await self._ephemeral(interaction, "You need mod permissions.")
+            await self._ephemeral(interaction, "❌ You need mod permissions.")
             return
         guild = interaction.guild
         member = interaction.user if isinstance(interaction.user, discord.Member) else None
         if guild is None or member is None:
-            await self._ephemeral(interaction, "Use in a server.")
+            await self._ephemeral(interaction, "❌ Use in a server.")
             return
         if member.voice is None or member.voice.channel is None:
-            await self._ephemeral(interaction, "Join the voice channel you want to configure first.")
+            await self._ephemeral(interaction, "❌ Join the voice channel you want to configure first.")
             return
 
         ch_id = member.voice.channel.id
         if autoplay_playlist and self._spotify is not None and not self._spotify.is_spotify_url(autoplay_playlist):
-            await self._ephemeral(interaction, "autoplay_playlist must be a Spotify URL.")
+            await self._ephemeral(interaction, "❌ autoplay_playlist must be a Spotify URL.")
             return
 
         _guild_id = guild.id
@@ -639,7 +639,7 @@ class MusicCog(commands.Cog):
     async def cmd_247_status(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
-            await self._ephemeral(interaction, "Use in a server.")
+            await self._ephemeral(interaction, "❌ Use in a server.")
             return
         _guild_id = guild.id
 

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 from discord.ext import commands
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -40,21 +41,21 @@ class RenameCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
 
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
+                "❌ This command can only be used in a server.", ephemeral=True
             )
             return
 
         nick = new_name.strip() if new_name else None
         if nick is not None and len(nick) > MAX_NICK_LENGTH:
             await interaction.response.send_message(
-                f"Nicknames can be at most {MAX_NICK_LENGTH} characters "
+                f"❌ Nicknames can be at most {MAX_NICK_LENGTH} characters "
                 f"(that one is {len(nick)}).",
                 ephemeral=True,
             )
@@ -62,7 +63,7 @@ class RenameCog(commands.Cog):
 
         if target == guild.owner:
             await interaction.response.send_message(
-                "I can't rename the server owner — Discord doesn't allow it.",
+                "❌ I can't rename the server owner — Discord doesn't allow it.",
                 ephemeral=True,
             )
             return
@@ -70,14 +71,14 @@ class RenameCog(commands.Cog):
         bot_member = guild.me
         if bot_member is None or not bot_member.guild_permissions.manage_nicknames:
             await interaction.response.send_message(
-                "I need the **Manage Nicknames** permission to do this.",
+                "❌ I need the **Manage Nicknames** permission to do this.",
                 ephemeral=True,
             )
             return
 
         if target.top_role >= bot_member.top_role:
             await interaction.response.send_message(
-                f"I can't rename {target.mention} — their highest role is above mine.",
+                f"❌ I can't rename {target.mention} — their highest role is above mine.",
                 ephemeral=True,
             )
             return
@@ -90,14 +91,14 @@ class RenameCog(commands.Cog):
             )
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"I'm not allowed to rename {target.mention} (role hierarchy or "
+                f"❌ I'm not allowed to rename {target.mention} (role hierarchy or "
                 "permissions).",
                 ephemeral=True,
             )
             return
         except discord.HTTPException:
             await interaction.response.send_message(
-                "Something went wrong talking to Discord. Please try again.",
+                "❌ Something went wrong talking to Discord. Please try again.",
                 ephemeral=True,
             )
             return

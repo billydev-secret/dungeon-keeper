@@ -3,7 +3,7 @@ import { makeHorizontalBarChart, makeDoughnutChart, ROLE_COLORS } from "../chart
 
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading mod workload data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading mod workload data…</div></div>';
   const charts = [];
 
   async function load() {

@@ -74,7 +74,7 @@ def _render_away_preview(
     text: str, member: discord.Member | discord.User
 ) -> discord.Embed:
     return discord.Embed(
-        title=f"💚 {member.display_name} is away",
+        title=f"💚 {member.display_name} Is Away",
         description=text or AWAY_DEFAULT_TEXT,
         color=WELLNESS_PRIMARY,
     )
@@ -139,7 +139,7 @@ class _SetupWizardView(discord.ui.View):
 
     def _build_step2_embed(self) -> discord.Embed:
         return discord.Embed(
-            title="🛡️ How firm should your boundaries be?",
+            title="🛡️ How Firm Should Your Boundaries Be?",
             description=(
                 "**Step 2 of 2** — All levels preserve your ability to post. Nothing locks you out.\n\n"
                 + "\n".join(
@@ -152,7 +152,7 @@ class _SetupWizardView(discord.ui.View):
 
     def _build_done_embed(self, member: discord.Member) -> discord.Embed:
         return discord.Embed(
-            title="✅ You're all set!",
+            title="✅ You're All Set!",
             description=(
                 "Your **Wellness Guardian** role has been assigned — "
                 "check out the new 🌿 Wellness channels in your channel list.\n\n"
@@ -347,7 +347,7 @@ class _SettingsView(discord.ui.View):
         self.add_item(notif_select)
 
         commit_btn: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-            label="Public commitment: ON" if current_public else "Public commitment: OFF",
+            label="Public Commitment: ON" if current_public else "Public Commitment: OFF",
             style=discord.ButtonStyle.success if current_public else discord.ButtonStyle.secondary,
             row=2,
         )
@@ -480,7 +480,7 @@ class WellnessCog(commands.Cog):
         ctx = self.ctx
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("Server only.", ephemeral=True)
+            await interaction.response.send_message("❌ Server only.", ephemeral=True)
             return
 
         guild_id = guild.id
@@ -519,12 +519,12 @@ class WellnessCog(commands.Cog):
         user = await _require_active_user(ctx, interaction)
         if user is None:
             await interaction.response.send_message(
-                "You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
+                "❌ You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
             )
             return
         if message is not None and len(message) > AWAY_MESSAGE_MAX:
             await interaction.response.send_message(
-                f"Away message must be {AWAY_MESSAGE_MAX} characters or fewer.", ephemeral=True
+                f"❌ Away message must be {AWAY_MESSAGE_MAX} characters or fewer.", ephemeral=True
             )
             return
         guild_id = guild.id
@@ -550,7 +550,7 @@ class WellnessCog(commands.Cog):
         user = await _require_active_user(ctx, interaction)
         if user is None:
             await interaction.response.send_message(
-                "You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
+                "❌ You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
             )
             return
         guild_id = guild.id

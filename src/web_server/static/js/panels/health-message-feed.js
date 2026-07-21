@@ -138,7 +138,7 @@ export function mount(container) {
             <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:var(--ink-dim)">No messages match filters</td></tr>'}</tbody>
           </table>
           </div>
-          ${allMessages.length < total ? '<div style="text-align:center;margin-top:10px;"><button class="sf-filter-btn" id="mf-load-more">Load more</button></div>' : ""}
+          ${allMessages.length < total ? '<div style="text-align:center;margin-top:10px;"><button class="sf-filter-btn" id="mf-load-more">Load More</button></div>' : ""}
         </div>
       </div>
     `;

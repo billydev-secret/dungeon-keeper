@@ -155,7 +155,7 @@ function renderLedgerRepeats(rows) {
     `<li>User <code>${esc(r.author_id)}</code> — ${esc(String(r.distinct_targets))} different people, ${esc(String(r.hits))} entries</li>`
   ).join("");
   return `<div class="rw-ledger-repeats">
-    <h4>Same entry against more than one person</h4>
+    <h4>Same Entry Against More Than One Person</h4>
     <ul style="margin:0; padding-left:18px">${items}</ul>
   </div>`;
 }

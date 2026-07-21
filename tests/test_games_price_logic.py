@@ -387,7 +387,7 @@ def test_collect_all_players_skips_malformed() -> None:
 def test_build_start_embed_shows_host_and_round() -> None:
     embed = build_start_embed("Alice", round_num=1, total_rounds=5)
     assert embed.title is not None
-    assert "NAME YOUR PRICE" in embed.title
+    assert "Name Your Price" in embed.title
     assert embed.description is not None
     assert "Alice" in embed.description
     assert "Round 1/5" in embed.description

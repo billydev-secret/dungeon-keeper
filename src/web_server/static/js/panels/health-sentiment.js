@@ -7,7 +7,7 @@ function fmtTime(ts) {
 }
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading sentiment data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading sentiment data…</div></div>';
   const charts = [];
 
   async function load() {

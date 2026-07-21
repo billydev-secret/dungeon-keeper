@@ -3,7 +3,7 @@ import { makeLineChart, makeBarChart } from "../charts.js";
 
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading DAU/MAU data...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading DAU/MAU data…</div></div>';
   const charts = [];
 
   async function load() {

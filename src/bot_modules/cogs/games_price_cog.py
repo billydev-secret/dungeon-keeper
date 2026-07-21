@@ -1128,7 +1128,7 @@ class PriceCog(commands.Cog):
                 )
                 accent = await self._resolve_accent(guild)
                 embed = discord.Embed(
-                    title=f"{GAME_ICONS['price']} NAME YOUR PRICE — CLOSED",
+                    title=f"{GAME_ICONS['price']} Name Your Price — Closed",
                     description="This game was closed by the host.",
                     color=accent or discord.Color(PHASE_RECAP),
                 )

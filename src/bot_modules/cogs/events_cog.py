@@ -313,7 +313,7 @@ async def _on_tree_error(
         try:
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "That command is out of date on this server. Please try again in a moment.",
+                    "❌ That command is out of date on this server. Please try again in a moment.",
                     ephemeral=True,
                 )
         except discord.HTTPException:
@@ -324,7 +324,7 @@ async def _on_tree_error(
     try:
         if not interaction.response.is_done():
             await interaction.response.send_message(
-                "Command failed. Please try again.", ephemeral=True
+                "❌ Command failed. Please try again.", ephemeral=True
             )
     except discord.HTTPException:
         pass
@@ -1023,7 +1023,7 @@ class EventsCog(commands.Cog):
     ) -> discord.Embed:
         """Daily digest DM: streak update + a fun little quest checklist."""
         embed = discord.Embed(
-            title=f"{settings.currency_emoji} Daily streak",
+            title=f"{settings.currency_emoji} Daily Streak",
             color=accent,
         )
         unit = settings.currency_name if outcome.paid == 1 else settings.currency_plural
@@ -1034,7 +1034,7 @@ class EventsCog(commands.Cog):
         if outcome.milestone > 0:
             unit_m = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
             embed.add_field(
-                name=f"🏆 Day {outcome.streak} milestone!",
+                name=f"🏆 Day {outcome.streak} Milestone!",
                 value=f"Bonus {settings.currency_emoji} **{outcome.milestone:,}** {unit_m}",
                 inline=False,
             )
@@ -1053,10 +1053,10 @@ class EventsCog(commands.Cog):
             value = f"{saved} — your streak lives on at day **{outcome.streak}**."
             if outcome.shield_consumed and settings.price_streak_shield > 0:
                 value += " Grab a fresh shield in `/bank shop`."
-            embed.add_field(name="🛟 Streak saved", value=value, inline=False)
+            embed.add_field(name="🛟 Streak Saved", value=value, inline=False)
         if outcome.reset and prior_streak >= 3:
             embed.add_field(
-                name="🔁 Streak reset",
+                name="🔁 Streak Reset",
                 value=(
                     f"Your **{prior_streak}**-day streak ended. Starting fresh "
                     f"at day **{outcome.streak}**."
@@ -1066,7 +1066,7 @@ class EventsCog(commands.Cog):
         quest_field = _quest_recap_field(quests_out)
         if quest_field:
             embed.add_field(
-                name="🎯 Quests to play with today",
+                name="🎯 Quests to Play With Today",
                 value=quest_field,
                 inline=False,
             )

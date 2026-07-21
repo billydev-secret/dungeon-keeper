@@ -124,7 +124,7 @@ export function mount(container) {
     queueEl.innerHTML = pending.length
       ? pending.map((i) => rowHtml(i, `
           <button class="act-btn ghost" data-action="edit" data-id="${i.id}">Edit</button>
-          <button class="act-btn ghost" data-action="post-now" data-id="${i.id}">Post now</button>
+          <button class="act-btn ghost" data-action="post-now" data-id="${i.id}">Post Now</button>
           <button class="doc-x" data-action="delete" data-id="${i.id}" title="Delete">✕</button>
         `)).join("")
       : renderEmpty("Nothing queued. Create an announcement to get started.");
@@ -213,7 +213,7 @@ export function mount(container) {
             <label>Role buttons (optional — members click to give themselves the role, click again to drop it)</label>
             <div data-buttons-list></div>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="act-btn ghost" data-action="add-button" type="button">Add role button</button>
+              <button class="act-btn ghost" data-action="add-button" type="button">Add Role Button</button>
               <span class="field-hint" data-buttons-hint></span>
             </div>
           </div>

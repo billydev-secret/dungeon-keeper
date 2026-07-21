@@ -975,8 +975,8 @@ def test_build_profile_show_embed_uses_template_default_for_empty_name():
     )
     assert isinstance(embed, discord.Embed)
     fields = {f.name: f.value or "" for f in embed.fields}
-    assert "*(template default)*" in fields["Saved name"]
-    assert fields["User limit"] == "no cap"
+    assert "*(template default)*" in fields["Saved Name"]
+    assert fields["User Limit"] == "no cap"
     assert "Open" in fields["Access"]
     assert fields["Trusted (count)"] == "0"
     assert fields["Blocked (count)"] == "0"
@@ -991,8 +991,8 @@ def test_build_profile_show_embed_renders_saved_name():
         blocked_count=1,
     )
     fields = {f.name: f.value or "" for f in embed.fields}
-    assert fields["Saved name"] == "my room"
-    assert fields["User limit"] == "5"
+    assert fields["Saved Name"] == "my room"
+    assert fields["User Limit"] == "5"
     assert "locked" in fields["Access"].lower()
     assert fields["Trusted (count)"] == "3"
     assert fields["Blocked (count)"] == "1"

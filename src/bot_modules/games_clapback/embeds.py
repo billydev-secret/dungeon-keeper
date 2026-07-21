@@ -51,7 +51,7 @@ def build_lobby_embed(
     if color is None:
         color = FALLBACK_COLOR
     embed = discord.Embed(
-        title=f"{ICON} CLAPBACK",
+        title=f"{ICON} Clapback",
         description=(
             f"Hosted by: **{host_name}** | {config['rounds']} rounds\n\n"
             "Join the battle of wits! Write the funniest answer\n"
@@ -103,7 +103,7 @@ def build_submit_embed(
     if color is None:
         color = FALLBACK_COLOR
     embed = discord.Embed(
-        title=f"{ICON} CLAPBACK — Round {round_num}/{total_rounds}",
+        title=f"{ICON} Clapback — Round {round_num}/{total_rounds}",
         description=f'**"{prompt}"**',
         color=color,
     )
@@ -137,7 +137,7 @@ def build_vote_embed(
     )
     embed = discord.Embed(
         title=(
-            f"{ICON} HEAD TO HEAD — Round {round_num}, "
+            f"{ICON} Head to Head — Round {round_num}, "
             f"Matchup {matchup_index + 1}/{total_matchups}"
         ),
         description=(
@@ -168,7 +168,7 @@ def build_reveal_embed(
 
     Has three branches that match the cog's pre-extraction logic:
 
-    - **clapback** (unanimous, 2+ votes): "C L A P B A C K" title,
+    - **clapback** (unanimous, 2+ votes): "Clapback" title,
       winner + defeated fields, celebratory tail line.
     - **tie** (no winner): TIE title with both answers + 50/50 split.
     - **regular win**: MATCHUP RESULT title with winner / loser
@@ -194,7 +194,7 @@ def build_reveal_embed(
 
         # A clapback is a decisive win → green stays semantic (accent ignored).
         reveal = discord.Embed(
-            title=f"{ICON} C L A P B A C K",
+            title=f"{ICON} Clapback",
             color=WIN_COLOR,
         )
         reveal.add_field(
@@ -226,7 +226,7 @@ def build_reveal_embed(
         b_name = "???" if anonymous else name_resolver(player_b)
         # A tie has no winner → neutral, so it follows the guild accent.
         reveal = discord.Embed(
-            title=f"{ICON} MATCHUP RESULT — TIE!",
+            title=f"{ICON} Matchup Result — Tie!",
             color=color or FALLBACK_COLOR,
         )
         reveal.add_field(
@@ -255,7 +255,7 @@ def build_reveal_embed(
 
         # A decided matchup is a win → green stays semantic (accent ignored).
         reveal = discord.Embed(
-            title=f"{ICON} MATCHUP RESULT",
+            title=f"{ICON} Matchup Result",
             color=WIN_COLOR,
         )
         reveal.add_field(
@@ -311,7 +311,7 @@ def build_scoreboard_embed(
         lines.append(f"{prefix} <@{pid}> — **{pts}** pts")
 
     remaining = total_rounds - round_num
-    title = f"{ICON} ROUND {round_num} COMPLETE"
+    title = f"{ICON} Round {round_num} Complete"
     footer_line = (
         f"{remaining} round(s) remaining!"
         if remaining > 0
@@ -372,12 +372,12 @@ def build_recap_embed(
     rounds_played = len(round_history)
 
     embed = discord.Embed(
-        title=f"{ICON} CLAPBACK — FINAL RESULTS",
+        title=f"{ICON} Clapback — Final Results",
         description=f"{rounds_played} rounds | {len(players)} players",
         color=color or FALLBACK_COLOR,
     )
     embed.add_field(
-        name=f"🏆 WINNER: {winner_name}",
+        name=f"🏆 Winner: {winner_name}",
         value=f"**{sorted_scores[0][1]}** pts" if sorted_scores else "—",
         inline=False,
     )
@@ -434,7 +434,7 @@ def build_recap_embed(
 
     total_ql = sum(clapbacks.values())
     if total_ql:
-        embed.add_field(name="⚡ Total CLAPBACKS", value=str(total_ql), inline=True)
+        embed.add_field(name="⚡ Total Clapbacks", value=str(total_ql), inline=True)
 
     embed.set_footer(text=f"{ICON} Clapback")
     # `anonymous` already consumed for best_record; kept for clarity.

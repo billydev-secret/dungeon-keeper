@@ -88,7 +88,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         else:
             color = COLOR_GREEN
 
-        embed = discord.Embed(title="🔥 PRESSURE COOKER", color=color)
+        embed = discord.Embed(title="🔥 Pressure Cooker", color=color)
 
         p1 = guild.get_member(game.challenger_id)
         p2 = guild.get_member(game.target_id)
@@ -130,7 +130,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         winner_name = winner.display_name if winner else str(game.winner_id)
         loser_name = loser.display_name if loser else str(game.loser_id)
 
-        embed = discord.Embed(title="💥 BOOM.", color=COLOR_RED)
+        embed = discord.Embed(title="💥 Boom.", color=COLOR_RED)
         embed.description = (
             f"**{loser_name}** pushed the gauge to **{game.gauge}/100** and lost."
         )

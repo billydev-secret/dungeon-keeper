@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.economy")
 
-MANAGE_DENIED_MSG = "You don't have permission to review quest claims."
+MANAGE_DENIED_MSG = "❌ You don't have permission to review quest claims."
 _CLAIM_VIEW_TIMEOUT = 180  # seconds; the ephemeral claim select is short-lived.
 
 # Member-facing explainer per quest state / trigger kind — shown in the
@@ -140,11 +140,11 @@ def render_signoff_card_embed(
     resolution (green approved, red denied) and accent while pending.
     """
     if state == "paid":
-        embed = discord.Embed(title="✅ Quest approved", color=discord.Color.green())
+        embed = discord.Embed(title="✅ Quest Approved", color=discord.Color.green())
     elif state in ("denied", "expired"):
-        embed = discord.Embed(title="❌ Quest denied", color=discord.Color.red())
+        embed = discord.Embed(title="❌ Quest Denied", color=discord.Color.red())
     else:
-        embed = discord.Embed(title="📋 Quest sign-off requested", color=accent)
+        embed = discord.Embed(title="📋 Quest Sign-Off Requested", color=accent)
 
     embed.add_field(name="👤 Member", value=claimant_mention, inline=True)
     embed.add_field(name="🎯 Quest", value=quest_title, inline=True)
@@ -153,7 +153,7 @@ def render_signoff_card_embed(
         embed.add_field(name="📋 Criteria", value=criteria, inline=False)
     if deny_count > 0:
         embed.add_field(
-            name="Prior denials/expirations", value=str(deny_count), inline=True
+            name="Prior Denials/Expirations", value=str(deny_count), inline=True
         )
     if state == "paid" and resolver_id:
         embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
@@ -232,7 +232,7 @@ class QuestDenyButton(
         settings = await _load_settings(interaction, interaction.guild)
         member = interaction.user
         if settings is None or not isinstance(member, discord.Member):
-            await _safe_ephemeral(interaction, "This only works in a server.")
+            await _safe_ephemeral(interaction, "❌ This only works in a server.")
             return
         if not can_manage_economy(member, settings):
             await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
@@ -251,7 +251,7 @@ class QuestSignoffView(discord.ui.View):
         self.add_item(QuestDenyButton(claim_id))
 
 
-class QuestDenyModal(discord.ui.Modal, title="Deny quest claim"):
+class QuestDenyModal(discord.ui.Modal, title="Deny Quest Claim"):
     reason: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Reason (shown to the member)",
         style=discord.TextStyle.paragraph,
@@ -356,11 +356,11 @@ async def _handle_resolution(
         bundle = await asyncio.to_thread(_read_claim_bundle, ctx, claim_id)
     except Exception:
         log.exception("econ quests: failed to load claim %s", claim_id)
-        await _safe_ephemeral(interaction, "Couldn't load that claim — try again.")
+        await _safe_ephemeral(interaction, "❌ Couldn't load that claim — try again.")
         return
 
     if bundle is None or bundle["quest"] is None:
-        await _safe_ephemeral(interaction, "That claim no longer exists.")
+        await _safe_ephemeral(interaction, "❌ That claim no longer exists.")
         return
 
     settings: EconSettings = bundle["settings"]
@@ -368,7 +368,7 @@ async def _handle_resolution(
     quest = bundle["quest"]
 
     if guild is None or not isinstance(member, discord.Member):
-        await _safe_ephemeral(interaction, "This only works in a server.")
+        await _safe_ephemeral(interaction, "❌ This only works in a server.")
         return
     if not can_manage_economy(member, settings):
         await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
@@ -382,7 +382,7 @@ async def _handle_resolution(
     if claim["state"] != "pending":
         await _refresh_resolved_card(card, accent, settings, claim, quest, bundle)
         await _safe_ephemeral(
-            interaction, "That claim was already resolved — I refreshed the card."
+            interaction, "❌ That claim was already resolved — I refreshed the card."
         )
         return
 
@@ -416,12 +416,12 @@ async def _handle_resolution(
                 card, accent, settings, fresh["claim"], fresh["quest"], fresh
             )
         await _safe_ephemeral(
-            interaction, "That claim was already resolved — I refreshed the card."
+            interaction, "❌ That claim was already resolved — I refreshed the card."
         )
         return
     except Exception:
         log.exception("econ quests: failed to resolve claim %s", claim_id)
-        await _safe_ephemeral(interaction, "Couldn't resolve that claim — try again.")
+        await _safe_ephemeral(interaction, "❌ Couldn't resolve that claim — try again.")
         return
 
     new_state = "paid" if approve else "denied"
@@ -500,7 +500,7 @@ async def _dm_resolution(
     title = str(quest["title"])
     if approve:
         embed = discord.Embed(
-            title="✅ Quest approved",
+            title="✅ Quest Approved",
             description=(
                 f"Your claim for **{title}** was approved — "
                 f"{_reward_text(settings, paid)} added to your wallet."
@@ -509,7 +509,7 @@ async def _dm_resolution(
         )
     else:
         embed = discord.Embed(
-            title="❌ Quest claim denied",
+            title="❌ Quest Claim Denied",
             description=(
                 f"Your claim for **{title}** was denied. You can try again."
             ),
@@ -637,7 +637,7 @@ class QuestDetailSelect(discord.ui.Select):
         q = self._quests.get(self.values[0])
         if q is None:  # stale view after a reroll — just re-run /bank quests
             await interaction.response.send_message(
-                "That quest is no longer on your board — re-run "
+                "❌ That quest is no longer on your board — re-run "
                 "`/bank quests`.",
                 ephemeral=True,
             )
@@ -711,13 +711,13 @@ class QuestClaimSelect(discord.ui.Select):
         bot = cast("Bot", interaction.client)
         member = interaction.user
         if not isinstance(member, discord.Member):
-            await interaction.followup.send("This only works in a server.", ephemeral=True)
+            await interaction.followup.send("❌ This only works in a server.", ephemeral=True)
             return
 
         quest_id = int(self.values[0])
         meta = self._meta.get(quest_id)
         if meta is None:
-            await interaction.followup.send("That quest is no longer available.", ephemeral=True)
+            await interaction.followup.send("❌ That quest is no longer available.", ephemeral=True)
             return
         qtype = str(meta["qtype"])
         booster = member.premium_since is not None
@@ -742,7 +742,7 @@ class QuestClaimSelect(discord.ui.Select):
         except Exception:
             log.exception("econ quests: claim failed for quest %s", quest_id)
             await interaction.followup.send(
-                "Something went wrong claiming that quest — try again.", ephemeral=True
+                "❌ Something went wrong claiming that quest — try again.", ephemeral=True
             )
             return
 
@@ -751,7 +751,7 @@ class QuestClaimSelect(discord.ui.Select):
             paid = int(getattr(outcome, "paid", 0))
             accent = await resolve_accent_color(self.ctx.db_path, self.guild)
             embed = discord.Embed(
-                title="🎉 Quest complete!",
+                title="🎉 Quest Complete!",
                 description=(
                     f"**{meta['title']}** — {_reward_text(settings, paid)} "
                     "added to your wallet."
@@ -904,7 +904,7 @@ class ShowMyQuestsButton(discord.ui.Button):
 
     def __init__(self) -> None:
         super().__init__(
-            label="Show my quests",
+            label="Show My Quests",
             emoji="📋",
             style=discord.ButtonStyle.secondary,
             custom_id=QUEST_BOARD_CUSTOM_ID,
@@ -915,7 +915,7 @@ class ShowMyQuestsButton(discord.ui.Button):
         cog = bot.get_cog("EconomyCog")
         if cog is None:  # cog unloaded mid-restart — never a dead button
             await interaction.response.send_message(
-                "Quests are unavailable right now — try again in a moment.",
+                "❌ Quests are unavailable right now — try again in a moment.",
                 ephemeral=True,
             )
             return

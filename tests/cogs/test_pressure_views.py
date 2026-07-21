@@ -166,7 +166,7 @@ def test_result_view_disable_disables_button():
 def test_result_view_button_label():
     view = _make_result_view()
     btn = next(b for b in view.children if isinstance(b, discord.ui.Button))
-    assert btn.label == "Name the loser"
+    assert btn.label == "Name the Loser"
 
 
 # ── NicknameModal ─────────────────────────────────────────────────────────────

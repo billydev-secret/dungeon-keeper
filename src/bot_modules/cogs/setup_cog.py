@@ -30,13 +30,13 @@ class SetupCog(commands.Cog):
         ctx = self.ctx
 
         if not ctx.is_admin(interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
+            await interaction.response.send_message("❌ Administrator only.", ephemeral=True)
             return
 
         guild = interaction.guild
         if guild is None:  # guild_only() guarantees this, but keep the type-checker happy
             await interaction.response.send_message(
-                "Run this in a server.", ephemeral=True
+                "❌ Run this in a server.", ephemeral=True
             )
             return
 

@@ -307,7 +307,7 @@ export function mount(container) {
               <div class="doc-add-row">
                 ${menu.published ? `
                   <button class="act-btn ghost" data-toggle-enabled>${menu.enabled ? "Unpublish (turn off)" : "Turn back on"}</button>
-                  <button class="act-btn ghost" data-update-live>Update live message</button>` : ""}
+                  <button class="act-btn ghost" data-update-live>Update Live Message</button>` : ""}
               </div>
             </div>
           </div>

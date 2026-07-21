@@ -80,7 +80,7 @@ function boardSection(cfg) {
     <form data-form-board class="form">
       <div class="field-row">${fields}</div>
       <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-        <button type="submit" class="btn btn-primary">Save board size</button>
+        <button type="submit" class="btn btn-primary">Save Board Size</button>
         <span data-status-board></span>
       </div>
     </form>`;
@@ -95,7 +95,7 @@ function render(container, channels, cfg) {
       </header>
 
       <section class="card" data-sec="library">
-        <div class="section-label">Quest library</div>
+        <div class="section-label">Quest Library</div>
         <div class="field-hint" style="margin-bottom:8px;">
           Quests are the tunable rewards. Members also earn automatically from
           faucets (daily logins &amp; streaks, XP conversion, game wins, QOTD…) —
@@ -108,12 +108,12 @@ function render(container, channels, cfg) {
       </section>
 
       <section class="card" data-sec="board">
-        <div class="section-label">Board size</div>
+        <div class="section-label">Board Size</div>
         ${boardSection(cfg)}
       </section>
 
       <section class="card" data-sec="author">
-        <div class="section-label" data-author-label>New quest</div>
+        <div class="section-label" data-author-label>New Quest</div>
         <form data-form-quest class="form">
           <div class="field-row">
             <div class="field"><label>Title</label>
@@ -188,8 +188,8 @@ function render(container, channels, cfg) {
             <span class="field-hint" style="margin:0;">(completion files a claim you approve on Operations instead of paying instantly)</span>
           </label>
           <div style="display:flex; gap:8px; align-items:center;">
-            <button type="submit" class="btn btn-primary" data-submit-quest>Create quest</button>
-            <button type="button" class="btn" data-cancel-edit style="display:none;">Cancel edit</button>
+            <button type="submit" class="btn btn-primary" data-submit-quest>Create Quest</button>
+            <button type="button" class="btn" data-cancel-edit style="display:none;">Cancel Edit</button>
             <span data-status-quest></span>
           </div>
         </form>
@@ -202,7 +202,7 @@ function render(container, channels, cfg) {
             <div class="field"><label>How many</label>
               <input type="number" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
             <div class="field" style="align-self:flex-end;">
-              <button type="button" class="btn" data-ai-generate>Generate ideas</button></div>
+              <button type="button" class="btn" data-ai-generate>Generate Ideas</button></div>
           </div>
           <div class="field-hint" style="opacity:.75;">Ideas use the quest type selected above. Click one to load it into the form — nothing is saved until you create it.</div>
           <div data-ai-results></div>
@@ -470,8 +470,8 @@ function wireAuthoring(container, channels) {
     editingId = null;
     form.reset();
     triggerPicker.setValue("0");
-    authorLabel.textContent = "New quest";
-    submitBtn.textContent = "Create quest";
+    authorLabel.textContent = "New Quest";
+    submitBtn.textContent = "Create Quest";
     cancelBtn.style.display = "none";
     updateHint();
     updateCommunity();
@@ -499,7 +499,7 @@ function wireAuthoring(container, channels) {
     targetInput.value = q.target_count ?? 1;
     setCompletion(q.trigger_kind ? "game" : (q.trigger_words ? "phrase" : "manual"));
     authorLabel.textContent = `Editing: ${q.title}`;
-    submitBtn.textContent = "Save changes";
+    submitBtn.textContent = "Save Changes";
     cancelBtn.style.display = "";
     updateHint();
     updateCommunity();

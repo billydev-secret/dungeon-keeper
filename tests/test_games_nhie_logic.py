@@ -294,8 +294,8 @@ def test_build_round_embed_active_title_and_color():
         round_num=1,
     )
     assert embed.title is not None
-    assert "NEVER HAVE I EVER" in embed.title
-    assert "ROUND OVER" not in embed.title
+    assert "Never Have I Ever" in embed.title
+    assert "Round Over" not in embed.title
 
 
 def test_build_round_embed_closed_title_changes():
@@ -303,7 +303,7 @@ def test_build_round_embed_closed_title_changes():
         statement="x", guilty=[], innocent=[], round_num=1, closed=True
     )
     assert embed.title is not None
-    assert "ROUND OVER" in embed.title
+    assert "Round Over" in embed.title
 
 
 def test_build_round_embed_renders_round_and_statement_fields():
@@ -453,7 +453,7 @@ def test_build_closed_embed_title_says_closed():
         statement="x", guilty=[], innocent=[], round_num=1
     )
     assert embed.title is not None
-    assert "CLOSED" in embed.title
+    assert "Closed" in embed.title
 
 
 def test_build_closed_embed_uses_recap_color():
@@ -507,7 +507,7 @@ def test_build_recap_embed_renders_dash_when_no_scores():
 def test_build_recap_embed_title_says_game_over():
     embed = build_recap_embed(winner_id=1, guilt_scores={})
     assert embed.title is not None
-    assert "GAME OVER" in embed.title
+    assert "Game Over" in embed.title
 
 
 # ── sanity / integration ─────────────────────────────────────────────

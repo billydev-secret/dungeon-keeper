@@ -941,7 +941,7 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
     embed = _build_shop_embed(_settings(db), set(), None, panel=True)
 
     tiers = {f.name: f.value for f in embed.fields}
-    assert list(tiers) == ["Essentials", "Signature", "One-shot", "For a friend"]
+    assert list(tiers) == ["Essentials", "Signature", "One-shot", "For a Friend"]
 
     # Every row's cells share one width across the whole embed, so the columns
     # line up across tier headings rather than restarting at each one.
@@ -1214,7 +1214,7 @@ async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
         await cog.bank_post_shop.callback(cog, interaction, None)
 
     kwargs = channel.send.await_args.kwargs
-    assert "Perk shop" in kwargs["embed"].title
+    assert "Perk Shop" in kwargs["embed"].title
     assert kwargs["view"].timeout is None  # persistent, never expires
     # children are DynamicItem wrappers, not raw Buttons
     assert {str(b.custom_id) for b in kwargs["view"].children} == {
@@ -1759,8 +1759,8 @@ async def test_wallet_shows_active_rentals(ctx, db):
     await _wallet(cog, interaction)
 
     embed = interaction.response.send_message.await_args.kwargs["embed"]
-    rentals_field = next(f for f in embed.fields if f.name == "Active rentals")
-    assert "Custom role color" in rentals_field.value
+    rentals_field = next(f for f in embed.fields if f.name == "Active Rentals")
+    assert "Custom Role Color" in rentals_field.value
     assert "gift received" in rentals_field.value
 
 
@@ -2380,7 +2380,7 @@ async def test_pay_memo_reaches_ledger_embed_and_dm(ctx, db):
 
     # Sender's confirmation embed carries the normalised memo.
     embed = interaction.response.send_message.await_args.kwargs["embed"]
-    assert (embed.title or "").endswith("Payment sent")
+    assert (embed.title or "").endswith("Payment Sent")
     assert "rent money" in embed.description
 
     # Recipient's DM carries it too.
@@ -2408,7 +2408,7 @@ async def test_pay_without_memo_is_unchanged(ctx, db):
         await _pay(cog, interaction, _member(member_id=600), 20)
 
     embed = interaction.response.send_message.await_args.kwargs["embed"]
-    assert (embed.title or "").endswith("Payment sent")
+    assert (embed.title or "").endswith("Payment Sent")
     # A memo would appear as its own trailing paragraph; the base line has none.
     assert "\n\n" not in embed.description
     assert '"' not in notify.await_args.kwargs["content"]
@@ -2444,7 +2444,7 @@ async def test_pay_memo_survives_the_large_amount_confirm_gate(ctx, db):
 
     # Over the threshold we get a confirm view, not a transfer.
     kwargs = interaction.response.send_message.await_args.kwargs
-    assert (kwargs["embed"].title or "").endswith("Confirm payment")
+    assert (kwargs["embed"].title or "").endswith("Confirm Payment")
     assert "big one" in kwargs["embed"].description
     view = kwargs["view"]
     assert view.memo == "big one"
@@ -2588,7 +2588,7 @@ async def test_rent_voice_style_skips_role_projection(ctx, db):
 
     apply_mock.assert_not_awaited()  # no personal role involved
     msg = interaction.response.send_message.await_args.args[0]
-    assert "Voice style" in msg
+    assert "Voice Style" in msg
     rentals = _live_rentals(db)
     assert len(rentals) == 1 and rentals[0]["perk"] == "voice_style"
     assert rentals[0]["price"] == 30
@@ -2669,11 +2669,11 @@ async def test_bank_emoji_disabled_at_price_zero(ctx, db):
 def test_shop_embed_raffle_row_only_when_enabled(db):
     _enable(db)
     embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    assert not any(f.name == "Weekly raffle" for f in embed.fields)
+    assert not any(f.name == "Weekly Raffle" for f in embed.fields)
 
     _enable(db, raffle_enabled=True)
     embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    row = next(f for f in embed.fields if f.name == "Weekly raffle")
+    row = next(f for f in embed.fields if f.name == "Weekly Raffle")
     assert "10" in row.value  # ticket price
 
 

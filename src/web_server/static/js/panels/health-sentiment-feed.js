@@ -15,7 +15,7 @@ const EMOTION_COLORS = {
 };
 
 export function mount(container) {
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading sentiment feed...</div></div>';
+  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading sentiment feed…</div></div>';
   let filter = "all"; // all | positive | negative
 
   async function load() {

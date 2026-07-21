@@ -42,12 +42,12 @@ function render(container, members) {
       </header>
 
       <section class="card" data-sec="community" style="display:none;">
-        <div class="section-label">Community goals</div>
+        <div class="section-label">Community Goals</div>
         <div data-community></div>
       </section>
 
       <section class="card" data-sec="grant">
-        <div class="section-label">Grant currency</div>
+        <div class="section-label">Grant Currency</div>
         <form data-form-grant class="form">
           <div class="field-row">
             <div class="field"><label>Member</label>
@@ -65,12 +65,12 @@ function render(container, members) {
       </section>
 
       <section class="card" data-sec="rentals">
-        <div class="section-label">Perk rentals</div>
+        <div class="section-label">Perk Rentals</div>
         <div data-rentals><div class="empty">Loading…</div></div>
       </section>
 
       <section class="card" data-sec="ledger">
-        <div class="section-label">Ledger audit</div>
+        <div class="section-label">Ledger Audit</div>
         <div class="field-row">
           <div class="field"><label>Member filter</label>
             <span data-picker="ledger-member"></span></div>
@@ -157,7 +157,7 @@ async function refreshRentals(container, members) {
       const note = rental && rental.state === "grace"
         ? "This grace-period rental cancels immediately."
         : "This active rental runs to the end of the paid week (no refund), then finalizes.";
-      if (!(await confirmDialog(`Cancel this rental? ${note}`, { danger: true, confirmLabel: "Cancel rental" }))) return;
+      if (!(await confirmDialog(`Cancel this rental? ${note}`, { danger: true, confirmLabel: "Cancel Rental" }))) return;
       try {
         await apiPost(`/api/economy/rentals/${id}/cancel`, {});
         showStatus(status, true, "Cancelled");
@@ -201,7 +201,7 @@ async function refreshCommunity(container, members) {
         <div class="field"><label>Set progress</label>
           <input type="number" min="0" step="1" data-cprogress="${q.id}" value="${q.community_current || 0}" style="max-width:120px;" /></div>
         <div class="field"><button class="btn" data-cprogress-save="${q.id}">Save</button></div>
-        <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle payout</button></div>
+        <div class="field"><button class="btn btn-primary" data-csettle="${q.id}">Settle Payout</button></div>
         <span class="save-status" data-cstatus="${q.id}"></span>
       </div>`;
     return `

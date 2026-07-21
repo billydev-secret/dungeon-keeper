@@ -13,6 +13,7 @@ from bot_modules.commands.role_grant_commands import (
     _execute_grant,
     _execute_grant_audit_post,
 )
+from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -57,13 +58,13 @@ class RoleGrantCog(commands.Cog):
         ctx = self.ctx
         if not ctx.can_use_grant_role(interaction, role):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
         cfg = ctx.guild_config(interaction.guild_id or 0).grant_roles.get(role)
         if cfg is None:
             await interaction.response.send_message(
-                "This grant role is not configured.", ephemeral=True
+                "❌ This grant role is not configured.", ephemeral=True
             )
             return
         await _execute_grant(
@@ -96,7 +97,7 @@ class RoleGrantCog(commands.Cog):
         ctx = self.ctx
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
+                NO_PERMISSION, ephemeral=True
             )
             return
         await _execute_grant_audit_post(interaction, role, min_level, channel, ctx)

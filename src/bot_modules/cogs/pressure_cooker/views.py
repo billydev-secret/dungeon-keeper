@@ -30,7 +30,7 @@ class GameView(discord.ui.View):
         self._on_pump = on_pump
 
         pump_btn = discord.ui.Button(
-            label="PUMP",
+            label="Pump",
             style=discord.ButtonStyle.danger,
             emoji="💨",
             custom_id=f"pump:{game_id}",

@@ -311,7 +311,7 @@ def test_compute_recap_winners_accepts_played_ids_as_list():
 def test_build_lobby_embed_default_no_prompt():
     embed = build_lobby_embed()
     assert embed.title is not None
-    assert "TWO TRUTHS AND A LIE" in embed.title
+    assert "Two Truths and a Lie" in embed.title
     assert embed.description is not None
     assert "Prompt" not in embed.description
     by_name = {f.name: f.value for f in embed.fields}
@@ -340,13 +340,13 @@ def test_build_guess_embed_title_uses_subject_name():
     embed = build_guess_embed("Alice", ["s1", "s2", "s3"], {})
     assert embed.title is not None
     assert "Alice" in embed.title
-    assert "GUESS THE LIE" in embed.title
+    assert "Guess the Lie" in embed.title
 
 
 def test_build_guess_embed_closed_flag_changes_title():
     embed = build_guess_embed("Alice", ["s1", "s2", "s3"], {}, closed=True)
     assert embed.title is not None
-    assert "REVEAL" in embed.title
+    assert "Reveal" in embed.title
 
 
 def test_build_guess_embed_renders_three_statement_fields():

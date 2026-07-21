@@ -33,7 +33,7 @@ function buildDom() {
     </div>
     <div class="transcript-meta-bar" data-meta></div>
     <div class="transcript-body" data-body>
-      <div class="transcript-loading">Loading transcript...</div>
+      <div class="transcript-loading">Loading transcript…</div>
     </div>
   `;
   modal.querySelector("[data-close]").addEventListener("click", close);
@@ -130,7 +130,7 @@ export async function showTranscript(recordType, recordId) {
   const label = TYPE_LABELS[recordType] || recordType;
   titleEl.textContent = `${label} #${recordId} — Transcript`;
   metaEl.innerHTML = "";
-  bodyEl.innerHTML = `<div class="transcript-loading">Loading transcript...</div>`;
+  bodyEl.innerHTML = `<div class="transcript-loading">Loading transcript…</div>`;
 
   open();
 
