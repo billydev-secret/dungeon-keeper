@@ -45,6 +45,7 @@ from bot_modules.economy.perk_actions import (
 )
 from bot_modules.economy.quest_views import (
     QuestApproveButton,
+    QuestBoardView,
     QuestClaimView,
     QuestDenyButton,
     can_manage_economy,
@@ -2593,6 +2594,14 @@ class EconomyCog(commands.Cog):
 
     @bank.command(name="quests", description="View and claim the server's active quests.")
     async def bank_quests(self, interaction: discord.Interaction) -> None:
+        await self.send_quests_panel(interaction)
+
+    async def send_quests_panel(self, interaction: discord.Interaction) -> None:
+        """The member's private quest list + claim UI.
+
+        Shared by the ``/bank quests`` command and the leaderboard panel's
+        "Show my quests" button, so both open the exact same ephemeral view.
+        """
         assert interaction.guild is not None
         guild = interaction.guild
 
@@ -3525,7 +3534,7 @@ class EconomyCog(commands.Cog):
         ):
             try:
                 old = await target.fetch_message(settings.leaderboard_message_id)
-                await old.edit(embed=embed)
+                await old.edit(embed=embed, view=QuestBoardView())
             except discord.HTTPException:
                 pass  # gone or unreachable — fall through to a fresh post
             else:
@@ -3548,7 +3557,7 @@ class EconomyCog(commands.Cog):
                     pass
 
         try:
-            message = await target.send(embed=embed)
+            message = await target.send(embed=embed, view=QuestBoardView())
         except discord.Forbidden:
             await interaction.response.send_message(
                 f"I don't have permission to post in {target.mention}.",
@@ -3683,9 +3692,11 @@ class EconomyCog(commands.Cog):
             SponsorApproveButton,
             SponsorDenyButton,
         )
-        # The guide panel's 🔔 toggle carries no per-message state, so it is a
-        # plain static-custom_id view rather than a dynamic item.
+        # The guide panel's 🔔 toggle and the quest board's "Show my quests"
+        # button carry no per-message state, so they are plain static-custom_id
+        # views rather than dynamic items.
         self.bot.add_view(GuideView())
+        self.bot.add_view(QuestBoardView())
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:

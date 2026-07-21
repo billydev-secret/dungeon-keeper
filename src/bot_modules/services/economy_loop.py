@@ -82,6 +82,7 @@ from bot_modules.economy.leaderboard import (
     build_leaderboard_embed,
     collect_leaderboard_data,
 )
+from bot_modules.economy.quest_views import QuestBoardView
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -975,7 +976,7 @@ async def run_guild_leaderboard(
     )
     try:
         message = await channel.fetch_message(settings.leaderboard_message_id)
-        await message.edit(embed=embed)
+        await message.edit(embed=embed, view=QuestBoardView())
     except discord.NotFound:
 
         def _clear() -> None:

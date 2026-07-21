@@ -822,7 +822,12 @@ the member owns and gift rentals where they are the beneficiary.
   aggregated per quest (title × count + latest relative timestamp, max 5
   lines, plus a full-board-bonus count; titles and counts only, never member
   names, per the 2026-07-18 ticker decision); and a blurb pointing members
-  at `/quests` + `/bank wallet` for their own numbers. Sections stack
+  at `/quests` + `/bank wallet` for their own numbers. The panel carries a
+  persistent **Show my quests** button (`econ:show_my_quests`, a static-id
+  `QuestBoardView` re-registered at cog load and re-attached on every
+  repaint) that opens the same ephemeral panel as `/bank quests` — the
+  members' door from the anonymous board into their own personal draw.
+  Sections stack
   full-width, each heading given breathing room by a zero-width blank
   line ending the previous section's value (and the description); each body is a small table — fixed-width inline-code cells
   align the columns (pulse label | value, earner name | amount, quest

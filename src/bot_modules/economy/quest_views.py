@@ -880,3 +880,45 @@ class QuestClaimView(discord.ui.View):
                     ctx, settings, guild, rerollable, local_day, reroll_cost
                 )
             )
+
+
+# ── quest-board "Show my quests" button ──────────────────────────────────────
+
+QUEST_BOARD_CUSTOM_ID = "econ:show_my_quests"
+
+
+class ShowMyQuestsButton(discord.ui.Button):
+    """Persistent button on the public leaderboard/quest-board panel.
+
+    The board is anonymous by design (no member names, no per-member draw), so
+    this is the members' door from it into their own private quest list — the
+    same ephemeral panel ``/bank quests`` opens. One button serves everyone; the
+    per-member state lives entirely in the ephemeral reply, so it carries no id.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="Show my quests",
+            emoji="📋",
+            style=discord.ButtonStyle.secondary,
+            custom_id=QUEST_BOARD_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = cast("Bot", interaction.client)
+        cog = bot.get_cog("EconomyCog")
+        if cog is None:  # cog unloaded mid-restart — never a dead button
+            await interaction.response.send_message(
+                "Quests are unavailable right now — try again in a moment.",
+                ephemeral=True,
+            )
+            return
+        await cog.send_quests_panel(interaction)  # type: ignore[attr-defined]
+
+
+class QuestBoardView(discord.ui.View):
+    """The persistent view attached to the leaderboard/quest-board panel."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(ShowMyQuestsButton())

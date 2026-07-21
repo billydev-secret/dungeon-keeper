@@ -13,12 +13,15 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.quest_views import (
+    QUEST_BOARD_CUSTOM_ID,
     QuestApproveButton,
+    QuestBoardView,
     QuestClaimView,
     QuestDenyButton,
     QuestDenyModal,
     QuestDetailSelect,
     QuestSignoffView,
+    ShowMyQuestsButton,
     can_manage_economy,
 )
 from bot_modules.economy.quests import quest_period
@@ -173,6 +176,47 @@ async def test_custom_id_roundtrip():
         "econ_claim:approve:99",
         "econ_claim:deny:99",
     }
+
+
+# ── quest board "Show my quests" button ───────────────────────────────────────
+
+
+def test_quest_board_view_is_persistent_and_stable():
+    """A fixed custom_id + no timeout is what lets clicks route after a restart."""
+    view = QuestBoardView()
+    assert view.timeout is None
+    assert [getattr(c, "custom_id", None) for c in view.children] == [
+        QUEST_BOARD_CUSTOM_ID
+    ]
+
+
+@pytest.mark.asyncio
+async def test_show_my_quests_routes_to_the_cog_panel():
+    """The button opens the same ephemeral panel /bank quests does."""
+    cog = MagicMock()
+    cog.send_quests_panel = AsyncMock()
+    bot = MagicMock()
+    bot.get_cog = MagicMock(return_value=cog)
+    interaction = _button_interaction(bot, user=_member())
+
+    await ShowMyQuestsButton().callback(interaction)
+
+    bot.get_cog.assert_called_once_with("EconomyCog")
+    cog.send_quests_panel.assert_awaited_once_with(interaction)
+    interaction.response.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_show_my_quests_is_never_a_dead_button():
+    """With the cog unloaded mid-restart the click still answers, not hangs."""
+    bot = MagicMock()
+    bot.get_cog = MagicMock(return_value=None)
+    interaction = _button_interaction(bot, user=_member())
+
+    await ShowMyQuestsButton().callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
 
 
 # ── /bank quests details select ───────────────────────────────────────────────
