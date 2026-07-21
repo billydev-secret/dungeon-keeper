@@ -1,7 +1,7 @@
-"""AI Advisor — a grounded Claude assistant for "how do I use Dungeon Keeper".
+"""Billy-bot — a grounded Claude assistant for "how do I use Dungeon Keeper".
 
 This is the shared brain behind two thin surfaces:
-  - the dashboard Help panel's "Ask the Guide" box (``web_server/routes/advisor.py``)
+  - the dashboard Help panel's "Ask Billy-bot" box (``web_server/routes/advisor.py``)
   - the Discord ``/ask`` command (``bot_modules/cogs/advisor_cog.py``)
 
 Answers are grounded **only** in the user manual (``web_server/static/manual.html`` —
@@ -45,7 +45,7 @@ _MANUAL_PATH = (
 )
 
 _ERROR_MSG = (
-    "I couldn't reach the guide service just now — please try again in a moment, "
+    "I couldn't reach Billy-bot just now — please try again in a moment, "
     "or open the **Help** panel on the dashboard."
 )
 _EMPTY_MSG = "Ask me anything about using Dungeon Keeper — a command, a game, a setting."
@@ -54,9 +54,8 @@ _UNSURE_HINT = (
 )
 
 SYSTEM_INSTRUCTIONS = (
-    "You are the Dungeon Keeper Guide, a friendly assistant that helps members, "
-    "moderators, and admins use the Dungeon Keeper Discord bot and its web "
-    "dashboard.\n\n"
+    "You are Billy-bot, a friendly assistant that helps members, moderators, and "
+    "admins use the Dungeon Keeper Discord bot and its web dashboard.\n\n"
     "Rules:\n"
     "- Answer ONLY questions about using Dungeon Keeper. For anything else, "
     "politely decline and steer back to the bot.\n"

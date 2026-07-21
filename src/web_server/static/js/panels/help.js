@@ -15,7 +15,7 @@ function renderAnswerHtml(text) {
     .replace(/\n/g, "<br>");
 }
 
-// The "Ask the Guide" box: a grounded chat over the manual (POST /api/help/advisor).
+// The "Ask Billy-bot" box: a grounded chat over the manual (POST /api/help/advisor).
 function buildAskBox() {
   const box = document.createElement("div");
   box.className = "dk-help-ask";
@@ -27,8 +27,8 @@ function buildAskBox() {
 
   const input = document.createElement("input");
   input.type = "text";
-  input.placeholder = "Ask the guide — e.g. “How do I start a game?”";
-  input.setAttribute("aria-label", "Ask the guide a question");
+  input.placeholder = "Ask Billy-bot — e.g. “How do I start a game?”";
+  input.setAttribute("aria-label", "Ask Billy-bot a question");
   input.maxLength = 500;
   input.style.cssText = "flex:1;min-width:0;";
 
@@ -60,7 +60,7 @@ function buildAskBox() {
       answer.textContent =
         err && /429/.test(String(err.message))
           ? "You're asking a lot quickly — give it a few seconds and try again."
-          : "Couldn't reach the guide just now — try again in a moment.";
+          : "Couldn't reach Billy-bot just now — try again in a moment.";
     } finally {
       btn.disabled = false;
       input.disabled = false;
