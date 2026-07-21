@@ -954,13 +954,17 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
     # Four self-perk rows — the "For a friend" tier is prose since gifting
     # generalized to every perk (no single gift price to tabulate).
     assert len(rows) == 4
-    prefixes = {line.split("` `")[0] for line in rows}
-    assert len({len(p) for p in prefixes}) == 1
+    # One `label  blurb` cell per row (quest-board shape), all the same
+    # width so columns align across tier headings — and narrow enough that
+    # the price doesn't wrap onto its own line on a phone-width embed.
+    cells = {line.split("`")[1] for line in rows}
+    assert len({len(c) for c in cells}) == 1
+    assert all(len(c) <= 27 for c in cells)
 
     # Ascending price inside each tier, and the blurb is present.
     assert tiers["Essentials"].index("**35**") < tiers["Essentials"].index("**50**")
     assert tiers["Signature"].index("**120**") < tiers["Signature"].index("**400**")
-    assert "your nickname + role name" in _shop_row(embed, "Name")
+    assert "nickname + role" in _shop_row(embed, "Name")
 
 
 def test_shop_table_reorders_when_prices_are_reconfigured(db):

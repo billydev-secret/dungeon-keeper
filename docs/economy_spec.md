@@ -873,7 +873,8 @@ the member owns and gift rentals where they are the beneficiary.
   names are global; all *strings* inside are currency-branded.
   - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — one ephemeral
     panel that both browses and configures. The listing is an aligned code-cell
-    table in the leaderboard's house style (`label` | `blurb` | price), grouped
+    table in the quest-board's house style (one `label  blurb` cell, then the
+    price — blurbs kept short enough that a row fits a phone-width line), grouped
     into price tiers — **Essentials** (name, color), **Signature** (gradient,
     icon), **For a friend** (a prose row — gifting has no single price to
     tabulate) — sorted by the guild's configured price

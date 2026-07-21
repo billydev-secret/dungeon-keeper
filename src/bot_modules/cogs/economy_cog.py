@@ -165,12 +165,15 @@ _PERK_SHORT = {
     "role_icon": "Icon",
     "voice_style": "Voice",
 }
+# Blurbs stay under ~15 chars: the shop row is one code cell of
+# label + blurb, and anything wider pushes the price onto its own
+# line on a phone-width embed.
 _PERK_BLURBS = {
-    "role_color": "one solid color, your pick",
-    "role_name": "your nickname + role name",
-    "role_gradient": "two-color fade on your name",
-    "role_icon": "a badge beside your name",
-    "voice_style": "name + size your voice room",
+    "role_color": "any solid color",
+    "role_name": "nickname + role",
+    "role_gradient": "two-color fade",
+    "role_icon": "badge by name",
+    "voice_style": "your voice room",
 }
 _PERK_EMOJI = {
     "role_color": "🎨",
@@ -1102,9 +1105,10 @@ def _build_shop_embed(
     """The shop listing, shared by /bank shop and the channel panel.
 
     Rendered as the aligned code-cell table the leaderboard, guide and quest
-    panels use: ``label`` | ``blurb`` | price, grouped into price tiers. Five
-    ``inline=False`` fields carrying four words each read as an airy list;
-    a table reads as a storefront.
+    panels use: one ``label  blurb`` cell then the price, grouped into price
+    tiers (the quest-board row shape — a single cell keeps the whole row
+    inside a phone-width line). Five ``inline=False`` fields carrying four
+    words each read as an airy list; a table reads as a storefront.
 
     ``owned`` marks the viewer's rented rows, ``balance`` puts their wallet
     in the description, and ``shields_held`` marks the shield row — all only
@@ -1158,8 +1162,8 @@ def _build_shop_embed(
         elif perk == "role_icon" and icon_catalog is not None:
             note = f" · {icon_catalog[2]} to pick from"
         return (
-            f"`{_pad(_PERK_SHORT[perk], label_width)}` "
-            f"`{_pad(_PERK_BLURBS[perk], blurb_width)}` "
+            f"`{_pad(_PERK_SHORT[perk], label_width)}  "
+            f"{_pad(_PERK_BLURBS[perk], blurb_width)}` "
             f"{settings.currency_emoji} **{price_str}**{note}"
         )
 
