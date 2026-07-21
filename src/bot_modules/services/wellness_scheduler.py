@@ -29,6 +29,7 @@ import discord
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.wellness_ai import generate_weekly_encouragement
 from bot_modules.core.utils import format_guild_for_log, format_user_for_log
+from bot_modules.services.embeds import WELLNESS_PRIMARY
 from bot_modules.services.wellness_service import (
     MILESTONES,
     SETTINGS_RETENTION_SECONDS,
@@ -122,7 +123,7 @@ async def _send_blackout_entry_dm(
             f"Slow mode is active until **{_format_minute(blackout.end_minute)}**.\n\n"
             "Sleep well! 💚"
         ),
-        color=discord.Color.from_str("#7BC97B"),
+        color=discord.Color(WELLNESS_PRIMARY),
     )
     await _try_dm(member, embed=embed)
 
@@ -212,7 +213,7 @@ async def wellness_tick_loop(bot: discord.Client, db_path: Path) -> None:
 # Active-in-Commitment loop (spec §5)
 # ---------------------------------------------------------------------------
 
-_ACTIVE_EMBED_COLOR = discord.Color.from_str("#7BC97B")
+_ACTIVE_EMBED_COLOR = discord.Color(WELLNESS_PRIMARY)
 _ACTIVE_EMBED_TITLE = "💚 Active in Commitment"
 _ACTIVE_MAX_ENTRIES = 25  # Discord embed description stays comfortable
 
@@ -412,7 +413,7 @@ async def wellness_active_list_loop(bot: discord.Client, db_path: Path) -> None:
 # Weekly AI report loop (spec §6)
 # ---------------------------------------------------------------------------
 
-_WEEKLY_REPORT_COLOR = discord.Color.from_str("#7BC97B")
+_WEEKLY_REPORT_COLOR = discord.Color(WELLNESS_PRIMARY)
 
 
 def _build_weekly_report_embed(
