@@ -29,7 +29,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
 | [docs_cog_spec.md](docs_cog_spec.md) | `/docs` cog: posts dashboard-authored docs into channels (not this docs/ folder) |
-| [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels (accent color, section spacing, monospace tables, persistent views, ping allow-listing) |
+| [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
 | [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`). Photo Challenge left this suite — it's now a standalone scheduled dashboard feature (own channel + schedule, `/api/photo-challenge`, panel `photo-challenge.js`) |
