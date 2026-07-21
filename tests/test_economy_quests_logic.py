@@ -192,7 +192,7 @@ def test_pick_rotation_full_cycle():
         ("daily", (10, 20)),
         ("weekly", (25, 75)),
         ("community", None),
-        ("monthly", (75, 200)),
+        ("monthly", (50, 90)),
         ("yearly", None),
     ],
 )
