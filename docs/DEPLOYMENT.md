@@ -224,17 +224,25 @@ An opt-in, read-only LAN analytics dashboard. Uncomment in `.env`:
 
 ```ini
 DASHBOARD_ENABLED=1
-DASHBOARD_HOST=0.0.0.0
+DASHBOARD_HOST=127.0.0.1
 DASHBOARD_PORT=8080
 ```
 
-Without OAuth it runs in **open LAN mode** (no login). To require Discord login
-and expose it publicly, also set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
-`SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(32))"`),
-and `DASHBOARD_BASE_URL`, add the `/callback` redirect URI in the Developer
-Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
+**Auth fails closed.** The dashboard refuses to start unless auth is explicitly
+configured one of two ways:
 
-> **Do not expose the open-LAN dashboard to the internet** — it has no auth.
+- **Discord OAuth (public):** set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+  `SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(32))"`),
+  and `DASHBOARD_BASE_URL`, add the `/callback` redirect URI in the Developer
+  Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
+- **Open LAN mode (no login):** set `DASHBOARD_OPEN_AUTH=1`. This serves a
+  **full-admin, no-auth** dashboard and is forced to a loopback bind. It must be
+  an explicit choice — a missing OAuth secret no longer silently falls back to
+  it, so a dropped env var can't publish an admin-to-everyone dashboard.
+
+> **Never expose open-LAN mode (`DASHBOARD_OPEN_AUTH=1`) to the internet** — it
+> has no auth, and a tunnel (e.g. cloudflared) bridging the loopback bind to the
+> public internet would expose full admin to everyone.
 
 ---
 

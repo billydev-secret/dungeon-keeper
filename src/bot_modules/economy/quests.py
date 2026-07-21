@@ -162,10 +162,13 @@ TRIGGER_KIND_INFO: dict[str, str] = {
 
 
 # Suggested reward bands per quest type (community is judged by the author).
+# Monthly was lowered from (75, 200) to (50, 90) after live data showed monthly
+# quests were the richest per-claim faucet (see migration 103); the old ceiling
+# let a single monthly pay ~150, several role-perk rentals from one click.
 _REWARD_BANDS: dict[str, tuple[int, int]] = {
     "daily": (10, 20),
     "weekly": (25, 75),
-    "monthly": (75, 200),
+    "monthly": (50, 90),
 }
 
 

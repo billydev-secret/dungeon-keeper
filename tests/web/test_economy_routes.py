@@ -66,7 +66,7 @@ def test_get_economy_config_returns_defaults(authed_client):
     assert data["currency_name"] == "Coin"
     assert data["currency_plural"] == "Coins"
     assert data["booster_multiplier"] == 1.5
-    assert data["xp_per_coin"] == 15.0
+    assert data["xp_per_coin"] == 0.0  # XP→coin faucet ships off (dormant knob)
     # Snowflakes leave as strings (see test_get_config_emits_snowflakes_as_
     # strings) — including the 0 sentinel, so the picker always sees one type.
     assert data["bank_channel_id"] == "0"

@@ -771,6 +771,7 @@ def test_stats_shape(authed_client, fake_ctx):
         "supply",
         "distribution",
         "flow_7d",
+        "income_sources",
         "members",
         "engagement",
         "transfers_top",
@@ -778,6 +779,7 @@ def test_stats_shape(authed_client, fake_ctx):
     ):
         assert key in body
     assert body["supply"]["holders"] == 2
+    assert len(body["income_sources"]["buckets"]) == 8
     assert len(body["members"]) == 2
 
 

@@ -21,11 +21,13 @@ A moderator dashboard panel (Reports → Member Lists → Grant Audit, `GET /api
 
 | Bucket | Meaning |
 |---|---|
-| **Waiting for first grant** | At/above the level bar, never granted, and no prune history at all — the role was simply never given. Sorted highest level first. |
-| **Stripped but came back** | Stripped by the inactivity-prune loop (open `role_prune_events` row), active again since (last activity at/after the prune window's cutoff), but never re-granted — pruned fairly, returned, and nobody closed the loop. |
-| **Last 10 inactive stripped** | Most recent open prune events whose members are still inactive — the prune working as intended, shown for visibility. Newest first, capped at 10. |
+| **Waiting for first grant** | At/above the level bar with **no evidence of ever holding the role** — no prune ledger row *and* no historical `role_events` grant row. The role was simply never given. Sorted highest level first. |
+| **Stripped but came back** | Stripped (open `role_prune_events` row, or an *implicit strip* — see below), active again since (last activity at/after the prune window's cutoff), but never re-granted — pruned fairly, returned, and nobody closed the loop. |
+| **Last 10 inactive stripped** | Most recent open strips whose members are still inactive — the prune working as intended, shown for visibility. Newest first (implicit strips sort last), capped at 10. |
 
 All buckets exclude bots, members who left, and anyone on an active inactive-channel hold or jail — checked against both the DB hold rows **and** a hold role held live in Discord (a mod may have stripped roles by hand without a DB row).
+
+**Implicit strips.** `role_events` isn't gapless — a removal that happens while the bot is down is never logged, so it can't be backfilled into the ledger. A member with a historical grant row for the role, no ledger row, and no role today is therefore treated as an *implicit* open strip with an unknown date: they're bucketed by activity like any other open event and shown with "date unrecorded" (dashboard: "unrecorded") instead of a fabricated timestamp, and they never appear in "waiting for first grant". This keys off `role_events.role_name`, so a role rename orphans older history — an accepted `role_events` limitation.
 
 ### The `role_prune_events` ledger
 

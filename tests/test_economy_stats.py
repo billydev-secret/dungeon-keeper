@@ -322,6 +322,55 @@ def test_flow_burn_rate_zero_when_no_mint(db):
     assert out["flow_7d"]["burn_rate"] == 0
 
 
+# ── service: income sources (stacked-bar buckets) ──────────────────────
+
+
+def test_income_sources_shape_and_order(db):
+    _seed(db)
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    inc = out["income_sources"]
+    assert inc["groups"] == ["logins", "activity", "quests", "games", "grants"]
+    # Eight trailing weekly buckets, oldest first (ascending start).
+    assert len(inc["buckets"]) == 8
+    starts = [b["start"] for b in inc["buckets"]]
+    assert starts == sorted(starts)
+    # Newest bucket starts one week before NOW; oldest, eight weeks before.
+    assert inc["buckets"][-1]["start"] == pytest.approx(NOW - 7 * DAY)
+    assert inc["buckets"][0]["start"] == pytest.approx(NOW - 8 * 7 * DAY)
+    # Every bucket total equals the sum of its per-group totals.
+    for b in inc["buckets"]:
+        assert b["total"] == sum(b["totals"].values())
+
+
+def test_income_sources_buckets_by_group_and_week(db):
+    # Two credits in the most recent 7d, one credit ~two weeks back.
+    _ledger(db, 1, 50, "login", NOW - 1 * DAY)  # this week → logins
+    _ledger(db, 1, 20, "quest", NOW - 2 * DAY)  # this week → quests
+    _ledger(db, 2, 15, "grant", NOW - 10 * DAY, actor=99)  # 2 weeks back → grants
+    # Excluded: a transfer_in never counts as income.
+    _ledger(db, 2, 999, "transfer_in", NOW - 1 * DAY, meta={"from": 1})
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    buckets = out["income_sources"]["buckets"]
+    newest = buckets[-1]  # [NOW-7d, NOW)
+    assert newest["totals"]["logins"] == 50
+    assert newest["totals"]["quests"] == 20
+    assert newest["total"] == 70  # transfer_in excluded
+    # The grant landed in the bucket spanning ~10 days ago (index 6 of 0..7).
+    two_back = buckets[-2]  # [NOW-14d, NOW-7d)
+    assert two_back["totals"]["grants"] == 15
+    assert two_back["total"] == 15
+
+
+def test_income_sources_ignores_out_of_window(db):
+    # A credit older than 8 weeks must not appear in any bucket.
+    _ledger(db, 1, 500, "login", NOW - 9 * 7 * DAY)
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    assert all(b["total"] == 0 for b in out["income_sources"]["buckets"])
+
+
 # ── service: members ───────────────────────────────────────────────────
 
 
