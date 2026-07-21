@@ -19,6 +19,7 @@ from bot_modules.economy.perk_actions import (
     find_color_clash,
     parse_hex_color,
     revoke_role_perks,
+    should_revert_nick,
 )
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_rentals_service import (
@@ -382,3 +383,23 @@ async def test_revoke_reprojects_when_entitlements_remain(db):
     existing.delete.assert_not_awaited()  # re-projected, not deleted
     with open_db(db) as conn:
         assert get_personal_role(conn, GUILD_ID, USER_ID) is not None
+
+
+# ── should_revert_nick: lapsed name perk resets the nick it set (#56 follow-up) ─
+
+
+def test_should_revert_nick_when_name_perk_lapsed_and_nick_matches():
+    # role_name gone from entitlements, nick still equals the perk's name.
+    assert should_revert_nick(set(), "Sir Fluffy", "Sir Fluffy") is True
+    # other perks can remain — a role_name-only lapse still reverts.
+    assert should_revert_nick({"role_color"}, "Sir Fluffy", "Sir Fluffy") is True
+
+
+def test_should_not_revert_nick_when_still_entitled_or_nick_changed():
+    # still holds role_name → keep the nick.
+    assert should_revert_nick({"role_name"}, "Sir Fluffy", "Sir Fluffy") is False
+    # member changed their nick since (e.g. a game name-penalty) → don't clobber.
+    assert should_revert_nick(set(), "Sir Fluffy", "Jailed Loser") is False
+    # no nick / no stored name → nothing to revert.
+    assert should_revert_nick(set(), "Sir Fluffy", None) is False
+    assert should_revert_nick(set(), "", "Sir Fluffy") is False
