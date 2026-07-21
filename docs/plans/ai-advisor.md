@@ -28,6 +28,18 @@ it can't invent commands or promise unbuilt features.
   @everyone as the public fallback) and NSFW channels are always excluded, so an
   open `/ask` can't surface content the asker can't see. Answers are also
   tailored to the asker's permissions (`capability_summary`).
+- **Config awareness (admins only):** `build_config_summary` adds a secret-filtered
+  (drops `*token*`/`*secret*`/`*refresh*` etc.), id-resolved view of the shared
+  `config` KV table so admins get correct "is X set up?" answers. It is *partial*
+  by design — feature areas keep settings in ~40 own-tables (economy, wellness,
+  games, …) with no reusable serializer, so the prompt tells the model to defer
+  to the panel for anything not listed rather than guess (fixing the "says it's
+  not configured when it is" bug). Deeper per-feature config is a follow-up.
+- **Linking:** the context lists channels as `#name (<#id>)` and the (env)
+  `DASHBOARD_BASE_URL`; the prompt tells the model to emit `<#id>` mentions and
+  the dashboard URL. Discord renders both natively; the web Ask box converts
+  `<#id>` → `discord.com/channels/...` links (via a visible-channel map the
+  route returns) and auto-links URLs.
 - **Provider:** Anthropic (off-box), reusing the existing
   `ANTHROPIC_API_KEY` + `bot_modules.games.utils.ai_client.get_client()`
   singleton. The on-box/LAN llama stack is reserved for moderation (privacy

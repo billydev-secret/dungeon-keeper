@@ -83,11 +83,27 @@ def test_load_manual_text_caches_on_mtime(tmp_path, monkeypatch):
 
 def test_build_system_has_instructions_and_cached_corpus(monkeypatch):
     monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE BODY")
+    monkeypatch.setattr(adv, "dashboard_url", lambda: "")
     system = adv.build_system()
     assert system[0]["text"] == adv.SYSTEM_INSTRUCTIONS
     assert "GUIDE BODY" in system[1]["text"]
     # Corpus block is prompt-cached so repeat calls bill it at ~0.1x.
     assert system[1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_build_system_injects_dashboard_url_into_cached_prefix(monkeypatch):
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "G")
+    monkeypatch.setattr(adv, "dashboard_url", lambda: "https://dash.example")
+    system = adv.build_system()
+    # Stable → lives in the instructions block (part of the cached prefix).
+    assert "https://dash.example" in system[0]["text"]
+
+
+def test_dashboard_url_ignores_localhost(monkeypatch):
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "http://localhost:8080")
+    assert adv.dashboard_url() == ""
+    monkeypatch.setenv("DASHBOARD_BASE_URL", "https://dk.example.com/")
+    assert adv.dashboard_url() == "https://dk.example.com"
 
 
 def test_build_system_survives_missing_manual(monkeypatch):
