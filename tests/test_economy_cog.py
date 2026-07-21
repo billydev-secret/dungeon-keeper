@@ -19,7 +19,9 @@ from bot_modules.services.economy_quests_service import (
     create_quest,
     set_quest_active,
 )
+from bot_modules.cogs.economy_cog import _NICK_FORBIDDEN, _custom_name_confirmation
 from bot_modules.services.economy_service import (
+    EconSettings,
     apply_credit,
     get_balance,
     get_ledger,
@@ -955,7 +957,7 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
     # Ascending price inside each tier, and the blurb is present.
     assert tiers["Essentials"].index("**35**") < tiers["Essentials"].index("**50**")
     assert tiers["Signature"].index("**120**") < tiers["Signature"].index("**400**")
-    assert "call yourself anything" in _shop_row(embed, "Name")
+    assert "your nickname + role name" in _shop_row(embed, "Name")
 
 
 def test_shop_table_reorders_when_prices_are_reconfigured(db):
@@ -2596,3 +2598,81 @@ async def test_buy_raffle_tickets_rejects_junk_quantity(ctx, db):
     assert "whole number" in interaction.response.send_message.await_args.args[0]
     with open_db(db) as conn:
         assert get_balance(conn, GUILD_ID, 500) == 100
+
+
+# ── custom-name perk: renames the role AND the server nickname (#56) ───────────
+
+
+def test_custom_name_confirmation_variants():
+    ok = _custom_name_confirmation("Sir Fluffy", nick_ok=True)
+    assert "Sir Fluffy" in ok
+    assert "nickname" in ok.lower() and "role" in ok.lower()
+
+    forbidden = _custom_name_confirmation(
+        "Sir Fluffy", nick_ok=False, nick_reason=_NICK_FORBIDDEN
+    )
+    assert forbidden.startswith("Your role name is now **Sir Fluffy**.")
+    assert "Manage Nicknames" in forbidden
+
+    plain = _custom_name_confirmation("Sir Fluffy", nick_ok=False)
+    assert plain == "Your role name is now **Sir Fluffy**."
+
+
+@pytest.mark.asyncio
+async def test_set_role_name_also_sets_nickname(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    actor = _member(member_id=500)
+    actor.edit = AsyncMock()
+    interaction = _interaction(actor)
+
+    with (
+        patch.object(
+            cog,
+            "_load_role_ctx",
+            return_value=(EconSettings(enabled=True), {"role_name": True}, 0),
+        ),
+        patch.object(cog, "_name_blocklist", return_value=[]),
+        patch.object(cog, "_upsert_role"),
+        patch(
+            "bot_modules.cogs.economy_cog.apply_role_perks",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.set_role_name(interaction, "Sir Fluffy")
+
+    actor.edit.assert_awaited_once()
+    assert actor.edit.await_args.kwargs.get("nick") == "Sir Fluffy"
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "Sir Fluffy" in msg and "nickname" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    actor = _member(member_id=500)
+    resp = MagicMock(status=403, reason="Forbidden")
+    actor.edit = AsyncMock(side_effect=discord.Forbidden(resp, "Missing Permissions"))
+    interaction = _interaction(actor)
+    upsert = MagicMock()
+
+    with (
+        patch.object(
+            cog,
+            "_load_role_ctx",
+            return_value=(EconSettings(enabled=True), {"role_name": True}, 0),
+        ),
+        patch.object(cog, "_name_blocklist", return_value=[]),
+        patch.object(cog, "_upsert_role", upsert),
+        patch(
+            "bot_modules.cogs.economy_cog.apply_role_perks",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.set_role_name(interaction, "Sir Fluffy")
+
+    upsert.assert_called_once()  # the role rename still persists
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "Sir Fluffy" in msg
+    assert "Manage Nicknames" in msg

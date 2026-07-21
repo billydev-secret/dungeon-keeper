@@ -668,7 +668,7 @@ takes effect on the next cycle, never retroactively.
 | Perk | Per week | Repo grounding |
 |---|---|---|
 | Custom role color (solid) | 50 | `guild.create_role(color=…)` |
-| Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table) |
+| Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`) |
 | Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
 | Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
 | Private text room | 200 | §8 (Stage 2) |

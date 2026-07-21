@@ -166,7 +166,7 @@ _PERK_SHORT = {
 }
 _PERK_BLURBS = {
     "role_color": "one solid color, your pick",
-    "role_name": "call yourself anything",
+    "role_name": "your nickname + role name",
     "role_gradient": "two-color fade on your name",
     "role_icon": "a badge beside your name",
     "voice_style": "name + size your voice room",
@@ -186,6 +186,30 @@ _PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Essentials", ("role_name", "role_color")),
     ("Signature", ("role_gradient", "role_icon")),
 )
+
+
+# The custom-name perk renames the member's personal role AND sets their
+# server nickname to match — "call yourself anything" has to actually change
+# the name people see, not just a cosmetic role label. The nickname is
+# best-effort (a bot can't outrank the hierarchy or rename the guild owner),
+# so the confirmation spells out which parts landed.
+_NICK_FORBIDDEN = (
+    "I couldn't set your server nickname to match — my role needs to sit "
+    "above yours with the Manage Nicknames permission (and Discord never "
+    "lets a bot rename the server owner)."
+)
+_NICK_FAILED = "Your server nickname didn't take, though — try again in a moment."
+
+
+def _custom_name_confirmation(text: str, *, nick_ok: bool, nick_reason: str = "") -> str:
+    """The ephemeral reply after a member sets their custom name."""
+    if nick_ok:
+        return (
+            f"Your name is now **{text}** — it's your server nickname and your "
+            "personal role name."
+        )
+    base = f"Your role name is now **{text}**."
+    return f"{base} {nick_reason}" if nick_reason else base
 
 
 def _perk_price(settings: EconSettings, perk: str) -> int:
@@ -552,12 +576,12 @@ class _EmojiCancelView(discord.ui.View):
         await self.cog.do_cancel_emoji(interaction, self.submission_id)
 
 
-class _RoleNameModal(discord.ui.Modal, title="Custom role name"):
+class _RoleNameModal(discord.ui.Modal, title="Set your custom name"):
     text = discord.ui.TextInput(
-        label="Role name",
+        label="Name",
         min_length=1,
         max_length=_MAX_ROLE_NAME_LEN,
-        placeholder="Shown in your profile and the member list",
+        placeholder="Becomes your server nickname + your role name",
     )
 
     def __init__(self, cog: EconomyCog) -> None:
@@ -2250,9 +2274,32 @@ class EconomyCog(commands.Cog):
         await asyncio.to_thread(
             self._upsert_role, guild.id, user_id, {"name": text}
         )
+        nick_ok, nick_reason = await self._apply_custom_nick(interaction.user, text)
         await self._apply_and_confirm(
-            interaction, guild.id, user_id, f"Your role name is now **{text}**."
+            interaction,
+            guild.id,
+            user_id,
+            _custom_name_confirmation(text, nick_ok=nick_ok, nick_reason=nick_reason),
         )
+
+    async def _apply_custom_nick(
+        self, member: discord.User | discord.Member, text: str
+    ) -> tuple[bool, str]:
+        """Set ``member``'s server nickname to their custom name (best-effort).
+
+        Returns ``(ok, reason)``. The role rename stands regardless; the
+        nickname can fail when the bot lacks Manage Nicknames, the member
+        outranks the bot, or the member is the guild owner (a Discord limit).
+        """
+        if not isinstance(member, discord.Member):
+            return False, ""
+        try:
+            await member.edit(nick=text, reason="Economy custom-name perk")
+        except discord.Forbidden:
+            return False, _NICK_FORBIDDEN
+        except discord.HTTPException:
+            return False, _NICK_FAILED
+        return True, ""
 
     async def set_role_color(self, interaction: discord.Interaction, hex: str) -> None:
         assert interaction.guild is not None
