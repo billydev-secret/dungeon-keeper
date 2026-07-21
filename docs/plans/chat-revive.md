@@ -2,8 +2,8 @@
 
 **Status:** v1 built (stages 0–4, 2026-07-14). Stages 2–4 landed together in
 one commit at Billy's request ("let the whole thing rip") instead of the
-per-stage live-testing cadence below. Live verification is queued in
-`docs/TESTING_QUEUE.md`.
+per-stage live-testing cadence below. QA cards post automatically from the
+commit's Testing: section (TESTING_QUEUE.md retired 2026-07-18).
 
 **Same-day revision:** the `/revive` slash-command group (Stage 2) was built
 and then **removed** to keep the command surface clean; management moved to
@@ -15,8 +15,10 @@ instead of a cog.
 
 **Spec:** `docs/chat_revive_spec.md` (added at Stage 0; source: product spec 2026-07-14).
 Commits are tagged `Chat Revive (stage N): …`. Each stage is built in a worktree,
-`scripts/gate.py` green, spec + `docs/INDEX.md` + `docs/TESTING_QUEUE.md` updated in the
-same commit, then merged to main for live testing before the next stage starts.
+`scripts/gate.py` green, spec + `docs/INDEX.md` updated in the same commit, then
+merged to main for live testing before the next stage starts. QA cards post
+automatically from the commit's Testing: section (TESTING_QUEUE.md retired
+2026-07-18).
 
 ## What we're building on (recon summary)
 

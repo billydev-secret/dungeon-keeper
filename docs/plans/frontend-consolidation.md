@@ -1,6 +1,8 @@
 # Frontend consolidation — one fetch core, one esc, shared strips/states/utilities
 
-Review finding U3a–U3h / #13. Status: **planned (2026-07-02).**
+Review finding U3a–U3h / #13. Status: **implemented (2026-07-02)** — stages 1–3
+shipped (894987b fetch core, e782b4b esc convergence, 617c855 tab-strip/state
+fragments/utilities).
 
 ## 1. Context & goal
 

@@ -4,8 +4,10 @@
 Usage:
     python scripts/gate.py            # ruff + pyright + FULL pytest
     python scripts/gate.py --scoped   # ruff + pyright + tests for changed files
-    python scripts/gate.py --quick    # ruff + pyright only (pre-commit hook)
+    python scripts/gate.py --quick    # ruff + pyright + scoped browser panel checks (no pytest)
     python scripts/gate.py -k foo     # extra args forwarded to pytest
+
+The pre-commit hook runs ``--scoped`` (not ``--quick``).
 
 Runs everything with the repo venv's interpreter, located automatically,
 so it works no matter which python launched this script.

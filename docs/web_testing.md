@@ -64,10 +64,15 @@ snapshots otherwise make results flap between runs.
 
 ## Where each runs
 
-| | default suite (per push) | gate.py --quick/--scoped | nightly |
-|---|---|---|---|
-| authz / snowflake / help-links | ✅ | ✅ | ✅ |
-| mobile layout / panel console | skipped (no browser) | scoped to changed panels* | full |
+| | default suite (per push) | gate.py --quick | gate.py --scoped | nightly |
+|---|---|---|---|---|
+| authz / snowflake / help-links | ✅ | — (no pytest) | when a `src/web_server/` change maps them in | ✅ |
+| mobile layout / panel console | skipped (no browser) | scoped to changed panels* | scoped to changed panels* | full |
+
+`--quick` runs **no pytest at all** (ruff + pyright + the scoped browser panel
+checks when dashboard assets changed), so the authz/snowflake/help-links sweeps
+never run under it; under `--scoped` they run only when the staged diff touches
+`src/web_server/` and the mapping pulls their test files in.
 
 \* gate.py runs the browser suite (`-m browser`) only when a commit touches
 dashboard assets, scoped to the affected panels (`PANEL_SCOPE`); all-panel

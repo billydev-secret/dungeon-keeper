@@ -15,7 +15,7 @@ Discord moderation, community, voice, and analytics bot.
 ### XP & analytics
 - **XP & leveling** — Earn XP from text, replies, voice participation, and reactions on your image posts, with anti-grind multipliers keeping rewards fair. Configurable level milestones grant roles, and level-up and level-5 announcements celebrate progress.
 - **Leaderboards** — `/xp_leaderboards` ranks top earners by source and time window and shows you exactly where you stand. The dashboard adds time-to-level histograms and per-source breakdowns.
-- **Web analytics dashboard** — An opt-in LAN dashboard (`DASHBOARD_ENABLED=1`) with 25+ cached, read-only panels covering engagement, retention, community structure, growth, anomalies, and quality. Caches pre-warm hourly and refresh every 15 minutes so big servers load instantly.
+- **Web analytics dashboard** — A web dashboard (`DASHBOARD_ENABLED=1`; loopback-only origin, published via a Cloudflare tunnel) with 25+ cached, read-only panels covering engagement, retention, community structure, growth, anomalies, and quality. Caches pre-warm hourly and refresh every 15 minutes so big servers load instantly.
   - *Engagement & retention:* DAU/MAU stickiness, cohort retention curves, newcomer activation funnel, churn-risk early-warning scores.
   - *Activity patterns:* 7×24 message heatmap, message-rate trends, join-time distribution, voice stats, activity timeline.
   - *Community structure:* force-directed interaction graph, animated interaction heatmap, participation Gini/Lorenz, channel-health comparison.
@@ -48,7 +48,6 @@ enable/disable, channel allowlists, and an AI question-bank fallback.
 - **Mt. Rushmore Draft** — Snake-draft your top four picks for a topic, with no duplicates allowed once a pick is gone. Everyone reveals their board and the room votes on the best lineup.
 - **Clapback** — A prompt drops and everyone writes their funniest anonymous one-liner. Answers go head-to-head for votes, and sweeping every vote earns a "CLAPBACK!" bonus.
 - **LegitLibs** — Mad-Libs–style template fill with reveals in parallel (Quiplash) or round-robin (Classic) mode. Four heat tiers run from Flirty to Unhinged.
-- **Photo Challenge** — A host drops a Photo Challenge card and a thread opens for everyone's photo submissions.
 
 ### Head-to-head & group games
 High-stakes games with server-authoritative hidden state, per-pair cooldowns, audit
@@ -59,6 +58,12 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 - **Chicken** — A shared meter climbs toward 100 while everyone decides when to bail. In a duel the first to bail loses; in a group, everyone still holding at the crash goes down together.
 - **Musical Chairs** — 3+ players, one fewer chair each round, and music that plays for a hidden duration before you scramble to SIT. Sit too early and you false-start; last one standing wins.
 
+### Economy & perk shop
+- **Coins & wallet** — Earn server currency from daily logins, chatting, voice, games, reactions, and QOTD answers, all recorded in a full ledger. `/bank wallet` shows your balance and recent activity.
+- **Quests & daily boards** — A personal quest board (daily/weekly/monthly) draws each member their own random slice of the guild's quest pool, plus tiered community weeklies the whole server works toward with a live tracker.
+- **Perk shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
+- **Sinks & stakes** — Coin wagers on duel and group games, paid quest rerolls, raffles, and other sinks keep the currency circulating. Mods post the guide/shop/leaderboard panels and can grant coins directly. `docs/economy_spec.md` is the deep doc.
+
 ### Engagement & content
 - **Whisper** — Send an anonymous message to an opted-in member who gets three guesses to name the sender. Share publicly, reply back, or reveal yourself once you're guessed.
 - **Pen Pals** — Members join a pool and a scheduled round pairs eligible members (nobody re-matched more than once a month) into private 2-person channels, each seeded with a conversation-starter question. Channels tear down after ~24 hours, and mods can pair specific members or kick off a new round.
@@ -66,7 +71,11 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 - **Starboard** — Reactions with a configured emoji repost high-engagement messages to a dedicated board once they cross a threshold. Self-stars don't count and an NSFW guard keeps age-gated content out of SFW channels.
 - **Quote** — Right-click any message to render it as a styled quote card over the author's avatar, with theme and font pickers. Post it publicly and the bot auto-reacts so great quotes can reach the starboard themselves.
 - **Auto-react** — Automatically drop chosen emoji on images and embeds in configured channels. A frictionless nudge that gets visual content the engagement it deserves.
-- **Needle (auto-thread)** — Automatically spawn a thread from each new message in designated channels, with custom thread names, welcome messages, and status-reaction tracking. Keeps Q&A and discussion channels tidy at a glance.
+- **Needle (auto-thread)** — Automatically spawn a thread from each new message in designated channels, with custom thread names, welcome messages, and status-reaction tracking (`/close`, `/title`). Keeps Q&A and discussion channels tidy at a glance.
+- **Photo Challenge** — A standalone scheduled feature: challenge cards post to a dedicated channel on their own schedule (dashboard panel), and posting a photo pays a once-daily participation award plus a quest bonus on top.
+- **Chat Revive ("Ember")** — A commandless, dashboard-managed lull watcher that drops a conversation-starter question when a watched channel goes quiet — rhythm-aware, budgeted, with an opt-in ping button.
+- **Greeting Watch** — Another commandless dashboard feature: when a member's "good morning"/"hello" in a watched channel goes unanswered, the bot quietly DMs them a hello so nobody greets an empty room.
+- **QA Tracker** — Behavior-changing updates automatically post QA cards with Pass / Fail / Blocked buttons; volunteer testers holding the QA-crew role earn economy coins per verdict, with admin oversight and void on the dashboard.
 - **Bios** — Members build rich, multi-field profiles through an interactive wizard. Finished bios live as persistent cards in a dedicated channel so the community can get to know each other.
 - **Emoji Stealer** — Right-click a message or paste an image URL to upload it as a custom emoji to one of your servers. Build out your emoji library without ever leaving Discord.
 - **Bump Tracker** — Track cooldowns for listing sites like DISBOARD and get pinged the moment each is ready to bump again, with a live status widget. Essential for servers that grow through listing traffic.
@@ -75,6 +84,8 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 
 ### Onboarding & community
 - **Role grants** — `/grant role:<key> member:<@user>` hands out community roles through a per-role permission allowlist (e.g. greeters can grant Denizen, mods can grant NSFW/Veteran). Self-serve role-giving without handing out Manage Roles.
+- **Role menus** — Self-assign roles via persistent button or dropdown menus. Admins build, preview, publish, and maintain menus entirely from the dashboard's Oracle builder; members toggle roles with private ephemeral feedback.
+- **Announcements** — Dashboard-queued one-shot channel posts: embed + ping line, live preview, guild-local scheduling, sent history, and up to five optional self-assign role buttons per announcement.
 - **Welcome / leave** — Configurable join and leave messages, edited and previewed live from the dashboard. Make a strong first impression without redeploying.
 - **Booster role buttons** — Persistent click-to-claim buttons for booster perks that survive restarts. Set them up once and they keep working.
 - **Birthday** — Members record their birthday with `/birthday set`, and the bot posts a daily celebration in a configured channel. The message template is customizable and the dashboard previews the next 90 days.
@@ -174,7 +185,6 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/todo <task>` — Add a task to the shared server todo list (moderators only)
 - `/birthday set` — Record your birthday
 - `/confess` — Post an anonymous confession (modal)
-- `/dmrequest` — Send moderators a private DM request
 - `/delete_me` — Permanently delete all your messages and data
 
 **DM Permissions**
@@ -188,7 +198,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/wellness away on` / `/wellness away off` — Toggle your away auto-reply
 
 **Party Games**
-- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `ffa_banner`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`, `photo`
+- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `ffa_banner`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`
 - `/recap` — Recap of the current game-night session
 - `/games help` / `/games support` — Game list and support link
 - *Spicier (NSFW) prompts appear only in channels an admin has marked age-restricted in Discord.*
@@ -213,11 +223,27 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/steal_emoji <url> <name>` — Add a custom emoji from an image URL; also a **Steal Emoji** message context-menu
 - **Quote** — message context-menu that renders a styled quote card over the author's avatar
 - `/bump status` / `/bump log` — Check bump cooldowns or record a manual bump (mod)
+- `/close` / `/title <name>` — Close or rename the current auto-thread (Needle)
 - *Auto-thread channels and bump-tracker sites are managed from the web dashboard.*
 
+**Economy & Perk Shop**
+- `/bank wallet` — Your balance + recent ledger activity
+- `/bank shop` — Browse and rent perks
+- `/bank quests` — Your personal quest board
+- `/bank pay` — Send coins to another member
+- `/bank gift` — Buy a perk for someone else
+- `/bank role` — Customize your rented role perk
+- `/bank mute` — Spend a mute token
+- `/bank sponsor` — Sponsor a QOTD (mod-approved)
+- `/bank emoji` — Rent an emoji slot
+- `/bank grant` — (mod) Grant or deduct coins
+- `/bank post-guide` / `post-shop` / `post-leaderboard` — (mod) Post the channel panels
+- `/qotd post` — (mod) Post the question-of-the-day banner card
+- *Quest library, prices/rates, income sources, and all other economy knobs live in the web dashboard's Economy pages; `docs/economy_spec.md` is the deep doc.*
+
 **Voice (your channel)**
-- `/voice lock` / `/voice unlock` — Lock or unlock your channel
-- `/voice hide` / `/voice unhide` — Hide or reveal your channel
+- `/voice access <state>` — One dial for who gets in: Open / NSFW / NSFW locked / Spectator (all but Open are age-gated)
+- `/voice knock` / `/voice sleepkick` — Ask into a locked channel; set a self-disconnect timer
 - `/voice rename <name>` / `/voice limit <n>` — Rename or set user limit
 - `/voice invite <member>` / `/voice kick <member>` — Manage access
 - `/voice transfer <member>` / `/voice claim` / `/voice owner` — Ownership
@@ -279,6 +305,8 @@ Most settings are configured through the web dashboard after the bot is running 
 **Utility** (mod)
 - `/purge [count] [after]` — Delete messages by count and/or cutoff time
 - `/rename <target> [new_name]` — Set a member's nickname (requires Manage Nicknames; leave `new_name` blank to reset to their username)
+- `/hidden hide` / `/hidden restore` / `/hidden list` — Stash channels out of view and bring them back
+- `/inactive mark` / `/inactive release` / `/inactive panel` / `/inactive sweep` — Inactive-member management (sweep settings live on the web dashboard)
 
 **Owner**
 - `/reload_cog <extension>` — Hot-reload a cog
@@ -286,25 +314,24 @@ Most settings are configured through the web dashboard after the bot is running 
 
 ## Development
 
-Run all checks:
+Run the full gate (ruff + pyright + the whole pytest suite, xdist-parallel):
 
-```powershell
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m mypy
-.\.venv\Scripts\python.exe -m pytest -q
+```bash
+python scripts/gate.py
 ```
 
-Set up pre-commit hooks (runs ruff, mypy, and pytest on every commit):
+Useful variants:
 
-```powershell
-.\.venv\Scripts\pre-commit.exe install
+```bash
+python scripts/gate.py --quick    # ruff + pyright only (plus scoped browser
+                                  # panel checks when dashboard assets changed)
+python scripts/gate.py --scoped   # ruff + pyright + just the tests mapped to
+                                  # your staged diff
 ```
 
-Run hooks across all files:
-
-```powershell
-.\.venv\Scripts\pre-commit.exe run --all-files
-```
+The pre-commit hook runs `python scripts/gate.py --scoped` automatically on
+every commit; touching broadly-shared files (core/, models/, migrations/, deps)
+falls back to the full suite. CI runs the full suite + coverage on every push.
 
 ### Running the beta tools sidecar (dev only)
 
@@ -323,5 +350,4 @@ Verify with `/beta-puppets-list` in the test guild — all 3 puppets should
 show as connected. Use `/beta-puppets-impersonate alice #general "hello"`
 to test that puppet sends are working.
 
-See `docs/superpowers/specs/2026-04-30-beta-tools-sidecar-design.md` for the
-full design.
+See `docs/beta_tools_spec.md` for the full design.

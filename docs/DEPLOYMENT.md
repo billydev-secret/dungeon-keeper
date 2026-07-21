@@ -145,30 +145,23 @@ Stop with `Ctrl+C`. The SQLite database is written to `DB_PATH_PROD`
 
 ## 7. Run as a service (systemd)
 
-Create `/etc/systemd/system/dungeon-keeper.service` (adjust `User` and paths —
-the current prod box uses `User=ben` and
-`/home/ben/discord-bots/dungeon-keeper`):
+The canonical unit is tracked in the repo at
+[`deploy/dungeon-keeper.service`](../deploy/dungeon-keeper.service) (see also
+`deploy/README.md` and `deploy/discord-bots.target`). It carries the full
+production config — `PartOf=discord-bots.target`, `Environment=PYTHONPATH`,
+`TimeoutStartSec=180`, and a systemd hardening block — so **install it from
+`deploy/` rather than hand-writing a unit** (adjust `User` and paths; the
+current prod box uses `User=ben` and `/home/ben/discord-bots/dungeon-keeper`).
+The heart of it is just:
 
 ```ini
-[Unit]
-Description=dungeon-keeper Discord bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ben
-WorkingDirectory=/home/ben/discord-bots/dungeon-keeper
 ExecStart=/home/ben/discord-bots/dungeon-keeper/.venv/bin/python -m dungeonkeeper
 Restart=on-failure
-RestartSec=5
 # .env is loaded automatically by the app; no EnvironmentFile needed.
-
-[Install]
-WantedBy=multi-user.target
 ```
 
 ```bash
+sudo cp deploy/dungeon-keeper.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now dungeon-keeper
 sudo systemctl status dungeon-keeper
@@ -190,6 +183,12 @@ sudo systemctl enable --now dungeon-keeper-watchdog
 Configuration comes from `.env`: it DMs `WATCHDOG_USER_ID` (falling back to
 `SUPPORT_USER_ID`) using the bot token; `WATCHDOG_UNIT` and
 `WATCHDOG_POLL_SECONDS` override the defaults (`dungeon-keeper.service`, 30s).
+
+Verify DM delivery end-to-end with:
+
+```bash
+python scripts/watchdog.py --test    # sends a one-off test DM and exits
+```
 
 ---
 
@@ -220,25 +219,53 @@ bot keeps running and music commands report "Music is currently unavailable."
 
 ## 9. Optional — Web dashboard
 
-An opt-in, read-only LAN analytics dashboard. Uncomment in `.env`:
+An opt-in analytics/admin dashboard. Uncomment in `.env`:
 
 ```ini
 DASHBOARD_ENABLED=1
-DASHBOARD_HOST=0.0.0.0
+DASHBOARD_HOST=127.0.0.1
 DASHBOARD_PORT=8080
 ```
 
-Without OAuth it runs in **open LAN mode** (no login). To require Discord login
-and expose it publicly, also set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
-`SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(32))"`),
-and `DASHBOARD_BASE_URL`, add the `/callback` redirect URI in the Developer
-Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
+**Reference deployment (what prod actually runs):** the dashboard binds
+**loopback-only** (`DASHBOARD_HOST=127.0.0.1`, port 8080) and is published to
+the internet through a **cloudflared tunnel** — Cloudflare terminates TLS and
+forwards to `http://127.0.0.1:8080`, so no port is ever exposed on the box.
+Discord OAuth is enabled (`DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+`SESSION_SECRET` via
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`, and
+`DASHBOARD_BASE_URL` set to the public tunnel hostname), with the `/callback`
+redirect URI registered in the Developer Portal.
+
+Alternatives: without OAuth it runs in **open LAN mode** (no login) — bind
+`0.0.0.0` only on a trusted LAN. A classic reverse proxy (nginx/Caddy)
+terminating TLS also works in place of the tunnel.
 
 > **Do not expose the open-LAN dashboard to the internet** — it has no auth.
 
 ---
 
-## 10. Backups & maintenance
+## 10. Optional — LLM backend (LAN GPU server)
+
+AI features run a GGUF model **in-process on CPU by default** (calls are
+serialised behind one shared model). The production architecture instead
+offloads inference to a llama.cpp **`llama-server` on a LAN GPU box**, which
+frees the bot host and lets calls run concurrently. Configure in `.env`
+(see the `LLM backend` block in `.env.example`):
+
+```ini
+LLAMA_SERVER_URL=http://192.168.1.50:8080   # empty = in-process CPU fallback
+LLAMA_SERVER_TIMEOUT=120                    # per-request timeout, seconds
+LLAMA_SERVER_ALLOW_PUBLIC=0                 # keep 0: private/loopback URLs only
+```
+
+`LLAMA_SERVER_URL` must be a private/loopback address; a public URL is refused
+(the bot falls back to in-process) unless `LLAMA_SERVER_ALLOW_PUBLIC=1` — leave
+that off unless you fully control the network path.
+
+---
+
+## 11. Backups & maintenance
 
 - **Database** — everything lives in the single SQLite file at `DB_PATH_PROD`.
   A background DB-backup loop runs in-process, but you should also snapshot the
@@ -256,6 +283,23 @@ Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
   so `git describe --always deployed` always answers "what's live" (the boot
   log warns loudly if the working tree was dirty).
 - **Logs** — `journalctl -u dungeon-keeper`.
+- **QA card recovery** — the post-commit hook that posts QA Tracker cards reads
+  the `Testing:` section off the commit, but it **skips worktree commits** (no
+  `.env` in the worktree) and **fast-forward merges** (no merge commit to fire
+  on). Recover a missed card manually:
+  ```bash
+  python scripts/post_testing_docs.py --commit <sha>        # dry-run preview
+  python scripts/post_testing_docs.py --commit <sha> --yes  # actually post
+  ```
+- **Handy maintenance scripts** (all in `scripts/`):
+  - `refresh_dev_db.py --no-fixtures` — rebuild the dev DB from prod without
+    seeding fixture data.
+  - `recompute_xp.py --commit` — recompute member XP from the event ledger
+    (dry-run by default; `--commit` writes).
+  - `diff_db.py` / `restore_messages.py [BACKUP] [WORKING] --dry-run` — compare
+    a backup DB against the working DB / restore message rows from it.
+  - `economy_tuning_report.py --baseline` / `--save-baseline` — economy health
+    report against a saved baseline snapshot.
 
 ---
 
@@ -263,8 +307,8 @@ Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| `ModuleNotFoundError` for discord/fastapi/etc. on a fresh install | You ran only `pip install -e .`. Run `pip install -r requirements.txt` first. |
+| `ModuleNotFoundError` for discord/fastapi/etc. on a fresh install | You ran only `pip install -e .`. Run `pip install -r requirements.lock` first (section 3). |
 | Bot connects but sees no message content / can't read members | Privileged intents not enabled in the Developer Portal (section 4, step 3). |
 | Bot exits immediately on startup citing wrong bot ID | `EXPECTED_BOT_ID_PROD` doesn't match the token's bot user — fix the token or the ID. |
-| `pip install` fails building mediapipe / onnxruntime / llama-cpp-python | Use Python 3.10 and install `build-essential`, then retry. |
+| `pip install` fails building mediapipe / onnxruntime / llama-cpp-python | Install `build-essential` (gcc/g++/make) so the sdist can compile, then retry. |
 | Music commands say "currently unavailable" | Java 17+ missing, or `setup_lavalink.py` not run, or Lavalink env vars unset (section 8). |

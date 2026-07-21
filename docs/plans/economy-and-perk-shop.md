@@ -2,9 +2,10 @@
 
 Spec: `docs/economy_spec.md` (V3.1, repo-grounded). Commits reference stages as
 `Economy (stage N): …`. Each stage: built in a worktree, `scripts/gate.py` green,
-spec + `docs/INDEX.md` + `docs/TESTING_QUEUE.md` updated in the same commit, merged to
-main for live testing before the next stage starts. Restart required after each merge
-(user pushes that button).
+spec + `docs/INDEX.md` updated in the same commit, merged to main for live testing
+before the next stage starts. Restart required after each merge (user pushes that
+button). QA cards post automatically from the commit's Testing: section
+(TESTING_QUEUE.md retired 2026-07-18).
 
 ## Layout
 
@@ -181,8 +182,9 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
 ## Stage 5 — Soak + tuning pass — ACTIVE (Billy-driven)
 
 No new features. Run the economy live ≥1–2 weeks; use the metrics card to set real
-prices/rates for each guild; fix what live testing surfaces (TESTING_QUEUE entries
-from stages 0–4). Decision checkpoint with real income data before rooms.
+prices/rates for each guild; fix what live testing surfaces (QA cards post
+automatically from each commit's Testing: section — TESTING_QUEUE.md retired
+2026-07-18). Decision checkpoint with real income data before rooms.
 
 - Shipped the **Statistics page** (Bank Manager) as Stage-5 tuning tooling — live,
   on-demand who-has-what + income-velocity read (supply concentration, distribution,
