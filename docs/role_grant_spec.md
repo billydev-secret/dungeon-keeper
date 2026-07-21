@@ -9,10 +9,11 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or mod | Give a configured community role to a member |
+| `/grant_audit role:<key> min_level:<n> channel:<#ch>` | Slash | Mod | Post (or refresh/move) the auto-updating grant-audit card |
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
 
-(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** panel, below.)
+(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** panel and the `/grant_audit` card, below.)
 
 ## Grant Audit panel
 
@@ -34,6 +35,15 @@ The inactivity-prune loop (`inactivity_prune_service`, see the prune rule config
 - **restored** — a successful `/grant` of the same role closes any open rows for that member (`restored_at` set to the grant time). "Active again" is *not* stored — it stays a live computation against last-activity, since it's a moving target.
 
 A one-off backfill helper (`role_grant_audit_service.backfill_prune_events_from_role_events`) seeds the ledger from historical `role_events` removals, skipping removals the activity history disproves as prunes and inserting already-restored rows for members who hold the role again. It's idempotent and is run once per guild/role from a REPL after deploy.
+
+### The auto-updating card (`/grant_audit`)
+
+The same three buckets also render as a channel embed a mod can pin anywhere: `/grant_audit role:<key> min_level:<n> [channel:<#ch>]` posts the card (defaults: `nsfw`, level 5, current channel). Behavior mirrors the economy leaderboard panel:
+
+- The card's channel/message ids and grant/min-level parameters are stored per guild in config (`grant_audit_card_*` keys); one card per guild.
+- Re-running the command in the same channel refreshes in place; a different channel moves the card (the stale message is deleted when reachable).
+- An hourly loop (`grant_audit_card_loop`, registered at startup) re-renders every stored card. A 404 on the message (mod deleted it) retires the card by clearing the stored ids; a missing grant config or role does the same.
+- The waiting bucket caps at 15 lines with an "…and N more on the dashboard" overflow; the two stripped buckets show `stripped <t:…:R>` relative timestamps that tick client-side between edits.
 
 ## Behavior
 

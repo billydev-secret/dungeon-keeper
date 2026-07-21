@@ -869,6 +869,17 @@
       </div>
     </div>
 
+    <div class="cmd-block">
+      <span class="cmd-name">/grant_audit role:nsfw min_level:5 channel:#mod-log</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Posts an auto-updating card showing who's missing the grant role and why — waiting for their first grant, stripped by the inactivity prune but active again, or recently stripped and still inactive. The card refreshes hourly; re-running the command refreshes or moves it, and deleting the message retires it. The full sortable view lives on the <strong>Grant Audit</strong> dashboard panel.</span>
+      <div class="cmd-params">
+        <strong>role</strong> — grant role to audit (default nsfw).<br>
+        <strong>min_level</strong> — level bar for the waiting bucket (default 5).<br>
+        <strong>channel</strong> — where the card lives; defaults to the current channel.
+      </div>
+    </div>
+
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">

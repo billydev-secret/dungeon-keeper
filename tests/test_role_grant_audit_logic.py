@@ -10,15 +10,24 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.role_grant_audit_service import (
+    GrantAuditSnapshot,
     backfill_prune_events_from_role_events,
+    build_grant_audit_embed,
+    clear_card_ref,
     compute_recent_inactive,
     compute_stripped_returned,
     compute_waiting_for_first_grant,
+    gather_grant_audit,
     get_ever_pruned_ids,
     get_hold_excluded_ids,
     get_open_prune_events,
+    guilds_with_card,
+    load_card_ref,
     mark_restored,
     record_prune_events,
+    refresh_grant_audit_card,
+    resolve_grant_audit_buckets,
+    save_card_ref,
 )
 from migrations import apply_migrations_sync
 
@@ -312,3 +321,221 @@ def test_backfill_ignores_other_role_names(db_path):
             conn, _fake_guild(), _fake_role(), INACTIVITY_DAYS
         )
         assert inserted == 0
+
+
+# ── snapshot assembly (gather + live resolution) ──────────────────────
+
+
+class _FakeRole:
+    def __init__(self, role_id=ROLE_ID, members=()):
+        self.id = role_id
+        self.name = "NSFW"
+        self.members = list(members)
+
+
+class _FakeMember:
+    def __init__(self, user_id, display_name="", bot=False, roles=()):
+        self.id = user_id
+        self.display_name = display_name or f"member-{user_id}"
+        self.bot = bot
+        self.roles = list(roles)
+
+
+class _FakeGuild:
+    me = None
+
+    def __init__(self, role, members):
+        self.id = GUILD_ID
+        self._role = role
+        self._members = {m.id: m for m in members}
+
+    def get_role(self, role_id):
+        return self._role if role_id == self._role.id else None
+
+    def get_member(self, user_id):
+        return self._members.get(user_id)
+
+    def get_channel(self, channel_id):
+        return None
+
+
+def _seed_snapshot_fixture(db_path, now):
+    """3001 waiting · 3002 stripped-returned · 3003 stripped-still-inactive."""
+    with open_db(db_path) as conn:
+        for uid, level in ((3001, 6), (3002, 7)):
+            conn.execute(
+                "INSERT INTO member_xp (guild_id, user_id, total_xp, level) "
+                "VALUES (?, ?, 0, ?)",
+                (GUILD_ID, uid, level),
+            )
+        record_prune_events(conn, GUILD_ID, [3002], ROLE_ID, now - 5 * 86400)
+        record_prune_events(conn, GUILD_ID, [3003], ROLE_ID, now - 3 * 86400)
+        for uid, days_ago in ((3001, 1), (3002, 1), (3003, 60)):
+            _seed_activity(conn, uid, now - days_ago * 86400)
+
+
+def test_gather_and_resolve_buckets(db_path):
+    now = time.time()
+    _seed_snapshot_fixture(db_path, now)
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(u) for u in (3001, 3002, 3003)])
+    with open_db(db_path) as conn:
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5)
+    snap = resolve_grant_audit_buckets(guild, guild._role, gathered, 5, now)  # type: ignore[arg-type]
+    assert [r["user_id"] for r in snap.waiting] == [3001]
+    assert [r["user_id"] for r in snap.returned] == [3002]
+    assert snap.returned[0]["level"] == 7
+    assert [r["user_id"] for r in snap.inactive] == [3003]
+    assert snap.inactivity_days == 30  # no prune rule → default window
+
+
+def test_resolve_buckets_excludes_departed_and_held(db_path):
+    now = time.time()
+    _seed_snapshot_fixture(db_path, now)
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO inactive_members (guild_id, user_id, stored_roles, created_at, status) "
+            "VALUES (?, 3002, '[]', 0, 'active')",
+            (GUILD_ID,),
+        )
+        gathered = gather_grant_audit(conn, GUILD_ID, ROLE_ID, 5)
+    # 3001 left the server (not in guild cache); 3002 sits on an inactive hold.
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(3002), _FakeMember(3003)])
+    snap = resolve_grant_audit_buckets(guild, guild._role, gathered, 5, now)  # type: ignore[arg-type]
+    assert snap.waiting == []
+    assert snap.returned == []
+    assert [r["user_id"] for r in snap.inactive] == [3003]
+
+
+# ── card embed builder ────────────────────────────────────────────────
+
+
+def _snapshot(waiting=(), returned=(), inactive=(), min_level=5, days=30):
+    return GrantAuditSnapshot(
+        min_level=min_level,
+        inactivity_days=days,
+        waiting=list(waiting),
+        returned=list(returned),
+        inactive=list(inactive),
+    )
+
+
+def test_embed_has_three_buckets_with_counts():
+    snap = _snapshot(
+        waiting=[{"user_id": 1, "display_name": "Nismo", "level": 7}],
+        returned=[
+            {"user_id": 2, "display_name": "Phantom", "level": 6, "pruned_at": 100.0}
+        ],
+        inactive=[
+            {"user_id": 3, "display_name": "Ghost", "level": None, "pruned_at": 200.0}
+        ],
+    )
+    embed = build_grant_audit_embed("NSFW", snap, now_ts=1000.0)
+    assert embed.title == "Grant audit — NSFW"
+    names = [f.name for f in embed.fields]
+    assert names[0] == "🕐 Waiting for first grant (1)"
+    assert names[1] == "↩️ Stripped but came back (1)"
+    assert names[2] == "💤 Recently stripped, still inactive"
+    assert "Nismo" in str(embed.fields[0].value)
+    assert "Phantom" in str(embed.fields[1].value) and "<t:100:R>" in str(embed.fields[1].value)
+    assert "Ghost" in str(embed.fields[2].value)
+
+
+def test_embed_empty_buckets_show_all_clear():
+    embed = build_grant_audit_embed("NSFW", _snapshot(), now_ts=1000.0)
+    assert embed.fields[0].value == "Nobody — all clear."
+    assert embed.fields[1].value == "Nobody — all clear."
+    assert "30d inactivity prune" in str(embed.fields[2].value)
+
+
+def test_embed_caps_waiting_with_overflow_line():
+    waiting = [
+        {"user_id": i, "display_name": f"m{i}", "level": 5} for i in range(20)
+    ]
+    embed = build_grant_audit_embed("NSFW", _snapshot(waiting=waiting), now_ts=0.0)
+    assert "…and 5 more on the dashboard." in str(embed.fields[0].value)
+    assert embed.fields[0].name == "🕐 Waiting for first grant (20)"
+
+
+# ── card ref storage ──────────────────────────────────────────────────
+
+
+def test_card_ref_roundtrip(db_path):
+    with open_db(db_path) as conn:
+        ref = load_card_ref(conn, GUILD_ID)
+        assert ref.message_id == 0 and ref.grant_name == ""
+        save_card_ref(conn, GUILD_ID, 111, 2**60 + 3, "nsfw", 7)
+        ref = load_card_ref(conn, GUILD_ID)
+        assert (ref.channel_id, ref.message_id) == (111, 2**60 + 3)
+        assert (ref.grant_name, ref.min_level) == ("nsfw", 7)
+        assert guilds_with_card(conn) == [GUILD_ID]
+        clear_card_ref(conn, GUILD_ID)
+        assert load_card_ref(conn, GUILD_ID).message_id == 0
+        assert guilds_with_card(conn) == []
+
+
+# ── card refresh (Discord I/O mocked) ─────────────────────────────────
+
+
+def _seed_card_guild(db_path, now):
+    _seed_snapshot_fixture(db_path, now)
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO grant_roles (guild_id, grant_name, label, role_id) "
+            "VALUES (?, 'nsfw', 'NSFW', ?)",
+            (GUILD_ID, ROLE_ID),
+        )
+        save_card_ref(conn, GUILD_ID, 555000, 666000, "nsfw", 5)
+
+
+def _card_bot(guild):
+    import discord
+    from unittest.mock import AsyncMock
+
+    channel = MagicMock(spec=discord.TextChannel)
+    message = MagicMock()
+    message.edit = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=message)
+    guild.get_channel = lambda cid: channel if cid == 555000 else None
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    return bot, channel, message
+
+
+async def test_refresh_card_edits_message_in_place(db_path):
+    now = time.time()
+    _seed_card_guild(db_path, now)
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(u) for u in (3001, 3002, 3003)])
+    bot, channel, message = _card_bot(guild)
+
+    await refresh_grant_audit_card(bot, db_path, GUILD_ID, now_ts=now)
+
+    channel.fetch_message.assert_awaited_once_with(666000)
+    message.edit.assert_awaited_once()
+    embed = message.edit.call_args.kwargs["embed"]
+    assert embed.title == "Grant audit — NSFW"
+    assert "member-3001" in embed.fields[0].value
+
+
+async def test_refresh_card_retires_ref_when_message_deleted(db_path):
+    import discord
+    from unittest.mock import AsyncMock
+
+    now = time.time()
+    _seed_card_guild(db_path, now)
+    guild = _FakeGuild(_FakeRole(), [])
+    bot, channel, _ = _card_bot(guild)
+    not_found = discord.NotFound(MagicMock(status=404, reason="Not Found"), "gone")
+    channel.fetch_message = AsyncMock(side_effect=not_found)
+
+    await refresh_grant_audit_card(bot, db_path, GUILD_ID, now_ts=now)
+
+    with open_db(db_path) as conn:
+        assert load_card_ref(conn, GUILD_ID).message_id == 0
+        assert guilds_with_card(conn) == []
+
+
+async def test_refresh_card_noop_without_stored_ref(db_path):
+    guild = _FakeGuild(_FakeRole(), [])
+    bot, channel, message = _card_bot(guild)
+    await refresh_grant_audit_card(bot, db_path, GUILD_ID)
+    channel.fetch_message.assert_not_awaited()
