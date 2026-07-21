@@ -2,7 +2,7 @@
 
 A step-by-step guide for installing **dungeon-keeper (dk)** on a Linux server for
 production use. For a quick local dev setup on Windows, see the Quick Start in
-[README.md](README.md).
+[README.md](../README.md).
 
 > **One thing that trips everyone up:** `pyproject.toml` declares **no runtime
 > dependencies**. Running `pip install -e .` alone installs the package but

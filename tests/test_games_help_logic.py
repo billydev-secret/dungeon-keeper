@@ -77,10 +77,10 @@ _DOCS_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
 
 
 def test_readme_party_game_count_matches_code():
-    readme = (_DOCS_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    readme = (_DOCS_ROOT / "README.md").read_text(encoding="utf-8")
     expected = f"{len(_PARTY_GAME_KEYS)}-game"
     assert expected in readme, (
-        f"docs/README.md should say '{expected}' (GAME_ICONS has "
+        f"README.md should say '{expected}' (GAME_ICONS has "
         f"{len(_PARTY_GAME_KEYS)} party games) — update the count."
     )
 

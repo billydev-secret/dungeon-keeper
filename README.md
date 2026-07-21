@@ -117,7 +117,7 @@ cp .env.example .env            # fill in DISCORD_TOKEN
 python -m dungeonkeeper
 ```
 
-For full setup instructions (bot permissions, guild configuration, production deployment) see [DEPLOYMENT.md](DEPLOYMENT.md).
+For full setup instructions (bot permissions, guild configuration, production deployment) see [DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Music cog setup
 

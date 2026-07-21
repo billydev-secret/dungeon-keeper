@@ -16,7 +16,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers |
 |---|---|
-| [README.md](README.md) | Feature overview + slash-command reference (currency pass 2026-07-21; broad-strokes accurate, verify individual command signatures against `/help` when it matters) |
+| [README.md](../README.md) | Feature overview + slash-command reference — moved to the repo root (currency pass 2026-07-21; broad-strokes accurate, verify individual command signatures against `/help` when it matters) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
@@ -74,14 +74,14 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sink round 2: paid quest rerolls, sponsor-a-QOTD (mod-approved), burn list, PvP coin wagers | All stages built (4b landed 2026-07-20) |
 | [events_spec.md](events_spec.md) | Events cog | |
-| [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
+| [music_spec.md](music_spec.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
 | [plans/qa-tracker.md](plans/qa-tracker.md) | QA Tracker (volunteer testing crew: verdict cards, currency rewards, admin void) | Stages 0–4 built (schema/service, cog, poster cards, dashboard, auto-archive sweep); bounty idea still open |
 | [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live leaderboard panel (today's pulse, pace, anonymous feed, event-driven debounced refresh) | Built 2026-07-18; awaiting live testing |
 | [plans/quest-variety-and-community-weeklies.md](plans/quest-variety-and-community-weeklies.md) | Quest engagement round: 13 new trigger kinds, auto-tracking community weeklies (tiered), live tracker, dynamic targets, board add-ons | Built 2026-07-18 (all stages); awaiting live testing + post-restart seed script |
 | [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |
 | [survey_spec.md](survey_spec.md) | Anonymous Survey (launcher button, DM walkthrough, de-identified responses) | **Zero code** — no cog, no launcher, no DM session logic anywhere in `src/`. Pure design doc; not started. |
-| [TGM-Dashboard-Concept-Spec.md](TGM-Dashboard-Concept-Spec.md) | Web dashboard concept | |
+| [tgm_dashboard_concept.md](tgm_dashboard_concept.md) | Web dashboard concept | concept doc — the 12-tile dashboard it sketches is largely unbuilt; treat as aspirational-by-intent |
 | [tools_spec.md](tools_spec.md) | Bot tools | |
 
 ## Implementation plans (`docs/plans/`)
