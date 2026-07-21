@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -46,8 +47,8 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert embed.color == discord.Color(0x123456)
     fields = {f.name: f.value or "" for f in embed.fields}
     earning = fields["Earning"]
-    # what-pays-what rows are aligned: label cell, payment outside
-    assert "`First message of the day` 🪙 5" in earning
+    # what-pays-what rows are aligned: label cell (padded to column width), payment outside
+    assert re.search(r"`First message of the day\s*` 🪙 5\b", earning)
     assert "🪙 15" in earning  # voice-first login base
     assert "/bank quests" in earning
     spending = fields["Spending"]
