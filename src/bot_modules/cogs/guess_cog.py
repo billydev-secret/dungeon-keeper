@@ -984,6 +984,15 @@ class CropEditorView(discord.ui.View):
             candidate_count=self._candidate_count,
         )
 
+        # Quest hook: submitting a round is the producer half of the
+        # guess-who quest pair (the guesses themselves fire "guess").
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            self.bot, self.guild_id, self._submitter_id,
+            "guess_post", occurrence=str(round_id),
+        )
+
         if self._original_bytes:
             orig_path = _GUESS_ORIG_DIR / f"{round_id}{self._original_ext}"
 
@@ -1425,6 +1434,14 @@ class ConfessionPreviewView(discord.ui.View):
             candidate_count=0,
             round_type="confession",
             confession_text=self._text,
+        )
+
+        # Quest hook: a confession round is still a submitted round.
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            self._bot, self._guild_id, self._submitter_id,
+            "guess_post", occurrence=str(round_id),
         )
 
         card_bytes = await asyncio.to_thread(

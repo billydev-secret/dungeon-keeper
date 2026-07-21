@@ -91,6 +91,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "pen_pal_complete": "See a Pen Pals session through to the end",
     "whisper_guess": "Correctly guess who sent a whisper",
     "guess_win": "Win a Guess Who round",
+    "guess_post": "Submit a Guess Who round",
     "quoted": "Have your message turned into a quote card",
     "session_join": "Join a scheduled game session",
     "voice_message": "Post a voice message",
@@ -142,6 +143,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "pen_pal_complete": "A Pen Pals session you were in reaching its natural end — both members fire; sessions that end early don't. Event cadence: once per session.",
     "whisper_guess": "Correctly guessing who sent you an anonymous whisper. Event cadence: once per whisper.",
     "guess_win": "Winning a Guess Who round. Event cadence: once per round.",
+    "guess_post": "Submitting a Guess Who round for others to solve (confession rounds count too). Event cadence: once per submitted round.",
     "quoted": "Someone ELSE turning your message into a quote card (the quoted author is credited; self-quotes never fire). Event cadence: once per quoted message.",
     "session_join": "Joining a scheduled game session. Event cadence: once per session.",
     "voice_message": "Posting a voice message (the transcription listener is the detector). Event cadence: once per message — use daily/weekly with a target count.",
@@ -482,6 +484,55 @@ def assigned_quest_ids(
     start = (index * n) % m
     picked = [shuffled[(start + i) % m] for i in range(n)]
     return sorted(picked)
+
+
+def pair_map(tagged: dict[int, str]) -> dict[int, int]:
+    """Quest-id → partner-id for tags shared by EXACTLY two quests.
+
+    ``tagged`` maps pool quest ids to their pair_tag ('' = untagged). A tag
+    carried by one quest (partner inactive/deleted) or by three-plus is
+    inert — a strict rule beats guessing which two of three were meant.
+    """
+    by_tag: dict[str, list[int]] = {}
+    for qid, tag in tagged.items():
+        if tag:
+            by_tag.setdefault(tag, []).append(qid)
+    out: dict[int, int] = {}
+    for ids in by_tag.values():
+        if len(ids) == 2:
+            a, b = sorted(ids)
+            out[a], out[b] = b, a
+    return out
+
+
+def apply_pair_bundles(picked: list[int], pairs: dict[int, int]) -> list[int]:
+    """Complete pairs on a drawn board: a picked quest pulls in its partner.
+
+    Walking picked ids in sorted order, a quest whose partner is absent
+    swaps the partner in for the LAST slot that isn't itself part of an
+    honored pair — deterministic, so the board stays a pure function of
+    (pool, member, period). A board of one can't hold a pair and is left
+    alone; if every other slot is already pair-locked, the odd quest keeps
+    its solo slot. Returns sorted ids, same length as ``picked``.
+    """
+    out = sorted(picked)
+    locked: set[int] = set()
+    # Pass 1: pairs the draw already completed are untouchable — another
+    # quest pulling ITS partner in must never split them.
+    for qid in out:
+        if qid in pairs and pairs[qid] in out:
+            locked.update((qid, pairs[qid]))
+    # Pass 2: complete the rest, lowest id first, displacing from the end.
+    for qid in list(out):
+        if qid in locked or qid not in pairs:
+            continue
+        partner = pairs[qid]
+        for i in range(len(out) - 1, -1, -1):
+            if out[i] != qid and out[i] not in locked:
+                out[i] = partner
+                locked.update((qid, partner))
+                break
+    return sorted(out)
 
 
 def has_board(qtype: str) -> bool:

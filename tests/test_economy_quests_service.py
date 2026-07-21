@@ -106,6 +106,7 @@ def _make(
     target_min=0,
     target_max=0,
     reward_xp=0,
+    pair_tag="",
     title="Quest",
 ):
     qid = create_quest(
@@ -129,6 +130,7 @@ def _make(
         target_min=target_min,
         target_max=target_max,
         reward_xp=reward_xp,
+        pair_tag=pair_tag,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -1581,6 +1583,43 @@ def test_fire_only_pays_quests_on_members_board(db):
         )
         claimed = {int(q["id"]) for q, _ in results}
         assert claimed == board
+
+
+def test_board_pairs_land_together(db):
+    # Two pair-tagged dailies in a pool of 8: any member whose draw touches
+    # either one gets both — the host prompt and the play prompt travel as
+    # a unit, every period, for every member.
+    with open_db(db) as conn:
+        host = _make(conn, qtype="daily", trigger_kind="guess_post",
+                     pair_tag="guesswho", title="Host")
+        play = _make(conn, qtype="daily", trigger_kind="guess", target_count=1,
+                     pair_tag="guesswho", title="Play")
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        for uid in range(100, 140):
+            for day in ("2026-07-13", "2026-07-14", "2026-07-15"):
+                board = assigned_board_ids(conn, GUILD, uid, "daily", day)
+                assert not (host in board) ^ (play in board)
+
+
+def test_board_pair_inert_when_partner_inactive(db):
+    # The partner got deactivated: the tag maps to one active quest, so the
+    # survivor draws like any untagged quest instead of dragging a ghost in.
+    with open_db(db) as conn:
+        host = _make(conn, qtype="daily", trigger_kind="guess_post",
+                     pair_tag="guesswho", title="Host")
+        play = _make(conn, qtype="daily", trigger_kind="guess",
+                     pair_tag="guesswho", title="Play", active=False)
+        for _ in range(4):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        boards = [
+            assigned_board_ids(conn, GUILD, uid, "daily", day)
+            for uid in range(100, 130)
+        ]
+        assert all(play not in b for b in boards)
+        assert any(host in b for b in boards)
+        assert all(len(b) == 2 for b in boards)
 
 
 def test_board_size_is_per_guild_configurable(db):

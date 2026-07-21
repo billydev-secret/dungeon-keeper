@@ -458,6 +458,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `pen_pal_complete` | a Pen Pals session reaches its natural 24 h expiry (both members fire; `early`/`channel_missing` closes never fire) | `pen_pals_cog` expiry sweep | `pen_pal_complete:<session_id>` |
 | `whisper_guess` | member correctly guesses a whisper's sender (fires after the race-consumed check, so a two-tab solve pays once) | `whisper_cog._handle_guess_outcome` | `whisper_guess:<whisper_id>` |
 | `guess_win` | member wins a Guess Who round (stretch twin of `guess`; fires only for the solve-race winner) | `guess_cog` solved path | `guess_win:<round_id>` |
+| `guess_post` | member submits a Guess Who round for others to solve (confession rounds included — producer half of the guess-who pair, see §4.6 pairing) | `guess_cog` both `_do_insert_round` call sites | `guess_post:<round_id>` |
 | `session_join` | member appears in a game-night session's roster (end_game now merges the real roster into `games_session_tracker`, which start-time calls only seeded with the host) | `game_manager._fire_session_join` | `session_join:<session_id>` — later games in the same session collide silently |
 | `voice_message` | member posts a voice message (fires before the transcription config gate — the quest is the post, not the transcript) | `voice_transcription_cog._on_message` | `voice_message:<message_id>` — use daily/weekly with a target count |
 | `music_request` | member's `/play` adds ≥1 track | `music_cog.play` via `daily_occurrence=True` | `music_request:<local_day>` (once/day by construction — a 30-track playlist and 30 requests look the same) |
@@ -579,6 +580,21 @@ roughly **⌊poolsize/N⌋ periods** apart (a full cycle when N divides the pool
 approximate otherwise — e.g. a 5-daily pool at N=2 recurs some dailies every 2
 days; small pools where `N ≥ poolsize` degrade to "everyone sees everything"). Community and event quests are **not** personalized (community is a
 guild-wide objective; event pays per occurrence).
+
+**Paired quests** (migration 106, `pair_tag`): two active quests of the same
+cadence sharing a non-empty `pair_tag` are drawn as a **bundle** — when the
+pure draw picks either, `quests.apply_pair_bundles` swaps its partner in for
+the last unpaired slot, so producer/consumer prompts (submit a Guess Who
+round + play one; send a whisper + unmask one) land on a member's board the
+same period. Pairs the draw already completed are never split; a tag carried
+by one active quest or by three-plus is inert (strict exactly-two rule,
+`quests.pair_map`); a board of one can't hold a pair and is left alone.
+Reroll overrides apply **after** pairing — a member can still opt out of half
+a pair, and that's their call. Note the frequency effect: a paired quest
+appears whenever *either* member of the pair is drawn, roughly doubling how
+often each shows up relative to an untagged pool-mate. Tag editing is on the
+dashboard Quests page (Pair tag field); like any pool change, edit at the
+period boundary or boards reshuffle mid-period.
 
 Both surfaces filter to the member's board: `fire_trigger_quests` and the
 trigger-word `on_message` path skip any daily/weekly/monthly quest not on the

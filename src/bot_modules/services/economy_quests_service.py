@@ -75,6 +75,7 @@ _UPDATABLE_FIELDS = frozenset(
         "target_min",
         "target_max",
         "reward_xp",
+        "pair_tag",
     }
 )
 
@@ -123,6 +124,7 @@ def create_quest(
     target_min: int = 0,
     target_max: int = 0,
     reward_xp: int = 0,
+    pair_tag: str = "",
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
     if qtype not in ("daily", "weekly", "monthly", "community", "event"):
@@ -137,8 +139,9 @@ def create_quest(
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
              created_by, created_at, trigger_words, trigger_channel_id,
-             trigger_kind, target_count, target_min, target_max, reward_xp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             trigger_kind, target_count, target_min, target_max, reward_xp,
+             pair_tag)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -161,6 +164,7 @@ def create_quest(
             int(target_min),
             int(target_max),
             int(reward_xp),
+            pair_tag,
         ),
     )
     return int(cur.lastrowid or 0)
@@ -506,9 +510,21 @@ def assigned_board_ids(
     n = quests.board_size(qtype, sizes)
     if n <= 0 or not quests.has_board(qtype):
         return set()
-    pool = list_active_pool_ids(conn, guild_id, qtype)
+    tagged = {
+        int(r["id"]): str(r["pair_tag"])
+        for r in conn.execute(
+            "SELECT id, pair_tag FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
+            (guild_id, qtype),
+        )
+    }
+    pool = sorted(tagged)
     idx = quests.period_index(qtype, local_day)
-    board = set(quests.assigned_quest_ids(pool, user_id, idx, n))
+    picked = quests.assigned_quest_ids(pool, user_id, idx, n)
+    # Paired quests land together: a drawn quest pulls its partner into the
+    # remaining slot (producer/consumer pairs — hosts and players prompted
+    # the same period). Rerolls apply after, so a member can still opt out.
+    board = set(quests.apply_pair_bundles(picked, quests.pair_map(tagged)))
     # Reroll overrides sit on top of the pure draw: from → to per slot, this
     # period only. A replacement that has since left the active pool falls
     # back to the pure slot rather than dropping the board below size.
