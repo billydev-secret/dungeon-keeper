@@ -99,12 +99,12 @@ export function mount(container) {
     container.innerHTML = `
       <div class="panel">
         <header>
-          <h2>Inactivity Prune</h2>
+          <h2>Auto-Remove Role (Inactive)</h2>
           <div class="subtitle">Automatically remove a role from inactive members</div>
         </header>
         <form class="form" data-form>
           <div class="field">
-            <label>Role to Prune</label>
+            <label>Role to Remove</label>
             <select name="role_id">${roleSelect(roles, p.role_id)}</select>
             <div class="field-hint">Set to (none) to disable pruning</div>
           </div>
