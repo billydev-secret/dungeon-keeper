@@ -16,6 +16,13 @@
   (`events_cog`), traditional/fantasies recap no-guild fallback gray → BRAND,
   Name-Your-Price force-close embed → accent, and a content-type-color
   semantic note added to the guide (Truth/Dare card coding stays).
+- Engine games — full-accent (2026-07-21 follow-up ruling: no per-game state
+  palettes) — done: chicken, musical chairs, hot potato (1v1 + group),
+  quickdraw, pressure cooker, legitlibs (quiplash + classic), risky rolls.
+  Yellow active states / the pressure gauge / heat tiers / terminal greys →
+  accent (resolved once per game, cached); gold winners → COLOR_GREEN;
+  loss/crash/elimination stays COLOR_RED. This RETIRES the earlier "non-goal"
+  that kept the engine palettes.
 
 **Spec:** [`../embed_style_guide.md`](../embed_style_guide.md) — updated 2026-07-21 with
 the color rulings, currency vocabulary, ledger-row, footer, and title-glyph

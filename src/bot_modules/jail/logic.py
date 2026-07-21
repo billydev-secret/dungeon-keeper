@@ -220,6 +220,44 @@ def restore_roles(stored: list[int], available_role_ids: set[int]) -> list[int]:
     return [rid for rid in stored if rid in available_role_ids]
 
 
+# ── Jailed-role channel visibility ────────────────────────────────────
+#
+# Jail is a deny-list: a jailed member keeps @everyone, so they can see any
+# channel @everyone can see unless that channel carries an explicit
+# ``@Jailed → view_channel=False`` overwrite. Those overwrites are stamped when
+# the Jailed role is first created — but a channel (or category) created later
+# has none, and leaks to jailed members. These helpers decide which channels
+# still need the deny so the cog can stamp new ones (on_guild_channel_create)
+# and backfill any that already leaked (startup sweep).
+
+
+def channel_needs_jail_deny(jailed_view_overwrite: bool | None) -> bool:
+    """Return True if a channel still needs a ``view_channel=False`` Jailed deny.
+
+    ``jailed_view_overwrite`` is the Jailed role's current ``view_channel``
+    overwrite on the channel:
+
+    - ``False`` — the deny is already in place; leave it (returns False).
+    - ``True``  — explicitly *allowed*; the channel is exposed and must be
+      overridden (returns True).
+    - ``None``  — no overwrite, so the member inherits @everyone's visibility;
+      the channel is exposed and needs the stamp (returns True).
+    """
+    return jailed_view_overwrite is not False
+
+
+def channels_needing_jail_deny(
+    channel_states: list[tuple[int, bool | None]],
+) -> list[int]:
+    """Filter ``(channel_id, jailed_view_overwrite)`` pairs to the exposed ids.
+
+    Preserves input order so a caller iterating the guild's channels stamps
+    them top-to-bottom. See :func:`channel_needs_jail_deny` for the per-channel
+    rule.
+    """
+    return [cid for cid, view in channel_states if channel_needs_jail_deny(view)]
+
+
 # ── Expiry checks ─────────────────────────────────────────────────────
 
 def is_jail_expired(jail_row: dict[str, Any], now_ts: float | None = None) -> bool:

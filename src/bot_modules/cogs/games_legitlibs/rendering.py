@@ -7,12 +7,10 @@ _MARKER_RE = re.compile(r"\{(\w+)\}")
 _GAME_NAME = "LegitLibs"
 _ICON = GAME_ICONS["legitlibs"]
 
-_TIER_COLORS = {
-    1: PHASE_JOINING,
-    2: PHASE_PLAYING,
-    3: 0xFF6B35,
-    4: 0xED4245,
-}
+# Embeds follow the guild accent (threaded in as ``color`` by the cog). Each
+# builder keeps its original phase color only as a fall-back for when accent
+# resolution fails, so a branding hiccup never crashes a game.
+_ColorT = discord.Color | int
 
 
 def build_join_embed(
@@ -22,12 +20,13 @@ def build_join_embed(
     mode: str,
     player_count: int,
     player_min: int,
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     mode_label = {"quiplash": "Quiplash", "classic": "Classic", "hotseat": "Hot Seat"}.get(mode, mode.title())
     embed = discord.Embed(
         title=f"{_ICON} LEGITLIBS  —  {mode_label.upper()}",
         description=f'**"{template_title}"**',
-        color=_TIER_COLORS.get(tier, PHASE_JOINING),
+        color=color if color is not None else PHASE_JOINING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Mode", value=mode_label, inline=True)
@@ -49,6 +48,7 @@ def build_fill_embed(
     submitted_count: int,
     deadline_ts: int | None = None,
     redacted_body: str | None = None,
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     description = f'**"{template_title}"**'
     if redacted_body:
@@ -57,7 +57,7 @@ def build_fill_embed(
     embed = discord.Embed(
         title=f"{_ICON} LEGITLIBS  —  FILL PHASE",
         description=description,
-        color=PHASE_PLAYING,
+        color=color if color is not None else PHASE_PLAYING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Submitted", value=f"{submitted_count} / {player_count}", inline=True)
@@ -73,21 +73,24 @@ def build_reveal_embed(
     filled_body: str,
     submission_num: int,
     total_submissions: int,
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(
         title=f"{_ICON} {submission_num} / {total_submissions}",
         description=filled_body,
-        color=PHASE_RESULTS,
+        color=color if color is not None else PHASE_RESULTS,
     )
     embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  {HEAT_ICONS[tier]} {template_title}")
     return embed
 
 
-def build_no_submissions_embed(template_title: str, tier: int) -> discord.Embed:
+def build_no_submissions_embed(
+    template_title: str, tier: int, color: _ColorT | None = None
+) -> discord.Embed:
     embed = discord.Embed(
         title=f"{_ICON} NO SUBMISSIONS",
         description="Nobody filled in the blanks in time.",
-        color=PHASE_RECAP,
+        color=color if color is not None else PHASE_RECAP,
     )
     embed.set_footer(text=f"{_ICON} {_GAME_NAME}  •  {template_title}")
     return embed
@@ -147,6 +150,7 @@ def build_classic_fill_embed(
     player_count: int,
     done_count: int,
     deadline_ts: int,
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     description = (
         f'**"{template_title}"**\n\n'
@@ -156,7 +160,7 @@ def build_classic_fill_embed(
     embed = discord.Embed(
         title=f"{_ICON} LEGITLIBS  —  CLASSIC — FILL PHASE",
         description=description,
-        color=PHASE_PLAYING,
+        color=color if color is not None else PHASE_PLAYING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Players done", value=f"{done_count} / {player_count}", inline=True)
@@ -171,6 +175,7 @@ def build_classic_rescue_embed(
     unfilled_count: int,
     volunteer_names: list[str],
     deadline_ts: int,
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     s = "s" if unfilled_count != 1 else ""
     description = (
@@ -182,7 +187,7 @@ def build_classic_rescue_embed(
     embed = discord.Embed(
         title=f"{_ICON} LEGITLIBS  —  CLASSIC — RESCUE ROUND",
         description=description,
-        color=PHASE_PLAYING,
+        color=color if color is not None else PHASE_PLAYING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Unfilled", value=str(unfilled_count), inline=True)
@@ -204,6 +209,7 @@ def build_classic_rescue_fill_embed(
     rescuers_done: int,
     rescuers_total: int,
     deadline_ts: int,
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     description = (
         f'**"{template_title}"**\n\n'
@@ -212,7 +218,7 @@ def build_classic_rescue_fill_embed(
     embed = discord.Embed(
         title=f"{_ICON} LEGITLIBS  —  CLASSIC — RESCUE FILL",
         description=description,
-        color=PHASE_PLAYING,
+        color=color if color is not None else PHASE_PLAYING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(
@@ -229,13 +235,14 @@ def build_classic_reveal_embed(
     tier: int,
     filled_body: str,
     contributor_names: list[str],
+    color: _ColorT | None = None,
 ) -> discord.Embed:
     if len(filled_body) > 4090:
         filled_body = filled_body[:4090] + "…"
     embed = discord.Embed(
         title=f"{_ICON} {template_title}",
         description=filled_body,
-        color=PHASE_RECAP,
+        color=color if color is not None else PHASE_RECAP,
     )
     contribs = ", ".join(contributor_names) if contributor_names else "—"
     embed.set_footer(

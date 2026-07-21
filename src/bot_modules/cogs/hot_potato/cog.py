@@ -15,6 +15,7 @@ import time
 import discord
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
@@ -35,6 +36,9 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
+        # Guild accent resolved once per game and reused across every message
+        # edit; missing entries fall back to the old COLOR_YELLOW.
+        self._accents: dict[int, "discord.Color"] = {}
 
     hot_potato = app_commands.Group(
         name="hotpotato",
@@ -181,7 +185,24 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
 
     # ── Game hooks ────────────────────────────────────────────────────────────
 
+    async def _prime_accent(self, game: HotPotatoGame) -> None:
+        """Resolve & cache this game's guild accent once; never raise into a game
+        path. Leaves the entry unset (render falls back to COLOR_YELLOW) when
+        there's no guild, no bot.ctx/db_path, or resolution fails."""
+        if game.id in self._accents:
+            return
+        guild = self.bot.get_guild(game.guild_id)
+        ctx = getattr(self.bot, "ctx", None)
+        db_path = getattr(ctx, "db_path", None)
+        if guild is None or db_path is None:
+            return
+        try:
+            self._accents[game.id] = await resolve_accent_color(db_path, guild)
+        except Exception as e:  # pragma: no cover - defensive
+            log.debug("hot potato accent resolve failed: %s", e)
+
     async def on_game_start(self, game: HotPotatoGame) -> None:
+        await self._prime_accent(game)
         cfg = await hpdb.get_config(self.db, game.guild_id)
         timer = random.uniform(cfg["min_timer"], cfg["max_timer"])
         now = time.time()
@@ -200,6 +221,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         self._timers[game.id] = task
 
     async def on_game_resume(self, game: HotPotatoGame) -> None:
+        await self._prime_accent(game)
         if not game.started_at or not game.timer_seconds:
             asyncio.create_task(self._explode(game.id))
             return
@@ -225,6 +247,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
 
     async def on_game_resolved(self, game_id: int) -> None:
         self._cancel_timer(game_id)
+        self._accents.pop(game_id, None)
 
     def render_game_state(
         self, game: HotPotatoGame, guild: discord.Guild
@@ -255,7 +278,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                     f"**{c_name}** vs **{t_name}**\n\n"
                     f"**{holder_name}** is holding the potato! Quick — PASS it!"
                 ),
-                color=COLOR_YELLOW,
+                color=self._accents.get(game.id, COLOR_YELLOW),
             )
             embed.add_field(name="🥔 Passes", value=str(pass_count), inline=True)
 

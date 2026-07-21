@@ -51,11 +51,18 @@ async def db(sync_db_path: Path) -> GamesDb:
 
 @pytest.fixture(autouse=True)
 def _stub_lobby_accent():
-    """The lobby embed now resolves the guild accent; the FakeGuild here has no
-    real avatar to read, so stub the lookup."""
-    with patch(
-        "bot_modules.duels.base_game.resolve_accent_color",
-        new=AsyncMock(return_value=discord.Color.blurple()),
+    """The lobby embed (base_game) and the active game embed (this cog, via
+    ``_prime_accent`` on start/resume) both resolve the guild accent; the
+    FakeGuild here has no real avatar to read, so stub both import paths."""
+    with (
+        patch(
+            "bot_modules.duels.base_game.resolve_accent_color",
+            new=AsyncMock(return_value=discord.Color.blurple()),
+        ),
+        patch(
+            "bot_modules.cogs.hot_potato_group.cog.resolve_accent_color",
+            new=AsyncMock(return_value=discord.Color.blurple()),
+        ),
     ):
         yield
 

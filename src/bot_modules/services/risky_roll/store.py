@@ -17,6 +17,11 @@ class StateStore:
     def __init__(self, db_path: Path) -> None:
         self._path = str(db_path)
 
+    @property
+    def db_path(self) -> str:
+        """The SQLite path, exposed so the module can resolve embed accents."""
+        return self._path
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, timeout=30)
         conn.row_factory = sqlite3.Row

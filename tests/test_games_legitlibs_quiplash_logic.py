@@ -306,3 +306,72 @@ def test_shuffle_reveal_order_uses_module_random_when_omitted():
 
 def test_shuffle_reveal_order_empty_list():
     assert shuffle_reveal_order([]) == []
+
+
+# ── rendering builders follow the guild accent ───────────────────────
+#
+# The Quiplash embeds (join / fill / reveal / no-submissions) now take a
+# ``color`` the cog threads in from ``resolve_accent_color``. When accent
+# resolution fails the cog passes ``None`` and each builder falls back to
+# its original phase color, so a branding hiccup never crashes a game.
+
+import discord  # noqa: E402
+
+from bot_modules.cogs.games_legitlibs import rendering as ll_rendering  # noqa: E402
+from bot_modules.games.constants import (  # noqa: E402
+    PHASE_JOINING,
+    PHASE_PLAYING,
+    PHASE_RECAP,
+    PHASE_RESULTS,
+)
+
+
+def test_tier_colors_gradient_removed():
+    """The old gold→blue→orange→red heat gradient is gone entirely."""
+    assert not hasattr(ll_rendering, "_TIER_COLORS")
+
+
+def test_build_join_embed_uses_passed_accent():
+    accent = discord.Color(0x123456)
+    embed = ll_rendering.build_join_embed("Host", "T", 3, "quiplash", 1, 2, color=accent)
+    assert embed.color == accent
+
+
+def test_build_join_embed_falls_back_to_phase_color_without_accent():
+    embed = ll_rendering.build_join_embed("Host", "T", 3, "quiplash", 1, 2)
+    assert embed.color == discord.Color(PHASE_JOINING)
+
+
+def test_build_fill_embed_uses_passed_accent():
+    accent = discord.Color(0x0AABBC)
+    embed = ll_rendering.build_fill_embed("Host", "T", 3, 2, 0, color=accent)
+    assert embed.color == accent
+
+
+def test_build_fill_embed_falls_back_without_accent():
+    embed = ll_rendering.build_fill_embed("Host", "T", 3, 2, 0)
+    assert embed.color == discord.Color(PHASE_PLAYING)
+
+
+def test_build_reveal_embed_uses_passed_accent():
+    accent = discord.Color(0xABCDEF)
+    embed = ll_rendering.build_reveal_embed("T", 3, "body", 1, 1, color=accent)
+    assert embed.color == accent
+
+
+def test_build_reveal_embed_falls_back_without_accent():
+    """No single 'funniest' winner is declared — the reveal is a neutral
+    tally, so it follows the accent (results-green only as fallback)."""
+    embed = ll_rendering.build_reveal_embed("T", 3, "body", 1, 1)
+    assert embed.color == discord.Color(PHASE_RESULTS)
+
+
+def test_build_no_submissions_embed_uses_passed_accent():
+    accent = discord.Color(0x445566)
+    embed = ll_rendering.build_no_submissions_embed("T", 3, color=accent)
+    assert embed.color == accent
+
+
+def test_build_no_submissions_embed_falls_back_without_accent():
+    embed = ll_rendering.build_no_submissions_embed("T", 3)
+    assert embed.color == discord.Color(PHASE_RECAP)

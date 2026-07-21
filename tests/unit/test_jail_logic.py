@@ -6,6 +6,8 @@ import pytest
 from freezegun import freeze_time
 
 from bot_modules.jail.logic import (
+    channel_needs_jail_deny,
+    channels_needing_jail_deny,
     eligible_voters,
     is_jail_expired,
     jail_duration_seconds,
@@ -16,6 +18,36 @@ from bot_modules.jail.logic import (
     vote_outcome,
 )
 from bot_modules.services.moderation import fmt_duration, parse_duration
+
+
+# ── Jailed-role channel visibility ────────────────────────────────────
+
+@pytest.mark.parametrize("overwrite,needs", [
+    (None, True),    # no overwrite → inherits @everyone → exposed
+    (True, True),    # explicitly allowed → must be overridden
+    (False, False),  # already denied → leave it
+])
+def test_channel_needs_jail_deny(overwrite, needs):
+    assert channel_needs_jail_deny(overwrite) is needs
+
+
+def test_channels_needing_jail_deny_filters_and_preserves_order():
+    states = [
+        (10, None),    # exposed
+        (20, False),   # already denied — skip
+        (30, True),    # allowed — must override
+        (40, None),    # exposed
+    ]
+    assert channels_needing_jail_deny(states) == [10, 30, 40]
+
+
+def test_channels_needing_jail_deny_all_denied_is_empty():
+    states = [(1, False), (2, False), (3, False)]
+    assert channels_needing_jail_deny(states) == []
+
+
+def test_channels_needing_jail_deny_empty_input():
+    assert channels_needing_jail_deny([]) == []
 
 
 # ── parse_duration ────────────────────────────────────────────────────

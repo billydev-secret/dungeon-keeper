@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.services.risky_roll import state as rr_state
-from bot_modules.services.risky_roll.formatters import build_embed
+from bot_modules.services.risky_roll.formatters import build_embed, resolve_embed_accent
 from bot_modules.services.risky_roll.logic import (
     collect_channel_state_ids,
     normalize_auto_close_options,
@@ -226,11 +226,12 @@ class RiskyRollCog(commands.Cog):
                     content = f"# <@&{role_id}> A new Risky Rolls round has begun!"
                     allowed_mentions = discord.AllowedMentions(roles=True)
 
+            accent = await resolve_embed_accent(interaction.guild)
             view = RiskyRollView(state.game_id)
             try:
                 await interaction.response.send_message(
                     content=content,
-                    embed=build_embed(state, interaction.guild),
+                    embed=build_embed(state, interaction.guild, accent),
                     view=view,
                     allowed_mentions=allowed_mentions,
                 )
@@ -260,7 +261,7 @@ class RiskyRollCog(commands.Cog):
                         try:
                             await message.edit(
                                 content="Risky Rolls could not finish setup. Start a new round.",
-                                embed=build_embed(state, interaction.guild),
+                                embed=build_embed(state, interaction.guild, accent),
                                 view=failed_view,
                                 allowed_mentions=discord.AllowedMentions.none(),
                             )
@@ -323,10 +324,11 @@ class RiskyRollCog(commands.Cog):
             )
             rr_state.active_games[state.game_id] = state
 
+            accent = await resolve_embed_accent(channel.guild)
             view = RiskyRollView(state.game_id)
             try:
                 msg = await channel.send(
-                    embed=build_embed(state, channel.guild),
+                    embed=build_embed(state, channel.guild, accent),
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )

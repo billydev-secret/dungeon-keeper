@@ -15,9 +15,10 @@ import time
 import discord
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
-from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
 from . import db as mcdb
 from .game import MusicalChairsGame, chairs_for, resolve_round
@@ -34,6 +35,30 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
+        # game_id -> resolved guild accent, so a game's round-active embeds share
+        # one branding lookup across every MUSIC↔SCRAMBLE message edit.
+        self._accents: dict[int, discord.Color] = {}
+
+    async def _resolve_accent(
+        self, game_id: int, guild: discord.Guild | None
+    ) -> discord.Color:
+        """Return the guild accent for this game's round-active embeds, resolved
+        once and cached for reuse across the game's message edits. Falls back to
+        the old COLOR_YELLOW on any failure (no guild / no app context / branding
+        error) so a branding hiccup never crashes a live game."""
+        cached = self._accents.get(game_id)
+        if cached is not None:
+            return cached
+        ctx = getattr(self.bot, "ctx", None)
+        if guild is None or ctx is None:
+            return discord.Color(COLOR_YELLOW)
+        try:
+            color = await resolve_accent_color(ctx.db_path, guild)
+        except Exception:
+            log.debug("accent resolution failed for game %s", game_id, exc_info=True)
+            return discord.Color(COLOR_YELLOW)
+        self._accents[game_id] = color
+        return color
 
     musicalchairs = app_commands.Group(
         name="musicalchairs",
@@ -184,6 +209,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 pass
         game2 = await mcdb.get_game(self.db, game.id)
         if guild and game2 and game2.message_id:
+            await self._resolve_accent(game.id, guild)
             await self._edit_message_silent(
                 game2.channel_id, game2.message_id,
                 self.render_game_state(game2, guild),
@@ -254,6 +280,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
     async def on_game_start(self, game: MusicalChairsGame) -> None:
         cfg = await mcdb.get_config(self.db, game.guild_id)
+        await self._resolve_accent(game.id, self.bot.get_guild(game.guild_id))
         music = random.uniform(cfg["min_music"], cfg["max_music"])
         now = time.time()
         await self._db_set_state(
@@ -270,6 +297,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         self._timers[game.id] = task
 
     async def on_game_resume(self, game: MusicalChairsGame) -> None:
+        await self._resolve_accent(game.id, self.bot.get_guild(game.guild_id))
         if not game.phase or game.phase_started_at is None or game.phase_duration is None:
             asyncio.create_task(self._start_scramble(game.id))
             return
@@ -297,6 +325,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
     async def on_game_resolved(self, game_id: int) -> None:
         self._cancel_timer(game_id)
+        self._accents.pop(game_id, None)
 
     def _name(self, guild: discord.Guild, uid: int) -> str:
         m = guild.get_member(uid)
@@ -317,10 +346,12 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             embed.add_field(name="Chairs left", value=str(chairs), inline=True)
             embed.add_field(name="Still in", value=alive_names, inline=False)
         else:  # MUSIC
+            # Round-active embeds follow the guild accent (resolved once per game
+            # into ``_accents``); fall back to the old COLOR_YELLOW if unresolved.
             embed = discord.Embed(
                 title=f"🎵 MUSICAL CHAIRS — Round {game.round}",
                 description="🎶 …the music is playing… **don't sit yet** (sit early and you're out).",
-                color=COLOR_YELLOW,
+                color=self._accents.get(game.id, COLOR_YELLOW),
             )
             embed.add_field(name="🪑 Chairs", value=str(chairs), inline=True)
             embed.add_field(name="👥 Still in", value=alive_names, inline=False)
@@ -344,7 +375,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         embed = discord.Embed(
             title="🪑 Musical Chairs — Game Over",
             description=f"**{winner_name}** takes the last chair!",
-            color=COLOR_GOLD,
+            color=COLOR_GREEN,
         )
         embed.add_field(name="🏆 Winner", value=winner_name, inline=True)
         embed.add_field(name="🥈 Runner-up", value=loser_name, inline=True)

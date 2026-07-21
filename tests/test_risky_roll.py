@@ -29,6 +29,8 @@ from pathlib import Path
 import pytest
 
 from bot_modules.services.risky_roll import state
+from bot_modules.services import embeds as embed_colors
+from bot_modules.services.risky_roll import formatters
 from bot_modules.services.risky_roll.formatters import (
     build_embed,
     build_how_to_play_content,
@@ -38,6 +40,7 @@ from bot_modules.services.risky_roll.formatters import (
     build_rolloff_embed,
     format_lowest_rolloff_note,
     format_user_mentions,
+    resolve_embed_accent,
 )
 from bot_modules.services.risky_roll.logic import (
     build_main_prompt_state,
@@ -770,6 +773,88 @@ def test_build_embed_footer_describes_auto_close():
     assert embed.footer.text is not None
     assert "25" in embed.footer.text
     assert "120" in embed.footer.text
+
+
+# ── formatters.build_embed color (guild accent + win = green) ────────
+
+_ACCENT = discord.Color(0x8B5CF6)  # a distinctive purple, unlike any old state color
+
+
+def test_build_embed_winner_no_loser_is_green_regardless_of_accent():
+    # A decided winner with no loser marks a WIN → always green, even when an
+    # accent is supplied (the accent must not override the win color).
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {1: 69, 2: 5}
+    s.highest_user = 1
+    s.lowest_user = None
+    s.is_open = False
+    assert build_embed(s, None, _ACCENT).color == discord.Color(embed_colors.COLOR_GREEN)
+    assert build_embed(s).color == discord.Color(embed_colors.COLOR_GREEN)
+
+
+def test_build_embed_open_round_uses_accent_when_supplied():
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    assert build_embed(s, None, _ACCENT).color == _ACCENT
+
+
+def test_build_embed_open_round_falls_back_to_old_red_without_accent():
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    assert build_embed(s).color == discord.Color(0xDC3545)
+
+
+def test_build_embed_reroll_uses_accent_and_falls_back_to_old_orange():
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.reroll_user_ids = {1, 2}
+    assert build_embed(s, None, _ACCENT).color == _ACCENT
+    assert build_embed(s).color == discord.Color(0xFF9800)
+
+
+def test_build_embed_round_over_with_loser_uses_accent_and_falls_back_to_greyple():
+    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
+    s.rolls = {1: 90, 2: 5}
+    s.highest_user = 1
+    s.lowest_user = 2
+    s.is_open = False
+    assert build_embed(s, None, _ACCENT).color == _ACCENT
+    assert build_embed(s).color == discord.Color(0x546E7A)
+
+
+# ── formatters.resolve_embed_accent guards ──────────────────────────
+
+
+async def test_resolve_embed_accent_returns_none_without_guild():
+    assert await resolve_embed_accent(None) is None
+
+
+async def test_resolve_embed_accent_returns_none_without_store(monkeypatch):
+    # No store set → no db_path → fall back (None), never touching branding.
+    monkeypatch.setattr(state, "store", None, raising=False)
+    assert await resolve_embed_accent(object()) is None
+
+
+async def test_resolve_embed_accent_resolves_via_branding(monkeypatch):
+    class _Store:
+        db_path = ":memory:"
+
+    async def _fake_resolve(db_path, guild):
+        return _ACCENT
+
+    monkeypatch.setattr(state, "store", _Store(), raising=False)
+    monkeypatch.setattr(formatters, "resolve_accent_color", _fake_resolve)
+    assert await resolve_embed_accent(object()) == _ACCENT
+
+
+async def test_resolve_embed_accent_swallows_errors(monkeypatch):
+    class _Store:
+        db_path = ":memory:"
+
+    async def _boom(db_path, guild):
+        raise RuntimeError("branding blew up")
+
+    monkeypatch.setattr(state, "store", _Store(), raising=False)
+    monkeypatch.setattr(formatters, "resolve_accent_color", _boom)
+    # A branding failure must never crash a game — accent falls back to None.
+    assert await resolve_embed_accent(object()) is None
 
 
 # ── formatters.build_embed name resolution ──────────────────────────
