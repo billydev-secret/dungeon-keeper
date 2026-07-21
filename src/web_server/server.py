@@ -169,10 +169,14 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def _auto_detect_auth(guild_id: int) -> AuthBackend:
-    """Pick an auth backend based on environment variables.
+    """Pick an auth backend based on environment variables — failing *closed*.
 
-    If DISCORD_CLIENT_ID and SESSION_SECRET are set, use Discord OAuth2.
-    Otherwise fall back to the open (LAN-only) backend.
+    Discord OAuth2 when DISCORD_CLIENT_ID + SESSION_SECRET are set. The open
+    (no-auth, full-admin) backend is served ONLY when explicitly opted into via
+    ``DASHBOARD_OPEN_AUTH=1``. A missing OAuth secret must NOT silently fall back
+    to admin-to-everyone: the cloudflared tunnel bridges the loopback bind to the
+    public internet, so a dropped env var would otherwise publish an unguarded
+    admin dashboard. When neither is configured we refuse to start.
     """
     client_id = os.getenv("DISCORD_CLIENT_ID")
     session_secret = os.getenv("SESSION_SECRET")
@@ -182,10 +186,19 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
         _log.info("Discord OAuth2 authentication enabled (client_id=%s)", client_id)
         return DiscordOAuthAuth(session_secret, guild_id, support_user_id=support_user_id)
 
-    _log.info(
-        "Open authentication (LAN mode) — set DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth"
+    if os.getenv("DASHBOARD_OPEN_AUTH") == "1":
+        _log.warning(
+            "Open (no-auth, full-admin) dashboard — DASHBOARD_OPEN_AUTH=1. Intended "
+            "for a trusted LAN only; never expose this backend through a tunnel."
+        )
+        return OpenAuth()
+
+    raise RuntimeError(
+        "Dashboard auth is unconfigured. Set DISCORD_CLIENT_ID + SESSION_SECRET "
+        "to enable Discord OAuth, or DASHBOARD_OPEN_AUTH=1 to explicitly run the "
+        "open (no-auth, full-admin) backend on a trusted LAN. Refusing to start "
+        "rather than silently granting admin access to everyone."
     )
-    return OpenAuth()
 
 
 def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001

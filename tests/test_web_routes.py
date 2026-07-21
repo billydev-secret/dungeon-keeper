@@ -772,3 +772,31 @@ def test_post_bot_identity_400_on_bad_avatar_url(ctx, make_client):
         MockClient.return_value = instance
         resp = client.post("/api/config/bot-identity", data={"avatar_url": "https://bad.example.com/img.png"})
     assert resp.status_code == 400
+
+
+# ── auth backend selection fails closed (deep-review #5) ──────────────────────
+
+from web_server.server import _auto_detect_auth  # noqa: E402
+
+
+def test_auto_detect_auth_uses_oauth_when_configured(monkeypatch):
+    monkeypatch.setenv("DISCORD_CLIENT_ID", "cid")
+    monkeypatch.setenv("SESSION_SECRET", "secret")
+    monkeypatch.delenv("DASHBOARD_OPEN_AUTH", raising=False)
+    assert isinstance(_auto_detect_auth(123), DiscordOAuthAuth)
+
+
+def test_auto_detect_auth_open_only_with_explicit_optin(monkeypatch):
+    monkeypatch.delenv("DISCORD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.setenv("DASHBOARD_OPEN_AUTH", "1")
+    assert isinstance(_auto_detect_auth(123), OpenAuth)
+
+
+def test_auto_detect_auth_fails_closed_when_unconfigured(monkeypatch):
+    # A dropped OAuth secret must NOT silently serve admin-to-everyone.
+    monkeypatch.delenv("DISCORD_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.delenv("DASHBOARD_OPEN_AUTH", raising=False)
+    with pytest.raises(RuntimeError, match="Refusing to start"):
+        _auto_detect_auth(123)
