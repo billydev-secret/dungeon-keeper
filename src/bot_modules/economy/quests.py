@@ -188,6 +188,13 @@ _REWARD_BANDS: dict[str, tuple[int, int]] = {
 }
 
 
+# Kinds whose per-member counts must never surface as "top contributors":
+# naming the most active confessors/repliers/whisperers would deanonymize an
+# anonymous feed. A community weekly on these kinds pays flat tiers only —
+# no top-contributor bonus, no names in the beat sheet (even the owner DM:
+# the sheet is written to be pasted publicly).
+ANON_COMMUNITY_KINDS = frozenset({"confession", "confession_reply", "whisper"})
+
 # Community weekly milestone tiers, as fractions of the auto-sized target.
 # Tier 1 is sized to be near-certain, tier 3 a genuine stretch; each tier
 # crossed pays the quest's flat reward once (research: binary pass/fail
@@ -293,10 +300,25 @@ def beat_resolution(summary: dict) -> str:
     top = summary["top_contributors"]
     bonus_paid = summary["bonus_paid"]
     pct = round(100 * int(current) / int(target)) if target else 0
+    tier_word = f"{crossed}/3 tiers" if crossed else "no tiers"
+    if summary.get("anonymous"):
+        # Anonymous kind: the sheet is written to be pasted publicly, so it
+        # must carry no names — and no bonus was paid to have names for.
+        return (
+            f"🏆 **Community weekly resolved** — {title}\n"
+            f"Final: {current}/{target} ({pct}%) → **{tier_word}** paid to "
+            f"every active member ({summary['reward_per_tier']} per tier).\n"
+            f"Contributors: {contributors} (anonymous kind — no top list, "
+            f"no bonus)\n\n"
+            f"Suggested post:\n"
+            f"> 🏆 **{title}** is in the books: {pct}% and {tier_word} "
+            f"cleared — payouts are in your wallets. No shout-outs on this "
+            f"one; you know who you are. 🤫 All {contributors} of you moved "
+            f"the bar. Next goal after a breather week. 💰"
+        )
     top_lines = "\n".join(
         f"  {i + 1}. <@{uid}> — {n}" for i, (uid, n) in enumerate(top)
     ) or "  (nobody)"
-    tier_word = f"{crossed}/3 tiers" if crossed else "no tiers"
     return (
         f"🏆 **Community weekly resolved** — {title}\n"
         f"Final: {current}/{target} ({pct}%) → **{tier_word}** paid to every "
