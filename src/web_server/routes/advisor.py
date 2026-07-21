@@ -1,4 +1,4 @@
-"""AI Advisor endpoint — powers the Help panel's "Ask the Guide" box.
+"""Billy-bot endpoint — powers the Help panel's "Ask Billy-bot" box.
 
 Grounded, member-facing help (not admin config), so it's open to any
 authenticated dashboard user. The heavy lifting lives in
