@@ -476,7 +476,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `qotd_reply` | member newly earns the QOTD flat award | `events_cog._econ_work` after `try_award_qotd` returns True | `qotd_reply:<qotd_id>` |
 | `starboard` | a member's message first crosses the star threshold | `starboard_cog` first-crossing insert (bot authors excluded) | `starboard:<message_id>` |
 | `invite` | a member the inviter recruited joins | `events_cog.on_member_join` beside `record_invite` | `invite:<invitee_id>` (rejoin never re-pays) |
-| `boost` | member starts a server boost (`premium_since` None→set) | `EconomyCog._on_boost_started` (new listener) | `boost:<boost_start_ts>` |
+| `boost` | member starts a server boost (`premium_since` None→set) | `EconomyCog._on_boost_started` (live listener), plus a startup reconcile `economy_boost_reconcile.reconcile_boosters` that replays the trigger for members already boosting when the quest/listener shipped — the live transition never fires for them, and boosting is one-shot, so without the reconcile they'd never be paid; keyed on the same `premium_since` timestamp, so the claim collision makes it idempotent and never double-pays | `boost:<boost_start_ts>` |
 | `bio_set` | member saves/updates their bio via the wizard | `bios/wizard._persist_sync` | `bio_set:set` (event = once ever) |
 | `media_post` | member posts a message with an image; per-quest `trigger_channel_id` scopes it (threads count via parent) | `EconomyCog._on_media_post` (announces like photo; DM under `game_role_id`) | `media_post:<message_id>` — use daily/weekly cadence |
 | `pen_pal` | two members are paired into a Pen Pals session (both fire) | `pen_pals_cog._do_pair` save | `pen_pal:<session_id>` |

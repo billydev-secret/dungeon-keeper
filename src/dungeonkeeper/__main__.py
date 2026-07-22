@@ -26,6 +26,7 @@ from bot_modules.services.role_grant_audit_service import grant_audit_card_loop
 from bot_modules.announcements.buttons import AnnouncementRoleButton
 from bot_modules.chat_revive.actions import ReviveOptInButton
 from bot_modules.services.chat_revive_loop import chat_revive_loop
+from bot_modules.services.economy_boost_reconcile import reconcile_boosters
 from bot_modules.services.economy_drops_loop import (
     DropClaimButton,
     economy_drops_loop,
@@ -346,6 +347,11 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: leaderboard_live_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: economy_drops_loop(bot, db_path))
+
+    # One-shot: credit the boost trigger to members who were already boosting
+    # before the boost quest/listener shipped (the live transition never fires
+    # for them). Idempotent via the per-occurrence boost claim key.
+    bot.startup_task_factories.append(lambda: reconcile_boosters(bot, db_path))
 
     bot.startup_task_factories.append(lambda: chat_revive_loop(bot, db_path))
 
