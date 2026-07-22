@@ -637,6 +637,24 @@ approximate otherwise — e.g. a 5-daily pool at N=2 recurs some dailies every 2
 days; small pools where `N ≥ poolsize` degrade to "everyone sees everything"). Community and event quests are **not** personalized (community is a
 guild-wide objective; event pays per occurrence).
 
+**Pool frozen per period** (migration 110, `econ_quest_pool_snapshots`): the
+draw's `pool_ids` and `board_size` are **snapshotted the first time any
+member's board of a cadence is computed in a period**, and every later read
+that period draws from the snapshot. Both `m = len(pool)` and `n = board_size`
+move the draw window (`start = index·n mod m`), so without this an admin
+activating/deactivating a library quest — or changing a *Board size* dial —
+mid-period reshuffled **every member's current board**, not just the slot
+touched. Now such edits only surface at the **next daily/weekly/monthly roll**:
+the pool a member is looking at is stable for the period they're in. A quest
+deactivated mid-period keeps its slot in the frozen board set but both the
+`/quests` panel and the fire/payout paths filter on `active=1`, so it simply
+renders as an empty slot (never a visible dead quest, never pays) until the
+next period re-snapshots it out — the same "board runs one shorter" shape as a
+completed setup quest. `reroll_board_slot` draws its swap candidates from the
+same frozen pool, so a mid-period activation is never a reroll target. Snapshots are keyed
+`(guild_id, qtype, period_idx)` and pruned to the current period on each freeze
+(a board is only ever read for the current period).
+
 **Paired quests** (migration 106, `pair_tag`): two active quests of the same
 cadence sharing a non-empty `pair_tag` are drawn as a **bundle** — when the
 pure draw picks either, `quests.apply_pair_bundles` swaps its partner in for
@@ -649,8 +667,9 @@ Reroll overrides apply **after** pairing — a member can still opt out of half
 a pair, and that's their call. Note the frequency effect: a paired quest
 appears whenever *either* member of the pair is drawn, roughly doubling how
 often each shows up relative to an untagged pool-mate. Tag editing is on the
-dashboard Quests page (Pair tag field); like any pool change, edit at the
-period boundary or boards reshuffle mid-period.
+dashboard Quests page (Pair tag field); like any pool change, it takes effect
+at the next period roll (the pool is frozen per period — see above), so a
+mid-period tag edit never reshuffles the current board.
 
 Both surfaces filter to the member's board: `fire_trigger_quests` and the
 trigger-word `on_message` path skip any daily/weekly/monthly quest not on the

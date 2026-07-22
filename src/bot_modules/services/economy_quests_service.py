@@ -20,6 +20,7 @@ Ledger kinds added here: ``quest`` (instant claim + approved sign-off) and
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -520,6 +521,72 @@ def _drop_completed_setup(
     return board - done
 
 
+def _frozen_board_pool(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    qtype: str,
+    idx: int,
+    settings: EconSettings | None,
+) -> tuple[dict[int, str], int]:
+    """The cadence pool + board size frozen for ``(guild, qtype, period idx)``.
+
+    The personal board is a pure function of ``(pool, user, period_idx, n)``.
+    Reading the live active set on every view meant an admin activating or
+    deactivating a quest — or changing a board size — mid-period reshuffled
+    every member's current board, because both ``m = len(pool)`` and ``n`` move
+    the draw window (``start = index * n % m``). We snapshot the live pool and
+    size the first time any member's board of this cadence is computed in the
+    period, and hand every later read that period the same snapshot — so
+    library and size edits only surface at the next roll.
+
+    Returns ``(tagged, n)``: the frozen id→pair_tag map and board size. Rows
+    for older periods are pruned on first insert (a board is only ever read for
+    the current period).
+    """
+    row = conn.execute(
+        "SELECT pool_json, board_size FROM econ_quest_pool_snapshots "
+        "WHERE guild_id = ? AND qtype = ? AND period_idx = ?",
+        (guild_id, qtype, idx),
+    ).fetchone()
+    if row is None:
+        live_tagged = {
+            int(r["id"]): str(r["pair_tag"])
+            for r in conn.execute(
+                "SELECT id, pair_tag FROM econ_quests "
+                "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
+                (guild_id, qtype),
+            )
+        }
+        sizes = board_sizes(settings) if settings is not None else None
+        live_n = quests.board_size(qtype, sizes)
+        # INSERT OR IGNORE: under concurrency a sibling read may win the freeze;
+        # we re-select below so both sides draw from the same snapshot.
+        conn.execute(
+            "INSERT OR IGNORE INTO econ_quest_pool_snapshots "
+            "(guild_id, qtype, period_idx, pool_json, board_size) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                guild_id,
+                qtype,
+                idx,
+                json.dumps({str(k): v for k, v in live_tagged.items()}),
+                live_n,
+            ),
+        )
+        conn.execute(
+            "DELETE FROM econ_quest_pool_snapshots "
+            "WHERE guild_id = ? AND qtype = ? AND period_idx < ?",
+            (guild_id, qtype, idx),
+        )
+        row = conn.execute(
+            "SELECT pool_json, board_size FROM econ_quest_pool_snapshots "
+            "WHERE guild_id = ? AND qtype = ? AND period_idx = ?",
+            (guild_id, qtype, idx),
+        ).fetchone()
+    tagged = {int(k): str(v) for k, v in json.loads(row["pool_json"]).items()}
+    return tagged, int(row["board_size"])
+
+
 def assigned_board_ids(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -532,25 +599,21 @@ def assigned_board_ids(
 
     A per-member subset of the cadence pool (the guild's configured
     ``board_size`` of them), stable within the period and spaced so repeats
-    stay ~a week apart. Only daily/weekly/monthly have a board; other
-    cadences return an empty set, as does a cadence sized to 0. One-time setup
-    quests the member has already completed are dropped (see
-    ``_drop_completed_setup``), so only members who haven't done them see them.
+    stay ~a week apart. The pool and size are frozen per period (see
+    ``_frozen_board_pool``): an admin editing the library or a board size
+    mid-period doesn't move anyone's current board, only next period's. Only
+    daily/weekly/monthly have a board; other cadences return an empty set, as
+    does a cadence sized to 0. One-time setup quests the member has already
+    completed are dropped (see ``_drop_completed_setup``), so only members who
+    haven't done them see them.
     """
-    sizes = board_sizes(settings) if settings is not None else None
-    n = quests.board_size(qtype, sizes)
-    if n <= 0 or not quests.has_board(qtype):
+    if not quests.has_board(qtype):
         return set()
-    tagged = {
-        int(r["id"]): str(r["pair_tag"])
-        for r in conn.execute(
-            "SELECT id, pair_tag FROM econ_quests "
-            "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
-            (guild_id, qtype),
-        )
-    }
-    pool = sorted(tagged)
     idx = quests.period_index(qtype, local_day)
+    tagged, n = _frozen_board_pool(conn, guild_id, qtype, idx, settings)
+    if n <= 0:
+        return set()
+    pool = sorted(tagged)
     picked = quests.assigned_quest_ids(pool, user_id, idx, n)
     # Paired quests land together: a drawn quest pulls its partner into the
     # remaining slot (producer/consumer pairs — hosts and players prompted
@@ -617,7 +680,12 @@ def reroll_board_slot(
         )
 
     idx = quests.period_index(qtype, local_day)
-    pool = list_active_pool_ids(conn, guild_id, qtype)
+    # Draw candidates from the SAME frozen pool the board uses, not the live
+    # active set: a quest activated mid-period isn't in this period's snapshot,
+    # so rerolling into it would be silently dropped by the ``to in pool_set``
+    # guard in ``assigned_board_ids`` and waste the reroll.
+    frozen_tagged, _ = _frozen_board_pool(conn, guild_id, qtype, idx, settings)
+    pool = sorted(frozen_tagged)
     ordered = quests.assigned_quest_ids(pool, user_id, idx, len(pool))
     # Never swap a member INTO a one-time setup quest they've already done —
     # it would drop straight back off their board (_drop_completed_setup) and

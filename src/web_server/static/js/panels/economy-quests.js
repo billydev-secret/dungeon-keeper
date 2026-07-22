@@ -75,7 +75,8 @@ function boardSection(cfg) {
       cadence's active pool. Lower this to make the board less busy without
       deactivating quests — a bigger pool with a small board also spaces
       repeats further apart. <strong>0 turns the cadence off entirely</strong>
-      (nothing shows, nothing pays).
+      (nothing shows, nothing pays). Like library edits, a size change takes
+      effect at the next roll — current boards aren't resized mid-period.
     </div>
     <form data-form-board class="form">
       <div class="field-row">${fields}</div>
@@ -102,6 +103,12 @@ function render(container, channels, cfg) {
           those rates live on <a href="#/economy-income-sources">Income Sources</a>.
           Sign-off claims and community-goal payouts are handled on
           <a href="#/economy-bank-manager">Operations</a>.
+        </div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          🔁 <strong>Edits apply at the next roll.</strong> Activating,
+          deactivating, or editing a quest never reshuffles anyone's current
+          board — the change lands at the next daily / weekly / monthly
+          period boundary, so in-progress boards stay put.
         </div>
         <div data-quest-slots class="field-hint" style="margin-bottom:6px;"></div>
         <div data-quests><div class="empty">Loading…</div></div>
