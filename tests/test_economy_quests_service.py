@@ -1684,14 +1684,147 @@ def test_board_pair_inert_when_partner_inactive(db):
 
 def test_board_size_is_per_guild_configurable(db):
     # The guild's quest_board_* settings size the board, not the default 2.
+    # Sizes are frozen per period (see test_board_size_change_waits_for_roll),
+    # so probe each size on its own day to read the fresh setting each time.
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        wide = EconSettings(enabled=True, quest_board_daily=4)
+        narrow = EconSettings(enabled=True, quest_board_daily=1)
+        w = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-13", wide)
+        n = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-14", narrow)
+        assert len(w) == 4
+        assert len(n) == 1
+
+
+def test_board_size_change_waits_for_roll(db):
+    # Freeze-everything: a board-size setting change mid-period doesn't resize
+    # anyone's current board — the size is snapshotted on first view and only
+    # the next period picks up the new size.
     with open_db(db) as conn:
         for _ in range(6):
             _make(conn, qtype="daily", trigger_kind="message_sent")
         day = "2026-07-13"
         wide = EconSettings(enabled=True, quest_board_daily=4)
         narrow = EconSettings(enabled=True, quest_board_daily=1)
+        # First view of the period freezes size 4.
         assert len(assigned_board_ids(conn, GUILD, USER, "daily", day, wide)) == 4
-        assert len(assigned_board_ids(conn, GUILD, USER, "daily", day, narrow)) == 1
+        # Admin shrinks the board mid-period — current board is unmoved.
+        assert len(assigned_board_ids(conn, GUILD, USER, "daily", day, narrow)) == 4
+        # Next day re-reads the live (now narrow) setting.
+        nxt = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-14", narrow)
+        assert len(nxt) == 1
+
+
+def test_pool_frozen_add_does_not_reshuffle_current_board(db):
+    # The complaint this feature fixes: activating a new quest mid-period used
+    # to reshuffle everyone's live board (m changed → the draw window moved).
+    # The pool is now frozen on first view, so the current board is unmoved.
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        before = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        _make(conn, qtype="daily", trigger_kind="message_sent")  # admin adds one
+        after = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        assert after == before
+
+
+def test_pool_frozen_new_quest_appears_only_next_period(db):
+    # The new content is invisible for the rest of the current period, then the
+    # next period's snapshot includes it — "leave it till the next reroll".
+    with open_db(db) as conn:
+        for _ in range(4):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day, nxt = "2026-07-13", "2026-07-14"
+        members = range(100, 160)
+        for uid in members:  # freeze this period's pool across a spread
+            assigned_board_ids(conn, GUILD, uid, "daily", day, SETTINGS)
+        new_id = _make(conn, qtype="daily", trigger_kind="message_sent")
+        same = set().union(
+            *(assigned_board_ids(conn, GUILD, uid, "daily", day, SETTINGS)
+              for uid in members)
+        )
+        assert new_id not in same  # frozen out of the current period
+        later = set().union(
+            *(assigned_board_ids(conn, GUILD, uid, "daily", nxt, SETTINGS)
+              for uid in members)
+        )
+        assert new_id in later  # next period's snapshot picks it up
+
+
+def test_pool_frozen_deactivate_stays_until_next_period(db):
+    # Deactivating a drawn quest mid-period leaves it on the current board
+    # (frozen), and it's gone next period when the pool re-snapshots.
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day, nxt = "2026-07-13", "2026-07-14"
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        victim = min(board)
+        set_quest_active(conn, GUILD, victim, False)
+        assert assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS) == board
+        assert victim not in assigned_board_ids(
+            conn, GUILD, USER, "daily", nxt, SETTINGS
+        )
+
+
+def test_new_quest_not_paid_until_next_period(db):
+    # The freeze holds on the payout path too: a daily activated after the
+    # member's board froze this period doesn't pay until next period.
+    with open_db(db) as conn:
+        for _ in range(4):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day=day, occurrence="m1", booster=False,
+        )  # freezes USER's board for the day
+        new_id = _make(conn, qtype="daily", trigger_kind="message_sent")
+        results = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day=day, occurrence="m2", booster=False,
+        )
+        assert new_id not in {int(q["id"]) for q, _ in results}
+
+
+def test_reroll_swaps_within_frozen_pool(db):
+    # Reroll must draw from the frozen pool, not the live active set: a quest
+    # activated mid-period isn't in the snapshot, so it can't be a swap target
+    # (or the swap would be silently dropped by assigned_board_ids' pool guard).
+    from bot_modules.services.economy_quests_service import reroll_board_slot
+
+    with open_db(db) as conn:
+        for _ in range(5):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        extra = [
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+            for _ in range(3)
+        ]
+        target = min(board)
+        new_row, _cost = reroll_board_slot(conn, SETTINGS, GUILD, USER, target, day)
+        assert int(new_row["id"]) not in extra
+        after = assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        assert target not in after
+        assert int(new_row["id"]) in after  # the swap actually took effect
+
+
+def test_pool_snapshot_prunes_old_periods(db):
+    # Only the current period's snapshot is retained per (guild, qtype) — old
+    # rows are pruned on the next period's freeze so the table stays bounded.
+    with open_db(db) as conn:
+        for _ in range(4):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        for day in ("2026-07-13", "2026-07-14", "2026-07-15"):
+            assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        rows = conn.execute(
+            "SELECT COUNT(*) c FROM econ_quest_pool_snapshots "
+            "WHERE guild_id = ? AND qtype = 'daily'",
+            (GUILD,),
+        ).fetchone()
+        assert rows["c"] == 1
 
 
 def test_board_size_zero_pays_nothing(db):
