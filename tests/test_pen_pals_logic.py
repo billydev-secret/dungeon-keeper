@@ -1113,3 +1113,143 @@ async def test_tick_skips_sweep_for_disabled_guild(sync_db_path, monkeypatch):
     await pp._tick(MagicMock(), sync_db_path)
 
     do_round.assert_not_awaited()
+
+
+# ── Abnormal session teardown ─────────────────────────────────────────
+#
+# A session that ends because a member was banned/left, or because a mod
+# deleted the channel, must not silently drop the survivors: they go back in
+# the pool, and the close never routes through the expiry path (so
+# ``pen_pal_complete`` doesn't fire for an abandoned session).
+
+
+def _close_reason(db_path, session_id: str) -> str | None:
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT close_reason FROM pen_pals_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        return row["close_reason"] if row else None
+
+
+def test_close_abnormal_member_left_requeues_only_partner(sync_db_path):
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
+        row = pp._get_session_by_channel(conn, 4242)
+        requeued = pp._close_abnormal_and_requeue(conn, row, "member_left", departed_user_id=1)
+
+    assert requeued == [2]
+    assert _pool_ids(sync_db_path) == [2]  # departed member 1 is not re-queued
+    assert _active_session(sync_db_path, 1) is None
+    assert _close_reason(sync_db_path, "s1") == "member_left"
+
+
+def test_close_abnormal_channel_delete_requeues_both(sync_db_path):
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
+        row = pp._get_session_by_channel(conn, 4242)
+        requeued = pp._close_abnormal_and_requeue(conn, row, "channel_deleted", departed_user_id=None)
+
+    assert sorted(requeued) == [1, 2]
+    assert sorted(_pool_ids(sync_db_path)) == [1, 2]
+    assert _close_reason(sync_db_path, "s1") == "channel_deleted"
+
+
+def test_close_abnormal_is_idempotent_on_double_event(sync_db_path):
+    """The ban listener deletes the channel, which fires on_guild_channel_delete
+    for the same session — only the first claim re-queues; the second is a no-op."""
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
+        row = pp._get_session_by_channel(conn, 4242)
+        first = pp._close_abnormal_and_requeue(conn, row, "member_left", departed_user_id=1)
+        second = pp._close_abnormal_and_requeue(conn, row, "channel_deleted", departed_user_id=None)
+
+    assert first == [2]
+    assert second is None                     # already closed → claim fails
+    assert _pool_ids(sync_db_path) == [2]      # partner pooled exactly once
+    assert _close_reason(sync_db_path, "s1") == "member_left"  # first reason wins
+
+
+def test_close_abnormal_skips_survivor_already_pooled(sync_db_path):
+    """A survivor already in the pool isn't added a second time."""
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
+        pp._add_to_pool(conn, GUILD_ID, 2)  # somehow already queued
+        row = pp._get_session_by_channel(conn, 4242)
+        requeued = pp._close_abnormal_and_requeue(conn, row, "member_left", departed_user_id=1)
+
+    assert requeued == []                # nothing newly added
+    assert _pool_ids(sync_db_path) == [2]  # still present, not duplicated
+
+
+async def test_end_session_abnormally_deletes_channel_and_dms_survivor(sync_db_path, monkeypatch):
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
+        row = pp._get_session_by_channel(conn, 4242)
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._end_session_abnormally(
+        bot, sync_db_path, row, reason="member_left", departed_user_id=1, delete_channel=True,
+    )
+
+    channel.delete.assert_awaited_once()
+    guild.get_member(2).send.assert_awaited_once()
+    guild.get_member(1).send.assert_not_awaited()  # departed member isn't messaged
+    assert _pool_ids(sync_db_path) == [2]
+
+
+async def test_end_session_abnormally_second_call_is_noop(sync_db_path, monkeypatch):
+    """The duplicate on_guild_channel_delete after a ban does nothing."""
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "s1", GUILD_ID, 4242, 1, 2, now)
+        row = pp._get_session_by_channel(conn, 4242)
+
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.delete = AsyncMock()
+    bot.get_channel.return_value = channel
+
+    await pp._end_session_abnormally(
+        bot, sync_db_path, row, reason="member_left", departed_user_id=1, delete_channel=True,
+    )
+    guild.get_member(2).send.reset_mock()
+
+    # Second event for the same (now-closed) session.
+    await pp._end_session_abnormally(
+        bot, sync_db_path, row, reason="channel_deleted", departed_user_id=None, delete_channel=False,
+    )
+
+    guild.get_member(2).send.assert_not_awaited()
+    assert _pool_ids(sync_db_path) == [2]  # not re-queued twice
+
+
+async def test_on_member_remove_drops_pooled_member(sync_db_path, monkeypatch):
+    """A member who was only in the pool (no session) is removed on leave."""
+    refresh = AsyncMock()
+    monkeypatch.setattr(pp, "_refresh_panel", refresh)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 7)
+
+    ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(MagicMock(), ctx)
+    member = MagicMock(spec=discord.Member, id=7)
+    member.guild = MagicMock(id=GUILD_ID)
+
+    await cog._on_member_remove(member)
+
+    assert _pool_ids(sync_db_path) == []
+    refresh.assert_awaited_once()

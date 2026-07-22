@@ -263,6 +263,57 @@ def _close_session(conn, session_id: str, reason: str) -> None:
     )
 
 
+def _claim_close(conn, session_id: str, reason: str) -> bool:
+    """Close a session only if it is still active, atomically.
+
+    Returns True for the caller that actually closed it, False if it was
+    already closed. This is the guard against double-handling: a ban deletes
+    the channel, which fires ``on_guild_channel_delete`` for the same session —
+    only one of the two events should notify and re-queue the survivors.
+    """
+    cur = conn.execute(
+        """
+        UPDATE pen_pals_sessions
+        SET state = 'closed', closed_at = ?, close_reason = ?
+        WHERE session_id = ? AND state = 'active'
+        """,
+        (time.time(), reason, session_id),
+    )
+    return cur.rowcount > 0
+
+
+def _close_abnormal_and_requeue(
+    conn, session_row, reason: str, departed_user_id: int | None
+) -> list[int] | None:
+    """Close a session that ended for a reason other than expiry or /end.
+
+    Atomically claims the close (returns ``None`` if another handler already
+    did — a lost race or a duplicate event), drops the departed member from
+    the pool, and returns each surviving member to the pool so they get a
+    fresh match. Never touches the expiry path, so ``pen_pal_complete`` does
+    **not** fire — an abandoned session isn't "seen through".
+
+    ``departed_user_id`` is the member who left/was banned (never re-queued),
+    or ``None`` when both members remain (e.g. a mod deleted the channel).
+
+    Returns the list of re-queued survivor ids.
+    """
+    if not _claim_close(conn, session_row["session_id"], reason):
+        return None
+    guild_id = session_row["guild_id"]
+    if departed_user_id is not None:
+        _remove_from_pool(conn, guild_id, departed_user_id)
+    requeued: list[int] = []
+    for uid in (session_row["user1_id"], session_row["user2_id"]):
+        if uid == departed_user_id:
+            continue
+        if _get_active_session(conn, guild_id, uid) or _in_pool(conn, guild_id, uid):
+            continue
+        _add_to_pool(conn, guild_id, uid)
+        requeued.append(uid)
+    return requeued
+
+
 def _set_close_warning_sent(conn, session_id: str) -> None:
     conn.execute(
         "UPDATE pen_pals_sessions SET close_warning_sent = 1 WHERE session_id = ?",
@@ -712,6 +763,71 @@ async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[
     return pairs_made, await asyncio.to_thread(_pool_count)
 
 
+# ── Abnormal session teardown ─────────────────────────────────────────────────
+#
+# A session normally ends by running its 24h course (expiry) or via /penpals
+# end. Everything else — a member banned/kicked/leaving mid-session, or a mod
+# deleting the channel out from under the pair — routes here so the survivor(s)
+# are told what happened and dropped back into the pool instead of silently
+# falling out of Pen Pals.
+
+
+async def _end_session_abnormally(
+    bot: discord.Client,
+    db_path: Path,
+    session_row,
+    *,
+    reason: str,
+    departed_user_id: int | None,
+    delete_channel: bool,
+) -> None:
+    guild_id = session_row["guild_id"]
+    channel_id = session_row["channel_id"]
+
+    def _claim():
+        with open_db(db_path) as conn:
+            return _close_abnormal_and_requeue(conn, session_row, reason, departed_user_id)
+
+    requeued = await asyncio.to_thread(_claim)
+    if requeued is None:
+        return  # another handler already closed this session — nothing to do
+
+    # Tear the channel down (skip when it's already gone, e.g. it was deleted).
+    if delete_channel:
+        raw = bot.get_channel(channel_id)
+        if raw is None:
+            try:
+                raw = await bot.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                raw = None
+        if isinstance(raw, discord.TextChannel):
+            try:
+                await raw.delete(reason=f"Pen Pals: {reason}")
+            except discord.HTTPException as exc:
+                log.warning("pen_pals: failed to delete channel %d (%s): %s", channel_id, reason, exc)
+
+    # Notify each surviving member and refresh the signup panel's pool count.
+    guild = bot.get_guild(guild_id)
+    if guild is not None:
+        for uid in requeued:
+            member = guild.get_member(uid)
+            if member is None:
+                continue
+            try:
+                await member.send(
+                    f"Your pen pal session in **{guild.name}** ended early — your partner "
+                    "is no longer available. You've been put back in the Pen Pals pool for "
+                    "a new match."
+                )
+            except discord.HTTPException:
+                pass
+
+    try:
+        await _refresh_panel(bot, db_path, guild_id)
+    except discord.HTTPException as exc:
+        log.warning("pen_pals: panel refresh after abnormal close failed in %d: %s", guild_id, exc)
+
+
 # ── Background loop ───────────────────────────────────────────────────────────
 
 
@@ -760,10 +876,13 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
             try:
                 raw = await bot.fetch_channel(channel_id)
             except (discord.NotFound, discord.Forbidden):
-                def _close_missing(sid: str = session_id):
-                    with open_db(db_path) as conn:
-                        _close_session(conn, sid, "channel_missing")
-                await asyncio.to_thread(_close_missing)
+                # Channel vanished while the session was live (e.g. deleted
+                # while the bot was offline, so on_guild_channel_delete never
+                # fired). Same teardown as a manual delete: re-queue both.
+                await _end_session_abnormally(
+                    bot, db_path, row,
+                    reason="channel_missing", departed_user_id=None, delete_channel=False,
+                )
                 continue
             except discord.HTTPException:
                 continue
@@ -1356,6 +1475,52 @@ class PenPalsCog(commands.Cog):
             await _refresh_panel(self.bot, self.ctx.db_path, guild_id, repost=True)
         except discord.HTTPException as exc:
             log.warning("pen_pals: panel repost failed in guild %d: %s", guild_id, exc)
+
+    @commands.Cog.listener("on_member_remove")
+    async def _on_member_remove(self, member: discord.Member) -> None:
+        """A member left / was kicked or banned. If they were mid-session,
+        tear it down and re-queue their partner; if only pooled, drop them."""
+        db_path = self.ctx.db_path
+        guild_id = member.guild.id
+
+        def _lookup():
+            with open_db(db_path) as conn:
+                was_pooled = _in_pool(conn, guild_id, member.id)
+                if was_pooled:
+                    _remove_from_pool(conn, guild_id, member.id)
+                return _get_active_session(conn, guild_id, member.id), was_pooled
+
+        session, was_pooled = await asyncio.to_thread(_lookup)
+        if session is not None:
+            await _end_session_abnormally(
+                self.bot, db_path, session,
+                reason="member_left", departed_user_id=member.id, delete_channel=True,
+            )
+        elif was_pooled:
+            try:
+                await _refresh_panel(self.bot, db_path, guild_id)
+            except discord.HTTPException as exc:
+                log.warning("pen_pals: panel refresh after member leave failed in %d: %s", guild_id, exc)
+
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _on_channel_delete(self, channel: discord.abc.GuildChannel) -> None:
+        """A pen pal channel was deleted (usually by a mod). Close the session
+        and return both members to the pool."""
+        if not isinstance(channel, discord.TextChannel):
+            return
+        db_path = self.ctx.db_path
+
+        def _lookup():
+            with open_db(db_path) as conn:
+                return _get_session_by_channel(conn, channel.id)
+
+        session = await asyncio.to_thread(_lookup)
+        if session is None:
+            return
+        await _end_session_abnormally(
+            self.bot, db_path, session,
+            reason="channel_deleted", departed_user_id=None, delete_channel=False,
+        )
 
     @commands.Cog.listener("on_pen_pals_panel_refresh")
     async def _on_panel_refresh(

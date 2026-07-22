@@ -57,7 +57,11 @@ The expiry timestamp uses Discord's absolute + relative format so both users see
 
 **Early close.** `/penpals end` in the active channel prompts the invoker for a 15-second confirm. Either member can initiate; the channel is deleted on confirmation. The other member receives a DM: "Your pen pal session in **{server}** was ended early."
 
-**Channel already gone.** If the channel is missing when the bot goes to clean up (deleted by an admin, etc.), the session row is marked `closed` and the cleanup moves on silently.
+**Partner leaves mid-session.** If a session member leaves — voluntarily, kicked, or banned — `on_member_remove` closes the session (`close_reason = 'member_left'`), deletes the channel, and returns the *surviving* partner to the pool for a fresh match. The departed member is dropped from the pool and never re-queued. The survivor gets a DM: "Your pen pal session in **{server}** ended early — your partner is no longer available. You've been put back in the Pen Pals pool for a new match." This does **not** run the expiry path, so `pen_pal_complete` (the quest hook) does not fire for an abandoned session.
+
+**Channel deleted.** If a mod deletes an active pen pal channel, `on_guild_channel_delete` closes the session (`close_reason = 'channel_deleted'`) and returns **both** members to the pool with the same DM. Since a ban's channel deletion also fires this event, the close is claimed atomically — whichever handler runs first wins, and the duplicate is a no-op, so no one is re-queued twice.
+
+**Channel already gone.** If the channel is missing when the background task goes to clean up (e.g. it was deleted while the bot was offline, so `on_guild_channel_delete` never fired), the session is closed with `close_reason = 'channel_missing'` and both members are returned to the pool — the same teardown as a manual delete.
 
 ### Questions
 
