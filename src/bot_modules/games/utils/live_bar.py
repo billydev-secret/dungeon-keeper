@@ -7,30 +7,19 @@ log = logging.getLogger(__name__)
 
 BAR_WIDTH = 14
 
-# Eighth-block characters: index 1 = 1/8 filled … index 7 = 7/8 filled
-_EIGHTHS = "▏▎▍▌▋▊▉"
-
 
 def build_bar(count: int, total: int, width: int = BAR_WIDTH) -> tuple[str, str]:
-    """Returns (bar_string, percentage_string) with sub-character precision."""
+    """Returns (bar_string, percentage_string). Renders clean without code spans."""
     if total == 0:
-        return f"`{'░' * width}`", "0%"
+        return "▱" * width, "0%"
     ratio = count / total
     pct = f"{round(ratio * 100)}%"
 
-    units = ratio * width * 8  # total eighth-units to fill
-    full_blocks = int(units // 8)
-    remainder = int(units % 8)
+    filled = round(ratio * width)
+    filled = max(0, min(width, filled))
+    bar = "▰" * filled + "▱" * (width - filled)
 
-    bar = "█" * full_blocks
-    if full_blocks < width:
-        if remainder > 0:
-            bar += _EIGHTHS[remainder - 1]
-            bar += "░" * (width - full_blocks - 1)
-        else:
-            bar += "░" * (width - full_blocks)
-
-    return f"`{bar}`", pct
+    return bar, pct
 
 
 class LiveBarUpdater:

@@ -88,7 +88,7 @@ def qa_db(tmp_path) -> Path:
     """A prod-shaped SQLite file with migration 077 applied directly."""
     path = tmp_path / "prod.db"
     conn = sqlite3.connect(path)
-    conn.executescript(MIGRATION.read_text())
+    conn.executescript(MIGRATION.read_text(encoding="utf-8"))
     conn.commit()
     conn.close()
     return path
@@ -277,7 +277,7 @@ def test_flat_checklist_dump_stays_plain_text(mod, monkeypatch, tmp_path) -> Non
     checklist_dir.mkdir(parents=True)
     (checklist_dir / "admin_testing_checklist.md").write_text(
         "# Admin checklist\n\n## Section\n\n- [ ] poke the thing\n"
-    )
+    , encoding="utf-8")
     calls = wire(mod, monkeypatch, None)
     monkeypatch.setattr(mod, "REPO", tmp_path)
 
@@ -305,7 +305,7 @@ def test_featured_checklist_posts_cards_to_its_own_channel(
         "# Admin checklist\n\nIntro prose.\n\n## Moderation Config\n\n"
         "### Auto-delete\n\n- [ ] set a rule\n- [ ] remove a rule\n\n"
         "### Hidden Channels\n\n- [ ] hide and restore\n"
-    )
+    , encoding="utf-8")
     calls = wire(mod, monkeypatch, qa_db)
     monkeypatch.setattr(mod, "REPO", tmp_path)
 

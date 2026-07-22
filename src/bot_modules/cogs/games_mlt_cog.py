@@ -173,7 +173,7 @@ class MLTJoinView(discord.ui.View):
 
 class PoseMLTModal(discord.ui.Modal, title="Pose a Prompt"):
     prompt = discord.ui.TextInput(
-        label="Most likely to...",
+        label="Most likely to…",
         placeholder="e.g. win a staring contest",
         style=discord.TextStyle.paragraph,
         max_length=300,

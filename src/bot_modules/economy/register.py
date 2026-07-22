@@ -87,6 +87,11 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "wager_payout": ("🎰", "Game wager won"),
     "wager_refund": ("↩️", "Game wager refunded"),
     "emoji_sponsor_refund": ("↩️", "Emoji sponsorship refund"),
+    "pin_sponsor": ("📌", "Pinned message"),
+    "pin_sponsor_refund": ("↩️", "Pinned-message refund"),
+    "bounty_stake": ("🎯", "Bounty stake"),
+    "bounty_payout": ("🏆", "Bounty won"),
+    "bounty_refund": ("↩️", "Bounty refund"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
@@ -112,6 +117,7 @@ _PERK_LABELS: dict[str, str] = {
     "role_name": "Custom role name",
     "role_icon": "Role icon",
     "role_gradient": "Gradient role colour",
+    "role_holographic": "Holographic role colour",
     "voice_style": "Voice style",
     "emoji": "Sponsored emoji",
     "gift_color": "Gifted role colour",

@@ -11,6 +11,9 @@ const PRICE_FIELDS = [
     hint: "Flat price when a member uploads their own icon. Curated catalog icons below are priced individually.",
   }],
   ["price_role_gradient", "Role gradient", {}],
+  ["price_role_holographic", "Role holographic", {
+    hint: "Discord's fixed holographic shimmer preset — a distinct, pricier tier than the two-colour gradient. Members pick nothing; renting it is the whole thing. Needs the server's enhanced role colours feature to render.",
+  }],
   ["price_voice_style", "Voice style", {
     hint: "Weekly lease for Voice Master rename + user limit. 0 (the default) keeps those controls free for everyone — setting a price is the launch switch, so announce before flipping it.",
   }],
@@ -29,6 +32,12 @@ const CONSUMABLE_FIELDS = [
   }],
   ["price_streak_shield", "Streak shield", {
     hint: "One-shot: auto-burned to save a login streak the free grace day can't. Members hold at most one. 0 removes it from the shop.",
+  }],
+  ["price_pin_of_day", "Pin of the day", {
+    hint: "What /bank pin costs. A member pays to pin a short message; a mod approves it; the bot pins a card for 24h, then auto-unpins. 0 disables it. Also needs a pin channel set on the Economy config page — it's a public sink, so announce before switching it on. Charged at submit; declines and expired-unreviewed requests refund.",
+  }],
+  ["pin_expire_days", "Pin review window (days)", {
+    hint: "A pin request no mod approves or declines within this many days expires and refunds automatically. 0 keeps requests queued indefinitely.",
   }],
 ];
 
@@ -67,6 +76,9 @@ const DEMURRAGE_FIELDS = [
   }],
   ["wager_rake_pct", "Wager rake (%)", {
     hint: "House cut of each settled PvP wager pot (max 50). 0 (the default) keeps wagers a pure winner-takes-all transfer; refunds are never raked. The winner's payout names the cut.",
+  }],
+  ["bounty_rake_pct", "Bounty rake (%)", {
+    hint: "House cut when a community bounty is awarded (0–100). 0 (the default) means the winner takes the whole pot. Cancelled or expired bounties are never raked — every contributor is refunded in full. Set the board channel on the Economy config page to switch bounties on.",
   }],
 ];
 

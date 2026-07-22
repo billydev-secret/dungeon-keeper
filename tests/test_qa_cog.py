@@ -442,4 +442,4 @@ def test_extension_registered_in_entry_point():
     import dungeonkeeper
 
     entry = Path(dungeonkeeper.__file__).parent / "__main__.py"
-    assert '"bot_modules.cogs.qa_cog",' in entry.read_text()
+    assert '"bot_modules.cogs.qa_cog",' in entry.read_text(encoding="utf-8")

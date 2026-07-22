@@ -33,7 +33,7 @@ _BAR_WIDTH = 16
 def _meter_bar(pct: float) -> str:
     filled = int(round(pct / 100.0 * _BAR_WIDTH))
     filled = max(0, min(_BAR_WIDTH, filled))
-    return "█" * filled + "░" * (_BAR_WIDTH - filled)
+    return "▰" * filled + "▱" * (_BAR_WIDTH - filled)
 
 
 class ChickenCog(BaseGame, name="ChickenCog"):
@@ -314,7 +314,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         embed.add_field(name="Bailed", value=bailed, inline=False)
         embed.add_field(
             name=f"⚡ Meter — {pct:.0f}%",
-            value=f"`{_meter_bar(pct)}`\n↑ crash at 100%. blink first or ride it out.",
+            value=f"{_meter_bar(pct)}\n↑ crash at 100%. blink first or ride it out.",
             inline=False,
         )
         stakes = game.stakes_text or "Whoever's still holding at the crash surrenders their nickname for 24h."

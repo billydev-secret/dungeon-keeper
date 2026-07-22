@@ -561,6 +561,12 @@ async def test_quests_listing_state_matrix(ctx, db):
 @pytest.mark.asyncio
 async def test_cog_load_registers_persistent_buttons(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
+    from bot_modules.economy.bounty_views import (
+        BountyAwardButton,
+        BountyCancelButton,
+        BountyChipInButton,
+    )
+    from bot_modules.economy.pin_views import PinApproveButton, PinDenyButton
     from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
     from bot_modules.economy.sponsor_views import (
         SponsorApproveButton,
@@ -579,6 +585,11 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
         ShopRentButton,
         SponsorApproveButton,
         SponsorDenyButton,
+        PinApproveButton,
+        PinDenyButton,
+        BountyChipInButton,
+        BountyAwardButton,
+        BountyCancelButton,
     )
 
 
@@ -909,7 +920,8 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     interaction = _interaction(_member(member_id=500))
 
     async def _gate(bot, guild_id, perk):
-        return perk not in ("role_gradient", "role_icon")
+        # Enhanced-role-colours off ⇒ both gradient and holographic gated.
+        return perk not in ("role_gradient", "role_holographic", "role_icon")
 
     with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(side_effect=_gate)):
         await _shop(cog, interaction)
@@ -919,12 +931,12 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
 
     view = kwargs["view"]
     assert isinstance(view, _ShopView)
-    # Gradient + icon buttons disabled; color + name enabled.
+    # Gradient + holographic + icon buttons disabled; color + name enabled.
     buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
     disabled = {
         str(b.custom_id).split(":")[1] for b in buttons if b.disabled
     }
-    assert disabled == {"role_gradient", "role_icon"}
+    assert disabled == {"role_gradient", "role_holographic", "role_icon"}
     blob = " ".join(f.value for f in kwargs["embed"].fields)
     assert "needs a server feature" in blob
 
@@ -951,9 +963,9 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
         for line in value.splitlines()
         if line.startswith("`")
     ]
-    # Four self-perk rows — the "For a friend" tier is prose since gifting
+    # Five self-perk rows — the "For a friend" tier is prose since gifting
     # generalized to every perk (no single gift price to tabulate).
-    assert len(rows) == 4
+    assert len(rows) == 5
     # One `label  blurb` cell per row (quest-board shape), all the same
     # width so columns align across tier headings — and narrow enough that
     # the price doesn't wrap onto its own line on a phone-width embed.
@@ -1031,7 +1043,8 @@ async def test_shop_buttons_carry_no_price(ctx, db):
 
 
 @pytest.mark.parametrize(
-    "perk", ["role_color", "role_name", "role_gradient", "role_icon"]
+    "perk",
+    ["role_color", "role_name", "role_gradient", "role_holographic", "role_icon"],
 )
 @pytest.mark.asyncio
 async def test_shop_rent_success_each_perk(ctx, db, perk):
@@ -1073,6 +1086,27 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     # The rented row is ticked in the table.
     color_row = _shop_row(kwargs["embed"], "Color")
     assert "✅" in color_row
+
+
+@pytest.mark.asyncio
+async def test_shop_rented_holographic_shows_active_not_customise(ctx, db):
+    """Holographic has no member styling, so its rented row is an inert chip."""
+    _enable(db)
+    _add_rental(db, "role_holographic")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
+        await _shop(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
+    by_id = {str(b.custom_id): b for b in buttons}
+    # Shown as active + disabled — no customise modal, no rent button.
+    assert "econ_shop_active:role_holographic" in by_id
+    assert by_id["econ_shop_active:role_holographic"].disabled is True
+    assert "econ_shop_cfg:role_holographic" not in by_id
+    assert "econ_shop_rent:role_holographic" not in by_id
 
 
 @pytest.mark.asyncio
@@ -1225,6 +1259,7 @@ async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
         "econ_shop_panel:role_color",
         "econ_shop_panel:role_name",
         "econ_shop_panel:role_gradient",
+        "econ_shop_panel:role_holographic",
         "econ_shop_panel:role_icon",
         "econ_shop_panel:streak_shield",
     }
@@ -2788,3 +2823,98 @@ async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
     msg = interaction.response.send_message.await_args.args[0]
     assert "Sir Fluffy" in msg
     assert "Manage Nicknames" in msg
+
+
+# ── /bank pin (Pin of the Day) ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pin_submit_refused_when_not_enabled(ctx, db):
+    _enable(db)  # no price and no pin channel → the feature is off
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_pin_submit(interaction, "hello world")
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "isn't enabled" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        rows = conn.execute("SELECT COUNT(*) c FROM econ_pin_submissions").fetchone()
+    assert rows["c"] == 0  # nothing queued, nothing charged
+
+
+@pytest.mark.asyncio
+async def test_pin_submit_charges_and_queues(ctx, db):
+    _enable(db, price_pin_of_day=30, pin_channel_id=5555)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 100, "grant", actor_id=1)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_pin_submit(interaction, "gm gamers")
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 70  # 30 held upfront
+        row = conn.execute(
+            "SELECT state, message FROM econ_pin_submissions WHERE guild_id = ?",
+            (GUILD_ID,),
+        ).fetchone()
+    assert row["state"] == "pending"
+    assert row["message"] == "gm gamers"
+    interaction.followup.send.assert_awaited()  # the "sent for review" receipt
+
+
+# ── /bounty (Community Bounty) ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bounty_post_refused_when_not_enabled(ctx, db):
+    _enable(db)  # no bounty channel → off
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_bounty_post(interaction, "do a thing", "", "50")
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "aren't enabled" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        n = conn.execute("SELECT COUNT(*) c FROM econ_bounties").fetchone()["c"]
+    assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_bounty_post_escrows_and_opens(ctx, db):
+    _enable(db, bounty_channel_id=5555, bounty_min_stake=10)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 200, "grant", actor_id=1)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_bounty_post(interaction, "Draw the mascot", "as a knight", "50")
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 150  # 50 staked into the pot
+        row = conn.execute(
+            "SELECT state, poster_id, title FROM econ_bounties WHERE guild_id = ?",
+            (GUILD_ID,),
+        ).fetchone()
+    assert row["state"] == "open"
+    assert row["poster_id"] == 500
+    assert row["title"] == "Draw the mascot"
+    interaction.followup.send.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bounty_post_bad_stake_rejected(ctx, db):
+    _enable(db, bounty_channel_id=5555, bounty_min_stake=10)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 200, "grant", actor_id=1)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_bounty_post(interaction, "Draw the mascot", "", "not-a-number")
+
+    interaction.followup.send.assert_awaited()
+    assert "whole number" in interaction.followup.send.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 200  # nothing charged

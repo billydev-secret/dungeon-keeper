@@ -438,7 +438,7 @@ class DmRequestReasonModal(discord.ui.Modal, title="DM Request"):
         style=discord.TextStyle.short,
         required=False,
         max_length=MAX_REASON_LENGTH,
-        placeholder="Why you'd like to connect...",
+        placeholder="Why you'd like to connect…",
     )
 
     def __init__(self, cog: DmPermsCog, target: discord.Member | discord.User, request_type: str) -> None:

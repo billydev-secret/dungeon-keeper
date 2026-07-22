@@ -149,7 +149,7 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
     answer = discord.ui.TextInput(
         label="Your reply",
         style=discord.TextStyle.paragraph,
-        placeholder="Posted anonymously in this channel...",
+        placeholder="Posted anonymously in this channel…",
         max_length=1000,
     )
 

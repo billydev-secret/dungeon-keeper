@@ -404,7 +404,7 @@ def test_render_draft_board_truncates_long_picks():
     players = [(1, "Alice")]
     boards = {"1": ["A" * 30, None, None, None]}
     out = render_draft_board(players, boards, 1)
-    assert "..." in out
+    assert "…" in out
     # The full 30-char string is not rendered
     assert "A" * 30 not in out
 

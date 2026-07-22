@@ -16,26 +16,26 @@ from tests.fakes import FakeUser, fake_interaction
 def test_gauge_bar_empty():
     result = gauge_bar(0)
     assert "0/100" in result
-    assert "█" not in result
+    assert "▰" not in result
 
 
 def test_gauge_bar_half():
     result = gauge_bar(50)
     assert "50/100" in result
-    assert "█" in result
-    assert "░" in result
+    assert "▰" in result
+    assert "▱" in result
 
 
 def test_gauge_bar_full():
     result = gauge_bar(100)
     assert "100/100" in result
-    assert "░" not in result
+    assert "▱" not in result
 
 
 def test_gauge_bar_over_ceiling_clamps():
     result = gauge_bar(115)
     assert "115/100" in result  # shows actual value
-    assert "░" not in result    # bar is full
+    assert "▱" not in result    # bar is full
 
 
 # ── ChallengeView ─────────────────────────────────────────────────────────────

@@ -124,6 +124,25 @@ class EconSettings:
     # approved ones never expire — they're waiting on staff, not the member.
     price_qotd_sponsor: int = 40
     qotd_sponsor_expire_days: int = 14
+    # Pin of the Day (plan: docs/plans/pin-of-the-day.md): a member pays to pin a
+    # short message; a mod approves it; the bot pins a card in `pin_channel_id`
+    # for 24h, then auto-unpins. A public sink — off until BOTH a price and a
+    # channel are set (announce before flipping it on). Charged at submit, so
+    # denial and pending-expiry refund; a pin that went live does not. Pending
+    # submissions nobody resolves expire and refund after `pin_expire_days`.
+    price_pin_of_day: int = 0
+    pin_channel_id: int = 0
+    pin_expire_days: int = 3
+    # Community Bounty (plan: docs/plans/community-bounty.md): anyone posts a
+    # freeform task and seeds a pot; anyone chips in; a mod awards the pot to the
+    # winner minus `bounty_rake_pct` (which evaporates — a real sink, next to the
+    # wager rake / hoard tax); an unawarded bounty refunds every contributor
+    # after `bounty_expire_days`. Off until a board channel is set.
+    bounty_channel_id: int = 0
+    bounty_min_stake: int = 10
+    bounty_max_open: int = 3
+    bounty_expire_days: int = 14
+    bounty_rake_pct: int = 0
     # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
     # held (max 1) until a login gap would reset the streak, then auto-burned
     # to save it — covers what the free grace day can't. 0 hides the shop row
@@ -133,6 +152,11 @@ class EconSettings:
     price_role_name: int = 35
     price_role_icon: int = 75
     price_role_gradient: int = 120
+    # Discord's holographic role preset — a fixed three-colour shimmer set via
+    # `tertiary_colour`, not the member-picked two-colour gradient. Priced above
+    # the gradient as the top cosmetic tier; like the gradient it needs the
+    # guild's ENHANCED_ROLE_COLORS feature to actually render.
+    price_role_holographic: int = 300
     # Voice-style lease (sinks round 3, stage 3): Voice Master rename + user
     # limit become leased while this is > 0 AND the economy is enabled. The
     # 0 default is the dark launch — controls stay free until an admin prices

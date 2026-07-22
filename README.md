@@ -61,7 +61,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 ### Economy & perk shop
 - **Coins & wallet** — Earn server currency from daily logins, chatting, voice, games, reactions, and QOTD answers, all recorded in a full ledger. `/bank wallet` shows your balance and recent activity.
 - **Quests & daily boards** — A personal quest board (daily/weekly/monthly) draws each member their own random slice of the guild's quest pool, plus tiered community weeklies the whole server works toward with a live tracker.
-- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
+- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, name, gradient and holographic role colors, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
 - **Sinks & stakes** — Coin wagers on duel and group games, paid quest rerolls, raffles, and other sinks keep the currency circulating. Mods post the guide/shop/leaderboard panels and can grant coins directly. `docs/economy_spec.md` is the deep doc.
 
 ### Engagement & content
@@ -235,6 +235,8 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/bank role` — Customize your rented role perk
 - `/bank mute` — Spend a mute token
 - `/bank sponsor` — Sponsor a QOTD (mod-approved)
+- `/bank pin` — Pay to pin a short message for a day (mod-approved)
+- `/bounty` — Post a community bounty others can chip into; a mod awards it
 - `/bank emoji` — Rent an emoji slot
 - `/bank grant` — (mod) Grant or deduct coins
 - `/bank post-guide` / `post-shop` / `post-leaderboard` — (mod) Post the channel panels
@@ -265,7 +267,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Role Grants** (configurable allowlist)
 - `/grant role:<key> member:<@member>` — Give a configured community role
-- `/grant_audit role:<key> min_level:<n> [channel]` — (mod) Post the auto-updating grant-audit card (refreshes hourly; delete the message to retire it)
+- `/grant_audit role:<key> min_level:<n> [channel]` — (mod) Post the auto-updating grant-audit card (refreshes hourly, stays at the bottom of the channel; delete the message to retire it)
 - *The full missing-grant audit lives in the web dashboard (Reports → Member Lists → Grant Audit).*
 
 **XP**

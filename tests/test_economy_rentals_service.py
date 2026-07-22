@@ -107,6 +107,17 @@ def test_rent_charges_upfront_and_snapshots_price(db):
         assert led["amount"] == -SETTINGS.price_role_color
 
 
+def test_rent_holographic_charges_default_price(db):
+    # Exercises the migration-107 CHECK (the perk is accepted) and that the
+    # flat holographic price flows through _price_for.
+    _fund(db, USER, 400)
+    row = _rent(db, USER, "role_holographic")
+    assert row["state"] == "active"
+    assert row["price"] == SETTINGS.price_role_holographic == 300
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 400 - 300
+
+
 def test_rent_price_snapshot_uses_current_settings(db):
     _fund(db, USER, 500)
     pricey = EconSettings(price_role_color=99)

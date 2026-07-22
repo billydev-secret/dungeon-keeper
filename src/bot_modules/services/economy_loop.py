@@ -104,6 +104,8 @@ from bot_modules.services.voice_master_service import (
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_demurrage_service as demurrage_svc
+from bot_modules.services import economy_bounty_service as bounty_svc
+from bot_modules.services import economy_pin_service as pin_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
@@ -142,10 +144,11 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.services.message_store import get_known_users_bulk
 
-# The two perks whose billing is gated on a guild feature (role icon / gradient
-# role colors). Only these are swept each tick — the sweep asks Discord whether
-# the feature still exists, so it is kept to the perks that can actually lose it.
-_FEATURE_GATED_PERKS = ("role_icon", "role_gradient")
+# The perks whose billing is gated on a guild feature (role icon / gradient +
+# holographic role colors). Only these are swept each tick — the sweep asks
+# Discord whether the feature still exists, so it is kept to the perks that can
+# actually lose it.
+_FEATURE_GATED_PERKS = ("role_icon", "role_gradient", "role_holographic")
 
 # Grace-window length in whole hours, for the "payment failed" DM copy.
 _GRACE_HOURS = int(GRACE_SECONDS // 3600)
@@ -638,6 +641,91 @@ class ExpiredEmojiNotice:
     name: str
     refund: int
     unit: str
+
+
+@dataclass(frozen=True)
+class ExpiredPinNotice:
+    """A pending pin nobody reviewed in time (for the post-commit refund DM)."""
+
+    guild_id: int
+    user_id: int
+    message: str
+    refund: int
+    unit: str
+
+
+@dataclass(frozen=True)
+class PinSweep:
+    """A tick's pin work: pending refunds to DM, live pins to unpin from Discord."""
+
+    refunds: list[ExpiredPinNotice]
+    # (channel_id, message_id) of live pins past their 24h — unpinned after commit.
+    unpins: list[tuple[int, int]]
+
+
+def run_pin_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> PinSweep:
+    """Retire live pins past 24h and refund pending pins nobody reviewed.
+
+    Live pins are *not* refunded (their day ran) — they only need their Discord
+    message unpinned after the transaction commits. Pending pins are refunded
+    exactly once and DMed. A disabled economy skips both.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return PinSweep(refunds=[], unpins=[])
+    unpins = [
+        (int(row["pin_channel_id"]), int(row["pin_message_id"]))
+        for row in pin_svc.expire_live_pins(conn, guild_id, now=now_ts)
+    ]
+    refunds = [
+        ExpiredPinNotice(
+            guild_id=guild_id,
+            user_id=int(row["user_id"]),
+            message=str(row["message"]),
+            refund=int(row["price"]),
+            unit=settings.currency_plural or "coins",
+        )
+        for row in pin_svc.expire_stale_pending(conn, settings, guild_id, now=now_ts)
+    ]
+    return PinSweep(refunds=refunds, unpins=unpins)
+
+
+@dataclass(frozen=True)
+class ExpiredBountyNotice:
+    """An expired bounty for the post-commit card refresh + contributor DMs."""
+
+    guild_id: int
+    bounty_id: int
+    title: str
+    card_channel_id: int
+    card_message_id: int
+    refunded_user_ids: list[int]
+
+
+def run_bounty_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> list[ExpiredBountyNotice]:
+    """Expire and refund open bounties nobody awarded within the window.
+
+    Refunds every contributor exactly once here; the caller re-renders each card
+    and DMs the refunded members after the transaction commits.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return []
+    return [
+        ExpiredBountyNotice(
+            guild_id=guild_id,
+            bounty_id=int(exp.bounty["id"]),
+            title=str(exp.bounty["title"]),
+            card_channel_id=int(exp.bounty["card_channel_id"]),
+            card_message_id=int(exp.bounty["card_message_id"]),
+            refunded_user_ids=exp.refunded_user_ids,
+        )
+        for exp in bounty_svc.expire_bounties(conn, settings, guild_id, now=now_ts)
+    ]
 
 
 def run_emoji_expiry(
@@ -1261,10 +1349,14 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         # try so a failed sweep can't NameError below or leak the previous
         # guild's notices.
         sponsor_notices, emoji_notices = [], []
+        pin_sweep = PinSweep(refunds=[], unpins=[])
+        bounty_notices: list[ExpiredBountyNotice] = []
         try:
             with open_db(db_path) as conn:
                 sponsor_notices = run_sponsor_expiry(conn, guild.id, now_ts)
                 emoji_notices = run_emoji_expiry(conn, guild.id, now_ts)
+                pin_sweep = run_pin_expiry(conn, guild.id, now_ts)
+                bounty_notices = run_bounty_expiry(conn, guild.id, now_ts)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1313,6 +1405,77 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                     "Economy loop: failed to DM expired emoji sponsor to %s.",
                     notice.user_id,
                 )
+
+        # Pin of the Day: unpin the live cards whose 24h ran out (the rows are
+        # already retired in DB), then DM anyone whose pending pin expired
+        # unreviewed and was refunded.
+        if pin_sweep.unpins:
+            from bot_modules.economy.pin_views import unpin_and_delete
+
+            for channel_id, message_id in pin_sweep.unpins:
+                try:
+                    await unpin_and_delete(bot, channel_id, message_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception(
+                        "Economy loop: failed to unpin expired pin %s.", message_id
+                    )
+        for notice in pin_sweep.refunds:
+            try:
+                await notify_member(
+                    bot,
+                    db_path,
+                    notice.guild_id,
+                    notice.user_id,
+                    content=(
+                        f"No mod got to your pinned message in time, so you've "
+                        f"had your {notice.refund} {notice.unit} back.\n"
+                        f"> {notice.message}"
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to DM expired pin to user %s.",
+                    notice.user_id,
+                )
+
+        # Community bounties that expired unawarded: refresh each board card to
+        # its "expired" state (rows already refunded in DB) and DM every
+        # contributor whose stake came back.
+        if bounty_notices:
+            from bot_modules.economy.bounty_views import refresh_card_by_id
+
+            for notice in bounty_notices:
+                try:
+                    await refresh_card_by_id(
+                        bot, guild, notice.card_channel_id,
+                        notice.card_message_id, notice.bounty_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception(
+                        "Economy loop: failed to refresh expired bounty card %s.",
+                        notice.bounty_id,
+                    )
+                for uid in notice.refunded_user_ids:
+                    try:
+                        await notify_member(
+                            bot, db_path, notice.guild_id, uid,
+                            content=(
+                                f"The bounty **{notice.title}** expired unawarded, "
+                                "so your stake is back in your wallet."
+                            ),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        log.exception(
+                            "Economy loop: failed to DM bounty refund to %s.", uid
+                        )
 
         if raffle_draw is not None and raffle_draw.winner_id is not None:
             # The draw row is already committed — the DM is best-effort and

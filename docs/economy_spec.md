@@ -181,6 +181,37 @@ to currency.
     and refund, swept per-guild by the hourly loop. **Approved ones never
     expire** — they're waiting on staff, and timing them out would punish the
     member for staff latency. `price_qotd_sponsor = 0` disables the feature.
+- **Pin of the Day (built, sink — migration 108, plan
+  `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
+  artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
+  at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
+  `pending`; a mod Approves/Declines on a bank-channel card
+  (`PinApproveButton`/`PinDenyButton`, persistent). Approve posts + pins a
+  "Pinned by @X" card in `pin_channel_id` and flips the row to `live` with a
+  24h `expires_at` — the Discord post happens *before* the DB move, so a failed
+  post refunds (the member is never charged for a pin nobody saw). One live pin
+  per guild (partial unique index); a new approval **supersedes** the prior one
+  (unpinned early — mod-paced). The hourly loop's `run_pin_expiry` unpins live
+  pins past 24h (**no refund** — the day ran) and refunds `pending` ones no mod
+  reached within `pin_expire_days` (default 3). Enabled only when
+  `price_pin_of_day > 0` **and** `pin_channel_id` is set — a public sink, dark
+  by default. One submission in flight per member.
+- **Community Bounty (built, sink — migration 109, plan
+  `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
+  `/bounty` opens a modal (title, details, opening stake); anyone chips into a
+  bounty's pot from its board card in `bounty_channel_id` (💰 Chip in), and a
+  mod Awards it (a `UserSelect` picks the winner) or Cancels it — persistent
+  `BountyChipInButton`/`BountyAwardButton`/`BountyCancelButton`. Every stake is
+  an `apply_debit` (`bounty_stake`) recorded as its own `econ_bounty_contributions`
+  row; the pot is `SUM(non-refunded contributions)` (never stored). Award credits
+  one `bounty_payout` of `pot − floor(pot × bounty_rake_pct / 100)` to the winner;
+  the rake is escrow never credited back — the **burn** (a real sink, next to
+  `wager_rake_pct`/`demurrage`). Cancel/expire refund every contribution
+  (`bounty_refund`, exactly-once, **never raked**). `run_bounty_expiry` on the
+  hourly loop expires + refunds open bounties past `bounty_expire_days`
+  (default 14) and re-renders the card. Guards: `bounty_min_stake` floor,
+  `bounty_max_open` per member. Enabled only when `bounty_channel_id` is set —
+  dark by default.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
@@ -801,7 +832,8 @@ takes effect on the next cycle, never retroactively.
 | Custom role color (solid) | 50 | `guild.create_role(color=…)` |
 | Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`). When the perk lapses, `revoke_role_perks` reverts the nick too (`should_revert_nick` — only if the nick still equals the perk's name, so a game name-penalty stake set since is never clobbered) |
 | Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
-| Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
+| Gradient (member-picked two-color fade) | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
+| Holographic (Discord's fixed shimmer preset) | 300 | `role_holographic` perk (migration 107): the projector sets the fixed `(primary, secondary, tertiary)` triple Discord accepts for `tertiary_color`; requires the same Enhanced Role Styles feature; supersedes gradient; member picks nothing (no customise modal) |
 | Private text room | 200 | §8 (Stage 6) |
 | Private voice room | 200 | §8 (Stage 6) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
@@ -876,13 +908,15 @@ the member owns and gift rentals where they are the beneficiary.
     table in the quest-board's house style (one `label  blurb` cell, then the
     price — blurbs kept short enough that a row fits a phone-width line), grouped
     into price tiers — **Essentials** (name, color), **Signature** (gradient,
-    icon), **For a friend** (a prose row — gifting has no single price to
-    tabulate) — sorted by the guild's configured price
+    icon, holographic), **For a friend** (a prose row — gifting has no single
+    price to tabulate) — sorted by the guild's configured price
     inside each tier, with the viewer's balance in the description and the
     renewal fine print in the footer. Unrented rows carry an emoji-led **Rent**
     button (no price in the label), rented rows a green **customise** button
     opening the matching modal (name / color hex / gradient hexes /
-    server-emoji icon), with icon/gradient rows
+    server-emoji icon) — except holographic, a fixed preset with nothing to
+    pick, whose rented row shows an inert **Active** chip instead — with
+    icon/gradient/holographic rows
     reflecting the server's role features and rented rows marked ✅. A fresh rental's
     confirmation carries the same customise button. Entitlements are
     beneficiary-based, so a *gifted* perk surfaces exactly like a self-rented

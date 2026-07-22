@@ -73,7 +73,7 @@ def env_value(key: str) -> str | None:
     env_file = REPO / ".env"
     if not env_file.exists():
         return None
-    for line in env_file.read_text().splitlines():
+    for line in env_file.read_text(encoding="utf-8").splitlines():
         if line.startswith(f"{key}="):
             return line.split("=", 1)[1].strip().strip("\"'").split("#")[0].strip()
     return None
@@ -398,7 +398,7 @@ def pack(block: str) -> list[str]:
 
 def plan(name: str) -> list[str]:
     path, _ = DOCS[name]
-    text = (REPO / path).read_text()
+    text = (REPO / path).read_text(encoding="utf-8")
     chunks: list[str] = []
     for block in split_entries(text):
         chunks.extend(pack(block))
@@ -590,7 +590,7 @@ def main() -> None:
 
     for name in targets:
         path, channel = DOCS[name]
-        text = (REPO / path).read_text()
+        text = (REPO / path).read_text(encoding="utf-8")
         # Every ``###`` block above "## Done" becomes a QA card — each
         # checklist feature, since the checklists were regrouped into
         # per-feature ``###`` blocks. A doc with no ``###`` headings simply

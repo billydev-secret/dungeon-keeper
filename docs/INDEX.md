@@ -18,6 +18,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 |---|---|
 | [README.md](../README.md) | Feature overview + slash-command reference — moved to the repo root (currency pass 2026-07-21; broad-strokes accurate, verify individual command signatures against `/help` when it matters) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
+| [dev_remote_testing.md](dev_remote_testing.md) | Dispatching pytest to a faster machine over SSH (opt-in, falls back to local) |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
 | [auto_role_spec.md](auto_role_spec.md) | Auto-role on join: dashboard-configured role set applied to new human members (apply-time hierarchy/managed filtering; jailed rejoiners skipped) |
 | [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
@@ -105,6 +106,7 @@ feature and also appear in the Design table above.
 | [plans/config-model-unification.md](plans/config-model-unification.md) | `guild_config` becomes the single source of truth (kills flat AppContext fields) | Implemented 2026-07-02 |
 | [plans/economy-and-perk-shop.md](plans/economy-and-perk-shop.md) | Economy core: wallets, quests, Bank Manager, rentals, metrics | Stages 0–4 built; stage 5 soak/tuning active |
 | [plans/embed-style-conformance.md](plans/embed-style-conformance.md) | Embed style-guide conformance sweep (color rulings, currency vocab, footers, games full-accent) from a 5-agent audit of all 272 embeds | Stage 0 (spec) done 2026-07-21; stages 1–7 in progress |
+| [plans/copy-style-conformance.md](plans/copy-style-conformance.md) | Round 2: full user-facing copy sweep (Title Case, ❌/✅ prefixes, guild→server, separators, ellipsis, progress bars, dashboard JS) | Done — bulk via `0d3c12c4`, mop-up gaps closed 2026-07-21 |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sinks: rerolls, QOTD sponsor, burn list, PvP wagers | All stages built (4b 2026-07-20) |
 | [plans/economy-sinks-round-3.md](plans/economy-sinks-round-3.md) | Sinks: gifts, shield, voice lease, emoji, raffle | All five stages built 2026-07-19 (lease + raffle ship dark) |
 | [plans/external-game-economy.md](plans/external-game-economy.md) | External-bot payouts (Gamebot CAH + Cat Bot) via multi-watch collector | Stages 1–3 shipped |

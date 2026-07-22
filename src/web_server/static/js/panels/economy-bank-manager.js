@@ -98,6 +98,7 @@ const PERK_LABELS = {
   role_name: "Role name",
   role_icon: "Role icon",
   role_gradient: "Role gradient",
+  role_holographic: "Role holographic",
 };
 
 async function refreshRentals(container, members) {

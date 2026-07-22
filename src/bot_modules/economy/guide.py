@@ -122,7 +122,7 @@ def build_guide_embed(
 
     spend_rows = [
         ("/bank shop", "rent perks for your personal role — color, name, "
-                       "gradient, icon (prices in the shop)"),
+                       "gradient, holographic, icon (prices in the shop)"),
         ("/bank gift", "treat a friend to any perk, on your tab"),
     ]
     if settings.transfers_enabled:

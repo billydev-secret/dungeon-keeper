@@ -52,10 +52,35 @@ from bot_modules.economy.quest_views import (
     can_manage_economy,
     post_signoff_card,
 )
+from bot_modules.economy.bounty_views import (
+    BountyAwardButton,
+    BountyCancelButton,
+    BountyChipInButton,
+    post_bounty_card,
+)
+from bot_modules.economy.pin_views import (
+    PinApproveButton,
+    PinDenyButton,
+)
+from bot_modules.economy.pin_views import (
+    post_review_card as post_pin_review_card,
+)
 from bot_modules.economy.sponsor_views import (
     SponsorApproveButton,
     SponsorDenyButton,
     post_review_card,
+)
+from bot_modules.services.economy_bounty_service import (
+    MAX_DESC_LEN,
+    MAX_TITLE_LEN,
+    bounty_enabled,
+    create_bounty,
+)
+from bot_modules.services.economy_pin_service import (
+    MAX_PIN_LEN,
+    MIN_PIN_LEN,
+    pin_enabled,
+    submit_pin,
 )
 from bot_modules.services.economy_qotd_sponsor_service import (
     attach_qotd,
@@ -144,15 +169,20 @@ _PERK_LABELS = {
     "role_name": "Custom Role Name",
     "role_icon": "Role Icon",
     "role_gradient": "Gradient Role",
+    "role_holographic": "Holographic Role",
     "voice_style": "Voice Style",
 }
 # The role perks a member rents for themselves, in shop display order. Every
 # giftable perk (these + the voice-style lease) is gifted as the same perk
 # kind rented with the friend as beneficiary (gift_color retired in 091).
-_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
+_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_holographic", "role_icon")
+# Self-perks with no member-side customisation: renting IS the whole thing
+# (holographic is a fixed Discord preset, not a colour the member picks), so
+# these skip the "Set …" modal and post-rent button.
+_NO_CONFIG_PERKS = ("role_holographic",)
 _GIFTABLE_PERKS = (*_SELF_PERKS, "voice_style")
 # Feature-gated perks and the friendly reason shown when the gate is closed.
-_FEATURE_GATED = ("role_gradient", "role_icon")
+_FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon")
 
 # Shop-table furniture. The full `_PERK_LABELS` names are too wide for an
 # aligned two-cell row, so the shop uses a short cell label plus a one-line
@@ -162,6 +192,7 @@ _PERK_SHORT = {
     "role_color": "Color",
     "role_name": "Name",
     "role_gradient": "Gradient",
+    "role_holographic": "Holo",
     "role_icon": "Icon",
     "voice_style": "Voice",
 }
@@ -172,6 +203,7 @@ _PERK_BLURBS = {
     "role_color": "any solid color",
     "role_name": "nickname + role",
     "role_gradient": "two-color fade",
+    "role_holographic": "shimmer preset",
     "role_icon": "badge by name",
     "voice_style": "your voice room",
 }
@@ -179,6 +211,7 @@ _PERK_EMOJI = {
     "role_color": "🎨",
     "role_name": "✨",
     "role_gradient": "🌈",
+    "role_holographic": "🪩",
     "role_icon": "🖼️",
     "voice_style": "🎙️",
 }
@@ -188,7 +221,7 @@ _PERK_EMOJI = {
 # prices are guild-configurable and can reorder.
 _PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Essentials", ("role_name", "role_color")),
-    ("Signature", ("role_gradient", "role_icon")),
+    ("Signature", ("role_gradient", "role_icon", "role_holographic")),
 )
 
 
@@ -643,6 +676,59 @@ class _RoleIconModal(discord.ui.Modal, title="Role Icon"):
         await self.cog.set_role_icon_emoji(interaction, str(self.emoji.value))
 
 
+class _PinSubmitModal(discord.ui.Modal, title="Pin a Message"):
+    """The paragraph a member pays to pin; a mod reviews it before it goes up."""
+
+    text: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your message",
+        style=discord.TextStyle.paragraph,
+        min_length=MIN_PIN_LEN,
+        max_length=MAX_PIN_LEN,
+        placeholder="Keep it short and fun — a mod approves it before it pins.",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_pin_submit(interaction, str(self.text.value))
+
+
+class _BountyPostModal(discord.ui.Modal, title="Post a Bounty"):
+    """A freeform task plus the poster's opening stake into the pot."""
+
+    b_title: discord.ui.TextInput = discord.ui.TextInput(
+        label="Bounty",
+        max_length=MAX_TITLE_LEN,
+        placeholder="What needs doing? e.g. 'Draw our mascot as a knight'",
+    )
+    description: discord.ui.TextInput = discord.ui.TextInput(
+        label="Details (optional)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=MAX_DESC_LEN,
+        placeholder="Any rules, deadline, or what 'done' looks like.",
+    )
+    stake: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your opening stake",
+        max_length=12,
+        placeholder="Coins you put in to start the pot",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_bounty_post(
+            interaction,
+            str(self.b_title.value),
+            str(self.description.value or ""),
+            str(self.stake.value),
+        )
+
+
 # Which modal customises which perk; a gifted perk uses the same modal as a
 # self-rented one (entitlements are beneficiary-based, so the rows match).
 _CFG_MODALS = {
@@ -772,7 +858,17 @@ class _ShopView(discord.ui.View):
                 button.callback = self._make_icons_callback()
                 self.add_item(button)
                 continue
-            if perk in owned:
+            if perk in owned and perk in _NO_CONFIG_PERKS:
+                # Nothing to customise (a fixed preset) — show it as active,
+                # like the voice lease's "Leased" chip, rather than a dead
+                # "Set …" button that opens an empty modal.
+                button = discord.ui.Button(
+                    label=f"{_PERK_EMOJI[perk]} Active",
+                    style=discord.ButtonStyle.success,
+                    disabled=True,
+                    custom_id=f"econ_shop_active:{perk}",
+                )
+            elif perk in owned:
                 button = discord.ui.Button(
                     label=_CUSTOMISE_LABELS[perk],
                     style=discord.ButtonStyle.success,
@@ -944,6 +1040,15 @@ async def _rent_perk_flow(
         )
         return
     await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
+    if perk in _NO_CONFIG_PERKS:
+        # A fixed preset — there's nothing to set, so it's live the moment the
+        # role projects. No customise button (an empty modal would confuse).
+        await interaction.response.send_message(
+            f"Rented **{_PERK_LABELS[perk]}**! Your personal role now wears "
+            "Discord's holographic shimmer — no setup needed.",
+            ephemeral=True,
+        )
+        return
     note = (
         " (For an image icon, upload one with `/bank role icon`.)"
         if perk == "role_icon"
@@ -1832,6 +1937,150 @@ class EconomyCog(commands.Cog):
             ephemeral=True,
         )
 
+    # ── pin of the day ───────────────────────────────────────────────────
+
+    @bank.command(
+        name="pin",
+        description="Pay to pin a short message for a day — a mod approves it first.",
+    )
+    async def bank_pin(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not pin_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Pinning a message isn't enabled here.", ephemeral=True
+            )
+            return
+        # A modal must be the FIRST response to the interaction (can't defer
+        # first), so the enable check above runs before we open it.
+        await interaction.response.send_modal(_PinSubmitModal(self))
+
+    async def do_pin_submit(
+        self, interaction: discord.Interaction, message: str
+    ) -> None:
+        """Escrow the price, queue the pin, and post the mod-approval card."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not pin_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Pinning a message isn't enabled here.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        def _submit():
+            with self.ctx.open_db() as conn:
+                return submit_pin(conn, settings, guild.id, member.id, message)
+
+        try:
+            outcome = await asyncio.to_thread(_submit)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        # Money's taken and the row exists; a card failure must never surface as
+        # an error to the member (it's still resolvable), so it's best-effort.
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_pin_review_card(
+            self.bot, self.ctx, guild, settings, accent, outcome.submission_id, member
+        )
+        unit = _unit(settings, outcome.price)
+        await interaction.followup.send(
+            f"📨 Sent your message to the mods for review — {outcome.price} "
+            f"{unit} held. If it's turned down you'll get a full refund; if it's "
+            "approved it's pinned for 24 hours.",
+            ephemeral=True,
+        )
+
+    # ── community bounty ─────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="bounty",
+        description="Post a community bounty — a task others can chip coins into.",
+    )
+    async def bounty(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not bounty_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Bounties aren't enabled here.", ephemeral=True
+            )
+            return
+        # A modal must be the first response — the enable check runs before it.
+        await interaction.response.send_modal(_BountyPostModal(self))
+
+    async def do_bounty_post(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        description: str,
+        raw_stake: str,
+    ) -> None:
+        """Open a bounty from the modal: escrow the stake and post the board card."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled or not bounty_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Bounties aren't enabled here.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            stake = int(raw_stake.strip())
+        except ValueError:
+            await interaction.followup.send(
+                "❌ Your stake has to be a whole number of coins.", ephemeral=True
+            )
+            return
+
+        def _create():
+            with self.ctx.open_db() as conn:
+                return create_bounty(
+                    conn, settings, guild.id, member.id,
+                    title=title, description=description, stake=stake,
+                )
+
+        try:
+            outcome = await asyncio.to_thread(_create)
+        except ValueError as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_bounty_card(
+            self.bot, self.ctx, guild, settings, accent, outcome.bounty_id
+        )
+        await interaction.followup.send(
+            f"🎯 Bounty posted with {outcome.stake:,} in the pot! Others can chip "
+            "in from its card, and a mod awards it when it's done.",
+            ephemeral=True,
+        )
+
     # ── emoji sponsorship ────────────────────────────────────────────────
 
     @bank.command(
@@ -2117,11 +2366,12 @@ class EconomyCog(commands.Cog):
             if perk == "role_icon"
             else ""
         )
-        gift_hint = (
-            "Renaming and sizing your voice channel are unlocked."
-            if perk == "voice_style"
-            else "Set it up from /bank shop."
-        )
+        if perk == "voice_style":
+            gift_hint = "Renaming and sizing your voice channel are unlocked."
+        elif perk in _NO_CONFIG_PERKS:
+            gift_hint = "It's already live on your personal role — no setup needed."
+        else:
+            gift_hint = "Set it up from /bank shop."
         await notify_member(
             self.bot, self.ctx.db_path, guild.id, member.id,
             content=(
@@ -3966,6 +4216,11 @@ class EconomyCog(commands.Cog):
             ShopRentButton,
             SponsorApproveButton,
             SponsorDenyButton,
+            PinApproveButton,
+            PinDenyButton,
+            BountyChipInButton,
+            BountyAwardButton,
+            BountyCancelButton,
         )
         # The guide panel's 🔔 toggle and the quest board's "Show my quests"
         # button carry no per-message state, so they are plain static-custom_id

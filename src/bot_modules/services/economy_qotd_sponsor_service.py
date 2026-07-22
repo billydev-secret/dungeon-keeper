@@ -180,9 +180,9 @@ def resolve_submission(
         "SELECT * FROM econ_qotd_submissions WHERE id = ?", (submission_id,)
     ).fetchone()
     if row is None:
-        raise ValueError("That submission no longer exists.")
+        raise ValueError("❌ That submission no longer exists.")
     if str(row["state"]) != "pending":
-        raise ValueError(f"That submission is already {row['state']}.")
+        raise ValueError(f"❌ That submission is already {row['state']}.")
 
     now = time.time()
     state = "approved" if approve else "denied"
@@ -193,7 +193,7 @@ def resolve_submission(
     )
     if (cur.rowcount or 0) == 0:
         # Lost a race with another resolver; their write stands.
-        raise ValueError("That submission was just resolved by someone else.")
+        raise ValueError("❌ That submission was just resolved by someone else.")
     if not approve:
         _refund(conn, row, "denied")
     fresh = conn.execute(

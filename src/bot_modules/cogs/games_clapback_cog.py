@@ -78,7 +78,7 @@ async def fetch_prompt(db, config: dict, used: list[str]) -> str | None:
 class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
     answer_input = discord.ui.TextInput(
         label="Your funniest answer",
-        placeholder="Type your answer here...",
+        placeholder="Type your answer here…",
         style=discord.TextStyle.short,
         required=True,
         max_length=200,

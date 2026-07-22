@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 
 class PoseStatementModal(discord.ui.Modal, title="Pose a Statement"):
     statement = discord.ui.TextInput(
-        label="Never have I ever...",
+        label="Never have I ever…",
         placeholder="e.g. gone skydiving",
         style=discord.TextStyle.paragraph,
         max_length=300,

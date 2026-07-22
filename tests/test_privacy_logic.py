@@ -183,24 +183,24 @@ def test_chunk_rejects_non_positive_size():
 
 def test_progress_bar_zero():
     bar = render_progress_bar(0, 10, width=10)
-    assert bar == "`[░░░░░░░░░░]` 0/10"
+    assert bar == "▱▱▱▱▱▱▱▱▱▱ 0/10"
 
 
 def test_progress_bar_full():
     bar = render_progress_bar(10, 10, width=10)
-    assert bar == "`[██████████]` 10/10"
+    assert bar == "▰▰▰▰▰▰▰▰▰▰ 10/10"
 
 
 def test_progress_bar_half():
     bar = render_progress_bar(5, 10, width=10)
-    assert bar == "`[█████░░░░░]` 5/10"
+    assert bar == "▰▰▰▰▰▱▱▱▱▱ 5/10"
 
 
 def test_progress_bar_total_zero_renders_full():
     """Defensive: ``total == 0`` means there was nothing to do, so the bar
     should show "complete" rather than divide-by-zero."""
     bar = render_progress_bar(0, 0, width=4)
-    assert bar == "`[████]` 0/0"
+    assert bar == "▰▰▰▰ 0/0"
 
 
 def test_progress_bar_clamps_overshoot():
@@ -208,8 +208,8 @@ def test_progress_bar_clamps_overshoot():
     sum semantics — the bar must not produce a negative-padded string."""
     bar = render_progress_bar(15, 10, width=10)
     # Filled clamped to 10, no negative padding
-    assert "█" * 10 in bar
-    assert "░" not in bar
+    assert "▰" * 10 in bar
+    assert "▱" not in bar
     assert bar.endswith("15/10")
 
 

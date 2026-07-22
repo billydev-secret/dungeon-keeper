@@ -93,7 +93,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         label="Question",
         style=discord.TextStyle.paragraph,
         max_length=500,
-        placeholder="Ask anything...",
+        placeholder="Ask anything…",
     )
 
     def __init__(self, game_id: str, db, channel, mode: str, host_id: int, target_id: int, ama_view):
@@ -225,7 +225,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         label="Reply",
         style=discord.TextStyle.paragraph,
         max_length=1000,
-        placeholder="Type your answer...",
+        placeholder="Type your answer…",
     )
 
     def __init__(self, game_id: str, db, question_idx: int, asker_id: int, ama_view, question_text: str):

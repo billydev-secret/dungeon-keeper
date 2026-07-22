@@ -98,10 +98,13 @@ def entitled_perks(rentals: Iterable[Mapping[str, object] | object]) -> set[str]
 def effective_color_mode(perks: set[str]) -> str:
     """Resolve the member's color mode from their entitled perks (spec §6).
 
-    Gradient supersedes solid: 'gradient' when role_gradient is entitled,
-    else 'solid' when a solid-color perk (role_color, self-rented or
-    received as a gift) is entitled, else 'none'.
+    Richest wins: 'holographic' (Discord's fixed three-colour preset) tops
+    'gradient' (member-picked two-colour), which tops 'solid' (a role_color,
+    self-rented or received as a gift), else 'none'. Holographic overrides the
+    lower modes so a member who rents both wears the shimmer, not a stale fade.
     """
+    if "role_holographic" in perks:
+        return "holographic"
     if "role_gradient" in perks:
         return "gradient"
     if perks & _SOLID_COLOR_PERKS:

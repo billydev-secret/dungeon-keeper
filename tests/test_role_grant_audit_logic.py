@@ -431,6 +431,8 @@ def test_embed_has_three_buckets_with_counts():
     )
     embed = build_grant_audit_embed("NSFW", snap, now_ts=1000.0)
     assert embed.title == "📋 Grant audit — NSFW"
+    # Blank author line above the title for breathing room from the top edge.
+    assert embed.author.name == "​"
     names = [f.name for f in embed.fields]
     assert names[0] == "🕐 Waiting for first grant (1)"
     assert names[1] == "↩️ Stripped but came back (1)"
@@ -492,9 +494,15 @@ def _card_bot(guild):
     from unittest.mock import AsyncMock
 
     channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 555000
     message = MagicMock()
+    message.id = 666000
     message.edit = AsyncMock()
+    message.delete = AsyncMock()
+    # Card is the newest message → edit-in-place path by default.
+    channel.last_message_id = 666000
     channel.fetch_message = AsyncMock(return_value=message)
+    channel.send = AsyncMock(return_value=MagicMock(id=666999))
     guild.get_channel = lambda cid: channel if cid == 555000 else None
     bot = MagicMock()
     bot.get_guild = MagicMock(return_value=guild)
@@ -514,6 +522,23 @@ async def test_refresh_card_edits_message_in_place(db_path):
     embed = message.edit.call_args.kwargs["embed"]
     assert embed.title == "📋 Grant audit — NSFW"
     assert "member-3001" in embed.fields[0].value
+    channel.send.assert_not_awaited()  # newest already → no repost
+
+
+async def test_refresh_card_reposts_to_bottom_when_not_newest(db_path):
+    now = time.time()
+    _seed_card_guild(db_path, now)
+    guild = _FakeGuild(_FakeRole(), [_FakeMember(u) for u in (3001, 3002, 3003)])
+    bot, channel, message = _card_bot(guild)
+    channel.last_message_id = 999999  # someone posted since → card is stale
+
+    await refresh_grant_audit_card(bot, db_path, GUILD_ID, now_ts=now)
+
+    message.edit.assert_not_awaited()
+    channel.send.assert_awaited_once()  # reposted at the bottom
+    message.delete.assert_awaited_once()  # old copy retired
+    with open_db(db_path) as conn:
+        assert load_card_ref(conn, GUILD_ID).message_id == 666999  # repointed
 
 
 async def test_refresh_card_retires_ref_when_message_deleted(db_path):

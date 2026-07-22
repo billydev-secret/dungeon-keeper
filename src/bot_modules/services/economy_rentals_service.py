@@ -63,7 +63,10 @@ if TYPE_CHECKING:
 # ``economy_emoji_service.finalize_upload`` after mod approval — never by a
 # direct shop rent. A gift is any of these rented with
 # ``beneficiary_id`` != ``user_id`` (the gift_color kind retired in 091).
-_PERKS = ("role_color", "role_name", "role_gradient", "role_icon", "voice_style")
+_PERKS = (
+    "role_color", "role_name", "role_gradient", "role_holographic",
+    "role_icon", "voice_style",
+)
 
 _RENTAL_COLS = (
     "id, guild_id, user_id, perk, state, price, started_at, next_bill_at, "

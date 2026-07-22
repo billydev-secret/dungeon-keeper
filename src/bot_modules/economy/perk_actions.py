@@ -64,7 +64,13 @@ _COSMETICS_ANCHOR = "#### Cosmetics"
 _FEATURE_FOR_PERK = {
     "role_icon": "ROLE_ICONS",
     "role_gradient": "ENHANCED_ROLE_COLORS",
+    "role_holographic": "ENHANCED_ROLE_COLORS",
 }
+
+# Discord's holographic role preset: the only (primary, secondary, tertiary)
+# combination the API accepts for a tertiary colour (discord.py 2.7.1 documents
+# it verbatim). The member picks nothing — renting the perk wears this shimmer.
+_HOLOGRAPHIC_PRESET = (11127295, 16759788, 16761760)
 
 # ΔE (CIE76) below this ⇒ "too close" to a staff color. Empirically ~25 is the
 # threshold where two role colors read as the same hue in the member list.
@@ -155,6 +161,7 @@ async def apply_role_perks(
     applied = set(raw_ent)
     if "ENHANCED_ROLE_COLORS" not in features:
         applied.discard("role_gradient")
+        applied.discard("role_holographic")
     if "ROLE_ICONS" not in features:
         applied.discard("role_icon")
 
@@ -172,13 +179,24 @@ async def apply_role_perks(
         target_name = d_name[:100]
     else:
         target_name = member.display_name
-    if mode in ("solid", "gradient") and d_color != -1:
-        target_color = discord.Color(d_color)
+    if mode == "holographic":
+        # A fixed preset — the member's stored colours don't apply; Discord
+        # rejects any tertiary colour that isn't exactly this triple.
+        p, s, t = _HOLOGRAPHIC_PRESET
+        target_color = discord.Color(p)
+        target_secondary: discord.Color | None = discord.Color(s)
+        target_tertiary: discord.Color | None = discord.Color(t)
     else:
-        target_color = discord.Color.default()
-    target_secondary = (
-        discord.Color(d_color2) if mode == "gradient" and d_color2 != -1 else None
-    )
+        if mode in ("solid", "gradient") and d_color != -1:
+            target_color = discord.Color(d_color)
+        else:
+            target_color = discord.Color.default()
+        target_secondary = (
+            discord.Color(d_color2)
+            if mode == "gradient" and d_color2 != -1
+            else None
+        )
+        target_tertiary = None
     want_icon = "role_icon" in applied and icon_payload is not None
 
     # Icon-switch detection. The reconcile diffs the role icon by PRESENCE only
@@ -195,7 +213,7 @@ async def apply_role_perks(
 
     if role is None:
         role = await _create_role(
-            guild, target_name, target_color, target_secondary,
+            guild, target_name, target_color, target_secondary, target_tertiary,
             icon_payload if want_icon else None,
         )
         if role is None:
@@ -215,7 +233,7 @@ async def apply_role_perks(
         await asyncio.to_thread(_persist)
     else:
         if not await _reconcile_role(
-            role, target_name, target_color, target_secondary,
+            role, target_name, target_color, target_secondary, target_tertiary,
             want_icon, icon_payload, icon_changed,
         ):
             return False
@@ -247,11 +265,14 @@ async def _create_role(
     name: str,
     color: discord.Color,
     secondary: discord.Color | None,
+    tertiary: discord.Color | None,
     icon_payload: bytes | str | None,
 ) -> discord.Role | None:
     kwargs: dict = {"name": name, "color": color, "reason": "Economy personal role"}
     if secondary is not None:
         kwargs["secondary_color"] = secondary
+    if tertiary is not None:
+        kwargs["tertiary_color"] = tertiary
     if icon_payload is not None:
         kwargs["display_icon"] = icon_payload
     try:
@@ -266,6 +287,7 @@ async def _reconcile_role(
     target_name: str,
     target_color: discord.Color,
     target_secondary: discord.Color | None,
+    target_tertiary: discord.Color | None,
     want_icon: bool,
     icon_payload: bytes | str | None,
     icon_changed: bool,
@@ -279,6 +301,9 @@ async def _reconcile_role(
     cur_secondary = getattr(role, "secondary_color", None)
     if cur_secondary != target_secondary:
         edits["secondary_color"] = target_secondary
+    cur_tertiary = getattr(role, "tertiary_color", None)
+    if cur_tertiary != target_tertiary:
+        edits["tertiary_color"] = target_tertiary
     # Icon: the role can't hand back an uploaded Asset's bytes, so we diff by
     # presence PLUS the caller's ``icon_changed`` flag (desired spec differs from
     # what we last projected). Upload when the role has no icon OR the member

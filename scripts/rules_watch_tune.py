@@ -552,7 +552,7 @@ async def main():
                          "pattern": c["pattern"],
                          "pred": 1 if o.get("verdict") == "flag" else 0}
                         for c, o in res]
-                with open(f"{a.dump}.{pname}.{ctx}.json", "w") as fh:
+                with open(f"{a.dump}.{pname}.{ctx}.json", "w", encoding="utf-8") as fh:
                     json.dump(recs, fh)
             if best is None or s["ba"] > best[1]["ba"]:
                 best = ((pname, ctx), s)

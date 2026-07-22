@@ -738,6 +738,105 @@ def test_run_sponsor_expiry_skips_approved_and_disabled_guilds(db):
         assert economy_loop.run_sponsor_expiry(conn, GUILD + 1, time.time()) == []
 
 
+# ── Pin of the Day expiry (run_pin_expiry) ─────────────────────────────
+
+
+def _pin(db_path, user_id=USER, message="gm gamers"):
+    from bot_modules.services.economy_pin_service import submit_pin
+
+    with open_db(db_path) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, user_id, 200, "grant", actor_id=9001)
+        return submit_pin(conn, settings, GUILD, user_id, message).submission_id
+
+
+def test_run_pin_expiry_unpins_live_and_refunds_pending(db):
+    from bot_modules.services.economy_pin_service import go_live
+
+    _enable(db, price_pin_of_day=30, pin_channel_id=5555, pin_expire_days=3)
+    now = time.time()
+    # A live pin whose 24h ran out (must be unpinned, NOT refunded)…
+    live_sid = _pin(db, user_id=USER, message="live one")
+    with open_db(db) as conn:
+        go_live(
+            conn, live_sid, resolver_id=9001,
+            pin_channel_id=5555, pin_message_id=42, now=now - 2 * 86400,
+        )
+    # …and a pending pin nobody reviewed (must expire + refund).
+    pending_sid = _pin(db, user_id=USER + 1, message="stale")
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE econ_pin_submissions SET created_at = ? WHERE id = ?",
+            (now - 10 * 86400, pending_sid),
+        )
+
+    with open_db(db) as conn:
+        sweep = economy_loop.run_pin_expiry(conn, GUILD, now)
+
+    assert sweep.unpins == [(5555, 42)]
+    assert len(sweep.refunds) == 1
+    assert sweep.refunds[0].user_id == USER + 1
+    assert sweep.refunds[0].refund == 30
+    assert sweep.refunds[0].unit  # non-empty
+    with open_db(db) as conn:
+        # The live pin's owner kept their spend; the pending owner was refunded.
+        assert get_balance(conn, GUILD, USER) == 170
+        assert get_balance(conn, GUILD, USER + 1) == 200
+
+
+def test_run_pin_expiry_skips_disabled_guild(db):
+    _enable(db, guild_id=GUILD + 1, enabled=False)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_pin_expiry(conn, GUILD + 1, time.time())
+    assert sweep.refunds == []
+    assert sweep.unpins == []
+
+
+# ── Community Bounty expiry (run_bounty_expiry) ────────────────────────
+
+
+def test_run_bounty_expiry_refunds_all_and_notices(db):
+    from bot_modules.services.economy_bounty_service import contribute, create_bounty
+
+    _enable(db, bounty_channel_id=555, bounty_min_stake=10, bounty_expire_days=14)
+    now = time.time()
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, USER, 200, "grant", actor_id=9001)
+        apply_credit(conn, GUILD, USER + 1, 200, "grant", actor_id=9001)
+        bid = create_bounty(
+            conn, settings, GUILD, USER, title="do a thing", description="",
+            stake=50, now=now,
+        ).bounty_id
+        contribute(conn, settings, GUILD, bid, USER + 1, 30, now=now)
+        # Age it past the window.
+        conn.execute(
+            "UPDATE econ_bounties SET expires_at = ? WHERE id = ?", (now - 100, bid)
+        )
+        conn.execute(
+            "UPDATE econ_bounties SET card_channel_id = 555, card_message_id = 42 "
+            "WHERE id = ?",
+            (bid,),
+        )
+
+    with open_db(db) as conn:
+        notices = economy_loop.run_bounty_expiry(conn, GUILD, now)
+
+    assert len(notices) == 1
+    assert notices[0].bounty_id == bid
+    assert notices[0].card_message_id == 42
+    assert set(notices[0].refunded_user_ids) == {USER, USER + 1}
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 200  # opener refunded
+        assert get_balance(conn, GUILD, USER + 1) == 200  # contributor refunded
+
+
+def test_run_bounty_expiry_skips_disabled_guild(db):
+    _enable(db, guild_id=GUILD + 1, enabled=False)
+    with open_db(db) as conn:
+        assert economy_loop.run_bounty_expiry(conn, GUILD + 1, time.time()) == []
+
+
 # ── rental billing pass (run_guild_rentals) ────────────────────────────
 
 # Anchor rental time on a plain float so week arithmetic is exact and tz-free.

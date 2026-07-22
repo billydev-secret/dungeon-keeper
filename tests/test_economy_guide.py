@@ -55,7 +55,7 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert "/bank quests" in earning
     spending = fields["🛍️ Spending"]
     assert "/bank shop" in spending
-    assert "color, name, gradient, icon" in spending  # perks named, not priced
+    assert "color, name, gradient, holographic, icon" in spending  # perks named, not priced
     assert "prices in the shop" in spending  # specifics deferred to the shop
     assert "/bank pay" in spending
     # fine print (streak cap, booster, rental grace) collapses to the footer

@@ -49,6 +49,6 @@ def test_configured_dir_is_writable():
     configured.mkdir(parents=True, exist_ok=True)
 
     probe = configured / ".write-probe"
-    probe.write_text("ok")
-    assert probe.read_text() == "ok"
+    probe.write_text("ok", encoding="utf-8")
+    assert probe.read_text(encoding="utf-8") == "ok"
     probe.unlink()
