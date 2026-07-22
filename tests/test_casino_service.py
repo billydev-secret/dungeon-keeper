@@ -731,3 +731,51 @@ def test_settled_games_land_in_stats_via_their_settle_paths(db):
         assert hand2 and svc.refund_live_blackjack_hands(conn, now=NOW)
         row = svc.member_casino_stats(conn, GUILD, A)
         assert row is not None and int(row["plays"]) == 3
+
+
+# ── UX round: cap visibility + honeypot lines ──────────────────────────
+
+
+def test_cap_error_names_the_reset_time(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 50})
+        _fund(conn, A, 1_000)
+        assert svc.take_stake(conn, GUILD, A, 50, "slots", now=NOW) is None
+        err = svc.take_stake(conn, GUILD, A, 10, "slots", now=NOW)
+        assert err is not None and "resets <t:" in err
+
+
+def test_daily_cap_status_reports_used_cap_and_reset(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        used, cap, reset_ts = svc.daily_cap_status(conn, GUILD, A, now=NOW)
+        assert (used, cap) == (0, svc.DEFAULT_CASINO_SETTINGS.daily_wager_cap)
+        assert reset_ts > NOW
+        assert svc.take_stake(conn, GUILD, A, 30, "slots", now=NOW) is None
+        used, _, _ = svc.daily_cap_status(conn, GUILD, A, now=NOW)
+        assert used == 30
+
+
+def test_instant_results_carry_the_pot_on_losses_only(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        lost = svc.settle_slots(conn, GUILD, A, 40, ("🌻", "🍀", "🐝"), now=NOW)
+        assert lost.fed == 10 and lost.pot_after == 110  # seed 100 + 10
+        won = svc.settle_coinflip(conn, GUILD, A, 10, "heads", "heads", now=NOW)
+        assert (won.fed, won.pot_after) == (0, 0)
+        svc.save_casino_settings(conn, GUILD, {"jackpot_enabled": False})
+        off = svc.settle_coinflip(conn, GUILD, A, 10, "heads", "tails", now=NOW)
+        assert (off.fed, off.pot_after) == (0, 0)
+
+
+def test_blackjack_step_carries_pot_on_a_loss(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        hand_id = _deal_state(conn, A, 40, [], ["10♠", "7♦"], ["10♥", "8♥"])
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "stand", now=NOW)
+        assert (step.outcome, step.payout) == ("lose", 0)
+        assert step.pot_after == 110  # seed 100 + 25% of 40
+        hand2 = _deal_state(conn, A, 40, [], ["10♠", "9♦"], ["10♥", "8♥"])
+        step = svc.resolve_blackjack_action(conn, GUILD, hand2, A, "stand", now=NOW)
+        assert (step.outcome, step.payout) == ("win", 80)
+        assert step.pot_after == 0

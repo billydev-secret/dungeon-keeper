@@ -152,6 +152,24 @@ caller-supplied.
   two-frame ball bounce. **Money settles before the first frame** — a
   crash mid-show leaves a stale message, never a wrong balance.
 
+## UX layer (2026-07-22 review round)
+
+- **Loop-closers:** every instant/blackjack result carries a persistent
+  🔁 button (`casino_again:{game}:{side}:{amount}`) that replays the same
+  stake **for whoever clicks** (their coins; every guard re-applies) —
+  results are invitations, not dead ends. Roulette recaps carry
+  🎡 Next Round. Stale buttons stay safe: stakes re-validate at click.
+- **Informed bets:** the bet modal's label carries live limits and cap
+  headroom ("Your bet (5–100 · 340 left today)") and pre-fills the
+  member's last stake per game (in-memory). The cap error names its reset
+  time; the hub's 📊 My Stats button shows the personal tally + today's
+  cap usage ephemerally.
+- **Honeypot feedback:** losing results append "the loss waters the
+  honeypot — now N" (from the settle's own transaction), so the jackpot's
+  funding is visible instead of silent. The round-already-running note
+  carries a jump link to the live round message. Blackjack hides Double
+  Down when the clicker can't afford the second stake.
+
 ## Storage (migrations 113 + 114)
 
 `casino_daily`, `casino_blackjack_hands` (state_json = deck/player/dealer,

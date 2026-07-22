@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, fields
 from typing import NamedTuple
 
-from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.logic import local_day_bounds, local_day_for
 from bot_modules.services import casino_logic
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -147,6 +147,23 @@ def game_enabled(settings: CasinoSettings, game: str) -> bool:
 # ── the money choke point ──────────────────────────────────────────────
 
 
+def daily_cap_status(
+    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    *, now: float | None = None,
+) -> tuple[int, int, float]:
+    """(wagered today, cap [0 = uncapped], reset timestamp) — the numbers
+    the bet modal's label and the My Stats card show, so members never
+    learn about the cap from an error."""
+    from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
+
+    ts = time.time() if now is None else now
+    offset = get_tz_offset_hours(conn, guild_id)
+    day = local_day_for(ts, offset)
+    _, day_end = local_day_bounds(day, offset)
+    cap = load_casino_settings(conn, guild_id).daily_wager_cap
+    return wagered_today(conn, guild_id, user_id, day), cap, day_end
+
+
 def wagered_today(
     conn: sqlite3.Connection, guild_id: int, user_id: int, local_day: str
 ) -> int:
@@ -210,9 +227,11 @@ def take_stake(
         already = wagered_today(conn, guild_id, user_id, day)
         if already + amount > settings.daily_wager_cap:
             left = max(0, settings.daily_wager_cap - already)
+            _, day_end = local_day_bounds(day, get_tz_offset_hours(conn, guild_id))
             return (
                 f"That bet would pass your daily casino cap of "
-                f"{settings.daily_wager_cap} {unit} — you have {left} left today."
+                f"{settings.daily_wager_cap} {unit} — you have {left} left "
+                f"today (resets <t:{int(day_end)}:R>)."
             )
     if not apply_debit(
         conn, guild_id, user_id, amount, STAKE_KIND,
@@ -469,6 +488,10 @@ class InstantResult(NamedTuple):
     label: str | None = None
     jackpot_won: int = 0
     streak: int = 0
+    # On a loss that fed the jackpot: the cut and the pot it left behind,
+    # so the result embed can show the loss watering the honeypot.
+    fed: int = 0
+    pot_after: int = 0
 
 
 def settle_coinflip(
@@ -477,17 +500,21 @@ def settle_coinflip(
 ) -> InstantResult:
     """Pay/feed/record one flip (stake already debited by take_stake)."""
     payout = casino_logic.coinflip_payout(stake) if landed == call else 0
+    fed = pot_after = 0
     if payout:
         pay_out(
             conn, guild_id, user_id, payout, "coinflip",
             meta={"call": call, "landed": landed},
         )
     else:
-        feed_jackpot(conn, guild_id, stake, now=now)
+        fed = feed_jackpot(conn, guild_id, stake, now=now)
+        pot_after = get_jackpot(conn, guild_id) if fed else 0
     streak = record_play(
         conn, guild_id, user_id, "coinflip", stake, payout, now=now
     )
-    return InstantResult(payout=payout, streak=streak)
+    return InstantResult(
+        payout=payout, streak=streak, fed=fed, pot_after=pot_after
+    )
 
 
 def settle_slots(
@@ -507,16 +534,19 @@ def settle_slots(
             pot = claim_jackpot(conn, guild_id, user_id, now=now)
             payout = max(pot, payout)
             jackpot_won = payout
+    fed = pot_after = 0
     if payout:
         meta: dict[str, object] = {"reels": "".join(reels)}
         if jackpot_won:
             meta["jackpot"] = jackpot_won
         pay_out(conn, guild_id, user_id, payout, "slots", meta=meta)
     else:
-        feed_jackpot(conn, guild_id, stake, now=now)
+        fed = feed_jackpot(conn, guild_id, stake, now=now)
+        pot_after = get_jackpot(conn, guild_id) if fed else 0
     streak = record_play(conn, guild_id, user_id, "slots", stake, payout, now=now)
     return InstantResult(
-        payout=payout, label=label, jackpot_won=jackpot_won, streak=streak
+        payout=payout, label=label, jackpot_won=jackpot_won, streak=streak,
+        fed=fed, pot_after=pot_after,
     )
 
 
@@ -685,6 +715,7 @@ class BlackjackStep(NamedTuple):
     outcome: str | None = None  # None = the hand is still live
     payout: int = 0
     streak: int = 0  # post-settle signed run, for the 🔥/🧊 callout
+    pot_after: int = 0  # jackpot after a losing hand fed it (0 otherwise)
 
 
 def resolve_blackjack_action(
@@ -723,10 +754,16 @@ def resolve_blackjack_action(
         if not settle_blackjack_hand(conn, hand_id, payout, outcome, now=now):
             return BlackjackStep(err="That hand is already finished.")
         stats = member_casino_stats(conn, guild_id, user_id)
+        pot_after = 0
+        if payout == 0:  # the settle fed the pot; read what it left
+            settings = load_casino_settings(conn, guild_id)
+            if settings.jackpot_enabled:
+                pot_after = get_jackpot(conn, guild_id)
         return BlackjackStep(
             player=player, dealer=dealer, stake=stake, doubled=doubled,
             outcome=outcome, payout=payout,
             streak=int(stats["streak"]) if stats is not None else 0,
+            pot_after=pot_after,
         )
 
     if action == "double":

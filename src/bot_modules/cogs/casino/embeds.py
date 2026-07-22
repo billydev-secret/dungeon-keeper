@@ -9,6 +9,8 @@ Builders are pure — color and settings arrive as parameters.
 
 from __future__ import annotations
 
+import sqlite3
+
 import discord
 
 from bot_modules.services import casino_logic as logic
@@ -50,6 +52,11 @@ def _streak_line(econ: EconSettings, streak: int) -> str | None:
 def _with_streak(desc: str, econ: EconSettings, streak: int) -> str:
     line = _streak_line(econ, streak)
     return f"{desc}\n{line}" if line else desc
+
+
+def _pot_line(pot_after: int) -> str:
+    """Every loss is a tiny ad for the jackpot."""
+    return f"🍯 The loss waters the honeypot — now **{pot_after:,}**."
 
 
 def build_hub_embed(
@@ -172,6 +179,7 @@ def build_coinflip_embed(
     payout: int,
     *,
     streak: int = 0,
+    pot_after: int = 0,
 ) -> discord.Embed:
     won = payout > 0
     face = "🌞" if landed == "heads" else "🌙"
@@ -183,6 +191,8 @@ def build_coinflip_embed(
             else "The coin does not care. The meadow keeps the bet."
         )
     )
+    if not won and pot_after > 0:
+        desc += f"\n{_pot_line(pot_after)}"
     embed = discord.Embed(
         title=f"🪙 Coinflip — {landed}! {face}",
         description=_with_streak(desc, econ, streak),
@@ -202,6 +212,7 @@ def build_slots_embed(
     *,
     jackpot_won: int = 0,
     streak: int = 0,
+    pot_after: int = 0,
 ) -> discord.Embed:
     reel_line = f"▶ {reels[0]} │ {reels[1]} │ {reels[2]} ◀"
     title = "🎰 Meadow Slots"
@@ -220,6 +231,8 @@ def build_slots_embed(
             f"{reel_line}\n\n<@{user_id}>'s {_coins(econ, stake)} scatters "
             "into the wildflowers."
         )
+        if pot_after > 0:
+            desc += f"\n{_pot_line(pot_after)}"
         color = COLOR_RED
     embed = discord.Embed(
         title=title, description=_with_streak(desc, econ, streak), color=color
@@ -356,6 +369,7 @@ def build_blackjack_embed(
     outcome: str | None = None,
     payout: int = 0,
     streak: int = 0,
+    pot_after: int = 0,
 ) -> discord.Embed:
     live = outcome is None
     if live:
@@ -382,6 +396,8 @@ def build_blackjack_embed(
         line = _OUTCOME_LINES.get(outcome or "", "")
         if payout > 0:
             line = f"{line} {_coins(econ, payout)}."
+        if payout == 0 and pot_after > 0:
+            line = f"{line}\n{_pot_line(pot_after)}"
         if outcome != "refunded":
             line = _with_streak(line, econ, streak)
         embed.add_field(name="Result", value=line, inline=False)
@@ -425,6 +441,8 @@ def build_roulette_result_embed(
     econ: EconSettings,
     result: int,
     bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount, payout)."""
     color_name = logic.wheel_color(result)
@@ -455,18 +473,65 @@ def build_roulette_result_embed(
             inline=False,
         )
     if losers_total:
-        embed.add_field(
-            name="The meadow keeps",
-            value=_coins(econ, losers_total),
-            inline=False,
-        )
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name="The meadow keeps", value=kept, inline=False)
     embed.set_footer(text=_FOOTER)
     return embed
 
 
-def build_round_running_note(closes_at: float) -> str:
+def build_round_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens roulette mid-round."""
-    return (
+    note = (
         f"🎡 A roulette round is already running — the wheel spins "
-        f"<t:{int(closes_at)}:R>. Place your bet on the round message above."
+        f"<t:{int(closes_at)}:R>."
     )
+    if url:
+        return f"{note} Jump to it and place your bet: {url}"
+    return f"{note} Place your bet on the round message above."
+
+
+def build_my_stats_embed(
+    econ: EconSettings,
+    stats: sqlite3.Row | None,
+    used: int,
+    cap: int,
+    reset_ts: float,
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """The hub's 📊 My Stats ephemeral — personal tally + cap headroom."""
+    embed = discord.Embed(title="📊 Your night at the tables", color=_accent(accent))
+    if stats is not None and int(stats["plays"]) > 0:
+        wagered = int(stats["wagered"])
+        returned = int(stats["returned"])
+        net = returned - wagered
+        streak = int(stats["streak"])
+        lines = [
+            f"Wagered {_coins(econ, wagered)} · returned "
+            f"{_coins(econ, returned)}",
+            f"Net: **{'+' if net >= 0 else '−'}{abs(net):,}** over "
+            f"{int(stats['plays']):,} plays",
+        ]
+        if int(stats["biggest_win"]) > 0:
+            lines.append(
+                f"Biggest win: {_coins(econ, int(stats['biggest_win']))} "
+                f"({stats['biggest_win_game']})"
+            )
+        streak_note = _streak_line(econ, streak)
+        if streak_note:
+            lines.append(streak_note)
+        embed.description = "\n".join(lines) + "\n​"
+    else:
+        embed.description = "You haven't played yet — the tables are patient.\n​"
+    if cap > 0:
+        embed.add_field(
+            name="Today",
+            value=(
+                f"**{used:,}** of **{cap:,}** {econ.currency_plural} wagered "
+                f"· resets <t:{int(reset_ts)}:R>"
+            ),
+            inline=False,
+        )
+    embed.set_footer(text=_FOOTER)
+    return embed
