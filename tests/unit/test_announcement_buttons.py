@@ -91,6 +91,9 @@ class _Interaction:
         self.guild = guild
         self.user = member
         self.response = _Response()
+        # The role_pick quest trigger reads interaction.client; get_guild → None
+        # makes fire_member_trigger a clean no-op.
+        self.client = SimpleNamespace(get_guild=lambda _gid: None)
 
 
 def _btn_row(**over):
