@@ -106,6 +106,7 @@ feature and also appear in the Design table above.
 | [plans/config-model-unification.md](plans/config-model-unification.md) | `guild_config` becomes the single source of truth (kills flat AppContext fields) | Implemented 2026-07-02 |
 | [plans/economy-and-perk-shop.md](plans/economy-and-perk-shop.md) | Economy core: wallets, quests, Bank Manager, rentals, metrics | Stages 0–4 built; stage 5 soak/tuning active |
 | [plans/embed-style-conformance.md](plans/embed-style-conformance.md) | Embed style-guide conformance sweep (color rulings, currency vocab, footers, games full-accent) from a 5-agent audit of all 272 embeds | Stage 0 (spec) done 2026-07-21; stages 1–7 in progress |
+| [plans/copy-style-conformance.md](plans/copy-style-conformance.md) | Round 2: full user-facing copy sweep (Title Case, ❌/✅ prefixes, guild→server, separators, ellipsis, progress bars, dashboard JS) | Done — bulk via `0d3c12c4`, mop-up gaps closed 2026-07-21 |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sinks: rerolls, QOTD sponsor, burn list, PvP wagers | All stages built (4b 2026-07-20) |
 | [plans/economy-sinks-round-3.md](plans/economy-sinks-round-3.md) | Sinks: gifts, shield, voice lease, emoji, raffle | All five stages built 2026-07-19 (lease + raffle ship dark) |
 | [plans/external-game-economy.md](plans/external-game-economy.md) | External-bot payouts (Gamebot CAH + Cat Bot) via multi-watch collector | Stages 1–3 shipped |

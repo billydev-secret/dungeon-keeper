@@ -101,12 +101,12 @@ def build_main_embed(
         total_q = len(payload.get("questions", []))
         answered = payload.get("total_answered", 0)
         passed = payload.get("total_passed", 0)
-        bar, pct = build_bar(answered, total_q) if total_q else ("░" * 14, "0%")
+        bar, pct = build_bar(answered, total_q) if total_q else ("▱" * 14, "0%")
         embed.add_field(
             name="📊 Progress",
             value=(
                 f"Questions: **{total_q}**  •  Answered: **{answered}**  •  Passed: **{passed}**\n"
-                f"`{bar}` {pct} answered"
+                f"{bar} {pct} answered"
             ),
             inline=False,
         )
@@ -184,12 +184,12 @@ def build_panel_embed(
         total_q = len(payload.get("questions", []))
         answered = payload.get("total_answered", 0)
         passed = payload.get("total_passed", 0)
-        bar, pct = build_bar(answered, total_q) if total_q else ("░" * 14, "0%")
+        bar, pct = build_bar(answered, total_q) if total_q else ("▱" * 14, "0%")
         embed.add_field(
             name="📊 Progress",
             value=(
                 f"Questions: **{total_q}**  •  Answered: **{answered}**  •  Passed: **{passed}**\n"
-                f"`{bar}` {pct} answered"
+                f"{bar} {pct} answered"
             ),
             inline=False,
         )
@@ -286,13 +286,13 @@ def build_recap_embed(
         description="Thanks for playing! Here's how the session went:",
         color=color,
     )
-    bar, pct = build_bar(total_answered, total_q) if total_q else ("░" * 14, "0%")
+    bar, pct = build_bar(total_answered, total_q) if total_q else ("▱" * 14, "0%")
     embed.add_field(
         name="📊 Session Stats",
         value=(
             f"**{total_q}** questions asked by **{unique_askers}** people\n"
             f"**{total_answered}** answered  •  **{total_passed}** passed\n"
-            f"`{bar}` {pct} answered"
+            f"{bar} {pct} answered"
         ),
         inline=False,
     )

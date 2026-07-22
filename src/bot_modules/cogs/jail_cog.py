@@ -111,7 +111,7 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
     vote_text: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Exact policy text to vote on",
         style=discord.TextStyle.paragraph,
-        placeholder="Type the exact wording of the policy being voted on...",
+        placeholder="Type the exact wording of the policy being voted on…",
         required=True,
         max_length=2000,
     )

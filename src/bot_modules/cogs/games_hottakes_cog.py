@@ -70,7 +70,7 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
         label="Hot Take",
         style=discord.TextStyle.paragraph,
         max_length=500,
-        placeholder="Type your spiciest opinion here...",
+        placeholder="Type your spiciest opinion here…",
     )
 
     def __init__(self, game_id: str, db, origin_message: discord.Message | None = None, *, queue_mode: bool = False):

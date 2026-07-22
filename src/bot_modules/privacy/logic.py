@@ -138,7 +138,7 @@ def chunk_for_bulk_delete(message_ids: list[int], chunk_size: int = 100) -> list
 
 
 def render_progress_bar(done: int, total: int, *, width: int = _DEFAULT_BAR_WIDTH) -> str:
-    """Render a textual progress bar of the form ``[████░░░░] 12/40``.
+    """Render a textual progress bar of the form ``▰▰▰▰▱▱▱▱ 12/40``.
 
     Matches the format used in ``_run_deletion`` so the cog can call this
     directly. A ``total`` of zero renders a full bar (defensive — there's
@@ -154,8 +154,8 @@ def render_progress_bar(done: int, total: int, *, width: int = _DEFAULT_BAR_WIDT
         # being summed double-counts a single message). Clamp to avoid negative
         # padding lengths producing visually broken bars.
         filled = max(0, min(width, filled))
-    bar = "█" * filled + "░" * (width - filled)
-    return f"`[{bar}]` {done}/{total}"
+    bar = "▰" * filled + "▱" * (width - filled)
+    return f"{bar} {done}/{total}"
 
 
 def render_scan_status(done: int, total: int, found: int) -> str:

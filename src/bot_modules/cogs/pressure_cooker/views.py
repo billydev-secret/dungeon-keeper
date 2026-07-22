@@ -12,9 +12,9 @@ log = logging.getLogger("dungeonkeeper.pressure")
 
 
 def gauge_bar(gauge: int, width: int = 20) -> str:
-    """Render a text progress bar. e.g. |████████░░░░░░░░░░░░| 42/100"""
+    """Render a text progress bar. e.g. ▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ 42/100"""
     filled = round(max(0, min(gauge, 100)) / 100 * width)
-    return f"|{'█' * filled}{'░' * (width - filled)}| {gauge}/100"
+    return f"{'▰' * filled}{'▱' * (width - filled)} {gauge}/100"
 
 
 class GameView(discord.ui.View):
