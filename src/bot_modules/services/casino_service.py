@@ -61,6 +61,11 @@ class CasinoSettings:
     roulette_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
+    # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
+    # slots triple-7️⃣ wins max(pot, the flat 120×), then the pot reseeds.
+    jackpot_enabled: bool = True
+    jackpot_cut_pct: int = 25
+    jackpot_seed: int = 100
     # Bot bookkeeping (the hub panel message + where it lives, so a channel
     # move can clean up the old panel) — not dashboard-editable.
     panel_message_id: int = 0
@@ -74,6 +79,7 @@ _BOOL_KEYS = [
     "slots_enabled",
     "blackjack_enabled",
     "roulette_enabled",
+    "jackpot_enabled",
 ]
 # Everything else on the dataclass is a plain int.
 _INT_KEYS = [f.name for f in fields(CasinoSettings) if f.name not in _BOOL_KEYS]
@@ -282,6 +288,238 @@ def refund(
     )
 
 
+# ── progressive jackpot + play stats ───────────────────────────────────
+
+
+def get_jackpot(conn: sqlite3.Connection, guild_id: int, *, seed: int = 0) -> int:
+    """The current pot — ``seed`` when nobody has fed it yet."""
+    row = conn.execute(
+        "SELECT pot FROM casino_jackpot WHERE guild_id = ?", (guild_id,)
+    ).fetchone()
+    return int(row["pot"]) if row is not None else seed
+
+
+def feed_jackpot(
+    conn: sqlite3.Connection, guild_id: int, lost_amount: int,
+    *, now: float | None = None,
+) -> int:
+    """Skim the configured cut of a fully-lost stake into the pot.
+
+    Returns the contribution (0 when the jackpot is off, the cut rounds to
+    nothing, or the amount is nonpositive). The pot is pure bookkeeping —
+    the lost coins were already burned by their ``casino_stake`` debit;
+    winning the pot later re-mints this recorded slice of them.
+    """
+    if lost_amount < 1:
+        return 0
+    settings = load_casino_settings(conn, guild_id)
+    if not settings.jackpot_enabled:
+        return 0
+    cut = lost_amount * max(0, min(100, settings.jackpot_cut_pct)) // 100
+    if cut < 1:
+        return 0
+    ts = time.time() if now is None else now
+    conn.execute(
+        # A fresh row starts at seed + cut; an existing row grows by the
+        # cut alone (excluded.pot carries the seed, so it must not be the
+        # conflict increment).
+        "INSERT INTO casino_jackpot (guild_id, pot, updated_at) "
+        "VALUES (?, ?, ?) "
+        "ON CONFLICT(guild_id) DO UPDATE SET "
+        "pot = pot + ?, updated_at = excluded.updated_at",
+        (guild_id, settings.jackpot_seed + cut, ts, cut),
+    )
+    return cut
+
+
+def claim_jackpot(
+    conn: sqlite3.Connection, guild_id: int, winner_id: int,
+    *, now: float | None = None,
+) -> int:
+    """Take the whole pot and reseed it — exactly-once by construction.
+
+    Runs inside the caller's write transaction (the slots spin), so two
+    simultaneous triple-7️⃣s serialize: the second finds the reseeded pot.
+    Returns the claimed amount (the seed itself if the pot was never fed).
+    """
+    settings = load_casino_settings(conn, guild_id)
+    ts = time.time() if now is None else now
+    conn.execute(
+        "INSERT OR IGNORE INTO casino_jackpot (guild_id, pot, updated_at) "
+        "VALUES (?, ?, ?)",
+        (guild_id, settings.jackpot_seed, ts),
+    )
+    row = conn.execute(
+        "UPDATE casino_jackpot SET last_amount = pot, pot = ?, "
+        "last_winner_id = ?, last_won_at = ?, updated_at = ? "
+        "WHERE guild_id = ? RETURNING last_amount",
+        (settings.jackpot_seed, winner_id, ts, ts, guild_id),
+    ).fetchone()
+    return int(row["last_amount"]) if row is not None else settings.jackpot_seed
+
+
+def record_play(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    game: str,
+    stake: int,
+    payout: int,
+    *,
+    now: float | None = None,
+) -> int:
+    """Fold one resolved play into lifetime + weekly stats; returns the new
+    signed streak (+n win run, −n loss run, 0 after a push).
+
+    Called in the same transaction as the play's settlement. Refunds and
+    voids never reach here — a bet the house handed back is not a play.
+    """
+    from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
+    from bot_modules.economy.quests import iso_week_for  # noqa: PLC0415
+
+    streak = casino_logic.next_streak(
+        int(
+            (
+                conn.execute(
+                    "SELECT streak FROM casino_member_stats "
+                    "WHERE guild_id = ? AND user_id = ?",
+                    (guild_id, user_id),
+                ).fetchone()
+                or {"streak": 0}
+            )["streak"]
+        ),
+        stake,
+        payout,
+    )
+    won = 1 if payout > stake else 0
+    conn.execute(
+        "INSERT INTO casino_member_stats "
+        "(guild_id, user_id, wagered, returned, plays, wins, biggest_win, "
+        "biggest_win_game, streak, best_streak) "
+        "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(guild_id, user_id) DO UPDATE SET "
+        "wagered = wagered + excluded.wagered, "
+        "returned = returned + excluded.returned, "
+        "plays = plays + 1, "
+        "wins = wins + excluded.wins, "
+        "biggest_win_game = CASE WHEN excluded.biggest_win > biggest_win "
+        "THEN excluded.biggest_win_game ELSE biggest_win_game END, "
+        "biggest_win = MAX(biggest_win, excluded.biggest_win), "
+        "streak = excluded.streak, "
+        "best_streak = MAX(best_streak, excluded.streak)",
+        (
+            guild_id, user_id, stake, payout, won,
+            payout if won else 0, game if won else "",
+            streak, max(streak, 0),
+        ),
+    )
+    ts = time.time() if now is None else now
+    week = iso_week_for(local_day_for(ts, get_tz_offset_hours(conn, guild_id)))
+    mult_x100 = payout * 100 // stake if won else 0
+    conn.execute(
+        "INSERT INTO casino_weekly "
+        "(guild_id, iso_week, user_id, wagered, won, biggest_win, "
+        "biggest_mult_x100) VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(guild_id, iso_week, user_id) DO UPDATE SET "
+        "wagered = wagered + excluded.wagered, "
+        "won = won + excluded.won, "
+        "biggest_win = MAX(biggest_win, excluded.biggest_win), "
+        "biggest_mult_x100 = MAX(biggest_mult_x100, excluded.biggest_mult_x100)",
+        (
+            guild_id, week, user_id, stake, payout,
+            payout if won else 0, mult_x100,
+        ),
+    )
+    return streak
+
+
+def member_casino_stats(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM casino_member_stats WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+
+
+def weekly_table_highlights(
+    conn: sqlite3.Connection, guild_id: int, iso_week: str
+) -> tuple[sqlite3.Row | None, sqlite3.Row | None]:
+    """(biggest single win, best multiplier) rows for the week — the
+    leaderboard's Night at the Tables block."""
+    biggest = conn.execute(
+        "SELECT user_id, biggest_win FROM casino_weekly "
+        "WHERE guild_id = ? AND iso_week = ? AND biggest_win > 0 "
+        "ORDER BY biggest_win DESC, user_id ASC LIMIT 1",
+        (guild_id, iso_week),
+    ).fetchone()
+    luckiest = conn.execute(
+        "SELECT user_id, biggest_mult_x100 FROM casino_weekly "
+        "WHERE guild_id = ? AND iso_week = ? AND biggest_mult_x100 > 0 "
+        "ORDER BY biggest_mult_x100 DESC, user_id ASC LIMIT 1",
+        (guild_id, iso_week),
+    ).fetchone()
+    return biggest, luckiest
+
+
+class InstantResult(NamedTuple):
+    """A settled coinflip/slots play, ready to render."""
+
+    payout: int
+    label: str | None = None
+    jackpot_won: int = 0
+    streak: int = 0
+
+
+def settle_coinflip(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, stake: int,
+    call: str, landed: str, *, now: float | None = None,
+) -> InstantResult:
+    """Pay/feed/record one flip (stake already debited by take_stake)."""
+    payout = casino_logic.coinflip_payout(stake) if landed == call else 0
+    if payout:
+        pay_out(
+            conn, guild_id, user_id, payout, "coinflip",
+            meta={"call": call, "landed": landed},
+        )
+    else:
+        feed_jackpot(conn, guild_id, stake, now=now)
+    streak = record_play(
+        conn, guild_id, user_id, "coinflip", stake, payout, now=now
+    )
+    return InstantResult(payout=payout, streak=streak)
+
+
+def settle_slots(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, stake: int,
+    reels: tuple[str, str, str], *, now: float | None = None,
+) -> InstantResult:
+    """Pay/feed/record one spin; triple-7️⃣ takes max(pot, the flat 120×).
+
+    The claim resets the pot either way — the flat multiplier is a floor
+    under an early, barely-fed pot, not a separate prize.
+    """
+    payout, label = casino_logic.slots_payout(reels, stake)
+    jackpot_won = 0
+    if reels == (casino_logic.SEVEN,) * 3:
+        settings = load_casino_settings(conn, guild_id)
+        if settings.jackpot_enabled:
+            pot = claim_jackpot(conn, guild_id, user_id, now=now)
+            payout = max(pot, payout)
+            jackpot_won = payout
+    if payout:
+        meta: dict[str, object] = {"reels": "".join(reels)}
+        if jackpot_won:
+            meta["jackpot"] = jackpot_won
+        pay_out(conn, guild_id, user_id, payout, "slots", meta=meta)
+    else:
+        feed_jackpot(conn, guild_id, stake, now=now)
+    streak = record_play(conn, guild_id, user_id, "slots", stake, payout, now=now)
+    return InstantResult(
+        payout=payout, label=label, jackpot_won=jackpot_won, streak=streak
+    )
+
+
 # ── blackjack hands ────────────────────────────────────────────────────
 
 
@@ -420,18 +658,19 @@ def settle_blackjack_hand(
     ).fetchone()
     if row is None:
         return False
+    gid, uid, stake = int(row["guild_id"]), int(row["user_id"]), int(row["stake"])
     if payout >= 1:
         meta: dict[str, object] = {"hand_id": hand_id, "outcome": outcome}
         if kind == PAYOUT_KIND:
-            pay_out(
-                conn, int(row["guild_id"]), int(row["user_id"]), payout,
-                "blackjack", meta=meta,
-            )
+            pay_out(conn, gid, uid, payout, "blackjack", meta=meta)
         else:
-            refund(
-                conn, int(row["guild_id"]), int(row["user_id"]), payout,
-                "blackjack", meta=meta, now=now,
-            )
+            refund(conn, gid, uid, payout, "blackjack", meta=meta, now=now)
+    if kind == PAYOUT_KIND:
+        # A real resolution (not a make-whole refund): a total loss feeds
+        # the jackpot, and the play lands in the stats either way.
+        if payout == 0:
+            feed_jackpot(conn, gid, stake, now=now)
+        record_play(conn, gid, uid, "blackjack", stake, payout, now=now)
     return True
 
 
@@ -744,8 +983,9 @@ def settle_roulette_round(
     if claimed is None:
         return None
     for bet in roulette_bets(conn, round_id):
+        amount = int(bet["amount"])
         payout = casino_logic.roulette_payout(
-            str(bet["bet_type"]), int(bet["selection"]), result, int(bet["amount"])
+            str(bet["bet_type"]), int(bet["selection"]), result, amount
         )
         if payout:
             conn.execute(
@@ -756,6 +996,12 @@ def settle_roulette_round(
                 conn, int(bet["guild_id"]), int(bet["user_id"]), payout,
                 "roulette", meta={"round_id": round_id, "result": result},
             )
+        else:
+            feed_jackpot(conn, int(bet["guild_id"]), amount, now=now)
+        record_play(
+            conn, int(bet["guild_id"]), int(bet["user_id"]), "roulette",
+            amount, payout, now=now,
+        )
     return roulette_bets(conn, round_id)
 
 

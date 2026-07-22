@@ -192,3 +192,30 @@ def test_describe_bet_labels():
     assert logic.describe_bet("red", 0) == "🔴 Red"
     assert logic.describe_bet("dozen", 2) == "Dozen 13–24"
     assert logic.describe_bet("number", 17) == "Straight 17"
+
+
+# ── fancy round: streaks & thresholds ──────────────────────────────────
+
+
+def test_next_streak_runs_and_resets():
+    ns = logic.next_streak
+    assert ns(0, 10, 19) == 1        # win starts a run
+    assert ns(3, 10, 19) == 4        # win extends
+    assert ns(-2, 10, 19) == 1       # win flips a cold run
+    assert ns(0, 10, 0) == -1        # loss starts a cold run
+    assert ns(-2, 10, 0) == -3       # loss extends
+    assert ns(4, 10, 0) == -1        # loss flips a hot run
+    assert ns(5, 10, 10) == 0        # push resets either way
+    assert ns(-5, 10, 10) == 0
+
+
+def test_is_big_win_is_10x():
+    assert logic.is_big_win(10, 100)
+    assert not logic.is_big_win(10, 99)
+
+
+def test_is_big_bet_tiers():
+    assert logic.is_big_bet(70, 100)       # ≥70% of the table max
+    assert not logic.is_big_bet(69, 100)
+    assert logic.is_big_bet(100, 0)        # uncapped: flat 100 floor
+    assert not logic.is_big_bet(99, 0)

@@ -85,6 +85,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         # guild_id → configured casino channel, kept warm by ensure_panel so
         # the on_message restick gate never touches the DB.
         self._casino_channels: dict[int, int] = {}
+        # guild_id → last jackpot value rendered on the hub panel; the
+        # maintenance loop repaints when the real pot drifts from this.
+        self._last_pot: dict[int, int] = {}
         self._boot_task: asyncio.Task | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
@@ -159,7 +162,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         ``status='open'`` claim makes replaying resolution here free.
         """
 
-        def _scan() -> tuple[list[int], list[int]]:
+        def _scan() -> tuple[list[int], list[int], dict[int, int]]:
             with self.ctx.open_db() as conn:
                 stale: list[int] = []
                 thresholds: dict[int, int] = {}
@@ -177,13 +180,30 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     for r in svc.open_roulette_rounds(conn)
                     if float(r["closes_at"]) <= now - 5  # grace for a live timer
                 ]
-                return stale, overdue
+                # Pots for guilds whose panel we're maintaining — repainted
+                # below when the value drifted from the rendered one. Same
+                # seed semantics as ensure_panel's read, or an unfed pot
+                # (no row yet) would look like perpetual drift.
+                pots: dict[int, int] = {}
+                for gid, channel_id in self._casino_channels.items():
+                    if not channel_id:
+                        continue
+                    cs = svc.load_casino_settings(conn, gid)
+                    if cs.jackpot_enabled and cs.slots_enabled:
+                        pots[gid] = svc.get_jackpot(conn, gid, seed=cs.jackpot_seed)
+                return stale, overdue, pots
 
         try:
-            stale, overdue = await asyncio.to_thread(_scan)
+            stale, overdue, pots = await asyncio.to_thread(_scan)
         except Exception:
             log.exception("casino maintenance sweep failed")
             return
+        for gid, pot in pots.items():
+            if self._last_pot.get(gid) == pot:
+                continue
+            guild = self.bot.get_guild(gid)
+            if guild is not None:
+                await self.ensure_panel(guild)  # re-reads + records the pot
         for hand_id in stale:
             try:
                 await self._auto_stand(hand_id)
@@ -299,18 +319,23 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         the bottom of the channel instead of being edited in place.
         """
 
-        def _read() -> tuple[EconSettings, svc.CasinoSettings]:
+        def _read() -> tuple[EconSettings, svc.CasinoSettings, int | None]:
             with self.ctx.open_db() as conn:
-                return (
-                    load_econ_settings(conn, guild.id),
-                    svc.load_casino_settings(conn, guild.id),
-                )
+                settings = svc.load_casino_settings(conn, guild.id)
+                pot: int | None = None
+                if settings.jackpot_enabled and settings.slots_enabled:
+                    pot = svc.get_jackpot(
+                        conn, guild.id, seed=settings.jackpot_seed
+                    )
+                return load_econ_settings(conn, guild.id), settings, pot
 
         try:
-            econ, settings = await asyncio.to_thread(_read)
+            econ, settings, pot = await asyncio.to_thread(_read)
         except Exception:
             log.exception("casino panel read failed for guild %s", guild.id)
             return
+        if pot is not None:
+            self._last_pot[guild.id] = pot
 
         async def _delete_stale() -> None:
             channel = self.bot.get_channel(settings.panel_channel_id)
@@ -344,7 +369,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             await _delete_stale()  # moved or buried; drop the old panel
             settings = replace(settings, panel_message_id=0)
         embed = casino_embeds.build_hub_embed(
-            econ, settings, await self._accent(guild)
+            econ, settings, await self._accent(guild), jackpot=pot
         )
         if settings.panel_message_id:
             try:
@@ -376,29 +401,29 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         if guild is None:
             return
 
-        def _play() -> tuple[str | None, EconSettings | None, str, int]:
+        def _play() -> tuple[
+            str | None, EconSettings | None, str, svc.InstantResult
+        ]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
                     conn, guild.id, interaction.user.id, amount, "coinflip",
                     channel_id=interaction.channel_id,
                 )
                 if err is not None:
-                    return err, None, "", 0
+                    return err, None, "", svc.InstantResult(0)
                 landed = logic.flip_coin()
-                payout = logic.coinflip_payout(amount) if landed == side else 0
-                svc.pay_out(
-                    conn, guild.id, interaction.user.id, payout, "coinflip",
-                    meta={"call": side, "landed": landed},
+                result = svc.settle_coinflip(
+                    conn, guild.id, interaction.user.id, amount, side, landed
                 )
-                return None, load_econ_settings(conn, guild.id), landed, payout
+                return None, load_econ_settings(conn, guild.id), landed, result
 
-        err, econ, landed, payout = await asyncio.to_thread(_play)
+        err, econ, landed, result = await asyncio.to_thread(_play)
         if err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
         await interaction.response.send_message(
             embed=casino_embeds.build_coinflip_embed(
-                econ, interaction.user.id, side, landed, amount, payout
+                econ, interaction.user.id, side, landed, amount, result.payout
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -411,7 +436,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             return
 
         def _play() -> tuple[
-            str | None, EconSettings | None, tuple[str, str, str], int, str | None
+            str | None, EconSettings | None, tuple[str, str, str],
+            svc.InstantResult,
         ]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
@@ -419,22 +445,21 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     channel_id=interaction.channel_id,
                 )
                 if err is not None:
-                    return err, None, ("", "", ""), 0, None
+                    return err, None, ("", "", ""), svc.InstantResult(0)
                 reels = logic.spin_slots()
-                payout, label = logic.slots_payout(reels, amount)
-                svc.pay_out(
-                    conn, guild.id, interaction.user.id, payout, "slots",
-                    meta={"reels": "".join(reels)},
+                result = svc.settle_slots(
+                    conn, guild.id, interaction.user.id, amount, reels
                 )
-                return None, load_econ_settings(conn, guild.id), reels, payout, label
+                return None, load_econ_settings(conn, guild.id), reels, result
 
-        err, econ, reels, payout, label = await asyncio.to_thread(_play)
+        err, econ, reels, result = await asyncio.to_thread(_play)
         if err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
         await interaction.response.send_message(
             embed=casino_embeds.build_slots_embed(
-                econ, interaction.user.id, reels, amount, payout, label
+                econ, interaction.user.id, reels, amount, result.payout,
+                result.label,
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )

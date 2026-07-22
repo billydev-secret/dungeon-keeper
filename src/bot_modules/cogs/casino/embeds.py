@@ -40,6 +40,8 @@ def build_hub_embed(
     econ: EconSettings,
     settings: CasinoSettings,
     accent: discord.Color | None,
+    *,
+    jackpot: int | None = None,
 ) -> discord.Embed:
     open_lines = [
         line
@@ -60,6 +62,15 @@ def build_hub_embed(
         + "\n​",
         inline=False,
     )
+    if jackpot is not None:
+        embed.add_field(
+            name="🍯 Progressive jackpot",
+            value=(
+                f"Currently {_coins(econ, jackpot)} — every lost bet feeds "
+                "it, and triple 7️⃣ on the slots takes it ALL.\n​"
+            ),
+            inline=False,
+        )
     limits = [f"Bets: **{settings.min_bet:,}**–**{settings.max_bet:,}**"
               if settings.max_bet else f"Bets: **{settings.min_bet:,}**+"]
     if settings.daily_wager_cap:
