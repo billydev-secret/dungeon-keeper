@@ -113,14 +113,14 @@ def kind_display(kind: str) -> tuple[str, str]:
 # stays although the kind retired in migration 091: ledger meta was not
 # rewritten, so pre-090 rental rows still carry it.
 _PERK_LABELS: dict[str, str] = {
-    "role_color": "Custom role colour",
+    "role_color": "Custom role color",
     "role_name": "Custom role name",
     "role_icon": "Role icon",
-    "role_gradient": "Gradient role colour",
-    "role_holographic": "Holographic role colour",
+    "role_gradient": "Gradient role color",
+    "role_holographic": "Holographic role color",
     "voice_style": "Voice room lease",
     "emoji": "Sponsored emoji",
-    "gift_color": "Gifted role colour",
+    "gift_color": "Gifted role color",
 }
 
 _LOGIN_SOURCE_LABELS = {"text": "text", "voice": "voice"}

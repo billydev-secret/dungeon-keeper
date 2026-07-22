@@ -340,7 +340,7 @@ def test_memo_quest_falls_back_when_quest_deleted():
 
 def test_memo_rental_uses_human_perk_label():
     entry = _entry(kind="rental", amount=-50, meta={"perk": "role_color"})
-    assert render_memo(entry, _names) == "Perk rental: **Custom role colour**"
+    assert render_memo(entry, _names) == "Perk rental: **Custom role color**"
 
 
 def test_memo_rental_renewal_says_renewal():
