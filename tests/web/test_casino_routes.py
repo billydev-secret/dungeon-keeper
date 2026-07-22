@@ -158,3 +158,22 @@ def test_update_economy_config_treats_explicit_nulls_as_no_change(
             (fake_ctx.guild_id, "econ_currency_name"),
         ).fetchone()
     assert row is None  # nothing was written
+
+
+def test_update_casino_jackpot_knobs_roundtrip_and_bounds(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/casino",
+        json={"jackpot_enabled": False, "jackpot_cut_pct": 40, "jackpot_seed": 250},
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        s = load_casino_settings(conn, fake_ctx.guild_id)
+    assert (s.jackpot_enabled, s.jackpot_cut_pct, s.jackpot_seed) == (False, 40, 250)
+    casino = authed_client.get("/api/config").json()["casino"]
+    assert casino["jackpot_cut_pct"] == 40
+    assert (
+        authed_client.put(
+            "/api/config/casino", json={"jackpot_cut_pct": 101}
+        ).status_code
+        == 422
+    )

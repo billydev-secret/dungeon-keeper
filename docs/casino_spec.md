@@ -66,6 +66,9 @@ All movement goes through `services/casino_service.py`:
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
 | `{game}_enabled` ×4 | true | closed tables refuse bets + drop off the panel |
+| `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
+| `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
+| `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
 | `blackjack_idle_seconds` | 180 | idle hand auto-stands (bounds 30–3600) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
@@ -121,11 +124,41 @@ cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 the double's second stake is derived from the hand row, never
 caller-supplied.
 
-## Storage (migration 113)
+## The fancy layer (plan: [plans/casino-fancy-round.md](plans/casino-fancy-round.md))
+
+- **Progressive jackpot** — `feed_jackpot` skims `jackpot_cut_pct`% of every
+  fully-lost stake (any game; refunds/voids never feed) into
+  `casino_jackpot`; the hub panel shows the pot and the maintenance loop
+  repaints on drift. Slots triple-7️⃣ claims `max(pot, 120×stake)`
+  exactly-once inside the spin's transaction (`claim_jackpot`: read+reset
+  with the flat multiplier as a floor), reseeds to `jackpot_seed`, and
+  posts a standalone gold celebration beside the result. The pot is
+  bookkeeping over coins the ledger already burned; paying it re-mints
+  that recorded slice (`casino_payout`, `meta.jackpot`, never boosted).
+- **Play stats** — `record_play` (same transaction as every settlement;
+  never refunds) maintains `casino_member_stats` (lifetime wagered /
+  returned / plays / wins / biggest win / signed streak) and the bounded
+  per-ISO-week `casino_weekly` rollup. Surfaces: an **At the Tables**
+  section on `/bank wallet`, and **Night at the Tables** on the live
+  leaderboard (week's biggest win + best multiplier, named — public play
+  is opting in, the raffle rule).
+- **Celebrations** — `is_big_win` (≥10×) escalates result embeds to gold
+  with a 💥; streak callouts (🔥/🧊 at |streak| ≥ 3) ride instant-game and
+  blackjack results.
+- **Tiered animations** — `is_big_bet` (≥70% of `max_bet`, or ≥100 coins
+  uncapped; fixed constants) gates the staged reveals: slots reels stop
+  one at a time, coinflip hangs in the air, blackjack pauses on the
+  hole-card flip. Roulette's once-per-round resolution always gets a
+  two-frame ball bounce. **Money settles before the first frame** — a
+  crash mid-show leaves a stale message, never a wrong balance.
+
+## Storage (migrations 113 + 114)
 
 `casino_daily`, `casino_blackjack_hands` (state_json = deck/player/dealer,
 `settled_at` guard, partial unique live index), `casino_roulette_rounds`
-(open|settled|void, partial unique open-per-channel), `casino_roulette_bets`.
+(open|settled|void, partial unique open-per-channel), `casino_roulette_bets`;
+114 adds `casino_jackpot` (one row per guild), `casino_member_stats` and
+`casino_weekly` (bounded upserts, no per-play log).
 
 ## Files
 
