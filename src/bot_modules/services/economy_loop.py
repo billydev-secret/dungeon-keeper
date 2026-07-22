@@ -104,6 +104,7 @@ from bot_modules.services.voice_master_service import (
 )
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_demurrage_service as demurrage_svc
+from bot_modules.services import economy_pin_service as pin_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
@@ -639,6 +640,55 @@ class ExpiredEmojiNotice:
     name: str
     refund: int
     unit: str
+
+
+@dataclass(frozen=True)
+class ExpiredPinNotice:
+    """A pending pin nobody reviewed in time (for the post-commit refund DM)."""
+
+    guild_id: int
+    user_id: int
+    message: str
+    refund: int
+    unit: str
+
+
+@dataclass(frozen=True)
+class PinSweep:
+    """A tick's pin work: pending refunds to DM, live pins to unpin from Discord."""
+
+    refunds: list[ExpiredPinNotice]
+    # (channel_id, message_id) of live pins past their 24h — unpinned after commit.
+    unpins: list[tuple[int, int]]
+
+
+def run_pin_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> PinSweep:
+    """Retire live pins past 24h and refund pending pins nobody reviewed.
+
+    Live pins are *not* refunded (their day ran) — they only need their Discord
+    message unpinned after the transaction commits. Pending pins are refunded
+    exactly once and DMed. A disabled economy skips both.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return PinSweep(refunds=[], unpins=[])
+    unpins = [
+        (int(row["pin_channel_id"]), int(row["pin_message_id"]))
+        for row in pin_svc.expire_live_pins(conn, guild_id, now=now_ts)
+    ]
+    refunds = [
+        ExpiredPinNotice(
+            guild_id=guild_id,
+            user_id=int(row["user_id"]),
+            message=str(row["message"]),
+            refund=int(row["price"]),
+            unit=settings.currency_plural or "coins",
+        )
+        for row in pin_svc.expire_stale_pending(conn, settings, guild_id, now=now_ts)
+    ]
+    return PinSweep(refunds=refunds, unpins=unpins)
 
 
 def run_emoji_expiry(
@@ -1262,10 +1312,12 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         # try so a failed sweep can't NameError below or leak the previous
         # guild's notices.
         sponsor_notices, emoji_notices = [], []
+        pin_sweep = PinSweep(refunds=[], unpins=[])
         try:
             with open_db(db_path) as conn:
                 sponsor_notices = run_sponsor_expiry(conn, guild.id, now_ts)
                 emoji_notices = run_emoji_expiry(conn, guild.id, now_ts)
+                pin_sweep = run_pin_expiry(conn, guild.id, now_ts)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1312,6 +1364,42 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             except Exception:
                 log.exception(
                     "Economy loop: failed to DM expired emoji sponsor to %s.",
+                    notice.user_id,
+                )
+
+        # Pin of the Day: unpin the live cards whose 24h ran out (the rows are
+        # already retired in DB), then DM anyone whose pending pin expired
+        # unreviewed and was refunded.
+        if pin_sweep.unpins:
+            from bot_modules.economy.pin_views import unpin_and_delete
+
+            for channel_id, message_id in pin_sweep.unpins:
+                try:
+                    await unpin_and_delete(bot, channel_id, message_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception(
+                        "Economy loop: failed to unpin expired pin %s.", message_id
+                    )
+        for notice in pin_sweep.refunds:
+            try:
+                await notify_member(
+                    bot,
+                    db_path,
+                    notice.guild_id,
+                    notice.user_id,
+                    content=(
+                        f"No mod got to your pinned message in time, so you've "
+                        f"had your {notice.refund} {notice.unit} back.\n"
+                        f"> {notice.message}"
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to DM expired pin to user %s.",
                     notice.user_id,
                 )
 

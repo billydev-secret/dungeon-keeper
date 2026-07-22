@@ -181,6 +181,21 @@ to currency.
     and refund, swept per-guild by the hourly loop. **Approved ones never
     expire** — they're waiting on staff, and timing them out would punish the
     member for staff latency. `price_qotd_sponsor = 0` disables the feature.
+- **Pin of the Day (built, sink — migration 108, plan
+  `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
+  artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
+  at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
+  `pending`; a mod Approves/Declines on a bank-channel card
+  (`PinApproveButton`/`PinDenyButton`, persistent). Approve posts + pins a
+  "Pinned by @X" card in `pin_channel_id` and flips the row to `live` with a
+  24h `expires_at` — the Discord post happens *before* the DB move, so a failed
+  post refunds (the member is never charged for a pin nobody saw). One live pin
+  per guild (partial unique index); a new approval **supersedes** the prior one
+  (unpinned early — mod-paced). The hourly loop's `run_pin_expiry` unpins live
+  pins past 24h (**no refund** — the day ran) and refunds `pending` ones no mod
+  reached within `pin_expire_days` (default 3). Enabled only when
+  `price_pin_of_day > 0` **and** `pin_channel_id` is set — a public sink, dark
+  by default. One submission in flight per member.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state

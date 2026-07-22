@@ -52,10 +52,23 @@ from bot_modules.economy.quest_views import (
     can_manage_economy,
     post_signoff_card,
 )
+from bot_modules.economy.pin_views import (
+    PinApproveButton,
+    PinDenyButton,
+)
+from bot_modules.economy.pin_views import (
+    post_review_card as post_pin_review_card,
+)
 from bot_modules.economy.sponsor_views import (
     SponsorApproveButton,
     SponsorDenyButton,
     post_review_card,
+)
+from bot_modules.services.economy_pin_service import (
+    MAX_PIN_LEN,
+    MIN_PIN_LEN,
+    pin_enabled,
+    submit_pin,
 )
 from bot_modules.services.economy_qotd_sponsor_service import (
     attach_qotd,
@@ -649,6 +662,25 @@ class _RoleIconModal(discord.ui.Modal, title="Role Icon"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.cog.set_role_icon_emoji(interaction, str(self.emoji.value))
+
+
+class _PinSubmitModal(discord.ui.Modal, title="Pin a Message"):
+    """The paragraph a member pays to pin; a mod reviews it before it goes up."""
+
+    text: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your message",
+        style=discord.TextStyle.paragraph,
+        min_length=MIN_PIN_LEN,
+        max_length=MAX_PIN_LEN,
+        placeholder="Keep it short and fun — a mod approves it before it pins.",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_pin_submit(interaction, str(self.text.value))
 
 
 # Which modal customises which perk; a gifted perk uses the same modal as a
@@ -1856,6 +1888,76 @@ class EconomyCog(commands.Cog):
             f"📨 Sent your question to the mods for review — {outcome.price} "
             f"{unit} held. If it's turned down you'll get a full refund, and "
             "you'll hear either way.",
+            ephemeral=True,
+        )
+
+    # ── pin of the day ───────────────────────────────────────────────────
+
+    @bank.command(
+        name="pin",
+        description="Pay to pin a short message for a day — a mod approves it first.",
+    )
+    async def bank_pin(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not pin_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Pinning a message isn't enabled here.", ephemeral=True
+            )
+            return
+        # A modal must be the FIRST response to the interaction (can't defer
+        # first), so the enable check above runs before we open it.
+        await interaction.response.send_modal(_PinSubmitModal(self))
+
+    async def do_pin_submit(
+        self, interaction: discord.Interaction, message: str
+    ) -> None:
+        """Escrow the price, queue the pin, and post the mod-approval card."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not pin_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Pinning a message isn't enabled here.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        def _submit():
+            with self.ctx.open_db() as conn:
+                return submit_pin(conn, settings, guild.id, member.id, message)
+
+        try:
+            outcome = await asyncio.to_thread(_submit)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        # Money's taken and the row exists; a card failure must never surface as
+        # an error to the member (it's still resolvable), so it's best-effort.
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_pin_review_card(
+            self.bot, self.ctx, guild, settings, accent, outcome.submission_id, member
+        )
+        unit = _unit(settings, outcome.price)
+        await interaction.followup.send(
+            f"📨 Sent your message to the mods for review — {outcome.price} "
+            f"{unit} held. If it's turned down you'll get a full refund; if it's "
+            "approved it's pinned for 24 hours.",
             ephemeral=True,
         )
 
@@ -3994,6 +4096,8 @@ class EconomyCog(commands.Cog):
             ShopRentButton,
             SponsorApproveButton,
             SponsorDenyButton,
+            PinApproveButton,
+            PinDenyButton,
         )
         # The guide panel's 🔔 toggle and the quest board's "Show my quests"
         # button carry no per-message state, so they are plain static-custom_id

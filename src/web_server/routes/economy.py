@@ -51,6 +51,9 @@ class EconomyConfigUpdate(BaseModel):
     # The public transaction feed's channel; 0 = feed off (the picker is the
     # toggle). The drain cursor beside it stays bot-managed, so it is not here.
     register_channel_id: int | None = Field(default=None, ge=0)
+    # Where an approved Pin of the Day gets pinned; 0 = the feature is off (it
+    # also needs price_pin_of_day > 0). The picker is the on switch.
+    pin_channel_id: int | None = Field(default=None, ge=0)
     manager_role_id: int | None = Field(default=None, ge=0)
     game_role_id: int | None = Field(default=None, ge=0)
     qotd_ping_role_id: int | None = Field(default=None, ge=0)
@@ -123,6 +126,8 @@ class EconomyConfigUpdate(BaseModel):
     # panel.
     price_qotd_sponsor: int | None = Field(default=None, ge=0)
     qotd_sponsor_expire_days: int | None = Field(default=None, ge=0)
+    price_pin_of_day: int | None = Field(default=None, ge=0)
+    pin_expire_days: int | None = Field(default=None, ge=0)
 
 
 def _stringify_snowflakes(cfg: dict) -> dict:

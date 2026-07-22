@@ -561,6 +561,7 @@ async def test_quests_listing_state_matrix(ctx, db):
 @pytest.mark.asyncio
 async def test_cog_load_registers_persistent_buttons(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
+    from bot_modules.economy.pin_views import PinApproveButton, PinDenyButton
     from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
     from bot_modules.economy.sponsor_views import (
         SponsorApproveButton,
@@ -579,6 +580,8 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
         ShopRentButton,
         SponsorApproveButton,
         SponsorDenyButton,
+        PinApproveButton,
+        PinDenyButton,
     )
 
 
@@ -2812,3 +2815,42 @@ async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
     msg = interaction.response.send_message.await_args.args[0]
     assert "Sir Fluffy" in msg
     assert "Manage Nicknames" in msg
+
+
+# ── /bank pin (Pin of the Day) ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_pin_submit_refused_when_not_enabled(ctx, db):
+    _enable(db)  # no price and no pin channel → the feature is off
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_pin_submit(interaction, "hello world")
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "isn't enabled" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        rows = conn.execute("SELECT COUNT(*) c FROM econ_pin_submissions").fetchone()
+    assert rows["c"] == 0  # nothing queued, nothing charged
+
+
+@pytest.mark.asyncio
+async def test_pin_submit_charges_and_queues(ctx, db):
+    _enable(db, price_pin_of_day=30, pin_channel_id=5555)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 100, "grant", actor_id=1)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_pin_submit(interaction, "gm gamers")
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 70  # 30 held upfront
+        row = conn.execute(
+            "SELECT state, message FROM econ_pin_submissions WHERE guild_id = ?",
+            (GUILD_ID,),
+        ).fetchone()
+    assert row["state"] == "pending"
+    assert row["message"] == "gm gamers"
+    interaction.followup.send.assert_awaited()  # the "sent for review" receipt

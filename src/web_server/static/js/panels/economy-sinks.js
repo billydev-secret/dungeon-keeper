@@ -33,6 +33,12 @@ const CONSUMABLE_FIELDS = [
   ["price_streak_shield", "Streak shield", {
     hint: "One-shot: auto-burned to save a login streak the free grace day can't. Members hold at most one. 0 removes it from the shop.",
   }],
+  ["price_pin_of_day", "Pin of the day", {
+    hint: "What /bank pin costs. A member pays to pin a short message; a mod approves it; the bot pins a card for 24h, then auto-unpins. 0 disables it. Also needs a pin channel set on the Economy config page — it's a public sink, so announce before switching it on. Charged at submit; declines and expired-unreviewed requests refund.",
+  }],
+  ["pin_expire_days", "Pin review window (days)", {
+    hint: "A pin request no mod approves or declines within this many days expires and refunds automatically. 0 keeps requests queued indefinitely.",
+  }],
 ];
 
 // Weekly raffle: tickets in, a free-perk-week voucher out. The enable flag

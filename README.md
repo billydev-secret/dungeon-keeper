@@ -235,6 +235,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/bank role` — Customize your rented role perk
 - `/bank mute` — Spend a mute token
 - `/bank sponsor` — Sponsor a QOTD (mod-approved)
+- `/bank pin` — Pay to pin a short message for a day (mod-approved)
 - `/bank emoji` — Rent an emoji slot
 - `/bank grant` — (mod) Grant or deduct coins
 - `/bank post-guide` / `post-shop` / `post-leaderboard` — (mod) Post the channel panels

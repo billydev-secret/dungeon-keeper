@@ -124,6 +124,15 @@ class EconSettings:
     # approved ones never expire — they're waiting on staff, not the member.
     price_qotd_sponsor: int = 40
     qotd_sponsor_expire_days: int = 14
+    # Pin of the Day (plan: docs/plans/pin-of-the-day.md): a member pays to pin a
+    # short message; a mod approves it; the bot pins a card in `pin_channel_id`
+    # for 24h, then auto-unpins. A public sink — off until BOTH a price and a
+    # channel are set (announce before flipping it on). Charged at submit, so
+    # denial and pending-expiry refund; a pin that went live does not. Pending
+    # submissions nobody resolves expire and refund after `pin_expire_days`.
+    price_pin_of_day: int = 0
+    pin_channel_id: int = 0
+    pin_expire_days: int = 3
     # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
     # held (max 1) until a login gap would reset the streak, then auto-burned
     # to save it — covers what the free grace day can't. 0 hides the shop row

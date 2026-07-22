@@ -143,6 +143,18 @@ function render(container, cfg, channels, roles, members) {
           timing is jittered so members can't clock it. An unclaimed pouch
           vanishes after the expiry window and pays nobody.</div>
 
+        <div class="section-label">Pin of the Day</div>
+        <div class="field">
+          <label>Pin channel</label>
+          <span data-picker="pin_channel_id"></span>
+          <div class="field-hint">A member pays (set the price on the Sinks page)
+            to pin a short message here; a mod approves it first, then the bot
+            pins a card for 24 hours before auto-unpinning. Needs both a channel
+            AND a price &gt; 0 to switch on — it's a public sink, so announce it
+            before flipping it on. The bot needs Manage Messages here to pin.
+            Leave unset to keep it off.</div>
+        </div>
+
         <div class="section-label">Branding</div>
         <div class="field-row">
           <div class="field">
@@ -204,6 +216,11 @@ function render(container, cfg, channels, roles, members) {
     channels,
     String(cfg.drops_channel_id),
   );
+  const pinChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="pin_channel_id"]'),
+    channels,
+    String(cfg.pin_channel_id),
+  );
   const hostPicker = mountPicker(
     form.querySelector('[data-picker="community_host_user_id"]'),
     toMemberOptions(members),
@@ -241,6 +258,7 @@ function render(container, cfg, channels, roles, members) {
       bank_channel_id: channelPicker.getValue() || "0",
       register_channel_id: registerChannelPicker.getValue() || "0",
       drops_channel_id: dropsChannelPicker.getValue() || "0",
+      pin_channel_id: pinChannelPicker.getValue() || "0",
       manager_role_id: rolePicker.getValue() || "0",
       game_role_id: gameRolePicker.getValue() || "0",
       community_host_user_id: hostPicker.getValue() || "0",
