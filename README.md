@@ -61,7 +61,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 ### Economy & perk shop
 - **Coins & wallet** — Earn server currency from daily logins, chatting, voice, games, reactions, and QOTD answers, all recorded in a full ledger. `/bank wallet` shows your balance and recent activity.
 - **Quests & daily boards** — A personal quest board (daily/weekly/monthly) draws each member their own random slice of the guild's quest pool, plus tiered community weeklies the whole server works toward with a live tracker.
-- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, name, gradient and holographic role colors, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
+- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, name, gradient and holographic role colors, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week; a **Cancel & Refund** button lets you end a rental (or a held streak shield) early for an immediate, pro-rated refund.
 - **Sinks & stakes** — Coin wagers on duel and group games, paid quest rerolls, raffles, and other sinks keep the currency circulating. Mods post the guide/shop/leaderboard panels and can grant coins directly. `docs/economy_spec.md` is the deep doc.
 - **The Golden Meadow Casino** — House gambling in one admin-configured channel, entirely button-driven (no commands): coinflip, meadow-reel slots, blackjack with double-down, and channel-wide roulette rounds. Fixed, RTP-tested paytables give the house a small edge; per-member daily wager caps and min/max bets are set on the dashboard's Casino page. A loss-fed **progressive jackpot** rides the slots, big bets get animated reveals, and streaks/biggest-wins feed `/bank wallet` stats plus a weekly leaderboard block. `docs/casino_spec.md` covers it.
 
@@ -229,7 +229,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Economy & Perk Shop**
 - `/bank wallet` — Your balance + recent ledger activity
-- `/bank shop` — Browse and rent perks
+- `/bank shop` — Browse and rent perks; ↩️ Cancel & Refund ends a rental (or held streak shield) early for an immediate, pro-rated refund
 - `/bank quests` — Your personal quest board
 - `/bank pay` — Send coins to another member
 - `/bank gift` — Buy a perk for someone else

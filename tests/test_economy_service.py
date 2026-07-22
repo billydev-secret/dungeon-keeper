@@ -28,6 +28,7 @@ from bot_modules.services.economy_service import (
     process_conversion,
     process_login,
     purchase_streak_shield,
+    refund_streak_shield,
     save_econ_settings,
     set_notify_muted,
     transfer_currency,
@@ -916,6 +917,39 @@ def test_purchase_shield_insufficient_leaves_no_claim(db):
     with open_db(db) as conn:
         assert get_streak_shields(conn, GUILD, USER) == 0
         assert get_balance(conn, GUILD, USER) == _shield_price() - 1
+
+
+def test_refund_shield_credits_price_paid_not_current_price(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        purchase_streak_shield(conn, S, GUILD, USER)
+        # refund_streak_shield takes no settings/price argument at all — it
+        # can only credit back what purchase_streak_shield snapshotted, so a
+        # guild re-pricing the shield afterward can't be reflected either way.
+        refunded = refund_streak_shield(conn, GUILD, USER)
+        assert refunded == _shield_price()
+        assert get_balance(conn, GUILD, USER) == 100
+        assert get_streak_shields(conn, GUILD, USER) == 0
+        assert [r["kind"] for r in get_ledger(conn, GUILD, USER)][0] == (
+            "streak_shield_refund"
+        )
+
+
+def test_refund_shield_none_held_rejected(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="no shield held"):
+            refund_streak_shield(conn, GUILD, USER)
+
+
+def test_refund_shield_exactly_once(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+        purchase_streak_shield(conn, S, GUILD, USER)
+        refund_streak_shield(conn, GUILD, USER)
+        with pytest.raises(ValueError, match="no shield held"):
+            refund_streak_shield(conn, GUILD, USER)
+        # A second attempt must not credit a second refund.
+        assert get_balance(conn, GUILD, USER) == 100
 
 
 def test_purchase_shield_allowed_at_streak_zero(db):

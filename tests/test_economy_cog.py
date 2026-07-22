@@ -2570,6 +2570,139 @@ async def test_buy_shield_already_holding_message(ctx, db):
         assert get_balance(conn, GUILD_ID, 500) == 100 - 30  # charged once
 
 
+# ── /bank shop: cancel & refund ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_shop_view_shows_refund_button_only_when_something_refundable(ctx, db):
+    cog = _make_cog(ctx)
+    bare = _ShopView(cog, _settings(db), _guild_roles(), 500, set(), set())
+    assert not any(
+        b.custom_id == "econ_shop_refund"
+        for b in bare.children
+        if isinstance(b, discord.ui.Button)
+    )
+    with_rental = _ShopView(
+        cog, _settings(db), _guild_roles(), 500, set(), set(),
+        refundable=[
+            {
+                "id": 1, "perk": "role_color", "state": "active",
+                "price": 50, "next_bill_at": time.time() + 604800,
+            }
+        ],
+    )
+    assert any(
+        b.custom_id == "econ_shop_refund"
+        for b in with_rental.children
+        if isinstance(b, discord.ui.Button)
+    )
+    with_shield = _ShopView(
+        cog, _settings(db), _guild_roles(), 500, set(), set(), shield_price=30,
+    )
+    assert any(
+        b.custom_id == "econ_shop_refund"
+        for b in with_shield.children
+        if isinstance(b, discord.ui.Button)
+    )
+
+
+@pytest.mark.asyncio
+async def test_refund_picker_previews_prorated_amount(ctx, db):
+    _enable(db)
+    _credit(db, 500, 200)
+    _add_rental(db, "role_color", user_id=500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    refundable, shield_price = cog._refundables(GUILD_ID, 500)
+
+    await cog.open_refund_picker(
+        interaction, _settings(db), _guild_roles(), refundable, shield_price
+    )
+    view = interaction.response.send_message.await_args.kwargs["view"]
+    select = next(c for c in view.children if isinstance(c, discord.ui.Select))
+    assert len(select.options) == 1
+    assert select.options[0].value.startswith("rental:")
+    assert "back" in select.options[0].description
+
+
+@pytest.mark.asyncio
+async def test_refund_confirm_credits_prorated_amount_and_ends_rental_now(ctx, db):
+    _enable(db)
+    _credit(db, 500, 200)
+    _add_rental(db, "role_color", user_id=500)
+    with open_db(db) as conn:
+        rid = conn.execute(
+            "SELECT id FROM econ_rentals WHERE user_id = 500"
+        ).fetchone()["id"]
+        # Half the paid week already elapsed -> half the price back.
+        conn.execute(
+            "UPDATE econ_rentals SET next_bill_at = ? WHERE id = ?",
+            (time.time() + 302400, rid),
+        )
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.revoke_perk_effect", new=AsyncMock()
+    ) as revoke_mock:
+        await cog.finalize_refund(
+            interaction, _settings(db), _guild_roles(), f"rental:{rid}"
+        )
+    revoke_mock.assert_awaited_once()
+    text = interaction.response.edit_message.await_args.kwargs["content"]
+    assert "credited back" in text
+    with open_db(db) as conn:
+        # _add_rental inserts the row directly (no debit), so the refund is
+        # pure credit on top of the starting 200 — ~half the 50 price back,
+        # floor rounding tolerating a little clock jitter.
+        balance = get_balance(conn, GUILD_ID, 500)
+        assert 200 + 24 <= balance <= 200 + 25
+        row = conn.execute(
+            "SELECT state FROM econ_rentals WHERE id = ?", (rid,)
+        ).fetchone()
+        assert row["state"] == "cancelled"  # ends now, not at period end
+
+
+@pytest.mark.asyncio
+async def test_refund_confirm_shield_credits_full_price(ctx, db):
+    _enable(db)
+    _credit(db, 500, 100)
+    cog = _make_cog(ctx)
+    await cog.do_buy_shield(
+        _interaction(_member(member_id=500)), _settings(db), _guild_roles()
+    )
+
+    interaction = _interaction(_member(member_id=500))
+    await cog.finalize_refund(interaction, _settings(db), _guild_roles(), "shield")
+
+    text = interaction.response.edit_message.await_args.kwargs["content"]
+    assert "30" in text  # the shield's default price
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 100
+        assert get_streak_shields(conn, GUILD_ID, 500) == 0
+
+
+@pytest.mark.asyncio
+async def test_refund_confirm_rejects_a_stale_target(ctx, db):
+    _enable(db)
+    _credit(db, 500, 200)
+    _add_rental(db, "role_color", user_id=500, state="lapsed")
+    with open_db(db) as conn:
+        rid = conn.execute(
+            "SELECT id FROM econ_rentals WHERE user_id = 500"
+        ).fetchone()["id"]
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.finalize_refund(
+        interaction, _settings(db), _guild_roles(), f"rental:{rid}"
+    )
+    text = interaction.response.edit_message.await_args.kwargs["content"]
+    assert "❌" in text
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 200  # untouched
+
+
 @pytest.mark.asyncio
 async def test_panel_shield_button_buys(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton

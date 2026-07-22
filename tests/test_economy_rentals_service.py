@@ -16,6 +16,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.economy.rentals import GRACE_SECONDS, WEEK_SECONDS
 from bot_modules.services.economy_rentals_service import (
     BillingResult,
+    RentalRefund,
     bill_rental,
     cancel_all_for_member,
     cancel_rental,
@@ -23,7 +24,9 @@ from bot_modules.services.economy_rentals_service import (
     entitlements,
     get_personal_role,
     list_member_rentals,
+    list_refundable_rentals,
     list_rentals,
+    refund_rental,
     rent_perk,
     set_rental_suspended,
     upsert_personal_role,
@@ -251,6 +254,92 @@ def test_cancel_terminal_rejected(db):
     with open_db(db) as conn:
         with pytest.raises(ValueError, match="not live"):
             cancel_rental(conn, GUILD, r["id"], requester_id=USER)
+
+
+# ── refund_rental ────────────────────────────────────────────────────────
+
+
+def test_refund_active_credits_prorated_amount_and_ends_now(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")  # price 50, next_bill_at = T0 + WEEK
+    with open_db(db) as conn:
+        out = refund_rental(
+            conn, GUILD, r["id"], requester_id=USER, now=T0 + WEEK_SECONDS / 2,
+        )
+    assert isinstance(out, RentalRefund)
+    assert out.perk == "role_color"
+    assert out.refund == 25  # half the week left, half the price back
+    assert out.beneficiary_id == USER
+    row = _get(db, r["id"])
+    assert row["state"] == "cancelled"  # ends NOW, not at period end
+    assert row["ended_at"] == T0 + WEEK_SECONDS / 2
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 200 - 50 + 25
+        led = get_ledger(conn, GUILD, USER, limit=1)[0]
+        assert led["kind"] == "rental_refund"
+        assert led["amount"] == 25
+
+
+def test_refund_active_no_time_left_credits_zero(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    with open_db(db) as conn:
+        out = refund_rental(
+            conn, GUILD, r["id"], requester_id=USER, now=T0 + WEEK_SECONDS,
+        )
+    assert out.refund == 0
+    with open_db(db) as conn:
+        # No refund credit landed — balance is just the post-rent balance.
+        assert get_balance(conn, GUILD, USER) == 200 - 50
+
+
+def test_refund_grace_is_free_but_still_ends_now(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    _set(db, r["id"], state="grace", grace_since=T0)
+    with open_db(db) as conn:
+        out = refund_rental(conn, GUILD, r["id"], requester_id=USER, now=T0 + 10)
+    assert out.refund == 0
+    row = _get(db, r["id"])
+    assert row["state"] == "cancelled"
+
+
+def test_refund_not_payer_rejected(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color", beneficiary_id=OTHER)
+    with open_db(db) as conn:
+        # OTHER wears the perk but didn't pay for it — can't refund it.
+        with pytest.raises(ValueError, match="not your rental"):
+            refund_rental(conn, GUILD, r["id"], requester_id=OTHER)
+
+
+def test_refund_terminal_rejected_exactly_once(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    with open_db(db) as conn:
+        out = refund_rental(conn, GUILD, r["id"], requester_id=USER, now=T0 + 10)
+    assert out.refund == 49  # floors just under the full 50 at T0+10
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="not live"):
+            refund_rental(conn, GUILD, r["id"], requester_id=USER, now=T0 + 20)
+    with open_db(db) as conn:
+        # A second attempt must not credit a second refund.
+        assert get_balance(conn, GUILD, USER) == 200 - 50 + 49
+
+
+def test_refund_missing_rejected(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="not found"):
+            refund_rental(conn, GUILD, 424242, requester_id=USER)
+
+
+def test_list_refundable_rentals_excludes_gift_beneficiary(db):
+    _fund(db, USER, 300)
+    _rent(db, USER, "role_color", beneficiary_id=OTHER)
+    with open_db(db) as conn:
+        # USER paid for it — it's refundable by them, not by OTHER who wears it.
+        assert len(list_refundable_rentals(conn, GUILD, USER)) == 1
+        assert list_refundable_rentals(conn, GUILD, OTHER) == []
 
 
 # ── cancel_all_for_member ──────────────────────────────────────────────

@@ -1033,6 +1033,113 @@ async def _safe_dm(
         log.exception("Economy loop: failed to DM rental notice to user %s.", user_id)
 
 
+async def revert_voice_style(
+    bot: discord.Client, db_path: Path, guild_id: int, member_id: int
+) -> None:
+    """Best-effort de-style of a live temp channel when the lease ends.
+
+    The saved profile stays stored (dormant); only the LIVE channel is
+    walked back to the template name and default limit. Failures are
+    swallowed — the entitlement is already gone, so the next spawn is
+    clean either way. The rename burns one of Discord's 2-per-10-minutes
+    channel-rename slots; acceptable for a lapse.
+    """
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+
+    def _load():
+        with open_db(db_path) as conn:
+            return (
+                get_owned_channel(conn, guild_id, member_id),
+                load_voice_master_config(conn, guild_id),
+            )
+
+    row, cfg = await asyncio.to_thread(_load)
+    if row is None:
+        return
+    channel = guild.get_channel(int(row.channel_id))
+    if not isinstance(channel, discord.VoiceChannel):
+        return
+    member = guild.get_member(member_id)
+    name, _fell_back = resolve_channel_name(
+        saved_name=None,
+        template=cfg.default_name_template or DEFAULT_NAME_TEMPLATE,
+        display_name=member.display_name if member else "member",
+        username=member.name if member else "member",
+        blocklist_patterns=[],
+    )
+    try:
+        await channel.edit(
+            name=name,
+            user_limit=cfg.default_user_limit,
+            reason="Economy: voice-style lease ended",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        log.warning(
+            "Economy loop: voice-style revert failed for channel %s.", channel.id,
+        )
+
+
+async def _delete_sponsored_emoji(
+    bot: discord.Client, db_path: Path, guild_id: int, rental_id: int
+) -> None:
+    """Take the emoji down when its rental ends (lapse or cancel).
+
+    State first: the live submission row is closed in its own transaction
+    (freeing the member's slot and the name claim) before the Discord
+    delete, so a crash can't leave the ledger thinking the emoji is paid
+    for. A delete failure just logs — the emoji lingers until a mod
+    removes it by hand, but nobody is billed for it.
+    """
+
+    def _close():
+        with open_db(db_path) as conn:
+            return emoji_svc.mark_lapsed(conn, rental_id)
+
+    row = await asyncio.to_thread(_close)
+    if row is None or row["emoji_id"] is None:
+        return
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    emoji = guild.get_emoji(int(row["emoji_id"]))
+    if emoji is None:
+        return
+    try:
+        await emoji.delete(reason="Economy: emoji sponsorship ended")
+    except (discord.Forbidden, discord.HTTPException):
+        log.warning(
+            "Economy loop: failed to delete lapsed sponsored emoji %s.",
+            row["emoji_id"],
+        )
+
+
+async def revoke_perk_effect(
+    bot: discord.Client,
+    db_path: Path,
+    guild_id: int,
+    perk: str,
+    rental_id: int,
+    beneficiary_id: int,
+) -> None:
+    """Strip a perk's Discord-side effect when its rental ends.
+
+    Dispatches per perk kind: ``voice_style`` walks back the live temp
+    channel (no personal role involved), ``emoji`` deletes the sponsored
+    emoji, everything else re-projects/deletes the personal role via
+    ``revoke_role_perks``. Shared by the billing loop (lapse / period-end
+    cancel) and the member self-service refund flow, which must strip the
+    perk immediately rather than waiting for period end.
+    """
+    if perk == "voice_style":
+        await revert_voice_style(bot, db_path, guild_id, beneficiary_id)
+    elif perk == "emoji":
+        await _delete_sponsored_emoji(bot, db_path, guild_id, rental_id)
+    else:
+        await revoke_role_perks(bot, db_path, guild_id, beneficiary_id)
+
+
 async def _dispatch_rental_effects(
     bot: discord.Client, db_path: Path, guild_id: int, outcome: RentalTickOutcome
 ) -> None:
@@ -1070,83 +1177,6 @@ async def _dispatch_rental_effects(
                     notice.beneficiary_id,
                 )
 
-    async def _revert_voice_style(member_id: int) -> None:
-        """Best-effort de-style of a live temp channel when the lease ends.
-
-        The saved profile stays stored (dormant); only the LIVE channel is
-        walked back to the template name and default limit. Failures are
-        swallowed — the entitlement is already gone, so the next spawn is
-        clean either way. The rename burns one of Discord's 2-per-10-minutes
-        channel-rename slots; acceptable for a lapse.
-        """
-        guild = bot.get_guild(guild_id)
-        if guild is None:
-            return
-
-        def _load():
-            with open_db(db_path) as conn:
-                return (
-                    get_owned_channel(conn, guild_id, member_id),
-                    load_voice_master_config(conn, guild_id),
-                )
-
-        row, cfg = await asyncio.to_thread(_load)
-        if row is None:
-            return
-        channel = guild.get_channel(int(row.channel_id))
-        if not isinstance(channel, discord.VoiceChannel):
-            return
-        member = guild.get_member(member_id)
-        name, _fell_back = resolve_channel_name(
-            saved_name=None,
-            template=cfg.default_name_template or DEFAULT_NAME_TEMPLATE,
-            display_name=member.display_name if member else "member",
-            username=member.name if member else "member",
-            blocklist_patterns=[],
-        )
-        try:
-            await channel.edit(
-                name=name,
-                user_limit=cfg.default_user_limit,
-                reason="Economy: voice-style lease ended",
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            log.warning(
-                "Economy loop: voice-style revert failed for channel %s.",
-                channel.id,
-            )
-
-    async def _delete_sponsored_emoji(rental_id: int) -> None:
-        """Take the emoji down when its rental ends (lapse or cancel).
-
-        State first: the live submission row is closed in its own transaction
-        (freeing the member's slot and the name claim) before the Discord
-        delete, so a crash can't leave the ledger thinking the emoji is paid
-        for. A delete failure just logs — the emoji lingers until a mod
-        removes it by hand, but nobody is billed for it.
-        """
-
-        def _close():
-            with open_db(db_path) as conn:
-                return emoji_svc.mark_lapsed(conn, rental_id)
-
-        row = await asyncio.to_thread(_close)
-        if row is None or row["emoji_id"] is None:
-            return
-        guild = bot.get_guild(guild_id)
-        if guild is None:
-            return
-        emoji = guild.get_emoji(int(row["emoji_id"]))
-        if emoji is None:
-            return
-        try:
-            await emoji.delete(reason="Economy: emoji sponsorship ended")
-        except (discord.Forbidden, discord.HTTPException):
-            log.warning(
-                "Economy loop: failed to delete lapsed sponsored emoji %s.",
-                row["emoji_id"],
-            )
-
     for res in outcome.billing:
         if res.action == BillingAction.ENTER_GRACE.value:
             await _safe_dm(
@@ -1160,16 +1190,10 @@ async def _dispatch_rental_effects(
             BillingAction.CANCEL_PERIOD_END.value,
         ):
             try:
-                if res.perk == "voice_style":
-                    # No personal role involved — walk back the live temp
-                    # channel instead of re-projecting role entitlements.
-                    await _revert_voice_style(res.beneficiary_id)
-                elif res.perk == "emoji":
-                    await _delete_sponsored_emoji(res.rental_id)
-                else:
-                    await revoke_role_perks(
-                        bot, db_path, guild_id, res.beneficiary_id
-                    )
+                await revoke_perk_effect(
+                    bot, db_path, guild_id, res.perk, res.rental_id,
+                    res.beneficiary_id,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
