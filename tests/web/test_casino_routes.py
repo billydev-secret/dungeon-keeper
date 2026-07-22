@@ -116,3 +116,45 @@ def test_update_casino_rejects_out_of_range_values(authed_client):
         ).status_code
         == 422
     )
+
+
+def test_update_casino_treats_explicit_nulls_as_no_change(authed_client, fake_ctx):
+    """Fields sent as JSON null must change nothing — not persist "None"
+    (booleans would silently parse back False) and not 500 on the
+    min/max cross-check."""
+    resp = authed_client.put(
+        "/api/config/casino",
+        json={"slots_enabled": None, "min_bet": None, "channel_id": None},
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        s = load_casino_settings(conn, fake_ctx.guild_id)
+    assert s.slots_enabled is True
+    assert s.min_bet == 5
+    assert s.channel_id == 0
+
+
+def test_update_economy_config_pokes_the_casino_panel(authed_client, fake_ctx):
+    """Disabling the economy must reach the casino cog so the hub panel is
+    torn down without a restart."""
+    from unittest.mock import MagicMock
+
+    fake_ctx.bot = MagicMock()
+    resp = authed_client.put("/api/economy/config", json={"enabled": False})
+    assert resp.status_code == 200
+    fake_ctx.bot.dispatch.assert_called_once_with(
+        "casino_config_change", fake_ctx.guild_id
+    )
+
+
+def test_update_economy_config_treats_explicit_nulls_as_no_change(
+    authed_client, fake_ctx
+):
+    resp = authed_client.put("/api/economy/config", json={"currency_name": None})
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM config WHERE guild_id = ? AND key = ?",
+            (fake_ctx.guild_id, "econ_currency_name"),
+        ).fetchone()
+    assert row is None  # nothing was written

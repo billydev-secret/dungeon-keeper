@@ -3538,7 +3538,14 @@ async def update_casino(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    values = body.model_dump(exclude_unset=True)
+    # exclude_unset keeps fields sent as EXPLICIT null; dropping them here
+    # means "no change" — otherwise str(None) would be persisted and read
+    # back as the string "None" (booleans silently parse to False, and the
+    # min/max cross-check below would TypeError on None).
+    values = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if v is not None
+    }
     if "channel_id" in values:
         try:
             values["channel_id"] = int(values["channel_id"] or 0)

@@ -33,7 +33,10 @@ FAUCET_GROUPS: dict[str, str] = {
     "game_participation": "games",
     "game_win": "games",
     "qotd": "games",
-    "casino_payout": "games",
+    # casino_payout is deliberately NOT here (the wager_payout precedent):
+    # gross winnings are ~93-97% of turnover, so mapping them to "games"
+    # would drown the real game faucets in the mix chart and inflate the
+    # median-income figure the pricing hints are anchored to.
     "grant": "grants",
 }
 

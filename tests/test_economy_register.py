@@ -715,3 +715,15 @@ async def test_register_tick_covers_every_guild_and_isolates_failures(db):
     await register_tick(bot, db, NOW)
 
     channel.send.assert_awaited_once()  # the enabled guild still drained
+
+
+def test_casino_refunds_post_while_stakes_and_payouts_skip(db):
+    """Casino bet spam is kept out of the feed (it would outrun the drain
+    budget and starve other kinds), but the make-whole refunds still post."""
+    with open_db(db) as conn:
+        _row(conn, USER_ID, 10, kind="casino_payout")
+        _row(conn, USER_ID, -10, kind="casino_stake")
+        _row(conn, USER_ID, 10, kind="casino_refund", meta={"game": "roulette"})
+        entries = collect_register_entries(conn, GUILD_ID, 0, 10)
+
+    assert [e.kind for e in entries] == ["casino_refund"]

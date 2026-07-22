@@ -26,6 +26,7 @@ import sqlite3
 import time
 
 from dataclasses import dataclass, fields
+from typing import NamedTuple
 
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services import casino_logic
@@ -84,22 +85,28 @@ def load_casino_settings(conn: sqlite3.Connection, guild_id: int) -> CasinoSetti
 
     Guild-scoped only (no legacy guild_id=0 fallback), missing or
     unparseable values fall back to the dataclass defaults — the econ
-    loader's contract.
+    loader's contract. One query for all keys (GLOB treats the underscore
+    literally, unlike LIKE) — this loader runs on every bet, so per-field
+    SELECTs would be ~12 round-trips per click.
     """
-    from bot_modules.core.db_utils import get_config_value, parse_bool  # noqa: PLC0415
+    from bot_modules.core.db_utils import parse_bool  # noqa: PLC0415
 
+    stored = {
+        str(r["key"])[len(CASINO_PREFIX):]: str(r["value"])
+        for r in conn.execute(
+            "SELECT key, value FROM config WHERE guild_id = ? "
+            "AND key GLOB 'casino_*'",
+            (guild_id,),
+        )
+    }
     defaults = DEFAULT_CASINO_SETTINGS
     kwargs: dict[str, object] = {}
     for key in _BOOL_KEYS:
-        raw = get_config_value(
-            conn, f"{CASINO_PREFIX}{key}", "", guild_id, allow_legacy_fallback=False
-        )
+        raw = stored.get(key, "")
         if raw:
             kwargs[key] = parse_bool(raw, getattr(defaults, key))
     for key in _INT_KEYS:
-        raw = get_config_value(
-            conn, f"{CASINO_PREFIX}{key}", "", guild_id, allow_legacy_fallback=False
-        )
+        raw = stored.get(key, "")
         if raw:
             try:
                 kwargs[key] = int(raw)
@@ -154,6 +161,7 @@ def take_stake(
     *,
     now: float | None = None,
     enforce_bet_limits: bool = True,
+    channel_id: int | None = None,
 ) -> str | None:
     """Debit a stake, or return the member-facing reason it can't happen.
 
@@ -163,6 +171,11 @@ def take_stake(
     double-down passes ``enforce_bet_limits=False`` — its amount was
     already validated at the deal, and doubling a table-max bet is part of
     the game — but the daily cap and the balance still apply.
+
+    ``channel_id`` (when the caller knows it) must match the configured
+    casino channel: an orphaned hub panel — one a channel move failed to
+    delete — keeps working buttons forever, and this is the guard that
+    stops it taking real money outside the casino.
     """
     if amount < 1:
         raise ValueError("A casino stake has to be at least 1.")
@@ -172,6 +185,8 @@ def take_stake(
     settings = load_casino_settings(conn, guild_id)
     if not settings.channel_id:
         return "The casino is closed."
+    if channel_id is not None and channel_id != settings.channel_id:
+        return f"The casino has moved — find it in <#{settings.channel_id}>."
     if not game_enabled(settings, game):
         return "That table is closed right now."
     unit = econ.currency_plural
@@ -236,8 +251,17 @@ def refund(
     amount: int,
     game: str,
     meta: dict[str, object] | None = None,
+    *,
+    now: float | None = None,
 ) -> None:
-    """Return a stake (kind ``casino_refund``) — void rounds, boot sweeps."""
+    """Return a stake (kind ``casino_refund``) — void rounds, boot sweeps.
+
+    Also hands back daily-cap headroom: a house-initiated refund (restart,
+    voided round) must not leave the member's cap consumed by a bet that
+    never resolved. The decrement targets the CURRENT guild-local day,
+    clamped at 0 — a refund landing after the day rolled simply finds no
+    counter to give back, which is fine because that day's cap is moot.
+    """
     if amount < 1:
         return
     full_meta: dict[str, object] = {"game": game, **(meta or {})}
@@ -245,6 +269,16 @@ def refund(
         conn, guild_id, user_id, amount, REFUND_KIND,
         meta=full_meta,
         booster=False,
+    )
+    from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
+
+    day = local_day_for(
+        time.time() if now is None else now, get_tz_offset_hours(conn, guild_id)
+    )
+    conn.execute(
+        "UPDATE casino_daily SET wagered = MAX(0, wagered - ?) "
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+        (amount, guild_id, user_id, day),
     )
 
 
@@ -337,7 +371,19 @@ def double_blackjack_stake(
 
     Returns the member-facing error (daily cap / funds) or None. Bet limits
     don't re-apply — the original amount was validated at the deal.
+
+    The guarded no-op UPDATE claims the live hand INSIDE the write
+    transaction before any money moves: a boot sweep or auto-stand that
+    settled the hand from another connection makes the claim miss, so the
+    second stake is never debited against a finished hand.
     """
+    claimed = conn.execute(
+        "UPDATE casino_blackjack_hands SET doubled = doubled "
+        "WHERE id = ? AND settled_at IS NULL RETURNING id",
+        (hand_id,),
+    ).fetchone()
+    if claimed is None:
+        return "That hand is already finished."
     err = take_stake(
         conn, guild_id, user_id, amount, "blackjack",
         now=now, enforce_bet_limits=False,
@@ -346,7 +392,7 @@ def double_blackjack_stake(
         return err
     conn.execute(
         "UPDATE casino_blackjack_hands SET stake = stake + ?, doubled = 1 "
-        "WHERE id = ? AND settled_at IS NULL",
+        "WHERE id = ?",
         (amount, hand_id),
     )
     return None
@@ -375,12 +421,172 @@ def settle_blackjack_hand(
     if row is None:
         return False
     if payout >= 1:
-        credit = pay_out if kind == PAYOUT_KIND else refund
-        credit(
-            conn, int(row["guild_id"]), int(row["user_id"]), payout,
-            "blackjack", meta={"hand_id": hand_id, "outcome": outcome},
-        )
+        meta: dict[str, object] = {"hand_id": hand_id, "outcome": outcome}
+        if kind == PAYOUT_KIND:
+            pay_out(
+                conn, int(row["guild_id"]), int(row["user_id"]), payout,
+                "blackjack", meta=meta,
+            )
+        else:
+            refund(
+                conn, int(row["guild_id"]), int(row["user_id"]), payout,
+                "blackjack", meta=meta, now=now,
+            )
     return True
+
+
+class BlackjackStep(NamedTuple):
+    """One resolved hit/stand/double press. err set = nothing happened."""
+
+    err: str | None = None
+    player: list[str] | None = None
+    dealer: list[str] | None = None
+    stake: int = 0
+    doubled: bool = False
+    outcome: str | None = None  # None = the hand is still live
+    payout: int = 0
+
+
+def resolve_blackjack_action(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    hand_id: int,
+    user_id: int,
+    action: str,
+    *,
+    now: float | None = None,
+) -> BlackjackStep:
+    """One button press — every rule and coin movement in one tested place.
+
+    The opening guarded UPDATE both claims the live hand inside the write
+    transaction (so a boot sweep / auto-stand settling from another
+    connection can't interleave — their commit makes our claim miss) and
+    bumps ``last_action_at``, resetting the idle clock on every press.
+    The double-down's second stake is derived from the hand row, never
+    caller-supplied, and only a two-card hand may double.
+    """
+    ts = time.time() if now is None else now
+    row = conn.execute(
+        "UPDATE casino_blackjack_hands SET last_action_at = ? "
+        "WHERE id = ? AND settled_at IS NULL RETURNING *",
+        (ts, hand_id),
+    ).fetchone()
+    if row is None:
+        return BlackjackStep(err="That hand is already finished.")
+    if int(row["guild_id"]) != guild_id or int(row["user_id"]) != user_id:
+        return BlackjackStep(err="That's not your hand — deal your own!")
+    deck, player, dealer = deserialize_blackjack(str(row["state_json"]))
+    stake = int(row["stake"])
+    doubled = bool(row["doubled"])
+
+    def _finish(payout: int, outcome: str) -> BlackjackStep:
+        if not settle_blackjack_hand(conn, hand_id, payout, outcome, now=now):
+            return BlackjackStep(err="That hand is already finished.")
+        return BlackjackStep(
+            player=player, dealer=dealer, stake=stake, doubled=doubled,
+            outcome=outcome, payout=payout,
+        )
+
+    if action == "double":
+        if len(player) != 2:
+            return BlackjackStep(
+                err="You can only double on your first two cards."
+            )
+        err = double_blackjack_stake(conn, guild_id, hand_id, user_id, stake, now=now)
+        if err is not None:
+            return BlackjackStep(err=err)
+        stake *= 2
+        doubled = True
+        player.append(deck.pop())
+        if casino_logic.hand_value(player) > 21:
+            return _finish(0, "bust")
+        casino_logic.dealer_play(deck, dealer)
+        return _finish(*casino_logic.blackjack_settle(player, dealer, stake))
+
+    if action == "hit":
+        player.append(deck.pop())
+        value = casino_logic.hand_value(player)
+        if value > 21:
+            return _finish(0, "bust")
+        if value == 21:
+            casino_logic.dealer_play(deck, dealer)
+            return _finish(*casino_logic.blackjack_settle(player, dealer, stake))
+        update_blackjack_state(
+            conn, hand_id, serialize_blackjack(deck, player, dealer), now=now
+        )
+        return BlackjackStep(
+            player=player, dealer=dealer, stake=stake, doubled=doubled
+        )
+
+    if action == "stand":
+        casino_logic.dealer_play(deck, dealer)
+        return _finish(*casino_logic.blackjack_settle(player, dealer, stake))
+
+    raise ValueError(f"unknown blackjack action: {action}")
+
+
+def stand_idle_blackjack_hand(
+    conn: sqlite3.Connection, hand_id: int, *, now: float | None = None
+) -> BlackjackStep | None:
+    """The idle sweep's auto-stand. None = the hand was already settled.
+
+    Same in-transaction claim as :func:`resolve_blackjack_action`, minus
+    the owner check (the system stands on the member's behalf).
+    """
+    row = conn.execute(
+        "UPDATE casino_blackjack_hands SET last_action_at = last_action_at "
+        "WHERE id = ? AND settled_at IS NULL RETURNING *",
+        (hand_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    deck, player, dealer = deserialize_blackjack(str(row["state_json"]))
+    stake = int(row["stake"])
+    casino_logic.dealer_play(deck, dealer)
+    payout, outcome = casino_logic.blackjack_settle(player, dealer, stake)
+    if not settle_blackjack_hand(conn, hand_id, payout, outcome, now=now):
+        return None
+    return BlackjackStep(
+        player=player, dealer=dealer, stake=stake, doubled=bool(row["doubled"]),
+        outcome=outcome, payout=payout,
+    )
+
+
+def refund_member_live_stakes(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, *, now: float | None = None
+) -> dict[str, int]:
+    """Refund a departing member's live casino money — the on_member_remove
+    seam the PvP wager escrow already has, extended to the casino.
+
+    The blackjack hand settles as refunded; the member's bets on any open
+    roulette round are deleted (so the spin can't pay a ghost) and refunded
+    as one credit. Returns {"blackjack": amount, "roulette": amount}.
+    """
+    out = {"blackjack": 0, "roulette": 0}
+    hand = live_blackjack_hand(conn, guild_id, user_id)
+    if hand is not None and settle_blackjack_hand(
+        conn, int(hand["id"]), int(hand["stake"]), "refunded",
+        kind=REFUND_KIND, now=now,
+    ):
+        out["blackjack"] = int(hand["stake"])
+    bets = conn.execute(
+        "SELECT b.id, b.amount FROM casino_roulette_bets b "
+        "JOIN casino_roulette_rounds r ON r.id = b.round_id "
+        "WHERE b.guild_id = ? AND b.user_id = ? AND r.status = 'open'",
+        (guild_id, user_id),
+    ).fetchall()
+    total = sum(int(b["amount"]) for b in bets)
+    if total:
+        conn.executemany(
+            "DELETE FROM casino_roulette_bets WHERE id = ?",
+            [(int(b["id"]),) for b in bets],
+        )
+        refund(
+            conn, guild_id, user_id, total, "roulette",
+            meta={"left_guild": True}, now=now,
+        )
+        out["roulette"] = total
+    return out
 
 
 def refund_live_blackjack_hands(
@@ -484,6 +690,19 @@ def place_roulette_bet(
     ts = time.time() if now is None else now
     if rnd is None or str(rnd["status"]) != "open" or ts >= float(rnd["closes_at"]):
         return "Betting on that round has closed."
+    # That pre-check ran in autocommit — a buzzer-beater bet can race the
+    # settle timer, whose claim + bet-read commit between our check and our
+    # debit, leaving a stake nothing ever pays or refunds. This guarded
+    # no-op UPDATE is the first write of OUR transaction: it serializes
+    # against the settler, and a round it already claimed makes us miss
+    # here, before any money moves.
+    claimed = conn.execute(
+        "UPDATE casino_roulette_rounds SET message_id = message_id "
+        "WHERE id = ? AND status = 'open' AND closes_at > ? RETURNING id",
+        (round_id, ts),
+    ).fetchone()
+    if claimed is None:
+        return "Betting on that round has closed."
     err = take_stake(conn, int(rnd["guild_id"]), user_id, amount, "roulette", now=now)
     if err is not None:
         return err
@@ -548,10 +767,11 @@ def void_roulette_round(
     Exactly-once via the same status='open' claim. Returns {user_id: total
     refunded}.
     """
+    ts = time.time() if now is None else now
     claimed = conn.execute(
         "UPDATE casino_roulette_rounds SET status = 'void', settled_at = ? "
         "WHERE id = ? AND status = 'open' RETURNING guild_id",
-        (time.time() if now is None else now, round_id),
+        (ts, round_id),
     ).fetchone()
     if claimed is None:
         return {}
@@ -561,7 +781,10 @@ def void_roulette_round(
         uid = int(bet["user_id"])
         totals[uid] = totals.get(uid, 0) + int(bet["amount"])
     for uid, amount in totals.items():
-        refund(conn, guild_id, uid, amount, "roulette", meta={"round_id": round_id})
+        refund(
+            conn, guild_id, uid, amount, "roulette",
+            meta={"round_id": round_id}, now=ts,
+        )
     return totals
 
 

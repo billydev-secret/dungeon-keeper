@@ -290,10 +290,16 @@ def build_roulette_result_embed(
     dot = _COLOR_DOTS[color_name]
     winners = [b for b in bets if b[3] > 0]
     losers_total = sum(b[2] for b in bets if b[3] == 0)
-    desc = [f"The ball lands on {dot} **{result}**.\n​"]
+    if bets:
+        description = f"The ball lands on {dot} **{result}**.\n​"
+    else:
+        description = (
+            f"The ball lands on {dot} **{result}** — but nobody bet. "
+            "The wheel spins for the bees alone."
+        )
     embed = discord.Embed(
         title="🎡 Roulette — no more bets!",
-        description="".join(desc),
+        description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
     if winners:
@@ -311,11 +317,6 @@ def build_roulette_result_embed(
             name="The meadow keeps",
             value=_coins(econ, losers_total),
             inline=False,
-        )
-    if not bets:
-        embed.description = (
-            f"The ball lands on {dot} **{result}** — but nobody bet. "
-            "The wheel spins for the bees alone."
         )
     embed.set_footer(text=_FOOTER)
     return embed
