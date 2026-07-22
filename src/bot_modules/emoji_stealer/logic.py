@@ -75,7 +75,7 @@ def validate_emoji_name(name: str) -> tuple[bool, str, str | None]:
         return (
             False,
             clean,
-            "Emoji name must be at least 2 characters (letters, numbers, underscores).",
+            "❌ Emoji name must be at least 2 characters (letters, numbers, underscores).",
         )
     return True, clean, None
 

@@ -490,7 +490,7 @@ class SixtyNineQuestionModal(discord.ui.Modal, title="Ask A Question"):
 
             if state.prompt_kind == PromptKind.ROOM:
                 channel = interaction.channel
-                thread_name = question_text[:97] + "..." if len(question_text) > 97 else question_text
+                thread_name = question_text[:97] + "…" if len(question_text) > 97 else question_text
                 thread = None
                 try:
                     if isinstance(channel, discord.TextChannel) and state.prompt_message_id is not None:

@@ -63,7 +63,7 @@ class StorySentenceModal(discord.ui.Modal, title="Add Your Sentence"):
         label="Your Sentence",
         style=discord.TextStyle.paragraph,
         max_length=500,
-        placeholder="Continue the story...",
+        placeholder="Continue the story…",
     )
 
     def __init__(self, game_id: str, player_id: int, context_text: str = ""):

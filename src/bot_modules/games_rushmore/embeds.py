@@ -62,7 +62,7 @@ def render_draft_board(
             elif pick == SKIPPED_MARKER:
                 picks.append(f"{i+1}. *Skipped*")
             else:
-                display = pick if len(pick) <= 18 else pick[:15] + "..."
+                display = pick if len(pick) <= 18 else pick[:15] + "…"
                 picks.append(f"{i+1}. {display}")
 
         truncated_name = (

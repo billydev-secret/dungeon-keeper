@@ -222,7 +222,7 @@ class GamesExternalCog(commands.Cog):
         kind: app_commands.Choice[str],
     ):
         if interaction.guild is None:
-            await interaction.response.send_message("Guild only.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
         if not bot.bot:
             await interaction.response.send_message(
@@ -253,7 +253,7 @@ class GamesExternalCog(commands.Cog):
     @is_mod_or_admin()
     async def track_status(self, interaction: discord.Interaction):
         if interaction.guild is None:
-            await interaction.response.send_message("Guild only.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
         watches = await logic.list_watches(self.db, interaction.guild.id)
         if not watches:
@@ -296,7 +296,7 @@ class GamesExternalCog(commands.Cog):
         self, interaction: discord.Interaction, bot: discord.User | None = None
     ):
         if interaction.guild is None:
-            await interaction.response.send_message("Guild only.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
         bot_id, err = await self._resolve_one_bot(interaction.guild.id, bot)
         if bot_id is None:
@@ -315,7 +315,7 @@ class GamesExternalCog(commands.Cog):
         self, interaction: discord.Interaction, bot: discord.User | None = None
     ):
         if interaction.guild is None:
-            await interaction.response.send_message("Guild only.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
         bot_id, err = await self._resolve_one_bot(interaction.guild.id, bot)
         if bot_id is None:
@@ -352,7 +352,7 @@ class GamesExternalCog(commands.Cog):
         count: app_commands.Range[int, 1, 100] = 40,
     ):
         if interaction.guild is None:
-            await interaction.response.send_message("Guild only.", ephemeral=True)
+            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
 
