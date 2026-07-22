@@ -14,11 +14,9 @@ const PRICE_FIELDS = [
   ["price_role_holographic", "Role holographic", {
     hint: "Discord's fixed holographic shimmer preset — a distinct, pricier tier than the two-colour gradient. Members pick nothing; renting it is the whole thing. Needs the server's enhanced role colours feature to render.",
   }],
-  ["price_voice_style", "Voice style", {
-    hint: "Weekly lease for Voice Master rename + user limit. 0 (the default) keeps those controls free for everyone — setting a price is the launch switch, so announce before flipping it.",
+  ["price_voice_style", "Voice room lease", {
+    hint: "Weekly lease for Voice Master rename + user limit — this is the price members pay in the shop for their voice room. 0 (the default) keeps those controls free for everyone; setting a price is the launch switch, so announce before flipping it.",
   }],
-  ["price_text_room", "Text room", { hint: "Used by a later stage." }],
-  ["price_voice_room", "Voice room", { hint: "Used by a later stage." }],
 ];
 
 // One-shot buys rather than weekly rentals — cheap enough to be an impulse,
@@ -176,46 +174,64 @@ function render(container, cfg, pricing, icons) {
           <a href="#/economy-income-sources">Income Sources</a>.</div>
       </header>
 
-      <form class="form card" data-price-form>
-        <div class="section-label">Perk Prices</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+      <form class="form form-cards" data-price-form>
+        <div class="card">
+          <div class="section-label">Perk Prices</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+          </div>
         </div>
-        <div class="section-label" style="margin-top:16px;">Consumables</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+
+        <div class="card">
+          <div class="section-label">Consumables</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${CONSUMABLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+          </div>
         </div>
-        <div class="section-label" style="margin-top:16px;">Weekly Raffle</div>
-        <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
-          <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-            <input type="checkbox" name="raffle_enabled" /> Enabled
-          </label>
-          ${RAFFLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+
+        <div class="card">
+          <div class="section-label">Weekly Raffle</div>
+          <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
+            <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+              <input type="checkbox" name="raffle_enabled" /> Enabled
+            </label>
+            ${RAFFLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+          </div>
+          <div class="field-hint">
+            Drawn at the ISO-week roll; the prize is a free weekly perk payment
+            (a voucher, never coins) and the winner is announced by name on the
+            leaderboard panel — announce the raffle before enabling it.
+          </div>
         </div>
-        <div class="field-hint" style="margin-bottom:8px;">
-          Drawn at the ISO-week roll; the prize is a free weekly perk payment
-          (a voucher, never coins) and the winner is announced by name on the
-          leaderboard panel — announce the raffle before enabling it.
+
+        <div class="card">
+          <div class="section-label">Evaporation — hoard tax &amp; wager rake</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${DEMURRAGE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+          </div>
+          <div class="field-hint">
+            Both ship at 0 (off). The hoard tax is collected at the weekly roll
+            from wallets above the floor; the rake comes out of each settled
+            wager pot. Every collection shows in the register feed like any
+            other transaction — announce before setting either rate.
+          </div>
         </div>
-        <div class="section-label" style="margin-top:16px;">Evaporation — hoard tax &amp; wager rake</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${DEMURRAGE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+
+        <div class="card">
+          <div class="section-label">Sponsored Emojis</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+          </div>
         </div>
-        <div class="field-hint" style="margin-bottom:8px;">
-          Both ship at 0 (off). The hoard tax is collected at the weekly roll
-          from wallets above the floor; the rake comes out of each settled
-          wager pot. Every collection shows in the register feed like any
-          other transaction — announce before setting either rate.
+
+        <div class="card">
+          <div class="section-label">Sponsored QOTD</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
+          </div>
         </div>
-        <div class="section-label" style="margin-top:16px;">Sponsored Emojis</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${EMOJI_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
-        </div>
-        <div class="section-label" style="margin-top:16px;">Sponsored QOTD</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
-        </div>
-        <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
+
+        <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Save Prices</button>
           <span data-price-status></span>
         </div>
