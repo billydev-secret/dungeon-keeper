@@ -245,6 +245,88 @@ def build_jackpot_celebration(
     return embed
 
 
+# ── animation frames (big bets get the show; money is already settled) ─
+
+
+def build_coinflip_spin_embed(
+    econ: EconSettings, user_id: int, call: str, stake: int,
+    accent: discord.Color | None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🪙 Coinflip — it's in the air!",
+        description=(
+            f"<@{user_id}> calls **{call}** for {_coins(econ, stake)}…\n"
+            "The coin spins high over the meadow. 🌾"
+        ),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_slots_spin_embed(
+    econ: EconSettings,
+    user_id: int,
+    stake: int,
+    revealed: tuple[str | None, str | None, str | None],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    cells = " │ ".join(sym if sym is not None else "🌀" for sym in revealed)
+    embed = discord.Embed(
+        title="🎰 Meadow Slots",
+        description=(
+            f"▶ {cells} ◀\n\n<@{user_id}> bet {_coins(econ, stake)} — "
+            "the reels are spinning…"
+        ),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_blackjack_reveal_embed(
+    econ: EconSettings,
+    user_id: int,
+    player: list[str],
+    dealer_first_two: list[str],
+    stake: int,
+    accent: discord.Color | None,
+    *,
+    doubled: bool = False,
+) -> discord.Embed:
+    stake_note = f" (doubled to {stake:,})" if doubled else ""
+    embed = discord.Embed(
+        title="🃏 Blackjack",
+        description=f"<@{user_id}> is in for {_coins(econ, stake)}{stake_note}\n​",
+        color=_accent(accent),
+    )
+    embed.add_field(
+        name="Their hand", value=_hand_line(player) + "\n​", inline=False
+    )
+    embed.add_field(
+        name="Dealer",
+        value=_hand_line(dealer_first_two) + "\n*The dealer turns the hole card…*",
+        inline=False,
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_roulette_bounce_embed(
+    econ: EconSettings, bounce: tuple[int, int], accent: discord.Color | None
+) -> discord.Embed:
+    frames = " … ".join(
+        f"{_COLOR_DOTS[logic.wheel_color(n)]} {n}" for n in bounce
+    )
+    embed = discord.Embed(
+        title="🎡 Roulette — no more bets!",
+        description=f"The ball dances across the wheel… {frames} …",
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
 _OUTCOME_LINES = {
     "blackjack": "**Blackjack!** Paid 3:2 —",
     "win": "**They beat the dealer** —",

@@ -403,7 +403,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             return
 
         def _play() -> tuple[
-            str | None, EconSettings | None, str, svc.InstantResult
+            str | None, EconSettings | None, str, svc.InstantResult, int
         ]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
@@ -411,24 +411,41 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     channel_id=interaction.channel_id,
                 )
                 if err is not None:
-                    return err, None, "", svc.InstantResult(0)
+                    return err, None, "", svc.InstantResult(0), 0
                 landed = logic.flip_coin()
                 result = svc.settle_coinflip(
                     conn, guild.id, interaction.user.id, amount, side, landed
                 )
-                return None, load_econ_settings(conn, guild.id), landed, result
+                max_bet = svc.load_casino_settings(conn, guild.id).max_bet
+                return None, load_econ_settings(conn, guild.id), landed, result, max_bet
 
-        err, econ, landed, result = await asyncio.to_thread(_play)
+        err, econ, landed, result, max_bet = await asyncio.to_thread(_play)
         if err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
+        final = casino_embeds.build_coinflip_embed(
+            econ, interaction.user.id, side, landed, amount, result.payout,
+            streak=result.streak,
+        )
+        if not logic.is_big_bet(amount, max_bet):
+            await interaction.response.send_message(
+                embed=final, allowed_mentions=discord.AllowedMentions.none()
+            )
+            return
+        # The show: money settled above — a crash mid-animation leaves a
+        # stale message, never a wrong balance.
         await interaction.response.send_message(
-            embed=casino_embeds.build_coinflip_embed(
-                econ, interaction.user.id, side, landed, amount, result.payout,
-                streak=result.streak,
+            embed=casino_embeds.build_coinflip_spin_embed(
+                econ, interaction.user.id, side, amount, await self._accent(guild)
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        try:
+            message = await interaction.original_response()
+            await asyncio.sleep(1.2)
+            await message.edit(embed=final)
+        except discord.HTTPException:
+            pass
 
     async def play_slots(
         self, interaction: discord.Interaction, amount: int
@@ -439,7 +456,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
         def _play() -> tuple[
             str | None, EconSettings | None, tuple[str, str, str],
-            svc.InstantResult,
+            svc.InstantResult, int,
         ]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
@@ -447,25 +464,54 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     channel_id=interaction.channel_id,
                 )
                 if err is not None:
-                    return err, None, ("", "", ""), svc.InstantResult(0)
+                    return err, None, ("", "", ""), svc.InstantResult(0), 0
                 reels = logic.spin_slots()
                 result = svc.settle_slots(
                     conn, guild.id, interaction.user.id, amount, reels
                 )
-                return None, load_econ_settings(conn, guild.id), reels, result
+                max_bet = svc.load_casino_settings(conn, guild.id).max_bet
+                return None, load_econ_settings(conn, guild.id), reels, result, max_bet
 
-        err, econ, reels, result = await asyncio.to_thread(_play)
+        err, econ, reels, result, max_bet = await asyncio.to_thread(_play)
         if err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
-        await interaction.response.send_message(
-            embed=casino_embeds.build_slots_embed(
-                econ, interaction.user.id, reels, amount, result.payout,
-                result.label,
-                jackpot_won=result.jackpot_won, streak=result.streak,
-            ),
-            allowed_mentions=discord.AllowedMentions.none(),
+        final = casino_embeds.build_slots_embed(
+            econ, interaction.user.id, reels, amount, result.payout,
+            result.label,
+            jackpot_won=result.jackpot_won, streak=result.streak,
         )
+        if logic.is_big_bet(amount, max_bet):
+            # Reels stop one at a time; the outcome is already banked.
+            accent = await self._accent(guild)
+            await interaction.response.send_message(
+                embed=casino_embeds.build_slots_spin_embed(
+                    econ, interaction.user.id, amount, (None, None, None), accent
+                ),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            try:
+                message = await interaction.original_response()
+                for stop in (1, 2):
+                    await asyncio.sleep(1.0)
+                    revealed = (
+                        reels[0] if stop >= 1 else None,
+                        reels[1] if stop >= 2 else None,
+                        None,
+                    )
+                    await message.edit(
+                        embed=casino_embeds.build_slots_spin_embed(
+                            econ, interaction.user.id, amount, revealed, accent
+                        )
+                    )
+                await asyncio.sleep(1.0)
+                await message.edit(embed=final)
+            except discord.HTTPException:
+                pass
+        else:
+            await interaction.response.send_message(
+                embed=final, allowed_mentions=discord.AllowedMentions.none()
+            )
         if result.jackpot_won and isinstance(
             interaction.channel, discord.TextChannel
         ):
@@ -603,25 +649,27 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         assert guild is not None
         uid = interaction.user.id
 
-        def _step() -> tuple[svc.BlackjackStep, EconSettings | None]:
+        def _step() -> tuple[svc.BlackjackStep, EconSettings | None, int]:
             with self.ctx.open_db() as conn:
                 step = svc.resolve_blackjack_action(
                     conn, guild.id, hand_id, uid, action
                 )
-                econ = (
-                    load_econ_settings(conn, guild.id)
-                    if step.err is None
-                    else None
+                if step.err is not None:
+                    return step, None, 0
+                return (
+                    step,
+                    load_econ_settings(conn, guild.id),
+                    svc.load_casino_settings(conn, guild.id).max_bet,
                 )
-                return step, econ
 
-        step, econ = await asyncio.to_thread(_step)
+        step, econ, max_bet = await asyncio.to_thread(_step)
         if step.err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {step.err}")
             return step.err == "That hand is already finished."
+        accent = await self._accent(guild)
         embed = casino_embeds.build_blackjack_embed(
             econ, uid, step.player or [], step.dealer or [],
-            step.stake, await self._accent(guild),
+            step.stake, accent,
             doubled=step.doubled, outcome=step.outcome, payout=step.payout,
             streak=step.streak,
         )
@@ -630,7 +678,21 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             else build_blackjack_view(hand_id, can_double=False)
         )
         try:
-            await interaction.response.edit_message(embed=embed, view=view)
+            if step.outcome is not None and logic.is_big_bet(step.stake, max_bet):
+                # Pause on the hole-card flip before the verdict lands.
+                await interaction.response.edit_message(
+                    embed=casino_embeds.build_blackjack_reveal_embed(
+                        econ, uid, step.player or [],
+                        (step.dealer or [])[:2], step.stake, accent,
+                        doubled=step.doubled,
+                    ),
+                    view=None,
+                )
+                await asyncio.sleep(1.4)
+                if interaction.message is not None:
+                    await interaction.message.edit(embed=embed, view=None)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
         except discord.HTTPException:
             pass
         return step.outcome is not None
@@ -906,6 +968,16 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         result_embed = casino_embeds.build_roulette_result_embed(econ, result, bets)
         if int(rnd["message_id"]):
             try:
+                # One resolution per round, so the bounce is always worth it:
+                # two near-misses, then the verdict. Money already settled.
+                await channel.get_partial_message(int(rnd["message_id"])).edit(
+                    embed=casino_embeds.build_roulette_bounce_embed(
+                        econ, ((result + 5) % 37, (result + 23) % 37),
+                        await self._accent(channel.guild),
+                    ),
+                    view=None,
+                )
+                await asyncio.sleep(1.5)
                 await channel.get_partial_message(int(rnd["message_id"])).edit(
                     embed=result_embed, view=None
                 )
