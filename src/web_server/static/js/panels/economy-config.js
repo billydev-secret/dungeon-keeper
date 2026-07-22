@@ -38,7 +38,8 @@ function render(container, cfg, channels, roles, members) {
           <a href="#/economy-income-sources">Income Sources</a></div>
       </header>
 
-      <form class="form card" data-form>
+      <form class="form form-cards" data-form>
+        <div class="card">
         <div class="section-label">Core</div>
         <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
           <input type="checkbox" name="enabled"${cfg.enabled ? " checked" : ""} />
@@ -104,6 +105,9 @@ function render(container, cfg, channels, roles, members) {
           <div class="field-hint">Applied to faucet credits for server boosters (≥ 1).</div>
         </div>
 
+        </div>
+
+        <div class="card">
         <div class="section-label">Coin Drops</div>
         <div class="field">
           <label>Drop channel</label>
@@ -143,6 +147,9 @@ function render(container, cfg, channels, roles, members) {
           timing is jittered so members can't clock it. An unclaimed pouch
           vanishes after the expiry window and pays nobody.</div>
 
+        </div>
+
+        <div class="card">
         <div class="section-label">Pin of the Day</div>
         <div class="field">
           <label>Pin channel</label>
@@ -155,6 +162,9 @@ function render(container, cfg, channels, roles, members) {
             Leave unset to keep it off.</div>
         </div>
 
+        </div>
+
+        <div class="card">
         <div class="section-label">Community Bounty</div>
         <div class="field">
           <label>Bounty board channel</label>
@@ -186,7 +196,9 @@ function render(container, cfg, channels, roles, members) {
           for the opener and each chip-in. Max open caps how many live bounties
           one member can have posted at once (0 = no cap). A bounty nobody awards
           within the expiry window refunds every contributor (0 = never expires).</div>
+        </div>
 
+        <div class="card">
         <div class="section-label">Branding</div>
         <div class="field-row">
           <div class="field">
@@ -212,8 +224,9 @@ function render(container, cfg, channels, roles, members) {
           <label>Currency icon URL</label>
           <input type="text" name="currency_icon_url" value="${cfg.currency_icon_url}" maxlength="512" />
         </div>
+        </div>
 
-        <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
+        <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Save</button>
           <span data-status></span>
         </div>

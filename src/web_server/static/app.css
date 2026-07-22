@@ -975,6 +975,13 @@ textarea.field-input { resize: vertical; }
   padding: 18px 20px;
 }
 .panel > .form { max-width: none; }
+/* A form that is itself just a stack of .card sections: drop the outer box so
+   each major heading reads as its own card (the .form flex gap spaces them). */
+.panel > .form.form-cards {
+  background: none;
+  border: none;
+  padding: 0;
+}
 .panel > section + section,
 .panel > .form   + .form,
 .panel > section + .form,
