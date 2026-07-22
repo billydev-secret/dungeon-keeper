@@ -172,6 +172,7 @@ const SECTIONS = [
       { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js" },
       { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js" },
       { id: "economy-sinks", label: "Sinks", module: "./panels/economy-sinks.js", adminOnly: true },
+      { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true },
       { id: "economy-qotd", label: "QOTD", module: "./panels/economy-qotd.js", adminOnly: true },
       { id: "economy-qotd-submissions", label: "Sponsored QOTD", module: "./panels/economy-qotd-submissions.js" },
       { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js" },

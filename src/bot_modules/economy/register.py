@@ -92,6 +92,9 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "bounty_stake": ("🎯", "Bounty stake"),
     "bounty_payout": ("🏆", "Bounty won"),
     "bounty_refund": ("↩️", "Bounty refund"),
+    "casino_stake": ("🎰", "Casino bet"),
+    "casino_payout": ("🎰", "Casino win"),
+    "casino_refund": ("↩️", "Casino refund"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
@@ -408,6 +411,12 @@ def render_memo(entry: RegisterEntry, resolve_name: Callable[[int], str]) -> str
         if rake:
             return f"Game wager won — house kept {rake:,}"
         return _KIND_DISPLAY[kind][1]
+
+    if kind in ("casino_stake", "casino_payout", "casino_refund"):
+        # Meta names the table (coinflip/slots/blackjack/roulette) — say it.
+        game = str(meta.get("game") or "").strip().capitalize()
+        label = _KIND_DISPLAY[kind][1]
+        return f"{label} — {game}" if game else label
 
     if kind == "grant":
         reason = str(meta.get("reason") or "").strip()

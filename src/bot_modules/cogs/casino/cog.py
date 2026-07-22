@@ -174,6 +174,14 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
     async def _wait_ready(self) -> None:
         await self.bot.wait_until_ready()
 
+    @commands.Cog.listener()
+    async def on_casino_config_change(self, guild_id: int) -> None:
+        """The dashboard's casino PUT dispatches this after a save so the
+        hub panel appears/moves/updates without waiting for a restart."""
+        guild = self.bot.get_guild(guild_id)
+        if guild is not None:
+            await self.ensure_panel(guild)
+
     # ── shared helpers ─────────────────────────────────────────────────
 
     async def _accent(self, guild: discord.Guild | None) -> discord.Color | None:

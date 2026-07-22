@@ -80,6 +80,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |
 | [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |
+| [casino_spec.md](casino_spec.md) | The Golden Meadow casino: house gambling (coinflip, slots, blackjack, roulette), button-only | Built 2026-07-22 ([plans/casino.md](plans/casino.md)) |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sink round 2: paid quest rerolls, sponsor-a-QOTD (mod-approved), burn list, PvP coin wagers | All stages built (4b landed 2026-07-20) |
 | [events_spec.md](events_spec.md) | Events cog | |
 | [music_spec.md](music_spec.md) | Music cog (Lavalink) | Built |

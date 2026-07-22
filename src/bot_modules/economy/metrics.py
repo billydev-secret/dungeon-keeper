@@ -33,6 +33,7 @@ FAUCET_GROUPS: dict[str, str] = {
     "game_participation": "games",
     "game_win": "games",
     "qotd": "games",
+    "casino_payout": "games",
     "grant": "grants",
 }
 
