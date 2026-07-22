@@ -79,6 +79,29 @@ def progress_bar(current: int, target: int, width: int = 10) -> str:
     return f"{'▰' * filled}{'▱' * (width - filled)} {current:,}/{target:,}"
 
 
+def community_progress_bar(current: int, target: int, width: int = 12) -> str:
+    """A community goal's meter, split into the 3 tier regions.
+
+    Divides the ``▰▱`` bar at the 40/70/100% tier thresholds
+    (``quest_rules.COMMUNITY_TIERS``) with a ``┃`` divider, so members can
+    see which milestone region they're in rather than just a flat fill.
+    """
+    if target <= 0:
+        return f"{current:,}"
+    bounds = [0]
+    for frac in quest_rules.COMMUNITY_TIERS:
+        bounds.append(max(bounds[-1] + 1, round(width * frac)))
+    bounds[-1] = width
+    filled = max(0, min(width, round(width * current / target)))
+    segments = []
+    for start, end in zip(bounds, bounds[1:]):
+        seg_len = end - start
+        seg_filled = max(0, min(seg_len, filled - start))
+        segments.append("▰" * seg_filled + "▱" * (seg_len - seg_filled))
+    bar = "┃".join(segments)
+    return f"{bar} {current:,}/{target:,}"
+
+
 def _rel(ts: float) -> str:
     """A Discord relative timestamp — ticks live in every client."""
     return f"<t:{int(ts)}:R>"
@@ -129,6 +152,9 @@ class CommunityGoal:
     today_delta: int | None = None
     on_track: bool = True
     ends_ts: float | None = None
+    # What action the goal is tracking (quests.TRIGGER_KINDS), "" for manual
+    # goals — shown next to the title so the board explains itself.
+    kind_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -332,6 +358,13 @@ def collect_leaderboard_data(
                     today_delta=today_delta,
                     on_track=on_track,
                     ends_ts=week_end if auto else None,
+                    kind_label=(
+                        quest_rules.TRIGGER_KINDS.get(
+                            str(row["trigger_kind"]), ""
+                        )
+                        if auto
+                        else ""
+                    ),
                 )
             )
         elif row["qtype"] in _QTYPE_LABELS:
@@ -392,14 +425,16 @@ def _pulse_lines(data: LeaderboardData, emoji: str, plural: str) -> str:
 
 
 def _community_block(g: CommunityGoal) -> str:
-    """One goal's lines: bar + state, then tier/pace/crowd detail for autos."""
+    """One goal's lines: what it tracks, a tier-region bar, then detail."""
     if g.settled:
         state = " — ✅ paid out"
     elif g.completed:
         state = " — 🎉 complete, payout coming"
     else:
         state = ""
-    lines = [f"**{g.title}**", f"{progress_bar(g.current, g.target or 0)}{state}"]
+    title = f"**{g.title}** — {g.kind_label}" if g.kind_label else f"**{g.title}**"
+    bar = community_progress_bar(g.current, g.target or 0)
+    lines = [title, f"{bar}{state}"]
     target = int(g.target or 0)
     if g.auto and target > 0 and not g.settled:
         if not g.completed:

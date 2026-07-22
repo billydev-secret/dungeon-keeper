@@ -184,6 +184,10 @@ Which embed slot does which job:
 - Existing `█░` bars (games `live_bar.py`, chicken, pressure cooker) and the
   bracket/pipe wrappers around them are legacy; converge when touching, don't
   add a fourth vocabulary.
+- A bar with named milestone regions (community goals' 40/70/100% tiers,
+  `leaderboard.community_progress_bar`) divides the same `▰▱` bar into
+  segments with a `┃` divider at each threshold — no new fill characters, no
+  color; the tier lines underneath still carry the numbers.
 
 ## Empty states & pagination
 

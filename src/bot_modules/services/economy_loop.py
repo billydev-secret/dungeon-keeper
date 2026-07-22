@@ -273,10 +273,12 @@ def run_guild_day_roll(
         )
         return DayRollResult()
 
+    repair_beats = _repair_orphaned_community_quests(conn, guild_id, this_week, today)
+
     last_day = row["last_local_day"]
     if last_day == today:
-        return DayRollResult()
-    beats: list[CommunityBeat] = []
+        return DayRollResult(beats=tuple(repair_beats))
+    beats: list[CommunityBeat] = list(repair_beats)
     week_rolled = False
 
     # ── day roll: convert the day that just ended, advance daily pool ──
@@ -329,6 +331,12 @@ def run_guild_day_roll(
             local_day=today,
         )
         beats.extend(week_beats)
+        beats.extend(_roll_community_weekly_slot2(
+            bot, conn, settings, guild_id,
+            closed_week=last_week,
+            new_week=this_week,
+            local_day=today,
+        ))
         # Roll up metrics for the week that JUST closed (idempotent via PK —
         # a replay before the marks advance recomputes nothing).
         compute_weekly_rollup(
@@ -380,9 +388,13 @@ def _roll_community_weekly(
     plus the updated ``last_community_week`` mark — the run week, advanced
     only at activation, so "gap over" is simply ``community_week !=
     closed_week``. First-ever roll (mark NULL) activates immediately.
+
+    This is concurrency lane 1 of 2 (``community_slot``) — lane 2
+    (``_roll_community_weekly_slot2``) runs the same weekly cadence with no
+    gap week, so the board isn't fully dark during this lane's breather.
     """
     beats: list[CommunityBeat] = []
-    active = list_active_community_kind_quests(conn, guild_id)
+    active = list_active_community_kind_quests(conn, guild_id, slot=1)
     if active:
         member_ids = active_member_ids(conn, guild_id, days=30)
         boosters = {
@@ -424,6 +436,122 @@ def _roll_community_weekly(
         )
     )
     return beats, new_week
+
+
+def _roll_community_weekly_slot2(
+    bot: discord.Client,
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    *,
+    closed_week: str,
+    new_week: str,
+    local_day: str,
+) -> list[CommunityBeat]:
+    """Concurrency lane 2: same weekly cadence as lane 1, no gap week.
+
+    2026-07-22 decision: lane 1 keeps its one-week-on/one-week-off breather
+    untouched, but two lines with matched 1-week run/gap durations can only
+    ever be in perfect sync (both active, both dark together) or perfect
+    anti-phase (always exactly one active) — there's no offset that gives
+    sustained double coverage. So lane 2 instead refills the instant it
+    settles: the board shows 2 goals whenever lane 1 is mid-run, and drops
+    to just lane 2 during lane 1's gap week, but is never fully empty.
+    """
+    beats: list[CommunityBeat] = []
+    active = list_active_community_kind_quests(conn, guild_id, slot=2)
+    if active:
+        quest = active[0]
+        if str(quest["last_run_week"]) != closed_week:
+            return beats  # still mid-run
+        member_ids = active_member_ids(conn, guild_id, days=30)
+        boosters = {
+            uid: member_is_booster(bot, guild_id, uid) for uid in member_ids
+        }
+        summary = settle_community_weekly(conn, settings, guild_id, quest, boosters)
+        beats.append(CommunityBeat(guild_id, quests.beat_resolution(summary)))
+
+    nxt = next_community_weekly(conn, guild_id)
+    if nxt is None:
+        return beats  # library has no more community weeklies free
+    kind = str(nxt["trigger_kind"])
+    scope = nxt["trigger_channel_id"]
+    target = auto_size_community_target(
+        conn, guild_id, kind, local_day,
+        channel_id=int(scope) if scope is not None else None,
+    )
+    activate_community_weekly(
+        conn, guild_id, int(nxt["id"]), target=target, week=new_week, slot=2
+    )
+    beats.append(
+        CommunityBeat(
+            guild_id,
+            quests.beat_kickoff(
+                str(nxt["title"]),
+                quests.TRIGGER_KINDS.get(kind, kind),
+                target,
+                new_week,
+            ),
+        )
+    )
+    return beats
+
+
+def _repair_orphaned_community_quests(
+    conn: sqlite3.Connection, guild_id: int, this_week: str, local_day: str
+) -> list[CommunityBeat]:
+    """Self-heal community-kind quests stuck active outside the slot system.
+
+    A quest only carries a real ``community_target`` once it passes through
+    ``activate_community_weekly`` — a seed script bug (2026-07-22) flipped
+    ``active=1`` directly on 11 library rows, leaving them targetless and
+    outside both concurrency lanes. Runs every tick (cheap, guild-scoped) so
+    a bad seed self-heals within the hour rather than waiting on the next
+    week roll, and immediately fills whichever lanes it just freed up — but
+    only in the same tick it actually found orphans, so it never overrides a
+    legitimate, intentional gap week.
+    """
+    orphans = conn.execute(
+        "SELECT id FROM econ_quests WHERE guild_id = ? AND qtype = 'community' "
+        "AND trigger_kind != '' AND active = 1 AND community_target IS NULL",
+        (guild_id,),
+    ).fetchall()
+    if not orphans:
+        return []
+    conn.execute(
+        "UPDATE econ_quests SET active = 0 "
+        "WHERE guild_id = ? AND qtype = 'community' AND trigger_kind != '' "
+        "AND active = 1 AND community_target IS NULL",
+        (guild_id,),
+    )
+    beats: list[CommunityBeat] = []
+    for slot in (1, 2):
+        if list_active_community_kind_quests(conn, guild_id, slot=slot):
+            continue
+        nxt = next_community_weekly(conn, guild_id)
+        if nxt is None:
+            return beats
+        kind = str(nxt["trigger_kind"])
+        scope = nxt["trigger_channel_id"]
+        target = auto_size_community_target(
+            conn, guild_id, kind, local_day,
+            channel_id=int(scope) if scope is not None else None,
+        )
+        activate_community_weekly(
+            conn, guild_id, int(nxt["id"]), target=target, week=this_week, slot=slot
+        )
+        beats.append(
+            CommunityBeat(
+                guild_id,
+                quests.beat_kickoff(
+                    str(nxt["title"]),
+                    quests.TRIGGER_KINDS.get(kind, kind),
+                    target,
+                    this_week,
+                ),
+            )
+        )
+    return beats
 
 
 def community_hourly_beats(

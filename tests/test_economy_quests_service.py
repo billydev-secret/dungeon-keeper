@@ -1358,6 +1358,35 @@ def test_next_community_weekly_rotation_order(db):
         assert pick is not None and int(pick["id"]) == b  # never-run first
 
 
+def test_activate_community_weekly_tags_and_filters_by_slot(db):
+    """Two concurrency lanes (2026-07-22): activation tags a quest's slot,
+    and list_active_community_kind_quests can narrow to just one lane so
+    each lane's roll never touches the other's quest."""
+    from bot_modules.services.economy_quests_service import (
+        activate_community_weekly,
+        get_quest,
+        list_active_community_kind_quests,
+    )
+
+    with open_db(db) as conn:
+        qa = _community_kind(conn, title="A", active=False)
+        qb = _community_kind(conn, title="B", active=False, kind="reply_sent")
+        activate_community_weekly(conn, GUILD, qa, target=10, week="2026-W29")
+        activate_community_weekly(conn, GUILD, qb, target=10, week="2026-W29", slot=2)
+
+        assert int(get_quest(conn, GUILD, qa)["community_slot"]) == 1
+        assert int(get_quest(conn, GUILD, qb)["community_slot"]) == 2
+
+        both = list_active_community_kind_quests(conn, GUILD)
+        assert {int(r["id"]) for r in both} == {qa, qb}
+
+        slot1 = list_active_community_kind_quests(conn, GUILD, slot=1)
+        assert [int(r["id"]) for r in slot1] == [qa]
+
+        slot2 = list_active_community_kind_quests(conn, GUILD, slot=2)
+        assert [int(r["id"]) for r in slot2] == [qb]
+
+
 def test_kind_activity_prune_keeps_trailing_window(db):
     from bot_modules.services.economy_quests_service import (
         prune_kind_activity,
