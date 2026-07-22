@@ -261,6 +261,12 @@ async def apply_inactive(
 
     inactive_id = await asyncio.to_thread(_persist)
 
+    # Feed the promotion-review watch set so this sleeper is spotted the moment
+    # they post in the sleeper channel.
+    from bot_modules.services.promotion_review_service import note_inactive
+
+    await asyncio.to_thread(note_inactive, ctx.db_path, guild_id, target_id)
+
     # DM the member so they know where they went and how to get back.
     chan_id = await asyncio.to_thread(_read_channel_id, ctx, guild_id)
     channel_line = f"\nHead to <#{chan_id}> and open a ticket to restore your access." if chan_id else ""

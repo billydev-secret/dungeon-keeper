@@ -920,6 +920,20 @@
       </div>
     </div>
 
+    <div class="callout callout-info">
+      <span class="callout-icon">🎫</span>
+      <div class="callout-body">
+        <strong>Promotion-review cards with a Grant button</strong>
+        <p>The <strong>Level 5 Log Channel</strong> (set on the XP config panel) is your promotion-reviews channel. Three things now post a review card there, each with a <strong>Grant access</strong> button your roles manager can click — no commands needed:</p>
+        <ul>
+          <li><strong>Level 5 reached</strong> — the existing level-up card; the button adds your configured grant role.</li>
+          <li><strong>Access came back</strong> — a member whose role an auto-sweep pruned posts again anywhere; the button re-adds the grant role and closes out their prune record.</li>
+          <li><strong>Sleeper stirred</strong> — a member held in the Inactive channel posts there again; the button fully reactivates them (restores their saved roles, removes <code>@Inactive</code>).</li>
+        </ul>
+        <p>Return/sleeper cards also have a <strong>Dismiss</strong> button, and each returning member gets one card at a time. Set the <strong>Promotion Review Grant Role</strong> on the XP config panel (in this server, the spicy-access role) to arm the Grant button; the return/sleeper cards stay dormant until the Level 5 Log Channel is set. Buttons are limited to admins/mods (or anyone with Manage Roles).</p>
+      </div>
+    </div>
+
     <div class="cmd-block">
       <span class="cmd-name">/quality_leave add member:@user days:30</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>

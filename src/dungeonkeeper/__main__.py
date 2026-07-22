@@ -21,6 +21,16 @@ from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
+from bot_modules.services.promotion_review_service import warm as warm_promo_review
+from bot_modules.services.promotion_review_views import (
+    DismissButton as PromoReviewDismissButton,
+)
+from bot_modules.services.promotion_review_views import (
+    GrantAccessButton as PromoReviewGrantButton,
+)
+from bot_modules.services.promotion_review_views import (
+    Level5GrantButton as PromoReviewLevel5Button,
+)
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
 from bot_modules.services.role_grant_audit_service import grant_audit_card_loop
 from bot_modules.announcements.buttons import AnnouncementRoleButton
@@ -269,6 +279,12 @@ def main() -> None:
         print_startup_banner(boot_cfg, bot.user)
         await check_guild_membership(boot_cfg, bot)
 
+        # Seed the returned-member watch set so members already owed a review
+        # card are spotted the moment they post after a restart.
+        await asyncio.to_thread(
+            warm_promo_review, db_path, [g.id for g in bot.guilds]
+        )
+
         if boot_cfg.is_dev:
             guild = bot.get_guild(boot_cfg.guild_id)
             if guild:
@@ -293,6 +309,13 @@ def main() -> None:
     # Register the persistent coin-drop Claim button — a pouch posted before a
     # restart stays claimable after it.
     bot.add_dynamic_items(DropClaimButton)
+
+    # Register persistent promotion-review buttons (return/sleeper Grant + Dismiss,
+    # and the Level 5 card's Grant) so a card posted before a restart stays
+    # actionable after it.
+    bot.add_dynamic_items(
+        PromoReviewGrantButton, PromoReviewDismissButton, PromoReviewLevel5Button
+    )
 
     # Register persistent Rules Watch label buttons for unlabeled events
     from bot_modules.rules_watch.alert import register_persistent_views as _rw_register_views

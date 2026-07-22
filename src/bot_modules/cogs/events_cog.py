@@ -32,6 +32,7 @@ from bot_modules.services.greeting_watch_service import (
 )
 from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
+from bot_modules.services import promotion_review_service as promo_review
 from bot_modules.services.message_store import (
     adjust_reaction_count,
     classify_media_kind,
@@ -597,6 +598,17 @@ class EventsCog(commands.Cog):
 
             await asyncio.to_thread(_persist_nonmember_message)
             return
+
+        # A member who lost access (auto-sweep prune, or an inactive/"sleeper"
+        # hold) has come back — post a promotion-review card. is_watched is an
+        # O(1) in-memory filter, so the common (not-watched) case costs nothing;
+        # the DB-truth trigger evaluation + dedup happens inside post_review_card.
+        if promo_review.is_watched(guild_id, message.author.id) and isinstance(
+            message.author, discord.Member
+        ):
+            from bot_modules.services.promotion_review_views import post_review_card
+
+            await post_review_card(self.ctx, message.author, message.channel.id)
 
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
