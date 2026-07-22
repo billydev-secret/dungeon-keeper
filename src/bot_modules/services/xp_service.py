@@ -287,8 +287,13 @@ async def maybe_log_level_5(
         level_5_log_channel_id,
         total_xp,
     )
+    # The Level 5 card doubles as a promotion review, so it carries a Grant
+    # button (adds the configured promotion_review_grant_role_id). Persistent —
+    # registered in __main__ — so it stays actionable across restarts.
+    from bot_modules.services.promotion_review_views import Level5PromotionView
+
     try:
-        await channel.send(embed=embed)
+        await channel.send(embed=embed, view=Level5PromotionView(member.id))
         log.info(
             "Sent level %s announcement for %s to channel %s.",
             settings.role_grant_level,

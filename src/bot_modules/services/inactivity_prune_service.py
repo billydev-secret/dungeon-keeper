@@ -244,14 +244,20 @@ async def run_prune_for_guild(
     if pruned:
         from bot_modules.services.role_grant_audit_service import record_prune_events
 
+        pruned_ids = [m.id for m in pruned]
         with open_db(db_path) as conn:
             record_prune_events(
                 conn,
                 guild_id,
-                [m.id for m in pruned],
+                pruned_ids,
                 role_id,
                 discord.utils.utcnow().timestamp(),
             )
+        # Feed the returned-member watch set so the message hot path can spot
+        # these members the moment they come back and post.
+        from bot_modules.services.promotion_review_service import note_pruned
+
+        note_pruned(db_path, guild_id, pruned_ids)
         log.info(
             "Inactivity prune: removed @%s from %d member(s) in guild %s: %s",
             role.name,

@@ -912,6 +912,11 @@ async def get_config(
                     "level_5_role_id": str(
                         _int_val(conn, "xp_level_5_role_id", guild_id=guild_id)
                     ),
+                    "promotion_review_grant_role_id": str(
+                        _int_val(
+                            conn, "promotion_review_grant_role_id", guild_id=guild_id
+                        )
+                    ),
                     "level_5_log_channel_id": str(
                         _int_val(
                             conn, "xp_level_5_log_channel_id", guild_id=guild_id
@@ -1358,6 +1363,7 @@ async def welcome_preview(
 
 class XpConfigUpdate(BaseModel):
     level_5_role_id: str | None = None
+    promotion_review_grant_role_id: str | None = None
     level_5_log_channel_id: str | None = None
     level_up_log_channel_id: str | None = None
     xp_grant_allowed_user_ids: list[str] | None = None
@@ -1393,6 +1399,13 @@ async def update_xp(
             if body.level_5_role_id is not None:
                 set_config_value(
                     conn, "xp_level_5_role_id", body.level_5_role_id, guild_id
+                )
+            if body.promotion_review_grant_role_id is not None:
+                set_config_value(
+                    conn,
+                    "promotion_review_grant_role_id",
+                    body.promotion_review_grant_role_id,
+                    guild_id,
                 )
             if body.level_5_log_channel_id is not None:
                 set_config_value(

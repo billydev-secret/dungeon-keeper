@@ -243,6 +243,16 @@ def test_update_xp_role_ids(authed_client, fake_ctx):
         assert get_config_value(conn, "xp_level_up_log_channel_id", "0", fake_ctx.guild_id) == "4001"
 
 
+def test_update_xp_promotion_review_grant_role(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/xp", json={
+        "promotion_review_grant_role_id": "5001",
+    })
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "promotion_review_grant_role_id", "0", fake_ctx.guild_id) == "5001"
+
+
 def test_update_xp_excluded_channels(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/xp", json={"xp_excluded_channel_ids": ["7001", "7002"]})
     assert resp.status_code == 200
