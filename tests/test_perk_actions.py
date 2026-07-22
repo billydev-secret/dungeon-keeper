@@ -63,7 +63,8 @@ def _set_desired(db, **values):
 
 
 def _role(
-    rid, *, name="role", color=0, position=1, secondary=None, icon=None, perms=None
+    rid, *, name="role", color=0, position=1, secondary=None, tertiary=None,
+    icon=None, perms=None,
 ):
     r = MagicMock()
     r.id = rid
@@ -71,6 +72,9 @@ def _role(
     r.color = discord.Color(color)
     r.position = position
     r.secondary_color = secondary
+    # Explicit so the reconcile's getattr diff sees a real None, not a
+    # MagicMock auto-child (which would read as "changed" every pass).
+    r.tertiary_color = tertiary
     r.display_icon = icon
     r.permissions = perms if perms is not None else discord.Permissions.none()
     r.edit = AsyncMock()
@@ -162,6 +166,7 @@ async def test_feature_gate_ok_matrix():
     bot = _bot(guild)
     assert await feature_gate_ok(bot, GUILD_ID, "role_icon") is True
     assert await feature_gate_ok(bot, GUILD_ID, "role_gradient") is False
+    assert await feature_gate_ok(bot, GUILD_ID, "role_holographic") is False
     assert await feature_gate_ok(bot, GUILD_ID, "role_color") is True  # un-gated
     # Missing guild → cannot confirm support.
     assert await feature_gate_ok(MagicMock(get_guild=lambda g: None), GUILD_ID, "role_icon") is False
@@ -220,6 +225,78 @@ async def test_apply_gradient_without_feature_falls_back_to_solid(db):
     kwargs = guild.create_role.await_args.kwargs
     assert kwargs["color"] == discord.Color(0x111111)
     assert "secondary_color" not in kwargs
+
+
+# Discord's one accepted (primary, secondary, tertiary) holographic triple.
+_HOLO = (11127295, 16759788, 16761760)
+
+
+@pytest.mark.asyncio
+async def test_apply_creates_holographic_preset(db):
+    # Renting holographic wears Discord's fixed preset — the member's stored
+    # colours are irrelevant; all three preset colours are set on create.
+    _add_rental(db, "role_holographic")
+    _set_desired(db, color=0xABCDEF, color2=0x123456)  # ignored by holographic
+    guild = _guild(member=_member(), features=("ENHANCED_ROLE_COLORS",))
+    guild.create_role.return_value = _role(999)
+
+    await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
+
+    kwargs = guild.create_role.await_args.kwargs
+    p, s, t = _HOLO
+    assert kwargs["color"] == discord.Color(p)
+    assert kwargs["secondary_color"] == discord.Color(s)
+    assert kwargs["tertiary_color"] == discord.Color(t)
+
+
+@pytest.mark.asyncio
+async def test_apply_holographic_supersedes_gradient(db):
+    # Holding both, the shimmer wins — no stale two-colour fade.
+    _add_rental(db, "role_gradient")
+    _add_rental(db, "role_holographic")
+    _set_desired(db, color=0x111111, color2=0x222222)
+    guild = _guild(member=_member(), features=("ENHANCED_ROLE_COLORS",))
+    guild.create_role.return_value = _role(999)
+
+    await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
+
+    kwargs = guild.create_role.await_args.kwargs
+    assert kwargs["tertiary_color"] == discord.Color(_HOLO[2])
+
+
+@pytest.mark.asyncio
+async def test_apply_holographic_without_feature_is_inert(db):
+    # No ENHANCED_ROLE_COLORS ⇒ holographic is dropped; with nothing else
+    # entitled the role projects with the default colour and no extra colours.
+    _add_rental(db, "role_holographic")
+    _set_desired(db, color=0x111111)
+    guild = _guild(member=_member(), features=())
+    guild.create_role.return_value = _role(999)
+
+    await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
+
+    kwargs = guild.create_role.await_args.kwargs
+    assert kwargs["color"] == discord.Color.default()
+    assert "secondary_color" not in kwargs
+    assert "tertiary_color" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_apply_downgrade_from_holographic_clears_tertiary(db):
+    # Holographic lapses to solid colour ⇒ the tertiary/secondary are cleared.
+    _add_rental(db, "role_color")  # only solid colour remains
+    _set_desired(db, color=0x123456, role_id=999)
+    existing = _role(
+        999, name="Ziggy", color=0x123456, position=11,
+        secondary=discord.Color(_HOLO[1]), tertiary=discord.Color(_HOLO[2]),
+    )
+    guild = _guild(roles=[existing], member=_member(roles=[existing]))
+
+    await apply_role_perks(_bot(guild), db, GUILD_ID, USER_ID)
+
+    edits = existing.edit.await_args.kwargs
+    assert edits["secondary_color"] is None
+    assert edits["tertiary_color"] is None
 
 
 @pytest.mark.asyncio

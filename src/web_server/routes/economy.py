@@ -96,6 +96,7 @@ class EconomyConfigUpdate(BaseModel):
     price_role_name: int | None = Field(default=None, ge=0)
     price_role_icon: int | None = Field(default=None, ge=0)
     price_role_gradient: int | None = Field(default=None, ge=0)
+    price_role_holographic: int | None = Field(default=None, ge=0)
     price_voice_style: int | None = Field(default=None, ge=0)
     price_emoji: int | None = Field(default=None, ge=0)
     price_emoji_animated: int | None = Field(default=None, ge=0)

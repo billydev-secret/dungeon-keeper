@@ -118,3 +118,12 @@ def test_color_mode_gift_color_kind_retired():
 def test_color_mode_gradient_supersedes_solid():
     assert effective_color_mode({"role_gradient", "role_color"}) == "gradient"
     assert effective_color_mode({"role_gradient"}) == "gradient"
+
+
+def test_color_mode_holographic_tops_everything():
+    assert effective_color_mode({"role_holographic"}) == "holographic"
+    # Holographic beats gradient and solid when a member holds several.
+    assert (
+        effective_color_mode({"role_holographic", "role_gradient", "role_color"})
+        == "holographic"
+    )

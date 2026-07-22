@@ -11,6 +11,9 @@ const PRICE_FIELDS = [
     hint: "Flat price when a member uploads their own icon. Curated catalog icons below are priced individually.",
   }],
   ["price_role_gradient", "Role gradient", {}],
+  ["price_role_holographic", "Role holographic", {
+    hint: "Discord's fixed holographic shimmer preset — a distinct, pricier tier than the two-colour gradient. Members pick nothing; renting it is the whole thing. Needs the server's enhanced role colours feature to render.",
+  }],
   ["price_voice_style", "Voice style", {
     hint: "Weekly lease for Voice Master rename + user limit. 0 (the default) keeps those controls free for everyone — setting a price is the launch switch, so announce before flipping it.",
   }],

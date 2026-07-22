@@ -133,6 +133,11 @@ class EconSettings:
     price_role_name: int = 35
     price_role_icon: int = 75
     price_role_gradient: int = 120
+    # Discord's holographic role preset — a fixed three-colour shimmer set via
+    # `tertiary_colour`, not the member-picked two-colour gradient. Priced above
+    # the gradient as the top cosmetic tier; like the gradient it needs the
+    # guild's ENHANCED_ROLE_COLORS feature to actually render.
+    price_role_holographic: int = 300
     # Voice-style lease (sinks round 3, stage 3): Voice Master rename + user
     # limit become leased while this is > 0 AND the economy is enabled. The
     # 0 default is the dark launch — controls stay free until an admin prices

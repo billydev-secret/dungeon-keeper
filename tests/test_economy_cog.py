@@ -909,7 +909,8 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     interaction = _interaction(_member(member_id=500))
 
     async def _gate(bot, guild_id, perk):
-        return perk not in ("role_gradient", "role_icon")
+        # Enhanced-role-colours off ⇒ both gradient and holographic gated.
+        return perk not in ("role_gradient", "role_holographic", "role_icon")
 
     with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(side_effect=_gate)):
         await _shop(cog, interaction)
@@ -919,12 +920,12 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
 
     view = kwargs["view"]
     assert isinstance(view, _ShopView)
-    # Gradient + icon buttons disabled; color + name enabled.
+    # Gradient + holographic + icon buttons disabled; color + name enabled.
     buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
     disabled = {
         str(b.custom_id).split(":")[1] for b in buttons if b.disabled
     }
-    assert disabled == {"role_gradient", "role_icon"}
+    assert disabled == {"role_gradient", "role_holographic", "role_icon"}
     blob = " ".join(f.value for f in kwargs["embed"].fields)
     assert "needs a server feature" in blob
 
@@ -951,9 +952,9 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
         for line in value.splitlines()
         if line.startswith("`")
     ]
-    # Four self-perk rows — the "For a friend" tier is prose since gifting
+    # Five self-perk rows — the "For a friend" tier is prose since gifting
     # generalized to every perk (no single gift price to tabulate).
-    assert len(rows) == 4
+    assert len(rows) == 5
     # One `label  blurb` cell per row (quest-board shape), all the same
     # width so columns align across tier headings — and narrow enough that
     # the price doesn't wrap onto its own line on a phone-width embed.
@@ -1031,7 +1032,8 @@ async def test_shop_buttons_carry_no_price(ctx, db):
 
 
 @pytest.mark.parametrize(
-    "perk", ["role_color", "role_name", "role_gradient", "role_icon"]
+    "perk",
+    ["role_color", "role_name", "role_gradient", "role_holographic", "role_icon"],
 )
 @pytest.mark.asyncio
 async def test_shop_rent_success_each_perk(ctx, db, perk):
@@ -1073,6 +1075,27 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     # The rented row is ticked in the table.
     color_row = _shop_row(kwargs["embed"], "Color")
     assert "✅" in color_row
+
+
+@pytest.mark.asyncio
+async def test_shop_rented_holographic_shows_active_not_customise(ctx, db):
+    """Holographic has no member styling, so its rented row is an inert chip."""
+    _enable(db)
+    _add_rental(db, "role_holographic")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
+        await _shop(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
+    by_id = {str(b.custom_id): b for b in buttons}
+    # Shown as active + disabled — no customise modal, no rent button.
+    assert "econ_shop_active:role_holographic" in by_id
+    assert by_id["econ_shop_active:role_holographic"].disabled is True
+    assert "econ_shop_cfg:role_holographic" not in by_id
+    assert "econ_shop_rent:role_holographic" not in by_id
 
 
 @pytest.mark.asyncio
@@ -1225,6 +1248,7 @@ async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
         "econ_shop_panel:role_color",
         "econ_shop_panel:role_name",
         "econ_shop_panel:role_gradient",
+        "econ_shop_panel:role_holographic",
         "econ_shop_panel:role_icon",
         "econ_shop_panel:streak_shield",
     }

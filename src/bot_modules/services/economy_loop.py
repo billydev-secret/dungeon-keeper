@@ -142,10 +142,11 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.services.message_store import get_known_users_bulk
 
-# The two perks whose billing is gated on a guild feature (role icon / gradient
-# role colors). Only these are swept each tick — the sweep asks Discord whether
-# the feature still exists, so it is kept to the perks that can actually lose it.
-_FEATURE_GATED_PERKS = ("role_icon", "role_gradient")
+# The perks whose billing is gated on a guild feature (role icon / gradient +
+# holographic role colors). Only these are swept each tick — the sweep asks
+# Discord whether the feature still exists, so it is kept to the perks that can
+# actually lose it.
+_FEATURE_GATED_PERKS = ("role_icon", "role_gradient", "role_holographic")
 
 # Grace-window length in whole hours, for the "payment failed" DM copy.
 _GRACE_HOURS = int(GRACE_SECONDS // 3600)

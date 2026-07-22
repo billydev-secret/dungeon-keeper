@@ -144,15 +144,20 @@ _PERK_LABELS = {
     "role_name": "Custom Role Name",
     "role_icon": "Role Icon",
     "role_gradient": "Gradient Role",
+    "role_holographic": "Holographic Role",
     "voice_style": "Voice Style",
 }
 # The role perks a member rents for themselves, in shop display order. Every
 # giftable perk (these + the voice-style lease) is gifted as the same perk
 # kind rented with the friend as beneficiary (gift_color retired in 091).
-_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
+_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_holographic", "role_icon")
+# Self-perks with no member-side customisation: renting IS the whole thing
+# (holographic is a fixed Discord preset, not a colour the member picks), so
+# these skip the "Set …" modal and post-rent button.
+_NO_CONFIG_PERKS = ("role_holographic",)
 _GIFTABLE_PERKS = (*_SELF_PERKS, "voice_style")
 # Feature-gated perks and the friendly reason shown when the gate is closed.
-_FEATURE_GATED = ("role_gradient", "role_icon")
+_FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon")
 
 # Shop-table furniture. The full `_PERK_LABELS` names are too wide for an
 # aligned two-cell row, so the shop uses a short cell label plus a one-line
@@ -162,6 +167,7 @@ _PERK_SHORT = {
     "role_color": "Color",
     "role_name": "Name",
     "role_gradient": "Gradient",
+    "role_holographic": "Holo",
     "role_icon": "Icon",
     "voice_style": "Voice",
 }
@@ -172,6 +178,7 @@ _PERK_BLURBS = {
     "role_color": "any solid color",
     "role_name": "nickname + role",
     "role_gradient": "two-color fade",
+    "role_holographic": "shimmer preset",
     "role_icon": "badge by name",
     "voice_style": "your voice room",
 }
@@ -179,6 +186,7 @@ _PERK_EMOJI = {
     "role_color": "🎨",
     "role_name": "✨",
     "role_gradient": "🌈",
+    "role_holographic": "🪩",
     "role_icon": "🖼️",
     "voice_style": "🎙️",
 }
@@ -188,7 +196,7 @@ _PERK_EMOJI = {
 # prices are guild-configurable and can reorder.
 _PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Essentials", ("role_name", "role_color")),
-    ("Signature", ("role_gradient", "role_icon")),
+    ("Signature", ("role_gradient", "role_icon", "role_holographic")),
 )
 
 
@@ -772,7 +780,17 @@ class _ShopView(discord.ui.View):
                 button.callback = self._make_icons_callback()
                 self.add_item(button)
                 continue
-            if perk in owned:
+            if perk in owned and perk in _NO_CONFIG_PERKS:
+                # Nothing to customise (a fixed preset) — show it as active,
+                # like the voice lease's "Leased" chip, rather than a dead
+                # "Set …" button that opens an empty modal.
+                button = discord.ui.Button(
+                    label=f"{_PERK_EMOJI[perk]} Active",
+                    style=discord.ButtonStyle.success,
+                    disabled=True,
+                    custom_id=f"econ_shop_active:{perk}",
+                )
+            elif perk in owned:
                 button = discord.ui.Button(
                     label=_CUSTOMISE_LABELS[perk],
                     style=discord.ButtonStyle.success,
@@ -944,6 +962,15 @@ async def _rent_perk_flow(
         )
         return
     await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
+    if perk in _NO_CONFIG_PERKS:
+        # A fixed preset — there's nothing to set, so it's live the moment the
+        # role projects. No customise button (an empty modal would confuse).
+        await interaction.response.send_message(
+            f"Rented **{_PERK_LABELS[perk]}**! Your personal role now wears "
+            "Discord's holographic shimmer — no setup needed.",
+            ephemeral=True,
+        )
+        return
     note = (
         " (For an image icon, upload one with `/bank role icon`.)"
         if perk == "role_icon"
@@ -2117,11 +2144,12 @@ class EconomyCog(commands.Cog):
             if perk == "role_icon"
             else ""
         )
-        gift_hint = (
-            "Renaming and sizing your voice channel are unlocked."
-            if perk == "voice_style"
-            else "Set it up from /bank shop."
-        )
+        if perk == "voice_style":
+            gift_hint = "Renaming and sizing your voice channel are unlocked."
+        elif perk in _NO_CONFIG_PERKS:
+            gift_hint = "It's already live on your personal role — no setup needed."
+        else:
+            gift_hint = "Set it up from /bank shop."
         await notify_member(
             self.bot, self.ctx.db_path, guild.id, member.id,
             content=(

@@ -801,7 +801,8 @@ takes effect on the next cycle, never retroactively.
 | Custom role color (solid) | 50 | `guild.create_role(color=…)` |
 | Custom role name | 35 | 32-char, filtered via the voice-master name-blocklist matcher (shared table). Setting it renames the member's personal role **and** sets their server nickname to match (`member.edit(nick=…)`, best-effort — a Forbidden/HTTP failure still keeps the role rename and tells them why via `_custom_name_confirmation`). When the perk lapses, `revoke_role_perks` reverts the nick too (`should_revert_nick` — only if the nick still equals the perk's name, so a game name-penalty stake set since is never clobbered) |
 | Role icon | 75 | Requires `ROLE_ICONS` in `guild.features`; upload utils exist in `booster_roles.py` |
-| Gradient/holographic | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
+| Gradient (member-picked two-color fade) | 120 | **Capability confirmed**: `booster_roles.py` already sets `secondary_color` on create/edit; requires Enhanced Role Styles guild feature; supersedes solid |
+| Holographic (Discord's fixed shimmer preset) | 300 | `role_holographic` perk (migration 107): the projector sets the fixed `(primary, secondary, tertiary)` triple Discord accepts for `tertiary_color`; requires the same Enhanced Role Styles feature; supersedes gradient; member picks nothing (no customise modal) |
 | Private text room | 200 | §8 (Stage 6) |
 | Private voice room | 200 | §8 (Stage 6) |
 | Gift (any perk above) | base perk price | Payer funds a friend's perk — same kind, `beneficiary_id` = friend; billed to the payer at the perk's current price |
@@ -876,13 +877,15 @@ the member owns and gift rentals where they are the beneficiary.
     table in the quest-board's house style (one `label  blurb` cell, then the
     price — blurbs kept short enough that a row fits a phone-width line), grouped
     into price tiers — **Essentials** (name, color), **Signature** (gradient,
-    icon), **For a friend** (a prose row — gifting has no single price to
-    tabulate) — sorted by the guild's configured price
+    icon, holographic), **For a friend** (a prose row — gifting has no single
+    price to tabulate) — sorted by the guild's configured price
     inside each tier, with the viewer's balance in the description and the
     renewal fine print in the footer. Unrented rows carry an emoji-led **Rent**
     button (no price in the label), rented rows a green **customise** button
     opening the matching modal (name / color hex / gradient hexes /
-    server-emoji icon), with icon/gradient rows
+    server-emoji icon) — except holographic, a fixed preset with nothing to
+    pick, whose rented row shows an inert **Active** chip instead — with
+    icon/gradient/holographic rows
     reflecting the server's role features and rented rows marked ✅. A fresh rental's
     confirmation carries the same customise button. Entitlements are
     beneficiary-based, so a *gifted* perk surfaces exactly like a self-rented
