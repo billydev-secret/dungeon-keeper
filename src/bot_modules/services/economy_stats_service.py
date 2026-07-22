@@ -10,6 +10,16 @@ This is an admin/manager endpoint, not a hot path — clarity over
 micro-optimization — but member rows are built from a handful of ``GROUP BY``
 aggregates, never a per-member query loop.
 
+**Scope: members active in the last 30 days.** Every figure here is restricted
+to members whose ``member_activity.last_message_at`` falls inside the trailing
+30-day window (the same population :func:`active_member_ids` reports as
+``active_members``). A member who has gone quiet or left the guild keeps a wallet
+and a ledger history, but counting them would let a departed whale inflate
+supply and Gini, pad the member table with dead accounts, and distort the flow /
+income / spender boards — so they are filtered out everywhere, not just from the
+engagement counts. The active set is materialized once into a temp table
+(:func:`_load_active_members`) and every per-user query joins to it.
+
 Windows are trailing epoch spans from ``now`` (``now - 7·86400`` / ``now -
 30·86400``); no timezone math is needed for a trailing window. Money definitions
 match the weekly rollup: mint / income exclude ``transfer_in``, burn excludes
@@ -36,6 +46,36 @@ _DAY = 86400.0
 # weeks is enough to see a trend without the chart turning into a hairline forest.
 _INCOME_WEEKS = 8
 
+# Restricts a per-user query to the 30-day-active population. Appended inside a
+# WHERE that already keys on ``user_id`` (see :func:`_load_active_members` for
+# the temp table this joins to). No bind params, so it composes with the
+# positional placeholders the queries already carry.
+_ACTIVE = " AND user_id IN (SELECT user_id FROM _stats_active_members)"
+
+
+def _load_active_members(
+    conn: sqlite3.Connection, guild_id: int
+) -> frozenset[int]:
+    """Materialize the 30-day-active member set into a temp table + return it.
+
+    Every figure on the page is scoped to this population (module docstring).
+    Using a temp table lets each query ``JOIN``/``IN`` against it rather than
+    binding an unbounded ``IN (?, ?, …)`` list, and keeps the active set as the
+    single source of truth the ``active_members`` count already reports. The
+    returned set is for the handful of Python-side filters (transfer pairs)
+    where the recipient id lives in JSON rather than a column.
+    """
+    ids = active_member_ids(conn, guild_id, days=30)
+    conn.execute("DROP TABLE IF EXISTS _stats_active_members")
+    conn.execute(
+        "CREATE TEMP TABLE _stats_active_members (user_id INTEGER PRIMARY KEY)"
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO _stats_active_members (user_id) VALUES (?)",
+        [(uid,) for uid in ids],
+    )
+    return frozenset(ids)
+
 
 def compute_stats(
     conn: sqlite3.Connection,
@@ -53,6 +93,9 @@ def compute_stats(
     cut7 = now - 7 * _DAY
     cut30 = now - 30 * _DAY
 
+    # Scope every figure below to the 30-day-active population (module docstring).
+    active = _load_active_members(conn, guild_id)
+
     supply = _supply(conn, guild_id)
     positive_balances = _positive_balances(conn, guild_id)
 
@@ -63,7 +106,7 @@ def compute_stats(
         "income_sources": _income_sources(conn, guild_id, now),
         "members": _members(conn, guild_id, cut7, cut30, member_limit),
         "engagement": _engagement(conn, settings, guild_id, cut7, cut30, supply),
-        "transfers_top": _transfers_top(conn, guild_id, cut30),
+        "transfers_top": _transfers_top(conn, guild_id, cut30, active),
         "burn_top": _burn_top(conn, guild_id),
         "affordability": _affordability(conn, settings, guild_id, cut7),
     }
@@ -91,7 +134,7 @@ def _income_sources(conn: sqlite3.Connection, guild_id: int, now: float) -> dict
         "SELECT kind, CAST((? - created_at) / ? AS INTEGER) AS bucket, "
         "SUM(amount) AS s FROM econ_ledger "
         "WHERE guild_id = ? AND amount > 0 AND kind != 'transfer_in' "
-        "AND created_at >= ? GROUP BY bucket, kind",
+        "AND created_at >= ?" + _ACTIVE + " GROUP BY bucket, kind",
         (now, span, guild_id, cut),
     ):
         b = int(r["bucket"])
@@ -121,14 +164,16 @@ def _burn_top(
     """Lifetime biggest spenders. Deliberately all-time, not a trailing window.
 
     The point of showing this is to make spending itself a status worth
-    chasing, and a 7-day window would erase that standing every week.
+    chasing, and a 7-day window would erase that standing every week. The window
+    on *time* is still lifetime; the page-wide 30-day-active scope only drops
+    members who have since gone quiet or left (module docstring).
     """
     by_user: dict[int, dict[str, int]] = {}
     placeholders = ", ".join("?" for _ in stats.BURN_EXCLUDED_KINDS)
     for r in conn.execute(
         "SELECT user_id, kind, SUM(-amount) AS s FROM econ_ledger "
-        f"WHERE guild_id = ? AND amount < 0 AND kind NOT IN ({placeholders}) "
-        "GROUP BY user_id, kind",
+        f"WHERE guild_id = ? AND amount < 0 AND kind NOT IN ({placeholders})"
+        + _ACTIVE + " GROUP BY user_id, kind",
         (guild_id, *stats.BURN_EXCLUDED_KINDS),
     ):
         by_user.setdefault(int(r["user_id"]), {})[str(r["kind"])] = int(r["s"])
@@ -140,7 +185,8 @@ def _burn_top(
 
 def _positive_balances(conn: sqlite3.Connection, guild_id: int) -> list[int]:
     rows = conn.execute(
-        "SELECT balance FROM econ_wallets WHERE guild_id = ? AND balance > 0",
+        "SELECT balance FROM econ_wallets "
+        "WHERE guild_id = ? AND balance > 0" + _ACTIVE,
         (guild_id,),
     ).fetchall()
     return [int(r["balance"]) for r in rows]
@@ -149,7 +195,8 @@ def _positive_balances(conn: sqlite3.Connection, guild_id: int) -> list[int]:
 def _supply(conn: sqlite3.Connection, guild_id: int) -> dict:
     total = int(
         conn.execute(
-            "SELECT COALESCE(SUM(balance), 0) FROM econ_wallets WHERE guild_id = ?",
+            "SELECT COALESCE(SUM(balance), 0) FROM econ_wallets "
+            "WHERE guild_id = ?" + _ACTIVE,
             (guild_id,),
         ).fetchone()[0]
     )
@@ -173,7 +220,7 @@ def _flow(conn: sqlite3.Connection, guild_id: int, cut7: float) -> dict:
         conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM econ_ledger "
             "WHERE guild_id = ? AND created_at >= ? "
-            "AND amount > 0 AND kind != 'transfer_in'",
+            "AND amount > 0 AND kind != 'transfer_in'" + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
@@ -181,21 +228,23 @@ def _flow(conn: sqlite3.Connection, guild_id: int, cut7: float) -> dict:
         conn.execute(
             "SELECT COALESCE(SUM(-amount), 0) FROM econ_ledger "
             "WHERE guild_id = ? AND created_at >= ? "
-            "AND amount < 0 AND kind != 'transfer_out'",
+            "AND amount < 0 AND kind != 'transfer_out'" + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
     transfer_volume = int(
         conn.execute(
             "SELECT COALESCE(SUM(-amount), 0) FROM econ_ledger "
-            "WHERE guild_id = ? AND created_at >= ? AND kind = 'transfer_out'",
+            "WHERE guild_id = ? AND created_at >= ? AND kind = 'transfer_out'"
+            + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
     grants = int(
         conn.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM econ_ledger "
-            "WHERE guild_id = ? AND created_at >= ? AND kind = 'grant' AND amount > 0",
+            "WHERE guild_id = ? AND created_at >= ? AND kind = 'grant' "
+            "AND amount > 0" + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
@@ -219,10 +268,12 @@ def _members(
     member_limit: int,
 ) -> list[dict]:
     limit = min(max(member_limit, 1), 500)
+    # Only the 30-day-active top holders make the table; the windowed aggregates
+    # below are read solely for these ids, so filtering here scopes them too.
     top = conn.execute(
         "SELECT user_id, balance FROM econ_wallets "
-        "WHERE guild_id = ? AND balance > 0 "
-        "ORDER BY balance DESC, user_id ASC LIMIT ?",
+        "WHERE guild_id = ? AND balance > 0" + _ACTIVE
+        + " ORDER BY balance DESC, user_id ASC LIMIT ?",
         (guild_id, limit),
     ).fetchall()
     if not top:
@@ -333,7 +384,7 @@ def _engagement(
         conn.execute(
             "SELECT COUNT(DISTINCT user_id) FROM econ_ledger "
             "WHERE guild_id = ? AND created_at >= ? AND amount > 0 "
-            "AND kind != 'transfer_in'",
+            "AND kind != 'transfer_in'" + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
@@ -341,14 +392,14 @@ def _engagement(
         conn.execute(
             "SELECT COUNT(DISTINCT user_id) FROM econ_ledger "
             "WHERE guild_id = ? AND created_at >= ? AND kind = 'rental' "
-            "AND amount < 0",
+            "AND amount < 0" + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
     quest_claims_7d = int(
         conn.execute(
             "SELECT COUNT(*) FROM econ_quest_claims "
-            "WHERE guild_id = ? AND created_at >= ?",
+            "WHERE guild_id = ? AND created_at >= ?" + _ACTIVE,
             (guild_id, cut7),
         ).fetchone()[0]
     )
@@ -358,7 +409,7 @@ def _engagement(
         "SUM(CASE WHEN state = 'denied' THEN 1 ELSE 0 END) AS denied "
         "FROM econ_quest_claims "
         "WHERE guild_id = ? AND resolved_at IS NOT NULL AND resolved_at >= ? "
-        "AND state IN ('paid', 'denied')",
+        "AND state IN ('paid', 'denied')" + _ACTIVE,
         (guild_id, cut30),
     ).fetchone()
     paid = int(resolved["paid"] or 0)
@@ -399,14 +450,24 @@ def _hoard_weeks(
 # ── transfers ──────────────────────────────────────────────────────────
 
 
-def _transfers_top(conn: sqlite3.Connection, guild_id: int, cut30: float) -> list[dict]:
+def _transfers_top(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    cut30: float,
+    active: frozenset[int],
+) -> list[dict]:
     """Top 5 (from, to) pairs by 30d transfer_out magnitude. Recipient comes
     from the ``transfer_out`` meta ``{"to": ...}``; rows with missing/malformed
-    meta are skipped rather than crashing the aggregation."""
+    meta are skipped rather than crashing the aggregation.
+
+    Both parties must be 30-day-active (page-wide scope): the sender is filtered
+    in SQL, and the recipient — whose id lives in the JSON meta, not a column —
+    against ``active`` here."""
     pairs: dict[tuple[int, int], int] = {}
     for r in conn.execute(
         "SELECT user_id, amount, meta FROM econ_ledger "
-        "WHERE guild_id = ? AND created_at >= ? AND kind = 'transfer_out'",
+        "WHERE guild_id = ? AND created_at >= ? AND kind = 'transfer_out'"
+        + _ACTIVE,
         (guild_id, cut30),
     ):
         raw = r["meta"]
@@ -415,6 +476,8 @@ def _transfers_top(conn: sqlite3.Connection, guild_id: int, cut30: float) -> lis
         try:
             to_id = int(json.loads(raw)["to"])
         except (ValueError, TypeError, KeyError):
+            continue
+        if to_id not in active:
             continue
         key = (int(r["user_id"]), to_id)
         pairs[key] = pairs.get(key, 0) + int(-r["amount"])
@@ -436,7 +499,8 @@ def _affordability(
     rows = conn.execute(
         "SELECT user_id, SUM(amount) AS s FROM econ_ledger "
         "WHERE guild_id = ? AND created_at >= ? AND amount > 0 "
-        "AND kind != 'transfer_in' GROUP BY user_id HAVING s > 0",
+        "AND kind != 'transfer_in'" + _ACTIVE
+        + " GROUP BY user_id HAVING s > 0",
         (guild_id, cut7),
     ).fetchall()
     dailies = [float(r["s"]) / 7 for r in rows]

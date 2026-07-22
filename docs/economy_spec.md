@@ -1071,7 +1071,19 @@ the next hourly tick).
 **Statistics page (Economy section).** A live, on-demand tuning surface
 (`GET /api/economy/stats`, gated on `require_economy_manager` — manager
 role or admin; member table capped at 500), complementing the weekly rollup with a
-same-instant read of the ledger. It shows: **supply concentration** — total supply,
+same-instant read of the ledger.
+
+**Every figure is scoped to members active in the last 30 days** — those with a
+`member_activity.last_message_at` inside the trailing 30-day window (the same
+`active_member_ids` population the `active_members` count reports). A member who
+has gone quiet or left the guild still owns a wallet and a ledger history, but
+counting them would let a departed whale inflate supply and Gini, pad the member
+and spender tables with dead accounts, and distort flow / income / spender
+figures — so they are dropped from *every* section, not just the engagement
+counts. Transfer pairs require **both** parties active. The active set is
+materialized once into a temp table and every per-user query joins to it.
+
+It shows: **supply concentration** — total supply,
 holder count, median balance, top-10% share, and Gini, all computed over **positive
 balances only** (inequality of who-holds-what, not the zero-balance long tail); a
 fixed-bucket **balance histogram**; an **income-sources stacked bar** — minted coins
@@ -1095,7 +1107,9 @@ All ratios/divides are guarded (0 or `null` when there is no denominator).
 
 The spenders board is deliberately **all-time, not a trailing window** — its job
 is to make spending a standing status worth chasing, and a 7-day window would
-erase that standing every week. Burn excludes `transfer_out` (sideways: the coins
+erase that standing every week. (The *time* window stays lifetime; only the
+page-wide 30-day-active scope applies, so a member who has since left drops off,
+but an active member's old spend still counts.) Burn excludes `transfer_out` (sideways: the coins
 land in another wallet, so nothing leaves the economy) and `qa_void` (a staff
 clawback is a real removal but not a purchase, and crediting it would rank
 someone top for having had a reward revoked). Shares are computed against the

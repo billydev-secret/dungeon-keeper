@@ -759,6 +759,14 @@ def _seed_stats_wallet(fake_ctx, user_id: int, balance: int) -> None:
             "VALUES (?, ?, 40, 'login', NULL, NULL, ?)",
             (fake_ctx.guild_id, user_id, time.time() - 3600),
         )
+        # The Statistics page is scoped to 30-day-active members, so a wallet
+        # only shows up if its owner has recent activity.
+        conn.execute(
+            "INSERT OR REPLACE INTO member_activity "
+            "(guild_id, user_id, last_channel_id, last_message_id, last_message_at) "
+            "VALUES (?, ?, 0, 0, ?)",
+            (fake_ctx.guild_id, user_id, time.time() - 3600),
+        )
 
 
 def test_stats_shape(authed_client, fake_ctx):

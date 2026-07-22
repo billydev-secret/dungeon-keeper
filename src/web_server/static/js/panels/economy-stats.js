@@ -98,7 +98,7 @@ function render(container, members) {
       <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
         <div>
           <h2>Statistics</h2>
-          <div class="subtitle">Who holds what, and how fast currency flows</div>
+          <div class="subtitle">Who holds what, and how fast currency flows &middot; members active in the last 30 days</div>
         </div>
         <button class="btn" data-refresh>Refresh</button>
       </header>

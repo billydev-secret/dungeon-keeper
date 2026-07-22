@@ -7,6 +7,11 @@ zero-income short-circuit). Service: a seeded guild rolled up end-to-end
 asserting every top-level key — trailing-window edges (an 8-day-old row is in
 30d but not 7d), transfers excluded from mint/burn, top-faucet grouping,
 approval-rate null/value cases, and hoard_weeks with and without a rollup row.
+The page-wide 30-day-active scope has its own section: a holder/earner/spender
+with no ``member_activity`` row is dropped from supply, distribution, the member
+and burn tables, flow/income, spender counts, and transfer pairs (both parties
+must be active). Seeded members carry activity rows so the other tests keep
+counting them.
 """
 
 from __future__ import annotations
@@ -345,6 +350,8 @@ def test_income_sources_shape_and_order(db):
 
 def test_income_sources_buckets_by_group_and_week(db):
     # Two credits in the most recent 7d, one credit ~two weeks back.
+    _activity(db, 1, NOW - 1 * DAY)
+    _activity(db, 2, NOW - 1 * DAY)
     _ledger(db, 1, 50, "login", NOW - 1 * DAY)  # this week → logins
     _ledger(db, 1, 20, "quest", NOW - 2 * DAY)  # this week → quests
     _ledger(db, 2, 15, "grant", NOW - 10 * DAY, actor=99)  # 2 weeks back → grants
@@ -365,6 +372,7 @@ def test_income_sources_buckets_by_group_and_week(db):
 
 def test_income_sources_ignores_out_of_window(db):
     # A credit older than 8 weeks must not appear in any bucket.
+    _activity(db, 1, NOW - 1 * DAY)
     _ledger(db, 1, 500, "login", NOW - 9 * 7 * DAY)
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
@@ -404,6 +412,7 @@ def test_members_sorted_by_balance_and_limited(db):
 
 def test_member_top_faucet_none_without_income(db):
     _wallet(db, 50, 500)  # a holder with no ledger income at all
+    _activity(db, 50, NOW - 2 * DAY)  # active, so they make the table
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
     m = next(m for m in out["members"] if int(m["user_id"]) == 50)
@@ -473,6 +482,7 @@ def test_transfers_top_pairs(db):
 
 def test_transfers_top_skips_malformed_meta(db):
     d1 = NOW - DAY
+    _activity(db, 1, NOW - 1 * DAY)  # active, so the row reaches the meta parse
     _ledger(db, 1, -10, "transfer_out", d1, meta=None)  # no meta → skipped
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
@@ -546,8 +556,10 @@ def test_burn_top_excludes_transfers_and_clawbacks(db):
 
 def test_burn_top_is_lifetime_not_a_trailing_window(db):
     # A rental paid 400 days ago still counts — the board is standing, not
-    # recent activity, so an old spender doesn't drop off it.
+    # recent activity, so an old spender doesn't drop off it (as long as they're
+    # still a 30-day-active member).
     _wallet(db, 1, 10)
+    _activity(db, 1, NOW - 1 * DAY)
     _ledger(db, 1, -75, "rental", NOW - 400 * DAY)
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
@@ -582,9 +594,88 @@ def test_affordability_from_median_daily(db):
 
 def test_affordability_empty_without_earners(db):
     _wallet(db, 1, 100)  # holder, no income
+    _activity(db, 1, NOW - 2 * DAY)
     with open_db(db) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
     assert out["affordability"] == {}
+
+
+# ── service: 30-day-active scope (the page-wide filter) ────────────────
+#
+# Every figure is restricted to members with a member_activity row inside the
+# trailing 30 days. _seed activates members 1/2/3; _inactive_whale adds a holder
+# with a big wallet, income, a transfer, and a spend but NO activity row, so it
+# must vanish from every section.
+
+
+def _inactive_whale(db):
+    _wallet(db, 8, 5000)
+    _ledger(db, 8, 200, "login", NOW - DAY)  # income
+    _ledger(db, 8, -40, "rental", NOW - DAY)  # spend
+    _ledger(db, 8, -300, "transfer_out", NOW - DAY, meta={"to": 1})  # → active m1
+    _ledger(db, 1, 300, "transfer_in", NOW - DAY, meta={"from": 8})
+
+
+def test_supply_and_distribution_exclude_inactive_holder(db):
+    _seed(db)  # active: 1, 2, 3
+    _inactive_whale(db)  # user 8: no activity row
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    # The 5000-coin whale adds to neither supply, holder count, nor Gini.
+    assert out["supply"]["total"] == 1110
+    assert out["supply"]["holders"] == 3
+    assert sum(b["count"] for b in out["distribution"]) == 3
+
+
+def test_members_and_burn_exclude_inactive_holder(db):
+    _seed(db)
+    _inactive_whale(db)
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    assert all(int(m["user_id"]) != 8 for m in out["members"])
+    assert all(b["user_id"] != "8" for b in out["burn_top"])
+
+
+def test_flow_and_income_exclude_inactive_earner(db):
+    _seed(db)
+    _inactive_whale(db)
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    # Seed 7d mint is 130; the whale's 200-coin login must not be added.
+    assert out["flow_7d"]["minted"] == 130
+    newest = out["income_sources"]["buckets"][-1]
+    assert newest["totals"]["logins"] == 50  # seed login only, not +200
+
+
+def test_engagement_spenders_exclude_inactive(db):
+    _seed(db)  # member 2 is the only active spender (rental -18)
+    _inactive_whale(db)  # user 8 also spends on a rental but is inactive
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    assert out["engagement"]["spenders_7d"] == 1  # member 2 only, not the whale
+
+
+def test_transfers_top_requires_both_parties_active(db):
+    _seed(db)
+    _inactive_whale(db)  # user 8 → active member 1 for 300, but 8 is inactive
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    # The inactive sender's pair is dropped even though its recipient is active;
+    # only the active-to-active seed pair survives.
+    pairs = [(int(t["from_id"]), int(t["to_id"])) for t in out["transfers_top"]]
+    assert pairs == [(1, 2)]
+
+
+def test_transfers_top_drops_inactive_recipient(db):
+    _seed(db)
+    # An active sender (member 1) tips member 9, who has no activity row.
+    _ledger(db, 1, -60, "transfer_out", NOW - DAY, meta={"to": 9})
+    _ledger(db, 9, 60, "transfer_in", NOW - DAY, meta={"from": 1})
+    with open_db(db) as conn:
+        out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
+    pairs = {(int(t["from_id"]), int(t["to_id"])) for t in out["transfers_top"]}
+    assert (1, 9) not in pairs  # recipient inactive → pair excluded
+    assert (1, 2) in pairs  # the active-to-active seed pair remains
 
 
 # ── live "happening now" payload ──────────────────────────────────────
