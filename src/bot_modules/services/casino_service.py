@@ -60,8 +60,10 @@ class CasinoSettings:
     roulette_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
-    # Bot bookkeeping (the hub panel message) — not dashboard-editable.
+    # Bot bookkeeping (the hub panel message + where it lives, so a channel
+    # move can clean up the old panel) — not dashboard-editable.
     panel_message_id: int = 0
+    panel_channel_id: int = 0
 
 
 DEFAULT_CASINO_SETTINGS = CasinoSettings()
