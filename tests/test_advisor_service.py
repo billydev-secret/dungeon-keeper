@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
-from anthropic.types import TextBlock
+from anthropic.types import TextBlock, ToolUseBlock
 
 from bot_modules.services import advisor_service as adv
 
@@ -260,3 +260,129 @@ async def test_answer_api_failure_is_graceful(monkeypatch):
     res = await adv.answer_advisor("hello?")
     assert res.ok is False
     assert res.answer == adv._ERROR_MSG
+
+
+# ── config tools ────────────────────────────────────────────────────────────
+
+
+def _resp(*blocks, stop_reason="end_turn"):
+    resp = MagicMock()
+    resp.content = list(blocks)
+    resp.stop_reason = stop_reason
+    return resp
+
+
+def _tool_block(name, tool_input, bid="tu1"):
+    return ToolUseBlock(type="tool_use", id=bid, name=name, input=tool_input)
+
+
+def _mock_client_seq(monkeypatch, responses):
+    client = MagicMock()
+    client.messages.create = AsyncMock(side_effect=responses)
+    monkeypatch.setattr(adv, "get_client", lambda: client)
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    return client
+
+
+def test_build_tools_read_only_vs_write():
+    ro = adv.AdvisorTools(feature_keys=["general", "economy"], fetch_settings=lambda f: "")
+    names = [t["name"] for t in adv.build_tools(ro)]
+    assert names == ["get_server_settings"]
+    assert adv.build_tools(ro)[0]["input_schema"]["properties"]["feature"]["enum"] == [
+        "general", "economy",
+    ]
+    rw = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "", propose_change=lambda k, v: ""
+    )
+    assert [t["name"] for t in adv.build_tools(rw)] == [
+        "get_server_settings", "propose_config_change",
+    ]
+
+
+async def test_answer_without_tools_never_passes_tools(monkeypatch):
+    client = _mock_client(monkeypatch, content=[TextBlock(type="text", text="hi")])
+    await adv.answer_advisor("q")
+    assert "tools" not in client.messages.create.call_args.kwargs
+    assert client.messages.create.call_count == 1
+
+
+async def test_tool_loop_fetches_settings_then_answers(monkeypatch):
+    client = _mock_client_seq(monkeypatch, [
+        _resp(
+            TextBlock(type="text", text="Let me check."),
+            _tool_block("get_server_settings", {"feature": "economy"}),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="Daily reward is 100.")),
+    ])
+    fetched = []
+
+    def fetch(feature):
+        fetched.append(feature)
+        return "[Economy]\ndaily_reward = 100"
+
+    tools = adv.AdvisorTools(feature_keys=["general", "economy"], fetch_settings=fetch)
+    res = await adv.answer_advisor("what's the daily reward?", tools=tools)
+    assert res.ok is True
+    assert res.answer == "Daily reward is 100."
+    assert fetched == ["economy"]
+    assert client.messages.create.call_count == 2
+    # Second call carries the assistant tool_use turn + our tool_result.
+    msgs = client.messages.create.call_args.kwargs["messages"]
+    assert msgs[-2]["role"] == "assistant"
+    tr = msgs[-1]["content"][0]
+    assert tr["type"] == "tool_result"
+    assert tr["tool_use_id"] == "tu1"
+    assert "daily_reward = 100" in tr["content"]
+
+
+async def test_tool_loop_propose_and_handler_error(monkeypatch):
+    _mock_client_seq(monkeypatch, [
+        _resp(
+            _tool_block("propose_config_change", {"key": "welcome_channel_id", "value": "#hi"}),
+            stop_reason="tool_use",
+        ),
+        _resp(
+            _tool_block("get_server_settings", {"feature": "xp"}, bid="tu2"),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="done")),
+    ])
+    proposed = []
+
+    def boom(feature):
+        raise RuntimeError("db exploded")
+
+    tools = adv.AdvisorTools(
+        feature_keys=["xp"],
+        fetch_settings=boom,
+        propose_change=lambda k, v: proposed.append((k, v)) or "Queued.",
+    )
+    res = await adv.answer_advisor("set the welcome channel", tools=tools)
+    assert res.ok is True
+    assert proposed == [("welcome_channel_id", "#hi")]
+    # The failing fetch became readable text, not an exception.
+    assert res.answer == "done"
+
+
+async def test_tool_loop_exhaustion_forces_text_on_last_round(monkeypatch):
+    tool_resp = _resp(
+        _tool_block("get_server_settings", {"feature": "general"}),
+        stop_reason="tool_use",
+    )
+    client = _mock_client_seq(monkeypatch, [tool_resp] * adv.MAX_TOOL_ROUNDS)
+    tools = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "x")
+    res = await adv.answer_advisor("loop forever", tools=tools)
+    assert client.messages.create.call_count == adv.MAX_TOOL_ROUNDS
+    last = client.messages.create.call_args.kwargs
+    assert last["tool_choice"] == {"type": "none"}
+    # Model misbehaved to the end → graceful error, not a crash.
+    assert res.ok is False
+    assert res.answer == adv._ERROR_MSG
+
+
+def test_advisor_tools_toggle_defaults_on():
+    conn = _config_conn()
+    assert adv.get_advisor_tools_enabled(conn) is True
+    conn.execute("INSERT INTO config VALUES (0, 'advisor_config_tools', '0')")
+    assert adv.get_advisor_tools_enabled(conn) is False

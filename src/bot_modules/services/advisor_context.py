@@ -215,6 +215,55 @@ _FEATURE_LOADERS: list[tuple[str, Callable]] = [
 ]
 
 
+def _slugify(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+
+
+_FEATURES_BY_SLUG: dict[str, tuple[str, Callable]] = {
+    _slugify(label): (label, getter) for label, getter in _FEATURE_LOADERS
+}
+
+# "general" is the shared config KV table (welcome, moderation, spoiler, …).
+FEATURE_KEYS: list[str] = ["general", *_FEATURES_BY_SLUG]
+
+can_see_config = _can_see_config  # public alias for surface wiring
+
+
+def fetch_feature_settings(
+    guild, member: discord.Member | None, db_path, feature: str
+) -> str:
+    """One feature's settings on demand — the handler behind Billy-bot's
+    ``get_server_settings`` tool.
+
+    Same formatting, secret filtering, and admin gate as the inline summary,
+    but fetched per question instead of dumped into every prompt. Returns
+    human/model-readable text in every case (errors included) — the tool
+    result goes straight back to the model.
+    """
+    if not _can_see_config(member):
+        return "Not available: only server admins can view server settings."
+    slug = _slugify(feature or "")
+    try:
+        with open_db(db_path) as conn:
+            if slug == "general":
+                sec = _kv_config_section(conn, guild)
+            elif slug in _FEATURES_BY_SLUG:
+                label, getter = _FEATURES_BY_SLUG[slug]
+                sec = _feature_section(guild, label, getter(conn, guild.id, db_path))
+            else:
+                return (
+                    f"Unknown feature '{feature}'. "
+                    f"Available: {', '.join(FEATURE_KEYS)}."
+                )
+    except Exception:
+        log.exception("advisor settings fetch failed: %s / %s", getattr(guild, "id", "?"), slug)
+        return "Couldn't read those settings just now — suggest the dashboard panel instead."
+    return sec or (
+        f"No saved settings for '{slug}' — the feature may be unconfigured. "
+        "Point the admin to its dashboard panel."
+    )
+
+
 def _kv_config_section(conn, guild) -> str:
     """The shared config KV table (welcome, moderation, spoiler, …), secret-filtered."""
     try:
@@ -374,12 +423,18 @@ def build_asker_context(
     guild: discord.Guild,
     viewer: discord.Member | None,
     db_path,
+    *,
+    include_config: bool = True,
 ) -> str:
     """Assemble the live, visibility-scoped server context block for one asker.
 
     ``viewer`` is the asking Member when known; when it's ``None`` (e.g. a
     dashboard user we couldn't resolve to a guild member) we fall back to the
     guild's public (@everyone) visibility.
+
+    ``include_config=False`` skips the inline admin settings dump — used when
+    the caller gives Billy-bot the ``get_server_settings`` tool instead, so
+    settings are fetched on demand rather than paid for on every ask.
     """
     visible = visible_text_channels(guild, viewer)
     visible_ids = {ch.id for ch in visible}
@@ -411,7 +466,8 @@ def build_asker_context(
         with open_db(db_path) as conn:
             docs = list_docs(conn, guild.id)
             anns = list_announcements(conn, guild.id)
-            config_text = build_config_summary(conn, guild, viewer, db_path)
+            if include_config:
+                config_text = build_config_summary(conn, guild, viewer, db_path)
     except Exception:
         log.exception("advisor context DB read failed for guild %s", getattr(guild, "id", "?"))
         docs, anns = [], []

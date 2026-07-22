@@ -44,14 +44,19 @@ async def help_advisor(
     user: AuthenticatedUser = Depends(require_perms(set())),
 ):
     from bot_modules.services.advisor_context import (
+        FEATURE_KEYS,
         build_asker_context,
+        can_see_config,
+        fetch_feature_settings,
         visible_text_channels,
     )
     from bot_modules.services.advisor_service import (
         MODEL,
+        AdvisorTools,
         answer_advisor,
         get_advisor_context_enabled,
         get_advisor_model,
+        get_advisor_tools_enabled,
     )
 
     ctx = get_ctx(request)
@@ -60,23 +65,37 @@ async def help_advisor(
 
     model = MODEL
     guild_context = None
+    tools = None
     channels: dict[str, str] = {}
     if guild is not None:
         with ctx.open_db() as conn:
             model = get_advisor_model(conn, guild_id)
             context_on = get_advisor_context_enabled(conn, guild_id)
+            tools_on = get_advisor_tools_enabled(conn, guild_id)
         if context_on:
             # Resolve the dashboard user to a guild member so the context is
             # scoped to what THEY can see; fall back to public (@everyone) if
             # they aren't a resolvable member.
             member = guild.get_member(user.user_id)
-            guild_context = build_asker_context(guild, member, ctx.db_path)
+            # Admins get on-demand settings lookup instead of the inline dump.
+            # Read-only here: the dashboard edits settings in its own panels,
+            # and the confirm-button flow only exists on the Discord surface.
+            if tools_on and member is not None and can_see_config(member):
+                tools = AdvisorTools(
+                    feature_keys=FEATURE_KEYS,
+                    fetch_settings=lambda f, _m=member: fetch_feature_settings(
+                        guild, _m, ctx.db_path, f
+                    ),
+                )
+            guild_context = build_asker_context(
+                guild, member, ctx.db_path, include_config=tools is None
+            )
             # Only the asker's visible channels — used to turn <#id> mentions in
             # the answer into links, and never a channel they can't see.
             channels = {str(ch.id): ch.name for ch in visible_text_channels(guild, member)}
 
     result = await answer_advisor(
-        body.question, body.history, model=model, guild_context=guild_context
+        body.question, body.history, model=model, guild_context=guild_context, tools=tools
     )
     return {
         "ok": result.ok,

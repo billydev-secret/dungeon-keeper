@@ -373,6 +373,86 @@ def test_build_config_summary_includes_feature_sections_and_isolates_failures(mo
     assert "Broken" not in s  # failing loader dropped silently
 
 
+# ── fetch_feature_settings (the get_server_settings tool handler) ───────────
+
+
+def _patch_settings_db(monkeypatch, conn):
+    @contextlib.contextmanager
+    def fake_open_db(_db_path):
+        yield conn
+
+    monkeypatch.setattr(ac, "open_db", fake_open_db)
+
+
+def test_feature_keys_cover_general_and_loaders():
+    assert "general" in ac.FEATURE_KEYS
+    assert "economy" in ac.FEATURE_KEYS
+    assert "voice_master" in ac.FEATURE_KEYS
+    assert len(ac.FEATURE_KEYS) == len(set(ac.FEATURE_KEYS))
+
+
+def test_fetch_settings_requires_admin(monkeypatch):
+    member = FakeMember(1, perms=FakeGuildPerms())
+    out = ac.fetch_feature_settings(FakeGuild(1, []), member, "db", "general")
+    assert "only server admins" in out
+    out = ac.fetch_feature_settings(FakeGuild(1, []), None, "db", "general")
+    assert "only server admins" in out
+
+
+def test_fetch_settings_general_and_unknown(monkeypatch):
+    conn = _conn_with_config([("welcome_enabled", "1")])
+    _patch_settings_db(monkeypatch, conn)
+    guild = FakeGuild(1, [])
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    out = ac.fetch_feature_settings(guild, admin, "db", "general")
+    assert "welcome_enabled = on" in out
+    out = ac.fetch_feature_settings(guild, admin, "db", "flux_capacitor")
+    assert "Unknown feature" in out
+    assert "general" in out  # lists what IS available
+
+
+def test_fetch_settings_feature_loader_and_empty(monkeypatch):
+    conn = _conn_with_config([])
+    _patch_settings_db(monkeypatch, conn)
+    monkeypatch.setattr(ac, "_FEATURES_BY_SLUG", {
+        "economy": ("Economy", lambda conn, gid, db: FakeEconSettings(0, 0, 250, "gold", True, "x")),
+        "starboard": ("Starboard", lambda conn, gid, db: None),
+    })
+    guild = FakeGuild(1, [])
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    out = ac.fetch_feature_settings(guild, admin, "db", "economy")
+    assert "[Economy]" in out and "daily_reward = 250" in out
+    # Unconfigured feature → readable pointer, not an empty string.
+    out = ac.fetch_feature_settings(guild, admin, "db", "starboard")
+    assert "No saved settings" in out
+
+
+def test_fetch_settings_loader_error_is_readable(monkeypatch):
+    conn = _conn_with_config([])
+    _patch_settings_db(monkeypatch, conn)
+
+    def _boom(conn, gid, db):
+        raise RuntimeError("loader exploded")
+
+    monkeypatch.setattr(ac, "_FEATURES_BY_SLUG", {"economy": ("Economy", _boom)})
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    out = ac.fetch_feature_settings(FakeGuild(1, []), admin, "db", "economy")
+    assert "Couldn't read" in out
+
+
+def test_context_include_config_false_skips_settings(monkeypatch):
+    guild, *_ = _guild_with_mixed_channels()
+    ac._pins.clear()
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(
+        ac, "build_config_summary", lambda conn, g, m, db=None: "CFG: welcome=on"
+    )
+    admin = FakeMember(99, perms=FakeGuildPerms(administrator=True))
+    ctx = ac.build_asker_context(guild, admin, "db", include_config=False)
+    assert "CFG" not in ctx  # tools replace the inline dump
+    assert "administrator" in ctx  # rest of the context still there
+
+
 # ── refresh_guild_pins ──────────────────────────────────────────────────────
 
 
