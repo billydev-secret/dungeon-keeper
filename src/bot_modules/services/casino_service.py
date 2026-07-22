@@ -684,6 +684,7 @@ class BlackjackStep(NamedTuple):
     doubled: bool = False
     outcome: str | None = None  # None = the hand is still live
     payout: int = 0
+    streak: int = 0  # post-settle signed run, for the 🔥/🧊 callout
 
 
 def resolve_blackjack_action(
@@ -721,9 +722,11 @@ def resolve_blackjack_action(
     def _finish(payout: int, outcome: str) -> BlackjackStep:
         if not settle_blackjack_hand(conn, hand_id, payout, outcome, now=now):
             return BlackjackStep(err="That hand is already finished.")
+        stats = member_casino_stats(conn, guild_id, user_id)
         return BlackjackStep(
             player=player, dealer=dealer, stake=stake, doubled=doubled,
             outcome=outcome, payout=payout,
+            streak=int(stats["streak"]) if stats is not None else 0,
         )
 
     if action == "double":
@@ -785,9 +788,11 @@ def stand_idle_blackjack_hand(
     payout, outcome = casino_logic.blackjack_settle(player, dealer, stake)
     if not settle_blackjack_hand(conn, hand_id, payout, outcome, now=now):
         return None
+    stats = member_casino_stats(conn, int(row["guild_id"]), int(row["user_id"]))
     return BlackjackStep(
         player=player, dealer=dealer, stake=stake, doubled=bool(row["doubled"]),
         outcome=outcome, payout=payout,
+        streak=int(stats["streak"]) if stats is not None else 0,
     )
 
 

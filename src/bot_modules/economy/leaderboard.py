@@ -189,6 +189,11 @@ class LeaderboardData:
     raffle_entrants: int = 0
     last_winner_id: int | None = None
     last_winner_week: str = ""
+    # Night at the Tables (casino fancy round): this ISO week's biggest
+    # single win (user_id, amount) and best multiplier (user_id, ×100).
+    # Winners are NAMED — public play is opting in, the raffle rule.
+    casino_biggest: tuple[int, int] | None = None
+    casino_luckiest: tuple[int, int] | None = None
 
 
 def collect_leaderboard_data(
@@ -232,6 +237,22 @@ def collect_leaderboard_data(
         if drow is not None:
             last_winner_id = int(drow["winner_id"])
             last_winner_week = str(drow["iso_week"])
+
+    from bot_modules.services.casino_service import (  # noqa: PLC0415
+        weekly_table_highlights,
+    )
+
+    big_row, lucky_row = weekly_table_highlights(conn, guild_id, this_week)
+    casino_biggest = (
+        (int(big_row["user_id"]), int(big_row["biggest_win"]))
+        if big_row is not None
+        else None
+    )
+    casino_luckiest = (
+        (int(lucky_row["user_id"]), int(lucky_row["biggest_mult_x100"]))
+        if lucky_row is not None
+        else None
+    )
 
     cutoff = now_ts - ROLLING_DAYS * 86400
     earners = [
@@ -398,6 +419,8 @@ def collect_leaderboard_data(
         raffle_entrants=raffle_entrants,
         last_winner_id=last_winner_id,
         last_winner_week=last_winner_week,
+        casino_biggest=casino_biggest,
+        casino_luckiest=casino_luckiest,
     )
 
 
@@ -620,6 +643,23 @@ def build_leaderboard_embed(
     _add_section("📋 Quest board", board)
 
     _add_section("📰 Live feed — today", _feed_lines(data))
+
+    if data.casino_biggest or data.casino_luckiest:
+        table_lines = []
+        if data.casino_biggest:
+            uid, amount = data.casino_biggest
+            table_lines.append(
+                f"💥 Biggest win: **{resolve_name(uid)}** — "
+                f"{emoji} **{amount:,}** in one play"
+            )
+        if data.casino_luckiest:
+            uid, mult_x100 = data.casino_luckiest
+            table_lines.append(
+                f"🍀 Luckiest hit: **{resolve_name(uid)}** — "
+                f"**{mult_x100 / 100:g}×** their bet"
+            )
+        table_lines.append("Resets with the week — the tables are waiting.")
+        _add_section("🎰 Night at the Tables", "\n".join(table_lines))
 
     embed.add_field(
         name="👤 Your Progress",

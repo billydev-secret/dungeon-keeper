@@ -55,6 +55,7 @@ class _HandOutcome(NamedTuple):
     doubled: bool = False
     outcome: str | None = None
     payout: int = 0
+    streak: int = 0
 
 
 class _RoundOpen(NamedTuple):
@@ -423,7 +424,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             return
         await interaction.response.send_message(
             embed=casino_embeds.build_coinflip_embed(
-                econ, interaction.user.id, side, landed, amount, result.payout
+                econ, interaction.user.id, side, landed, amount, result.payout,
+                streak=result.streak,
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -460,9 +462,22 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             embed=casino_embeds.build_slots_embed(
                 econ, interaction.user.id, reels, amount, result.payout,
                 result.label,
+                jackpot_won=result.jackpot_won, streak=result.streak,
             ),
             allowed_mentions=discord.AllowedMentions.none(),
         )
+        if result.jackpot_won and isinstance(
+            interaction.channel, discord.TextChannel
+        ):
+            try:
+                await interaction.channel.send(
+                    embed=casino_embeds.build_jackpot_celebration(
+                        econ, interaction.user.id, result.jackpot_won
+                    ),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                pass
 
     async def send_help(self, interaction: discord.Interaction) -> None:
         guild = interaction.guild
@@ -518,12 +533,15 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 econ = load_econ_settings(conn, guild.id)
                 outcome: str | None = None
                 payout = 0
+                streak = 0
                 if logic.is_natural(player) or logic.is_natural(dealer):
                     payout, outcome = logic.blackjack_settle(player, dealer, amount)
                     svc.settle_blackjack_hand(conn, hand_id, payout, outcome)
+                    stats = svc.member_casino_stats(conn, guild.id, uid)
+                    streak = int(stats["streak"]) if stats is not None else 0
                 return _HandOutcome(
                     econ=econ, hand_id=hand_id, player=player, dealer=dealer,
-                    stake=amount, outcome=outcome, payout=payout,
+                    stake=amount, outcome=outcome, payout=payout, streak=streak,
                 )
 
         try:
@@ -540,7 +558,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         embed = casino_embeds.build_blackjack_embed(
             result.econ, uid, result.player or [], result.dealer or [], amount,
             await self._accent(guild), outcome=result.outcome,
-            payout=result.payout,
+            payout=result.payout, streak=result.streak,
         )
         view = (
             discord.utils.MISSING
@@ -605,6 +623,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             econ, uid, step.player or [], step.dealer or [],
             step.stake, await self._accent(guild),
             doubled=step.doubled, outcome=step.outcome, payout=step.payout,
+            streak=step.streak,
         )
         view = (
             None if step.outcome is not None
@@ -649,6 +668,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             econ, int(row["user_id"]), step.player or [], step.dealer or [],
             step.stake, await self._accent(channel.guild),
             doubled=step.doubled, outcome=step.outcome, payout=step.payout,
+            streak=step.streak,
         )
         embed.set_footer(text="Stood automatically — the dealer waits for no one.")
         try:
