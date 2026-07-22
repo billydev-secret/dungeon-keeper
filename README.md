@@ -265,7 +265,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Role Grants** (configurable allowlist)
 - `/grant role:<key> member:<@member>` — Give a configured community role
-- `/grant_audit role:<key> min_level:<n> [channel]` — (mod) Post the auto-updating grant-audit card (refreshes hourly; delete the message to retire it)
+- `/grant_audit role:<key> min_level:<n> [channel]` — (mod) Post the auto-updating grant-audit card (refreshes hourly, stays at the bottom of the channel; delete the message to retire it)
 - *The full missing-grant audit lives in the web dashboard (Reports → Member Lists → Grant Audit).*
 
 **XP**

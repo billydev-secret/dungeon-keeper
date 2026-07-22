@@ -514,6 +514,9 @@ def build_grant_audit_embed(
         ),
         color=color,
     )
+    # A blank author line gives the title a little breathing room from the top
+    # edge of the embed (a bare title otherwise sits flush against it).
+    embed.set_author(name="​")
 
     waiting_lines = [
         f"**{r['display_name']}** — level {r['level']}"
@@ -562,7 +565,7 @@ def build_grant_audit_embed(
 
     embed.set_footer(
         text=(
-            "Auto-updates hourly · repost with /grant_audit · "
+            "Auto-updates hourly & stays at the bottom · "
             "delete this message to retire the card"
         )
     )
@@ -627,7 +630,11 @@ def guilds_with_card(conn: sqlite3.Connection) -> list[int]:
 async def refresh_grant_audit_card(
     bot: discord.Client, db_path: Path, guild_id: int, *, now_ts: float | None = None
 ) -> None:
-    """In-place refresh of a guild's grant-audit card.
+    """Refresh a guild's grant-audit card, keeping it at the bottom.
+
+    When the card is still the last message in its channel it's edited in
+    place (no unread churn); once anyone has posted since, it's reposted at
+    the bottom and the old copy deleted, with the stored ref repointed.
 
     A deleted card message (404) clears the stored ref so the loop stops
     retrying — deleting the message is how mods retire the card. A missing
@@ -684,21 +691,55 @@ async def refresh_grant_audit_card(
     snap = resolve_grant_audit_buckets(guild, role, gathered, ref.min_level, now)
     accent = await resolve_accent_color(db_path, guild)
     embed = build_grant_audit_embed(str(cfg["label"]), snap, now_ts=now, color=accent)
+
+    def _save(new_message_id: int) -> None:
+        with open_db(db_path) as conn:
+            save_card_ref(
+                conn,
+                guild_id,
+                channel.id,
+                new_message_id,
+                ref.grant_name,
+                ref.min_level,
+            )
+
     try:
         message = await channel.fetch_message(ref.message_id)
-        await message.edit(embed=embed)
     except discord.NotFound:
         await asyncio.to_thread(_clear)
         log.info(
             "Grant audit card: message gone in guild %s — retired the card.",
             guild_id,
         )
+        return
     except discord.HTTPException:
         log.warning("Grant audit card: refresh failed for guild %s.", guild_id)
+        return
+
+    # Keep the card pinned to the bottom of the channel: if it's no longer the
+    # most recent message, repost a fresh copy and retire the old one. When
+    # nothing has been said since, edit in place so we don't churn the channel.
+    if channel.last_message_id == message.id:
+        try:
+            await message.edit(embed=embed)
+        except discord.HTTPException:
+            log.warning("Grant audit card: refresh failed for guild %s.", guild_id)
+        return
+
+    try:
+        fresh = await channel.send(embed=embed)
+    except discord.HTTPException:
+        log.warning("Grant audit card: repost failed for guild %s.", guild_id)
+        return
+    await asyncio.to_thread(_save, fresh.id)
+    try:
+        await message.delete()
+    except discord.HTTPException:
+        pass  # old card already gone / unreachable — the new one is what counts
 
 
 async def grant_audit_card_loop(bot: discord.Client, db_path: Path) -> None:
-    """Hourly in-place refresh of every posted grant-audit card."""
+    """Hourly refresh of every posted grant-audit card (kept at the bottom)."""
 
     await bot.wait_until_ready()
     while not bot.is_closed():

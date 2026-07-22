@@ -44,7 +44,7 @@ The same three buckets also render as a channel embed a mod can pin anywhere: `/
 
 - The card's channel/message ids and grant/min-level parameters are stored per guild in config (`grant_audit_card_*` keys); one card per guild.
 - Re-running the command in the same channel refreshes in place; a different channel moves the card (the stale message is deleted when reachable).
-- An hourly loop (`grant_audit_card_loop`, registered at startup) re-renders every stored card. A 404 on the message (mod deleted it) retires the card by clearing the stored ids; a missing grant config or role does the same.
+- An hourly loop (`grant_audit_card_loop`, registered at startup) re-renders every stored card. To keep the card at the bottom of the channel it edits in place only while the card is still the channel's newest message (`channel.last_message_id`); once anyone has posted since, it reposts a fresh copy at the bottom, deletes the old one, and repoints the stored message id. A 404 on the message (mod deleted it) retires the card by clearing the stored ids; a missing grant config or role does the same.
 - The waiting bucket caps at 15 lines with an "…and N more on the dashboard" overflow; the two stripped buckets show `stripped <t:…:R>` relative timestamps that tick client-side between edits.
 
 ## Behavior
