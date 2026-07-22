@@ -54,6 +54,8 @@ class EconomyConfigUpdate(BaseModel):
     # Where an approved Pin of the Day gets pinned; 0 = the feature is off (it
     # also needs price_pin_of_day > 0). The picker is the on switch.
     pin_channel_id: int | None = Field(default=None, ge=0)
+    # The bounty board channel; 0 = bounties off (the picker is the on switch).
+    bounty_channel_id: int | None = Field(default=None, ge=0)
     manager_role_id: int | None = Field(default=None, ge=0)
     game_role_id: int | None = Field(default=None, ge=0)
     qotd_ping_role_id: int | None = Field(default=None, ge=0)
@@ -128,6 +130,10 @@ class EconomyConfigUpdate(BaseModel):
     qotd_sponsor_expire_days: int | None = Field(default=None, ge=0)
     price_pin_of_day: int | None = Field(default=None, ge=0)
     pin_expire_days: int | None = Field(default=None, ge=0)
+    bounty_min_stake: int | None = Field(default=None, ge=0)
+    bounty_max_open: int | None = Field(default=None, ge=0)
+    bounty_expire_days: int | None = Field(default=None, ge=0)
+    bounty_rake_pct: int | None = Field(default=None, ge=0, le=100)
 
 
 def _stringify_snowflakes(cfg: dict) -> dict:

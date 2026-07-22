@@ -52,6 +52,12 @@ from bot_modules.economy.quest_views import (
     can_manage_economy,
     post_signoff_card,
 )
+from bot_modules.economy.bounty_views import (
+    BountyAwardButton,
+    BountyCancelButton,
+    BountyChipInButton,
+    post_bounty_card,
+)
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
@@ -63,6 +69,12 @@ from bot_modules.economy.sponsor_views import (
     SponsorApproveButton,
     SponsorDenyButton,
     post_review_card,
+)
+from bot_modules.services.economy_bounty_service import (
+    MAX_DESC_LEN,
+    MAX_TITLE_LEN,
+    bounty_enabled,
+    create_bounty,
 )
 from bot_modules.services.economy_pin_service import (
     MAX_PIN_LEN,
@@ -681,6 +693,40 @@ class _PinSubmitModal(discord.ui.Modal, title="Pin a Message"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.cog.do_pin_submit(interaction, str(self.text.value))
+
+
+class _BountyPostModal(discord.ui.Modal, title="Post a Bounty"):
+    """A freeform task plus the poster's opening stake into the pot."""
+
+    b_title: discord.ui.TextInput = discord.ui.TextInput(
+        label="Bounty",
+        max_length=MAX_TITLE_LEN,
+        placeholder="What needs doing? e.g. 'Draw our mascot as a knight'",
+    )
+    description: discord.ui.TextInput = discord.ui.TextInput(
+        label="Details (optional)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=MAX_DESC_LEN,
+        placeholder="Any rules, deadline, or what 'done' looks like.",
+    )
+    stake: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your opening stake",
+        max_length=12,
+        placeholder="Coins you put in to start the pot",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_bounty_post(
+            interaction,
+            str(self.b_title.value),
+            str(self.description.value or ""),
+            str(self.stake.value),
+        )
 
 
 # Which modal customises which perk; a gifted perk uses the same modal as a
@@ -1958,6 +2004,80 @@ class EconomyCog(commands.Cog):
             f"📨 Sent your message to the mods for review — {outcome.price} "
             f"{unit} held. If it's turned down you'll get a full refund; if it's "
             "approved it's pinned for 24 hours.",
+            ephemeral=True,
+        )
+
+    # ── community bounty ─────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="bounty",
+        description="Post a community bounty — a task others can chip coins into.",
+    )
+    async def bounty(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not bounty_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Bounties aren't enabled here.", ephemeral=True
+            )
+            return
+        # A modal must be the first response — the enable check runs before it.
+        await interaction.response.send_modal(_BountyPostModal(self))
+
+    async def do_bounty_post(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        description: str,
+        raw_stake: str,
+    ) -> None:
+        """Open a bounty from the modal: escrow the stake and post the board card."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled or not bounty_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Bounties aren't enabled here.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            stake = int(raw_stake.strip())
+        except ValueError:
+            await interaction.followup.send(
+                "❌ Your stake has to be a whole number of coins.", ephemeral=True
+            )
+            return
+
+        def _create():
+            with self.ctx.open_db() as conn:
+                return create_bounty(
+                    conn, settings, guild.id, member.id,
+                    title=title, description=description, stake=stake,
+                )
+
+        try:
+            outcome = await asyncio.to_thread(_create)
+        except ValueError as exc:
+            await interaction.followup.send(f"❌ {exc}", ephemeral=True)
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_bounty_card(
+            self.bot, self.ctx, guild, settings, accent, outcome.bounty_id
+        )
+        await interaction.followup.send(
+            f"🎯 Bounty posted with {outcome.stake:,} in the pot! Others can chip "
+            "in from its card, and a mod awards it when it's done.",
             ephemeral=True,
         )
 
@@ -4098,6 +4218,9 @@ class EconomyCog(commands.Cog):
             SponsorDenyButton,
             PinApproveButton,
             PinDenyButton,
+            BountyChipInButton,
+            BountyAwardButton,
+            BountyCancelButton,
         )
         # The guide panel's 🔔 toggle and the quest board's "Show my quests"
         # button carry no per-message state, so they are plain static-custom_id

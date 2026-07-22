@@ -155,6 +155,38 @@ function render(container, cfg, channels, roles, members) {
             Leave unset to keep it off.</div>
         </div>
 
+        <div class="section-label">Community Bounty</div>
+        <div class="field">
+          <label>Bounty board channel</label>
+          <span data-picker="bounty_channel_id"></span>
+          <div class="field-hint">Where <code>/bounty</code> posts a card per
+            bounty. Anyone chips coins into a bounty's pot; a mod awards it to
+            whoever completed it (minus the bounty rake, set on the Sinks page),
+            or cancels it to refund everyone. Unclaimed bounties expire and
+            refund automatically. Leave unset to turn bounties off.</div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Min stake</label>
+            <input type="number" name="bounty_min_stake" min="1" step="1"
+              value="${cfg.bounty_min_stake}" style="max-width:120px;" />
+          </div>
+          <div class="field">
+            <label>Max open / member</label>
+            <input type="number" name="bounty_max_open" min="0" step="1"
+              value="${cfg.bounty_max_open}" style="max-width:120px;" />
+          </div>
+          <div class="field">
+            <label>Expire after (days)</label>
+            <input type="number" name="bounty_expire_days" min="0" step="1"
+              value="${cfg.bounty_expire_days}" style="max-width:120px;" />
+          </div>
+        </div>
+        <div class="field-hint" style="margin-top:-6px;">Min stake is the floor
+          for the opener and each chip-in. Max open caps how many live bounties
+          one member can have posted at once (0 = no cap). A bounty nobody awards
+          within the expiry window refunds every contributor (0 = never expires).</div>
+
         <div class="section-label">Branding</div>
         <div class="field-row">
           <div class="field">
@@ -221,6 +253,11 @@ function render(container, cfg, channels, roles, members) {
     channels,
     String(cfg.pin_channel_id),
   );
+  const bountyChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="bounty_channel_id"]'),
+    channels,
+    String(cfg.bounty_channel_id),
+  );
   const hostPicker = mountPicker(
     form.querySelector('[data-picker="community_host_user_id"]'),
     toMemberOptions(members),
@@ -236,6 +273,9 @@ function render(container, cfg, channels, roles, members) {
     "drops_max_coins",
     "drops_per_day",
     "drops_expire_minutes",
+    "bounty_min_stake",
+    "bounty_max_open",
+    "bounty_expire_days",
   ];
   const floatKeys = new Set(["booster_multiplier"]);
   const strKeys = [
@@ -259,6 +299,7 @@ function render(container, cfg, channels, roles, members) {
       register_channel_id: registerChannelPicker.getValue() || "0",
       drops_channel_id: dropsChannelPicker.getValue() || "0",
       pin_channel_id: pinChannelPicker.getValue() || "0",
+      bounty_channel_id: bountyChannelPicker.getValue() || "0",
       manager_role_id: rolePicker.getValue() || "0",
       game_role_id: gameRolePicker.getValue() || "0",
       community_host_user_id: hostPicker.getValue() || "0",

@@ -236,6 +236,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/bank mute` — Spend a mute token
 - `/bank sponsor` — Sponsor a QOTD (mod-approved)
 - `/bank pin` — Pay to pin a short message for a day (mod-approved)
+- `/bounty` — Post a community bounty others can chip into; a mod awards it
 - `/bank emoji` — Rent an emoji slot
 - `/bank grant` — (mod) Grant or deduct coins
 - `/bank post-guide` / `post-shop` / `post-leaderboard` — (mod) Post the channel panels

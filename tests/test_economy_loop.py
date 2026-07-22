@@ -792,6 +792,51 @@ def test_run_pin_expiry_skips_disabled_guild(db):
     assert sweep.unpins == []
 
 
+# ── Community Bounty expiry (run_bounty_expiry) ────────────────────────
+
+
+def test_run_bounty_expiry_refunds_all_and_notices(db):
+    from bot_modules.services.economy_bounty_service import contribute, create_bounty
+
+    _enable(db, bounty_channel_id=555, bounty_min_stake=10, bounty_expire_days=14)
+    now = time.time()
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, USER, 200, "grant", actor_id=9001)
+        apply_credit(conn, GUILD, USER + 1, 200, "grant", actor_id=9001)
+        bid = create_bounty(
+            conn, settings, GUILD, USER, title="do a thing", description="",
+            stake=50, now=now,
+        ).bounty_id
+        contribute(conn, settings, GUILD, bid, USER + 1, 30, now=now)
+        # Age it past the window.
+        conn.execute(
+            "UPDATE econ_bounties SET expires_at = ? WHERE id = ?", (now - 100, bid)
+        )
+        conn.execute(
+            "UPDATE econ_bounties SET card_channel_id = 555, card_message_id = 42 "
+            "WHERE id = ?",
+            (bid,),
+        )
+
+    with open_db(db) as conn:
+        notices = economy_loop.run_bounty_expiry(conn, GUILD, now)
+
+    assert len(notices) == 1
+    assert notices[0].bounty_id == bid
+    assert notices[0].card_message_id == 42
+    assert set(notices[0].refunded_user_ids) == {USER, USER + 1}
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 200  # opener refunded
+        assert get_balance(conn, GUILD, USER + 1) == 200  # contributor refunded
+
+
+def test_run_bounty_expiry_skips_disabled_guild(db):
+    _enable(db, guild_id=GUILD + 1, enabled=False)
+    with open_db(db) as conn:
+        assert economy_loop.run_bounty_expiry(conn, GUILD + 1, time.time()) == []
+
+
 # ── rental billing pass (run_guild_rentals) ────────────────────────────
 
 # Anchor rental time on a plain float so week arithmetic is exact and tz-free.

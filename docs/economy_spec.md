@@ -196,6 +196,22 @@ to currency.
   reached within `pin_expire_days` (default 3). Enabled only when
   `price_pin_of_day > 0` **and** `pin_channel_id` is set — a public sink, dark
   by default. One submission in flight per member.
+- **Community Bounty (built, sink — migration 109, plan
+  `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
+  `/bounty` opens a modal (title, details, opening stake); anyone chips into a
+  bounty's pot from its board card in `bounty_channel_id` (💰 Chip in), and a
+  mod Awards it (a `UserSelect` picks the winner) or Cancels it — persistent
+  `BountyChipInButton`/`BountyAwardButton`/`BountyCancelButton`. Every stake is
+  an `apply_debit` (`bounty_stake`) recorded as its own `econ_bounty_contributions`
+  row; the pot is `SUM(non-refunded contributions)` (never stored). Award credits
+  one `bounty_payout` of `pot − floor(pot × bounty_rake_pct / 100)` to the winner;
+  the rake is escrow never credited back — the **burn** (a real sink, next to
+  `wager_rake_pct`/`demurrage`). Cancel/expire refund every contribution
+  (`bounty_refund`, exactly-once, **never raked**). `run_bounty_expiry` on the
+  hourly loop expires + refunds open bounties past `bounty_expire_days`
+  (default 14) and re-renders the card. Guards: `bounty_min_stake` floor,
+  `bounty_max_open` per member. Enabled only when `bounty_channel_id` is set —
+  dark by default.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state

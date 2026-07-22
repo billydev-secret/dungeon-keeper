@@ -77,6 +77,9 @@ const DEMURRAGE_FIELDS = [
   ["wager_rake_pct", "Wager rake (%)", {
     hint: "House cut of each settled PvP wager pot (max 50). 0 (the default) keeps wagers a pure winner-takes-all transfer; refunds are never raked. The winner's payout names the cut.",
   }],
+  ["bounty_rake_pct", "Bounty rake (%)", {
+    hint: "House cut when a community bounty is awarded (0–100). 0 (the default) means the winner takes the whole pot. Cancelled or expired bounties are never raked — every contributor is refunded in full. Set the board channel on the Economy config page to switch bounties on.",
+  }],
 ];
 
 // Sponsored emojis: weekly rentals opened by mod approval (queue below).

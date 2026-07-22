@@ -561,6 +561,11 @@ async def test_quests_listing_state_matrix(ctx, db):
 @pytest.mark.asyncio
 async def test_cog_load_registers_persistent_buttons(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
+    from bot_modules.economy.bounty_views import (
+        BountyAwardButton,
+        BountyCancelButton,
+        BountyChipInButton,
+    )
     from bot_modules.economy.pin_views import PinApproveButton, PinDenyButton
     from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
     from bot_modules.economy.sponsor_views import (
@@ -582,6 +587,9 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
         SponsorDenyButton,
         PinApproveButton,
         PinDenyButton,
+        BountyChipInButton,
+        BountyAwardButton,
+        BountyCancelButton,
     )
 
 
@@ -2854,3 +2862,59 @@ async def test_pin_submit_charges_and_queues(ctx, db):
     assert row["state"] == "pending"
     assert row["message"] == "gm gamers"
     interaction.followup.send.assert_awaited()  # the "sent for review" receipt
+
+
+# ── /bounty (Community Bounty) ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bounty_post_refused_when_not_enabled(ctx, db):
+    _enable(db)  # no bounty channel → off
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_bounty_post(interaction, "do a thing", "", "50")
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "aren't enabled" in interaction.response.send_message.await_args.args[0]
+    with open_db(db) as conn:
+        n = conn.execute("SELECT COUNT(*) c FROM econ_bounties").fetchone()["c"]
+    assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_bounty_post_escrows_and_opens(ctx, db):
+    _enable(db, bounty_channel_id=5555, bounty_min_stake=10)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 200, "grant", actor_id=1)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_bounty_post(interaction, "Draw the mascot", "as a knight", "50")
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 150  # 50 staked into the pot
+        row = conn.execute(
+            "SELECT state, poster_id, title FROM econ_bounties WHERE guild_id = ?",
+            (GUILD_ID,),
+        ).fetchone()
+    assert row["state"] == "open"
+    assert row["poster_id"] == 500
+    assert row["title"] == "Draw the mascot"
+    interaction.followup.send.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bounty_post_bad_stake_rejected(ctx, db):
+    _enable(db, bounty_channel_id=5555, bounty_min_stake=10)
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, 500, 200, "grant", actor_id=1)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.do_bounty_post(interaction, "Draw the mascot", "", "not-a-number")
+
+    interaction.followup.send.assert_awaited()
+    assert "whole number" in interaction.followup.send.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 200  # nothing charged

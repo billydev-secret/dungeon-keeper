@@ -133,6 +133,16 @@ class EconSettings:
     price_pin_of_day: int = 0
     pin_channel_id: int = 0
     pin_expire_days: int = 3
+    # Community Bounty (plan: docs/plans/community-bounty.md): anyone posts a
+    # freeform task and seeds a pot; anyone chips in; a mod awards the pot to the
+    # winner minus `bounty_rake_pct` (which evaporates — a real sink, next to the
+    # wager rake / hoard tax); an unawarded bounty refunds every contributor
+    # after `bounty_expire_days`. Off until a board channel is set.
+    bounty_channel_id: int = 0
+    bounty_min_stake: int = 10
+    bounty_max_open: int = 3
+    bounty_expire_days: int = 14
+    bounty_rake_pct: int = 0
     # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
     # held (max 1) until a login gap would reset the streak, then auto-burned
     # to save it — covers what the free grace day can't. 0 hides the shop row

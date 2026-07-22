@@ -89,6 +89,9 @@ _KIND_DISPLAY: dict[str, tuple[str, str]] = {
     "emoji_sponsor_refund": ("↩️", "Emoji sponsorship refund"),
     "pin_sponsor": ("📌", "Pinned message"),
     "pin_sponsor_refund": ("↩️", "Pinned-message refund"),
+    "bounty_stake": ("🎯", "Bounty stake"),
+    "bounty_payout": ("🏆", "Bounty won"),
+    "bounty_refund": ("↩️", "Bounty refund"),
 }
 
 _FALLBACK_DISPLAY = ("🪙", "Adjustment")
