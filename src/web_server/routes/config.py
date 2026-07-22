@@ -466,6 +466,9 @@ def _casino_section(conn, guild_id: int) -> dict:
         "roulette_enabled": s.roulette_enabled,
         "roulette_window_seconds": s.roulette_window_seconds,
         "blackjack_idle_seconds": s.blackjack_idle_seconds,
+        "jackpot_enabled": s.jackpot_enabled,
+        "jackpot_cut_pct": s.jackpot_cut_pct,
+        "jackpot_seed": s.jackpot_seed,
     }
 
 
@@ -3523,6 +3526,9 @@ class CasinoConfigUpdate(BaseModel):
     roulette_enabled: bool | None = None
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
     blackjack_idle_seconds: int | None = Field(default=None, ge=30, le=3600)
+    jackpot_enabled: bool | None = None
+    jackpot_cut_pct: int | None = Field(default=None, ge=0, le=100)
+    jackpot_seed: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 @router.put("/config/casino")

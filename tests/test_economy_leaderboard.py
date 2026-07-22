@@ -841,3 +841,32 @@ async def test_live_tick_survives_refresh_failure(db):
     await run_live_tick(_loop_bot(guild), db, NOW)  # must not raise
 
     assert live_signal.pending_count() == 0  # consumed; hourly tick backstops
+
+
+# ── Night at the Tables (casino fancy round) ────────────────────────────────
+
+
+def test_collect_casino_week_highlights(db):
+    from bot_modules.core.db_utils import get_tz_offset_hours as _tz
+    from bot_modules.economy.quests import iso_week_for
+    from bot_modules.services.casino_service import record_play
+
+    with open_db(db) as conn:
+        offset = _tz(conn, GUILD_ID)
+        record_play(conn, GUILD_ID, 11, "slots", 10, 150, now=NOW)
+        record_play(conn, GUILD_ID, 12, "roulette", 10, 360, now=NOW)
+        record_play(conn, GUILD_ID, 13, "coinflip", 200, 380, now=NOW)
+        data = collect_leaderboard_data(conn, GUILD_ID, NOW)
+
+    # biggest single return is 13's 380; luckiest multiplier is 12's 36x
+    assert data.casino_biggest == (13, 380)
+    assert data.casino_luckiest == (12, 3600)
+    # sanity: the week key used matches the collector's clock
+    assert iso_week_for(local_day_for(NOW, offset))
+
+
+def test_collect_casino_section_absent_without_play(db):
+    with open_db(db) as conn:
+        data = collect_leaderboard_data(conn, GUILD_ID, NOW)
+    assert data.casino_biggest is None
+    assert data.casino_luckiest is None

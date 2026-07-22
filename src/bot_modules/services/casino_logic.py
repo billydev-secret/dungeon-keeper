@@ -162,6 +162,37 @@ def blackjack_settle(
     return 0, "lose"
 
 
+# ── streaks, big wins, big bets (the fancy layer's thresholds) ────────
+
+BIG_WIN_MULT = 10  # payout ≥ 10× the stake escalates the celebration
+STREAK_CALLOUT_AT = 3  # |streak| ≥ 3 gets the 🔥/🧊 line
+# A "big bet" earns the animated reveal: ≥70% of the table max, or ≥100
+# coins on an uncapped table. Constants, not knobs — pacing is design.
+BIG_BET_NUM = 7
+BIG_BET_DEN = 10
+BIG_BET_UNCAPPED = 100
+
+
+def next_streak(streak: int, stake: int, payout: int) -> int:
+    """Signed run tracker: wins extend +n, losses extend −n, a push (payout
+    exactly returns the stake) resets to 0."""
+    if payout > stake:
+        return streak + 1 if streak > 0 else 1
+    if payout < stake:
+        return streak - 1 if streak < 0 else -1
+    return 0
+
+
+def is_big_win(stake: int, payout: int) -> bool:
+    return payout >= stake * BIG_WIN_MULT
+
+
+def is_big_bet(stake: int, max_bet: int) -> bool:
+    if max_bet > 0:
+        return stake * BIG_BET_DEN >= max_bet * BIG_BET_NUM
+    return stake >= BIG_BET_UNCAPPED
+
+
 # ── Roulette (European single zero) ────────────────────────────────────
 
 RED_NUMBERS = frozenset(

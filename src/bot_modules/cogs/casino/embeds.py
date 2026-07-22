@@ -36,10 +36,28 @@ def _accent(accent: discord.Color | None) -> discord.Color | int:
     return accent if accent is not None else COLOR_GOLD
 
 
+def _streak_line(econ: EconSettings, streak: int) -> str | None:
+    """The 🔥/🧊 callout once a run reaches the threshold, else None."""
+    if streak >= logic.STREAK_CALLOUT_AT:
+        return f"🔥 **{streak} wins in a row!**"
+    if streak <= -logic.STREAK_CALLOUT_AT:
+        return (
+            f"🧊 {abs(streak)} losses in a row — the meadow is merciless."
+        )
+    return None
+
+
+def _with_streak(desc: str, econ: EconSettings, streak: int) -> str:
+    line = _streak_line(econ, streak)
+    return f"{desc}\n{line}" if line else desc
+
+
 def build_hub_embed(
     econ: EconSettings,
     settings: CasinoSettings,
     accent: discord.Color | None,
+    *,
+    jackpot: int | None = None,
 ) -> discord.Embed:
     open_lines = [
         line
@@ -60,6 +78,15 @@ def build_hub_embed(
         + "\n​",
         inline=False,
     )
+    if jackpot is not None:
+        embed.add_field(
+            name="🍯 Progressive jackpot",
+            value=(
+                f"Currently {_coins(econ, jackpot)} — every lost bet feeds "
+                "it, and triple 7️⃣ on the slots takes it ALL.\n​"
+            ),
+            inline=False,
+        )
     limits = [f"Bets: **{settings.min_bet:,}**–**{settings.max_bet:,}**"
               if settings.max_bet else f"Bets: **{settings.min_bet:,}**+"]
     if settings.daily_wager_cap:
@@ -143,19 +170,22 @@ def build_coinflip_embed(
     landed: str,
     stake: int,
     payout: int,
+    *,
+    streak: int = 0,
 ) -> discord.Embed:
     won = payout > 0
     face = "🌞" if landed == "heads" else "🌙"
+    desc = (
+        f"<@{user_id}> called **{call}** for {_coins(econ, stake)}.\n"
+        + (
+            f"The coin agrees — they collect {_coins(econ, payout)}."
+            if won
+            else "The coin does not care. The meadow keeps the bet."
+        )
+    )
     embed = discord.Embed(
         title=f"🪙 Coinflip — {landed}! {face}",
-        description=(
-            f"<@{user_id}> called **{call}** for {_coins(econ, stake)}.\n"
-            + (
-                f"The coin agrees — they collect {_coins(econ, payout)}."
-                if won
-                else "The coin does not care. The meadow keeps the bet."
-            )
-        ),
+        description=_with_streak(desc, econ, streak),
         color=COLOR_GREEN if won else COLOR_RED,
     )
     embed.set_footer(text=_FOOTER)
@@ -169,22 +199,130 @@ def build_slots_embed(
     stake: int,
     payout: int,
     label: str | None,
+    *,
+    jackpot_won: int = 0,
+    streak: int = 0,
 ) -> discord.Embed:
     reel_line = f"▶ {reels[0]} │ {reels[1]} │ {reels[2]} ◀"
+    title = "🎰 Meadow Slots"
     if payout > 0:
-        jackpot = reels == (logic.SEVEN,) * 3
+        big = jackpot_won > 0 or logic.is_big_win(stake, payout)
         desc = (
             f"{reel_line}\n\n{label} <@{user_id}> bet {_coins(econ, stake)} "
             f"and collects {_coins(econ, payout)}."
         )
-        color = COLOR_GOLD if jackpot else COLOR_GREEN
+        if jackpot_won:
+            title = "💥 🎰 THE HONEYPOT SPILLS"
+            desc += "\nThe whole progressive pot. The bees weep."
+        color = COLOR_GOLD if big else COLOR_GREEN
     else:
         desc = (
             f"{reel_line}\n\n<@{user_id}>'s {_coins(econ, stake)} scatters "
             "into the wildflowers."
         )
         color = COLOR_RED
-    embed = discord.Embed(title="🎰 Meadow Slots", description=desc, color=color)
+    embed = discord.Embed(
+        title=title, description=_with_streak(desc, econ, streak), color=color
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_jackpot_celebration(
+    econ: EconSettings, user_id: int, amount: int
+) -> discord.Embed:
+    """The standalone fanfare posted beside a jackpot result."""
+    embed = discord.Embed(
+        title="🏆 JACKPOT AT THE GOLDEN MEADOW 🏆",
+        description=(
+            f"🍯 7️⃣ 7️⃣ 7️⃣ 🍯\n\n<@{user_id}> just hit the progressive "
+            f"jackpot for {_coins(econ, amount)}!\n"
+            "The pot reseeds — every lost bet grows the next one. 🌱"
+        ),
+        color=COLOR_GOLD,
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+# ── animation frames (big bets get the show; money is already settled) ─
+
+
+def build_coinflip_spin_embed(
+    econ: EconSettings, user_id: int, call: str, stake: int,
+    accent: discord.Color | None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🪙 Coinflip — it's in the air!",
+        description=(
+            f"<@{user_id}> calls **{call}** for {_coins(econ, stake)}…\n"
+            "The coin spins high over the meadow. 🌾"
+        ),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_slots_spin_embed(
+    econ: EconSettings,
+    user_id: int,
+    stake: int,
+    revealed: tuple[str | None, str | None, str | None],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    cells = " │ ".join(sym if sym is not None else "🌀" for sym in revealed)
+    embed = discord.Embed(
+        title="🎰 Meadow Slots",
+        description=(
+            f"▶ {cells} ◀\n\n<@{user_id}> bet {_coins(econ, stake)} — "
+            "the reels are spinning…"
+        ),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_blackjack_reveal_embed(
+    econ: EconSettings,
+    user_id: int,
+    player: list[str],
+    dealer_first_two: list[str],
+    stake: int,
+    accent: discord.Color | None,
+    *,
+    doubled: bool = False,
+) -> discord.Embed:
+    stake_note = f" (doubled to {stake:,})" if doubled else ""
+    embed = discord.Embed(
+        title="🃏 Blackjack",
+        description=f"<@{user_id}> is in for {_coins(econ, stake)}{stake_note}\n​",
+        color=_accent(accent),
+    )
+    embed.add_field(
+        name="Their hand", value=_hand_line(player) + "\n​", inline=False
+    )
+    embed.add_field(
+        name="Dealer",
+        value=_hand_line(dealer_first_two) + "\n*The dealer turns the hole card…*",
+        inline=False,
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_roulette_bounce_embed(
+    econ: EconSettings, bounce: tuple[int, int], accent: discord.Color | None
+) -> discord.Embed:
+    frames = " … ".join(
+        f"{_COLOR_DOTS[logic.wheel_color(n)]} {n}" for n in bounce
+    )
+    embed = discord.Embed(
+        title="🎡 Roulette — no more bets!",
+        description=f"The ball dances across the wheel… {frames} …",
+        color=_accent(accent),
+    )
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -217,6 +355,7 @@ def build_blackjack_embed(
     doubled: bool = False,
     outcome: str | None = None,
     payout: int = 0,
+    streak: int = 0,
 ) -> discord.Embed:
     live = outcome is None
     if live:
@@ -243,6 +382,8 @@ def build_blackjack_embed(
         line = _OUTCOME_LINES.get(outcome or "", "")
         if payout > 0:
             line = f"{line} {_coins(econ, payout)}."
+        if outcome != "refunded":
+            line = _with_streak(line, econ, streak)
         embed.add_field(name="Result", value=line, inline=False)
     embed.set_footer(text=_FOOTER)
     return embed
@@ -306,6 +447,7 @@ def build_roulette_result_embed(
         embed.add_field(
             name="Winners",
             value="\n".join(
+                f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
                 f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
                 for uid, d, amount, payout in winners
             )

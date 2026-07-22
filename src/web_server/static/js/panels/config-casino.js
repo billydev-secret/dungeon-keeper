@@ -103,6 +103,27 @@ export function mount(container) {
       "Unchecked tables refuse bets and drop off the hub panel.",
     ));
 
+    const jackpotRow = document.createElement("div");
+    jackpotRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
+    jackpotRow.append(
+      checkbox("jackpot_enabled", c.jackpot_enabled !== false, "Progressive jackpot"),
+    );
+    form.appendChild(buildField(
+      "Jackpot", jackpotRow,
+      "A cut of every lost bet feeds one pot; triple 7️⃣ on the slots " +
+        "wins the larger of the pot or the flat 120×.",
+    ));
+    form.appendChild(buildField(
+      "Jackpot Cut (% of each lost bet)",
+      numInput("jackpot_cut_pct", c.jackpot_cut_pct ?? 25, 0),
+      "0–100. Bigger cut = faster-growing pot (and a casino that burns less).",
+    ));
+    form.appendChild(buildField(
+      "Jackpot Seed",
+      numInput("jackpot_seed", c.jackpot_seed ?? 100, 0),
+      "What the pot resets to after it's won — minted when claimed, so keep it modest.",
+    ));
+
     form.appendChild(buildField(
       "Roulette Betting Window (seconds)",
       numInput("roulette_window_seconds", c.roulette_window_seconds ?? 45, 15),
@@ -131,6 +152,8 @@ export function mount(container) {
         ["min_bet", 1],
         ["max_bet", 0],
         ["daily_wager_cap", 0],
+        ["jackpot_cut_pct", 0],
+        ["jackpot_seed", 0],
         ["roulette_window_seconds", 15],
         ["blackjack_idle_seconds", 30],
       ]) {
@@ -153,6 +176,7 @@ export function mount(container) {
           slots_enabled: fd.has("slots_enabled"),
           blackjack_enabled: fd.has("blackjack_enabled"),
           roulette_enabled: fd.has("roulette_enabled"),
+          jackpot_enabled: fd.has("jackpot_enabled"),
         });
         showStatus(statusEl, true);
       } catch (err) {

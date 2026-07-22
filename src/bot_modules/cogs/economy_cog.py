@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
@@ -1430,16 +1431,25 @@ class EconomyCog(commands.Cog):
         guild_id = guild.id
         user_id = interaction.user.id
 
-        def _load() -> tuple[EconSettings, int, list, list, int]:
+        def _load() -> tuple[
+            EconSettings, int, list, list, int, sqlite3.Row | None
+        ]:
+            from bot_modules.services.casino_service import (  # noqa: PLC0415
+                member_casino_stats,
+            )
+
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 balance = get_balance(conn, guild_id, user_id)
                 ledger = get_ledger(conn, guild_id, user_id, limit=10)
                 rentals = list_member_rentals(conn, guild_id, user_id)
                 shields = get_streak_shields(conn, guild_id, user_id)
-            return settings, balance, ledger, rentals, shields
+                casino = member_casino_stats(conn, guild_id, user_id)
+            return settings, balance, ledger, rentals, shields, casino
 
-        settings, balance, ledger, rentals, shields = await asyncio.to_thread(_load)
+        settings, balance, ledger, rentals, shields, casino = (
+            await asyncio.to_thread(_load)
+        )
 
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
@@ -1486,6 +1496,29 @@ class EconomyCog(commands.Cog):
         if rental_lines:
             embed.add_field(
                 name="Active Rentals", value="\n".join(rental_lines), inline=False
+            )
+
+        if casino is not None and int(casino["plays"]) > 0:
+            wagered = int(casino["wagered"])
+            returned = int(casino["returned"])
+            net = returned - wagered
+            streak = int(casino["streak"])
+            lines = [
+                f"Wagered **{wagered:,}** · returned **{returned:,}** · "
+                f"net **{'+' if net >= 0 else '−'}{abs(net):,}**"
+            ]
+            if int(casino["biggest_win"]) > 0:
+                lines.append(
+                    f"Biggest win: {settings.currency_emoji} "
+                    f"**{int(casino['biggest_win']):,}** "
+                    f"({str(casino['biggest_win_game'])})"
+                )
+            if streak >= 3:
+                lines.append(f"🔥 {streak}-win streak going")
+            elif streak <= -3:
+                lines.append(f"🧊 {abs(streak)} losses running — walk away?")
+            embed.add_field(
+                name="🎰 At the Tables", value="\n".join(lines), inline=False
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)

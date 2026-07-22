@@ -15,6 +15,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import casino_service as svc
+from bot_modules.services import casino_logic as logic
 from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,
@@ -617,3 +618,116 @@ def test_casino_kinds_economy_accounting_registrations():
     assert "casino_refund" not in SKIP_KINDS
     assert "casino_stake" in BURN_EXCLUDED_KINDS
     assert not any(k.startswith("casino_") for k in FAUCET_GROUPS)
+
+
+# ── fancy round: jackpot + stats (stage 2) ─────────────────────────────
+
+
+def test_jackpot_feeds_only_on_full_losses(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        # a lost slots spin feeds 25% of the stake
+        r = svc.settle_slots(conn, GUILD, A, 40, ("🌻", "🍀", "🐝"), now=NOW)
+        assert r.payout == 0
+        assert svc.get_jackpot(conn, GUILD) == svc.DEFAULT_CASINO_SETTINGS.jackpot_seed + 10
+        # a winning spin feeds nothing
+        pot = svc.get_jackpot(conn, GUILD)
+        r = svc.settle_slots(conn, GUILD, A, 40, ("🌻", "🌻", "🍀"), now=NOW)
+        assert r.payout == 60 and svc.get_jackpot(conn, GUILD) == pot
+        # cut that floors to zero feeds nothing (3-coin stake, 25% = 0)
+        svc.feed_jackpot(conn, GUILD, 3, now=NOW)
+        assert svc.get_jackpot(conn, GUILD) == pot
+
+
+def test_jackpot_disabled_pays_flat_and_keeps_no_pot(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_enabled": False})
+        _fund(conn, A, 1_000)
+        r = svc.settle_slots(conn, GUILD, A, 10, ("🌻", "🍀", "🐝"), now=NOW)
+        assert r.payout == 0
+        assert svc.get_jackpot(conn, GUILD) == 0  # nothing fed
+        r = svc.settle_slots(conn, GUILD, A, 10, (logic.SEVEN,) * 3, now=NOW)
+        assert (r.payout, r.jackpot_won) == (1200, 0)  # flat 120×, no pot claim
+
+
+def test_triple_sevens_takes_pot_with_flat_floor(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 10_000)
+        svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 0, "max_bet": 0})
+        # small pot, big bet → the flat 120× floor wins out (pot still resets)
+        svc.feed_jackpot(conn, GUILD, 100, now=NOW)  # pot = seed 100 + 25
+        r = svc.settle_slots(conn, GUILD, A, 10, (logic.SEVEN,) * 3, now=NOW)
+        assert (r.payout, r.jackpot_won) == (1200, 1200)
+        assert svc.get_jackpot(conn, GUILD) == 100  # reseeded
+        # fat pot, small bet → the pot wins out
+        conn.execute("UPDATE casino_jackpot SET pot = 5000 WHERE guild_id = ?", (GUILD,))
+        before = get_balance(conn, GUILD, A)
+        r = svc.settle_slots(conn, GUILD, A, 10, (logic.SEVEN,) * 3, now=NOW)
+        assert (r.payout, r.jackpot_won) == (5000, 5000)
+        assert get_balance(conn, GUILD, A) == before + 5000
+        assert svc.get_jackpot(conn, GUILD) == 100
+
+
+def test_claim_jackpot_is_exactly_once_per_pot(db):
+    with open_db(db) as conn:
+        svc.feed_jackpot(conn, GUILD, 1_000, now=NOW)  # 100 seed + 250
+        assert svc.claim_jackpot(conn, GUILD, A, now=NOW) == 350
+        assert svc.claim_jackpot(conn, GUILD, B, now=NOW) == 100  # just the reseed
+
+
+def test_blackjack_and_roulette_losses_feed_the_pot(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        hand_id = _deal(conn, stake=40)
+        assert svc.settle_blackjack_hand(conn, hand_id, 0, "bust", now=NOW)
+        assert svc.get_jackpot(conn, GUILD) == 110  # seed 100 + 10
+        round_id = _open_round(conn)
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 40, now=NOW + 1)
+        assert svc.settle_roulette_round(conn, round_id, 2, now=NOW + 45) is not None
+        assert svc.get_jackpot(conn, GUILD) == 120  # black landed, red fed
+        # refunds never feed: a fresh hand swept at boot leaves the pot alone
+        hand2 = _deal(conn, stake=40)
+        assert hand2 and svc.refund_live_blackjack_hands(conn, now=NOW)
+        assert svc.get_jackpot(conn, GUILD) == 120
+
+
+def test_record_play_tracks_streaks_stats_and_weekly(db):
+    with open_db(db) as conn:
+        assert svc.record_play(conn, GUILD, A, "coinflip", 10, 19, now=NOW) == 1
+        assert svc.record_play(conn, GUILD, A, "slots", 10, 0, now=NOW) == -1
+        assert svc.record_play(conn, GUILD, A, "slots", 10, 0, now=NOW) == -2
+        assert svc.record_play(conn, GUILD, A, "roulette", 10, 360, now=NOW) == 1
+        assert svc.record_play(conn, GUILD, A, "blackjack", 10, 10, now=NOW) == 0
+        row = svc.member_casino_stats(conn, GUILD, A)
+        assert row is not None
+        assert (int(row["plays"]), int(row["wins"])) == (5, 2)
+        assert (int(row["wagered"]), int(row["returned"])) == (50, 389)
+        assert int(row["biggest_win"]) == 360
+        assert str(row["biggest_win_game"]) == "roulette"
+        assert (int(row["streak"]), int(row["best_streak"])) == (0, 1)
+        from bot_modules.economy.quests import iso_week_for
+        from bot_modules.economy.logic import local_day_for
+        week = iso_week_for(local_day_for(NOW, 0.0))
+        biggest, luckiest = svc.weekly_table_highlights(conn, GUILD, week)
+        assert biggest is not None and int(biggest["biggest_win"]) == 360
+        assert luckiest is not None and int(luckiest["biggest_mult_x100"]) == 3600
+        assert svc.weekly_table_highlights(conn, GUILD, "1999-W01") == (None, None)
+
+
+def test_settled_games_land_in_stats_via_their_settle_paths(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        svc.settle_coinflip(conn, GUILD, A, 10, "heads", "heads", now=NOW)
+        hand_id = _deal(conn, stake=20)
+        svc.settle_blackjack_hand(conn, hand_id, 40, "win", now=NOW)
+        round_id = _open_round(conn)
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+        svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45)
+        row = svc.member_casino_stats(conn, GUILD, A)
+        assert row is not None and int(row["plays"]) == 3
+        assert int(row["streak"]) == 3  # three wins in a row
+        # a boot-sweep refund is NOT a play
+        hand2 = _deal(conn, stake=20)
+        assert hand2 and svc.refund_live_blackjack_hands(conn, now=NOW)
+        row = svc.member_casino_stats(conn, GUILD, A)
+        assert row is not None and int(row["plays"]) == 3
