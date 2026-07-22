@@ -363,13 +363,35 @@ kind-carrying quests).
 events advance the counter guild-wide — `fire_trigger_quests` bumps every
 active same-kind community quest (`_bump_community_kind`), deliberately NOT
 filtered by personal boards, with per-member rows in `econ_community_contrib`
-(migration 082). Lifecycle is scheduler-owned, **one week on / one week off**
-(`_roll_community_weekly` at the ISO-week roll, alternation state in
-`econ_day_marks.last_community_week`):
+(migration 082). Lifecycle is scheduler-owned, running **two concurrent
+lanes** (`econ_quests.community_slot`, migration 111, 2026-07-22 decision) so
+the board always shows up to 2 goals rather than 1:
 
-- **Activation** (first roll after a full gap week, or ever): the library's
+- **Lane 1** keeps the original **one week on / one week off**
+  (`_roll_community_weekly` at the ISO-week roll, alternation state in
+  `econ_day_marks.last_community_week`) — a run settles at the roll that
+  closes its week, then the lane sits empty for a full gap week ("let the
+  win breathe") before the next library pick activates.
+- **Lane 2** (`_roll_community_weekly_slot2`) runs the same weekly cadence
+  and tier rules but with **no gap week** — it refills in the same roll it
+  settles. Two lines with matched 1-week run/gap durations can only ever be
+  perfectly in phase (both active, both dark together) or perfectly out of
+  phase (always exactly one active) — there's no offset that sustains double
+  coverage — so lane 2 trades away its own breather instead, keeping the
+  board from ever going fully dark even during lane 1's gap week.
+- **Self-repair** (`_repair_orphaned_community_quests`, runs every hourly
+  tick): a quest only carries a real `community_target` once it passes
+  through `activate_community_weekly` — a direct `active=1` write (the
+  2026-07-22 seed-script bug that shipped 11 library rows live at once with
+  no target) leaves it outside both lanes. The repair deactivates any such
+  orphan and immediately fills whichever lane(s) it just freed, so a bad
+  seed self-heals within the hour instead of waiting on the next week roll —
+  but only in the tick it actually finds orphans, so it never overrides a
+  legitimate gap week.
+- **Activation** (a lane's first roll after its gap, or ever): the library's
   least-recently-run inactive kind community quest (`next_community_weekly`,
-  `last_run_week` ordering) activates with a **fully automatic target** —
+  `last_run_week` ordering, tagged with the activating lane's `slot`)
+  activates with a **fully automatic target** —
   trailing 28 days of that kind's `econ_kind_activity` ÷ 4 ÷ 0.75
   (`community_auto_target`, floor 10), so a typical week lands ~75% and a
   push clears it. No manual override by design (2026-07-18 decision). A
@@ -1109,10 +1131,12 @@ first rollup lands.
 
 **"Happening now" (Statistics page, top card).** The live quest pulse
 (`GET /api/economy/quests/live` → `compute_live`, manager-gated,
-45 s panel auto-refresh): the running community weekly as a hero card
-(progress bar, %, 40/70/100 tier chips, contributor count, daily-bucket
+45 s panel auto-refresh): the running community weekly(ies) as hero cards —
+one per active concurrency lane (§4.3), up to 2 at once — each with a
+progress bar, %, 40/70/100 tier chips, contributor count, daily-bucket
 pace flag "on track"/"needs a push", time to the week roll — or a gap-week
-note), per-quest **anonymous** completion counts for the current period of
+note when a lane is empty. Per-quest **anonymous** completion counts for the
+current period of
 every active daily/weekly/monthly quest (+ counted-quest in-flight counts),
 event-quest totals (7d / ever), quests-done-today / this-week tickers, and
 day/week reset countdowns. Aggregates only, never member names (2026-07-18

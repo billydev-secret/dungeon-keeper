@@ -1210,8 +1210,8 @@ def _roll_beats(bot, db_path, now_ts, guild_id=GUILD):
 def _community_state(db_path, qid):
     with open_db(db_path) as conn:
         q = conn.execute(
-            "SELECT active, community_target, last_run_week FROM econ_quests "
-            "WHERE id = ?", (qid,),
+            "SELECT active, community_target, last_run_week, community_slot "
+            "FROM econ_quests WHERE id = ?", (qid,),
         ).fetchone()
         p = conn.execute(
             "SELECT current, settled_at FROM econ_community_progress "
@@ -1221,41 +1221,108 @@ def _community_state(db_path, qid):
 
 
 def test_community_weekly_gap_week_lifecycle(db):
+    """Slot 1 keeps one-week-on/one-week-off; slot 2 refills with no gap
+    (2026-07-22 decision) so the board is never fully dark."""
     _enable(db)
     bot = _Bot([_Guild(GUILD, {USER: _Member()})])
     qa = _mk_community_kind(db, title="Msgs", kind="message_sent")
     qb = _mk_community_kind(db, title="Replies", kind="reply_sent")
+    qc = _mk_community_kind(db, title="Reacts", kind="reaction_given")
     _add_activity(db, USER)
 
     _roll(bot, db, _ts(D1))  # first sight: marks only
 
-    # W28 → W29 roll: first-ever community week activates the library's next
-    # quest (id order when never run) with an auto-sized (floor) target.
+    # W28 → W29 roll: first-ever community week fills BOTH slots at once —
+    # slot 1 takes the library's lowest-id never-run pick (qa), slot 2 takes
+    # the next (qb) — each with an auto-sized (floor) target.
     beats = _roll_beats(bot, db, _ts("2026-07-13"))
-    assert any("kicked off" in b.text for b in beats)
+    assert len([b for b in beats if "kicked off" in b.text]) == 2
     q, p = _community_state(db, qa)
     assert int(q["active"]) == 1 and int(q["community_target"]) == 10
-    assert q["last_run_week"] == "2026-W29"
+    assert q["last_run_week"] == "2026-W29" and int(q["community_slot"]) == 1
+    q, _ = _community_state(db, qb)
+    assert int(q["active"]) == 1 and int(q["community_slot"]) == 2
 
-    # Members act during the run week → counter + contrib move.
+    # Members act on slot 1's kind during the run week; slot 2's kind sees
+    # nothing, so it settles at 0%.
     for i in range(7):
         _fire(db, "message_sent", USER, f"m{i}", "2026-07-15")
 
-    # W29 → W30 roll: the run settles (7/10 = 70% → tiers 1+2), resolution
-    # beat, quest deactivates, and nothing new activates (the win breathes).
+    # W29 → W30 roll: both runs close together (both started the same
+    # week). Slot 1 settles and takes its gap week (nothing reactivates
+    # there — "the win breathes"); slot 2 settles too but refills the SAME
+    # roll with the next library pick (qc), since it has no gap.
     beats = _roll_beats(bot, db, _ts("2026-07-20"))
-    assert any("resolved" in b.text for b in beats)
-    assert not any("kicked off" in b.text for b in beats)
+    assert len([b for b in beats if "resolved" in b.text]) == 2
+    assert len([b for b in beats if "kicked off" in b.text]) == 1
     q, p = _community_state(db, qa)
     assert int(q["active"]) == 0 and p["settled_at"] is not None
     # 2 tiers × 30 flat + 15 top-contributor bonus.
     assert _balance(db, USER) == 75
+    q, _ = _community_state(db, qb)
+    assert int(q["active"]) == 0  # slot 2's run also closed
+    q, _ = _community_state(db, qc)
+    assert int(q["active"]) == 1 and int(q["community_slot"]) == 2
+    assert q["last_run_week"] == "2026-W30"
 
-    # W30 → W31 roll: gap week over → the OTHER quest activates.
+    # W30 → W31 roll: slot 1's gap week is over → it reclaims a library
+    # pick; slot 2's qc also closes this roll (it too only ran one week)
+    # and immediately refills. The board never went empty in between.
     beats = _roll_beats(bot, db, _ts("2026-07-27"))
     assert any("kicked off" in b.text for b in beats)
-    q, _ = _community_state(db, qb)
-    assert int(q["active"]) == 1 and q["last_run_week"] == "2026-W31"
+    q, _ = _community_state(db, qa)  # slot 1 reclaimed by the lowest-id pick
+    assert int(q["active"]) == 1 and int(q["community_slot"]) == 1
+    q, _ = _community_state(db, qc)
+    assert int(q["active"]) == 0  # settled again after its one week
+
+
+def test_repair_orphaned_community_quests_self_heals(db):
+    """2026-07-22 bug: a seed script flipped active=1 directly on library
+    community quests, bypassing activate_community_weekly entirely — no
+    target, no slot. The repair runs every tick (not just week rolls),
+    cleans those up, and immediately fills both slots from clean picks."""
+    _enable(db)
+    bot = _Bot([_Guild(GUILD, {USER: _Member()})])
+    _roll(bot, db, _ts(D1))  # first sight: establishes marks (W28)
+
+    orphan_a = _mk_community_kind(db, title="Orphan A", kind="message_sent")
+    orphan_b = _mk_community_kind(db, title="Orphan B", kind="reply_sent")
+    clean_a = _mk_community_kind(db, title="Clean A", kind="reaction_given")
+    clean_b = _mk_community_kind(db, title="Clean B", kind="voice_session")
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE econ_quests SET active = 1 WHERE id IN (?, ?)",
+            (orphan_a, orphan_b),
+        )
+
+    # Same-day tick (no day/week roll) — the repair still runs every tick.
+    beats = _roll_beats(bot, db, _ts(D1, hour=18))
+    assert len([b for b in beats if "kicked off" in b.text]) == 2
+
+    ids = (orphan_a, orphan_b, clean_a, clean_b)
+    with open_db(db) as conn:
+        rows = conn.execute(
+            "SELECT id, active, community_target, community_slot "
+            "FROM econ_quests WHERE id IN (?, ?, ?, ?)",
+            ids,
+        ).fetchall()
+    # No row is left in the corrupted state (active with no real target) —
+    # whichever two the tie-break picked, both are properly slotted.
+    assert not any(r["active"] and r["community_target"] is None for r in rows)
+    active_rows = [r for r in rows if r["active"]]
+    assert len(active_rows) == 2
+    assert all(int(r["community_target"]) > 0 for r in active_rows)
+    assert {int(r["community_slot"]) for r in active_rows} == {1, 2}
+
+    # A later same-day tick is a no-op — the repair doesn't keep firing
+    # once the orphans are gone, so it never overrides a real gap week.
+    beats = _roll_beats(bot, db, _ts(D1, hour=20))
+    assert beats == []
+    with open_db(db) as conn:
+        rows2 = conn.execute(
+            "SELECT id, active FROM econ_quests WHERE id IN (?, ?, ?, ?)", ids,
+        ).fetchall()
+    assert {r["id"] for r in rows2 if r["active"]} == {r["id"] for r in active_rows}
 
 
 def test_community_hourly_beats_fire_once(db):

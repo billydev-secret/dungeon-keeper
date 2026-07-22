@@ -19,7 +19,7 @@ from bot_modules.economy.leaderboard import (
     ROLLING_DAYS,
     build_leaderboard_embed,
     collect_leaderboard_data,
-    progress_bar,
+    community_progress_bar,
 )
 from bot_modules.economy.logic import local_day_bounds, local_day_for
 from bot_modules.services import economy_quests_service as quests_svc
@@ -134,6 +134,7 @@ def test_collect_quests_and_community_goals(db):
     goal = data.community[0]
     assert (goal.title, goal.current, goal.target) == ("Group goal", 40, 100)
     assert not goal.completed and not goal.settled
+    assert goal.kind_label == ""  # manual goal, nothing to label
 
 
 def test_collect_pulse_and_today_deltas(db):
@@ -213,6 +214,7 @@ def test_collect_auto_goal_live_detail(db):
     assert goal.today_delta == 1
     assert goal.on_track  # 30 done ≥ 90% of the linear-pace expectation
     assert goal.ends_ts == data.week_roll_ts
+    assert goal.kind_label == "Send a message"  # TRIGGER_KINDS[message_sent]
 
 
 # ── builder ─────────────────────────────────────────────────────────────────
@@ -256,8 +258,35 @@ def test_embed_community_bar_and_states():
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
     goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
     assert goals is not None
-    assert progress_bar(50, 100) in goals
+    assert community_progress_bar(50, 100) in goals
     assert "✅ paid out" in goals
+
+
+def test_community_progress_bar_marks_tier_regions():
+    # width=12 default: tier bounds at 5/8/12 (40/70/100% of target).
+    assert community_progress_bar(0, 10) == "▱▱▱▱▱┃▱▱▱┃▱▱▱▱ 0/10"
+    assert community_progress_bar(4, 10) == "▰▰▰▰▰┃▱▱▱┃▱▱▱▱ 4/10"  # tier 1 boundary
+    assert community_progress_bar(7, 10) == "▰▰▰▰▰┃▰▰▰┃▱▱▱▱ 7/10"  # tier 2 boundary
+    assert community_progress_bar(10, 10) == "▰▰▰▰▰┃▰▰▰┃▰▰▰▰ 10/10"
+    assert community_progress_bar(5, 0) == "5"  # no target, plain count
+
+
+def test_embed_goal_title_shows_kind_label():
+    data = LeaderboardData(
+        top_earners=[],
+        community=[
+            CommunityGoal(
+                "Server Buzz", 10, 100, completed=False, settled=False,
+                auto=True, kind_label="Send a message",
+            ),
+            CommunityGoal("Manual goal", 1, 10, completed=False, settled=False),
+        ],
+        quests=[],
+    )
+    embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
+    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    assert "**Server Buzz** — Send a message" in goals
+    assert "**Manual goal**\n" in goals  # no dangling "—" without a label
 
 
 def test_embed_sections_stack_full_width():

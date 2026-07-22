@@ -520,7 +520,8 @@ def compute_live(
     """The Statistics page's "Happening now" payload — quest pulse, not money.
 
     Anonymous by design (2026-07-18 decision): aggregates and counts only,
-    never member names — the community hero card, per-quest completion
+    never member names — the community hero card(s) (one per active
+    concurrency lane, up to 2 since 2026-07-22), per-quest completion
     counts for the current period of each cadence, event-quest totals, and
     the day/week countdowns. Cheap single-pass queries; refreshed on a
     30-60s interval by the panel.

@@ -1956,20 +1956,29 @@ def list_settleable_community_quests(
 
 
 def list_active_community_kind_quests(
-    conn: sqlite3.Connection, guild_id: int
+    conn: sqlite3.Connection, guild_id: int, *, slot: int | None = None
 ) -> list[sqlite3.Row]:
-    """Active auto-tracking (kind-carrying) community quests for a guild."""
+    """Active auto-tracking (kind-carrying) community quests for a guild.
+
+    ``slot`` narrows to one concurrency lane (1 or 2, see
+    ``activate_community_weekly``); omitted, returns both lanes.
+    """
+    clause = ""
+    params: list[object] = [guild_id]
+    if slot is not None:
+        clause = "AND q.community_slot = ?"
+        params.append(slot)
     return conn.execute(
-        """
+        f"""
         SELECT q.*, p.current, p.completed_at, p.settled_at,
                p.notified_tier, p.final_notice_sent
         FROM econ_quests q
         LEFT JOIN econ_community_progress p ON p.quest_id = q.id
         WHERE q.guild_id = ? AND q.qtype = 'community' AND q.active = 1
-          AND q.trigger_kind != ''
+          AND q.trigger_kind != '' {clause}
         ORDER BY q.id
         """,
-        (guild_id,),
+        params,
     ).fetchall()
 
 
@@ -2078,6 +2087,7 @@ def activate_community_weekly(
     *,
     target: int,
     week: str,
+    slot: int = 1,
 ) -> None:
     """Open a community weekly's run: size it, reset per-run state, activate.
 
@@ -2085,14 +2095,19 @@ def activate_community_weekly(
     transaction) so a library quest can re-run in a later week and pay
     again. Exactly-once only has to hold *within* a run, where settlement
     replays share the reservation rows.
+
+    ``slot`` tags which concurrency lane this run belongs to (1 = the
+    original one-week-on/one-week-off lane, 2 = the no-gap lane added
+    2026-07-22) so each lane's roll only ever settles its own quest.
     """
     conn.execute(
         """
         UPDATE econ_quests
-        SET active = 1, community_target = ?, last_run_week = ?
+        SET active = 1, community_target = ?, last_run_week = ?,
+            community_slot = ?
         WHERE id = ? AND guild_id = ?
         """,
-        (target, week, quest_id, guild_id),
+        (target, week, slot, quest_id, guild_id),
     )
     conn.execute("DELETE FROM econ_community_contrib WHERE quest_id = ?", (quest_id,))
     conn.execute(

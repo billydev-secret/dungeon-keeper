@@ -1,0 +1,13 @@
+-- Second concurrent community weekly (2026-07-22 decision): the board was
+-- stuck showing 11 community goals at once (a seed-script bug flipped
+-- active=1 directly, bypassing activate_community_weekly), which also
+-- exposed that only ever having ONE auto-tracking community weekly running
+-- made the board go fully dark every gap week. Two slots now run
+-- concurrently: slot 1 keeps the existing one-week-on/one-week-off
+-- alternation untouched; slot 2 is a second lane with no gap week, so the
+-- board never goes empty even during slot 1's breather.
+--
+-- community_slot tags which lane a currently-active kind-carrying community
+-- quest belongs to, so each slot's roll only ever settles its own quest.
+-- Meaningless on inactive/manual community rows; reset on every activation.
+ALTER TABLE econ_quests ADD COLUMN community_slot INTEGER NOT NULL DEFAULT 1;
