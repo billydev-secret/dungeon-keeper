@@ -63,6 +63,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 - **Quests & daily boards** — A personal quest board (daily/weekly/monthly) draws each member their own random slice of the guild's quest pool, plus tiered community weeklies the whole server works toward with a live tracker.
 - **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, name, gradient and holographic role colors, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week.
 - **Sinks & stakes** — Coin wagers on duel and group games, paid quest rerolls, raffles, and other sinks keep the currency circulating. Mods post the guide/shop/leaderboard panels and can grant coins directly. `docs/economy_spec.md` is the deep doc.
+- **The Golden Meadow Casino** — House gambling in one admin-configured channel, entirely button-driven (no commands): coinflip, meadow-reel slots, blackjack with double-down, and channel-wide roulette rounds. Fixed, RTP-tested paytables give the house a small edge; per-member daily wager caps and min/max bets are set on the dashboard's Casino page. `docs/casino_spec.md` covers it.
 
 ### Engagement & content
 - **Whisper** — Send an anonymous message to an opted-in member who gets three guesses to name the sender. Share publicly, reply back, or reveal yourself once you're guessed.

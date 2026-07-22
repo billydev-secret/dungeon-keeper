@@ -9,7 +9,7 @@ from datetime import date
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.core.db_utils import (
     add_config_id,
@@ -443,6 +443,29 @@ def _risky_section(conn, guild_id: int) -> dict:
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
         "max_games_per_channel": int(max_games),
+    }
+
+
+def _casino_section(conn, guild_id: int) -> dict:
+    """The Golden Meadow casino settings (docs/casino_spec.md).
+
+    panel_* bookkeeping fields are deliberately absent — bot-managed, never
+    dashboard-editable. Ids go out as strings (the snowflake rule).
+    """
+    from bot_modules.services.casino_service import load_casino_settings  # noqa: PLC0415
+
+    s = load_casino_settings(conn, guild_id)
+    return {
+        "channel_id": str(s.channel_id),
+        "min_bet": s.min_bet,
+        "max_bet": s.max_bet,
+        "daily_wager_cap": s.daily_wager_cap,
+        "coinflip_enabled": s.coinflip_enabled,
+        "slots_enabled": s.slots_enabled,
+        "blackjack_enabled": s.blackjack_enabled,
+        "roulette_enabled": s.roulette_enabled,
+        "roulette_window_seconds": s.roulette_window_seconds,
+        "blackjack_idle_seconds": s.blackjack_idle_seconds,
     }
 
 
@@ -1048,6 +1071,7 @@ async def get_config(
                 "whisper": _whisper_section(conn, guild_id),
                 "needle": _needle_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
+                "casino": _casino_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
                 "rules_watch": _rules_watch_section(conn, guild_id, ctx.db_path),
                 "inactive": _inactive_section(conn, guild_id),
@@ -3481,6 +3505,60 @@ async def update_risky(
     if new_max_games is not None:
         rr_state.max_games_per_channel[guild_id] = new_max_games
 
+    return result
+
+
+class CasinoConfigUpdate(BaseModel):
+    """PUT /config/casino — every field optional, unknown fields rejected."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel_id: str | None = None  # "0" turns the whole casino off
+    min_bet: int | None = Field(default=None, ge=1, le=1_000_000)
+    max_bet: int | None = Field(default=None, ge=0, le=10_000_000)  # 0 = no max
+    daily_wager_cap: int | None = Field(default=None, ge=0, le=10_000_000)
+    coinflip_enabled: bool | None = None
+    slots_enabled: bool | None = None
+    blackjack_enabled: bool | None = None
+    roulette_enabled: bool | None = None
+    roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
+    blackjack_idle_seconds: int | None = Field(default=None, ge=30, le=3600)
+
+
+@router.put("/config/casino")
+async def update_casino(
+    request: Request,
+    body: CasinoConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    from bot_modules.services.casino_service import (  # noqa: PLC0415
+        load_casino_settings,
+        save_casino_settings,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    values = body.model_dump(exclude_unset=True)
+    if "channel_id" in values:
+        try:
+            values["channel_id"] = int(values["channel_id"] or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "channel_id must be a snowflake or 0") from None
+
+    def _q():
+        with ctx.open_db() as conn:
+            current = load_casino_settings(conn, guild_id)
+            merged_min = values.get("min_bet", current.min_bet)
+            merged_max = values.get("max_bet", current.max_bet)
+            if merged_max and merged_min > merged_max:
+                raise HTTPException(400, "min_bet cannot exceed max_bet")
+            save_casino_settings(conn, guild_id, values)
+        return {"ok": True}
+
+    result = await run_query(_q)
+    # Let the cog refresh (or tear down) the hub panel without a restart.
+    if ctx.bot:
+        ctx.bot.dispatch("casino_config_change", guild_id)
     return result
 
 

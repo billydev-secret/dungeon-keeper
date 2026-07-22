@@ -23,6 +23,7 @@ export const HELP_GROUPS = [
   // mirroring the manual's section order. (Items alphabetize within a group
   // in the sidebar, so only group membership/order matters here.)
   { heading: "Games & Social", items: [
+    { page: "help-casino",      anchor: "economy-casino",  label: "Casino" },
     { page: "help-games",       anchor: "games",           label: "Games Night" },
     { page: "help-guess",       anchor: "guess",           label: "Guess Who" },
     { page: "help-photo",       anchor: "photo-challenge", label: "Photo Challenge" },
