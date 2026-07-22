@@ -542,7 +542,7 @@ def build_leaderboard_embed(
     if data.community:
         _add_section(
             "🎯 Community goals — everyone gets paid when we hit them",
-            "\n".join(_community_block(g) for g in data.community),
+            "\n\n".join(_community_block(g) for g in data.community),
         )
 
     if data.quests:

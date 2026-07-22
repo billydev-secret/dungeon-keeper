@@ -262,6 +262,31 @@ def test_embed_community_bar_and_states():
     assert "✅ paid out" in goals
 
 
+def test_embed_community_goals_separated_by_blank_line():
+    # Two goals crammed together with no gap read as one run-on block —
+    # a blank line between them keeps each goal's bar/tier/detail trio
+    # visually grouped with its own title.
+    data = LeaderboardData(
+        top_earners=[],
+        community=[
+            CommunityGoal(
+                "Server Buzz", 327, 16635, completed=False, settled=False,
+                auto=True, tiers=0, contributors=23, today_delta=1656,
+                on_track=False,
+            ),
+            CommunityGoal(
+                "Talk It Out", 108, 10263, completed=False, settled=False,
+                auto=True, tiers=0, contributors=19, today_delta=784,
+                on_track=False,
+            ),
+        ],
+        quests=[],
+    )
+    embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
+    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    assert "today\n\n**Talk It Out**" in goals
+
+
 def test_community_progress_bar_marks_tier_regions():
     # width=12 default: tier bounds at 5/8/12 (40/70/100% of target).
     assert community_progress_bar(0, 10) == "▱▱▱▱▱┃▱▱▱┃▱▱▱▱ 0/10"
