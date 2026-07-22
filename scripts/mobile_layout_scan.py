@@ -297,7 +297,7 @@ def main() -> int:
             )
             print(f"  {key:18} {pairs[key]:3}  {examples[:90]}")
     if args.json:
-        args.json.write_text(json.dumps(findings, indent=2))
+        args.json.write_text(json.dumps(findings, indent=2), encoding="utf-8")
         print(f"\nfull findings → {args.json}")
     return 0
 

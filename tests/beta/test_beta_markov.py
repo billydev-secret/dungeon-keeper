@@ -9,7 +9,7 @@ from pathlib import Path
 def _make_chain_file(tmp_path: Path, chain: dict, corpus_size: int = 500) -> Path:
     data = {"version": 1, "corpus_size": corpus_size, "chain": chain}
     p = tmp_path / "chain.json"
-    p.write_text(json.dumps(data))
+    p.write_text(json.dumps(data), encoding="utf-8")
     return p
 
 

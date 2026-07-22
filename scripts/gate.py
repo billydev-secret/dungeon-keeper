@@ -30,6 +30,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
 
+# Optional: dispatch pytest to a faster machine (see scripts/remote_test.py and
+# docs/dev_remote_testing.md). Inert unless REMOTE_TEST_HOST is set, and it
+# falls back to local whenever that machine is unreachable — so a missing or
+# broken remote can never block a commit.
+try:
+    import remote_test  # sys.path[0] is scripts/ when run as `python scripts/gate.py`
+except ImportError:  # pragma: no cover — only if the file is absent
+    remote_test = None  # type: ignore[assignment]
+
 # ── scoping heuristic ────────────────────────────────────────────────────
 #
 # The mapping is deliberately best-effort: bounded runtime beats perfect
@@ -293,6 +302,23 @@ def run_mobile(py: str, changed: list[str]) -> None:
         sys.exit(result.returncode)
 
 
+def run_pytest(py: str, *args: str) -> None:
+    """Run pytest remotely when configured and reachable, else locally.
+
+    ``remote_test.run`` returns None for every "can't or shouldn't dispatch"
+    case, which is exactly the signal to fall through to the local path.
+    """
+    print("── pytest " + "─" * 54, flush=True)
+
+    code = remote_test.run(args) if remote_test is not None else None
+    if code is None:
+        code = subprocess.run([py, "-m", "pytest", *args], cwd=ROOT).returncode
+
+    if code != 0:
+        print("GATE FAILED: pytest", file=sys.stderr)
+        sys.exit(code)
+
+
 def main() -> None:
     argv = sys.argv[1:]
     quick = "--quick" in argv
@@ -338,19 +364,19 @@ def main() -> None:
             sys.exit(1)
         if run_full:
             print("── scope: shared file changed → running FULL suite " + "─" * 10)
-            run(py, "pytest", "-m", "pytest", *pytest_args)
+            run_pytest(py, *pytest_args)
         elif targets:
             print(f"── scope: {len(targets)} test file(s) for this diff " + "─" * 10)
             for t in targets:
                 print(f"   • {t}")
-            run(py, "pytest", "-m", "pytest", *targets, *pytest_args)
+            run_pytest(py, *targets, *pytest_args)
         else:
             print("── scope: no code/test changes mapped → skipping pytest " + "─" * 6)
         run_mobile(py, changed)
         print("GATE OK (scoped)")
         return
 
-    run(py, "pytest", "-m", "pytest", *pytest_args)
+    run_pytest(py, *pytest_args)
     print("GATE OK")
 
 

@@ -246,9 +246,9 @@ def main() -> None:
         conn.close()
 
     if args.save_baseline:
-        args.save_baseline.write_text(json.dumps(stats, indent=2) + "\n")
+        args.save_baseline.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
         print(f"baseline written: {args.save_baseline}")
-    baseline = json.loads(args.baseline.read_text()) if args.baseline else None
+    baseline = json.loads(args.baseline.read_text(encoding="utf-8")) if args.baseline else None
     if args.json:
         print(json.dumps(stats, indent=2))
     else:

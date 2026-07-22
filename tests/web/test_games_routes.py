@@ -664,7 +664,7 @@ def test_prompts_update_global(open_client, monkeypatch, tmp_path):
     )
     assert resp.status_code == 200
 
-    saved = json.loads(cfg_path.read_text())
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert saved["audience"] == "adults"
     assert saved["sfw_tone"] == "playful"
     assert saved["nsfw_tone"] == "bold"
@@ -680,7 +680,7 @@ def test_prompts_update_game_entry(open_client, monkeypatch, tmp_path):
     )
     assert resp.status_code == 200
 
-    saved = json.loads(cfg_path.read_text())
+    saved = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert saved["games"]["wyr"]["descriptor"] == "Would You Rather"
     assert saved["games"]["wyr"]["max_tokens"] == 150
 

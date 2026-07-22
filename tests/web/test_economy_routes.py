@@ -398,7 +398,7 @@ def test_no_panel_parses_a_snowflake_with_parseint():
     offender = re.compile(r"parseInt\([^)]*(?:getValue\(\)|_id)[^)]*\)")
     hits = []
     for path in sorted(panels.glob("*.js")):
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if offender.search(line):
                 hits.append(f"{path.name}:{lineno}: {line.strip()}")
 
