@@ -201,7 +201,12 @@ async def update_economy_config(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    values = body.model_dump(exclude_unset=True)
+    # Fields sent as explicit null mean "no change" — without this filter
+    # str(None) would be persisted and read back as the string "None".
+    values = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if v is not None
+    }
 
     def _q():
         with ctx.open_db() as conn:
@@ -213,7 +218,13 @@ async def update_economy_config(
                 raise HTTPException(422, str(exc)) from exc
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # The casino's hub panel documents "economy off ⇒ panel torn down" —
+    # the cog can only honor that if this save pokes it (same dispatch the
+    # casino config PUT uses; ensure_panel re-reads everything itself).
+    if ctx.bot:
+        ctx.bot.dispatch("casino_config_change", guild_id)
+    return result
 
 
 # ── rentable icon catalog ───────────────────────────────────────────────

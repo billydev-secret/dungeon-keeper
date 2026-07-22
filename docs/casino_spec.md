@@ -9,7 +9,14 @@ into it.
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
 ❓ How It Works); every flow is buttons + amount modals. Results post
-publicly (mentions live in embeds, so nothing pings).
+publicly (mentions live in embeds, so nothing pings). The panel is
+**bottom-sticky** (the economy sticky-panel pattern): channel traffic
+debounces a 20s restick that deletes and reposts it, since it is the
+casino's only entry point. Roulette round embeds repaint on a 2s debounce
+per round (one edit per burst of bets, the live_signal idea). Both the
+casino config PUT **and the economy config PUT** dispatch
+`casino_config_change`, so enabling/disabling/moving anything updates or
+tears down the panel without a restart.
 
 ## Money
 
@@ -25,12 +32,29 @@ All movement goes through `services/casino_service.py`:
   booster multiplier.
 - Daily cap accounting: `casino_daily (guild_id, user_id, local_day,
   wagered)` upsert **in the same transaction as the debit**, guild-local day
-  via `tz_offset_hours`. Cap 0 = uncapped (and keeps no books).
+  via `tz_offset_hours`. Cap 0 = uncapped (and keeps no books). **Refunds
+  hand the headroom back** (current-day row, clamped at 0) — a
+  house-initiated refund must not leave the cap consumed by a bet that
+  never resolved.
+- `take_stake` also takes the interaction's `channel_id` (from the cog
+  entry points) and refuses play outside the configured casino channel —
+  an orphaned hub panel a failed delete left behind can't run games
+  elsewhere.
+- A departing member's live stakes ride the wager-escrow rule:
+  `refund_member_live_stakes` (called from the cog's `on_member_remove`)
+  refunds an open blackjack hand and deletes+refunds their bets on open
+  roulette rounds, so nothing settles into a ghost wallet.
 - House edge is **fixed paytables in `services/casino_logic.py`, not
   settings** — enforced by exact-EV tests (see Testing). RTPs: coinflip
   95%, slots ≈93.3%, roulette ≈97.3%, blackjack rules-derived.
-- The register feed narrates all three kinds (🎰/↩️, memo names the table);
-  `casino_payout` rolls into the faucet mix under **games**.
+- The register feed **skips** `casino_stake`/`casino_payout` (results are
+  already public in the casino channel, and bet-per-play volume would
+  outrun the feed's drain budget and starve other kinds); `casino_refund`
+  still posts (↩️, memo names the table), and all three keep their
+  `/bank wallet` display entries. Casino kinds are deliberately **absent
+  from `FAUCET_GROUPS`** (the `wager_payout` precedent — gross winnings
+  aren't faucet income) and `casino_stake` is in `BURN_EXCLUDED_KINDS`
+  (gross turnover isn't "spending" on the biggest-spenders board).
 - Casino games deliberately do **not** call `pay_game_rewards` — gambling
   pays no participation/win faucet.
 
@@ -78,7 +102,24 @@ Dashboard: **Economy → Casino** (`config-casino.js`, admin-only;
 
 Every terminal path settles or refunds, exactly-once via
 `settled_at IS NULL` / `status='open'` claims — a stake can never evaporate
-or double-pay, including replayed timers and double-clicks.
+or double-pay, including replayed timers and double-clicks. Because the
+pre-checks run in autocommit (legacy DEFERRED isolation), every money-moving
+path **re-claims its row inside the write transaction** with a guarded
+no-op UPDATE before the debit: `place_roulette_bet` (a buzzer-beater bet
+racing the spin misses the claim instead of stranding a stake),
+`double_blackjack_stake`, and `resolve_blackjack_action` (which also bumps
+`last_action_at`, resetting the idle clock per press, and reports
+"already finished" instead of rendering an outcome the settle didn't pay).
+
+Recovery is layered: roulette close timers arm **before** the round
+message sends (a failed send voids the round instead of stranding it);
+the 60s maintenance sweep auto-stands idle blackjack hands **and resolves
+any open round past `closes_at`** (self-healing after a crashed timer);
+boot re-arms/refunds as before. Blackjack game rules (double only on two
+cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
+`stand_idle_blackjack_hand` in the service — tested, not cog glue — and
+the double's second stake is derived from the hand row, never
+caller-supplied.
 
 ## Storage (migration 113)
 

@@ -76,10 +76,15 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.ctx = bot.ctx
-        self._accents: dict[int, discord.Color] = {}
         self._bj_locks: dict[int, asyncio.Lock] = {}
-        self._rl_locks: dict[int, asyncio.Lock] = {}
         self._roulette_timers: dict[int, asyncio.Task] = {}
+        # Debounced round-embed repaints (one per open round) and panel
+        # resticks (one per guild) — burst coalescers, not state.
+        self._repaint_tasks: dict[int, asyncio.Task] = {}
+        self._restick_tasks: dict[int, asyncio.Task] = {}
+        # guild_id → configured casino channel, kept warm by ensure_panel so
+        # the on_message restick gate never touches the DB.
+        self._casino_channels: dict[int, int] = {}
         self._boot_task: asyncio.Task | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
@@ -94,9 +99,12 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.maintenance.cancel()
         if self._boot_task is not None:
             self._boot_task.cancel()
-        for task in self._roulette_timers.values():
-            task.cancel()
-        self._roulette_timers.clear()
+        for task_map in (
+            self._roulette_timers, self._repaint_tasks, self._restick_tasks
+        ):
+            for task in task_map.values():
+                task.cancel()
+            task_map.clear()
 
     async def _boot(self) -> None:
         """Post-restart recovery: refund orphaned hands, re-arm round timers,
@@ -142,11 +150,18 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
     @tasks.loop(seconds=60)
     async def maintenance(self) -> None:
-        """Auto-stand blackjack hands whose player wandered off."""
+        """Auto-stand idle blackjack hands AND resolve overdue roulette rounds.
 
-        def _idle() -> list[int]:
+        The roulette leg is the self-healing backstop the timer tasks need:
+        a resolution that failed transiently, or a round whose send crashed
+        before its timer armed, would otherwise hold members' stakes and
+        block the channel until the next restart. The exactly-once
+        ``status='open'`` claim makes replaying resolution here free.
+        """
+
+        def _scan() -> tuple[list[int], list[int]]:
             with self.ctx.open_db() as conn:
-                out: list[int] = []
+                stale: list[int] = []
                 thresholds: dict[int, int] = {}
                 now = time.time()
                 for row in svc.idle_live_blackjack_hands(conn, now):
@@ -156,19 +171,31 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                             conn, gid
                         ).blackjack_idle_seconds
                     if now - float(row["last_action_at"]) >= thresholds[gid]:
-                        out.append(int(row["id"]))
-                return out
+                        stale.append(int(row["id"]))
+                overdue = [
+                    int(r["id"])
+                    for r in svc.open_roulette_rounds(conn)
+                    if float(r["closes_at"]) <= now - 5  # grace for a live timer
+                ]
+                return stale, overdue
 
         try:
-            stale = await asyncio.to_thread(_idle)
+            stale, overdue = await asyncio.to_thread(_scan)
         except Exception:
-            log.exception("casino idle sweep failed")
+            log.exception("casino maintenance sweep failed")
             return
         for hand_id in stale:
             try:
                 await self._auto_stand(hand_id)
             except Exception:
                 log.exception("casino auto-stand failed for hand %s", hand_id)
+        for round_id in overdue:
+            if round_id in self._roulette_timers:
+                continue  # a healthy timer owns it
+            try:
+                await self._resolve_roulette(round_id)
+            except Exception:
+                log.exception("casino overdue-round resolve failed for %s", round_id)
 
     @maintenance.before_loop
     async def _wait_ready(self) -> None:
@@ -176,37 +203,100 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
     @commands.Cog.listener()
     async def on_casino_config_change(self, guild_id: int) -> None:
-        """The dashboard's casino PUT dispatches this after a save so the
-        hub panel appears/moves/updates without waiting for a restart."""
+        """Dashboard saves (casino page AND the economy page's enable
+        toggle) dispatch this so the hub panel appears/moves/updates/tears
+        down without waiting for a restart."""
         guild = self.bot.get_guild(guild_id)
         if guild is not None:
             await self.ensure_panel(guild)
 
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        """Refund a leaver's live casino stakes — the wager-escrow seam's
+        rule extended to the casino, so nothing settles into a ghost
+        wallet after the member is gone."""
+
+        def _refund() -> dict[str, int]:
+            with self.ctx.open_db() as conn:
+                return svc.refund_member_live_stakes(
+                    conn, member.guild.id, member.id
+                )
+
+        try:
+            await asyncio.to_thread(_refund)
+        except Exception:
+            log.exception("casino leaver refund failed for %s", member.id)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Keep the hub panel — the casino's only entry point — at the
+        bottom of its channel (the economy sticky-panel pattern): any
+        traffic in the casino channel debounces a restick check."""
+        guild = message.guild
+        if guild is None:
+            return
+        if message.channel.id != self._casino_channels.get(guild.id):
+            return
+        if guild.id in self._restick_tasks:
+            return
+        self._restick_tasks[guild.id] = asyncio.create_task(
+            self._restick_later(guild.id)
+        )
+
+    async def _restick_later(self, guild_id: int) -> None:
+        try:
+            await asyncio.sleep(20)
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+
+            def _read() -> svc.CasinoSettings:
+                with self.ctx.open_db() as conn:
+                    return svc.load_casino_settings(conn, guild_id)
+
+            settings = await asyncio.to_thread(_read)
+            channel = guild.get_channel(settings.channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                return
+            if channel.last_message_id == settings.panel_message_id:
+                return  # nothing has buried it
+            await self.ensure_panel(guild, force_repost=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("casino panel restick failed for guild %s", guild_id)
+        finally:
+            self._restick_tasks.pop(guild_id, None)
+
     # ── shared helpers ─────────────────────────────────────────────────
 
     async def _accent(self, guild: discord.Guild | None) -> discord.Color | None:
-        """Resolve + cache the guild accent; never let it break a game."""
+        """Resolve the guild accent per render; never let it break a game.
+
+        No cog-side cache: branding.py already caches by avatar hash and is
+        invalidated on dashboard branding saves, so this stays cheap AND
+        picks up accent changes without a restart.
+        """
         if guild is None:
             return None
-        cached = self._accents.get(guild.id)
-        if cached is not None:
-            return cached
         try:
-            accent = await resolve_accent_color(self.ctx.db_path, guild)
+            return await resolve_accent_color(self.ctx.db_path, guild)
         except Exception:
             log.debug("casino accent resolve failed", exc_info=True)
             return None
-        self._accents[guild.id] = accent
-        return accent
 
     # ── hub panel upkeep ───────────────────────────────────────────────
 
-    async def ensure_panel(self, guild: discord.Guild) -> None:
+    async def ensure_panel(
+        self, guild: discord.Guild, *, force_repost: bool = False
+    ) -> None:
         """Post/refresh the hub panel in the configured casino channel.
 
         Also the teardown path: an unset channel (or a disabled economy)
-        deletes any panel we previously posted. Called at boot and by the
-        dashboard's casino PUT route after a config change.
+        deletes any panel we previously posted. Called at boot, by config
+        changes (dashboard dispatch), and by the restick debounce with
+        ``force_repost=True`` — delete-and-repost so the panel returns to
+        the bottom of the channel instead of being edited in place.
         """
 
         def _read() -> tuple[EconSettings, svc.CasinoSettings]:
@@ -239,6 +329,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     {"panel_message_id": message_id, "panel_channel_id": channel_id},
                 )
 
+        self._casino_channels[guild.id] = settings.channel_id
         if not settings.channel_id or not econ.enabled:
             if settings.panel_message_id:
                 await _delete_stale()
@@ -248,8 +339,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         channel = guild.get_channel(settings.channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
-        if settings.panel_message_id and settings.panel_channel_id != channel.id:
-            await _delete_stale()  # the casino moved; drop the old panel
+        moved = settings.panel_channel_id != channel.id
+        if settings.panel_message_id and (moved or force_repost):
+            await _delete_stale()  # moved or buried; drop the old panel
             settings = replace(settings, panel_message_id=0)
         embed = casino_embeds.build_hub_embed(
             econ, settings, await self._accent(guild)
@@ -265,7 +357,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             except discord.HTTPException:
                 return
         try:
-            message = await channel.send(embed=embed, view=CasinoHubView())
+            message = await channel.send(
+                embed=embed,
+                view=CasinoHubView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
         except discord.HTTPException:
             log.warning("casino panel post failed in #%s", channel.id)
             return
@@ -283,7 +379,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         def _play() -> tuple[str | None, EconSettings | None, str, int]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
-                    conn, guild.id, interaction.user.id, amount, "coinflip"
+                    conn, guild.id, interaction.user.id, amount, "coinflip",
+                    channel_id=interaction.channel_id,
                 )
                 if err is not None:
                     return err, None, "", 0
@@ -318,7 +415,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         ]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
-                    conn, guild.id, interaction.user.id, amount, "slots"
+                    conn, guild.id, interaction.user.id, amount, "slots",
+                    channel_id=interaction.channel_id,
                 )
                 if err is not None:
                     return err, None, ("", "", ""), 0, None
@@ -378,7 +476,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                         err="You already have a hand at the table — "
                         "finish it first."
                     )
-                err = svc.take_stake(conn, guild.id, uid, amount, "blackjack")
+                err = svc.take_stake(
+                    conn, guild.id, uid, amount, "blackjack",
+                    channel_id=interaction.channel_id,
+                )
                 if err is not None:
                     return _HandOutcome(err=err)
                 deck = logic.new_deck()
@@ -444,131 +545,85 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             return
         lock = self._bj_locks.setdefault(hand_id, asyncio.Lock())
         async with lock:
-            outcome = await self._blackjack_step(interaction, hand_id, action)
-        if outcome:
+            done = await self._blackjack_step(interaction, hand_id, action)
+        if done:
             self._bj_locks.pop(hand_id, None)
 
     async def _blackjack_step(
         self, interaction: discord.Interaction, hand_id: int, action: str
     ) -> bool:
-        """One button press; True once the hand is finished."""
+        """One button press, rules in the service; True once the hand is
+        terminally gone (settled now, or found already settled) so the
+        caller drops its lock — clicks on stale buttons must not grow the
+        lock dict forever."""
         guild = interaction.guild
         assert guild is not None
         uid = interaction.user.id
 
-        def _step() -> _HandOutcome:
+        def _step() -> tuple[svc.BlackjackStep, EconSettings | None]:
             with self.ctx.open_db() as conn:
-                row = svc.get_blackjack_hand(conn, hand_id)
-                if row is None or row["settled_at"] is not None:
-                    return _HandOutcome(err="That hand is already finished.")
-                if int(row["user_id"]) != uid:
-                    return _HandOutcome(err="That's not your hand — deal your own!")
-                deck, player, dealer = svc.deserialize_blackjack(
-                    str(row["state_json"])
+                step = svc.resolve_blackjack_action(
+                    conn, guild.id, hand_id, uid, action
                 )
-                stake = int(row["stake"])
-                doubled = bool(row["doubled"])
-                econ = load_econ_settings(conn, guild.id)
+                econ = (
+                    load_econ_settings(conn, guild.id)
+                    if step.err is None
+                    else None
+                )
+                return step, econ
 
-                def _finish(payout: int, outcome: str) -> _HandOutcome:
-                    svc.settle_blackjack_hand(conn, hand_id, payout, outcome)
-                    return _HandOutcome(
-                        econ=econ, player=player, dealer=dealer, stake=stake,
-                        doubled=doubled, outcome=outcome, payout=payout,
-                    )
-
-                if action == "double":
-                    if len(player) != 2:
-                        return _HandOutcome(
-                            err="You can only double on your first two cards."
-                        )
-                    err = svc.double_blackjack_stake(
-                        conn, guild.id, hand_id, uid, stake
-                    )
-                    if err is not None:
-                        return _HandOutcome(err=err)
-                    stake *= 2
-                    doubled = True
-                    player.append(deck.pop())
-                    if logic.hand_value(player) > 21:
-                        return _finish(0, "bust")
-                    logic.dealer_play(deck, dealer)
-                    return _finish(*logic.blackjack_settle(player, dealer, stake))
-
-                if action == "hit":
-                    player.append(deck.pop())
-                    value = logic.hand_value(player)
-                    if value > 21:
-                        return _finish(0, "bust")
-                    if value == 21:
-                        logic.dealer_play(deck, dealer)
-                        return _finish(
-                            *logic.blackjack_settle(player, dealer, stake)
-                        )
-                    svc.update_blackjack_state(
-                        conn, hand_id, svc.serialize_blackjack(deck, player, dealer)
-                    )
-                    return _HandOutcome(
-                        econ=econ, player=player, dealer=dealer, stake=stake,
-                        doubled=doubled,
-                    )
-
-                # stand
-                logic.dealer_play(deck, dealer)
-                return _finish(*logic.blackjack_settle(player, dealer, stake))
-
-        result = await asyncio.to_thread(_step)
-        if result.err is not None or result.econ is None:
-            await safe_ephemeral(interaction, f"❌ {result.err}")
-            return False
+        step, econ = await asyncio.to_thread(_step)
+        if step.err is not None or econ is None:
+            await safe_ephemeral(interaction, f"❌ {step.err}")
+            return step.err == "That hand is already finished."
         embed = casino_embeds.build_blackjack_embed(
-            result.econ, uid, result.player or [], result.dealer or [],
-            result.stake, await self._accent(guild),
-            doubled=result.doubled, outcome=result.outcome, payout=result.payout,
+            econ, uid, step.player or [], step.dealer or [],
+            step.stake, await self._accent(guild),
+            doubled=step.doubled, outcome=step.outcome, payout=step.payout,
         )
         view = (
-            None if result.outcome is not None
+            None if step.outcome is not None
             else build_blackjack_view(hand_id, can_double=False)
         )
         try:
             await interaction.response.edit_message(embed=embed, view=view)
         except discord.HTTPException:
             pass
-        return result.outcome is not None
+        return step.outcome is not None
 
     async def _auto_stand(self, hand_id: int) -> None:
-        """The idle sweep's stand — same settle path, message edit best-effort."""
+        """The idle sweep's stand — same settle path, message edit best-effort.
+
+        ``stand_idle_blackjack_hand`` returns None when the hand was
+        settled concurrently (a button press holding the claim), so this
+        can never render an outcome the settle didn't pay.
+        """
         lock = self._bj_locks.setdefault(hand_id, asyncio.Lock())
         async with lock:
 
             def _stand():
                 with self.ctx.open_db() as conn:
                     row = svc.get_blackjack_hand(conn, hand_id)
-                    if row is None or row["settled_at"] is not None:
+                    if row is None:
                         return None
-                    deck, player, dealer = svc.deserialize_blackjack(
-                        str(row["state_json"])
-                    )
-                    logic.dealer_play(deck, dealer)
-                    payout, outcome = logic.blackjack_settle(
-                        player, dealer, int(row["stake"])
-                    )
-                    svc.settle_blackjack_hand(conn, hand_id, payout, outcome)
+                    step = svc.stand_idle_blackjack_hand(conn, hand_id)
+                    if step is None:
+                        return None
                     econ = load_econ_settings(conn, int(row["guild_id"]))
-                    return row, deck, player, dealer, payout, outcome, econ
+                    return row, step, econ
 
             result = await asyncio.to_thread(_stand)
         self._bj_locks.pop(hand_id, None)
         if result is None:
             return
-        row, _, player, dealer, payout, outcome, econ = result
+        row, step, econ = result
         channel = self.bot.get_channel(int(row["channel_id"]))
         if not isinstance(channel, discord.TextChannel) or not int(row["message_id"]):
             return
         embed = casino_embeds.build_blackjack_embed(
-            econ, int(row["user_id"]), player, dealer, int(row["stake"]),
-            self._accents.get(int(row["guild_id"])),
-            doubled=bool(row["doubled"]), outcome=outcome, payout=payout,
+            econ, int(row["user_id"]), step.player or [], step.dealer or [],
+            step.stake, await self._accent(channel.guild),
+            doubled=step.doubled, outcome=step.outcome, payout=step.payout,
         )
         embed.set_footer(text="Stood automatically — the dealer waits for no one.")
         try:
@@ -592,6 +647,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 settings = svc.load_casino_settings(conn, guild.id)
                 if not econ.enabled or not settings.channel_id:
                     return _RoundOpen(err="The casino is closed.")
+                if channel_id != settings.channel_id:
+                    return _RoundOpen(
+                        err="The casino has moved — find it in "
+                        f"<#{settings.channel_id}>."
+                    )
                 if not settings.roulette_enabled:
                     return _RoundOpen(err="That table is closed right now.")
                 existing = svc.live_roulette_round(conn, channel_id)
@@ -609,7 +669,16 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     closes_at=float(rnd["closes_at"]),
                 )
 
-        result = await asyncio.to_thread(_open)
+        try:
+            result = await asyncio.to_thread(_open)
+        except sqlite3.IntegrityError:
+            # Two simultaneous presses both passed the pre-check; the
+            # partial unique index caught the second — same polite note as
+            # the ordinary already-running path.
+            await safe_ephemeral(
+                interaction, casino_embeds.build_round_running_note(time.time())
+            )
+            return
         if result.err is not None:
             await safe_ephemeral(interaction, f"❌ {result.err}")
             return
@@ -620,20 +689,36 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             )
             return
         round_id = result.round_id
+        # Arm BEFORE the send: if the send fails the timer still resolves
+        # (refunds) the round instead of stranding it headless until boot.
+        self._arm_roulette_timer(round_id, result.closes_at)
         embed = casino_embeds.build_roulette_round_embed(
             result.econ, result.closes_at, [], await self._accent(guild)
         )
-        await interaction.response.send_message(
-            embed=embed, view=build_roulette_view(round_id)
-        )
-        message = await interaction.original_response()
+        try:
+            await interaction.response.send_message(
+                embed=embed,
+                view=build_roulette_view(round_id),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            message = await interaction.original_response()
+        except discord.HTTPException:
+            # No message means nobody can bet — kill the round now rather
+            # than leave a headless betting window blocking the channel.
+            timer = self._roulette_timers.pop(round_id, None)
+            if timer is not None:
+                timer.cancel()
+            await self._void_round(round_id)
+            await safe_ephemeral(
+                interaction, "❌ Couldn't open the round — try again."
+            )
+            return
 
         def _bind() -> None:
             with self.ctx.open_db() as conn:
                 svc.set_roulette_message(conn, round_id, message.id)
 
         await asyncio.to_thread(_bind)
-        self._arm_roulette_timer(round_id, result.closes_at)
 
     async def place_roulette_bet(
         self,
@@ -648,46 +733,75 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             return
         uid = interaction.user.id
 
-        def _bet() -> _RoundBet:
+        def _bet() -> str | None:
             with self.ctx.open_db() as conn:
-                err = svc.place_roulette_bet(
+                return svc.place_roulette_bet(
                     conn, round_id, uid, bet_type, selection, amount
                 )
-                if err is not None:
-                    return _RoundBet(err=err)
-                rnd = svc.get_roulette_round(conn, round_id)
-                assert rnd is not None
-                bets = [
-                    (
-                        int(b["user_id"]),
-                        logic.describe_bet(str(b["bet_type"]), int(b["selection"])),
-                        int(b["amount"]),
-                    )
-                    for b in svc.roulette_bets(conn, round_id)
-                ]
-                return _RoundBet(
-                    econ=load_econ_settings(conn, guild.id), rnd=rnd, bets=bets
-                )
 
-        result = await asyncio.to_thread(_bet)
-        if result.err is not None or result.econ is None or result.rnd is None:
-            await safe_ephemeral(interaction, f"❌ {result.err}")
+        err = await asyncio.to_thread(_bet)
+        if err is not None:
+            await safe_ephemeral(interaction, f"❌ {err}")
             return
         desc = logic.describe_bet(bet_type, selection)
         await safe_ephemeral(interaction, f"✅ Bet placed: {desc} for {amount:,}.")
-        rnd = result.rnd
-        channel = self.bot.get_channel(int(rnd["channel_id"]))
-        if isinstance(channel, discord.TextChannel) and int(rnd["message_id"]):
-            embed = casino_embeds.build_roulette_round_embed(
-                result.econ, float(rnd["closes_at"]), result.bets or [],
-                await self._accent(guild),
-            )
-            try:
-                await channel.get_partial_message(int(rnd["message_id"])).edit(
-                    embed=embed
+        # Repaint is debounced per round — a burst of bets coalesces into
+        # one message edit (the live_signal idea) instead of one Discord
+        # edit per bettor.
+        self._schedule_round_repaint(guild, round_id)
+
+    def _schedule_round_repaint(self, guild: discord.Guild, round_id: int) -> None:
+        if round_id in self._repaint_tasks:
+            return
+        self._repaint_tasks[round_id] = asyncio.create_task(
+            self._repaint_round(guild, round_id)
+        )
+
+    async def _repaint_round(self, guild: discord.Guild, round_id: int) -> None:
+        try:
+            await asyncio.sleep(2.0)
+
+            def _read() -> _RoundBet:
+                with self.ctx.open_db() as conn:
+                    rnd = svc.get_roulette_round(conn, round_id)
+                    if rnd is None or str(rnd["status"]) != "open":
+                        return _RoundBet()
+                    bets = [
+                        (
+                            int(b["user_id"]),
+                            logic.describe_bet(
+                                str(b["bet_type"]), int(b["selection"])
+                            ),
+                            int(b["amount"]),
+                        )
+                        for b in svc.roulette_bets(conn, round_id)
+                    ]
+                    return _RoundBet(
+                        econ=load_econ_settings(conn, guild.id), rnd=rnd, bets=bets
+                    )
+
+            result = await asyncio.to_thread(_read)
+            rnd = result.rnd
+            if result.econ is None or rnd is None:
+                return  # settled while we slept — the result edit owns it now
+            channel = self.bot.get_channel(int(rnd["channel_id"]))
+            if isinstance(channel, discord.TextChannel) and int(rnd["message_id"]):
+                embed = casino_embeds.build_roulette_round_embed(
+                    result.econ, float(rnd["closes_at"]), result.bets or [],
+                    await self._accent(guild),
                 )
-            except discord.HTTPException:
-                pass
+                try:
+                    await channel.get_partial_message(int(rnd["message_id"])).edit(
+                        embed=embed
+                    )
+                except discord.HTTPException:
+                    pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("roulette repaint failed for round %s", round_id)
+        finally:
+            self._repaint_tasks.pop(round_id, None)
 
     def _arm_roulette_timer(self, round_id: int, closes_at: float) -> None:
         if round_id in self._roulette_timers:
@@ -709,23 +823,26 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             self._roulette_timers.pop(round_id, None)
 
     async def _resolve_roulette(self, round_id: int) -> None:
-        lock = self._rl_locks.setdefault(round_id, asyncio.Lock())
-        async with lock:
+        # No lock needed: the status='open' claim inside settle_roulette_round
+        # is the mutual exclusion (timer, maintenance sweep and void can all
+        # reach a round; only the first claim pays).
+        repaint = self._repaint_tasks.pop(round_id, None)
+        if repaint is not None:
+            repaint.cancel()  # a stale "bets open" edit must not land post-spin
 
-            def _settle():
-                with self.ctx.open_db() as conn:
-                    rnd = svc.get_roulette_round(conn, round_id)
-                    if rnd is None or str(rnd["status"]) != "open":
-                        return None
-                    result = logic.spin_roulette()
-                    bets = svc.settle_roulette_round(conn, round_id, result)
-                    if bets is None:
-                        return None
-                    econ = load_econ_settings(conn, int(rnd["guild_id"]))
-                    return rnd, result, bets, econ
+        def _settle():
+            with self.ctx.open_db() as conn:
+                rnd = svc.get_roulette_round(conn, round_id)
+                if rnd is None or str(rnd["status"]) != "open":
+                    return None
+                result = logic.spin_roulette()
+                bets = svc.settle_roulette_round(conn, round_id, result)
+                if bets is None:
+                    return None
+                econ = load_econ_settings(conn, int(rnd["guild_id"]))
+                return rnd, result, bets, econ
 
-            settled = await asyncio.to_thread(_settle)
-        self._rl_locks.pop(round_id, None)
+        settled = await asyncio.to_thread(_settle)
         if settled is None:
             return
         rnd, result, bet_rows, econ = settled

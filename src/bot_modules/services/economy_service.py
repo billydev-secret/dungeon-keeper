@@ -252,25 +252,32 @@ _ALL_KEYS = frozenset(f.name for f in fields(EconSettings))
 def load_econ_settings(conn: sqlite3.Connection, guild_id: int) -> EconSettings:
     """Build an EconSettings from stored ``econ_`` config values.
 
-    Guild-scoped only — ``allow_legacy_fallback=False`` so an unconfigured
-    guild gets real defaults instead of inheriting the legacy guild_id=0 rows.
+    Guild-scoped only — no legacy guild_id=0 fallback, so an unconfigured
+    guild gets real defaults instead of inheriting the legacy guild_id=0
+    rows. One query for every ``econ_*`` key (GLOB keeps the underscore
+    literal): this loader runs on hot paths — casino bets load it inside
+    every stake — and the per-field version was ~35 SELECTs per call.
     """
-    from bot_modules.core.db_utils import get_config_value, parse_bool
+    from bot_modules.core.db_utils import parse_bool
 
+    stored = {
+        str(r["key"])[len(ECON_PREFIX):]: str(r["value"])
+        for r in conn.execute(
+            "SELECT key, value FROM config WHERE guild_id = ? "
+            "AND key GLOB 'econ_*'",
+            (guild_id,),
+        )
+    }
     defaults = DEFAULT_ECON_SETTINGS
     kwargs: dict[str, object] = {}
 
     for key in _BOOL_KEYS:
-        raw = get_config_value(
-            conn, f"{ECON_PREFIX}{key}", "", guild_id, allow_legacy_fallback=False
-        )
+        raw = stored.get(key, "")
         if raw:
             kwargs[key] = parse_bool(raw, getattr(defaults, key))
 
     for key in _INT_KEYS:
-        raw = get_config_value(
-            conn, f"{ECON_PREFIX}{key}", "", guild_id, allow_legacy_fallback=False
-        )
+        raw = stored.get(key, "")
         if raw:
             try:
                 kwargs[key] = int(raw)
@@ -278,9 +285,7 @@ def load_econ_settings(conn: sqlite3.Connection, guild_id: int) -> EconSettings:
                 pass
 
     for key in _FLOAT_KEYS:
-        raw = get_config_value(
-            conn, f"{ECON_PREFIX}{key}", "", guild_id, allow_legacy_fallback=False
-        )
+        raw = stored.get(key, "")
         if raw:
             try:
                 kwargs[key] = float(raw)
@@ -288,9 +293,7 @@ def load_econ_settings(conn: sqlite3.Connection, guild_id: int) -> EconSettings:
                 pass
 
     for key in _STR_KEYS:
-        raw = get_config_value(
-            conn, f"{ECON_PREFIX}{key}", "", guild_id, allow_legacy_fallback=False
-        )
+        raw = stored.get(key, "")
         if raw:
             kwargs[key] = raw
 

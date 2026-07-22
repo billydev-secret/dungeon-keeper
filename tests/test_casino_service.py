@@ -390,3 +390,230 @@ def test_boot_sweep_lists_open_rounds(db):
         r2 = _open_round(conn, channel=CHAN + 1)
         svc.settle_roulette_round(conn, r2, 0, now=NOW + 45)
         assert [int(r["id"]) for r in svc.open_roulette_rounds(conn)] == [r1]
+
+
+# ── review-fix regressions (docs/reviews round, 2026-07-22) ────────────
+
+
+def test_stale_precheck_cannot_strand_a_roulette_stake(db, monkeypatch):
+    """The buzzer-beater race: the autocommit pre-check saw an open round
+    but the settler claimed it before our debit. The in-transaction claim
+    must refuse the bet — money moved for a settled round is unrecoverable."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_round(conn)
+        assert svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45) is not None
+        stale = {
+            "id": round_id, "status": "open",
+            "closes_at": NOW + 45, "guild_id": GUILD,
+        }
+        monkeypatch.setattr(svc, "get_roulette_round", lambda *_: stale)
+        err = svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 2)
+        assert err == "Betting on that round has closed."
+        assert get_balance(conn, GUILD, A) == 100  # nothing debited
+        monkeypatch.undo()
+        assert all(int(b["user_id"]) != A for b in svc.roulette_bets(conn, round_id))
+
+
+def test_refunds_restore_daily_cap_headroom(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 100})
+        _fund(conn, A, 200)
+        _deal(conn, A, stake=80)
+        day = "2027-01-15"  # NOW's local day at offset 0
+        assert svc.wagered_today(conn, GUILD, A, day) == 80
+        swept = svc.refund_live_blackjack_hands(conn, now=NOW)
+        assert len(swept) == 1
+        assert svc.wagered_today(conn, GUILD, A, day) == 0
+        # the full cap is available again
+        assert svc.take_stake(conn, GUILD, A, 100, "slots", now=NOW) is None
+
+
+def test_void_round_restores_cap_headroom_and_clamps_at_zero(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 100})
+        _fund(conn, A, 200)
+        round_id = _open_round(conn)
+        assert svc.place_roulette_bet(conn, round_id, A, "red", 0, 60, now=NOW + 1) is None
+        day = "2027-01-15"
+        assert svc.wagered_today(conn, GUILD, A, day) == 60
+        assert svc.void_roulette_round(conn, round_id, now=NOW + 5) == {A: 60}
+        assert svc.wagered_today(conn, GUILD, A, day) == 0
+        # a refund with no counter row never goes negative
+        svc.refund(conn, GUILD, A, 50, "roulette", now=NOW)
+        assert svc.wagered_today(conn, GUILD, A, day) == 0
+
+
+def test_member_leave_refunds_live_stakes_and_spares_the_round(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _fund(conn, B, 100)
+        _deal(conn, A, stake=20)
+        round_id = _open_round(conn)
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+        svc.place_roulette_bet(conn, round_id, A, "number", 7, 15, now=NOW + 2)
+        svc.place_roulette_bet(conn, round_id, B, "black", 0, 20, now=NOW + 3)
+
+        out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 4)
+        assert out == {"blackjack": 20, "roulette": 25}
+        assert get_balance(conn, GUILD, A) == 200  # made whole
+        assert svc.live_blackjack_hand(conn, GUILD, A) is None
+        # A's bets are gone so the spin can't pay a ghost; B's bet survives
+        remaining = svc.roulette_bets(conn, round_id)
+        assert [int(b["user_id"]) for b in remaining] == [B]
+        bets = svc.settle_roulette_round(conn, round_id, 2, now=NOW + 45)  # 2 = black
+        assert bets is not None and [int(b["payout"]) for b in bets] == [40]
+        # a second leave call finds nothing live
+        assert svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 5) == {
+            "blackjack": 0, "roulette": 0,
+        }
+
+
+def _deal_state(conn, user_id, stake, deck, player, dealer):
+    assert svc.take_stake(conn, GUILD, user_id, stake, "blackjack", now=NOW) is None
+    return svc.create_blackjack_hand(
+        conn, GUILD, CHAN, user_id, stake,
+        svc.serialize_blackjack(deck, player, dealer), now=NOW,
+    )
+
+
+def test_resolve_action_hit_to_bust(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(conn, A, 20, ["5♣"], ["10♠", "9♦"], ["10♥", "7♥"])
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "hit", now=NOW)
+        assert (step.err, step.outcome, step.payout) == (None, "bust", 0)
+        assert get_balance(conn, GUILD, A) == 80
+        assert svc.live_blackjack_hand(conn, GUILD, A) is None
+
+
+def test_resolve_action_stand_win_pays_double(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(conn, A, 20, [], ["10♠", "9♦"], ["10♥", "7♥"])
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "stand", now=NOW)
+        assert (step.outcome, step.payout) == ("win", 40)
+        assert get_balance(conn, GUILD, A) == 120
+
+
+def test_resolve_action_hit_to_21_auto_stands(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(
+            conn, A, 20, ["2♣", "6♣"], ["10♠", "5♦"], ["10♥", "6♥"]
+        )
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "hit", now=NOW)
+        # player drew to 21, dealer drew 2 to 18 — resolved without a stand press
+        assert (step.outcome, step.payout) == ("win", 40)
+
+
+def test_resolve_action_plain_hit_stays_live_and_resets_idle_clock(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(
+            conn, A, 20, ["2♣", "2♦"], ["5♠", "5♦"], ["10♥", "7♥"]
+        )
+        step = svc.resolve_blackjack_action(
+            conn, GUILD, hand_id, A, "hit", now=NOW + 100
+        )
+        assert step.err is None and step.outcome is None
+        assert step.player == ["5♠", "5♦", "2♦"]
+        # the press bumped last_action_at, so the idle sweep no longer sees it
+        assert svc.idle_live_blackjack_hands(conn, NOW + 50) == []
+
+
+def test_resolve_action_double_derives_stake_from_the_row(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(
+            conn, A, 20, ["9♥", "10♣"], ["5♠", "6♦"], ["10♥", "7♥"]
+        )
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "double", now=NOW)
+        assert (step.doubled, step.stake) == (True, 40)
+        assert (step.outcome, step.payout) == ("win", 80)
+        assert get_balance(conn, GUILD, A) == 100 - 40 + 80
+
+
+def test_resolve_action_double_needs_two_cards(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(
+            conn, A, 20, ["2♣"], ["5♠", "5♦", "3♣"], ["10♥", "7♥"]
+        )
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "double", now=NOW)
+        assert step.err == "You can only double on your first two cards."
+        assert get_balance(conn, GUILD, A) == 80  # no second debit
+
+
+def test_resolve_action_double_short_funds_leaves_hand_live(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 25)
+        hand_id = _deal_state(conn, A, 20, ["9♥"], ["5♠", "6♦"], ["10♥", "7♥"])
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "double", now=NOW)
+        assert step.err is not None and "you have 5" in step.err
+        assert svc.live_blackjack_hand(conn, GUILD, A) is not None
+
+
+def test_resolve_action_owner_and_settled_guards(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(conn, A, 20, [], ["10♠", "9♦"], ["10♥", "7♥"])
+        with pytest.raises(ValueError):
+            svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "split", now=NOW)
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, B, "stand", now=NOW)
+        assert step.err == "That's not your hand — deal your own!"
+        # settle it out from under the press (the boot-sweep race)
+        assert svc.settle_blackjack_hand(conn, hand_id, 20, "push", now=NOW)
+        balance = get_balance(conn, GUILD, A)
+        step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "stand", now=NOW)
+        assert step.err == "That hand is already finished."
+        assert get_balance(conn, GUILD, A) == balance  # nothing paid twice
+
+
+def test_double_stake_refused_on_settled_hand(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal(conn, stake=20)
+        assert svc.settle_blackjack_hand(conn, hand_id, 0, "bust", now=NOW)
+        err = svc.double_blackjack_stake(conn, GUILD, hand_id, A, 20, now=NOW)
+        assert err == "That hand is already finished."
+        assert get_balance(conn, GUILD, A) == 80  # the double debited nothing
+
+
+def test_stand_idle_hand_settles_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal_state(conn, A, 20, [], ["10♠", "8♦"], ["10♥", "8♥"])
+        step = svc.stand_idle_blackjack_hand(conn, hand_id, now=NOW)
+        assert step is not None and (step.outcome, step.payout) == ("push", 20)
+        assert svc.stand_idle_blackjack_hand(conn, hand_id, now=NOW) is None
+        assert get_balance(conn, GUILD, A) == 100  # push paid exactly once
+
+
+def test_stake_refuses_the_wrong_channel(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        err = svc.take_stake(
+            conn, GUILD, A, 10, "slots", now=NOW, channel_id=CHAN + 99
+        )
+        assert err is not None and "moved" in err
+        assert get_balance(conn, GUILD, A) == 100
+        assert (
+            svc.take_stake(conn, GUILD, A, 10, "slots", now=NOW, channel_id=CHAN)
+            is None
+        )
+
+
+def test_casino_kinds_economy_accounting_registrations():
+    """The feed skips bet spam, the faucet mix ignores gross winnings, and
+    the spenders board ignores gross turnover — the accounting decisions
+    from the review, pinned."""
+    from bot_modules.economy.metrics import FAUCET_GROUPS
+    from bot_modules.economy.register import SKIP_KINDS
+    from bot_modules.economy.stats import BURN_EXCLUDED_KINDS
+
+    assert "casino_stake" in SKIP_KINDS
+    assert "casino_payout" in SKIP_KINDS
+    assert "casino_refund" not in SKIP_KINDS
+    assert "casino_stake" in BURN_EXCLUDED_KINDS
+    assert not any(k.startswith("casino_") for k in FAUCET_GROUPS)

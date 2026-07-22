@@ -55,7 +55,22 @@ TRANSFER_COLOUR = discord.Colour(0x5865F2)
 # ``transfer_in`` is skipped because a transfer writes two rows (out + in) for
 # one event; the register posts the ``transfer_out`` leg as a single
 # consolidated "A → B" entry instead of reporting the same movement twice.
-SKIP_KINDS: tuple[str, ...] = ("login", "conversion", "transfer_in")
+#
+# ``casino_stake`` / ``casino_payout`` are skipped because slot pulls and
+# coinflips write 1-2 rows per play — sustained play outruns the drain
+# budget (8 per 30s tick), and once the backlog crosses the stale cutoff
+# the drain silently drops OTHER kinds' entries queued behind the bet
+# spam. Casino results already post publicly in the casino channel, so the
+# feed loses no news; ``casino_refund`` still posts (rare, and it's how a
+# restart's make-whole sweep shows its receipts). All three keep their
+# ``_KIND_DISPLAY`` entries for /bank wallet.
+SKIP_KINDS: tuple[str, ...] = (
+    "login",
+    "conversion",
+    "transfer_in",
+    "casino_stake",
+    "casino_payout",
+)
 
 # Per-kind glyph + human label. The label is the fallback memo for kinds whose
 # meta carries nothing extra to say.
