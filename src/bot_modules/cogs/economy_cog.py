@@ -1099,7 +1099,7 @@ def _build_shop_embed(
         + (
             "Tap a button to rent — the reply is private to you."
             if panel
-            else "Green buttons customise what you've already rented."
+            else "Green buttons customize what you've already rented."
         )
         + "\n​"
     )
@@ -1248,7 +1248,7 @@ class EconomyCog(commands.Cog):
     )
     role = app_commands.Group(
         name="role",
-        description="Personal role extras (customise your perks in /bank shop).",
+        description="Personal role extras (customize your perks in /bank shop).",
         parent=bank,
     )
 
