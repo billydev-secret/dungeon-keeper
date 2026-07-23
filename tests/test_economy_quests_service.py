@@ -3007,6 +3007,32 @@ def test_a_single_pin_evicts_a_draw_rather_than_growing_the_board(db):
         assert setup in board
 
 
+def test_pin_eviction_never_splits_a_locked_pair(db):
+    # A pin must not evict half of a producer/consumer pair that
+    # apply_pair_bundles kept together. With a paired bundle on the board and a
+    # pending setup pin, the pair is kept whole (or dropped whole), never split.
+    with open_db(db) as conn:
+        # A pool of paired quests only, so the draw yields a bundle. Board size 3
+        # (SETTINGS.quest_board_daily) leaves 2 slots after one pin — exactly a
+        # pair's width, so a pair-blind eviction would split it.
+        pairs = []
+        for i in range(4):
+            a = _make(conn, qtype="daily", trigger_kind="guess_post",
+                      pair_tag=f"p{i}", title=f"host{i}")
+            b = _make(conn, qtype="daily", trigger_kind="guess",
+                      pair_tag=f"p{i}", title=f"play{i}")
+            pairs.append((a, b))
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", SETTINGS)
+        assert setup in board
+        # Every non-setup quest on the board has its partner on the board too.
+        by_id = {a: b for a, b in pairs} | {b: a for a, b in pairs}
+        for q in board:
+            if q == setup:
+                continue
+            assert by_id[q] in board, f"pair split: {q} without its partner"
+
+
 def test_every_pending_setup_quest_is_pinned_even_past_the_board_size(db):
     # Regression on the live shape: 4 setup quests against a smaller board. A
     # cap would rank them against each other and the last one — First Purchase,

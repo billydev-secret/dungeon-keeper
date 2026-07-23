@@ -555,6 +555,32 @@ def _drop_completed_setup(
     return board - done
 
 
+def _keep_ordinary_units(
+    ordinary: set[int], pairs: dict[int, int], slots: int
+) -> set[int]:
+    """Pick up to ``slots`` ordinary quests, never splitting a locked pair.
+
+    ``apply_pair_bundles`` deliberately keeps producer/consumer pairs on the
+    board together; eviction has to honour that. Quests are grouped into units
+    (a pair present on both sides is one unit, everything else a singleton),
+    ordered by lowest id for stability, and whole units are kept while they fit.
+    A pair that would overflow the remaining slots is dropped entirely rather
+    than split, so the board can land one short of ``slots`` — better a smaller
+    board than half a pair.
+    """
+    kept: set[int] = set()
+    seen: set[int] = set()
+    for q in sorted(ordinary):
+        if q in seen:
+            continue
+        partner = pairs.get(q)
+        unit = {q, partner} if partner is not None and partner in ordinary else {q}
+        seen |= unit
+        if len(kept) + len(unit) <= slots:
+            kept |= unit
+    return kept
+
+
 def _pin_pending_setup(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -562,6 +588,7 @@ def _pin_pending_setup(
     board: set[int],
     pool_ids: set[int],
     n: int,
+    pairs: dict[int, int],
 ) -> set[int]:
     """Force every not-yet-done one-time setup quest onto a member's board.
 
@@ -582,10 +609,11 @@ def _pin_pending_setup(
     setup quest, so a capped board would show the First Purchase nudge to
     nobody at all.
 
-    Eviction takes the highest ordinary quest ids first — stable within a
-    period, so a member's board doesn't churn between calls. Callers apply
-    reroll overrides *after* this, so a member can still pay to push a pinned
-    quest off their board; honouring the reroll matters more than the nudge.
+    Eviction keeps the lowest ordinary quest ids — stable within a period, so a
+    member's board doesn't churn between calls — but never splits a locked pair
+    (see ``_keep_ordinary_units``). Callers apply reroll overrides *after* this,
+    so a member can still pay to push a pinned quest off their board; honouring
+    the reroll matters more than the nudge.
     """
     if n <= 0:
         return board
@@ -602,10 +630,9 @@ def _pin_pending_setup(
     # size is a floor for ordinary content, not a ceiling on pins: capping here
     # would rank the setup quests against each other, and the lowest-priority
     # one (First Purchase, the whole reason pinning exists) would never be seen
-    # until the other three cleared. Keep the lowest ids so the set is stable.
+    # until the other three cleared.
     slots = max(0, n - len(pinned))
-    ordinary = sorted(board - pinned)
-    return pinned | set(ordinary[:slots])
+    return pinned | _keep_ordinary_units(board - pinned, pairs, slots)
 
 
 def _frozen_board_pool(
@@ -719,7 +746,9 @@ def assigned_board_ids(
     # for an override to be able to move it off, or a member could pay to
     # reroll a pin and watch it land straight back.
     board = _drop_completed_setup(conn, guild_id, user_id, board)
-    board = _pin_pending_setup(conn, guild_id, user_id, board, pool_set, n)
+    board = _pin_pending_setup(
+        conn, guild_id, user_id, board, pool_set, n, quests.pair_map(tagged)
+    )
     for row in conn.execute(
         "SELECT from_quest_id, to_quest_id FROM econ_board_overrides "
         "WHERE guild_id = ? AND user_id = ? AND qtype = ? AND period_idx = ?",
