@@ -3761,6 +3761,7 @@ class EconomyCog(commands.Cog):
                             "photo_post",
                             meta={"day": day},
                             booster=booster,
+                            multiplier=settings.booster_multiplier,
                         )
                 # The photo_post quest bonus stacks on top (once/day by
                 # occurrence; fire_trigger_quests re-checks the source toggle).
