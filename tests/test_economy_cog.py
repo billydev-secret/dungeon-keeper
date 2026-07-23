@@ -591,6 +591,12 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
         BountyAwardButton,
         BountyCancelButton,
     )
+    # The shop panel's Open Shop button is a static-custom_id view — it must
+    # be re-registered too or the posted panel goes dead after a restart.
+    from bot_modules.cogs.economy_cog import ShopPanelView
+
+    added_views = [c.args[0] for c in bot.add_view.call_args_list]
+    assert any(isinstance(v, ShopPanelView) for v in added_views)
 
 
 # ── /bank mute + notify_member honoring the pref ─────────────────────────────
@@ -1254,14 +1260,9 @@ async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
     kwargs = channel.send.await_args.kwargs
     assert "Perk Shop" in kwargs["embed"].title
     assert kwargs["view"].timeout is None  # persistent, never expires
-    # children are DynamicItem wrappers, not raw Buttons
+    # One launcher button — the personal menu carries the per-perk buttons.
     assert {str(b.custom_id) for b in kwargs["view"].children} == {
-        "econ_shop_panel:role_color",
-        "econ_shop_panel:role_name",
-        "econ_shop_panel:role_gradient",
-        "econ_shop_panel:role_holographic",
-        "econ_shop_panel:role_icon",
-        "econ_shop_panel:streak_shield",
+        "econ_shop_open",
     }
     assert _shop_panel_stored(db) == (777, 8888)
 
@@ -1311,37 +1312,55 @@ def _panel_button_interaction(ctx, cog=None, *, member_id: int = 500) -> MagicMo
 
 
 @pytest.mark.asyncio
-async def test_panel_button_rents_with_fresh_settings(ctx, db):
-    from bot_modules.cogs.economy_cog import ShopRentButton
+async def test_open_shop_panel_button_serves_the_personal_menu(ctx, db):
+    from bot_modules.cogs.economy_cog import ShopPanelView, _ShopView
 
     _enable(db)
     _credit(db, 500, 500)
     cog = _make_cog(ctx)
     interaction = _panel_button_interaction(ctx, cog)
 
-    with _patch_projection() as (apply_mock, _r, _n):
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await ShopPanelView()._open.callback(interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"]
+    assert "Perk Shop" in kwargs["embed"].title
+    assert isinstance(kwargs["view"], _ShopView)
+
+
+@pytest.mark.asyncio
+async def test_legacy_panel_rent_button_opens_the_personal_menu(ctx, db):
+    # Pre-Open-Shop panels carry per-perk rent buttons; a click on any of
+    # them now serves the personal menu instead of renting directly.
+    from bot_modules.cogs.economy_cog import ShopRentButton, _ShopView
+
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _panel_button_interaction(ctx, cog)
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
         await ShopRentButton("role_color").callback(interaction)
 
-    rentals = _live_rentals(db)
-    assert len(rentals) == 1 and rentals[0]["perk"] == "role_color"
-    apply_mock.assert_awaited_once()
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "Rented" in msg
-    assert interaction.response.send_message.await_args.kwargs["ephemeral"]
-    # The panel's rent confirmation carries the customise button too.
-    buttons = [
-        b
-        for b in interaction.response.send_message.await_args.kwargs["view"].children
-        if isinstance(b, discord.ui.Button)
-    ]
-    assert [str(b.custom_id) for b in buttons] == ["econ_rent_cfg:role_color"]
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"]
+    assert isinstance(kwargs["view"], _ShopView)
+    assert _live_rentals(db) == []  # opening the menu never rents
 
 
 @pytest.mark.asyncio
 async def test_panel_button_respects_disabled_economy(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
 
-    interaction = _panel_button_interaction(ctx)  # economy never enabled
+    cog = _make_cog(ctx)  # economy never enabled
+    interaction = _panel_button_interaction(ctx, cog)
 
     await ShopRentButton("role_color").callback(interaction)
 
@@ -1351,12 +1370,15 @@ async def test_panel_button_respects_disabled_economy(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_panel_button_rechecks_feature_gate(ctx, db):
+async def test_panel_served_menu_rechecks_feature_gates(ctx, db):
+    # The panel can outlive a feature being switched off — the menu it
+    # serves re-reads the gate at click time and disables the gated rows.
     from bot_modules.cogs.economy_cog import ShopRentButton
 
     _enable(db)
     _credit(db, 500, 500)
-    interaction = _panel_button_interaction(ctx)
+    cog = _make_cog(ctx)
+    interaction = _panel_button_interaction(ctx, cog)
 
     with patch(
         "bot_modules.cogs.economy_cog.feature_gate_ok",
@@ -1364,19 +1386,25 @@ async def test_panel_button_rechecks_feature_gate(ctx, db):
     ):
         await ShopRentButton("role_gradient").callback(interaction)
 
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "server feature" in msg
+    kwargs = interaction.response.send_message.await_args.kwargs
+    blob = " ".join(f.value for f in kwargs["embed"].fields)
+    assert "needs a server feature" in blob
+    buttons = [
+        b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)
+    ]
+    disabled = {str(b.custom_id) for b in buttons if b.disabled}
+    assert "econ_shop_rent:role_gradient" in disabled
     assert _live_rentals(db) == []
 
 
 @pytest.mark.asyncio
-async def test_panel_button_rejects_unknown_perk(ctx, db):
+async def test_panel_button_without_cog_refuses(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
 
     _enable(db)
-    interaction = _panel_button_interaction(ctx)
+    interaction = _panel_button_interaction(ctx)  # cog unloaded mid-flight
 
-    await ShopRentButton("voice_style").callback(interaction)  # not self-rentable
+    await ShopRentButton("role_color").callback(interaction)
 
     msg = interaction.response.send_message.await_args.args[0]
     assert "isn't available" in msg
@@ -2752,37 +2780,6 @@ async def test_refund_confirm_rejects_a_stale_target(ctx, db):
         assert get_balance(conn, GUILD_ID, 500) == 200  # untouched
 
 
-@pytest.mark.asyncio
-async def test_panel_shield_button_buys(ctx, db):
-    from bot_modules.cogs.economy_cog import ShopRentButton
-
-    _enable(db)
-    _credit(db, 500, 100)
-    cog = _make_cog(ctx)
-    interaction = _panel_button_interaction(ctx, cog)
-
-    await ShopRentButton("streak_shield").callback(interaction)
-
-    with open_db(db) as conn:
-        assert get_streak_shields(conn, GUILD_ID, 500) == 1
-
-
-@pytest.mark.asyncio
-async def test_panel_shield_button_refuses_at_price_zero(ctx, db):
-    from bot_modules.cogs.economy_cog import ShopRentButton
-
-    _enable(db, price_streak_shield=0)
-    _credit(db, 500, 100)
-    cog = _make_cog(ctx)
-    interaction = _panel_button_interaction(ctx, cog)
-
-    await ShopRentButton("streak_shield").callback(interaction)
-
-    assert "aren't for sale" in interaction.response.send_message.await_args.args[0]
-    with open_db(db) as conn:
-        assert get_streak_shields(conn, GUILD_ID, 500) == 0
-
-
 # ── voice-style lease in the shop (sinks round 3, stage 3) ───────────────────
 
 
@@ -2813,21 +2810,6 @@ async def test_rent_voice_style_skips_role_projection(ctx, db):
     rentals = _live_rentals(db)
     assert len(rentals) == 1 and rentals[0]["perk"] == "voice_style"
     assert rentals[0]["price"] == 30
-
-
-@pytest.mark.asyncio
-async def test_panel_voice_button_refuses_while_dark(ctx, db):
-    from bot_modules.cogs.economy_cog import ShopRentButton
-
-    _enable(db)  # dark: price 0
-    _credit(db, 500, 100)
-    cog = _make_cog(ctx)
-    interaction = _panel_button_interaction(ctx, cog)
-
-    await ShopRentButton("voice_style").callback(interaction)
-
-    assert "isn't active" in interaction.response.send_message.await_args.args[0]
-    assert _live_rentals(db) == []
 
 
 @pytest.mark.asyncio
