@@ -1645,3 +1645,61 @@ def test_branding_names_are_per_guild(fake_ctx):
     assert resolve_casino_name(fake_ctx.db_path, _SECOND_GUILD) == "Neon Pines"
     # The home guild keeps the built-in name.
     assert resolve_casino_name(fake_ctx.db_path, fake_ctx.guild_id) == DEFAULT_CASINO_NAME
+# ── anonymity-config gating ────────────────────────────────────────────
+# Confessions and Whisper both take a log_channel_id, and both logs record the
+# author behind the anonymous message. Only an admin may point those logs
+# somewhere — a game-host role holder redirecting them would de-anonymise
+# every confession and whisper in the server.
+
+
+def _game_host_client(fake_ctx, host_role_id: int = 4242) -> TestClient:
+    """A non-admin caller holding the configured game-host role."""
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO games_editor_role (guild_id, role_id) VALUES (?, ?)",
+            (fake_ctx.guild_id, host_role_id),
+        )
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    app = create_app(fake_ctx, auth=auth)
+    client = TestClient(app)
+    client.cookies.set(
+        SESSION_COOKIE,
+        auth.create_session_cookie(
+            user_id=2,
+            username="host",
+            access_token="token",
+            permission_bits=0,  # explicitly not an administrator
+            role_ids=[host_role_id],
+            guild_id=fake_ctx.guild_id,
+            guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
+        ),
+    )
+    return client
+
+
+def test_game_host_cannot_redirect_the_confessions_log(fake_ctx):
+    client = _game_host_client(fake_ctx)
+    try:
+        resp = client.put("/api/config/confessions", json={"log_channel_id": "9999"})
+        assert resp.status_code == 403
+    finally:
+        client.close()
+
+
+def test_game_host_cannot_redirect_the_whisper_log(fake_ctx):
+    client = _game_host_client(fake_ctx)
+    try:
+        resp = client.put("/api/config/whisper", json={"log_channel_id": "9999"})
+        assert resp.status_code == 403
+    finally:
+        client.close()
+
+
+def test_game_host_can_still_edit_guess_config(fake_ctx):
+    """The games-editor role keeps its legitimate reach — this isn't a blanket lockout."""
+    client = _game_host_client(fake_ctx)
+    try:
+        resp = client.put("/api/config/guess", json={"enabled": True})
+        assert resp.status_code != 403
+    finally:
+        client.close()

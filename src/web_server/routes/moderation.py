@@ -1048,11 +1048,13 @@ async def transcript(
         )
 
     ctx = get_ctx(request)
-    get_active_guild_id(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            return {"transcript": get_transcript(conn, record_type, record_id)}
+            return {
+                "transcript": get_transcript(conn, record_type, record_id, guild_id)
+            }
 
     return await run_query(_q)
 

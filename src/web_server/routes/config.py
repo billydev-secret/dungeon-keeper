@@ -3329,7 +3329,10 @@ class ConfessionsConfigUpdate(BaseModel):
 async def update_confessions(
     request: Request,
     body: ConfessionsConfigUpdate,
-    _: AuthenticatedUser = Depends(require_game_host),
+    # Admin-only: this payload carries log_channel_id, and the confessions log
+    # records the author beside their confession. A game-host role holder must
+    # not be able to point the de-anonymisation log at a channel they can read.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -4050,7 +4053,9 @@ class WhisperConfigUpdate(BaseModel):
 async def update_whisper_config(
     request: Request,
     body: WhisperConfigUpdate,
-    _: AuthenticatedUser = Depends(require_game_host),
+    # Admin-only for the same reason as confessions: log_channel_id points at
+    # the audit log that records the sender behind an anonymous whisper.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

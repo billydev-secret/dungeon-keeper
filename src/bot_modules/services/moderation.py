@@ -704,10 +704,19 @@ def get_transcript(
     conn: sqlite3.Connection,
     record_type: str,
     record_id: int,
+    guild_id: int,
 ) -> dict[str, Any] | None:
+    """Fetch a ticket/jail transcript, scoped to its guild.
+
+    ``guild_id`` is required rather than optional: ticket and jail ids come from
+    a global AUTOINCREMENT, so without it a moderator of one guild could read
+    another guild's private transcripts by enumerating record ids.
+    """
     row = conn.execute(
-        "SELECT content FROM transcripts WHERE record_type = ? AND record_id = ? ORDER BY created_at DESC LIMIT 1",
-        (record_type, record_id),
+        "SELECT content FROM transcripts "
+        "WHERE record_type = ? AND record_id = ? AND guild_id = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (record_type, record_id, guild_id),
     ).fetchone()
     return json.loads(row["content"]) if row else None
 

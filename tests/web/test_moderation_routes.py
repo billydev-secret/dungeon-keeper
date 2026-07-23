@@ -917,3 +917,29 @@ def test_moderation_requires_auth(fake_ctx):
     resp = client.get("/api/moderation/jails")
     assert resp.status_code in (401, 403)
     client.close()
+
+
+def test_transcript_does_not_leak_across_guilds(open_client, fake_ctx):
+    """Ticket/jail ids are a global AUTOINCREMENT, so the id alone isn't a secret.
+
+    Without a guild predicate a moderator of one guild could read another
+    guild's private support conversations by enumerating record ids.
+    """
+    import json as _json
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO transcripts (guild_id, record_type, record_id, content, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                fake_ctx.guild_id + 999,  # a different guild entirely
+                "ticket",
+                4242,
+                _json.dumps({"messages": [{"author": "bob", "content": "secret"}]}),
+                time.time(),
+            ),
+        )
+
+    body = open_client.get(
+        "/api/moderation/transcript?record_type=ticket&record_id=4242"
+    ).json()
+    assert body["transcript"] is None
