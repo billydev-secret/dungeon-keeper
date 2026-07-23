@@ -439,6 +439,7 @@ class QualityScoreEntrySchema(BaseModel):
     status: str
     active_days: int
     active_weeks: int
+    gender: str = "unknown"
 
 
 class QualityScoreResponse(BaseModel):
