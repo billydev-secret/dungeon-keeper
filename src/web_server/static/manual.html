@@ -485,8 +485,7 @@
       <li><strong>On the dashboard</strong> — use the <strong>Ask Billy-bot</strong> box at the top of any Help page.</li>
     </ul>
     <p>Billy-bot only answers from what it's been given, so it won't invent commands — if it's not sure, it'll say so and point you here or to a moderator.</p>
-    <p><strong>Admins:</strong> the <em>Config → Billy-bot</em> panel picks the AI model (Haiku by default) and can turn on <strong>live server context</strong> (off by default). With it on, Billy-bot can also answer using this server's channel topics, pinned messages, announcements, and dashboard docs — always limited to what the person asking is allowed to see, and never NSFW channels. It links to channels and the dashboard when that helps, and for admins it can read the server's <em>saved settings across features</em> (economy, XP, moderation, voice channels, wellness, and more) so it can answer "is X set up?" and what a setting is. Anything it can't see, it says so and points you to the right panel rather than guess.</p>
-    <p><strong>Changing settings via Billy-bot:</strong> when an admin asks in <code>/ask</code> (e.g. <em>"set the welcome channel to #lobby"</em>), Billy-bot can propose the change — it never applies anything itself. The proposal comes back as an <strong>Apply button</strong> on the private reply; the change only happens when an admin presses it, and the button double-checks permissions and that the value still makes sense. This covers the core saved settings (the ones shown as <em>General</em> when it reads config); feature panels with their own richer settings (economy prices, quests, and the like) are still edited on the dashboard, and Billy-bot will point you to the right panel.</p>
+    <p><strong>Admins</strong> get more from the <em>Config → Billy-bot</em> panel: it picks the model (Haiku by default) and can turn on <strong>live server context</strong> (off by default) so Billy-bot answers from this server's channel topics, pins, announcements, dashboard docs, and saved settings — always scoped to what the asker can see, never NSFW. An admin can even ask it to <em>change</em> a core setting; it never applies anything itself, but returns a permission-checked <strong>Apply button</strong> to confirm. Richer feature settings (economy prices, quests, and the like) stay on the dashboard. Full details in <a href="#config">Configuration</a>.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          2. FEATURE MAP
@@ -699,47 +698,19 @@
     <h2 id="guess" class="section-break"><span class="section-num">5</span> Guess Who Image Game</h2>
     <p>NSFW image-guessing game. Submit a cropped picture; opted-in members try to identify whose body it is by picking a name from a searchable member list. The full image is revealed (spoilered) on the first correct guess. Includes leaderboards, anonymous text confessions tied into the same channel, and a persistent submit/help prompt at the bottom of the configured channel.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/guess submit image:&lt;attachment&gt;</span>
-      <span class="cmd-perm">Configured Guess role — if no role is configured, the command refuses with a configuration error</span>
-      <span class="cmd-desc">Open the crop editor for a new NSFW submission. Use the up / down / left / right / zoom buttons to position the reveal, or hit Auto for a centered crop. Post publishes the round; the full image is revealed (spoilered) on the first correct guess.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/guess optin</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Join the Guess pool — grants the configured Guess role and adds you to the submitter / guesser autocomplete.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/guess confess text:...</span>
-      <span class="cmd-perm">Configured Guess role — if no role is configured, the command refuses with a configuration error</span>
-      <span class="cmd-desc">Submit an anonymous text confession to the Guess channel. Preview first, then Post — sender identity is logged for mods but hidden from members.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/guess leaderboard</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Show the top submitters and top guessers in this server.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/guess round round_id:&lt;n&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
-      <span class="cmd-desc">Inspect a specific Guess round (mod-only): submitter, guesses, current state.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/guess delete round_id:&lt;n&gt;</span>
-      <span class="cmd-perm">Submitter or <span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Remove a Guess round you submitted, or any round if you're a mod.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/guess prompt</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
-      <span class="cmd-desc">Re-post the persistent Submit / Help prompt at the bottom of the Guess channel. The Guess channel and submitter role are configured on the <a href="/">web dashboard</a> — the channel must be age-gated (NSFW).</span>
-    </div>
+    <table>
+      <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/guess submit image:&lt;attachment&gt;</code></td><td>Guess role</td><td>Open the crop editor for a new NSFW submission — use the up / down / left / right / zoom buttons to position the reveal, or Auto for a centered crop. Post publishes the round; the full image is revealed (spoilered) on the first correct guess</td></tr>
+        <tr><td><code>/guess optin</code></td><td><span class="perm perm-all">Everyone</span></td><td>Join the Guess pool — grants the Guess role and adds you to the submitter / guesser autocomplete</td></tr>
+        <tr><td><code>/guess confess text:...</code></td><td>Guess role</td><td>Submit an anonymous text confession to the Guess channel — preview, then Post; sender identity is logged for mods but hidden from members</td></tr>
+        <tr><td><code>/guess leaderboard</code></td><td><span class="perm perm-all">Everyone</span></td><td>Top submitters and top guessers in this server</td></tr>
+        <tr><td><code>/guess round round_id:&lt;n&gt;</code></td><td><span class="perm perm-mod">Mod — Manage Guild</span></td><td>Inspect a specific round: submitter, guesses, current state</td></tr>
+        <tr><td><code>/guess delete round_id:&lt;n&gt;</code></td><td>Submitter or <span class="perm perm-mod">Mod</span></td><td>Remove a round you submitted, or any round if you're a mod</td></tr>
+        <tr><td><code>/guess prompt</code></td><td><span class="perm perm-mod">Mod — Manage Guild</span></td><td>Re-post the persistent Submit / Help prompt at the bottom of the Guess channel</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:0.82rem;color:var(--muted)">The <code>/guess submit</code> and <code>/guess confess</code> commands need the configured Guess role; if no role is set they refuse with a configuration error. The Guess channel and submitter role are set on the <a href="/#/config-guess">web dashboard</a> — the channel must be age-gated (NSFW).</p>
 
     <!-- ══════════════════════════════════════════════════════════
          6. WHISPER
@@ -747,38 +718,16 @@
     <h2 id="whisper" class="section-break"><span class="section-num">6</span> Whisper Anonymous Messages</h2>
     <p>Anonymous message-guessing game. Send a secret message to an opted-in member via DM; they can try to guess who sent it, share it to the server feed, hide it for later, or reply anonymously.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/whisper send</span>
-      <span class="cmd-perm">Opted-in members (hold the configured Whisper role)</span>
-      <span class="cmd-desc">Send an anonymous message to another opted-in member via DM. The command takes no arguments — it opens a private recipient picker (opted-in members only), then a form for your message.</span>
-      <div class="cmd-params">
-        Rate limits (defaults, configurable in the dashboard's Whisper config panel): 30-second cooldown between any sends; max 5 whispers to the same person per hour.
-      </div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/whisper optin</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Opt in to send and receive anonymous whispers. Grants the configured Whisper role after a confirmation prompt.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/whisper optout</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Opt out of whispers. You'll no longer appear in others' autocomplete. Existing whispers are preserved.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/whisper sent</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Review the whispers you've sent in this server (active only).</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/whisper forget-me</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Permanently deletes all whispers you sent or received in this server. Cannot be undone.</span>
-    </div>
+    <table>
+      <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/whisper send</code></td><td>Opted-in members</td><td>Send an anonymous message to another opted-in member via DM. Takes no arguments — it opens a private recipient picker, then a message form. Rate limits (dashboard-configurable): 30-second cooldown between sends, max 5 to the same person per hour</td></tr>
+        <tr><td><code>/whisper optin</code></td><td><span class="perm perm-all">Everyone</span></td><td>Opt in to send and receive whispers (grants the Whisper role after a confirmation prompt)</td></tr>
+        <tr><td><code>/whisper optout</code></td><td><span class="perm perm-all">Everyone</span></td><td>Opt out — you no longer appear in others' autocomplete; existing whispers are preserved</td></tr>
+        <tr><td><code>/whisper sent</code></td><td><span class="perm perm-all">Everyone</span></td><td>Review the whispers you've sent in this server (active only)</td></tr>
+        <tr><td><code>/whisper forget-me</code></td><td><span class="perm perm-all">Everyone</span></td><td>Permanently delete all whispers you sent or received here — cannot be undone</td></tr>
+      </tbody>
+    </table>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -813,53 +762,19 @@
     <h2 id="pen-pals" class="section-break"><span class="section-num">8</span> Pen Pals</h2>
     <p>Pen Pals quietly matches members into private one-on-one conversations. Joining matches you straight away if someone eligible is already waiting — otherwise you sit in the pool and are matched the moment the next person joins. Either way the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours). Nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again. If there's someone you'd rather not be matched with, <span class="cmd-name">/penpals block</span> keeps the two of you apart — privately, and one block is enough.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals join</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Get a pen pal. If someone's already waiting you're matched on the spot; if not you join the pool and are matched as soon as the next person does. Either way the bot opens a private channel with your pen pal and drops a question to break the ice.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals leave</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Leave the pool before you're matched.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals status</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Check your current Pen Pals status — whether you're waiting in the pool or matched, and when your session ends.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals block</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Open a private panel to manage who Pen Pals should never match you with. Pick members to block, or unblock them later — one block is enough to keep the two of you apart, and the other person is never told. Blocking someone doesn't end a chat you're already in.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals new-question</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Swap the current conversation-starter for a fresh one when the chat needs a nudge (limited swaps per session).</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals end</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">End your current pen pal session early and close the shared channel.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals pair &lt;user1&gt; &lt;user2&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Force-pair two specific members into a Pen Pals channel, bypassing the pool.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/penpals round</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Force a pool sweep now. The bot sweeps every pool automatically every few minutes, so this is only for when you don't want to wait.</span>
-    </div>
+    <table>
+      <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/penpals join</code></td><td><span class="perm perm-all">Everyone</span></td><td>Get a pen pal — matched on the spot if someone's waiting, otherwise you join the pool and are matched when the next person does</td></tr>
+        <tr><td><code>/penpals leave</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the pool before you're matched</td></tr>
+        <tr><td><code>/penpals status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Whether you're waiting or matched, and when your session ends</td></tr>
+        <tr><td><code>/penpals block</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private panel to pick members Pen Pals should never match you with (or unblock them) — one block is enough, the other person is never told, and it doesn't end a chat you're already in</td></tr>
+        <tr><td><code>/penpals new-question</code></td><td><span class="perm perm-all">Everyone</span></td><td>Swap the current conversation-starter for a fresh one (limited swaps per session)</td></tr>
+        <tr><td><code>/penpals end</code></td><td><span class="perm perm-all">Everyone</span></td><td>End your current session early and close the shared channel</td></tr>
+        <tr><td><code>/penpals pair &lt;user1&gt; &lt;user2&gt;</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force-pair two specific members, bypassing the pool</td></tr>
+        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep now (the bot sweeps automatically every few minutes anyway)</td></tr>
+      </tbody>
+    </table>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -962,13 +877,25 @@
 
     <h3 id="economy-earning">Earning</h3>
     <ul>
-      <li><strong>Daily login</strong> — your first counted message or qualifying voice session of the day pays a small login reward (voice pays more than text). Consecutive days build a streak bonus, one missed day per week is silently forgiven, and streak milestones (day 7, 30, 100…) pay extra. If you've opted into economy DMs (the server's configured game role), each login sends you a little digest — your streak, and a checklist of open quests with progress bars, so you always know what's worth doing today.</li>
-      <li><strong>Quests</strong> — daily / weekly / monthly quests drawn onto your personal board, plus server-wide community goals and event quests. Many complete automatically when you do the thing (send a trigger phrase, play a game, post a photo, answer a chat-revive prompt, host a voice hangout, set a bio…); others you claim from <code>/bank quests</code>, and some need a staff sign-off before paying. Some quests travel in <strong>pairs</strong> — draw one half (say, <em>submit a Guess Who round</em>) and its partner (<em>play a round</em>) lands on your board with it. <strong>Getting-started nudges</strong> — one-time setup tasks like <em>filling out your bio</em> or <em>setting your birthday</em> — turn up among your daily quests too, and quietly drop off once you've done them, so they only ever show to people who haven't.</li>
-      <li><strong>Community weeklies</strong> — every other week the server gets a shared goal ("send 3,000 messages together") sized from recent activity. Everyone's actions count automatically, milestones at 40/70/100% each pay <em>every</em> active member, and the top contributors earn a bonus — so even a partial week pays out.</li>
-      <li><strong>Board extras</strong> — one free 🎲 reroll per day on <code>/bank quests</code> swaps out a quest that doesn't fit you, and you can buy a few more that day if you want another swap (the select tells you the price). Clearing your whole daily or weekly board pays a set bonus, and each week one ⚡ spotlight activity pays <em>double</em> (announced when the new week's quests go up).</li>
-      <li><strong>Games &amp; QOTD</strong> — playing a party game or duel pays participation (winning pays more — every game with a real winner now pays its champion, and the game's results card shows the amounts), and <strong>replying to</strong> the question of the day pays once per QOTD. Use Discord's reply on the question itself — just talking in the channel doesn't count, and yesterday's question stops paying when the day rolls over.</li>
-      <li><strong>Coin drops</strong> — where the server has turned them on, the bot occasionally drops a pouch of coins into a chat channel at unpredictable moments. First member to hit the <strong>🪙 Claim</strong> button grabs the whole pouch; the message updates to show who got it, and anyone slower is told so privately. Unclaimed pouches vanish after a while. Drops only land where there's conversation — you can't camp a dead channel waiting for one.</li>
-      <li><strong>Server boosters</strong> earn 1.5× on everything the server pays out (transfers between members are never multiplied).</li>
+      <li><strong>Daily login</strong> — your first counted message or qualifying voice session of the day pays a small login reward (voice pays more than text). Consecutive days build a streak bonus, one missed day per week is silently forgiven, and milestones (day 7, 30, 100…) pay extra.</li>
+      <li><strong>Quests</strong> — daily / weekly / monthly quests drawn onto your personal board, plus server-wide community goals and event quests.
+        <ul>
+          <li>Many complete <em>automatically</em> when you do the thing (send a trigger phrase, play a game, post a photo, answer a chat-revive prompt, host a voice hangout, set a bio…); others you claim from <code>/bank quests</code>, and a few need a staff sign-off before paying.</li>
+          <li>Some quests travel in <strong>pairs</strong> — draw one half (say, <em>submit a Guess Who round</em>) and its partner (<em>play a round</em>) lands with it.</li>
+          <li><strong>Getting-started nudges</strong> — one-time setup tasks like filling out your bio or setting your birthday — appear among your dailies and quietly drop off once done, so they only ever show to people who haven't.</li>
+        </ul>
+      </li>
+      <li><strong>Community weeklies</strong> — every other week the server gets a shared goal ("send 3,000 messages together") sized from recent activity. Everyone's actions count automatically, milestones at 40/70/100% each pay <em>every</em> active member, and top contributors earn a bonus — so even a partial week pays out.</li>
+      <li><strong>Board extras</strong> — perks on your quest board:
+        <ul>
+          <li>One free 🎲 reroll per day on <code>/bank quests</code> swaps out a quest that doesn't fit; buy a few more that day if you want another (the select shows the price).</li>
+          <li>Clearing your whole daily or weekly board pays a set bonus.</li>
+          <li>Each week one ⚡ spotlight activity pays <em>double</em> (announced when the new week's quests go up).</li>
+        </ul>
+      </li>
+      <li><strong>Games &amp; QOTD</strong> — playing a party game or duel pays participation (winning pays more; the results card shows the amounts). <strong>Replying to</strong> the question of the day pays once per QOTD — use Discord's reply on the question itself; just talking in the channel doesn't count, and yesterday's question stops paying at the day roll.</li>
+      <li><strong>Coin drops</strong> — where enabled, the bot occasionally drops a pouch of coins into an active chat channel. First to hit the <strong>🪙 Claim</strong> button takes the whole pouch; the message updates to show who won, and anyone slower is told privately. Unclaimed pouches expire, and drops only land where there's conversation.</li>
+      <li><strong>Server boosters</strong> earn 1.5× on everything the server pays out (member-to-member transfers are never multiplied).</li>
     </ul>
 
     <h3 id="economy-cmds">Wallet &amp; Member Commands</h3>
@@ -1889,6 +1816,21 @@
       </div>
     </div>
 
+    <h3 id="hidden-channels">Hidden Channels</h3>
+    <p>Hide a channel from everyone and later restore it exactly as it was. Hiding snapshots the channel's permission overwrites and placement, then parks it under a "Hidden Channels" category with <code>@everyone</code> denied View Channel (members with Administrator still see it — Discord always exempts them). Restoring moves it home and reinstates the original overwrites. Hides last until restored — there's no scheduled auto-restore.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/hidden hide channel: &nbsp;&nbsp; /hidden restore channel: &nbsp;&nbsp; /hidden list</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Hide a text / voice / stage / forum channel (categories can't be hidden), bring one back, or list what's currently hidden and who hid it. The bot needs Manage Channels and Manage Roles. No dashboard panel — these three commands are the entire interface.</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         23. CONTENT & COMMS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="content-comms" class="section-break"><span class="section-num">23</span> Content &amp; Comms</h2>
+    <p>Bot-maintained content and outbound messaging: self-assign role menus, dashboard-authored documents posted into channels, and scheduled announcements. All three are built on the dashboard and post persistent messages that keep working across bot restarts.</p>
+
     <h3 id="role-menus">Role Menus</h3>
     <p>Self-assign role menus, built entirely on the dashboard and posted into a channel as a persistent message with buttons or a dropdown. Members click to manage their own roles — the reply is only ever visible to them — and the message keeps working across bot restarts. Each menu has one of five modes:</p>
     <ul>
@@ -1940,19 +1882,10 @@
       </div>
     </div>
 
-    <h3 id="hidden-channels">Hidden Channels</h3>
-    <p>Hide a channel from everyone and later restore it exactly as it was. Hiding snapshots the channel's permission overwrites and placement, then parks it under a "Hidden Channels" category with <code>@everyone</code> denied View Channel (members with Administrator still see it — Discord always exempts them). Restoring moves it home and reinstates the original overwrites. Hides last until restored — there's no scheduled auto-restore.</p>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/hidden hide channel: &nbsp;&nbsp; /hidden restore channel: &nbsp;&nbsp; /hidden list</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Hide a text / voice / stage / forum channel (categories can't be hidden), bring one back, or list what's currently hidden and who hid it. The bot needs Manage Channels and Manage Roles. No dashboard panel — these three commands are the entire interface.</span>
-    </div>
-
     <!-- ══════════════════════════════════════════════════════════
-         23. NETWORK ANALYTICS
+         24. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="network-analytics" class="section-break"><span class="section-num">23</span> Network Analytics</h2>
+    <h2 id="network-analytics" class="section-break"><span class="section-num">24</span> Network Analytics</h2>
     <p>Interactive graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
 
     <div class="callout callout-info">
@@ -1966,7 +1899,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">24</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">25</span> Configuration Reference</h2>
     <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
     <div class="callout callout-info">
@@ -2029,7 +1962,7 @@
     <!-- ══════════════════════════════════════════════════════════
          25. QA TRACKER
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="qa-tracker" class="section-break"><span class="section-num">25</span> QA Tracker</h2>
+    <h2 id="qa-tracker" class="section-break"><span class="section-num">26</span> QA Tracker</h2>
     <p>A volunteer testing crew for the bot itself. Each new change lands as a <strong>QA card</strong> in the testing channel — an embed carrying the test checklist with <strong>Pass / Fail / Blocked</strong> buttons. Members holding the configured QA-crew role click a verdict (Fail requires a "what went wrong" note, which lands in the card's thread); the first Pass turns the card green as verified. Your first verdict on a test pays <a href="#economy">economy</a> currency instantly, up to a daily cap — re-clicking updates your verdict without re-paying. Until an admin configures the QA-crew role, the buttons are admins-only. A card that's stayed verified (green) for 10 minutes is automatically deleted from the channel to keep the queue tidy — the verdicts and payouts stay on record, just the message goes.</p>
 
     <div class="callout callout-info">
@@ -2043,7 +1976,7 @@
     <!-- ══════════════════════════════════════════════════════════
          26. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">26</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">27</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">

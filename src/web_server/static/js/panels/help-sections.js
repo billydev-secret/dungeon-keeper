@@ -60,6 +60,7 @@ export const HELP_GROUPS = [
     { page: "help-setup",          anchor: "setup",             label: "Setup & Permissions" },
     { page: "help-announcements",  anchor: "announcements",     label: "Announcements" },
     { page: "help-role-menus",     anchor: "role-menus",        label: "Role Menus" },
+    { page: "help-docs",           anchor: "docs",              label: "Docs" },
     { page: "help-config",         anchor: "config",            label: "Configuration" },
     { page: "help-cleanup",        anchor: "server-ops",        label: "Server Upkeep" },
     { page: "help-chat-revive",    anchor: "chat-revive",       label: "Chat Revive" },
