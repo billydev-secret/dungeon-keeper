@@ -444,14 +444,28 @@ convention, not a missing idea.
 | S3 | `services/casino_service.py:210` | `daily_wager_cap` — the casino's only spend limit — is bypassable the same way from coinflip/slots/blackjack-deal. Roulette and double-down are already safe because they take a claim first, which proves the intended pattern. | Guarded conditional upsert on `casino_daily` before the debit. |
 | S3 | `services/casino_service.py:710` | **Griefable blackjack idle clock.** The claim `UPDATE` bumps `last_action_at` for *any* clicker before the ownership check at :716, and the mismatch returns a value rather than raising — so the bump commits. A stranger clicking someone's Hit button resets the 180s auto-stand indefinitely, locking the owner's stake and (via the one-live-hand rule) locking them out of blackjack until a restart. | Fold `guild_id`/`user_id` into the claim's `WHERE`. |
 
-## Status
+## Status — all five fixed (2026-07-23)
 
-Only the wager finding was independently re-verified during this pass (the
-adversarial stage never ran). The other four carry the citations and failure
-scenarios their hunter produced; each is confirmable in one read via its
-citation. **None is fixed** — all five are open, and none appears in the main
-report or Addendum 1.
+Every finding above was reproduced by a regression test that fails against the
+old code, then fixed, in commits `65845540` (wagers), `7d90edab` (bounties),
+`34201040` (raffle), and `3af9cf17` (casino cap + blackjack ownership). The
+bounty race turned out to lose money in **both** directions — `award_bounty`
+also read the pot before its own guarded claim, so a chip-in could land behind
+the payout snapshot — which the original finding did not capture; both sides
+are fixed.
 
-The shared root cause makes these cheap to fix together, and worth a single
-convention note afterwards: *any limit or state check that gates a write must
-live in the same transaction as that write.*
+Two implementation notes worth carrying forward. First, `migration 094`
+already documents the unique index on `econ_game_wagers` as *"the race anchor
+for double-join / double-accept clicks"* — the anchor simply never engaged,
+because the row write was not the connection's first write. The fix leans on
+the mechanism the schema already provides. Second, claim-first is not
+sufficient on its own here: callers catch these `ValueError`s **inside** their
+own `with conn:` block, so the transaction commits regardless and a failed
+debit has to unwind its claim explicitly. A rollback-based unwind would have
+escrowed short players for free.
+
+The shared root cause made these cheap to fix together. The convention worth
+holding onto: *any limit or state check that gates a write must be enforced by
+that write — as a guarded `UPDATE`/upsert whose `rowcount` you check — not by a
+Python comparison against a value read beforehand.* The fourteen unrun angles
+remain the open item.
