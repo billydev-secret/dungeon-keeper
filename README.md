@@ -245,6 +245,8 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/bank pin` — Pay to pin a short message for a day (mod-approved)
 - `/bounty` — Post a community bounty others can chip into; a mod awards it
 - `/bank emoji` — Rent an emoji slot
+- `/bank auction start` — (mod) Start a live ascending auction; members bid with a card button, the winning bid is spent, outbid bids refund instantly
+- `/bank auction cancel` / `end` — (mod) Cancel the live auction (refunds the bid) or close it now
 - `/bank grant` — (mod) Grant or deduct coins
 - `/bank post-guide` / `post-shop` / `post-leaderboard` — (mod) Post the channel panels
 - `/qotd post` — (mod) Post the question-of-the-day banner card

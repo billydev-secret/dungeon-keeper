@@ -595,6 +595,7 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
     )
     from bot_modules.economy.pin_views import PinApproveButton, PinDenyButton
     from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
+    from bot_modules.economy.auction_views import AuctionBidButton
     from bot_modules.economy.sponsor_views import (
         SponsorApproveButton,
         SponsorDenyButton,
@@ -603,21 +604,25 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
     bot = MagicMock()
     cog = _make_cog(ctx)
     cog.bot = bot
-    await cog.cog_load()
-    # Every persistent button must be re-registered here or its custom_id stops
-    # routing after a restart, leaving dead buttons on old messages.
-    bot.add_dynamic_items.assert_called_once_with(
-        QuestApproveButton,
-        QuestDenyButton,
-        ShopRentButton,
-        SponsorApproveButton,
-        SponsorDenyButton,
-        PinApproveButton,
-        PinDenyButton,
-        BountyChipInButton,
-        BountyAwardButton,
-        BountyCancelButton,
-    )
+    try:
+        await cog.cog_load()
+        # Every persistent button must be re-registered here or its custom_id
+        # stops routing after a restart, leaving dead buttons on old messages.
+        bot.add_dynamic_items.assert_called_once_with(
+            QuestApproveButton,
+            QuestDenyButton,
+            ShopRentButton,
+            SponsorApproveButton,
+            SponsorDenyButton,
+            PinApproveButton,
+            PinDenyButton,
+            BountyChipInButton,
+            BountyAwardButton,
+            BountyCancelButton,
+            AuctionBidButton,
+        )
+    finally:
+        cog._auction_settle_loop.cancel()  # don't leak the background loop
     # The shop panel's Open Shop button is a static-custom_id view — it must
     # be re-registered too or the posted panel goes dead after a restart.
     from bot_modules.cogs.economy_cog import ShopPanelView

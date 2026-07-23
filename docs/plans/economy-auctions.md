@@ -137,20 +137,25 @@ kill-switch flag — the feature is off by absence, like bounties.
 
 ## Stages (each ships with tests in the same commit)
 
-0. **Schema + service core.** Migration; `economy_auction_service.py` with
-   `open_auction`, `place_bid` (the atomic transition above), `cancel_auction`,
-   `settle_due_auctions`. Pure-DB, no Discord. Tests hammer the money model:
-   escrow, outbid refund, the racing-bids guard, insufficient-balance abort,
-   winning-bid burn, cancel refund, exactly-once settle.
-1. **Cog + panel.** `/auction` command group, the sticky card, the Bid modal,
-   the persistent view, live repaint, result card + pings. Logic stays in the
-   service; the cog is glue.
-2. **Settle loop.** Wire `settle_due_auctions` into the existing economy tick so
-   auctions close on time without a mod present.
-3. **Dashboard.** Auctions history panel + the config knobs + the Statistics
-   burn line.
-4. **Docs.** economy_spec.md (new §), INDEX.md, README slash-command reference,
-   manual.html Help section, embed style conformance.
+0. **Schema + service core — BUILT 2026-07-23.** Migration 117;
+   `economy_auction_service.py` with `open_auction`, `place_bid`/`place_bid_now`,
+   `cancel_auction`, `end_auction_now`, `settle_due_auctions`. Pure-DB. 29 tests
+   hammer the money model: escrow, outbid refund, the CAS guard, insufficient-
+   balance abort, winning-bid burn, cancel refund, exactly-once settle.
+1. **Cog + panel — BUILT 2026-07-23.** `/bank auction start|cancel|end` under the
+   `bank` group; `economy/auction_views.py` owns the sticky card, the Bid modal,
+   the persistent `AuctionBidButton`, live repaint, and the settle→announce
+   (winner + host ping, outbid/winner DMs). Bids run through `place_bid_now`
+   (BEGIN IMMEDIATE + retry — the M1 concurrency fix). Card renderer unit-tested.
+2. **Settle loop — BUILT 2026-07-23.** `EconomyCog._auction_settle_loop`
+   (`@tasks.loop(seconds=30)`) closes auctions past `ends_at` per guild and
+   announces each, so an auction ends on time with no mod present.
+3. **Dashboard — TODO.** Auctions history panel + the config knobs
+   (`auction_min_bid` / `min_increment` / `soft_close_seconds` /
+   `max_duration_hours` aren't on the Sinks page yet) + the Statistics burn line.
+4. **Docs — BUILT 2026-07-23** (this stage): economy_spec.md §, README slash
+   reference, manual.html Help. INDEX.md classification + embed-style conformance
+   pass still TODO.
 
 ## Open defaults (sensible unless you say otherwise)
 

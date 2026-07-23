@@ -235,6 +235,27 @@ to currency.
   (default 14) and re-renders the card. Guards: `bounty_min_stake` floor,
   `bounty_max_open` per member. Enabled only when `bounty_channel_id` is set —
   dark by default.
+- **Live Auction (built, sink — migration 117, plan
+  `docs/plans/economy-auctions.md`):** a mod runs `/bank auction start` (title,
+  freeform prize, hours); the bot posts a sticky card with a 🔨 **Bid** button
+  (persistent `AuctionBidButton`, custom_id carries the auction id). Bidding is
+  **ascending and open**: each bid must beat the standing high by
+  `auction_min_increment` (opening floor `auction_min_bid`), and the outbid
+  member is refunded *instantly* (`auction_refund`). Escrow-at-bid (`auction_bid`
+  via `apply_debit`) means the winner is already charged at close; the winning
+  escrow is simply never refunded → **burned** (the sink; the mod hands over the
+  freeform prize out of band). A bid inside `auction_soft_close_seconds` of the
+  end pushes the end out (anti-snipe). The two-bids race is handled by
+  compare-and-swap on the high-bid slot; bids run under `place_bid_now` /
+  `open_db_immediate` (**BEGIN IMMEDIATE**, retry + friendly error) so concurrent
+  bidders serialize instead of hitting `SQLITE_BUSY_SNAPSHOT`. Close is timed:
+  `EconomyCog._auction_settle_loop` (30s) calls `settle_due_auctions` (exactly-once
+  via the `state='open'` claim) and announces the result — pinging winner + host,
+  DMing both. `/bank auction cancel` refunds the standing bid; `/bank auction end`
+  closes now. One live auction per guild (v1). **Dark by default**: no auction
+  exists until a mod opens one; `auction_*` knobs aren't on the dashboard yet
+  (Stage 3). Card renderer in `economy/auction_views.py`, money in
+  `economy_auction_service.py`.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
