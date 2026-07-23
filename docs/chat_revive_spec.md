@@ -54,7 +54,7 @@ Details of the moment:
 | Quiet hours | Nothing fires overnight (midnight–8am server time by default) |
 | Ping scarcity | Role tagged at most once per channel per day |
 | Mods slowed the room | If a channel is in slowmode, the bot assumes that's intentional and stays out |
-| Something's happening | No revives in a channel with an active event or ongoing game night |
+| Something's happening | No revives in a channel with an active event or ongoing game night (the busy check fails closed — if it errors, the channel counts as busy) |
 | Not invited | Revive only operates in channels an admin explicitly enabled |
 
 **New channels / new installs:** for the first couple of weeks, before the bot has learned a channel's rhythm, it runs in a conservative fallback mode — only firing after a long fixed silence, and only during daytime/evening hours. It quietly graduates to rhythm-aware behavior once it knows the room.

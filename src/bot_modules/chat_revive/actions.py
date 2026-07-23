@@ -31,7 +31,13 @@ CARD_HEADING = "Ember"
 
 async def channel_is_busy(bot: Bot, channel_id: int) -> bool:
     """Is a game or event running here? Checks the shared games_active_games
-    table plus every registered in-memory busy check (e.g. Risky Roll)."""
+    table plus every registered in-memory busy check (e.g. Risky Roll).
+
+    Fails closed: a check that raises counts as busy. The tradeoff is that a
+    broken check suppresses revives instead of posting over a live game — the
+    safe direction here, since a missed nudge costs nothing and talking over an
+    active room is the failure this gate exists to prevent.
+    """
     games_db = getattr(bot, "games_db", None)
     if games_db is not None:
         try:
@@ -39,12 +45,14 @@ async def channel_is_busy(bot: Bot, channel_id: int) -> bool:
                 return True
         except Exception:
             log.exception("active-game check failed for channel %s", channel_id)
+            return True
     for name, check in getattr(bot, "game_busy_checks", {}).items():
         try:
             if await check(channel_id):
                 return True
         except Exception:
             log.exception("busy check %r failed for channel %s", name, channel_id)
+            return True
     return False
 
 
