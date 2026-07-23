@@ -555,6 +555,59 @@ def _drop_completed_setup(
     return board - done
 
 
+def _pin_pending_setup(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    board: set[int],
+    pool_ids: set[int],
+    n: int,
+) -> set[int]:
+    """Force every not-yet-done one-time setup quest onto a member's board.
+
+    Setup quests teach the loop (write a bio, set a birthday, pick a role, make
+    a first purchase) but they used to reach a member only if the random draw
+    happened to pick one — with a 20-quest daily pool and a 3-slot board, that
+    is a lottery, and the live data showed the shop-purchase quest reaching 9
+    members in ten days. Onboarding shouldn't be a dice roll, so pending setup
+    quests are *pinned*: they take slots ahead of ordinary draws until done.
+
+    Deliberately unbounded — a member with four pending setup quests and a
+    3-slot board sees four setup quests and no ordinary ones. Swamping a
+    newcomer's first few boards is the intended trade: they clear in one action
+    each and then never return (``_drop_completed_setup``), so the board
+    converts to normal within days. Capping pins at the board size is worse
+    than it sounds — the pins would have to be ranked against each other, and
+    on live data *every* member pending a purchase was also pending an earlier
+    setup quest, so a capped board would show the First Purchase nudge to
+    nobody at all.
+
+    Eviction takes the highest ordinary quest ids first — stable within a
+    period, so a member's board doesn't churn between calls. Callers apply
+    reroll overrides *after* this, so a member can still pay to push a pinned
+    quest off their board; honouring the reroll matters more than the nudge.
+    """
+    if n <= 0:
+        return board
+    candidates = _setup_kinds_by_id(conn, guild_id, pool_ids)
+    pending = sorted(
+        qid
+        for qid, kind in candidates.items()
+        if not _setup_quest_done(conn, guild_id, user_id, qid, kind)
+    )
+    if not pending:
+        return board
+    pinned = set(pending)
+    # Ordinary draws fill whatever the pins leave — possibly nothing. The board
+    # size is a floor for ordinary content, not a ceiling on pins: capping here
+    # would rank the setup quests against each other, and the lowest-priority
+    # one (First Purchase, the whole reason pinning exists) would never be seen
+    # until the other three cleared. Keep the lowest ids so the set is stable.
+    slots = max(0, n - len(pinned))
+    ordinary = sorted(board - pinned)
+    return pinned | set(ordinary[:slots])
+
+
 def _frozen_board_pool(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -642,7 +695,9 @@ def assigned_board_ids(
     daily/weekly/monthly have a board; other cadences return an empty set, as
     does a cadence sized to 0. One-time setup quests the member has already
     completed are dropped (see ``_drop_completed_setup``), so only members who
-    haven't done them see them.
+    haven't done them see them — and the ones they *haven't* done are pinned
+    onto the board ahead of ordinary draws (see ``_pin_pending_setup``), so
+    onboarding reaches everyone instead of depending on the draw.
     """
     if not quests.has_board(qtype):
         return set()
@@ -660,6 +715,11 @@ def assigned_board_ids(
     # period only. A replacement that has since left the active pool falls
     # back to the pure slot rather than dropping the board below size.
     pool_set = set(pool)
+    # Setup pins resolve BEFORE rerolls: a pinned quest has to be on the board
+    # for an override to be able to move it off, or a member could pay to
+    # reroll a pin and watch it land straight back.
+    board = _drop_completed_setup(conn, guild_id, user_id, board)
+    board = _pin_pending_setup(conn, guild_id, user_id, board, pool_set, n)
     for row in conn.execute(
         "SELECT from_quest_id, to_quest_id FROM econ_board_overrides "
         "WHERE guild_id = ? AND user_id = ? AND qtype = ? AND period_idx = ?",
@@ -669,7 +729,7 @@ def assigned_board_ids(
         if frm in board and to in pool_set:
             board.discard(frm)
             board.add(to)
-    return _drop_completed_setup(conn, guild_id, user_id, board)
+    return board
 
 
 def reroll_board_slot(

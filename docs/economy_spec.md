@@ -610,7 +610,8 @@ economy DM without a real opt-in signal.
 
 **One-time setup quests (the welcome guide, 2026-07-18):** the sanctioned,
 pull-not-push successor to the onboarding path. The setup trigger kinds
-(`quests.SETUP_QUEST_KINDS` = `bio_set`, `birthday_set`) can be run as ordinary
+(`quests.SETUP_QUEST_KINDS` = `bio_set`, `birthday_set`, `role_pick`,
+`shop_purchase`) can be run as ordinary
 **daily** quests, so they're drawn into a member's random daily board like any
 other — a subtle "fill out your bio / set your birthday" nudge that a newcomer
 happens on while browsing `/quests`, never a DM. Two service-layer
@@ -634,6 +635,26 @@ special-cases make a once-in-a-lifetime action fit a daily cadence:
   won't swap a member into a setup quest they've completed, and setup quests
   are excluded from the clear-the-board set-bonus requirement (a member
   shouldn't have to do their once-ever bio to earn today's daily set bonus).
+- **Pinned until done (2026-07-23).** A *pending* setup quest no longer waits
+  for a lucky draw: `_pin_pending_setup` forces every not-yet-done setup quest
+  in the frozen pool onto the board, evicting ordinary draws (highest quest id
+  first) to hold the configured board size. The nudge was previously a lottery
+  — with a 20-quest daily pool and a 3-slot board the shop-purchase quest
+  reached **9 members in ten days** — and onboarding shouldn't depend on the
+  dice. Deliberately **unbounded**: the board size is a floor for ordinary
+  content, not a ceiling on pins, so a member with four pending setup quests
+  and a 3-slot board sees four setup quests and no ordinary ones. Swamping a
+  newcomer's first boards is the intended trade, since each clears in one
+  action and then never returns, so the board converts to normal within days.
+  Capping pins at the board size was tried and rejected: it forces the pins to
+  be ranked against each other, and on live data (2026-07-23) *all 101* members
+  who had never made a purchase were also pending an earlier setup quest — a
+  capped board would have shown the First Purchase nudge to nobody.
+
+  Ordering matters: pins resolve **before** reroll overrides, so a member can
+  still pay to push a pinned quest off their board — honouring an explicit
+  reroll beats the nudge. (Applying pins after rerolls would let a paid reroll
+  land the quest straight back.)
 
 Enabling it is pure data: create a daily quest on each kind (normal daily
 reward). The fire hooks (`bios/wizard`, `birthday_cog`) already exist.
