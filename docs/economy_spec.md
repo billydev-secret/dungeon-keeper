@@ -306,8 +306,11 @@ each of daily/weekly/monthly is a **pool** of active quests (capped at
 `POOL_CAP = 25` each) that the **per-user board** (§4.6) draws from, **plus 1
 active event quest per trigger kind** per guild. (The former "1 active daily +
 rotate-tag pool" rule is retired — `rotate_tag`/`rotate_pool` still exist but
-are inert once every pool quest is active; the per-user board supplies the
-variety rotation used to.) Authoring
+`rotate_pool` is a true **no-op whenever more than one pool member is active**
+— which is the normal all-active state — so a day roll never quietly
+deactivates a live quest; it only advances a pool that keeps a single quest
+active at a time. The per-user board supplies the variety rotation this used
+to.) Authoring
 lives on the **Quests** page (library w/ pool summary + inline edit → **Board
 size** dials (§4.6, admin-only — the section is read-only prose for
 manager-role holders, since `GET/PUT /economy/config` is admin-gated) → quest

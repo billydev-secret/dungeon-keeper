@@ -621,14 +621,23 @@ def effective_target(
     """A counted quest's target for one member+period.
 
     With a band (``0 < target_min < target_max``) the target is drawn from a
-    Gaussian centered on the band, clamped to ``[min, max]`` — deterministic on
-    ``(user, quest, period)`` so it's stable all period and varies run to run.
-    Without a band it's the fixed ``target_count``. Never below 1.
+    Gaussian anchored in the LOWER third of the band, clamped to ``[min, max]``
+    — deterministic on ``(user, quest, period)`` so it's stable all period and
+    varies run to run. Without a band it's the fixed ``target_count``. Never
+    below 1.
+
+    This is the cold-start path: it only runs for a member with too little
+    trailing history to size from their own pace. That member is new or quiet,
+    and the warm median/p25 path this stands in for would clamp them toward
+    ``target_min`` — so centering the cold-start draw on the band MIDPOINT made
+    the fallback harder than the real thing it replaces. Anchoring near the
+    floor keeps a newcomer's first target attainable while sigma still spreads
+    members apart.
     """
     if not (0 < target_min < target_max):
         return max(1, int(target_count))
     rng = random.Random(_seed(user_id, quest_id, period))
-    mu = (target_min + target_max) / 2
+    mu = target_min + (target_max - target_min) / 3
     # ~95% of the mass lands inside the band before clamping; the tails clamp.
     sigma = (target_max - target_min) / 4 or 1
     draw = round(rng.gauss(mu, sigma))
