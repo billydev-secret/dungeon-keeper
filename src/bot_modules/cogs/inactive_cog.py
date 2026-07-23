@@ -41,7 +41,10 @@ from bot_modules.inactive.apply import (
     ensure_inactive_role,
     reactivate_member,
 )
-from bot_modules.inactive.logic import select_sweep_candidates
+from bot_modules.inactive.logic import (
+    select_sweep_candidates,
+    stale_inactive_channel_id,
+)
 from bot_modules.inactive.store import active_inactive_user_ids
 from bot_modules.services.embeds import MOD_INFO
 
@@ -254,6 +257,13 @@ class InactiveCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
+        # Note where the inactive channel used to point *before* overwriting it,
+        # so a re-point can strip the @Inactive overwrite off the old channel.
+        previous_raw = await asyncio.to_thread(
+            _read_config, ctx, "inactive_channel_id", guild.id
+        )
+        stale_channel_id = stale_inactive_channel_id(previous_raw, channel.id)
+
         # Persist the channel choice, then ensure the @Inactive role exists and
         # can view this channel (create it now so the grant below lands on it).
         await asyncio.to_thread(
@@ -278,6 +288,25 @@ class InactiveCog(commands.Cog):
             )
             return
 
+        # Re-point: the old channel would otherwise stay visible to @Inactive
+        # forever. Clearing the role's overwrite falls back to whatever the
+        # channel's normal permissions say (which deny it, from setup).
+        revoke_note = ""
+        if stale_channel_id:
+            old_channel = guild.get_channel(stale_channel_id)
+            if old_channel is not None:
+                try:
+                    await old_channel.set_permissions(role, overwrite=None)
+                except discord.HTTPException:
+                    log.warning(
+                        "Could not revoke @Inactive from old inactive channel %s",
+                        stale_channel_id, exc_info=True,
+                    )
+                    revoke_note = (
+                        f"\n⚠️ Couldn't remove the Inactive role's access to "
+                        f"<#{stale_channel_id}> — clear it manually."
+                    )
+
         accent = await resolve_accent_color(ctx.db_path, guild)
         embed = discord.Embed(
             title="💤 You're in the Inactive Channel",
@@ -293,7 +322,8 @@ class InactiveCog(commands.Cog):
         view.add_item(TicketPanelButton())
         await channel.send(embed=embed, view=view)
         await interaction.followup.send(
-            f"✅ Inactive channel set to {channel.mention} and panel posted.",
+            f"✅ Inactive channel set to {channel.mention} and panel posted."
+            f"{revoke_note}",
             ephemeral=True,
         )
 
@@ -371,6 +401,11 @@ class InactiveCog(commands.Cog):
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
         )
+
+def _read_config(ctx: AppContext, key: str, guild_id: int) -> str:
+    with ctx.open_db() as conn:
+        return get_config_value(conn, key, "0", guild_id) or "0"
+
 
 def _set_config(ctx: AppContext, key: str, value: str, guild_id: int) -> None:
     with ctx.open_db() as conn:

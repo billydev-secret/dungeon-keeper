@@ -63,3 +63,24 @@ def select_sweep_candidates(
     if len(eligible) <= cap:
         return eligible, 0
     return eligible[:cap], len(eligible) - cap
+
+
+def stale_inactive_channel_id(
+    previous_raw: str | None, new_channel_id: int
+) -> int | None:
+    """Return the channel whose ``@Inactive`` overwrite must be revoked, if any.
+
+    ``previous_raw`` is the stored ``inactive_channel_id`` config value (a
+    string, possibly missing, empty, ``"0"``, or garbage). When ``/inactive
+    panel`` re-points the inactive channel, the old channel keeps the role's
+    view/send overwrite forever unless it's cleaned up — so return the old id
+    when it's a real channel and genuinely different from the new one, else
+    ``None``.
+    """
+    try:
+        previous = int(previous_raw or "0")
+    except ValueError:
+        return None
+    if previous <= 0 or previous == new_channel_id:
+        return None
+    return previous

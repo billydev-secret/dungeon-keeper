@@ -44,6 +44,8 @@ Restores whichever snapshotted roles still exist (deleted roles are counted and 
 ### Panel (`/inactive panel`)
 Persists the channel choice, ensures the `@Inactive` role exists and can see the channel, then posts an accent-colored embed with the ticket system's persistent "Open Ticket" button (registered by the jail cog, so it survives restarts).
 
+Re-running the command against a **different** channel re-points the setup: the `@Inactive` role's permission overwrite is cleared from the previously-configured channel (`stale_inactive_channel_id` in `inactive/logic.py` decides whether there is one), so an ex-inactive channel doesn't stay visible to held members. If that cleanup fails (missing permissions or a Discord error) the panel still goes up and the invoker gets a warning naming the channel to fix by hand.
+
 ## Configuration
 
 Per-guild keys in the config table. `inactive_channel_id`/`inactive_role_id` are set via
