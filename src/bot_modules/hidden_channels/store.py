@@ -47,6 +47,16 @@ def create_hidden(
     return cur.lastrowid  # type: ignore[return-value]
 
 
+def delete_hidden(conn: sqlite3.Connection, hidden_id: int) -> bool:
+    """Delete a hold outright. Returns False if the row was already gone.
+
+    Used to roll back the row written ahead of a ``channel.edit()`` that then
+    failed — the channel is untouched, so the snapshot must not linger.
+    """
+    cur = conn.execute("DELETE FROM hidden_channels WHERE id = ?", (hidden_id,))
+    return cur.rowcount > 0
+
+
 def get_active_hidden(
     conn: sqlite3.Connection, guild_id: int, channel_id: int
 ) -> HiddenRow | None:

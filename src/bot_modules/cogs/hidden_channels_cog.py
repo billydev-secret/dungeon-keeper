@@ -13,8 +13,11 @@ channel overwrites; there's no way around that.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
+import sqlite3
 from typing import TYPE_CHECKING, Union
 
 import discord
@@ -27,6 +30,7 @@ from bot_modules.hidden_channels.overwrites import (
 )
 from bot_modules.hidden_channels.store import (
     create_hidden,
+    delete_hidden,
     get_active_hidden,
     list_active_hidden,
     mark_restored,
@@ -106,8 +110,11 @@ class HiddenChannelsCog(commands.Cog):
             return
         guild, me = pre
 
-        with self.ctx.open_db() as conn:
-            existing = get_active_hidden(conn, guild.id, channel.id)
+        def _load_existing():
+            with self.ctx.open_db() as conn:
+                return get_active_hidden(conn, guild.id, channel.id)
+
+        existing = await asyncio.to_thread(_load_existing)
         if existing is not None:
             await interaction.response.send_message(
                 f"❌ {channel.mention} is already hidden. Use `/hidden restore` to bring it back.",
@@ -122,6 +129,38 @@ class HiddenChannelsCog(commands.Cog):
         stored = serialize_overwrites(channel.overwrites)
         reason = f"Hidden by {interaction.user} ({interaction.user.id})"
 
+        # The snapshot row is written *before* the channel edit: the edit wipes
+        # the original overwrites irreversibly, so if the DB write went second
+        # and failed, the only copy of them would be gone. Writing first means a
+        # DB failure leaves the channel untouched, and an edit failure only
+        # leaves a row — which we delete below.
+        def _write_row() -> int:
+            with self.ctx.open_db() as conn:
+                return create_hidden(
+                    conn,
+                    guild_id=guild.id,
+                    channel_id=channel.id,
+                    original_parent_id=original_parent_id,
+                    original_position=original_position,
+                    stored_overwrites=stored,
+                    hidden_by=interaction.user.id,
+                )
+
+        try:
+            hidden_id = await asyncio.to_thread(_write_row)
+        except sqlite3.Error:
+            log.exception("Failed to save hidden-channel snapshot for %s", channel.id)
+            await interaction.followup.send(
+                "❌ I couldn't save this channel's permissions, so I left it alone. "
+                "Please try again.",
+                ephemeral=True,
+            )
+            return
+
+        def _rollback_row() -> None:
+            with self.ctx.open_db() as conn:
+                delete_hidden(conn, hidden_id)
+
         try:
             hidden_cat = await _ensure_hidden_category(guild, reason)
             await channel.edit(
@@ -133,6 +172,8 @@ class HiddenChannelsCog(commands.Cog):
                 reason=reason,
             )
         except discord.Forbidden:
+            with contextlib.suppress(sqlite3.Error):
+                await asyncio.to_thread(_rollback_row)
             await interaction.followup.send(
                 "❌ I'm not allowed to move or edit that channel — check my role's "
                 "position and permissions.",
@@ -141,22 +182,13 @@ class HiddenChannelsCog(commands.Cog):
             return
         except discord.HTTPException:
             log.exception("Failed to hide channel %s", channel.id)
+            with contextlib.suppress(sqlite3.Error):
+                await asyncio.to_thread(_rollback_row)
             await interaction.followup.send(
                 "❌ Something went wrong talking to Discord. Please try again.",
                 ephemeral=True,
             )
             return
-
-        with self.ctx.open_db() as conn:
-            create_hidden(
-                conn,
-                guild_id=guild.id,
-                channel_id=channel.id,
-                original_parent_id=original_parent_id,
-                original_position=original_position,
-                stored_overwrites=stored,
-                hidden_by=interaction.user.id,
-            )
 
         await interaction.followup.send(
             f"Hid **{channel.name}** under **{HIDDEN_CATEGORY_NAME}** and saved its "
@@ -177,8 +209,11 @@ class HiddenChannelsCog(commands.Cog):
             return
         guild, _me = pre
 
-        with self.ctx.open_db() as conn:
-            row = get_active_hidden(conn, guild.id, channel.id)
+        def _load_row():
+            with self.ctx.open_db() as conn:
+                return get_active_hidden(conn, guild.id, channel.id)
+
+        row = await asyncio.to_thread(_load_row)
         if row is None:
             await interaction.response.send_message(
                 f"❌ {channel.mention} isn't currently hidden.", ephemeral=True
@@ -224,8 +259,11 @@ class HiddenChannelsCog(commands.Cog):
         except discord.HTTPException:
             log.warning("Could not restore position for channel %s", channel.id)
 
-        with self.ctx.open_db() as conn:
-            mark_restored(conn, row["id"])
+        def _mark_restored() -> None:
+            with self.ctx.open_db() as conn:
+                mark_restored(conn, row["id"])
+
+        await asyncio.to_thread(_mark_restored)
 
         where = f"**{parent.name}**" if parent else "the top level"
         await interaction.followup.send(
@@ -241,8 +279,11 @@ class HiddenChannelsCog(commands.Cog):
             return
         guild, _me = pre
 
-        with self.ctx.open_db() as conn:
-            rows = list_active_hidden(conn, guild.id)
+        def _load_rows():
+            with self.ctx.open_db() as conn:
+                return list_active_hidden(conn, guild.id)
+
+        rows = await asyncio.to_thread(_load_rows)
         if not rows:
             await interaction.response.send_message(
                 "No channels are currently hidden.", ephemeral=True
