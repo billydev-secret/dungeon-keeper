@@ -27,7 +27,6 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from web_server.auth import OpenAuth
@@ -137,11 +136,20 @@ _HEAVY_PREFIXES = (
 
 
 def _noparam_get_paths(app) -> list[str]:
+    """Every parameter-less /api GET path, per the public OpenAPI schema.
+
+    Derived from ``app.openapi()`` rather than walking ``app.routes`` — see
+    ``test_authz_sweep._iter_routes`` for why a direct ``isinstance(route,
+    APIRoute)`` walk can silently miss almost everything on some FastAPI
+    versions (``include_router`` doesn't reliably flatten sub-router routes
+    into ``app.routes`` across versions).
+    """
     out = []
-    for route in app.routes:
-        if isinstance(route, APIRoute) and "GET" in route.methods and "{" not in route.path:
-            if route.path.startswith("/api") and not route.path.startswith(_HEAVY_PREFIXES):
-                out.append(route.path)
+    for path, operations in app.openapi()["paths"].items():
+        if "get" not in operations or "{" in path:
+            continue
+        if path.startswith("/api") and not path.startswith(_HEAVY_PREFIXES):
+            out.append(path)
     return sorted(set(out))
 
 

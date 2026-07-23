@@ -17,7 +17,6 @@ import re
 from collections.abc import Generator
 
 import pytest
-from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from web_server.auth import DiscordOAuthAuth
@@ -63,12 +62,22 @@ def noauth_client(fake_ctx) -> Generator[tuple[TestClient, object], None, None]:
 
 
 def _iter_routes(app):
-    """(path, method) for every APIRoute, skipping HEAD/OPTIONS auto-verbs."""
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
-        for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
-            yield route.path, method
+    """(path, method) for every registered operation, skipping HEAD/OPTIONS.
+
+    Derived from ``app.openapi()`` — the same public schema Swagger UI and
+    real clients use — rather than walking ``app.routes`` directly. FastAPI's
+    ``include_router`` doesn't reliably flatten a sub-router's routes into
+    ``app.routes`` as plain ``APIRoute`` instances across versions (a newer
+    FastAPI defers them behind an internal lazy wrapper instead), so a direct
+    ``isinstance(route, APIRoute)`` walk can silently see almost nothing.
+    ``openapi()`` reflects whatever is actually reachable regardless of that
+    internal representation.
+    """
+    for path, operations in app.openapi()["paths"].items():
+        for method in operations:
+            if method not in ("get", "post", "put", "patch", "delete"):
+                continue  # skip head/options and any non-verb PathItem key
+            yield path, method.upper()
 
 
 def test_every_api_route_is_registered_under_auth(noauth_client):
