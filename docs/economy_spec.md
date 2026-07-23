@@ -931,10 +931,39 @@ perk auto-resumes cleanly (re-projected, clock restarted) when the feature retur
 Restart-safe exactly-once via claim-before-side-effect on the rental row
 (`scheduled_games_service` pattern: state is advanced before the Discord side-effect),
 with feature-loss re-projection and transition-only DMs handled as post-commit effects.
-Dashboard cancel: an **active** rental runs to the end of the paid week (no refund); a
-**grace** rental is cancelled immediately and best-effort de-projects the role (§12).
-Leave/ban = immediate cancel + cleanup (member-remove listener), covering both rentals
-the member owns and gift rentals where they are the beneficiary.
+Dashboard cancel (admin, `POST /economy/rentals/{id}/cancel`): an **active** rental
+runs to the end of the paid week (no refund); a **grace** rental is cancelled
+immediately and best-effort de-projects the role (§12). Leave/ban = immediate cancel +
+cleanup (member-remove listener), covering both rentals the member owns and gift
+rentals where they are the beneficiary.
+
+**Member self-service refund** (`/bank shop` → **Cancel & Refund**): the payer (not
+just a gift's beneficiary) can end an **active** rental immediately and get back the
+pro-rated unused time — `floor(price × remaining / WEEK_SECONDS)`
+(`rentals.prorated_refund`) — no fee, no minimum holding period. A **grace** rental
+refunds 0 (the last debit already failed) but still cancels now rather than waiting
+for `force`-cancel. Either way the perk is stripped right away — a shared
+`revoke_perk_effect` dispatcher (`economy_loop.py`, also used by the billing loop's
+own lapse/period-end handling) reverts the voice-style channel or re-projects/deletes
+the personal role; a failure there is logged and swallowed (`finalize_refund`), same
+as the billing loop's own guard, since the refund itself already committed and must
+not fail the interaction. Exactly-once via the terminal `state` transition itself, no
+separate "refunded" flag needed. Ledger kind: `rental_refund`. Two rentals are
+**excluded from self-refund** at the `list_refundable_rentals`/`refund_rental` level
+(`economy_rentals_service._refund_ineligible_reason`, shared with the single-row
+`get_refundable_rental` the confirm step uses): one an admin already
+**force-cancelled** (`cancel_at_period_end` set with no refund intended — a
+self-refund would silently reverse that decision) and a **sponsored emoji** rental
+(its own lifecycle/refund bookkeeping lives in `economy_emoji_service`, never this
+generic path). A held, unconsumed **streak shield** refunds in full (the price
+actually paid, snapshotted in `econ_streaks.shield_price` at purchase — not the
+guild's current price) via `refund_streak_shield`, ledger kind
+`streak_shield_refund`; a shield already held when `shield_price` shipped (migration
+114) backfills as 0 and falls back to the guild's *current* price rather than hiding
+the refund option or crediting nothing (the true historical price is unrecoverable
+for those). **Raffle tickets are excluded** — they're entries in a shared weighted
+drawing, so refunding one would need to un-enter the member and reshuffle everyone
+else's odds; `buy_tickets` keeps its documented no-refund policy.
 
 ## 7. Member Surface
 
@@ -962,7 +991,13 @@ the member owns and gift rentals where they are the beneficiary.
     reflecting the server's role features and rented rows marked ✅. A fresh rental's
     confirmation carries the same customise button. Entitlements are
     beneficiary-based, so a *gifted* perk surfaces exactly like a self-rented
-    one (customise button, ✅ mark). **`/bank gift @member perk:<choice>`** —
+    one (customise button, ✅ mark). When the member has anything to cancel — a
+    live rental they PAID for, or a held streak shield — the view carries a single
+    **↩️ Cancel & Refund** button (one entry point rather than a second button per
+    owned row); it opens a picker of everything cancellable with its refund preview,
+    then a danger-styled Confirm/Back gate (§6) before the perk ends and the
+    pro-rated (or, for a shield, full) amount is credited back. **`/bank gift
+    @member perk:<choice>`** —
     pay to rent a friend any self-perk at its base price (eager role creation
     on the recipient); feature-gated perks check the guild gate, and gifting
     a perk the friend already has stops at an explicit "Gift anyway?" confirm

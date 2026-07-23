@@ -81,6 +81,18 @@ def classify(
     return BillingAction.NONE
 
 
+def prorated_refund(price: int, next_bill_at: float, now: float) -> int:
+    """The unused-time refund for cancelling an active rental right now.
+
+    ``floor(price * remaining / WEEK_SECONDS)`` — floor (not round) so a
+    refund never exceeds what's genuinely unused, and remaining is clamped to
+    ``[0, WEEK_SECONDS]`` so an overdue or clock-skewed rental never refunds
+    more than one week's price back.
+    """
+    remaining = min(WEEK_SECONDS, max(0.0, next_bill_at - now))
+    return max(0, min(price, int(price * remaining / WEEK_SECONDS)))
+
+
 def entitled_perks(rentals: Iterable[Mapping[str, object] | object]) -> set[str]:
     """The set of perks the given rentals currently entitle.
 

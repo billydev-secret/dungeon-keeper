@@ -977,7 +977,7 @@
       <tbody>
         <tr><td><code>/bank wallet</code></td><td>Your balance, recent ledger activity, and active rentals</td></tr>
         <tr><td><code>/bank quests</code></td><td>Your quest board at a glance — one line per quest with status and payout, grouped by cadence; a details menu shows any quest's full description, and claimable quests are claimed from the same panel</td></tr>
-        <tr><td><code>/bank shop</code></td><td>Browse the perk shop in an ephemeral panel — rent perks, and customize rented ones via the panel's modals</td></tr>
+        <tr><td><code>/bank shop</code></td><td>Browse the perk shop in an ephemeral panel — rent perks, customize rented ones via the panel's modals, and cancel anything you're renting (or a held streak shield) with the <strong>↩️ Cancel &amp; Refund</strong> button for an immediate, pro-rated refund</td></tr>
         <tr><td><code>/bank pay member: amount:</code></td><td>Send currency to another member (optional memo; large transfers ask for confirmation)</td></tr>
         <tr><td><code>/bank gift member: perk:</code></td><td>Pay to rent a friend any shop perk (color, name, gradient, holographic, icon, voice room lease) at its listed price</td></tr>
         <tr><td><code>/bank emoji image: name:</code></td><td>Sponsor a custom emoji — the first week's rent is held while a mod reviews it (full refund if declined), then it renews weekly from your wallet; if the rent lapses the emoji comes down. Run it bare to check on (or cancel) your submission</td></tr>
@@ -1007,6 +1007,13 @@
       <div class="callout-body">
         <strong>If a renewal can't be paid</strong>
         <p>You get a grace window (with a DM) to top up before the perk lapses. A lapsed perk is simply re-rentable later — nothing is lost except the cosmetic while it's down.</p>
+      </div>
+    </div>
+    <div class="callout callout-info">
+      <span class="callout-icon">↩️</span>
+      <div class="callout-body">
+        <strong>Changed your mind?</strong>
+        <p>The <strong>↩️ Cancel &amp; Refund</strong> button in <code>/bank shop</code> lists your rentable perks (and a held streak shield) — pick one and confirm to end it right away and get back the unused portion of what you paid, no fee. Raffle tickets and sponsored emoji aren't listed there: tickets are entries in the week's drawing and can't be refunded once bought, and a sponsored emoji is managed from <code>/bank emoji</code> instead.</p>
       </div>
     </div>
 

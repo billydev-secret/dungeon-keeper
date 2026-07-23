@@ -660,18 +660,18 @@ def purchase_streak_shield(
     Raises ValueError: "already holding" when a shield is held, "insufficient"
     when the debit fails.
     """
+    price = int(settings.price_streak_shield)
     cur = conn.execute(
         """
-        INSERT INTO econ_streaks (guild_id, user_id, shields)
-        VALUES (?, ?, 1)
-        ON CONFLICT(guild_id, user_id) DO UPDATE SET shields = 1
+        INSERT INTO econ_streaks (guild_id, user_id, shields, shield_price)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET shields = 1, shield_price = ?
         WHERE econ_streaks.shields = 0
         """,
-        (guild_id, user_id),
+        (guild_id, user_id, price, price),
     )
     if (cur.rowcount or 0) == 0:
         raise ValueError("already holding")
-    price = int(settings.price_streak_shield)
     ok = apply_debit(
         conn, guild_id, user_id, price, "streak_shield",
         actor_id=user_id, meta={},
@@ -685,6 +685,83 @@ def purchase_streak_shield(
     )
 
     fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
+    return price
+
+
+def _shield_refund_price(row: sqlite3.Row, settings: EconSettings) -> int:
+    """The amount to refund for a held shield row.
+
+    A shield bought before migration 114 (``shield_price`` didn't exist yet)
+    snapshots as the column default 0 — indistinguishable from "nothing
+    held" otherwise. The true historical price is genuinely unrecoverable for
+    those, so a stored 0 on a row that IS held (``shields = 1``) falls back
+    to the guild's current price rather than silently hiding the refund
+    option or zero-crediting it.
+    """
+    stored = int(row["shield_price"])
+    return stored if stored > 0 else int(settings.price_streak_shield)
+
+
+def get_streak_shield_price(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, settings: EconSettings
+) -> int:
+    """The price to refund for the member's held shield, or 0 if none is held."""
+    row = conn.execute(
+        "SELECT shield_price FROM econ_streaks "
+        "WHERE guild_id = ? AND user_id = ? AND shields = 1",
+        (guild_id, user_id),
+    ).fetchone()
+    return _shield_refund_price(row, settings) if row is not None else 0
+
+
+def get_streak_shield_status(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, settings: EconSettings
+) -> tuple[int, int]:
+    """(shields held, refund price) in one query — see ``get_streak_shield_price``."""
+    row = conn.execute(
+        "SELECT shields, shield_price FROM econ_streaks "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        return 0, 0
+    shields = int(row["shields"])
+    return shields, (_shield_refund_price(row, settings) if shields == 1 else 0)
+
+
+def refund_streak_shield(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, settings: EconSettings
+) -> int:
+    """Refund a held, unconsumed streak shield in full. Returns the amount refunded.
+
+    Refunds the price actually PAID (``shield_price``, snapshotted at
+    purchase), not the guild's current price, which may have moved since —
+    except for a legacy pre-migration-114 shield, which falls back to the
+    current price (see ``_shield_refund_price``). Exactly-once via the
+    guarded ``shields = 1`` UPDATE — the same claim-style anchor
+    ``purchase_streak_shield`` uses to grab the slot. Raises ValueError("no
+    shield held") if nothing is held (already consumed or never bought).
+    """
+    row = conn.execute(
+        "SELECT shield_price FROM econ_streaks WHERE guild_id = ? AND user_id = ? "
+        "AND shields = 1",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("no shield held")
+    price = _shield_refund_price(row, settings)
+    cur = conn.execute(
+        "UPDATE econ_streaks SET shields = 0, shield_price = 0 "
+        "WHERE guild_id = ? AND user_id = ? AND shields = 1",
+        (guild_id, user_id),
+    )
+    if (cur.rowcount or 0) == 0:
+        raise ValueError("no shield held")
+    if price > 0:
+        apply_credit(
+            conn, guild_id, user_id, price, "streak_shield_refund",
+            actor_id=user_id, meta={},
+        )
     return price
 
 

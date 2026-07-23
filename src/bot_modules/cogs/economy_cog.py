@@ -113,14 +113,20 @@ from bot_modules.services.economy_icon_catalog_service import (
     list_catalog,
 )
 from bot_modules.services.economy_rentals_service import (
+    RentalRefund,
     cancel_all_for_member,
     entitlements,
     get_live_role_icon_rental,
+    get_refundable_rental,
     list_member_rentals,
+    list_refundable_rentals,
+    refund_rental,
     rent_perk,
     set_rental_catalog_icon,
     upsert_personal_role,
 )
+from bot_modules.services.economy_loop import revoke_perk_effect
+from bot_modules.economy.rentals import prorated_refund
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
@@ -131,10 +137,13 @@ from bot_modules.services.economy_service import (
     get_balance,
     get_ledger,
     get_notify_muted,
+    get_streak_shield_price,
+    get_streak_shield_status,
     get_streak_shields,
     load_econ_settings,
     notify_member,
     purchase_streak_shield,
+    refund_streak_shield,
     save_econ_settings,
     set_notify_muted,
     transfer_currency,
@@ -788,20 +797,18 @@ class _IconCatalogSelect(discord.ui.Select):
         )
 
 
-class _IconCatalogView(discord.ui.View):
-    """Ephemeral catalog picker, scoped to the member who opened the shop."""
+class _MemberScopedView(discord.ui.View):
+    """A view usable only by the member it was opened for.
 
-    def __init__(
-        self,
-        cog: EconomyCog,
-        settings: EconSettings,
-        guild: discord.Guild,
-        user_id: int,
-        icons: list[dict],
-    ) -> None:
-        super().__init__(timeout=120)
+    Shared base for every shop-adjacent picker (``_ShopView``,
+    ``_IconCatalogView``, ``_RefundPickerView``) — they were each carrying an
+    identical ``interaction_check`` before this; one shared implementation
+    means the scoping rule/error text only needs to change in one place.
+    """
+
+    def __init__(self, user_id: int, *, timeout: float | None = 120) -> None:
+        super().__init__(timeout=timeout)
         self.user_id = user_id
-        self.add_item(_IconCatalogSelect(cog, settings, guild, icons))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -812,7 +819,146 @@ class _IconCatalogView(discord.ui.View):
         return True
 
 
-class _ShopView(discord.ui.View):
+class _IconCatalogView(_MemberScopedView):
+    """Ephemeral catalog picker, scoped to the member who opened the shop."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        icons: list[dict],
+    ) -> None:
+        super().__init__(user_id)
+        self.add_item(_IconCatalogSelect(cog, settings, guild, icons))
+
+
+class _RefundSelect(discord.ui.Select):
+    """Picker of the member's cancellable rentals + held shield.
+
+    Option values are ``"rental:{id}"`` or the literal ``"shield"``; choosing
+    one moves to a confirm step rather than acting immediately (a refund ends
+    the perk right away, so it gets the same Confirm/Back gate as a pay/gift
+    double-spend).
+    """
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        rentals: list[dict],
+        shield_price: int,
+    ) -> None:
+        now = time.time()
+        options: list[discord.SelectOption] = []
+        for r in rentals:
+            label = _PERK_LABELS.get(str(r["perk"]), str(r["perk"]))
+            if r["state"] == "active":
+                preview = prorated_refund(
+                    int(r["price"]), float(r["next_bill_at"]), now
+                )
+                desc = f"{settings.currency_emoji} {preview:,} back — ends now"
+            else:
+                desc = "Already in grace — no refund, ends now"
+            options.append(
+                discord.SelectOption(
+                    label=label[:100],
+                    value=f"rental:{int(r['id'])}",
+                    description=desc[:100],
+                )
+            )
+        if shield_price > 0:
+            options.append(
+                discord.SelectOption(
+                    label="Streak Shield",
+                    value="shield",
+                    description=f"{settings.currency_emoji} {shield_price:,} back"[:100],
+                )
+            )
+        super().__init__(
+            placeholder="Choose what to cancel…",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.cog.show_refund_confirm(
+            interaction, self.settings, self.guild, self.values[0]
+        )
+
+
+class _RefundPickerView(_MemberScopedView):
+    """Ephemeral picker of the member's cancellable rentals + held shield."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        rentals: list[dict],
+        shield_price: int,
+    ) -> None:
+        super().__init__(user_id)
+        self.add_item(_RefundSelect(cog, settings, guild, rentals, shield_price))
+
+
+class _RefundConfirmView(discord.ui.View):
+    """Ephemeral Confirm/Back gate before a refund actually runs.
+
+    Danger-styled (unlike _PayConfirmView's plain success Confirm) since this
+    ends a live perk immediately, not just moves money between two members.
+    """
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        target: str,
+    ) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.user_id = user_id
+        self.target = target
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ This confirmation isn't yours.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Yes, Cancel & Refund", style=discord.ButtonStyle.danger)
+    async def _confirm(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await self.cog.finalize_refund(
+            interaction, self.settings, self.guild, self.target
+        )
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def _back(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content="Nothing changed.", embed=None, view=None
+        )
+
+
+class _ShopView(_MemberScopedView):
     """One button per self-perk: Rent when unowned, a customise modal when owned.
 
     Feature-gated rows are disabled either way. ``owned`` is the viewer's
@@ -830,12 +976,15 @@ class _ShopView(discord.ui.View):
         owned: set[str],
         has_catalog: bool = False,
         shields_held: int = 0,
+        refundable: list[dict] | None = None,
+        shield_price: int = 0,
     ) -> None:
-        super().__init__(timeout=120)
+        super().__init__(user_id)
         self.cog = cog
         self.settings = settings
         self.guild = guild
-        self.user_id = user_id
+        self.refundable = refundable or []
+        self.shield_price = shield_price
         for perk in _SELF_PERKS:
             if perk == "role_icon" and has_catalog:
                 # A curated catalog replaces the rent/customise buttons with a
@@ -928,14 +1077,17 @@ class _ShopView(discord.ui.View):
             )
             button.callback = self._make_shield_callback()
             self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ Open your own shop with /bank shop.", ephemeral=True
+        if self.refundable or self.shield_price > 0:
+            # One entry point for everything cancellable, rather than a
+            # second button per owned row — the picker underneath handles
+            # however many the member happens to hold.
+            button = discord.ui.Button(
+                label="↩️ Cancel & Refund",
+                style=discord.ButtonStyle.secondary,
+                custom_id="econ_shop_refund",
             )
-            return False
-        return True
+            button.callback = self._make_refund_callback()
+            self.add_item(button)
 
     def _make_rent_callback(self, perk: str):
         async def _cb(interaction: discord.Interaction) -> None:
@@ -965,6 +1117,15 @@ class _ShopView(discord.ui.View):
         async def _cb(interaction: discord.Interaction) -> None:
             await interaction.response.send_modal(
                 _RaffleBuyModal(self.cog, self.settings)
+            )
+
+        return _cb
+
+    def _make_refund_callback(self):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.open_refund_picker(
+                interaction, self.settings, self.guild, self.refundable,
+                self.shield_price,
             )
 
         return _cb
@@ -1802,7 +1963,9 @@ class EconomyCog(commands.Cog):
 
         icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         has_catalog = icon_range is not None
-        shields = await asyncio.to_thread(self._shields, guild.id, user_id)
+        refundable, shields, shield_price = await asyncio.to_thread(
+            self._refundables, guild.id, user_id, settings
+        )
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = _build_shop_embed(
             settings,
@@ -1815,7 +1978,7 @@ class EconomyCog(commands.Cog):
         )
         view = _ShopView(
             self, settings, guild, user_id, gated, owned, has_catalog,
-            shields_held=shields,
+            shields_held=shields, refundable=refundable, shield_price=shield_price,
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -1908,6 +2071,158 @@ class EconomyCog(commands.Cog):
     ) -> None:
         """Rent a self-perk from the ephemeral shop view."""
         await _rent_perk_flow(interaction, self, settings, guild, perk)
+
+    # ── self-service refunds ─────────────────────────────────────────────
+
+    async def open_refund_picker(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        refundable: list[dict],
+        shield_price: int,
+    ) -> None:
+        """Show the picker of what the member can cancel & refund."""
+        view = _RefundPickerView(
+            self, settings, guild, interaction.user.id, refundable, shield_price
+        )
+        await interaction.response.send_message(
+            "Pick what to cancel — this credits you back right away and ends "
+            "the perk immediately:",
+            view=view,
+            ephemeral=True,
+        )
+
+    async def show_refund_confirm(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        target: str,
+    ) -> None:
+        """Re-check the pick is still live and show its Confirm/Back gate."""
+        user_id = interaction.user.id
+
+        def _load() -> tuple[dict | None, int]:
+            with self.ctx.open_db() as conn:
+                if target == "shield":
+                    return None, get_streak_shield_price(
+                        conn, guild.id, user_id, settings
+                    )
+                rental_id = int(target.split(":", 1)[1])
+                row = get_refundable_rental(conn, guild.id, user_id, rental_id)
+                return (dict(row) if row is not None else None), 0
+
+        rental, shield_price = await asyncio.to_thread(_load)
+        if target == "shield":
+            if shield_price <= 0:
+                await interaction.response.edit_message(
+                    content="❌ You're not holding a shield anymore.",
+                    embed=None, view=None,
+                )
+                return
+            text = (
+                "Cancel your 🛡️ **Streak Shield**? You'll get back "
+                f"{settings.currency_emoji} **{shield_price:,}**."
+            )
+        else:
+            if rental is None:
+                await interaction.response.edit_message(
+                    content="❌ That rental isn't yours to refund anymore.",
+                    embed=None, view=None,
+                )
+                return
+            label = _PERK_LABELS.get(str(rental["perk"]), str(rental["perk"]))
+            if rental["state"] == "active":
+                preview = prorated_refund(
+                    int(rental["price"]), float(rental["next_bill_at"]), time.time()
+                )
+                text = (
+                    f"Cancel **{label}**? You'll get back "
+                    f"{settings.currency_emoji} **{preview:,}** — the perk ends "
+                    "right now."
+                )
+            else:
+                text = (
+                    f"Cancel **{label}**? You're already in the grace period, "
+                    "so there's no refund — the perk ends right now."
+                )
+        view = _RefundConfirmView(self, settings, guild, user_id, target)
+        await interaction.response.edit_message(content=text, embed=None, view=view)
+
+    async def finalize_refund(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        target: str,
+    ) -> None:
+        """Run the refund for real and strip the perk immediately."""
+        user_id = interaction.user.id
+
+        if target == "shield":
+
+            def _refund_shield() -> int:
+                with self.ctx.open_db() as conn:
+                    return refund_streak_shield(conn, guild.id, user_id, settings)
+
+            try:
+                amount = await asyncio.to_thread(_refund_shield)
+            except ValueError:
+                await interaction.response.edit_message(
+                    content="❌ You're not holding a shield anymore.", view=None
+                )
+                return
+            await interaction.response.edit_message(
+                content=(
+                    "✅ Streak shield cancelled — "
+                    f"{settings.currency_emoji} **{amount:,}** credited back."
+                ),
+                view=None,
+            )
+            return
+
+        rental_id = int(target.split(":", 1)[1])
+
+        def _refund_rental() -> RentalRefund:
+            with self.ctx.open_db() as conn:
+                return refund_rental(
+                    conn, guild.id, rental_id, requester_id=user_id
+                )
+
+        try:
+            result = await asyncio.to_thread(_refund_rental)
+        except ValueError:
+            await interaction.response.edit_message(
+                content="❌ That rental isn't yours to refund anymore.", view=None
+            )
+            return
+
+        # Best-effort past this point: the refund already committed (money
+        # moved, rental terminal), so a Discord-side hiccup here must not
+        # blow up the interaction — same guard the billing loop's own call to
+        # this dispatcher uses for the same reason (economy_loop.py).
+        try:
+            await revoke_perk_effect(
+                self.bot, self.ctx.db_path, guild.id, result.perk, result.rental_id,
+                result.beneficiary_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy shop refund: failed to revoke perk for beneficiary %s.",
+                result.beneficiary_id,
+            )
+        label = _PERK_LABELS.get(result.perk, result.perk)
+        if result.refund > 0:
+            text = (
+                f"✅ **{label}** cancelled — {settings.currency_emoji} "
+                f"**{result.refund:,}** credited back."
+            )
+        else:
+            text = f"✅ **{label}** cancelled — no refund (already in the grace period)."
+        await interaction.response.edit_message(content=text, view=None)
 
     # ── sponsor a QOTD ───────────────────────────────────────────────────
 
@@ -2902,9 +3217,23 @@ class EconomyCog(commands.Cog):
         with self.ctx.open_db() as conn:
             return get_balance(conn, guild_id, user_id)
 
-    def _shields(self, guild_id: int, user_id: int) -> int:
+    def _refundables(
+        self, guild_id: int, user_id: int, settings: EconSettings
+    ) -> tuple[list[dict], int, int]:
+        """The member's refundable rentals, held-shield count, and its price.
+
+        One connection for the rental list AND the streak-shield status
+        (previously a separate ``_shields`` call plus its own query) — shop's
+        cancel/refund flow. ``list_refundable_rentals`` already excludes
+        sponsored-emoji rentals (a different self-service surface, ``/bank
+        emoji``) and admin-force-cancelled ones.
+        """
         with self.ctx.open_db() as conn:
-            return get_streak_shields(conn, guild_id, user_id)
+            rentals = [dict(r) for r in list_refundable_rentals(conn, guild_id, user_id)]
+            shields_held, shield_price = get_streak_shield_status(
+                conn, guild_id, user_id, settings
+            )
+        return rentals, shields_held, shield_price
 
     def _load_role_ctx(
         self, guild_id: int, user_id: int

@@ -17,6 +17,7 @@ from bot_modules.economy.rentals import (
     classify,
     effective_color_mode,
     entitled_perks,
+    prorated_refund,
 )
 
 NOW = 1_000_000.0
@@ -95,6 +96,36 @@ def test_entitled_perks_active_and_grace_grant():
 def test_entitled_perks_empty():
     assert entitled_perks([]) == set()
     assert entitled_perks([_r("role_color", "lapsed")]) == set()
+
+
+# ── prorated_refund ──────────────────────────────────────────────────────
+
+
+def test_prorated_refund_full_week_remaining():
+    assert prorated_refund(70, NOW + WEEK_SECONDS, NOW) == 70
+
+
+def test_prorated_refund_half_week_remaining():
+    assert prorated_refund(70, NOW + WEEK_SECONDS / 2, NOW) == 35
+
+
+def test_prorated_refund_floors_not_rounds():
+    # 1/3 of the week left on a price of 10 -> 3.33, floors to 3 (never 4).
+    assert prorated_refund(10, NOW + WEEK_SECONDS / 3, NOW) == 3
+
+
+def test_prorated_refund_no_time_left():
+    assert prorated_refund(70, NOW, NOW) == 0
+
+
+def test_prorated_refund_overdue_clamps_to_zero_not_negative():
+    assert prorated_refund(70, NOW - 100, NOW) == 0
+
+
+def test_prorated_refund_clock_skew_clamps_to_one_week_not_more():
+    # A next_bill_at further than a week out (shouldn't normally happen, but
+    # the clamp keeps a refund from ever exceeding the full price).
+    assert prorated_refund(70, NOW + WEEK_SECONDS * 5, NOW) == 70
 
 
 # ── effective_color_mode ───────────────────────────────────────────────

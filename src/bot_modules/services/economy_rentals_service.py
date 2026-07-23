@@ -39,7 +39,8 @@ post-commit Discord effects (values are ``BillingAction.*.value``):
   ``cancel_period_end``  — owner-cancelled active rental hit its anniversary;
                            state → cancelled, no charge; revoke perks, silent.
 
-Ledger kinds added here: ``rental`` (upfront charge + weekly renewal).
+Ledger kinds added here: ``rental`` (upfront charge + weekly renewal),
+``rental_refund`` (member self-service pro-rated cancel — see ``refund_rental``).
 """
 
 from __future__ import annotations
@@ -51,9 +52,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bot_modules.economy import rentals
-from bot_modules.economy.rentals import WEEK_SECONDS, BillingAction, classify
+from bot_modules.economy.rentals import WEEK_SECONDS, BillingAction, classify, prorated_refund
 from bot_modules.services.economy_raffle_service import try_redeem_voucher
-from bot_modules.services.economy_service import apply_debit
+from bot_modules.services.economy_service import apply_credit, apply_debit
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -80,6 +81,17 @@ _RENTAL_COLS = (
 _PERSONAL_ROLE_FIELDS = frozenset(
     {"role_id", "name", "color", "color2", "icon_path", "projected_icon_path"}
 )
+
+
+@dataclass(frozen=True)
+class RentalRefund:
+    """The outcome of a member self-service refund (for the caller's Discord effects)."""
+
+    rental_id: int
+    perk: str
+    refund: int
+    user_id: int
+    beneficiary_id: int
 
 
 @dataclass(frozen=True)
@@ -284,6 +296,133 @@ def cancel_rental(
     updated = _get_rental(conn, rental_id)
     assert updated is not None
     return updated
+
+
+def _refund_ineligible_reason(row: sqlite3.Row) -> str | None:
+    """Why a fetched rental (already matched on guild/owner) can't self-refund.
+
+    None means eligible. Shared by ``refund_rental``'s validation and
+    ``get_refundable_rental``'s single-row lookup so the eligibility rule
+    can't drift between the two: live (active/grace); not already
+    force-cancelled by an admin's no-refund ``cancel_at_period_end`` (the
+    dashboard's ``cancel_rental``) — self-refunding would silently reverse
+    that decision; and not a sponsored-emoji rental, which has its own
+    dedicated lifecycle/refund bookkeeping in ``economy_emoji_service`` and
+    is never meant to end through this generic path.
+    """
+    if row["state"] not in ("active", "grace"):
+        return "rental is not live"
+    if bool(row["cancel_at_period_end"]):
+        return "already cancelled — no refund"
+    if str(row["perk"]) == "emoji":
+        return "not refundable here"
+    return None
+
+
+def refund_rental(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    rental_id: int,
+    *,
+    requester_id: int,
+    now: float | None = None,
+) -> RentalRefund:
+    """Member self-service: cancel a live rental NOW and pro-rate the refund.
+
+    Unlike ``cancel_rental`` (an active rental runs out its paid week, no
+    refund), this ends the rental immediately — the caller must revoke the
+    Discord-side perk right after, rather than waiting for the anniversary
+    tick. Owner-only (the payer, same rule as ``cancel_rental`` — a gift's
+    beneficiary can't refund what they didn't pay). An active rental's refund
+    is the unused-time pro-ration (``rentals.prorated_refund``); a grace
+    rental refunds 0 (the last debit already failed). Exactly-once via the
+    guarded state transition itself — no separate "refunded" flag needed,
+    since a second call on an already-terminal row simply matches zero rows.
+    Raises ValueError: rental missing, not the requester's, already terminal,
+    already force-cancelled by an admin (no-refund), or a sponsored-emoji
+    rental (see ``_refund_ineligible_reason``).
+    """
+    now = time.time() if now is None else now
+    row = _get_rental(conn, rental_id)
+    if row is None or int(row["guild_id"]) != guild_id:
+        raise ValueError("rental not found")
+    if int(row["user_id"]) != requester_id:
+        raise ValueError("not your rental")
+    reason = _refund_ineligible_reason(row)
+    if reason is not None:
+        raise ValueError(reason)
+    state = row["state"]
+
+    refund = 0
+    if state == "active":
+        refund = prorated_refund(
+            int(row["price"]), float(row["next_bill_at"]), now
+        )
+
+    cur = conn.execute(
+        "UPDATE econ_rentals SET state = 'cancelled', ended_at = ? "
+        "WHERE id = ? AND state IN ('active', 'grace')",
+        (now, rental_id),
+    )
+    if (cur.rowcount or 0) == 0:
+        raise ValueError("rental is not live")
+
+    if refund > 0:
+        apply_credit(
+            conn, guild_id, requester_id, refund, "rental_refund",
+            actor_id=requester_id, meta={"rental_id": rental_id, "perk": row["perk"]},
+        )
+    return RentalRefund(
+        rental_id=rental_id,
+        perk=str(row["perk"]),
+        refund=refund,
+        user_id=requester_id,
+        beneficiary_id=int(row["beneficiary_id"]),
+    )
+
+
+def list_refundable_rentals(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> list[sqlite3.Row]:
+    """The member's live rentals they PAID for (payer, not just beneficiary).
+
+    A gift a member merely wears never shows up here — only the payer can
+    refund it, same rule as ``cancel_rental``/``refund_rental``. Excludes a
+    rental an admin already force-cancelled (``cancel_at_period_end`` — no
+    refund intended) and sponsored-emoji rentals (their own surface, see
+    ``_refund_ineligible_reason``).
+    """
+    return conn.execute(
+        f"""
+        SELECT {_RENTAL_COLS} FROM econ_rentals
+        WHERE guild_id = ? AND user_id = ? AND state IN ('active', 'grace')
+          AND cancel_at_period_end = 0 AND perk != 'emoji'
+        ORDER BY next_bill_at ASC, id ASC
+        """,
+        (guild_id, user_id),
+    ).fetchall()
+
+
+def get_refundable_rental(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, rental_id: int
+) -> sqlite3.Row | None:
+    """Single-row lookup mirroring ``list_refundable_rentals``'s eligibility.
+
+    For the refund confirm step: fetches and validates just the one rental the
+    member picked, instead of fetching their whole refundable list and
+    scanning it for one id. Returns None if missing, not the requester's, or
+    not currently eligible (mirrors ``_refund_ineligible_reason``, so this
+    can't drift from what ``refund_rental`` itself will accept).
+    """
+    row = _get_rental(conn, rental_id)
+    if (
+        row is None
+        or int(row["guild_id"]) != guild_id
+        or int(row["user_id"]) != user_id
+        or _refund_ineligible_reason(row) is not None
+    ):
+        return None
+    return row
 
 
 def cancel_all_for_member(
