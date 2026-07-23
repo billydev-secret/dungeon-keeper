@@ -206,7 +206,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Pen Pals
 
-- [ ] **Pen Pals — `/penpals pair <user1> <user2>`** — Force-pair two members bypassing pool/cooldown; confirm a private channel + intro + first question post.
+- [ ] **Pen Pals — `/penpals pair <user1> <user2>`** — Force-pair two members who are both in the pool, bypassing queue order/cooldown; confirm a private channel + intro + first question post, and that a member who never ran `/penpals join` is refused.
 - [ ] **Pen Pals — `/penpals round`** — Drain the pool; confirm eligible members pair (skipping anyone in the 30-day cooldown).
 - [ ] **Pen Pals questions (dashboard)** — Manage the question bank; confirm new questions appear in future sessions.
 
