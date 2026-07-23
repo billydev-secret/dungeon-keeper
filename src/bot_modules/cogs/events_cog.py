@@ -31,6 +31,7 @@ from bot_modules.services.greeting_watch_service import (
     record_greeting,
 )
 from bot_modules.services.interaction_graph import record_interactions
+from bot_modules.services.voice_follow import record_voice_follow
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import promotion_review_service as promo_review
@@ -444,6 +445,51 @@ class EventsCog(commands.Cog):
             self._message_backfill_task.add_done_callback(
                 self._log_background_task_result
             )
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
+        """Capture directed voice-follows: joining a channel someone's already in.
+
+        Only a genuine channel *join* into an already-occupied channel counts —
+        mute/deafen/stream toggles (same channel) and disconnects (no channel)
+        are ignored, as are joins into the guild's AFK park. The joiner is
+        ``from_user_id``; everyone already present is a ``to_user_id`` target.
+        Noise filtering (crowd size, flap debounce) lives in
+        ``record_voice_follow``.
+        """
+        if member.bot:
+            return
+        channel = after.channel
+        if channel is None:
+            return  # left voice entirely — not a follow
+        if before.channel is not None and before.channel.id == channel.id:
+            return  # same channel: a mute/deafen/stream state change, not a join
+        afk = member.guild.afk_channel
+        if afk is not None and channel.id == afk.id:
+            return  # parking in AFK isn't seeking anyone out
+
+        # Humans already present when this member arrived (self + bots excluded).
+        present_ids = [m.id for m in channel.members if not m.bot and m.id != member.id]
+        if not present_ids:
+            return
+
+        guild_id = member.guild.id
+        joiner_id = member.id
+        channel_id = channel.id
+        ts = int(time.time())
+
+        def _record() -> None:
+            with self.ctx.open_db() as conn:
+                record_voice_follow(
+                    conn, guild_id, joiner_id, present_ids, channel_id, ts=ts
+                )
+
+        await asyncio.to_thread(_record)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
