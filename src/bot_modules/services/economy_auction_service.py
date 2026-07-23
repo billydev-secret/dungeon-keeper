@@ -24,22 +24,19 @@ the bidder validated against (``high_bid IS :old``). This is the house
 ``UPDATE … WHERE … RETURNING`` idiom (see casino settle), applied to the high-bid
 slot. **Money is safe under any concurrency** — no bid can win on a stale read.
 
-Concurrency caveat (the caller must handle it): the CAS's graceful "someone just
-outbid you" branch is only reachable *within a single connection*. Across two
-live connections under the default ``open_db`` transaction (DEFERRED + WAL), a
-bid that pre-reads the row and then writes on a snapshot another bidder has
-already committed past gets ``sqlite3.OperationalError`` (BUSY_SNAPSHOT / "database
-is locked") on its escrow debit — before it ever reaches the CAS. The
-transaction rolls back cleanly (escrow conserved), but the loser sees a raw
-error, not the friendly retry. **Stage 1 (the cog) MUST run each bid under
-``BEGIN IMMEDIATE``** so bidders serialize on the write lock up front (no stale
-snapshot, no BUSY_SNAPSHOT — concurrent bids queue and re-read), **and/or catch
-``OperationalError`` and retry the bid in a fresh transaction.** Until then, the
-CAS is a correctness backstop, not a UX guarantee.
+Concurrency: bids MUST run under ``BEGIN IMMEDIATE`` (``place_bid_now`` /
+``open_db_immediate``), which takes the write lock before the read so concurrent
+bidders serialize and each re-reads the latest state — no stale WAL snapshot, no
+``SQLITE_BUSY_SNAPSHOT``. The compare-and-swap is then a correctness backstop
+(it also covers same-connection stale claims). ``place_bid_now`` additionally
+retries a handful of times on a transient ``OperationalError`` and, if it still
+can't get the lock, raises a friendly ValueError rather than a raw sqlite error.
+Calling ``place_bid`` under plain ``open_db`` (DEFERRED) is only safe for a
+single connection (the tests) — never wire the cog to it directly.
 
 Pure DB, no Discord — the caller owns the card and the DMs, matching the bounty
-and pin services. Every function rides the caller's transaction (``open_db``),
-so a raised ValueError rolls back any escrow taken on the way.
+and pin services. Every function rides the caller's transaction, so a raised
+ValueError rolls back any escrow taken on the way.
 """
 
 from __future__ import annotations
@@ -49,9 +46,12 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from bot_modules.core.db_utils import open_db_immediate
 from bot_modules.services.economy_service import apply_credit, apply_debit
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from bot_modules.services.economy_service import EconSettings
 
 BID_KIND = "auction_bid"
@@ -345,6 +345,41 @@ def place_bid(
     )
 
 
+def place_bid_now(
+    db_path: Path,
+    settings: EconSettings,
+    guild_id: int,
+    auction_id: int,
+    user_id: int,
+    amount: int,
+    *,
+    retries: int = 5,
+    now: float | None = None,
+) -> BidResult:
+    """Run :func:`place_bid` in its own ``BEGIN IMMEDIATE`` transaction.
+
+    The entry point the cog uses. BEGIN IMMEDIATE takes the write lock before
+    the read, so concurrent bidders serialize instead of racing on a stale
+    snapshot. A transient ``OperationalError`` (couldn't get the lock in time,
+    or a snapshot conflict on some other path) is retried a few times; if it
+    persists, it surfaces as a friendly ValueError rather than a raw sqlite
+    error. A ValueError from ``place_bid`` (bad bid, outbid, insufficient) is a
+    real rejection and propagates unretried.
+    """
+    last: sqlite3.OperationalError | None = None
+    for _ in range(max(1, retries)):
+        try:
+            with open_db_immediate(db_path) as conn:
+                return place_bid(
+                    conn, settings, guild_id, auction_id, user_id, amount, now=now
+                )
+        except sqlite3.OperationalError as exc:
+            last = exc  # busy/locked — queue and try again
+    raise ValueError(
+        "The auction is busy right now — give that bid another try."
+    ) from last
+
+
 # ── close & cancel ──────────────────────────────────────────────────────────
 
 
@@ -397,7 +432,7 @@ def settle_due_auctions(
     while True:
         claimed = conn.execute(
             "UPDATE econ_auctions SET state = 'closed' "
-            "WHERE id = (SELECT id FROM econ_auctions "
+            "WHERE state = 'open' AND id = (SELECT id FROM econ_auctions "
             "            WHERE guild_id = ? AND state = 'open' AND ends_at <= ? "
             "            ORDER BY id LIMIT 1) "
             "RETURNING *",

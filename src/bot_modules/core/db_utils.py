@@ -35,6 +35,35 @@ def open_db(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
+@contextlib.contextmanager
+def open_db_immediate(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
+    """Like :func:`open_db`, but the transaction starts with ``BEGIN IMMEDIATE``.
+
+    The write lock is taken up front — before any read — so a read-then-write
+    sequence can't run on a stale WAL snapshot and hit ``SQLITE_BUSY_SNAPSHOT``.
+    Concurrent writers instead queue on the lock (``busy_timeout``) and each
+    re-reads the latest committed state. Use this for read-validate-then-write
+    money paths that must serialize (e.g. auction bids); plain ``open_db`` is
+    fine for write-first or single-statement work.
+    """
+    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-32000")
+    conn.execute("PRAGMA mmap_size=268435456")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
 def get_config_value(
     conn: sqlite3.Connection,
     key: str,

@@ -146,7 +146,10 @@ async def pay_game_rewards(
         joiners = len([uid for uid in participants if uid != host])
         host_valid = host > 0 and _valid(host)
         if host_valid and joiners > 0:
-            host_booster = boosters.get(host, member_is_booster(bot, guild_id, host))
+            host_booster = (
+                boosters[host] if host in boosters
+                else member_is_booster(bot, guild_id, host)
+            )
 
             def _host_bounty() -> None:
                 with open_db(db_path) as conn:

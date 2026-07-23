@@ -20,6 +20,7 @@ from bot_modules.services.economy_auction_service import (
     min_next_bid,
     open_auction,
     place_bid,
+    place_bid_now,
     settle_due_auctions,
 )
 from bot_modules.services.economy_service import (
@@ -280,6 +281,48 @@ def test_bid_after_the_end_is_rejected(db):
         _fund(conn, A, 100)
         with pytest.raises(ValueError, match="ended"):
             place_bid(conn, SETTINGS, GUILD, aid, A, 20, now=NOW + HOUR + 1)
+
+
+# ── place_bid_now (BEGIN IMMEDIATE wrapper the cog uses) ──────────────────
+
+
+def test_place_bid_now_commits_a_bid_in_its_own_transaction(db):
+    # The cog entry point manages its own IMMEDIATE transaction; a committed bid
+    # is visible on a fresh connection afterward.
+    with open_db(db) as conn:
+        aid = _open(conn)
+        _fund(conn, A, 100)
+    res = place_bid_now(db, SETTINGS, GUILD, aid, A, 25, now=NOW)
+    assert res.amount == 25
+    with open_db(db) as conn:
+        assert int(get_auction(conn, aid)["high_bid"]) == 25
+        assert get_balance(conn, GUILD, A) == 75
+
+
+def test_place_bid_now_serialized_bids_outbid_and_refund_correctly(db):
+    with open_db(db) as conn:
+        aid = _open(conn)
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+    place_bid_now(db, SETTINGS, GUILD, aid, A, 30, now=NOW)
+    res = place_bid_now(db, SETTINGS, GUILD, aid, B, 40, now=NOW + 1)
+    assert res.outbid_user_id == A
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, A) == 100  # refunded when outbid
+        assert get_balance(conn, GUILD, B) == 60
+        assert int(get_auction(conn, aid)["high_bidder_id"]) == B
+
+
+def test_place_bid_now_propagates_a_rejection_without_retrying(db):
+    # A ValueError (below floor) is a real rejection, not a lock conflict — it
+    # must surface immediately, not be swallowed by the retry loop.
+    with open_db(db) as conn:
+        aid = _open(conn)
+        _fund(conn, A, 100)
+    with pytest.raises(ValueError, match="at least 10"):
+        place_bid_now(db, SETTINGS, GUILD, aid, A, 5, now=NOW)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, A) == 100  # nothing escrowed
 
 
 # ── close: the burn ──────────────────────────────────────────────────────

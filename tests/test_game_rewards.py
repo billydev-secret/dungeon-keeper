@@ -293,6 +293,30 @@ async def test_host_bounty_absent_without_a_host_id(db_path):
     assert _bal(db_path, 2) == 5
 
 
+async def test_host_bounty_denied_to_a_bot_host(db_path):
+    # The _valid(host) gate must reject a bot (or a departed/unresolvable) host
+    # so a bounty can't be minted to a bot that "hosted" a game.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    _add_active_quest(db_path, trigger_kind="game_host", reward=50)
+    bot: Any = _Bot(db_path, [_member(9, bot=True), _member(1), _member(2)])
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 0  # bot host: no bounty, no game_host quest
+    assert _bal(db_path, 1) == 25  # players unaffected
+
+
+async def test_host_bounty_denied_to_a_host_who_left_the_guild(db_path):
+    # host_id 404 isn't a member of the guild → _valid fails → no bounty.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])  # no member 404
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=404
+    )
+    assert _bal(db_path, 404) == 0
+    assert _bal(db_path, 1) == 25
+
+
 async def test_host_bounty_fires_the_game_host_quest(db_path):
     # The host quest fires only for the host, and only with a joiner present.
     _enable(db_path)  # bounty dark; the quest still fires
