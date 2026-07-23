@@ -389,6 +389,23 @@ def create_jail(
     return cur.lastrowid  # type: ignore[return-value]
 
 
+def set_jail_channel(
+    conn: sqlite3.Connection,
+    jail_id: int,
+    channel_id: int,
+) -> None:
+    """Record the jail channel id on an already-persisted jail row.
+
+    The row is written first (with ``channel_id`` 0) right after the role
+    strip so a member is never left role-less without a restoration record;
+    this fills in the channel once it has been created.
+    """
+    conn.execute(
+        "UPDATE jails SET channel_id = ? WHERE id = ?",
+        (channel_id, jail_id),
+    )
+
+
 def get_active_jail(
     conn: sqlite3.Connection,
     guild_id: int,

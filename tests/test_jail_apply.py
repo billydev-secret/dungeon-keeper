@@ -358,7 +358,7 @@ async def test_apply_jail_returns_no_channel_perms_on_create_channel_forbidden(t
     )
     guild.create_text_channel = AsyncMock(side_effect=forbidden)
 
-    target = _member(42)
+    target = _member(42, role_ids=(700, 701))
     result = await apply_jail(
         ctx, guild, target, _member(1),
         reason="", duration_seconds=None,
@@ -368,6 +368,57 @@ async def test_apply_jail_returns_no_channel_perms_on_create_channel_forbidden(t
     # The role swap DID happen before the channel creation failed.
     target.remove_roles.assert_awaited_once()
     target.add_roles.assert_awaited_once()
+
+    # Regression (S2): the jail row MUST already be persisted with the full
+    # role snapshot even though the channel could not be created. Otherwise the
+    # member is stripped to @everyone+@Jailed with no restoration record — the
+    # expiry loop never releases them and /jail release finds nothing.
+    assert result.jail_id is not None
+    with open_db(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT id, user_id, stored_roles, channel_id, status FROM jails"
+            " WHERE guild_id = ?",
+            (ctx.guild_id,),
+        ).fetchone()
+    assert row is not None, "no jails row persisted on the channel-forbidden path"
+    assert row["id"] == result.jail_id
+    assert row["user_id"] == 42
+    assert row["status"] == "active"
+    # channel_id left at 0 (no channel) but the snapshot is intact.
+    assert row["channel_id"] == 0
+    import json
+    assert json.loads(row["stored_roles"]) == [700, 701]
+
+
+async def test_apply_jail_snapshot_captured_before_channel_creation(tmp_path):
+    """The role snapshot recorded on the channel-forbidden path is the member's
+    real roles at strip time — not an empty list. This guards against the
+    reordered persist accidentally reading roles after the strip mutated them."""
+    ctx = _make_ctx(tmp_path / "a5b.db")
+    guild = _guild(guild_id=ctx.guild_id)
+    jailed_role = MagicMock(spec=discord.Role)
+    jailed_role.id = 5000
+    guild.get_role = MagicMock(return_value=jailed_role)
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "jailed_role_id", "5000", guild_id=ctx.guild_id)
+
+    forbidden = discord.Forbidden(
+        MagicMock(status=403, reason="Forbidden"), {"code": 50013}
+    )
+    guild.create_text_channel = AsyncMock(side_effect=forbidden)
+
+    target = _member(42, role_ids=(700, 701, 702))
+    result = await apply_jail(
+        ctx, guild, target, _member(1), reason="", duration_seconds=None,
+    )
+    assert result.ok is False
+    assert result.jail_id is not None
+    with open_db(ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT stored_roles FROM jails WHERE id = ?", (result.jail_id,),
+        ).fetchone()
+    import json
+    assert json.loads(row["stored_roles"]) == [700, 701, 702]
 
 
 async def test_apply_jail_short_circuits_on_precheck_failure(tmp_path):

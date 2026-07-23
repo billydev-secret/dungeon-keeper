@@ -82,6 +82,8 @@ the channel-side effects.
 
 Mod runs `/jail`, the right-click "Jail User" menu, or the dashboard. Rejects if the target is a bot, already jailed, or a mod. The flow snapshots every current role, strips them, assigns `@Jailed`, and creates a fresh private channel named `jail-{username}-{timestamp}` visible to the target and mod roles only. The `@Jailed` role itself is denied view on this channel so jailed users can't see each other's channels. The bot posts an intake embed in the channel and DMs the member: who jailed them, why, and how long the hold lasts (or "indefinite" if no duration was given). Tone is firm but neutral — "you've been placed in a moderation hold." Durations accept `30m`, `2h`, `1d`, `7d`, `1w`; no value means indefinite.
 
+The jail record (with the role snapshot) is written to the database the instant the roles are stripped — *before* the channel is created — so restoration is never lost. If channel creation then fails (missing **Manage Channels**), the member stays jailed with an intact record: the auto-release loop and `/jail release` both still work, and a mod only needs to grant the permission. The channel id is filled in on the same row once the channel exists.
+
 A background task checks once a minute for expired jails and runs the unjail flow automatically with reason "Jail duration expired." A 24-hour jail set at 11 pm Friday actually ends at 11 pm Saturday even if no mod is online.
 
 If a jailed user leaves and rejoins, they're re-jailed automatically: roles re-stripped, `@Jailed` re-assigned, channel access restored, with a note posted in the jail channel that they returned.
