@@ -916,6 +916,21 @@ async def quality_score(
                 window_days=days,
                 min_active_days=min_active_days,
             )
+
+            genders: dict[int, str] = {}
+            user_ids = [s.user_id for s in scores]
+            batch_size = 800
+            for i in range(0, len(user_ids), batch_size):
+                batch = user_ids[i : i + batch_size]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT user_id, gender FROM member_gender "
+                    f"WHERE guild_id = ? AND user_id IN ({placeholders})",
+                    [guild_id, *batch],
+                ).fetchall()
+                for r in rows:
+                    genders[int(r["user_id"])] = str(r["gender"])
+
             entries = []
             for s in scores:
                 entries.append(
@@ -930,6 +945,7 @@ async def quality_score(
                         "status": s.status,
                         "active_days": s.active_days,
                         "active_weeks": s.active_weeks,
+                        "gender": genders.get(s.user_id, "unknown"),
                     }
                 )
             scored = sum(1 for e in entries if e["status"] == "Active")

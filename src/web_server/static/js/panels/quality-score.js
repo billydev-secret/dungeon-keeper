@@ -2,6 +2,11 @@ import { api, esc } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
 
+const GENDER_COLORS = {
+  male:   "#5865f2",
+  female: "#eb459e",
+};
+
 const COMPONENT_COLORS = {
   engagement_given:     "#E6B84C",
   consistency_recency:  "#7F8F3A",
@@ -77,6 +82,7 @@ export function mount(container, initialParams) {
           </select>
         </label>
       </div>
+      <div data-gender-summary style="display:flex; gap:24px; margin-bottom:16px; font-weight:700;"></div>
       <div data-top-chart style="margin-bottom:16px;"><canvas></canvas></div>
       <div data-bottom-chart style="margin-bottom:16px;"><canvas></canvas></div>
       <div data-table-wrap style="max-height:500px; overflow-y:auto;"></div>
@@ -107,6 +113,22 @@ export function mount(container, initialParams) {
 
       let entries = data.entries;
       if (statusFilter) entries = entries.filter((e) => e.status === statusFilter);
+
+      // Gender totals always cover every member returned by the API, regardless
+      // of the Status filter or the Top/Bottom 10 chart slices.
+      const summaryEl = container.querySelector("[data-gender-summary]");
+      if (data.entries.length) {
+        const maleEntries = data.entries.filter((e) => e.gender === "male");
+        const femaleEntries = data.entries.filter((e) => e.gender === "female");
+        const maleSum = maleEntries.reduce((sum, e) => sum + e.final_score, 0) * 100;
+        const femaleSum = femaleEntries.reduce((sum, e) => sum + e.final_score, 0) * 100;
+        summaryEl.innerHTML = `
+          <span style="color:${GENDER_COLORS.male}">Male total: ${maleSum.toFixed(1)} (${maleEntries.length})</span>
+          <span style="color:${GENDER_COLORS.female}">Female total: ${femaleSum.toFixed(1)} (${femaleEntries.length})</span>
+        `;
+      } else {
+        summaryEl.innerHTML = "";
+      }
 
       if (!entries.length) {
         container.querySelector("[data-top-chart]").innerHTML = `<div class="empty">No quality score data.</div>`;
