@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from anthropic.types import TextBlock, ToolUseBlock
 
 from bot_modules.services import advisor_service as adv
+from bot_modules.services.advisor_actions import GRANT_FIELDS
 
 
 def _config_conn() -> sqlite3.Connection:
@@ -401,6 +402,53 @@ def test_propose_tool_defaults_to_the_narrow_enum():
         t for t in adv.build_tools(default) if t["name"] == "propose_config_change"
     )
     assert "jailed_role_id" not in propose["input_schema"]["properties"]["key"]["enum"]
+
+
+def test_grant_tool_appears_only_with_names_and_a_callback():
+    base = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "")
+    assert "propose_grant_role_change" not in [t["name"] for t in adv.build_tools(base)]
+
+    # A callback with no grants (or grants with no callback) offers nothing —
+    # an empty enum would let the model pass anything.
+    no_names = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "",
+        propose_grant=lambda g, f, v: "", grant_names=[],
+    )
+    assert "propose_grant_role_change" not in [t["name"] for t in adv.build_tools(no_names)]
+
+    wired = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "",
+        propose_grant=lambda g, f, v: "", grant_names=["nsfw", "denizen"],
+    )
+    defs = adv.build_tools(wired)
+    grant = next(t for t in defs if t["name"] == "propose_grant_role_change")
+    props = grant["input_schema"]["properties"]
+    assert props["grant_name"]["enum"] == ["denizen", "nsfw"]
+    assert set(props["field"]["enum"]) == set(GRANT_FIELDS)
+    assert grant["input_schema"]["required"] == ["grant_name", "field", "value"]
+
+
+async def test_tool_loop_runs_the_grant_proposer(monkeypatch):
+    client = _mock_client_seq(monkeypatch, [
+        _resp(
+            _tool_block("propose_grant_role_change",
+                        {"grant_name": "nsfw", "field": "role_id", "value": "@Adults"}),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="Press Apply to confirm.")),
+    ])
+    seen = []
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: "",
+        propose_grant=lambda g, f, v: (seen.append((g, f, v)), "Queued")[1],
+        grant_names=["nsfw"],
+    )
+    res = await adv.answer_advisor("point NSFW at @Adults", tools=tools)
+    assert res.ok is True
+    assert seen == [("nsfw", "role_id", "@Adults")]
+    assert client.messages.create.call_count == 2
 
 
 async def test_tool_loop_runs_the_gap_finder(monkeypatch):

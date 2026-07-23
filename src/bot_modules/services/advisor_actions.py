@@ -49,11 +49,19 @@ _CLEAR_WORDS = {"none", "off", "clear", "unset", "0"}
 
 @dataclass(frozen=True)
 class ConfigProposal:
-    """A validated, not-yet-applied change to one config KV key."""
+    """A validated, not-yet-applied settings change.
+
+    ``target`` says where it lands: the shared ``config`` KV table, or the
+    ``grant_roles`` table (community/NSFW role grants, which have their own
+    per-grant row rather than a KV key). The surface renders both the same way
+    — one Apply button — and :func:`apply_config_change` dispatches on it.
+    """
 
     key: str
     value: str  # normalized, exactly as it would be stored
-    display: str  # human-readable, e.g. "welcome_channel_id → #welcome"
+    display: str  # human-readable, e.g. "Welcome channel → #welcome"
+    target: str = "config"  # "config" | "grant_role"
+    grant_name: str = ""  # which grant_roles row, when target == "grant_role"
 
 
 def _current_value(conn: sqlite3.Connection, guild_id: int, key: str) -> str | None:
@@ -175,6 +183,111 @@ def validate_config_change(
     return ConfigProposal(key, value, f"{label} → {shown}")
 
 
+# ---------------------------------------------------------------------------
+# Grant roles (the grant_roles table, not the config KV)
+# ---------------------------------------------------------------------------
+
+# NSFW, Denizen, Veteran and any custom grants live here rather than in the KV
+# table, which is why the legacy *_role_id keys in `config` are dead rows the
+# code no longer reads. Every field below governs who gets a role or where the
+# grant is logged, so the whole surface is admin_only.
+GRANT_FIELDS: dict[str, tuple[str, str]] = {
+    # field -> (kind, human label)
+    "role_id": ("role", "granted role"),
+    "required_role_id": ("role", "role required before granting"),
+    "log_channel_id": ("channel", "grant log channel"),
+    "announce_channel_id": ("channel", "grant announcement channel"),
+    "grant_message": ("text", "grant message"),
+}
+
+
+def validate_grant_role_change(
+    conn: sqlite3.Connection,
+    guild,
+    grant_name: str,
+    field: str,
+    raw_value: str,
+    *,
+    is_admin: bool = False,
+    allow_noop: bool = False,
+) -> ConfigProposal:
+    """Validate a change to one field of one existing grant role.
+
+    Only grants that already exist for the guild can be edited: creating one is
+    a dashboard action, and letting the model invent grant names would let it
+    mint role-handing rows nobody asked for. Requires full ``administrator``
+    for the same reason the registry's ``admin_only`` tier does — every field
+    here decides who ends up with a role, NSFW access included.
+    """
+    from bot_modules.core.db_utils import get_grant_roles
+
+    if not is_admin:
+        raise ValueError(
+            "changing a role grant needs a full server administrator — "
+            "Manage Server isn't enough."
+        )
+    grant_name = (grant_name or "").strip().lower()
+    field = (field or "").strip().lower()
+    raw = (raw_value or "").strip()
+    if not grant_name or not field or not raw:
+        raise ValueError("grant name, field, and value are all required")
+    if len(raw) > _MAX_VALUE_CHARS:
+        raise ValueError(f"value too long (max {_MAX_VALUE_CHARS} chars)")
+    if field not in GRANT_FIELDS:
+        raise ValueError(
+            f"'{field}' isn't a grant field. Available: {', '.join(GRANT_FIELDS)}."
+        )
+
+    grants = get_grant_roles(conn, guild.id)
+    if grant_name not in grants:
+        known = ", ".join(sorted(grants)) or "none"
+        raise ValueError(
+            f"this server has no '{grant_name}' role grant. Existing grants: "
+            f"{known}. New ones are created from Config → Roles."
+        )
+
+    kind, field_label = GRANT_FIELDS[field]
+    current = str(grants[grant_name].get(field, "") or "")
+    label = f"{grants[grant_name]['label']} {field_label}"
+
+    if kind in ("role", "channel") and raw.casefold() in _CLEAR_WORDS:
+        value, shown = "0", "(cleared)"
+    elif kind == "role":
+        value, shown = _resolve_role(guild, raw)
+    elif kind == "channel":
+        value, shown = _resolve_channel(guild, raw)
+    else:
+        value = shown = raw
+
+    if not allow_noop and current == value:
+        raise ValueError(f"{label} is already {shown} — no change needed.")
+    return ConfigProposal(
+        key=field, value=value, display=f"{label} → {shown}",
+        target="grant_role", grant_name=grant_name,
+    )
+
+
+def _apply_grant_role(conn, guild, proposal: ConfigProposal) -> None:
+    """Read-modify-write one grant row (upsert_grant_role takes the whole row)."""
+    from bot_modules.core.db_utils import get_grant_roles, upsert_grant_role
+
+    grants = get_grant_roles(conn, guild.id)
+    row = grants.get(proposal.grant_name)
+    if row is None:
+        raise ValueError(f"the '{proposal.grant_name}' role grant no longer exists")
+    fields = {
+        "label": row["label"],
+        "role_id": int(row["role_id"] or 0),
+        "log_channel_id": int(row["log_channel_id"] or 0),
+        "announce_channel_id": int(row["announce_channel_id"] or 0),
+        "grant_message": row["grant_message"] or "",
+        "required_role_id": int(row["required_role_id"] or 0),
+    }
+    kind, _ = GRANT_FIELDS[proposal.key]
+    fields[proposal.key] = proposal.value if kind == "text" else int(proposal.value)
+    upsert_grant_role(conn, guild.id, proposal.grant_name, **fields)
+
+
 def apply_config_change(
     db_path, guild, proposal: ConfigProposal, *, is_admin: bool = False
 ) -> None:
@@ -186,12 +299,21 @@ def apply_config_change(
     asked. Defaults to non-admin so a caller that forgets fails closed.
     """
     with open_db(db_path) as conn:
-        checked = validate_config_change(
-            conn, guild, proposal.key, proposal.value,
-            allow_noop=True, is_admin=is_admin,
-        )
-        set_config_value(conn, checked.key, checked.value, guild.id)
+        if proposal.target == "grant_role":
+            checked = validate_grant_role_change(
+                conn, guild, proposal.grant_name, proposal.key, proposal.value,
+                allow_noop=True, is_admin=is_admin,
+            )
+            _apply_grant_role(conn, guild, checked)
+        else:
+            checked = validate_config_change(
+                conn, guild, proposal.key, proposal.value,
+                allow_noop=True, is_admin=is_admin,
+            )
+            set_config_value(conn, checked.key, checked.value, guild.id)
     log.info(
-        "advisor applied config change for guild %s: %s = %s",
-        guild.id, checked.key, checked.value,
+        "advisor applied %s change for guild %s: %s%s = %s",
+        proposal.target, guild.id,
+        f"{checked.grant_name}." if checked.grant_name else "",
+        checked.key, checked.value,
     )

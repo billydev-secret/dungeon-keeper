@@ -23,7 +23,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import cast
@@ -190,6 +190,12 @@ SYSTEM_INSTRUCTIONS = (
     "Offering a suggestion is fine; acting on one without being asked is not. "
     "If the tool rejects the key, send them to the feature's dashboard panel "
     "instead.\n"
+    "- Role grants (NSFW access, Denizen, Veteran, and any custom ones) are NOT "
+    "ordinary settings: use `propose_grant_role_change` for anything about who "
+    "receives a granted role, where grants are logged, or the grant message. "
+    "Settings that hand out access or moderation powers need a full server "
+    "administrator; if the asker only has Manage Server the tool will say so — "
+    "relay that plainly and point them to the dashboard rather than retrying.\n"
     "- Make answers clickable. Channels in THIS SERVER are listed as "
     "\"#name (<#id>)\"; when you mention one, write its <#id> form so it links. "
     "When you send someone to the dashboard, include its URL (given below, if "
@@ -389,6 +395,11 @@ class AdvisorTools:
     fetch_settings: Callable[[str], str]
     fetch_gaps: Callable[[], str] | None = None
     propose_change: Callable[[str, str], str] | None = None
+    #: ``(grant_name, field, value)`` — propose a change to one of the guild's
+    #: role grants (NSFW, Denizen, Veteran, custom). Admin-only; the surface
+    #: passes the guild's existing grant names so the model can't invent one.
+    propose_grant: Callable[[str, str, str], str] | None = None
+    grant_names: list[str] = field(default_factory=list)
     #: Whether the asker has full ``administrator``. Narrows the propose tool's
     #: key enum, so a Manage Server admin isn't offered access-granting keys it
     #: would only be rejected for naming.
@@ -469,6 +480,43 @@ def build_tools(tools: AdvisorTools) -> list[dict]:
                 },
             }
         )
+    if tools.propose_grant is not None and tools.grant_names:
+        from bot_modules.services.advisor_actions import GRANT_FIELDS
+
+        defs.append(
+            {
+                "name": "propose_grant_role_change",
+                "description": (
+                    "Propose a change to one of this server's ROLE GRANTS — the "
+                    "roles members are given for NSFW access, community "
+                    "standing, and the like. These live separately from ordinary "
+                    "settings, so use this tool (not propose_config_change) for "
+                    "anything about who gets a granted role, where grants are "
+                    "logged, or what the grant message says. Like other changes "
+                    "it is NOT applied now: it becomes an Apply button the admin "
+                    "must press. Roles/channels accept a @name/#name, id, or "
+                    "mention; 'none' clears one. You can only edit grants that "
+                    "already exist — creating one is a dashboard action."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "grant_name": {
+                            "type": "string",
+                            "enum": sorted(tools.grant_names),
+                            "description": "Which role grant to change.",
+                        },
+                        "field": {
+                            "type": "string",
+                            "enum": sorted(GRANT_FIELDS),
+                            "description": "Which part of the grant to change.",
+                        },
+                        "value": {"type": "string", "description": "The new value."},
+                    },
+                    "required": ["grant_name", "field", "value"],
+                },
+            }
+        )
     return defs
 
 
@@ -482,6 +530,12 @@ def _run_tool(tools: AdvisorTools, name: str, tool_input: dict) -> str:
         if name == "propose_config_change" and tools.propose_change is not None:
             return tools.propose_change(
                 str(tool_input.get("key", "")), str(tool_input.get("value", ""))
+            )
+        if name == "propose_grant_role_change" and tools.propose_grant is not None:
+            return tools.propose_grant(
+                str(tool_input.get("grant_name", "")),
+                str(tool_input.get("field", "")),
+                str(tool_input.get("value", "")),
             )
         return f"Unknown tool '{name}'."
     except Exception:

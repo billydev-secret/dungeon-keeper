@@ -62,6 +62,23 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
     "message_storage_level",  # privacy default: what message data is retained
 })
 
+# Rows that still exist in `config` on live servers but that no code reads any
+# more. They look exactly like real settings, so without this guard a future
+# pass could reasonably add them — and then an admin would click Apply, the
+# write would succeed, and nothing whatsoever would change. Worse than
+# refusing.
+#
+#   nsfw/denizen/veteran_role_id — superseded by the `grant_roles` table
+#                                  (see advisor_actions.validate_grant_role_change)
+#   veil_*                       — Veil was renamed to Guess in migration 020
+DEAD_KEYS: frozenset[str] = frozenset({
+    "nsfw_role_id",
+    "denizen_role_id",
+    "veteran_role_id",
+    "veil_role_id",
+    "veil_channel_id",
+})
+
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
 
 
@@ -169,6 +186,9 @@ FEATURES: tuple[Feature, ...] = (
             # Ping-only: naming this role grants nothing.
             _role("welcome_ping_role_id", "Role to ping on join"),
             _text("welcome_trigger", "What triggers the welcome"),
+            _role("unverified_role_id", "Unverified role", admin_only=True,
+                  help="Losing this role is what counts as passing the gate — "
+                       "full admin only."),
         ),
     ),
     Feature(
@@ -384,6 +404,10 @@ def _check_registry() -> None:
                 raise ValueError(f"{s.key}: privilege key must never be model-writable")
             if s.admin_only and not s.writable:
                 raise ValueError(f"{s.key}: admin_only is meaningless without writable")
+            if s.key in DEAD_KEYS:
+                raise ValueError(
+                    f"{s.key}: nothing reads this key — writing it would be a no-op"
+                )
             if s.key in seen:
                 raise ValueError(f"{s.key}: listed in two features")
             seen.add(s.key)

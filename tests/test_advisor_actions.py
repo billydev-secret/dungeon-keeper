@@ -251,6 +251,104 @@ def test_shape_comes_from_schema_not_stored_value():
         aa.validate_config_change(conn, _guild(), BOOL_KEY, "sometimes")
 
 
+# ── grant roles (the grant_roles table) ─────────────────────────────────────
+
+
+def _grant_conn(rows=(("nsfw", "NSFW"),), guild_id=1):
+    """A conn with the grant_roles table and the given grants."""
+    conn = _conn([], guild_id)
+    conn.execute(
+        "CREATE TABLE grant_roles (guild_id INTEGER NOT NULL, grant_name TEXT NOT NULL,"
+        " label TEXT NOT NULL, role_id INTEGER NOT NULL DEFAULT 0,"
+        " log_channel_id INTEGER NOT NULL DEFAULT 0,"
+        " announce_channel_id INTEGER NOT NULL DEFAULT 0,"
+        " grant_message TEXT NOT NULL DEFAULT '',"
+        " required_role_id INTEGER NOT NULL DEFAULT 0,"
+        " PRIMARY KEY (guild_id, grant_name))"
+    )
+    conn.executemany(
+        "INSERT INTO grant_roles (guild_id, grant_name, label) VALUES (?, ?, ?)",
+        [(guild_id, name, label) for name, label in rows],
+    )
+    return conn
+
+
+def test_grant_role_change_requires_full_admin():
+    conn = _grant_conn()
+    with pytest.raises(ValueError, match="full server administrator"):
+        aa.validate_grant_role_change(conn, _guild(), "nsfw", "role_id", "@Greeter")
+
+
+def test_grant_role_change_resolves_a_role_for_an_admin():
+    conn = _grant_conn()
+    prop = aa.validate_grant_role_change(
+        conn, _guild(), "nsfw", "role_id", "@Greeter", is_admin=True
+    )
+    assert prop.target == "grant_role"
+    assert prop.grant_name == "nsfw"
+    assert prop.key == "role_id"
+    assert prop.value == str(ROLE_ID)
+    assert prop.display == "NSFW granted role → @Greeter"
+
+
+def test_grant_role_change_handles_channels_and_text():
+    conn = _grant_conn()
+    ch = aa.validate_grant_role_change(
+        conn, _guild(), "nsfw", "log_channel_id", "#welcome", is_admin=True
+    )
+    assert ch.value == str(CH_ID)
+    msg = aa.validate_grant_role_change(
+        conn, _guild(), "nsfw", "grant_message", "Welcome aboard", is_admin=True
+    )
+    assert msg.value == "Welcome aboard"
+
+
+def test_grant_role_change_clears_with_none():
+    conn = _grant_conn()
+    conn.execute("UPDATE grant_roles SET role_id = ? WHERE grant_name = 'nsfw'", (ROLE_ID,))
+    prop = aa.validate_grant_role_change(
+        conn, _guild(), "nsfw", "role_id", "none", is_admin=True
+    )
+    assert prop.value == "0"
+    assert "cleared" in prop.display
+
+
+def test_grant_role_change_rejects_an_unknown_grant():
+    """The model can't mint a new role-handing row — creation is a panel action."""
+    conn = _grant_conn()
+    with pytest.raises(ValueError, match="no 'sparkle' role grant"):
+        aa.validate_grant_role_change(
+            conn, _guild(), "sparkle", "role_id", "@Greeter", is_admin=True
+        )
+
+
+def test_grant_role_change_rejects_an_unknown_field():
+    conn = _grant_conn()
+    with pytest.raises(ValueError, match="isn't a grant field"):
+        aa.validate_grant_role_change(
+            conn, _guild(), "nsfw", "guild_id", "9", is_admin=True
+        )
+
+
+def test_grant_role_change_rejects_a_noop():
+    conn = _grant_conn()
+    conn.execute("UPDATE grant_roles SET role_id = ? WHERE grant_name = 'nsfw'", (ROLE_ID,))
+    with pytest.raises(ValueError, match="already"):
+        aa.validate_grant_role_change(
+            conn, _guild(), "nsfw", "role_id", "@Greeter", is_admin=True
+        )
+
+
+def test_grant_role_change_rejects_blank_and_overlong():
+    conn = _grant_conn()
+    with pytest.raises(ValueError, match="required"):
+        aa.validate_grant_role_change(conn, _guild(), "nsfw", "role_id", " ", is_admin=True)
+    with pytest.raises(ValueError, match="too long"):
+        aa.validate_grant_role_change(
+            conn, _guild(), "nsfw", "grant_message", "x" * 500, is_admin=True
+        )
+
+
 # ── apply ───────────────────────────────────────────────────────────────────
 
 
@@ -309,6 +407,93 @@ def test_apply_refuses_a_proposal_for_a_panel_only_key(tmp_path):
     conn = sqlite3.connect(path)
     row = conn.execute("SELECT value FROM config WHERE key = 'ticket_category_id'").fetchone()
     assert row[0] == "0"
+
+
+def _grant_db_file(tmp_path, grants=(("nsfw", "NSFW"),)):
+    path = tmp_path / "g.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL, "
+        "value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
+    )
+    conn.execute(
+        "CREATE TABLE grant_roles (guild_id INTEGER NOT NULL, grant_name TEXT NOT NULL,"
+        " label TEXT NOT NULL, role_id INTEGER NOT NULL DEFAULT 0,"
+        " log_channel_id INTEGER NOT NULL DEFAULT 0,"
+        " announce_channel_id INTEGER NOT NULL DEFAULT 0,"
+        " grant_message TEXT NOT NULL DEFAULT '',"
+        " required_role_id INTEGER NOT NULL DEFAULT 0,"
+        " PRIMARY KEY (guild_id, grant_name))"
+    )
+    conn.executemany(
+        "INSERT INTO grant_roles (guild_id, grant_name, label) VALUES (1, ?, ?)",
+        list(grants),
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_apply_writes_a_grant_role_change(tmp_path):
+    path = _grant_db_file(tmp_path)
+    prop = aa.ConfigProposal(
+        "role_id", str(ROLE_ID), "x", target="grant_role", grant_name="nsfw"
+    )
+    aa.apply_config_change(path, _guild(), prop, is_admin=True)
+    conn = sqlite3.connect(path)
+    row = conn.execute(
+        "SELECT role_id, label FROM grant_roles WHERE grant_name = 'nsfw'"
+    ).fetchone()
+    assert row[0] == ROLE_ID
+    assert row[1] == "NSFW"  # read-modify-write preserved the untouched fields
+
+
+def test_apply_grant_role_preserves_other_fields(tmp_path):
+    path = _grant_db_file(tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "UPDATE grant_roles SET grant_message = 'hi', required_role_id = 7 "
+        "WHERE grant_name = 'nsfw'"
+    )
+    conn.commit()
+    conn.close()
+
+    prop = aa.ConfigProposal(
+        "log_channel_id", str(CH_ID), "x", target="grant_role", grant_name="nsfw"
+    )
+    aa.apply_config_change(path, _guild(), prop, is_admin=True)
+    conn = sqlite3.connect(path)
+    row = conn.execute(
+        "SELECT log_channel_id, grant_message, required_role_id FROM grant_roles "
+        "WHERE grant_name = 'nsfw'"
+    ).fetchone()
+    assert row == (CH_ID, "hi", 7)
+
+
+def test_apply_grant_role_refuses_a_non_admin_clicker(tmp_path):
+    path = _grant_db_file(tmp_path)
+    prop = aa.ConfigProposal(
+        "role_id", str(ROLE_ID), "x", target="grant_role", grant_name="nsfw"
+    )
+    with pytest.raises(ValueError, match="full server administrator"):
+        aa.apply_config_change(path, _guild(), prop, is_admin=False)
+    conn = sqlite3.connect(path)
+    assert conn.execute(
+        "SELECT role_id FROM grant_roles WHERE grant_name = 'nsfw'"
+    ).fetchone()[0] == 0
+
+
+def test_apply_grant_role_refuses_a_grant_deleted_since_proposing(tmp_path):
+    path = _grant_db_file(tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute("DELETE FROM grant_roles WHERE grant_name = 'nsfw'")
+    conn.commit()
+    conn.close()
+    prop = aa.ConfigProposal(
+        "role_id", str(ROLE_ID), "x", target="grant_role", grant_name="nsfw"
+    )
+    with pytest.raises(ValueError, match="no 'nsfw' role grant"):
+        aa.apply_config_change(path, _guild(), prop, is_admin=True)
 
 
 def test_apply_rechecks_admin_only_against_the_clicker(tmp_path):

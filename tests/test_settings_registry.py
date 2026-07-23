@@ -146,6 +146,21 @@ def test_admin_only_never_covers_a_privilege_key():
         assert key not in sr.writable_keys(is_admin=True), key
 
 
+def test_no_dead_key_is_in_the_registry():
+    """These have rows on live servers but nothing reads them — a change would
+    silently do nothing, which is worse than refusing."""
+    assert not (set(sr.SETTINGS_BY_KEY) & sr.DEAD_KEYS)
+
+
+def test_check_registry_rejects_a_dead_key(monkeypatch):
+    monkeypatch.setattr(sr, "FEATURES", (
+        sr.Feature(slug="a", label="A", panel="p", blurb="b",
+                   settings=(sr.Setting("nsfw_role_id", "NSFW", "role", writable=True),)),
+    ))
+    with pytest.raises(ValueError, match="nothing reads this key"):
+        sr._check_registry()
+
+
 def test_check_registry_rejects_admin_only_without_writable(monkeypatch):
     monkeypatch.setattr(sr, "FEATURES", (
         sr.Feature(slug="a", label="A", panel="p", blurb="b",
