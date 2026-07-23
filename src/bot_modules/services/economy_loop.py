@@ -126,6 +126,7 @@ from bot_modules.services.economy_quests_service import (
     rotate_pool,
     settle_community_quest,
     settle_community_weekly,
+    snapshot_community_progress,
 )
 from bot_modules.services.economy_metrics_service import compute_weekly_rollup
 from bot_modules.services.economy_rentals_service import (
@@ -280,6 +281,12 @@ def run_guild_day_roll(
         return DayRollResult(beats=tuple(repair_beats))
     beats: list[CommunityBeat] = list(repair_beats)
     week_rolled = False
+
+    # Snapshot each community goal's running total for the day that just
+    # ended — before the weekly settlement below can zero it — so the login
+    # digest can show yesterday's biggest movers. Idempotent (keyed on the
+    # day) so replaying this roll overwrites rather than double-counts.
+    snapshot_community_progress(conn, guild_id, last_day)
 
     # ── day roll: convert the day that just ended, advance daily pool ──
     # The XP→coin faucet is off when the rate is 0 (the default): skip it

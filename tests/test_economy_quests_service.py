@@ -30,7 +30,10 @@ from bot_modules.services.economy_quests_service import (
     active_member_ids,
     claim_quest,
     community_contrib_summary,
+    community_gains_for_day,
     create_quest,
+    load_member_quest_board,
+    snapshot_community_progress,
     delete_quest,
     deny_history,
     list_claims,
@@ -2865,3 +2868,106 @@ def test_setup_kinds_are_registered_board_kinds(db):
     for kind in SETUP_QUEST_KINDS:
         assert kind in TRIGGER_KINDS, kind
         assert kind in TRIGGER_KIND_INFO, kind
+
+
+# ── community-progress daily snapshots (biggest-movers digest) ─────────
+
+
+def test_snapshot_records_each_community_quests_current(db):
+    with open_db(db) as conn:
+        q = _make(conn, qtype="community", community_target=100, title="Server Buzz")
+        set_community_progress(conn, q, 40, target=100)
+        snapshot_community_progress(conn, GUILD, "2026-07-20")
+        row = conn.execute(
+            "SELECT current FROM econ_community_progress_snapshots "
+            "WHERE quest_id = ? AND day = ?",
+            (q, "2026-07-20"),
+        ).fetchone()
+        assert row["current"] == 40
+
+
+def test_snapshot_is_idempotent_per_day(db):
+    """A replayed day roll overwrites the same row, never double-counts."""
+    with open_db(db) as conn:
+        q = _make(conn, qtype="community", community_target=100)
+        set_community_progress(conn, q, 10, target=100)
+        snapshot_community_progress(conn, GUILD, "2026-07-20")
+        set_community_progress(conn, q, 60, target=100)
+        snapshot_community_progress(conn, GUILD, "2026-07-20")  # replay
+        rows = conn.execute(
+            "SELECT current FROM econ_community_progress_snapshots WHERE quest_id = ?",
+            (q,),
+        ).fetchall()
+        assert len(rows) == 1 and rows[0]["current"] == 60
+
+
+def test_community_gains_diffs_days_and_ranks(db):
+    with open_db(db) as conn:
+        buzz = _make(conn, qtype="community", community_target=9999, title="Server Buzz")
+        talk = _make(conn, qtype="community", community_target=9999, title="Talk It Out")
+        set_community_progress(conn, buzz, 100, target=9999)
+        set_community_progress(conn, talk, 500, target=9999)
+        snapshot_community_progress(conn, GUILD, "2026-07-20")
+        set_community_progress(conn, buzz, 900, target=9999)  # +800
+        set_community_progress(conn, talk, 550, target=9999)  # +50
+        snapshot_community_progress(conn, GUILD, "2026-07-21")
+        gains = community_gains_for_day(conn, GUILD, "2026-07-21")
+        assert [(g["title"], g["gain"]) for g in gains] == [
+            ("Server Buzz", 800),
+            ("Talk It Out", 50),
+        ]
+
+
+def test_community_gains_empty_without_prior_snapshot(db):
+    """Logging in before the day roll snapshots yesterday shows no movers."""
+    with open_db(db) as conn:
+        q = _make(conn, qtype="community", community_target=9999)
+        set_community_progress(conn, q, 300, target=9999)
+        snapshot_community_progress(conn, GUILD, "2026-07-21")  # only "today"
+        assert community_gains_for_day(conn, GUILD, "2026-07-21") == []
+
+
+def test_community_gains_skip_settlement_resets(db):
+    """A weekly reset lands current lower — a negative diff isn't a "gain"."""
+    with open_db(db) as conn:
+        q = _make(conn, qtype="community", community_target=9999, title="Weekly Goal")
+        set_community_progress(conn, q, 900, target=9999)
+        snapshot_community_progress(conn, GUILD, "2026-07-20")
+        set_community_progress(conn, q, 50, target=9999)  # reset after settle
+        snapshot_community_progress(conn, GUILD, "2026-07-21")
+        assert community_gains_for_day(conn, GUILD, "2026-07-21") == []
+
+
+def test_community_gains_honor_limit(db):
+    with open_db(db) as conn:
+        for i in range(5):
+            qid = _make(
+                conn, qtype="community", community_target=9999, title=f"Goal {i}"
+            )
+            set_community_progress(conn, qid, 0, target=9999)
+        snapshot_community_progress(conn, GUILD, "2026-07-20")
+        for i, qid in enumerate(
+            r["id"]
+            for r in conn.execute(
+                "SELECT id FROM econ_quests WHERE qtype = 'community' ORDER BY id"
+            ).fetchall()
+        ):
+            set_community_progress(conn, qid, (i + 1) * 10, target=9999)
+        snapshot_community_progress(conn, GUILD, "2026-07-21")
+        assert len(community_gains_for_day(conn, GUILD, "2026-07-21", limit=2)) == 2
+
+
+def test_load_member_quest_board_surfaces_trigger_channel_id(db):
+    with open_db(db) as conn:
+        scoped = _make(
+            conn,
+            qtype="event",
+            trigger_kind="photo_post",
+            trigger_channel_id=123456,
+            title="Photo of the Day",
+        )
+        server_wide = _make(conn, qtype="community", community_target=100, title="Buzz")
+        board = load_member_quest_board(conn, SETTINGS, GUILD, USER, "2026-07-21")
+        by_id = {e["id"]: e for e in board}
+        assert by_id[scoped]["trigger_channel_id"] == 123456
+        assert by_id[server_wide]["trigger_channel_id"] is None

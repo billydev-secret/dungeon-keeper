@@ -896,6 +896,13 @@ def load_member_quest_board(
             "reward_xp": int(row["reward_xp"]),
             "signoff": bool(row["signoff"]),
             "criteria": row["criteria"],
+            # Surfaced so the login digest can link a channel-scoped quest to
+            # its channel (<#id>); NULL for server-wide / any-channel quests.
+            "trigger_channel_id": (
+                int(row["trigger_channel_id"])
+                if row["trigger_channel_id"] is not None
+                else None
+            ),
             "spotlight": bool(
                 spot and str(row["trigger_kind"] or "") == spot
             ),
@@ -953,6 +960,68 @@ def load_member_quest_board(
                 entry["state"] = "pending"
         out.append(entry)
     return out
+
+
+def snapshot_community_progress(
+    conn: sqlite3.Connection, guild_id: int, day: str
+) -> None:
+    """Record every active community quest's running total for ``day``.
+
+    Called once at the guild-local day roll, keyed to the day that just ended
+    and taken *before* any weekly settlement zeroes ``current`` — so two
+    consecutive days' snapshots diff into that day's gain (see
+    :func:`community_gains_for_day`). Idempotent: a replayed roll overwrites
+    the same ``(quest_id, day)`` row rather than double-counting.
+    """
+    rows = conn.execute(
+        "SELECT id FROM econ_quests "
+        "WHERE guild_id = ? AND qtype = 'community' AND active = 1",
+        (guild_id,),
+    ).fetchall()
+    for row in rows:
+        quest_id = int(row["id"])
+        prog = conn.execute(
+            "SELECT current FROM econ_community_progress WHERE quest_id = ?",
+            (quest_id,),
+        ).fetchone()
+        current = int(prog["current"]) if prog else 0
+        conn.execute(
+            "INSERT OR REPLACE INTO econ_community_progress_snapshots "
+            "(guild_id, quest_id, day, current) VALUES (?, ?, ?, ?)",
+            (guild_id, quest_id, day, current),
+        )
+
+
+def community_gains_for_day(
+    conn: sqlite3.Connection, guild_id: int, day: str, *, limit: int = 3
+) -> list[dict]:
+    """The community goals that advanced the most on ``day``.
+
+    Gain = ``snapshot(day).current − snapshot(previous_day).current`` per
+    quest, keeping only positive movers, sorted biggest-first, capped at
+    ``limit``. Returns ``[]`` until both days' snapshots exist (e.g. a member
+    logging in before the hourly day roll has recorded yesterday) and skips
+    quests whose total reset across a weekly settlement (a negative diff).
+    """
+    prev = quests.previous_local_day(day)
+    rows = conn.execute(
+        """
+        SELECT q.title AS title, s.current AS cur, p.current AS prev
+        FROM econ_community_progress_snapshots s
+        JOIN econ_community_progress_snapshots p
+          ON p.quest_id = s.quest_id AND p.day = ?
+        JOIN econ_quests q ON q.id = s.quest_id
+        WHERE s.guild_id = ? AND s.day = ?
+        """,
+        (prev, guild_id, day),
+    ).fetchall()
+    gains = [
+        {"title": r["title"], "gain": int(r["cur"]) - int(r["prev"])}
+        for r in rows
+    ]
+    gains = [g for g in gains if g["gain"] > 0]
+    gains.sort(key=lambda g: g["gain"], reverse=True)
+    return gains[:limit]
 
 
 def local_day_for_period(qtype: str, period: str) -> str:

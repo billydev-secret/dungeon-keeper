@@ -28,9 +28,27 @@ from bot_modules.economy.quests import (
     parse_trigger_words,
     period_index,
     pick_rotation,
+    previous_local_day,
     quest_period,
     reward_band,
 )
+
+
+# ── previous_local_day ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "day,expected",
+    [
+        ("2026-07-23", "2026-07-22"),
+        ("2026-07-01", "2026-06-30"),  # month boundary
+        ("2026-01-01", "2025-12-31"),  # year boundary
+        ("2026-03-01", "2026-02-28"),  # non-leap February
+        ("2024-03-01", "2024-02-29"),  # leap February
+    ],
+)
+def test_previous_local_day(day, expected):
+    assert previous_local_day(day) == expected
 
 
 # ── iso_week_for / year rollover ──────────────────────────────────────

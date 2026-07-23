@@ -85,10 +85,22 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   no matter how many events race (birthday-announcement pattern).
 - **Daily digest DM:** members with the opt-in `game_role_id` role get one DM per
   qualifying login — a streak/payout line, any milestone/grace/shield/reset callout
-  (grace and shield burning together collapse into one "streak saved" field), and a
-  "quests to play with today" checklist (open quests with `progress_bar` meters, capped
-  at `_LOGIN_QUEST_RECAP_LIMIT`) so deciding what to do next is one glance, not a dig
-  through `/bank quests`. Members without the role earn the same rewards with no DM.
+  (grace and shield burning together collapse into one "streak saved" field), an
+  optional **"biggest movers yesterday"** field (the community goals that advanced the
+  most on the previous guild-local day), and the member's **full** open-quest checklist.
+  Quests group by cadence (Daily / Weekly / Monthly / 🌍 Community / ✨ Anytime); each
+  renders as a block — title, a monospace meter (bar in a code span so bars/counts line
+  up), and a blurb from the quest's `description` (with a per-cadence fallback), plus a
+  `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`). The
+  layout is built by `economy/quest_digest.py` (pure; unit-tested) and packed into
+  ≤1024-char embed fields (`… (cont.)` on overflow). Members without the role earn the
+  same rewards with no DM.
+  - **Movers data:** community progress is stored only as a cumulative `current`, so the
+    day roll (`economy_loop.run_guild_day_roll`) snapshots each community quest's total
+    into `econ_community_progress_snapshots` (keyed `(quest_id, day)`, taken before any
+    weekly settlement zeroes it). `community_gains_for_day` diffs consecutive days;
+    positive movers only, so a settlement reset shows nothing. A member logging in before
+    the hourly roll simply sees no movers field yet.
 
 ### 3.2 XP → Daily Conversion — dormant (off by default)
 **This faucet ships OFF.** `econ_xp_per_coin` defaults to **0**, and the day-roll
