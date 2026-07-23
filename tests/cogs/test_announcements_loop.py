@@ -258,6 +258,50 @@ async def test_claim_is_atomic(sync_db_path):
         assert svc.claim(conn, row["id"], NOW) is False  # already sent
 
 
+async def test_update_with_a_stale_expected_status_writes_nothing(sync_db_path):
+    """A dashboard PUT that raced the loop's claim must not revert the send."""
+    row = _insert(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        assert svc.claim(conn, row["id"], NOW) is True  # the loop wins the row
+
+    with open_db(sync_db_path) as conn:
+        wrote = svc.update_announcement(
+            conn, row["id"], GUILD,
+            {"title": "edited", "status": "draft", "post_at": None},
+            NOW + 1, expected_status="scheduled",
+        )
+
+    assert wrote is False
+    after = _row(sync_db_path, row["id"])
+    assert after["status"] == "sent"
+    assert after["title"] == "Big news"
+
+
+async def test_update_with_a_matching_expected_status_writes(sync_db_path):
+    row = _insert(sync_db_path, status="draft", post_at=None)
+
+    with open_db(sync_db_path) as conn:
+        wrote = svc.update_announcement(
+            conn, row["id"], GUILD, {"title": "edited", "status": "scheduled"},
+            NOW + 1, expected_status="draft",
+        )
+
+    assert wrote is True
+    after = _row(sync_db_path, row["id"])
+    assert (after["title"], after["status"]) == ("edited", "scheduled")
+
+
+async def test_update_without_an_expected_status_stays_unconditional(sync_db_path):
+    row = _insert(sync_db_path)
+
+    with open_db(sync_db_path) as conn:
+        assert svc.update_announcement(
+            conn, row["id"], GUILD, {"title": "edited"}, NOW + 1
+        ) is True
+
+    assert _row(sync_db_path, row["id"])["title"] == "edited"
+
+
 async def test_already_sent_row_is_skipped(sync_db_path):
     bot = _make_bot()
     row = _insert(sync_db_path, status="sent")

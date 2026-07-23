@@ -79,6 +79,7 @@ export function mount(container) {
     editingId: null,          // null | "new" | numeric id
     chPicker: null, rolePicker: null, previewTimer: null,
     buttons: [], buttonPickers: [], maxButtons: 5,
+    busy: false,             // a mutating request is in flight
   };
 
   function tickClock() {
@@ -535,18 +536,38 @@ export function mount(container) {
     }
   }
 
-  container.addEventListener("click", (ev) => {
+  // Every action that writes goes through one in-flight guard: a fast double
+  // click would otherwise fire two POSTs and create two announcements.
+  const MUTATING = {
+    "save": () => save(),
+    "post-now": (id) => postNow(id),
+    "delete": (id) => remove(id),
+    "clone": (id) => clone(id),
+  };
+
+  container.addEventListener("click", async (ev) => {
     const btn = ev.target.closest("[data-action]");
     if (!btn) return;
     const id = btn.dataset.id ? Number(btn.dataset.id) : null;
     const action = btn.dataset.action;
+    const mutate = Object.prototype.hasOwnProperty.call(MUTATING, action)
+      ? MUTATING[action] : null;
+    if (mutate) {
+      if (state.busy) return;
+      state.busy = true;
+      btn.disabled = true;
+      try {
+        await mutate(id);
+      } finally {
+        state.busy = false;
+        // A refresh re-renders the list, so the button may be gone by now.
+        if (btn.isConnected) btn.disabled = false;
+      }
+      return;
+    }
     if (action === "new") openEditor(null);
     else if (action === "cancel") closeEditor();
-    else if (action === "save") save();
     else if (action === "edit") openEditor(state.items.find((i) => i.id === id));
-    else if (action === "post-now") postNow(id);
-    else if (action === "delete") remove(id);
-    else if (action === "clone") clone(id);
     else if (action === "add-button") addButton();
     else if (action === "remove-button") removeButton(Number(btn.dataset.index));
   });
