@@ -1063,6 +1063,10 @@ async def _refresh_panel_locked(
     channel = bot.get_channel(panel_channel_id)
     if not isinstance(channel, discord.TextChannel):
         return
+    # panel_channel_id is dashboard-supplied and bot.get_channel spans every
+    # guild, so refuse a channel that isn't this guild's.
+    if channel.guild.id != guild_id:
+        return
 
     guild = bot.get_guild(guild_id)
     accent = await resolve_accent_color(db_path, guild) if guild else None

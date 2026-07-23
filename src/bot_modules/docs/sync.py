@@ -73,14 +73,27 @@ async def _resolve_color(
     return await resolve_accent_color(ctx.db_path, guild)
 
 
-async def _resolve_channel(bot: "Bot", channel_id: int):
+async def _resolve_channel(bot: "Bot", channel_id: int, guild: discord.Guild | None):
+    """Resolve a postable channel, refusing anything outside ``guild``.
+
+    ``channel_id`` arrives from the dashboard placement route, and both
+    ``bot.get_channel`` and ``bot.fetch_channel`` search every guild the bot is
+    in — so without the ownership check a moderator of one guild could post,
+    edit and pin docs into a co-tenant guild's channels. ``guild`` is None only
+    on paths that act on an already-stored placement.
+    """
     channel = bot.get_channel(channel_id)
     if channel is None:
         try:
             channel = await bot.fetch_channel(channel_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             channel = None
-    return channel if isinstance(channel, _POSTABLE) else None
+    if not isinstance(channel, _POSTABLE):
+        return None
+    if guild is not None and getattr(channel, "guild", None) is not None:
+        if channel.guild.id != guild.id:
+            return None
+    return channel
 
 
 async def _sync_channel(
@@ -89,8 +102,9 @@ async def _sync_channel(
     embeds: list[discord.Embed],
     existing_ids: list[int],
     pinned: bool = False,
+    guild: discord.Guild | None = None,
 ) -> SyncResult:
-    channel = await _resolve_channel(bot, channel_id)
+    channel = await _resolve_channel(bot, channel_id, guild)
     if channel is None:
         return SyncResult(channel_id, status="missing_channel")
 
@@ -209,6 +223,7 @@ async def _sync_one(
     bot: "Bot",
     placement: dict,
     embeds: list[discord.Embed],
+    guild: discord.Guild | None = None,
 ) -> SyncResult:
     placement_id = placement["id"]
     channel_id = placement["channel_id"]
@@ -217,7 +232,7 @@ async def _sync_one(
         _read_message_ids, ctx, placement_id
     )
     result = await _sync_channel(
-        bot, channel_id, embeds, existing, bool(placement.get("pinned"))
+        bot, channel_id, embeds, existing, bool(placement.get("pinned")), guild
     )
 
     # Persist whatever ids we ended up with (unless the channel vanished).
@@ -251,7 +266,7 @@ async def sync_doc(
     if not placements:
         return []
     embeds = await _render_embeds(ctx, guild, doc_row)
-    return [await _sync_one(ctx, bot, p, embeds) for p in placements]
+    return [await _sync_one(ctx, bot, p, embeds, guild) for p in placements]
 
 
 async def post_doc(
@@ -261,11 +276,15 @@ async def post_doc(
     bot = ctx.bot
     if bot is None:
         return SyncResult(channel_id, status="error", detail="Bot unavailable.")
+    # Validate ownership before writing the placement row, so a channel from
+    # another guild doesn't leave a stored placement behind for later syncs.
+    if await _resolve_channel(bot, channel_id, guild) is None:
+        return SyncResult(channel_id, status="missing_channel")
     placement = await asyncio.to_thread(
         _ensure_placement, ctx, doc_row["id"], channel_id
     )
     embeds = await _render_embeds(ctx, guild, doc_row)
-    return await _sync_one(ctx, bot, placement, embeds)
+    return await _sync_one(ctx, bot, placement, embeds, guild)
 
 
 async def set_pin(
@@ -288,7 +307,7 @@ async def set_pin(
     if bot is None:
         return SyncResult(channel_id, status="error", detail="Bot unavailable.")
     embeds = await _render_embeds(ctx, guild, doc_row)
-    return await _sync_one(ctx, bot, placement, embeds)
+    return await _sync_one(ctx, bot, placement, embeds, guild)
 
 
 async def unpost_doc(
@@ -301,7 +320,7 @@ async def unpost_doc(
         return False
     existing = await asyncio.to_thread(_read_message_ids, ctx, placement["id"])
     if bot is not None:
-        channel = await _resolve_channel(bot, channel_id)
+        channel = await _resolve_channel(bot, channel_id, None)
         if channel is not None:
             for mid in existing:
                 try:

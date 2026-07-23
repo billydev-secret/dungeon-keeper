@@ -239,7 +239,7 @@ class _FakeChannel:
 
 
 async def _sync_on(monkeypatch, channel, n_embeds, existing_ids, pinned=False):
-    async def _fake_resolve(bot, channel_id):
+    async def _fake_resolve(bot, channel_id, guild=None):
         return channel
 
     monkeypatch.setattr(docs_sync, "_resolve_channel", _fake_resolve)
@@ -418,3 +418,51 @@ def test_specs_to_embeds_sets_image():
     specs = render_doc("Doc", "![p](https://cdn/p.png)\n\nhi")
     embeds = docs_sync.specs_to_embeds(specs, discord.Color(0x123456))
     assert embeds[0].image.url == "https://cdn/p.png"
+
+
+# ── cross-guild channel guard ───────────────────────────────────────
+# The placement route takes channel_id from the caller, and bot.get_channel /
+# fetch_channel search every guild the bot is in — so the resolver has to
+# refuse a channel that isn't the acting guild's.
+
+class _GuildStub:
+    def __init__(self, gid: int):
+        self.id = gid
+
+
+class _ChannelStub(discord.TextChannel):
+    def __init__(self, guild_id: int):
+        self.guild = _GuildStub(guild_id)  # type: ignore[assignment]
+
+
+class _BotStub:
+    def __init__(self, channel):
+        self._channel = channel
+
+    def get_channel(self, _cid):
+        return self._channel
+
+
+async def test_resolve_channel_refuses_another_guilds_channel():
+    channel = _ChannelStub(guild_id=222)
+    got = await docs_sync._resolve_channel(
+        _BotStub(channel), 42, _GuildStub(111)  # type: ignore[arg-type]
+    )
+    assert got is None
+
+
+async def test_resolve_channel_allows_its_own_guilds_channel():
+    channel = _ChannelStub(guild_id=111)
+    got = await docs_sync._resolve_channel(
+        _BotStub(channel), 42, _GuildStub(111)  # type: ignore[arg-type]
+    )
+    assert got is channel
+
+
+async def test_resolve_channel_without_a_guild_is_unscoped():
+    """Stored-placement paths (unpost) pass None and must still resolve."""
+    channel = _ChannelStub(guild_id=222)
+    got = await docs_sync._resolve_channel(
+        _BotStub(channel), 42, None  # type: ignore[arg-type]
+    )
+    assert got is channel
