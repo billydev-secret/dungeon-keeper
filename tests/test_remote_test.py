@@ -488,3 +488,82 @@ def test_is_available_is_false_without_ssh(monkeypatch):
     cfg = rt.load_config(FULL_ENV)
     assert cfg is not None
     assert rt.is_available(cfg) is False
+
+
+# ── Session checkouts are clones, not worktrees ───────────────────────
+#
+# The worktree fallback resolves --git-common-dir, which in a plain clone is
+# the clone's *own* .git — so it lands back on the checkout that had no .env
+# to begin with. Session checkouts are cloned from the main one, so without
+# the origin fallback every gate run in them silently went local: a ~10x
+# slowdown that reports nothing, because "no config" legitimately means
+# "run locally".
+
+
+def _fake_git(mapping):
+    """Stub subprocess.run for the read-only git calls env_path makes."""
+    def run(cmd, **kwargs):
+        key = tuple(cmd[1:])
+        out = mapping.get(key)
+        rc = 0 if out is not None else 128
+        return type("R", (), {"returncode": rc, "stdout": out or ""})()
+    return run
+
+
+def test_env_path_follows_a_local_origin_from_a_clone(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    (main / ".git").mkdir(parents=True)
+    _write_env(main, "REMOTE_TEST_HOST=ben@box")
+
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        # A clone reports its own .git, so the worktree fallback finds nothing.
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): str(main),
+    }))
+    assert rt.env_path(clone) == main / ".env"
+
+
+def test_env_path_follows_an_origin_pointing_at_a_bare_git_dir(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    (main / ".git").mkdir(parents=True)
+    _write_env(main, "REMOTE_TEST_HOST=ben@box")
+
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): str(main / ".git"),
+    }))
+    assert rt.env_path(clone) == main / ".env"
+
+
+@pytest.mark.parametrize("origin", [
+    "https://github.com/example/dk.git",
+    "git@github.com:example/dk.git",
+    "ssh://git@example.com/dk.git",
+])
+def test_env_path_ignores_non_filesystem_origins(tmp_path, monkeypatch, origin):
+    """A network remote has no .env to read; don't try to treat it as a path."""
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): origin,
+    }))
+    assert rt.env_path(clone) is None
+
+
+def test_env_path_is_none_when_origin_has_no_env(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    (main / ".git").mkdir(parents=True)  # exists, but no .env in it
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): str(main),
+    }))
+    assert rt.env_path(clone) is None

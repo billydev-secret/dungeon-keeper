@@ -4,6 +4,16 @@ Run the test suite on a faster machine over SSH, falling back to local
 automatically when that machine is off. Opt-in: unset `REMOTE_TEST_HOST` and
 nothing changes.
 
+> **Where the config is found.** `.env` is gitignored, so it never travels with
+> the code. `env_path()` looks in the current checkout, then at the main
+> checkout via `git rev-parse --git-common-dir` (worktrees), then at a
+> `remote.origin.url` that is a local filesystem path (session checkouts, which
+> are *clones* — for those `--git-common-dir` returns the clone's own `.git`, so
+> the worktree fallback lands back where it started). The clone case was missing
+> until 2026-07-23, and because "no config" legitimately means "run locally",
+> every gate run in a session checkout silently took the slow path instead of
+> reporting anything.
+
 The prod box is a 2-core VM (a Synology VMM guest sharing an embedded Ryzen),
 where the full suite takes ~10 minutes. A spare desktop cuts that to a few.
 

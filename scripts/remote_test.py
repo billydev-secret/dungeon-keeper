@@ -90,32 +90,65 @@ class RemoteConfig:
     lock: str = DEFAULT_LOCK
 
 
+def _git(root: Path, *args: str) -> str | None:
+    """Run a read-only git command in root, or None if it can't be run."""
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def env_path(root: Path = ROOT) -> Path | None:
     """Locate the .env holding this config, or None.
 
-    Prefers the current checkout. Project convention is to do edits in a git
-    worktree, and worktrees have no .env of their own — so fall back to the
-    main checkout, found via `git rev-parse --git-common-dir`. Without this,
-    dispatch would silently never fire for the majority of commits.
+    Prefers the current checkout. Two fallbacks, because .env is gitignored and
+    so never travels with the code:
+
+    1. **Worktrees** (`git rev-parse --git-common-dir`) — the documented edit
+       workflow, and a worktree has no .env of its own.
+    2. **Local clones** (`git config remote.origin.url`) — session checkouts are
+       cloned from the main checkout rather than added as worktrees, and for
+       those `--git-common-dir` resolves back to the clone itself, so step 1
+       finds nothing. Only a filesystem path is followed; a real URL is ignored.
+
+    Without these, dispatch silently never fires and every run falls back to the
+    slow local box — the failure mode is a quiet 10x slowdown, not an error.
     """
     local = root / ".env"
     if local.exists():
         return local
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            cwd=root, capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    common_dir = _git(root, "rev-parse", "--git-common-dir")
+    if common_dir is None:
         return None
-    if result.returncode != 0:
-        return None
-
     # --git-common-dir points at the main checkout's .git; its parent is the
-    # working tree that owns the .env.
-    candidate = (root / result.stdout.strip()).resolve().parent / ".env"
-    return candidate if candidate.exists() else None
+    # working tree that owns the .env. In a plain clone it is this checkout's
+    # own .git, so this resolves back to `local` and finds nothing.
+    candidate = (root / common_dir).resolve().parent / ".env"
+    if candidate.exists():
+        return candidate
+
+    origin = _git(root, "config", "--get", "remote.origin.url")
+    if not origin:
+        return None
+    # Filesystem paths only: "user@host:repo" and "https://…" are remote and
+    # have no .env we could read.
+    if "://" in origin or (":" in origin and not Path(origin).is_absolute()):
+        return None
+    candidate = Path(origin).expanduser()
+    if not candidate.is_absolute():
+        candidate = (root / candidate).resolve()
+    # origin may point at the bare .git or at the working tree above it.
+    for base in (candidate, candidate.parent):
+        if base.name == ".git":
+            continue
+        env = base / ".env"
+        if env.exists():
+            return env
+    return None
 
 
 def env_file_values(root: Path = ROOT) -> dict[str, str]:
