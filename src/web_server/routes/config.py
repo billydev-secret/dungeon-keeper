@@ -60,6 +60,7 @@ from bot_modules.services.booster_roles import (
     sync_swatches,
     upsert_booster_role,
 )
+from bot_modules.services.greeting_watch_service import parse_notify_ids
 from bot_modules.services.quote_renderer import (
     BorderStyle,
     analyze_border_opening,
@@ -488,16 +489,20 @@ def _policy_section(conn, guild_id: int) -> dict:
 
 def _greeting_watch_section(conn, guild_id: int) -> dict:
     # Read the same keys the ingest hook (GuildConfig) and the monitor loop act
-    # on, so the panel never disagrees with what actually fires. channel_ids is
-    # a CSV of watched-channel ids (same shape as mod_role_ids).
+    # on, so the panel never disagrees with what actually fires. channel_ids and
+    # notify_user_ids are both CSVs of ids (same shape as mod_role_ids). The
+    # legacy single-notify key is folded in so a guild configured before
+    # multi-notify shipped still shows its subscriber.
+    notify_ids = parse_notify_ids(
+        _str_val(conn, "greeting_watch_notify_user_ids", guild_id=guild_id),
+        _str_val(conn, "greeting_watch_notify_user_id", guild_id=guild_id),
+    )
     return {
         "enabled": _bool_val(conn, "greeting_watch_enabled", guild_id=guild_id),
         "channel_ids": _str_val(
             conn, "greeting_watch_channel_ids", guild_id=guild_id
         ),
-        "notify_user_id": str(
-            _int_val(conn, "greeting_watch_notify_user_id", guild_id=guild_id)
-        ),
+        "notify_user_ids": [str(i) for i in notify_ids],
         "window_minutes": _int_val(
             conn, "greeting_watch_window_minutes", 10, guild_id=guild_id
         ),
@@ -2299,7 +2304,9 @@ async def update_games_musical_chairs(
 class GreetingWatchConfigUpdate(BaseModel):
     enabled: bool | None = None
     channel_ids: str | None = None
-    notify_user_id: str | None = None
+    # CSV of member ids to DM. Empty string = nobody. Replaces the legacy
+    # single ``notify_user_id`` field.
+    notify_user_ids: str | None = None
     window_minutes: int | None = None
 
 
@@ -2327,11 +2334,16 @@ async def update_greeting_watch(
                 set_config_value(
                     conn, "greeting_watch_channel_ids", body.channel_ids, guild_id
                 )
-            if body.notify_user_id is not None:
+            if body.notify_user_ids is not None:
+                # Normalize to a clean CSV (drop blanks/dupes/non-numeric) so
+                # the stored value matches what the loop parses.
+                normalized = ",".join(
+                    str(i) for i in parse_notify_ids(body.notify_user_ids)
+                )
                 set_config_value(
                     conn,
-                    "greeting_watch_notify_user_id",
-                    body.notify_user_id,
+                    "greeting_watch_notify_user_ids",
+                    normalized,
                     guild_id,
                 )
             if body.window_minutes is not None:

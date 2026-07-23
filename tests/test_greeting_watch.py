@@ -10,6 +10,7 @@ from bot_modules.services.greeting_watch_service import (
     is_greeting,
     list_due_greetings,
     mark_resolved,
+    parse_notify_ids,
     pending_greetings_for,
     record_greeting,
     was_acknowledged,
@@ -68,6 +69,39 @@ def test_is_greeting_positive(text):
 )
 def test_is_greeting_negative(text):
     assert is_greeting(text) is False
+
+
+# ── notify-id parsing (multi-subscriber) ─────────────────────────────
+
+
+def test_parse_notify_ids_csv_multiple():
+    assert parse_notify_ids("111,222,333") == [111, 222, 333]
+
+
+def test_parse_notify_ids_dedups_and_drops_junk_preserving_order():
+    # blanks, zeros, non-numeric and duplicates are all discarded; order kept.
+    assert parse_notify_ids(" 111 , , 0, abc, 222, 111 ") == [111, 222]
+
+
+def test_parse_notify_ids_empty_is_empty_list():
+    assert parse_notify_ids("") == []
+    assert parse_notify_ids(None) == []
+
+
+def test_parse_notify_ids_legacy_fallback_when_csv_blank():
+    # A guild configured before multi-notify keeps its single subscriber.
+    assert parse_notify_ids("", legacy="555") == [555]
+    assert parse_notify_ids(None, legacy="555") == [555]
+
+
+def test_parse_notify_ids_csv_wins_over_legacy():
+    # Once the CSV holds ids the legacy single value is ignored.
+    assert parse_notify_ids("111,222", legacy="555") == [111, 222]
+
+
+def test_parse_notify_ids_ignores_zero_legacy():
+    assert parse_notify_ids("", legacy="0") == []
+    assert parse_notify_ids("", legacy="") == []
 
 
 # ── DB fixture ───────────────────────────────────────────────────────
