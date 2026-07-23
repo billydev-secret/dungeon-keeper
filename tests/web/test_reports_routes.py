@@ -330,7 +330,7 @@ def test_intake_report_panel_escapes_member_controlled_columns():
     interpolated into innerHTML by renderSortableTable (stored-XSS shape)."""
     from pathlib import Path
 
-    src = Path("src/web_server/static/js/panels/intake-report.js").read_text()
+    src = Path("src/web_server/static/js/panels/intake-report.js").read_text(encoding="utf-8")
     assert 'format: (v, r) => esc(v || r.user_id)' in src  # both name columns
     assert src.count("esc(v || r.user_id)") == 2
     assert '{ key: "label", label: "Step", format: (v) => esc(v) }' in src
