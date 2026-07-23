@@ -70,13 +70,19 @@ Steps carry `done_at`/`done_by`/`skipped` — no message content, no answers
 ## Procedure reference
 
 Blocks (`intake_reference_blocks` config JSON: `text` | `questions`, title,
-body) render to messages — text chunks under the 2000-char cap; questions
-one message per line with an optional bold header. Sync
+body) render to messages — text chunks on line boundaries under the
+2000-char cap (rejoined with the newline they were split on, so the channel
+matches the editor); questions one message per line with an optional bold
+header, and a question longer than the cap is rejected on save rather than
+400-ing mid-sync. Sync
 (`intake_reference_service.sync_channel`, run inline on dashboard save) is
 a position-wise diff against `intake_reference_messages` (migration 116):
 unchanged kept, changed edited in place (ids/links stable), tail posted,
 surplus deleted, hand-deleted tracked messages reposted. Only tracked
-messages are ever touched. One-time import
+messages are ever touched. A Discord failure mid-plan keeps the affected
+message tracked under its **old** hash (so the next save retries it rather
+than believing it already synced) and returns `incomplete: true`, which the
+panel reports instead of a clean "synced". One-time import
 (`POST /config/intake/reference/import`) drafts text blocks from a
 channel's history, oldest first; refuses a non-empty editor.
 

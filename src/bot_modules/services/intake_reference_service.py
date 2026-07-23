@@ -104,8 +104,22 @@ def validate_blocks(entries: list[dict]) -> str:
             raise ValueError(f"Block {i}: unknown kind '{kind}'.")
         if not (title or body.strip()):
             raise ValueError(f"Block {i}: needs a title or some content.")
-        if kind == KIND_QUESTIONS and not _question_lines(body):
-            raise ValueError(f"Block {i}: a question list needs at least one question.")
+        if kind == KIND_QUESTIONS:
+            lines = _question_lines(body)
+            if not lines:
+                raise ValueError(
+                    f"Block {i}: a question list needs at least one question."
+                )
+            # Each question posts as its own message, so an over-long line
+            # would 400 mid-sync and wedge the reconcile. Reject on save.
+            over = next((ln for ln in lines if len(ln) > _CHUNK_LIMIT), None)
+            if over is not None:
+                raise ValueError(
+                    f"Block {i}: a question is {len(over)} characters — the "
+                    f"limit is {_CHUNK_LIMIT}. Split it into shorter lines."
+                )
+        if len(title) > _CHUNK_LIMIT:
+            raise ValueError(f"Block {i}: the title is too long.")
         out.append({"kind": kind, "title": title, "body": body})
     return json.dumps(out)
 
@@ -131,26 +145,40 @@ def _question_lines(body: str) -> list[str]:
 
 
 def _chunk_text(content: str) -> list[str]:
-    """Split a long text into ≤ limit messages, preferring paragraph then
-    line boundaries; a single oversized line hard-splits as a last resort."""
+    """Split a long text into ≤ limit messages on line boundaries.
+
+    A flat greedy accumulator over lines: paragraph breaks survive because a
+    blank line is just an empty element, and lines are rejoined with the
+    ``\\n`` they were split on, so the rendered text always matches the
+    editor. A single oversized line hard-splits as a last resort — flushing
+    the accumulator **first** so message order is never shuffled.
+    """
     if len(content) <= _CHUNK_LIMIT:
         return [content]
     chunks: list[str] = []
     current = ""
-    for para in content.split("\n\n"):
-        pieces = [para] if len(para) <= _CHUNK_LIMIT else para.splitlines()
-        for piece in pieces:
-            while len(piece) > _CHUNK_LIMIT:  # pathological single line
-                chunks.append(piece[:_CHUNK_LIMIT])
-                piece = piece[_CHUNK_LIMIT:]
-            joined = f"{current}\n\n{piece}" if current else piece
-            if len(joined) > _CHUNK_LIMIT:
-                chunks.append(current)
-                current = piece
-            else:
-                current = joined
-    if current:
-        chunks.append(current)
+
+    def flush() -> None:
+        # rstrip: a chunk boundary that lands on a paragraph break would
+        # otherwise post a message ending in blank lines.
+        nonlocal current
+        trimmed = current.rstrip()
+        if trimmed:
+            chunks.append(trimmed)
+        current = ""
+
+    for line in content.split("\n"):
+        while len(line) > _CHUNK_LIMIT:  # pathological single line
+            flush()  # keep earlier text ahead of the split pieces
+            chunks.append(line[:_CHUNK_LIMIT])
+            line = line[_CHUNK_LIMIT:]
+        joined = f"{current}\n{line}" if current else line
+        if len(joined) > _CHUNK_LIMIT:
+            flush()
+            current = line
+        else:
+            current = joined
+    flush()
     return chunks
 
 
@@ -276,7 +304,8 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
     ops, deletes = diff_messages(render_blocks(blocks), stored)
     mapping: list[tuple[int, str]] = []
     edited = posted = deleted = 0
-    for op, mid, content in ops:
+    incomplete = False
+    for index, (op, mid, content) in enumerate(ops):
         h = content_hash(content)
         if op == "keep":
             mapping.append((mid, h))
@@ -291,7 +320,11 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
                 pass  # someone deleted it by hand — fall through to repost
             except discord.HTTPException:
                 log.warning("intake reference: edit failed in guild %s", guild.id)
-                mapping.append((mid, h))  # keep tracking; retry next save
+                # Keep the message tracked under its *old* hash: storing the
+                # intended new hash would make the next diff emit "keep" and
+                # the failed edit would never be retried.
+                mapping.append((mid, stored[index][1]))
+                incomplete = True
                 continue
         try:
             sent = await channel.send(
@@ -299,7 +332,15 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
             )
         except discord.HTTPException:
             log.warning("intake reference: post failed in guild %s", guild.id)
-            break  # keep mapping consistent with what actually exists
+            # Stop syncing, but keep every still-unprocessed position that
+            # already had a message tracked under its old hash — dropping
+            # them would orphan real messages the bot then refuses to touch
+            # (and would repost them as duplicates on a later save). Bound
+            # the slice to the rendered range: anything past it is surplus
+            # the delete pass below is about to remove.
+            mapping.extend(stored[index:len(ops)])
+            incomplete = True
+            break
         mapping.append((sent.id, h))
         posted += 1
     for mid in deletes:
@@ -314,7 +355,16 @@ async def sync_channel(ctx: AppContext, guild: discord.Guild) -> dict:
             replace_mapping(conn, guild.id, mapping)
 
     await asyncio.to_thread(_store)
-    return {"synced": True, "edited": edited, "posted": posted, "deleted": deleted}
+    return {
+        "synced": True,
+        "edited": edited,
+        "posted": posted,
+        "deleted": deleted,
+        # Discord rejected at least one edit/send: the channel is only
+        # partially reconciled and the next save retries the rest. Surfaced
+        # so the dashboard doesn't report a clean sync.
+        "incomplete": incomplete,
+    }
 
 
 async def import_channel(

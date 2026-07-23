@@ -9,10 +9,12 @@ import_channel) is glue over these.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+import discord
 import pytest
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import intake_reference_service as ref
 from migrations import apply_migrations_sync
 
@@ -60,6 +62,12 @@ def test_validate_blocks_strict_and_canonical():
         ref.validate_blocks([{"kind": "text", "title": "", "body": " "}])
     with pytest.raises(ValueError, match="at least one question"):
         ref.validate_blocks([{"kind": "questions", "title": "t", "body": "\n \n"}])
+    # A question longer than one Discord message would 400 mid-sync and
+    # wedge the reconcile — rejected on save instead.
+    with pytest.raises(ValueError, match="the limit is"):
+        ref.validate_blocks(
+            [{"kind": "questions", "title": "t", "body": "q" * 2500}]
+        )
 
 
 # ── render ────────────────────────────────────────────────────────────
@@ -95,6 +103,26 @@ def test_render_chunks_long_text_on_paragraphs():
     short = ref.render_blocks([ref.Block("text", "", "aaa\n\nbbb\n\n" + "z" * 1900)])
     assert short[0] == "aaa\n\nbbb"
     assert len(short) == 2
+
+
+def test_chunking_preserves_order_around_an_oversized_line():
+    # Regression: hard-split pieces used to be emitted while earlier text
+    # was still buffered, so the intro posted AFTER the middle of the line
+    # it introduces.
+    chunks = ref._chunk_text("Intro paragraph\n\n" + "X" * 4000)
+    assert chunks[0] == "Intro paragraph"
+    assert chunks[1] == "X" * 1900
+    assert "".join(chunks).startswith("Intro paragraph")
+    assert sum(c.count("X") for c in chunks) == 4000
+
+
+def test_chunking_keeps_single_newlines_inside_a_paragraph():
+    # Regression: line pieces of an oversized paragraph were rejoined with
+    # "\n\n", turning single newlines into blank lines in the channel.
+    body = "\n".join(["a" * 700, "b" * 700, "c" * 700])
+    chunks = ref._chunk_text(body)
+    assert "\n\n" not in "".join(chunks)
+    assert chunks[0] == f"{'a' * 700}\n{'b' * 700}"
 
 
 def test_render_hard_splits_pathological_line():
@@ -152,6 +180,133 @@ def test_mapping_roundtrip_and_replace(db_path):
 
 
 # ── import drafting ───────────────────────────────────────────────────
+
+
+# ── sync failure paths ────────────────────────────────────────────────
+
+
+class _FakeResponse:
+    """Enough of an aiohttp response for discord.HTTPException's formatter."""
+
+    def __init__(self, status):
+        self.status = status
+        self.reason = "Fake"
+
+
+class _FakePartial:
+    def __init__(self, channel, mid):
+        self._channel, self._mid = channel, mid
+
+    async def edit(self, content):
+        if self._mid in self._channel.edit_fails:
+            raise discord.HTTPException(_FakeResponse(500), "boom")
+        self._channel.edits.append((self._mid, content))
+
+    async def delete(self):
+        self._channel.deletes.append(self._mid)
+
+
+class _FakeChannel(discord.TextChannel):
+    """Minimal stand-in: records sends/edits/deletes, can fail on demand."""
+
+    def __init__(self, *, send_fails_at=None, edit_fails=()):
+        self.id = 555
+        self.sent, self.edits, self.deletes = [], [], []
+        self.send_fails_at = send_fails_at  # nth send (0-based) raises
+        self.edit_fails = set(edit_fails)
+        self._next_id = 1000
+
+    async def send(self, content, **kwargs):
+        if self.send_fails_at is not None and len(self.sent) == self.send_fails_at:
+            raise discord.HTTPException(_FakeResponse(400), "too long")
+        self._next_id += 1
+        self.sent.append(content)
+        return SimpleNamespace(id=self._next_id)
+
+    def get_partial_message(self, mid):
+        return _FakePartial(self, mid)
+
+
+class _Ctx:
+    def __init__(self, db_path):
+        self.db_path = db_path
+
+    def open_db(self):
+        return open_db(self.db_path)
+
+
+def _guild(channel):
+    return SimpleNamespace(id=GUILD, get_channel=lambda cid: channel)
+
+
+def _setup(db_path, blocks, channel_id=555):
+    with open_db(db_path) as conn:
+        set_config_value(conn, ref.CHANNEL_KEY, str(channel_id), GUILD)
+        set_config_value(conn, ref.BLOCKS_KEY, ref.validate_blocks(blocks), GUILD)
+
+
+async def test_sync_posts_and_maps(db_path):
+    _setup(db_path, [{"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"}])
+    channel = _FakeChannel()
+    result = await ref.sync_channel(_Ctx(db_path), _guild(channel))
+    assert result["posted"] == 3 and result["incomplete"] is False
+    assert channel.sent == ["**SFW**", "Q1?", "Q2?"]
+    with open_db(db_path) as conn:
+        assert len(ref.stored_messages(conn, GUILD)) == 3
+
+
+async def test_failed_edit_keeps_old_hash_so_it_retries(db_path):
+    # Regression: the failed-edit branch stored the INTENDED hash, so the
+    # next diff said "keep" and the stale message was never fixed.
+    _setup(db_path, [{"kind": "text", "title": "", "body": "original"}])
+    ctx = _Ctx(db_path)
+    channel = _FakeChannel()
+    await ref.sync_channel(ctx, _guild(channel))
+    with open_db(db_path) as conn:
+        (mid, _), = ref.stored_messages(conn, GUILD)
+
+    _setup(db_path, [{"kind": "text", "title": "", "body": "reworded"}])
+    failing = _FakeChannel(edit_fails=[mid])
+    result = await ref.sync_channel(ctx, _guild(failing))
+    assert result["incomplete"] is True
+    assert failing.edits == []  # the edit really failed
+
+    # Next save (Discord healthy) must still see work to do.
+    ok = _FakeChannel()
+    result = await ref.sync_channel(ctx, _guild(ok))
+    assert ok.edits == [(mid, "reworded")]
+    assert result["edited"] == 1 and result["incomplete"] is False
+
+
+async def test_failed_post_keeps_earlier_messages_tracked(db_path):
+    # Regression: a send failure truncated the mapping, orphaning already-
+    # tracked messages at later positions (the bot then refuses to touch
+    # them, and reposts duplicates once the bad content is fixed).
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q1?\nQ2?\nQ3?"}])
+    ctx = _Ctx(db_path)
+    await ref.sync_channel(ctx, _guild(_FakeChannel()))
+    with open_db(db_path) as conn:
+        before = ref.stored_messages(conn, GUILD)
+    assert len(before) == 3
+
+    # Insert a question at the top: ops become edit,edit,edit,post — and
+    # the trailing post (the 4th message) fails.
+    _setup(db_path, [{"kind": "questions", "title": "", "body": "Q0?\nQ1?\nQ2?\nQ3?"}])
+    failing = _FakeChannel(send_fails_at=0)
+    result = await ref.sync_channel(ctx, _guild(failing))
+    assert result["incomplete"] is True
+    with open_db(db_path) as conn:
+        after = ref.stored_messages(conn, GUILD)
+    # All three original messages stay tracked (shifted content), nothing
+    # orphaned, and the missing 4th position is retried on the next save.
+    assert [m for m, _ in after] == [m for m, _ in before]
+
+    ok = _FakeChannel()
+    result = await ref.sync_channel(ctx, _guild(ok))
+    assert ok.sent == ["Q3?"]  # only the missing tail is posted
+    assert result["incomplete"] is False
+    with open_db(db_path) as conn:
+        assert len(ref.stored_messages(conn, GUILD)) == 4
 
 
 def test_blocks_from_messages_drafts_text_blocks():

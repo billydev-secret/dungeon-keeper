@@ -245,12 +245,15 @@ export function mount(container) {
           })),
         });
         const s = res.sync || {};
-        showStatus(
-          refStatus, true,
-          s.synced
-            ? `Saved — channel synced (${s.posted || 0} posted, ${s.edited || 0} edited, ${s.deleted || 0} deleted)`
-            : `Saved — channel not synced (${s.reason || "unknown"})`
-        );
+        const counts = `${s.posted || 0} posted, ${s.edited || 0} edited, ${s.deleted || 0} deleted`;
+        if (!s.synced) {
+          showStatus(refStatus, true, `Saved — channel not synced (${s.reason || "unknown"})`);
+        } else if (s.incomplete) {
+          // Discord rejected part of the plan; the next save retries it.
+          showStatus(refStatus, false, `Saved, but the channel is only partly synced (${counts}) — save again to retry`);
+        } else {
+          showStatus(refStatus, true, `Saved — channel synced (${counts})`);
+        }
       } catch (err) {
         showStatus(refStatus, false, err.message);
       }
