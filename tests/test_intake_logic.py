@@ -299,6 +299,101 @@ def test_close_for_member_on_leave(db_path):
         ) is None
 
 
+# ── message evaluation (greet + completion code) ──────────────────────
+
+
+def _eval(conn, **kw):
+    defaults = dict(
+        channel_id=CHANNEL,
+        content="welcome!",
+        mentioned_ids=[NEWCOMER],
+        author_is_greeter=True,
+        author_is_mod=False,
+    )
+    defaults.update(kw)
+    return svc.evaluate_message(conn, GUILD, **defaults)
+
+
+def test_evaluate_message_dark_or_no_mentions(db_path):
+    with open_db(db_path) as conn:
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        # Feature dark → nothing, even from a greeter in the right channel.
+        assert _eval(conn) == []
+        _enable(conn)
+        assert _eval(conn, mentioned_ids=[]) == []
+
+
+def test_evaluate_message_greet_gating(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert _eval(conn) == [(svc.ACTION_GREET, NEWCOMER)]
+        # Wrong channel → no greet; non-greeter (even a mod) → no greet.
+        assert _eval(conn, channel_id=999) == []
+        assert _eval(conn, author_is_greeter=False, author_is_mod=True) == []
+        # Mentioning someone without an open card → nothing.
+        assert _eval(conn, mentioned_ids=[12345]) == []
+
+
+def test_evaluate_message_completion_code(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        set_config_value(conn, svc.CODE_KEY, "DK-7734", GUILD)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        # Code + mention from a greeter, any channel → complete beats greet.
+        assert _eval(conn, content="all set, dk-7734!", channel_id=999) == [
+            (svc.ACTION_COMPLETE, NEWCOMER)
+        ]
+        # A mod who isn't a greeter can also complete…
+        assert _eval(
+            conn,
+            content="dk-7734",
+            author_is_greeter=False,
+            author_is_mod=True,
+            channel_id=999,
+        ) == [(svc.ACTION_COMPLETE, NEWCOMER)]
+        # …but a regular member saying the code does nothing.
+        assert _eval(
+            conn, content="dk-7734", author_is_greeter=False, channel_id=999
+        ) == []
+
+
+def test_evaluate_message_no_code_configured_never_completes(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        # Without a configured code, a chatty message still only greets.
+        assert _eval(conn, content="dk-7734") == [(svc.ACTION_GREET, NEWCOMER)]
+
+
+def test_evaluate_message_dedupes_mentions_keeps_order(db_path):
+    with open_db(db_path) as conn:
+        _enable(conn)
+        set_config_value(conn, svc.CODE_KEY, "DK-7734", GUILD)
+        svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        svc.create_card(conn, GUILD, 8, 100.0)
+        actions = _eval(
+            conn, content="dk-7734", mentioned_ids=[8, NEWCOMER, 8]
+        )
+        assert actions == [(svc.ACTION_COMPLETE, 8), (svc.ACTION_COMPLETE, NEWCOMER)]
+
+
+def test_inviter_for(db_path):
+    from bot_modules.services.invite_tracker import record_invite
+
+    with open_db(db_path) as conn:
+        assert svc.inviter_for(conn, GUILD, NEWCOMER) is None
+        record_invite(conn, GUILD, GREETER, NEWCOMER, "abc123", joined_at=100.0)
+        assert svc.inviter_for(conn, GUILD, NEWCOMER) == GREETER
+
+
+def test_greeter_role_id_getter(db_path):
+    with open_db(db_path) as conn:
+        assert svc.greeter_role_id(conn, GUILD) == 0
+        set_config_value(conn, svc.GREETER_ROLE_KEY, "4242", GUILD)
+        assert svc.greeter_role_id(conn, GUILD) == 4242
+
+
 # ── stale scan ────────────────────────────────────────────────────────
 
 

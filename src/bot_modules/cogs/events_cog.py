@@ -32,6 +32,7 @@ from bot_modules.services.greeting_watch_service import (
 )
 from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
+from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import promotion_review_service as promo_review
 from bot_modules.services.message_store import (
     adjust_reaction_count,
@@ -609,6 +610,17 @@ class EventsCog(commands.Cog):
             from bot_modules.services.promotion_review_views import post_review_card
 
             await post_review_card(self.ctx, message.author, message.channel.id)
+
+        # Intake: a message mentioning a newcomer with an open card may be
+        # the greeting (greeter, in the intake channel) or the completion
+        # code. is_watched keeps the common case to set lookups per mention;
+        # the DB-truth evaluation happens inside handle_intake_message.
+        if message.mentions and any(
+            intake_svc.is_watched(guild_id, u.id) for u in message.mentions
+        ):
+            from bot_modules.services.intake_views import handle_intake_message
+
+            await handle_intake_message(self.ctx, message)
 
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
@@ -1458,8 +1470,14 @@ class EventsCog(commands.Cog):
             and cfg.unverified_role_id in (before_ids - after_ids)
             and cfg.welcome_channel_id > 0
         ):
+            from bot_modules.services.intake_views import intake_enabled
+
             await self._send_welcome(after, cfg)
-            if cfg.greeter_chat_channel_id > 0:
+            # With intake enabled the join already posted the card — the
+            # verified-trigger arrival ping would be a duplicate surface.
+            if cfg.greeter_chat_channel_id > 0 and not await intake_enabled(
+                self.ctx, _guild_id
+            ):
                 greeter_channel = after.guild.get_channel(cfg.greeter_chat_channel_id)
                 if isinstance(greeter_channel, discord.TextChannel):
                     try:
@@ -1471,6 +1489,20 @@ class EventsCog(commands.Cog):
                         )
                     except discord.HTTPException as exc:
                         log.error("Failed to send greeter chat ping: %s", exc)
+
+        # Intake auto-ticks: roles gained (member/NSFW grant steps) and the
+        # unverified role coming off (the Verified step). is_watched pre-filters
+        # so role churn on members without an open card costs one set lookup.
+        if intake_svc.is_watched(_guild_id, _member_id):
+            gained = sorted(after_ids - before_ids)
+            unverified_removed = (
+                cfg.unverified_role_id > 0
+                and cfg.unverified_role_id in (before_ids - after_ids)
+            )
+            if gained or unverified_removed:
+                from bot_modules.services.intake_views import handle_role_changes
+
+                await handle_role_changes(self.ctx, after, gained, unverified_removed)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
@@ -1538,7 +1570,20 @@ class EventsCog(commands.Cog):
         if cfg.welcome_channel_id > 0 and cfg.welcome_trigger == "join":
             await self._send_welcome(member, cfg)
 
-        if cfg.greeter_chat_channel_id > 0:
+        # With intake enabled, the card (greeter-role ping + checklist) is the
+        # arrival surface; the legacy bare @here line only fires while intake
+        # is dark. Bots and jailed rejoiners never get a card, matching the
+        # auto-role guard below.
+        intake_posted = False
+        if not member.bot and not is_jailed:
+            from bot_modules.services.intake_views import post_intake_card
+
+            try:
+                intake_posted = await post_intake_card(self.ctx, member)
+            except Exception:
+                log.exception("intake: card post failed for %s", member.id)
+
+        if not intake_posted and cfg.greeter_chat_channel_id > 0:
             greeter_channel = member.guild.get_channel(cfg.greeter_chat_channel_id)
             if isinstance(greeter_channel, discord.TextChannel):
                 try:
@@ -1581,6 +1626,19 @@ class EventsCog(commands.Cog):
                     log.error("auto_role: failed to assign roles to %s: %s", member, exc)
 
     @commands.Cog.listener()
+    async def on_member_ban(
+        self, guild: discord.Guild, user: discord.User | discord.Member
+    ) -> None:
+        # A ban also fires on_member_remove; closing here first records the
+        # sharper resolution, and the remove hook then finds no open card.
+        if intake_svc.is_watched(guild.id, user.id):
+            from bot_modules.services.intake_views import close_member_card
+
+            await close_member_card(
+                self.ctx, guild, user.id, intake_svc.RESOLUTION_BANNED
+            )
+
+    @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
         _guild_id = member.guild.id
         _member_id = member.id
@@ -1592,6 +1650,13 @@ class EventsCog(commands.Cog):
                 record_member_event(conn, _guild_id, _member_id, "leave", _now)
 
         await asyncio.to_thread(_do_member_leave)
+
+        if intake_svc.is_watched(_guild_id, _member_id):
+            from bot_modules.services.intake_views import close_member_card
+
+            await close_member_card(
+                self.ctx, member.guild, _member_id, intake_svc.RESOLUTION_LEFT
+            )
 
         cfg = self.ctx.guild_config(member.guild.id)
         if cfg.leave_channel_id <= 0:
