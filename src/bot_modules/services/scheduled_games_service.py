@@ -239,6 +239,27 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     offset = await get_offset_hours_async(games_db, guild_id)
     recur_days = json.loads(row["recur_days"]) if row["recur_days"] else None
 
+    # 0. Lateness guard (mirrors announcements' MAX_LATE_SECONDS). If the bot was
+    #    offline through a slot, firing now would ping "starting now!" for a game
+    #    whose window closed hours ago. A one-time row uses its giveup_at deadline
+    #    (skip + mark missed); a recurring row skips this stale slot and rolls to
+    #    the next one rather than launching late.
+    if row["recurrence"] == "once":
+        deadline = row["giveup_at"]
+        too_late = deadline is not None and now >= deadline
+    else:
+        too_late = (now - row["next_run_at"]) > GIVEUP_GRACE_SECONDS
+    if too_late:
+        if row["recurrence"] == "once":
+            await games_db.execute(
+                "UPDATE games_scheduled SET status='done', next_run_at=NULL, "
+                "last_run_at=?, last_status='skipped_giveup' WHERE id=?",
+                (now, sched_id),
+            )
+        else:
+            await _advance_or_finish(games_db, row, now, "skipped_late", offset, recur_days)
+        return
+
     # 1. Resolve the target channel.
     channel = await _resolve_channel(bot, channel_id)
     if channel is None:
@@ -267,18 +288,12 @@ async def _process_due(bot, games_db, row, now: float) -> None:
                 log.exception("Scheduled game %s: busy-check for %s raised", sched_id, game_type)
     if busy:
         if row["recurrence"] == "once":
-            if now >= (row["giveup_at"] or now):
-                await games_db.execute(
-                    "UPDATE games_scheduled SET status='done', next_run_at=NULL, "
-                    "last_run_at=?, last_status='skipped_giveup' WHERE id=?",
-                    (now, sched_id),
-                )
-            else:
-                # Stay due — the 60s poll is the retry until giveup_at.
-                await games_db.execute(
-                    "UPDATE games_scheduled SET last_status='skipped_active' WHERE id=?",
-                    (sched_id,),
-                )
+            # Stay due — the 60s poll is the retry until giveup_at, at which point
+            # the lateness guard above marks it missed.
+            await games_db.execute(
+                "UPDATE games_scheduled SET last_status='skipped_active' WHERE id=?",
+                (sched_id,),
+            )
             return
         await _advance_or_finish(games_db, row, now, "skipped_active", offset, recur_days)
         return

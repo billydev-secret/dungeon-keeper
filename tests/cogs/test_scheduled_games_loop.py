@@ -236,6 +236,60 @@ async def test_launcher_returning_none_records_error(sync_db_path):
     assert after["next_run_at"] > NOW
 
 
+async def test_once_past_giveup_free_channel_marks_missed(sync_db_path):
+    # Bot was offline through the slot: even with a free channel the loop must
+    # NOT ping "starting now!" for a one-time game whose giveup_at deadline has
+    # passed — it marks the row missed instead of firing hours late.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(db, recurrence="once", start_date="2030-01-01",
+                        next_run_at=NOW - svc.GIVEUP_GRACE_SECONDS - 100,
+                        giveup_at=NOW - 100)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []                       # not fired late
+    assert bot._channels[CHAN].sends == []      # no "starting now!" ping
+    after = await _row(db, row["id"])
+    assert after["status"] == "done"
+    assert after["last_status"] == "skipped_giveup"
+
+
+async def test_recurring_stale_slot_skips_and_advances(sync_db_path):
+    # A daily slot more than the grace window old (bot offline overnight) is
+    # stale: skip it and roll to the next slot rather than launching late.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(db, recurrence="daily",
+                        next_run_at=NOW - svc.GIVEUP_GRACE_SECONDS - 100)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []                       # not fired late
+    assert bot._channels[CHAN].sends == []
+    after = await _row(db, row["id"])
+    assert after["status"] == "active"          # still recurring
+    assert after["last_status"] == "skipped_late"
+    assert after["next_run_at"] > NOW           # advanced to a future slot
+
+
+async def test_recurring_slightly_late_still_launches(sync_db_path):
+    # Within the grace window a recurring slot fires normally (a brief restart
+    # right after the slot shouldn't drop the game).
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(db, recurrence="daily", next_run_at=NOW - 60)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert len(launched) == 1
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "launched"
+
+
 async def test_once_free_channel_launches_and_done(sync_db_path):
     db = GamesDb(sync_db_path)
     launched = []
