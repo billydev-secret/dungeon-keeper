@@ -545,8 +545,9 @@ def pause_user(
     guild_id: int,
     user_id: int,
     until: float,
-) -> None:
-    conn.execute(
+) -> bool:
+    """Pause a user's enforcement. Returns False if no such user row exists."""
+    cur = conn.execute(
         "UPDATE wellness_users SET paused_until = ? WHERE guild_id = ? AND user_id = ?",
         (until, guild_id, user_id),
     )
@@ -554,13 +555,16 @@ def pause_user(
         "DELETE FROM wellness_slow_mode WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     )
+    return (cur.rowcount or 0) > 0
 
 
-def resume_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
-    conn.execute(
+def resume_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
+    """Resume a paused user. Returns False if no such user row exists."""
+    cur = conn.execute(
         "UPDATE wellness_users SET paused_until = NULL WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     )
+    return (cur.rowcount or 0) > 0
 
 
 def set_cooldown(

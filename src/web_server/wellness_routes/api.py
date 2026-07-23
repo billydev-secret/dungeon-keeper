@@ -551,6 +551,13 @@ async def create_cap(
         return _err(f"window must be one of {','.join(CAP_WINDOWS)}")
     if cap_limit < 1:
         return _err("limit must be ≥ 1")
+    # Channel/category caps need a picker (not yet built) to supply
+    # scope_target_id; without one they persist target 0, which enforcement
+    # can never match (and for category would apply to every uncategorized
+    # channel). Reject them — and voice — until the picker lands rather than
+    # ship a scope that isn't enforced.
+    if scope in ("channel", "category") and scope_target_id <= 0:
+        return _err(f"{scope} scope requires a target (coming soon)")
     if scope == "voice":
         return _err("voice scope is coming soon")
 

@@ -338,6 +338,30 @@ def test_create_cap_persists(authed_client, fake_ctx):
     assert listed["caps"][0]["limit"] == 5
 
 
+@pytest.mark.parametrize("scope", ["channel", "category", "voice"])
+def test_create_cap_rejects_scoped_without_target(authed_client, fake_ctx, scope):
+    # No channel/category picker ships yet, so these scopes can never carry a
+    # target and would silently persist scope_target_id=0 (which enforcement
+    # cannot match, and for category matches every uncategorized channel).
+    # They must be rejected outright, like voice.
+    _opt_in(fake_ctx)
+    resp = authed_client.post(
+        "/api/wellness/caps",
+        json={
+            "label": "scoped",
+            "scope": scope,
+            "window": "daily",
+            "limit": 5,
+        },
+    )
+    body = resp.json()
+    assert body["ok"] is False
+
+    # And nothing was persisted.
+    listed = authed_client.get("/api/wellness/caps").json()
+    assert listed["caps"] == []
+
+
 def test_delete_cap_removes_row(authed_client, fake_ctx):
     _opt_in(fake_ctx)
     created = authed_client.post(

@@ -10,8 +10,8 @@ A self-managed boundary tool. Members opt in, pick their own enforcement level, 
 
 At the code level, **there is no supported way to turn Wellness Guardian on for a guild.** The machinery is real and running, but it is gated on a config row that nothing writes:
 
-- `/wellness setup` refuses to run unless `wellness_config.role_id` is set, and points the user at `/wellness-admin setup`.
-- **`/wellness-admin setup` does not exist** — it is referenced only in error-message strings (`wellness_cog.py:228,249,496`). There is no `/wellness-admin` slash command group anywhere.
+- `/wellness setup` refuses to run unless `wellness_config.role_id` is set, and points the user at the web dashboard.
+- **`/wellness-admin setup` does not exist** — there is no `/wellness-admin` slash command group anywhere. The member-facing "not set up" error strings (`wellness_cog.py:228,249,496`) now all point at the web dashboard rather than naming a phantom command.
 - The dashboard admin router (`/api/wellness/admin`) has **no create-role / create-category / provisioning endpoint**. Its only writer of config sets `default_enforcement` and `crisis_resource_url` — never `role_id` or `channel_id`.
 - The only other writer of the config row is the background scheduler, which sets `active_list_message_id` only.
 

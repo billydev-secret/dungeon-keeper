@@ -227,7 +227,7 @@ def _build_active_embed(
             title=_ACTIVE_EMBED_TITLE,
             description=(
                 "No one has opted in with public commitment yet. "
-                "Turn it on in `/wellness settings` to show up here. 🌱"
+                "Turn it on from the Wellness panel on the web dashboard to show up here. 🌱"
             ),
             color=_ACTIVE_EMBED_COLOR,
         )
@@ -444,7 +444,9 @@ def _build_weekly_report_embed(
         description=body,
         color=_WEEKLY_REPORT_COLOR,
     )
-    embed.set_footer(text="Sent on Sunday mornings • turn off in /wellness settings")
+    embed.set_footer(
+        text="Sent on Sunday mornings • manage from the Wellness dashboard"
+    )
     return embed
 
 
