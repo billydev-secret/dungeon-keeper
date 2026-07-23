@@ -267,6 +267,13 @@ def test_locks_are_synced_so_the_remote_can_detect_staleness():
         assert name in rt.SYNC_PATHS
 
 
+def test_readme_is_synced_so_its_doc_test_cant_go_stale():
+    # test_games_help_logic.py checks README.md's party-game count against
+    # the code — without shipping it every run, a remote's only copy is
+    # whatever its initial `git clone` had, drifting silently forever after.
+    assert "README.md" in rt.SYNC_PATHS
+
+
 # ── .env fallback ──────────────────────────────────────────────────────────────
 
 

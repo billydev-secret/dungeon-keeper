@@ -37,6 +37,23 @@ Windows, so fixtures relying on fork-inherited state behave differently.
 Neither is knowable without running it. If teardown failures turn out to be
 widespread, switch to WSL2 (below) rather than fighting them.
 
+### A real gotcha found this way: don't walk `app.routes` directly
+
+The remote surfaced a genuine bug the local dev venv was masking: two web
+tests (`test_authz_sweep.py`, `test_snowflake_precision.py`) enumerated routes
+via `for route in app.routes: if isinstance(route, APIRoute): ...`. That
+assumption broke silently once the pinned `fastapi`/`starlette` versions
+diverged from whatever the local venv happened to have installed —
+`include_router` doesn't reliably flatten a sub-router's routes into
+`app.routes` as plain `APIRoute` instances across versions (a newer FastAPI
+can defer them behind an internal lazy wrapper instead), so the walk found
+almost nothing and the authz sweep passed *vacuously* — a security test that
+looked green while checking zero routes. The fix: enumerate routes via
+`app.openapi()["paths"]` instead — the same public schema Swagger UI and real
+clients use, verified identical (300 paths, 358 `/api` operations) on both the
+old and new FastAPI. This is exactly the kind of drift a stale local venv
+hides and a remote running the actually-pinned lock file catches.
+
 Remember the signal here is a **fast pre-filter**, not proof: prod is Linux, and
 CI on push remains the authoritative gate. A Linux-only bug can pass here.
 

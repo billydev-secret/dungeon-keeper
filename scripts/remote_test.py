@@ -52,7 +52,11 @@ LOCK_FILES = ("requirements.lock", "requirements-dev.lock")
 
 # Only these are shipped. Everything else (the DB, models/, backups/, .venv,
 # .git) is either irrelevant to the suite or far too large to sync per run.
-SYNC_PATHS = ("src", "tests", "scripts", "pyproject.toml", *LOCK_FILES)
+# README.md is included even though it isn't code: test_games_help_logic.py
+# asserts it stays in sync with the actual party-game list, and a remote whose
+# only copy dates back to its initial `git clone` will drift the moment either
+# side changes — silently, since nothing else re-syncs it.
+SYNC_PATHS = ("src", "tests", "scripts", "pyproject.toml", "README.md", *LOCK_FILES)
 
 # Records which lock hash the remote venv was last installed from.
 STAMP_FILE = ".remote-test-stamp"
