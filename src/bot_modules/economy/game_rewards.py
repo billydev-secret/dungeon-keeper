@@ -25,7 +25,10 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.quest_views import post_signoff_card
-from bot_modules.services.economy_quests_service import fire_trigger_quests
+from bot_modules.services.economy_quests_service import (
+    fire_trigger_quests,
+    source_enabled,
+)
 from bot_modules.services.embeds import footer_emoji
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -147,6 +150,11 @@ async def pay_game_rewards(
 
             def _host_bounty() -> None:
                 with open_db(db_path) as conn:
+                    # Gate the coin faucet on the game_host income source, the
+                    # same way photo_post gates its flat award — flipping the
+                    # source off must stop the payout, not just the quest.
+                    if not source_enabled(conn, guild_id, "game_host"):
+                        return
                     try:
                         award_host_bounty(
                             conn, settings, guild_id, host,

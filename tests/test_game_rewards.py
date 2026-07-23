@@ -245,6 +245,23 @@ async def test_host_bounty_pays_the_host_per_joiner(db_path):
     assert _bal(db_path, 2) == 5
 
 
+async def test_host_bounty_stops_when_the_income_source_is_disabled(db_path):
+    # The game_host income-source toggle must gate the coin faucet, not just the
+    # quest — flipping it off is the documented off-switch for the payout.
+    from bot_modules.core.db_utils import open_db as _open_db
+    from bot_modules.services.economy_quests_service import set_income_source
+
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with _open_db(db_path) as conn:
+        set_income_source(conn, GUILD, "game_host", False)
+    bot: Any = _Bot(db_path, [_member(9), _member(1), _member(2)])
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 0  # bounty suppressed with the source off
+    assert _bal(db_path, 1) == 25  # participation/win still pay (own faucet)
+
+
 async def test_host_bounty_counts_a_host_who_also_played(db_path):
     _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
     bot: Any = _Bot(db_path, [_member(9), _member(1)])
