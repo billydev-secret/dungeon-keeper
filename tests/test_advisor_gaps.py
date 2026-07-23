@@ -54,8 +54,10 @@ _WIDE = Feature(
 def test_nothing_set_is_unconfigured():
     gap = ag.classify_feature(_FEATURE, {})
     assert gap.status == "unconfigured"
-    assert {s.key for s in gap.missing} == {"t_enabled", "t_channel_id"}
+    # missing describes wiring only — the toggle is reported via switch_on.
+    assert {s.key for s in gap.missing} == {"t_channel_id"}
     assert gap.present == ()
+    assert gap.switch_on is False
     assert gap.is_gap is True
 
 
@@ -85,7 +87,8 @@ def test_partial_when_some_wiring_is_done_and_some_is_not():
     gap = ag.classify_feature(_WIDE, {"w_enabled": "1", "w_a": CH})
     assert gap.status == "partial"
     assert [s.key for s in gap.missing] == ["w_b"]
-    assert [s.key for s in gap.present] == ["w_enabled", "w_a"]
+    assert [s.key for s in gap.present] == ["w_a"]
+    assert gap.switch_on is True
 
 
 def test_wide_feature_fully_wired_but_off_is_ready_but_off():
@@ -113,9 +116,12 @@ def test_optional_settings_do_not_affect_status():
     assert ag.classify_feature(_FEATURE, {"t_extra": "hello"}).status == "unconfigured"
 
 
-def test_effort_counts_remaining_settings():
-    assert ag.classify_feature(_FEATURE, {}).effort == 2
-    assert ag.classify_feature(_FEATURE, {"t_channel_id": CH}).effort == 1
+def test_effort_counts_remaining_wiring_not_the_switch():
+    assert ag.classify_feature(_WIDE, {}).effort == 2
+    assert ag.classify_feature(_WIDE, {"w_a": CH}).effort == 1
+    # Fully wired but off: zero settings to fill in, just a switch to flip.
+    assert ag.classify_feature(_WIDE, {"w_a": CH, "w_b": CH}).effort == 0
+    assert ag.classify_feature(_FEATURE, {"t_channel_id": CH}).effort == 0
 
 
 # ── scan_guild ──────────────────────────────────────────────────────────────

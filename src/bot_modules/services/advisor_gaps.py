@@ -42,14 +42,22 @@ _GAP_STATUSES = frozenset({"ready_but_off", "partial", "unconfigured"})
 
 @dataclass(frozen=True)
 class FeatureGap:
-    """One feature's setup state on one guild."""
+    """One feature's setup state on one guild.
+
+    ``missing``/``present`` describe *wiring* — the required settings other than
+    the on/off switch. Whether the switch is flipped is carried by ``status``
+    and ``switch_on`` instead, so a fully-wired feature that's merely switched
+    off doesn't report its own toggle as a missing setting.
+    """
 
     feature: Feature
     status: str
-    #: Required settings with nothing usable stored.
+    #: Required non-switch settings with nothing usable stored.
     missing: tuple[Setting, ...]
-    #: Required settings that are filled in.
+    #: Required non-switch settings that are filled in.
     present: tuple[Setting, ...]
+    #: Switch state, or None when the feature has no on/off key.
+    switch_on: bool | None = None
 
     @property
     def is_gap(self) -> bool:
@@ -57,7 +65,7 @@ class FeatureGap:
 
     @property
     def effort(self) -> int:
-        """How many settings still need a value."""
+        """How many settings still need a value before the feature works."""
         return len(self.missing)
 
 
@@ -79,29 +87,27 @@ def _load_config(conn: sqlite3.Connection, guild_id: int) -> dict[str, str]:
 
 def classify_feature(feature: Feature, values: dict[str, str]) -> FeatureGap:
     """Bucket one feature by how much of its required setup exists."""
-    required = feature.required_settings()
-    missing = tuple(s for s in required if not s.is_set(values.get(s.key)))
-    present = tuple(s for s in required if s not in missing)
-
     enable = feature.enable_key
-    # The enable key is usually itself required; judge "is it on" separately so
-    # a fully-wired-but-switched-off feature doesn't just read as "partial".
-    switched_on = True
+    # The enable key is judged separately from the wiring, so a fully-wired but
+    # switched-off feature reads as the cheap win it is rather than as "partial".
+    switch_on: bool | None = None
     if enable is not None:
         enable_setting = next((s for s in feature.settings if s.key == enable), None)
         if enable_setting is not None:
-            switched_on = enable_setting.is_set(values.get(enable))
+            switch_on = enable_setting.is_set(values.get(enable))
 
-    non_switch_missing = tuple(s for s in missing if s.key != enable)
+    wiring = tuple(s for s in feature.required_settings() if s.key != enable)
+    missing = tuple(s for s in wiring if not s.is_set(values.get(s.key)))
+    present = tuple(s for s in wiring if s not in missing)
 
-    if not non_switch_missing:
-        status = "configured" if switched_on else "ready_but_off"
-    elif len(non_switch_missing) == len([s for s in required if s.key != enable]):
+    if not missing:
+        status = "ready_but_off" if switch_on is False else "configured"
+    elif not present:
         status = "unconfigured"
     else:
         status = "partial"
 
-    return FeatureGap(feature, status, missing, present)
+    return FeatureGap(feature, status, missing, present, switch_on)
 
 
 def scan_guild(conn: sqlite3.Connection, guild_id: int) -> list[FeatureGap]:
@@ -147,9 +153,9 @@ def format_gap_report(gaps: list[FeatureGap], *, include_configured: bool = Fals
             lines.append(f"- {f.label}: set up and running.")
             continue
         blurb = _STATUS_BLURB[gap.status]
-        if gap.status == "unconfigured" and gap.present:
-            # The switch is on but nothing behind it is filled in — saying
-            # "not set up at all" next to "Already set: ... on" reads wrong.
+        if gap.status == "unconfigured" and gap.switch_on:
+            # Saying "not set up at all" about a feature whose switch someone
+            # deliberately flipped reads wrong — it was started, not ignored.
             blurb = "switched on, but nothing is wired up behind it yet"
         lines.append(f"- {f.label} — {blurb}")
         lines.append(f"    What it does: {f.blurb}")

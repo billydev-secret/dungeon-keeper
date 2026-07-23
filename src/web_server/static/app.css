@@ -3676,3 +3676,51 @@ select option { background: var(--bg-input); color: var(--ink); }
 .ann-btn-pill.primary { background: #5865f2; }
 .ann-btn-pill.secondary { background: #4e5058; }
 .ann-btn-pill.success { background: #248046; }
+
+/* Suggested setup tile — the pushed half of Billy-bot's setup help */
+.sugg-row {
+  padding: 7px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--rule);
+  min-width: 0;
+}
+.sugg-row:last-of-type { border-bottom: none; }
+.sugg-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.sugg-name { font-weight: 600; color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.sugg-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: var(--r-sm);
+  /* No nowrap: on a phone these labels are wide enough to push the row
+     off-screen, and the mobile sweep fails the panel for it. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.sugg-ready   { background: var(--green-soft); color: var(--green); }
+.sugg-partial { background: var(--gold-soft);  color: var(--gold-solid); }
+.sugg-unset   { background: var(--rule-soft);  color: var(--ink-mute); }
+.sugg-blurb { color: var(--ink-dim); margin-top: 2px; overflow-wrap: anywhere; }
+.sugg-needs {
+  color: var(--ink-mute);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.sugg-panel {
+  color: var(--ink-mute);
+  font-size: 11px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.sugg-foot {
+  color: var(--ink-mute);
+  font-size: 11px;
+  margin-top: 8px;
+  font-style: italic;
+}

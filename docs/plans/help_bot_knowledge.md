@@ -1,7 +1,7 @@
 # Plan — Billy-bot: lower the threshold for using features
 
 **Branch:** `help-bot-knowledge`
-**Status:** in progress
+**Status:** all four stages built 2026-07-23
 
 ## Problem
 
@@ -74,8 +74,32 @@ behind one Apply.
 ### Stage 4 — proactive surfacing
 
 Same gap data, pushed instead of pulled. This is the stage that actually moves
-adoption; 2 and 3 are enablers. Dashboard suggestion strip is the first
-surface; a periodic digest is a follow-up decision.
+adoption; 2 and 3 are enablers.
+
+Shipped as a **home-page widget** (`setup-suggestions`) rather than a bespoke
+strip: the dashboard home is already a perm-gated, user-arrangeable widget grid,
+so an admin can move, resize, or remove the card like any other, and removing it
+sticks. Backed by `GET /api/help/suggestions` — the same `scan_guild` as the
+tool, rendered as structured rows instead of prose, with no model call, so it's
+cheap enough to sit on a page that refreshes every 60s.
+
+Existing admins already have a saved layout in localStorage, which a new
+registry entry would never reach. `ONE_TIME_ADDITIONS` in `home.js` offers the
+widget exactly once per user and records that it did, so it appears for current
+admins but doesn't come back if they remove it.
+
+A periodic Discord digest remains a follow-up decision — it's a push into a
+channel rather than onto a page the admin chose to open, so it wants its own
+opt-in.
+
+## Follow-ups
+
+- The registry covers 16 features / 56 settings out of ~240 live config keys.
+  Extending it is additive and safe (the import-time check enforces the rules);
+  the gap report gets better with every feature added.
+- Feature-table settings (Economy, Voice Master dials, Starboard) are readable
+  but still panel-only. Making selected ones writable now only needs registry
+  entries plus a per-feature setter, since the shape/validation path is generic.
 
 ## Testing
 

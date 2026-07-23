@@ -112,6 +112,51 @@ async def help_advisor(
     }
 
 
+# ── GET /help/suggestions — "what isn't this server using?" ────────────────
+
+
+@router.get("/help/suggestions")
+async def help_suggestions(
+    request: Request,
+    limit: int = 3,
+    guild_id: int = Depends(get_active_guild_id),
+    # Admin-gated for the same reason the gap tool is: a list of what a server
+    # hasn't set up is reconnaissance, and only admins can act on it anyway.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """The dashboard suggestion widget's data — the pushed half of setup help.
+
+    Same scan as Billy-bot's ``find_setup_gaps`` tool, rendered as structured
+    rows instead of prose. No model call: this is a DB read against the
+    registry, so it's cheap enough to sit on the home page.
+    """
+    from bot_modules.services.advisor_gaps import suggestions
+
+    ctx = get_ctx(request)
+    limit = max(1, min(int(limit), 10))
+
+    def _q():
+        with ctx.open_db() as conn:
+            return suggestions(conn, guild_id, limit)
+
+    gaps = await run_query(_q)
+    return {
+        "guild_id": str(guild_id),
+        "suggestions": [
+            {
+                "slug": g.feature.slug,
+                "label": g.feature.label,
+                "blurb": g.feature.blurb,
+                "panel": g.feature.panel,
+                "status": g.status,
+                "effort": g.effort,
+                "missing": [{"key": s.key, "label": s.label} for s in g.missing],
+            }
+            for g in gaps
+        ],
+    }
+
+
 # ── GET/PUT /config/advisor — the "Billy-bot" config panel ─────────────────
 
 
