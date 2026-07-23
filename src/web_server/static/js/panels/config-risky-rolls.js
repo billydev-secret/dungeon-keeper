@@ -1,123 +1,106 @@
-import { loadConfig, loadRoles, apiPut, showStatus, buildField } from "../config-helpers.js";
-
-function mkSel(name) {
-  const s = document.createElement("select");
-  s.name = name;
-  return s;
-}
-
-function mkOpt(value, text, selected) {
-  const o = document.createElement("option");
-  o.value = value;
-  o.textContent = text;
-  o.selected = !!selected;
-  return o;
-}
+import {
+  loadConfig,
+  loadRoles,
+  apiPut,
+  showStatus,
+  guardForm,
+  renderMetaWarning,
+  mountRolePicker,
+} from "../config-helpers.js";
 
 export function mount(container) {
-  container.textContent = "";
-  const wrap = document.createElement("div");
-  wrap.className = "panel";
-  const loading = document.createElement("div");
-  loading.className = "empty";
-  loading.textContent = "Loading config…";
-  wrap.appendChild(loading);
-  container.appendChild(wrap);
+  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
     const [config, roles] = await Promise.all([loadConfig(), loadRoles()]);
     const r = config.risky || {};
+    // Stored in seconds, edited in minutes — the unit is in the field label.
+    const minMinutes = Math.round((r.min_game_seconds || 0) / 60);
 
-    container.textContent = "";
-    const panel = document.createElement("div");
-    panel.className = "panel";
+    container.innerHTML = `
+      <div class="panel">
+        <header>
+          <h2>Risky Roller</h2>
+          <div class="subtitle">A dice game members start with <code>/risky start</code></div>
+        </header>
+        ${renderMetaWarning()}
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Announcements</div>
+            <div class="field">
+              <label>Ping Role</label>
+              <span data-picker="ping_role_id"></span>
+              <div class="field-hint">This role is mentioned whenever a new round
+                opens, so its holders get a notification. "(none)" starts rounds
+                quietly.</div>
+            </div>
+          </div>
 
-    const hdr = document.createElement("header");
-    const h2 = document.createElement("h2");
-    h2.textContent = "Risky Roller";
-    const sub = document.createElement("div");
-    sub.className = "subtitle";
-    sub.textContent = "Dice game settings";
-    hdr.append(h2, sub);
-    panel.appendChild(hdr);
+          <div class="card">
+            <div class="section-label">Round Rules</div>
+            <div class="field">
+              <label for="rr-min">Minimum Round Length (minutes)</label>
+              <input type="number" name="min_game_minutes" id="rr-min" required
+                min="0" max="1440" step="1" value="${minMinutes}" style="max-width:140px;" />
+              <div class="field-hint">A round must stay open at least this long before
+                anyone can close it, so latecomers still get a chance to join. 0 lets
+                the host close a round the moment it opens.</div>
+            </div>
+            <div class="field">
+              <label for="rr-max">Rounds Running at Once, Per Channel</label>
+              <input type="number" name="max_games_per_channel" id="rr-max" required
+                min="1" max="100" step="1" value="${r.max_games_per_channel || 10}" style="max-width:140px;" />
+              <div class="field-hint">Once a channel has this many open rounds,
+                <code>/risky start</code> is refused there until one finishes. Keeps a
+                busy channel from filling with half-played games.</div>
+            </div>
+          </div>
 
-    const form = document.createElement("form");
-    form.className = "form";
-    panel.appendChild(form);
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-status></span>
+          </div>
+        </form>
+      </div>
+    `;
 
-    // Ping role
-    const roleSel = mkSel("ping_role_id");
-    roleSel.appendChild(mkOpt("0", "(none)", r.ping_role_id === "0" || !r.ping_role_id));
-    for (const role of roles) {
-      roleSel.appendChild(mkOpt(role.id, "@" + role.name, role.id === r.ping_role_id));
-    }
-    form.appendChild(buildField(
-      "Ping Role",
-      roleSel,
-      "Role mentioned when a new round starts via /risky start. \"(none)\" disables the ping.",
-    ));
+    const form = container.querySelector("[data-form]");
+    const status = container.querySelector("[data-status]");
 
-    // Min game time — stored as seconds, edited as minutes
-    const minSecs = r.min_game_seconds || 0;
-    const minInp = document.createElement("input");
-    minInp.type = "number";
-    minInp.name = "min_game_minutes";
-    minInp.min = "0";
-    minInp.step = "1";
-    minInp.value = String(Math.round(minSecs / 60));
-    form.appendChild(buildField(
-      "Minimum Round Duration (minutes)",
-      minInp,
-      "How long a round must be open before it can be closed early. 0 disables the minimum.",
-    ));
+    const rolePicker = mountRolePicker(
+      form.querySelector('[data-picker="ping_role_id"]'),
+      roles, String(r.ping_role_id || "0"), { label: "Ping Role" },
+    );
 
-    // Max concurrent games per channel
-    const maxGamesInp = document.createElement("input");
-    maxGamesInp.type = "number";
-    maxGamesInp.name = "max_games_per_channel";
-    maxGamesInp.min = "1";
-    maxGamesInp.step = "1";
-    maxGamesInp.value = String(r.max_games_per_channel || 10);
-    form.appendChild(buildField(
-      "Max Concurrent Games Per Channel",
-      maxGamesInp,
-      "How many open rounds a single channel can have at once before /risky start is refused.",
-    ));
-
-    const row = document.createElement("div");
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "submit";
-    saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save";
-    const statusEl = document.createElement("span");
-    row.append(saveBtn, statusEl);
-    form.appendChild(row);
+    guardForm(form);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
       const mins = parseInt(fd.get("min_game_minutes"), 10);
-      if (!Number.isFinite(mins) || mins < 0) {
-        showStatus(statusEl, false, "Duration must be 0 or more");
+      if (!Number.isFinite(mins) || mins < 0 || mins > 1440) {
+        showStatus(status, false, "Minimum Round Length must be a number of minutes from 0 to 1440");
+        form.querySelector("[name=min_game_minutes]").focus();
         return;
       }
       const maxGames = parseInt(fd.get("max_games_per_channel"), 10);
-      if (!Number.isFinite(maxGames) || maxGames < 1) {
-        showStatus(statusEl, false, "Max concurrent games must be at least 1");
+      if (!Number.isFinite(maxGames) || maxGames < 1 || maxGames > 100) {
+        showStatus(status, false, "Rounds Running at Once must be a number from 1 to 100");
+        form.querySelector("[name=max_games_per_channel]").focus();
         return;
       }
       try {
         await apiPut("/api/config/risky", {
-          ping_role_id: fd.get("ping_role_id"),
+          // Role id stays a string; minutes are still converted back to the
+          // seconds the API stores.
+          ping_role_id: rolePicker.getValue() || "0",
           min_game_seconds: mins * 60,
           max_games_per_channel: maxGames,
         });
-        showStatus(statusEl, true);
+        showStatus(status, true);
       } catch (err) {
-        showStatus(statusEl, false, err.message);
+        showStatus(status, false, err.message);
       }
     });
-
-    container.appendChild(panel);
   })();
 }

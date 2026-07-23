@@ -1,46 +1,58 @@
-import { loadConfig, loadChannels, apiPut, showStatus, buildField } from "../config-helpers.js";
+import {
+  loadConfig,
+  loadChannels,
+  apiPut,
+  showStatus,
+  buildField,
+  mountChannelPicker,
+  mountChannelMultiPicker,
+  guardForm,
+  renderMetaWarning,
+} from "../config-helpers.js";
 
-function buildSelect(name, channels, selectedId, allowNone) {
-  const sel = document.createElement("select");
-  sel.name = name;
-  if (allowNone !== false) {
-    const none = document.createElement("option");
-    none.value = "0";
-    none.textContent = "(disabled)";
-    sel.appendChild(none);
+let _fieldSeq = 0;
+
+// buildField renders a bare <label>; tie it to its control by id so screen
+// readers announce the label and a label tap focuses the field (W-A7).
+function field(labelText, control, hint) {
+  const div = buildField(labelText, control, hint);
+  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
+    const id = control.id || `sb-field-${++_fieldSeq}`;
+    control.id = id;
+    div.querySelector("label").htmlFor = id;
   }
-  for (const ch of channels) {
-    const opt = document.createElement("option");
-    opt.value = ch.id;
-    opt.textContent = "#" + ch.name;
-    if (ch.id === selectedId) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  return sel;
+  return div;
 }
 
-function buildBoolSelect(name, value) {
-  const sel = document.createElement("select");
-  sel.name = name;
-  const optTrue = document.createElement("option");
-  optTrue.value = "true";
-  optTrue.textContent = "Enabled";
-  if (value) optTrue.selected = true;
-  const optFalse = document.createElement("option");
-  optFalse.value = "false";
-  optFalse.textContent = "Disabled";
-  if (!value) optFalse.selected = true;
-  sel.appendChild(optTrue);
-  sel.appendChild(optFalse);
-  return sel;
+// The one toggle idiom: a checkbox row plus a hint that states what changes.
+function toggleField(name, labelText, checked, hint) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lbl = document.createElement("label");
+  lbl.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.name = name;
+  box.checked = !!checked;
+  lbl.appendChild(box);
+  lbl.appendChild(document.createTextNode(labelText));
+  wrap.appendChild(lbl);
+  const h = document.createElement("div");
+  h.className = "field-hint";
+  h.textContent = hint;
+  wrap.appendChild(h);
+  return { wrap, box };
 }
 
 function buildNumberInput(name, min, value) {
   const inp = document.createElement("input");
   inp.type = "number";
   inp.name = name;
+  inp.required = true;
   inp.min = String(min);
+  inp.step = "1";
   inp.value = String(value);
+  inp.style.maxWidth = "140px";
   return inp;
 }
 
@@ -48,7 +60,9 @@ function buildTextInput(name, value, placeholder) {
   const inp = document.createElement("input");
   inp.type = "text";
   inp.name = name;
+  inp.required = true;
   inp.value = value;
+  inp.style.maxWidth = "140px";
   if (placeholder) inp.placeholder = placeholder;
   return inp;
 }
@@ -62,7 +76,7 @@ function appendLoading(container) {
   panel.className = "panel";
   const empty = document.createElement("div");
   empty.className = "empty";
-  empty.textContent = "Loading config…";
+  empty.textContent = "Loading starboard settings…";
   panel.appendChild(empty);
   container.appendChild(panel);
 }
@@ -74,7 +88,6 @@ export function mount(container) {
   (async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const s = config.starboard || {};
-    const excludedSet = new Set(s.excluded_channels || []);
 
     clearChildren(container);
     const panel = document.createElement("div");
@@ -86,50 +99,82 @@ export function mount(container) {
     h2.textContent = "Starboard";
     const sub = document.createElement("div");
     sub.className = "subtitle";
-    sub.textContent = "Repost popular messages to a starboard channel";
+    sub.textContent = "Copy messages your members react to the most into a hall-of-fame channel";
     header.appendChild(h2);
     header.appendChild(sub);
     panel.appendChild(header);
 
+    const warning = renderMetaWarning();
+    if (warning) {
+      const w = document.createElement("div");
+      w.innerHTML = warning;
+      panel.appendChild(w.firstElementChild);
+    }
+
+    // Master-toggle banner (W-C6): say plainly that nothing below applies.
+    const offBanner = document.createElement("div");
+    offBanner.className = "field-hint";
+    offBanner.setAttribute("role", "status");
+    offBanner.style.cssText =
+      "border:1px solid var(--rule); border-radius:6px; padding:10px; margin-bottom:14px; line-height:1.5;";
+    offBanner.textContent =
+      "Starboard is currently off — nothing below takes effect until you check "
+      + "\"Run the Starboard\" and save.";
+    panel.appendChild(offBanner);
+
     // ── Settings form ──────────────────────────────────────────────────
     const form = document.createElement("form");
-    form.className = "form";
+    form.className = "form form-cards";
     panel.appendChild(form);
 
-    form.appendChild(
-      buildField(
-        "Status",
-        buildBoolSelect("enabled", s.enabled !== false),
-        "When disabled, reactions are ignored.",
-      ),
+    const settingsCard = document.createElement("div");
+    settingsCard.className = "card";
+    const settingsLabel = document.createElement("div");
+    settingsLabel.className = "section-label";
+    settingsLabel.textContent = "Starboard Settings";
+    settingsCard.appendChild(settingsLabel);
+    form.appendChild(settingsCard);
+
+    const enabled = toggleField(
+      "enabled",
+      "Run the Starboard",
+      s.enabled !== false,
+      "When unchecked, reactions are ignored and nothing new is reposted. Messages already on the starboard stay there.",
+    );
+    settingsCard.appendChild(enabled.wrap);
+
+    function syncBanner() {
+      offBanner.style.display = enabled.box.checked ? "none" : "";
+    }
+    enabled.box.addEventListener("change", syncBanner);
+    syncBanner();
+
+    const chanSlot = document.createElement("span");
+    settingsCard.appendChild(field(
+      "Starboard Channel",
+      chanSlot,
+      "Where popular messages are reposted. Choose \"(disabled)\" and nothing is reposted anywhere.",
+    ));
+    // Snowflakes stay strings; "0" is the saved value meaning "no channel".
+    const chanPicker = mountChannelPicker(
+      chanSlot, channels, String(s.channel_id || "0"),
+      { emptyValue: "0", emptyLabel: "(disabled)", label: "Starboard Channel" },
     );
 
-    const chanSel = buildSelect("channel_id", channels, s.channel_id || "0");
-    form.appendChild(
-      buildField(
-        "Starboard Channel",
-        chanSel,
-        "Channel where starred messages are reposted.",
-      ),
-    );
+    settingsCard.appendChild(field(
+      "Reactions Needed",
+      buildNumberInput("threshold", 1, s.threshold ?? 3),
+      "How many people must react before a message is reposted. The author's own reaction doesn't count.",
+    ));
 
-    form.appendChild(
-      buildField(
-        "Threshold",
-        buildNumberInput("threshold", 1, s.threshold ?? 3),
-        "Minimum reactions required to post (excluding self-stars).",
-      ),
-    );
-
-    form.appendChild(
-      buildField(
-        "Emoji",
-        buildTextInput("emoji", s.emoji || "⭐", "⭐"),
-        "Reaction emoji that triggers the starboard.",
-      ),
-    );
+    settingsCard.appendChild(field(
+      "Reaction Emoji",
+      buildTextInput("emoji", s.emoji || "⭐", "⭐"),
+      "The emoji members react with to nominate a message. Any other emoji is ignored.",
+    ));
 
     const saveRow = document.createElement("div");
+    saveRow.style.cssText = "display:flex; gap:8px; align-items:center;";
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
     saveBtn.className = "btn btn-primary";
@@ -139,25 +184,30 @@ export function mount(container) {
     saveRow.appendChild(saveStatus);
     form.appendChild(saveRow);
 
+    guardForm(form);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
-      const threshold = parseInt(fd.get("threshold"), 10);
+      const rawThreshold = String(fd.get("threshold") ?? "").trim();
+      const threshold = parseInt(rawThreshold, 10);
       const emoji = String(fd.get("emoji") || "").trim();
-      if (!Number.isFinite(threshold) || threshold < 1) {
-        showStatus(saveStatus, false, "Threshold must be ≥ 1");
+      if (rawThreshold === "" || !Number.isFinite(threshold) || threshold < 1) {
+        showStatus(saveStatus, false, "Reactions Needed must be a whole number of 1 or more.");
+        form.querySelector('[name="threshold"]').focus();
         return;
       }
       if (!emoji) {
-        showStatus(saveStatus, false, "Emoji cannot be empty");
+        showStatus(saveStatus, false, "Reaction Emoji cannot be empty.");
+        form.querySelector('[name="emoji"]').focus();
         return;
       }
       try {
         await apiPut("/api/config/starboard", {
-          channel_id: fd.get("channel_id"),
+          channel_id: chanPicker.getValue() || "0",
           threshold,
           emoji,
-          enabled: fd.get("enabled") === "true",
+          enabled: enabled.box.checked,
         });
         showStatus(saveStatus, true);
       } catch (err) {
@@ -166,55 +216,47 @@ export function mount(container) {
     });
 
     // ── Excluded channels ──────────────────────────────────────────────
-    const exHeader = document.createElement("div");
-    exHeader.className = "section-label";
-    exHeader.textContent = "Excluded Channels";
-    panel.appendChild(exHeader);
-
     const exForm = document.createElement("form");
-    exForm.className = "form";
+    exForm.className = "form form-cards";
     panel.appendChild(exForm);
 
-    const exHint = document.createElement("div");
-    exHint.className = "field-hint";
-    exHint.style.marginBottom = "10px";
-    exHint.textContent = "Reactions in these channels are ignored by the starboard.";
-    exForm.appendChild(exHint);
+    const exCard = document.createElement("div");
+    exCard.className = "card";
+    const exLabel = document.createElement("div");
+    exLabel.className = "section-label";
+    exLabel.textContent = "Channels the Starboard Ignores";
+    exCard.appendChild(exLabel);
+    exForm.appendChild(exCard);
 
-    const exBox = document.createElement("div");
-    exBox.className = "checkbox-list";
-    for (const ch of channels) {
-      const lbl = document.createElement("label");
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.name = "excluded";
-      cb.value = ch.id;
-      if (excludedSet.has(ch.id)) cb.checked = true;
-      const txt = document.createTextNode(" #" + ch.name);
-      lbl.appendChild(cb);
-      lbl.appendChild(txt);
-      exBox.appendChild(lbl);
-    }
-    exForm.appendChild(exBox);
+    const exSlot = document.createElement("span");
+    exCard.appendChild(field(
+      "Ignored Channels",
+      exSlot,
+      "Reactions in these channels never put a message on the starboard — useful for private or spoiler rooms. Type to search, then click a channel to add it.",
+    ));
+    const exPicker = mountChannelMultiPicker(
+      exSlot, channels, s.excluded_channels || [],
+      { label: "Ignored Channels" },
+    );
 
     const exRow = document.createElement("div");
-    exRow.style.marginTop = "10px";
+    exRow.style.cssText = "display:flex; gap:8px; align-items:center;";
     const exBtn = document.createElement("button");
     exBtn.type = "submit";
     exBtn.className = "btn btn-primary";
-    exBtn.textContent = "Save Excluded Channels";
+    exBtn.textContent = "Save Ignored Channels";
     const exStatus = document.createElement("span");
     exRow.appendChild(exBtn);
     exRow.appendChild(exStatus);
     exForm.appendChild(exRow);
 
+    guardForm(exForm);
+
     exForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const checked = [...exForm.querySelectorAll('input[name="excluded"]:checked')].map(
-        (el) => el.value,
-      );
       try {
-        await apiPut("/api/config/starboard", { excluded_channels: checked });
+        // Same payload as before: a list of snowflake id strings.
+        await apiPut("/api/config/starboard", { excluded_channels: exPicker.getValues() });
         showStatus(exStatus, true);
       } catch (err) {
         showStatus(exStatus, false, err.message);

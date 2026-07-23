@@ -1509,12 +1509,29 @@ async def import_intake_reference(
     return {"ok": True, "blocks": blocks}
 
 
-@router.get("/config/welcome/preview")
+class WelcomePreviewBody(BaseModel):
+    """Optional on-screen field values to preview instead of the stored config.
+
+    Any field left as None falls back to the saved value, so the endpoint still
+    works with an empty body (previewing the stored config).
+    """
+
+    welcome_message: str | None = None
+    leave_message: str | None = None
+    server_guide_channel_id: str | None = None
+
+
+@router.post("/config/welcome/preview")
 async def welcome_preview(
     request: Request,
+    body: WelcomePreviewBody | None = None,
     user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
-    """Render welcome and leave embeds for the calling admin (used as a sample member)."""
+    """Render welcome and leave embeds for the calling admin (used as a sample member).
+
+    POSTed field values (the form's current, possibly-unsaved edits) take
+    precedence over stored config so the preview shows what the user typed.
+    """
     from bot_modules.services.welcome_service import (
         DEFAULT_LEAVE_MESSAGE,
         DEFAULT_WELCOME_MESSAGE,
@@ -1540,19 +1557,32 @@ async def welcome_preview(
     from bot_modules.bios.trigger import resolve_bio_placeholders
     from bot_modules.services.welcome_service import server_guide_mention_for
 
+    overrides = body or WelcomePreviewBody()
+
     def _q():
         with ctx.open_db() as conn:
-            wm = get_config_value(
-                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
+            wm = (
+                overrides.welcome_message
+                if overrides.welcome_message is not None
+                else get_config_value(
+                    conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
+                )
             )
-            lm = get_config_value(
-                conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+            lm = (
+                overrides.leave_message
+                if overrides.leave_message is not None
+                else get_config_value(
+                    conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+                )
             )
             bl, bcm = resolve_bio_placeholders(conn, guild_id)
+            raw_sgcid = (
+                overrides.server_guide_channel_id
+                if overrides.server_guide_channel_id is not None
+                else get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+            )
             try:
-                sgcid = int(
-                    get_config_value(conn, "server_guide_channel_id", "0", guild_id)
-                )
+                sgcid = int(raw_sgcid)
             except (TypeError, ValueError):
                 sgcid = 0
             return wm, lm, bl, bcm, sgcid

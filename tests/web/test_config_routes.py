@@ -1194,13 +1194,12 @@ def test_booster_post_panel_400_when_channel_not_text(authed_client, fake_ctx):
 
 
 def test_welcome_preview_503_when_bot_unavailable(authed_client):
-    resp = authed_client.get("/api/config/welcome/preview")
+    resp = authed_client.post("/api/config/welcome/preview", json={})
     assert resp.status_code == 503
 
 
-def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
-    """When the bot guild and the auth user are reachable, preview returns
-    rendered embed dicts for both welcome and leave."""
+def _welcome_preview_guild(fake_ctx):
+    """Wire a minimal bot/guild/member mock good enough for the preview route."""
     from unittest.mock import MagicMock
 
     guild = MagicMock()
@@ -1229,7 +1228,10 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
     bot = MagicMock()
     bot.get_guild = MagicMock(return_value=guild)
     fake_ctx.bot = bot
+    return guild
 
+
+def _post_preview(authed_client, payload):
     import discord
     from unittest.mock import AsyncMock, patch
 
@@ -1237,13 +1239,65 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
         "bot_modules.core.branding.resolve_accent_color",
         new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
-        resp = authed_client.get("/api/config/welcome/preview")
+        return authed_client.post("/api/config/welcome/preview", json=payload)
+
+
+def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
+    """When the bot guild and the auth user are reachable, preview returns
+    rendered embed dicts for both welcome and leave."""
+    _welcome_preview_guild(fake_ctx)
+
+    resp = _post_preview(authed_client, {})
     # 200 happy path; the route's build_*_embed helpers are exercised. If the
     # preview shape changes later, this is a useful regression bait.
     assert resp.status_code == 200
     body = resp.json()
     assert "welcome" in body
     assert "leave" in body
+
+
+def test_welcome_preview_uses_posted_values_over_stored(authed_client, fake_ctx):
+    """W-C3: the preview must reflect the form's current (unsaved) edits, not
+    the stored config — posted welcome/leave messages win over saved ones."""
+    from bot_modules.core.db_utils import set_config_value
+
+    _welcome_preview_guild(fake_ctx)
+
+    # Store different values so we can tell which source the preview used.
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "welcome_message", "STORED WELCOME", fake_ctx.guild_id)
+        set_config_value(conn, "leave_message", "STORED LEAVE", fake_ctx.guild_id)
+
+    resp = _post_preview(
+        authed_client,
+        {
+            "welcome_message": "UNSAVED WELCOME {member_name}",
+            "leave_message": "UNSAVED LEAVE",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "UNSAVED WELCOME" in body["welcome"]["description"]
+    assert "STORED WELCOME" not in body["welcome"]["description"]
+    assert "UNSAVED LEAVE" in body["leave"]["description"]
+    # Placeholders in posted values still resolve.
+    assert "tester" in body["welcome"]["description"]
+
+
+def test_welcome_preview_falls_back_to_stored_values(authed_client, fake_ctx):
+    """Fields omitted from the POST body fall back to the saved config."""
+    from bot_modules.core.db_utils import set_config_value
+
+    _welcome_preview_guild(fake_ctx)
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "welcome_message", "STORED WELCOME", fake_ctx.guild_id)
+
+    resp = _post_preview(authed_client, {"leave_message": "UNSAVED LEAVE"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "STORED WELCOME" in body["welcome"]["description"]
+    assert "UNSAVED LEAVE" in body["leave"]["description"]
 
 
 # ── PUT /api/config/guess — NSFW channel guard ─────────────────────────

@@ -142,7 +142,7 @@ async function refreshRentals(container, members) {
       </tr>`;
   }).join("");
   host.innerHTML = `
-    <div class="field-hint">Force-cancelling an active rental runs it to the end of the paid week (no refund); a grace-period rental is cancelled immediately.</div>
+    <div class="field-hint">Force-canceling an active rental runs it to the end of the paid week (no refund); a grace-period rental is canceled immediately.</div>
     <div style="overflow-x:auto;">
       <table class="data-table">
         <thead><tr><th>Member</th><th>Perk</th><th>State</th><th>price/wk (current)</th><th>Next bill</th><th>Gift to</th><th></th></tr></thead>

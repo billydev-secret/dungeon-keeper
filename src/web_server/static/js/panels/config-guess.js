@@ -1,53 +1,23 @@
-import { loadConfig, loadChannels, loadRoles, apiPut, showStatus } from "../config-helpers.js";
+import {
+  loadConfig,
+  loadChannels,
+  loadRoles,
+  apiPut,
+  showStatus,
+  guardForm,
+  renderMetaWarning,
+  mountChannelPicker,
+  mountRolePicker,
+} from "../config-helpers.js";
 
-function mkSel(name) {
-  const s = document.createElement("select");
-  s.name = name;
-  return s;
-}
-
-function mkOpt(value, text, selected) {
-  const o = document.createElement("option");
-  o.value = value;
-  o.textContent = text;
-  o.selected = !!selected;
-  return o;
-}
-
-function mkNum(name, min, value) {
-  const i = document.createElement("input");
-  i.type = "number";
-  i.name = name;
-  i.min = String(min);
-  i.value = String(value);
-  return i;
-}
-
-function mkField(labelText, ctrl, hint) {
-  const d = document.createElement("div");
-  d.className = "field";
-  const l = document.createElement("label");
-  l.textContent = labelText;
-  d.appendChild(l);
-  d.appendChild(ctrl);
-  if (hint) {
-    const h = document.createElement("div");
-    h.className = "field-hint";
-    h.textContent = hint;
-    d.appendChild(h);
-  }
-  return d;
-}
+const DIFFICULTIES = [
+  ["easy", "Easy — a generous crop, most people get it"],
+  ["medium", "Medium — a balanced crop"],
+  ["hard", "Hard — a tight crop, only the sharp-eyed get it"],
+];
 
 export function mount(container) {
-  container.textContent = "";
-  const wrap = document.createElement("div");
-  wrap.className = "panel";
-  const loading = document.createElement("div");
-  loading.className = "empty";
-  loading.textContent = "Loading config…";
-  wrap.appendChild(loading);
-  container.appendChild(wrap);
+  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
     const [config, channels, roles] = await Promise.all([
@@ -57,100 +27,133 @@ export function mount(container) {
     ]);
     const v = config.guess;
 
-    container.textContent = "";
-    const panel = document.createElement("div");
-    panel.className = "panel";
+    const num = (name, label, value, hint, { min = 0, max = 100000 } = {}) => `
+      <div class="field">
+        <label for="gs-${name}">${label}</label>
+        <input type="number" name="${name}" id="gs-${name}" required
+          min="${min}" max="${max}" step="1" value="${value}" style="max-width:140px;" />
+        <div class="field-hint">${hint}</div>
+      </div>`;
 
-    const hdr = document.createElement("header");
-    const h2 = document.createElement("h2");
-    h2.textContent = "Guess";
-    const sub = document.createElement("div");
-    sub.className = "subtitle";
-    sub.textContent = "NSFW guessing game settings";
-    hdr.append(h2, sub);
-    panel.appendChild(hdr);
+    container.innerHTML = `
+      <div class="panel">
+        <header>
+          <h2>Guess Who</h2>
+          <div class="subtitle">A guessing game built from cropped member-submitted images, for adults-only channels</div>
+        </header>
+        ${renderMetaWarning()}
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Where and Who</div>
+            <div class="field">
+              <label>Game Channel</label>
+              <span data-picker="channel_id"></span>
+              <div class="field-hint">Rounds are posted here. The game does nothing
+                until this is set — "(disabled)" turns it off. The channel must be
+                marked age-restricted in Discord; Dungeon Keeper refuses to post
+                anywhere else.</div>
+            </div>
+            <div class="field">
+              <label>Required Role</label>
+              <span data-picker="role_id"></span>
+              <div class="field-hint">Only members holding this role may submit
+                images. "(none)" lets anyone who can see the channel submit.</div>
+            </div>
+          </div>
 
-    const form = document.createElement("form");
-    form.className = "form";
-    panel.appendChild(form);
+          <div class="card">
+            <div class="section-label">Round Difficulty</div>
+            <div class="field">
+              <label for="gs-difficulty">Crop Difficulty</label>
+              <select name="crop_difficulty" id="gs-difficulty">
+                ${DIFFICULTIES.map(([val, label]) =>
+                  `<option value="${val}"${val === v.crop_difficulty ? " selected" : ""}>${label}</option>`).join("")}
+              </select>
+              <div class="field-hint">How tightly each round's image is cropped around
+                the detected region. Tighter crops make rounds harder and last
+                longer.</div>
+            </div>
+            ${num("guess_cooldown_seconds", "Wait Between Guesses (seconds)", v.guess_cooldown_seconds,
+              "How long one member must wait after guessing before guessing again. 0 removes the wait, which lets a fast typist brute-force a round.",
+              { min: 0, max: 3600 })}
+            ${num("max_guesses_per_round", "Guesses Per Round, Per Member", v.max_guesses_per_round,
+              "The most guesses one member may make on a single round. Keep it low so nobody can simply try every answer.",
+              { min: 1, max: 1000 })}
+          </div>
 
-    // Game Channel
-    const chSel = mkSel("channel_id");
-    chSel.appendChild(mkOpt("0", "(disabled)", v.channel_id === "0" || !v.channel_id));
-    for (const ch of channels) {
-      chSel.appendChild(mkOpt(ch.id, "#" + ch.name, ch.id === v.channel_id));
-    }
-    form.appendChild(mkField("Game Channel", chSel, "Channel where rounds are posted. Required for the game to work."));
+          <div class="card">
+            <div class="section-label">Image Submissions</div>
+            ${num("min_image_dimension_px", "Smallest Allowed Image (pixels)", v.min_image_dimension_px,
+              "Images narrower or shorter than this are rejected, because a tiny picture cropped down is unguessable.",
+              { min: 1, max: 10000 })}
+            ${num("max_image_size_mb", "Largest Allowed Image (megabytes)", v.max_image_size_mb,
+              "Images bigger than this are rejected, to keep uploads and storage in check.",
+              { min: 1, max: 100 })}
+            ${num("submit_max_per_window", "Submissions Allowed Per Member", v.submit_max_per_window,
+              "The most images one member may submit inside the time window below. This is the flood protection — beyond it, submissions are refused.",
+              { min: 1, max: 1000 })}
+            ${num("submit_window_seconds", "Submission Window (seconds)", v.submit_window_seconds,
+              "The rolling stretch of time the submission limit above is measured over.",
+              { min: 1, max: 86400 })}
+          </div>
 
-    // Required Role
-    const roleSel = mkSel("role_id");
-    roleSel.appendChild(mkOpt("0", "(none)", v.role_id === "0" || !v.role_id));
-    for (const r of roles) {
-      roleSel.appendChild(mkOpt(r.id, "@" + r.name, r.id === v.role_id));
-    }
-    form.appendChild(mkField("Required Role", roleSel, "Role required to submit images. \"(none)\" allows everyone."));
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-status></span>
+          </div>
+        </form>
+      </div>
+    `;
 
-    // Crop Difficulty
-    const diffSel = mkSel("crop_difficulty");
-    for (const d of ["easy", "medium", "hard"]) {
-      diffSel.appendChild(mkOpt(d, d.charAt(0).toUpperCase() + d.slice(1), d === v.crop_difficulty));
-    }
-    form.appendChild(mkField("Crop Difficulty", diffSel, "How tightly the crop frames the detected region."));
+    const form = container.querySelector("[data-form]");
+    const status = container.querySelector("[data-status]");
 
-    form.appendChild(mkField(
-      "Guess Cooldown (seconds)",
-      mkNum("guess_cooldown_seconds", 0, v.guess_cooldown_seconds),
-      "Per-user cooldown between guesses.",
-    ));
-    form.appendChild(mkField("Min Image Dimension (px)", mkNum("min_image_dimension_px", 1, v.min_image_dimension_px)));
-    form.appendChild(mkField("Max Image Size (MB)", mkNum("max_image_size_mb", 1, v.max_image_size_mb)));
+    const channelPicker = mountChannelPicker(
+      form.querySelector('[data-picker="channel_id"]'),
+      channels, String(v.channel_id || "0"), { label: "Game Channel" },
+    );
+    const rolePicker = mountRolePicker(
+      form.querySelector('[data-picker="role_id"]'),
+      roles, String(v.role_id || "0"), { label: "Required Role" },
+    );
 
-    form.appendChild(mkField(
-      "Submission Flood Cap",
-      mkNum("submit_max_per_window", 1, v.submit_max_per_window),
-      "Max images a member can submit within the flood-protection window below.",
-    ));
-    form.appendChild(mkField(
-      "Flood Window (seconds)",
-      mkNum("submit_window_seconds", 1, v.submit_window_seconds),
-      "Rolling window the submission flood cap applies over.",
-    ));
-    form.appendChild(mkField(
-      "Guesses Per Round Cap",
-      mkNum("max_guesses_per_round", 1, v.max_guesses_per_round),
-      "Max guesses a single member can make on one round (anti brute-force).",
-    ));
+    guardForm(form);
 
-    const row = document.createElement("div");
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "submit";
-    saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save";
-    const statusEl = document.createElement("span");
-    row.append(saveBtn, statusEl);
-    form.appendChild(row);
+    // Blank or out-of-range numbers used to post NaN and come back as a raw
+    // 422 naming no field — validate here and say which field is wrong.
+    const NUMS = [
+      ["guess_cooldown_seconds", "Wait Between Guesses", 0, 3600],
+      ["min_image_dimension_px", "Smallest Allowed Image", 1, 10000],
+      ["max_image_size_mb", "Largest Allowed Image", 1, 100],
+      ["submit_max_per_window", "Submissions Allowed Per Member", 1, 1000],
+      ["submit_window_seconds", "Submission Window", 1, 86400],
+      ["max_guesses_per_round", "Guesses Per Round, Per Member", 1, 1000],
+    ];
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
+      const payload = {
+        // Ids stay strings, same values the plain selects posted.
+        channel_id: channelPicker.getValue() || "0",
+        role_id: rolePicker.getValue() || "0",
+        crop_difficulty: fd.get("crop_difficulty"),
+      };
+      for (const [name, label, min, max] of NUMS) {
+        const n = parseInt(fd.get(name), 10);
+        if (!Number.isFinite(n) || n < min || n > max) {
+          showStatus(status, false, `${label} must be a number from ${min} to ${max}`);
+          form.querySelector(`[name=${name}]`).focus();
+          return;
+        }
+        payload[name] = n;
+      }
       try {
-        await apiPut("/api/config/guess", {
-          channel_id: fd.get("channel_id"),
-          role_id: fd.get("role_id"),
-          crop_difficulty: fd.get("crop_difficulty"),
-          guess_cooldown_seconds: parseInt(fd.get("guess_cooldown_seconds")) || 0,
-          min_image_dimension_px: parseInt(fd.get("min_image_dimension_px")) || 1,
-          max_image_size_mb: parseInt(fd.get("max_image_size_mb")) || 1,
-          submit_max_per_window: parseInt(fd.get("submit_max_per_window")) || 1,
-          submit_window_seconds: parseInt(fd.get("submit_window_seconds")) || 1,
-          max_guesses_per_round: parseInt(fd.get("max_guesses_per_round")) || 1,
-        });
-        showStatus(statusEl, true);
+        await apiPut("/api/config/guess", payload);
+        showStatus(status, true);
       } catch (err) {
-        showStatus(statusEl, false, err.message);
+        showStatus(status, false, err.message);
       }
     });
-
-    container.appendChild(panel);
   })();
 }

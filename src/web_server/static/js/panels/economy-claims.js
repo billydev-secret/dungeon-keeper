@@ -19,7 +19,7 @@ const STATES = [
 function nowSec() { return Date.now() / 1000; }
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Claims…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading claims…</div></div>`;
   (async () => {
     const members = await loadMembers().catch(() => []);
     render(container, members);
@@ -37,7 +37,8 @@ function render(container, members) {
     <div class="panel">
       <header>
         <h2>Claims</h2>
-        <div class="subtitle">Quest sign-off — approve or deny what members have claimed</div>
+        <div class="subtitle">Quests members say they have finished, waiting on your
+          approval before they are paid</div>
       </header>
 
       <section class="card">
@@ -59,17 +60,19 @@ function render(container, members) {
 
 function statusCell(c, members) {
   if (c.state === "pending") {
-    const denies = c.deny_count ? ` · ${c.deny_count} prior denies` : "";
-    return `pending${denies}`;
+    const denies = c.deny_count
+      ? ` · turned down ${c.deny_count} time${c.deny_count === 1 ? "" : "s"} before`
+      : "";
+    return `Waiting${denies}`;
   }
   const ago = c.resolved_at ? ` · ${fmtAge(nowSec() - c.resolved_at)} ago` : "";
   if (c.state === "paid") {
     const by = c.resolver_id ? ` by ${esc(memberName(members, c.resolver_id))}` : "";
-    return `<span class="badge">paid</span>${by}${ago}`;
+    return `<span class="badge">Paid</span>${by}${ago}`;
   }
   if (c.state === "denied") {
     const reason = c.deny_reason ? ` · <span title="${esc(c.deny_reason)}">${esc(c.deny_reason)}</span>` : "";
-    return `<span class="badge badge-warning">denied</span>${ago}${reason}`;
+    return `<span class="badge badge-warning">Turned down</span>${ago}${reason}`;
   }
   return `<span class="badge badge-dim">${esc(c.state)}</span>${ago}`;
 }
@@ -81,13 +84,13 @@ async function refreshClaims(container, members, state) {
     const params = state ? { state } : {};
     claims = (await api("/api/economy/claims", params)).claims;
   } catch (err) {
-    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    host.innerHTML = `<div class="error">The claims list failed to load: ${esc(err.message)}</div>`;
     return;
   }
   if (!claims.length) {
     host.innerHTML = `<div class="empty">${state === "pending"
-      ? "No pending claims — nothing needs you."
-      : "No claims here."}</div>`;
+      ? "Nothing is waiting for approval right now."
+      : "No claims match this filter."}</div>`;
     return;
   }
   const rows = claims.map((c) => `
@@ -99,7 +102,7 @@ async function refreshClaims(container, members, state) {
       <td>${statusCell(c, members)}</td>
       <td>${c.state === "pending" ? `
         <button class="btn btn-primary btn-sm" data-approve="${c.id}">Approve</button>
-        <button class="btn btn-ghost btn-sm" data-deny="${c.id}">Deny</button>
+        <button class="btn btn-ghost btn-sm" data-deny="${c.id}">Turn Down</button>
         <span class="save-status" data-claim-status="${c.id}"></span>` : ""}
       </td>
     </tr>`).join("");
@@ -128,11 +131,14 @@ async function refreshClaims(container, members, state) {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.deny;
       const status = host.querySelector(`[data-claim-status="${id}"]`);
-      const reason = await promptDialog("Reason for denial (shown to the claimant):", { confirmLabel: "Deny", required: true, danger: true });
+      const reason = await promptDialog(
+        "The member is not paid for this quest and is shown your reason. What should they be told?",
+        { title: "Turn down this claim?", confirmLabel: "Turn Down", required: true, danger: true },
+      );
       if (reason == null) return;
       try {
         await apiPost(`/api/economy/claims/${id}/deny`, { reason });
-        showStatus(status, true, "Denied");
+        showStatus(status, true, "Turned down");
         refreshClaims(container, members, state);
       } catch (err) {
         showStatus(status, false, err.message);

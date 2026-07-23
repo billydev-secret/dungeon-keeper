@@ -1,41 +1,51 @@
 import { api, apiPut, apiPost, apiDelete, request, esc } from "../api.js";
-import { showStatus } from "../config-helpers.js";
+import { showStatus, guardForm } from "../config-helpers.js";
+import { confirmDialog, promptDialog } from "../ui.js";
 
 // The perk-shop prices (the currency sinks). Moved here off the Settings page so
 // everything a member can spend on lives in one place. Faucet rates stay on the
-// Income Sources page. Each entry: [key, label, {min, hint}].
+// Income Sources page. Each entry: [key, label, {hint, max}] — `max` bounds both
+// the input and the client-side check that names the offending field on save.
 const PRICE_FIELDS = [
-  ["price_role_color", "Role color", {}],
-  ["price_role_name", "Role name", {}],
-  ["price_role_icon", "Role icon (custom upload)", {
-    hint: "Flat price when a member uploads their own icon. Curated catalog icons below are priced individually.",
+  ["price_role_color", "Role Color, Per Week", {
+    hint: "Weekly rent for picking a custom color on a member's own role. 0 makes it free.",
   }],
-  ["price_role_gradient", "Role gradient", {}],
-  ["price_role_holographic", "Role holographic", {
-    hint: "Discord's fixed holographic shimmer preset — a distinct, pricier tier than the two-colour gradient. Members pick nothing; renting it is the whole thing. Needs the server's enhanced role colours feature to render.",
+  ["price_role_name", "Role Name, Per Week", {
+    hint: "Weekly rent for naming their own role. 0 makes it free.",
   }],
-  ["price_voice_style", "Voice room lease", {
-    hint: "Weekly lease for Voice Master rename + user limit — this is the price members pay in the shop for their voice room. 0 (the default) keeps those controls free for everyone; setting a price is the launch switch, so announce before flipping it.",
+  ["price_role_icon", "Custom Role Icon, Per Week", {
+    hint: "Weekly rent when a member uploads an icon of their own. The curated catalog icons further down are priced one by one instead.",
+  }],
+  ["price_role_gradient", "Role Gradient, Per Week", {
+    hint: "Weekly rent for a two-color gradient on their role. 0 makes it free.",
+  }],
+  ["price_role_holographic", "Role Holographic Shimmer, Per Week", {
+    hint: "Discord's fixed holographic shimmer — a separate, pricier tier than the two-color gradient. There is nothing to pick; renting it is the whole perk. Your server needs Discord's enhanced role colors feature for it to show up at all.",
+  }],
+  ["price_voice_style", "Voice Room Lease, Per Week", {
+    hint: "Weekly rent for the Voice Master rename and user-limit controls. 0 (the default) leaves those controls free for everyone. Setting a price is what launches this as a paid perk, so tell members before you do.",
   }],
 ];
 
 // One-shot buys rather than weekly rentals — cheap enough to be an impulse,
 // which is the tier the rental ladder doesn't reach. Saved by the same form.
 const CONSUMABLE_FIELDS = [
-  ["price_quest_reroll", "Quest reroll", {
-    hint: "Charged per reroll after the free daily one. 0 disables paid rerolls (the free one stays).",
+  ["price_quest_reroll", "Quest Reroll", {
+    hint: "Charged each time a member swaps out a quest, after their free daily swap. 0 turns paid rerolls off — the free one stays either way.",
   }],
-  ["quest_reroll_daily_cap", "Paid rerolls / day", {
-    hint: "How many paid rerolls a member can buy per day, on top of the free one. 0 disables paid rerolls.",
+  ["quest_reroll_daily_cap", "Paid Rerolls Per Day", {
+    hint: "How many paid rerolls one member may buy in a day, on top of the free one. 0 turns paid rerolls off.",
+    max: 100,
   }],
-  ["price_streak_shield", "Streak shield", {
-    hint: "One-shot: auto-burned to save a login streak the free grace day can't. Members hold at most one. 0 removes it from the shop.",
+  ["price_streak_shield", "Streak Shield", {
+    hint: "A one-time buy that is spent automatically to rescue a login streak the free grace day cannot cover. A member can hold only one at a time. 0 removes it from the shop.",
   }],
-  ["price_pin_of_day", "Pin of the day", {
-    hint: "What /bank pin costs. A member pays to pin a short message; a mod approves it; the bot pins a card for 24h, then auto-unpins. 0 disables it. Also needs a pin channel set on the Economy config page — it's a public sink, so announce before switching it on. Charged at submit; declines and expired-unreviewed requests refund.",
+  ["price_pin_of_day", "Pin of the Day", {
+    hint: "What /bank pin costs. A member pays to pin a short message, a moderator approves it, and Dungeon Keeper pins a card for 24 hours before unpinning it again. 0 turns it off. It also needs a pin channel set on the Economy Settings page. Coins are taken when the request is sent and refunded if it is declined or expires unreviewed. This one is very public — tell members before switching it on.",
   }],
-  ["pin_expire_days", "Pin review window (days)", {
-    hint: "A pin request no mod approves or declines within this many days expires and refunds automatically. 0 keeps requests queued indefinitely.",
+  ["pin_expire_days", "Pin Review Window (days)", {
+    hint: "A pin request nobody approves or declines within this many days expires on its own and refunds the member. 0 leaves requests queued forever.",
+    max: 365,
   }],
 ];
 
@@ -44,20 +54,24 @@ const CONSUMABLE_FIELDS = [
 // is announced BY NAME — turning it on is a communications decision, not a
 // price tweak.
 const RAFFLE_FIELDS = [
-  ["price_raffle_ticket", "Ticket price", {}],
-  ["raffle_max_tickets", "Max tickets / member / week", {
-    hint: "Caps how much certainty one wallet can buy.",
+  ["price_raffle_ticket", "Ticket Price", {
+    hint: "What one raffle ticket costs.",
+  }],
+  ["raffle_max_tickets", "Tickets Per Member, Per Week", {
+    hint: "The most tickets one member may buy in a week — this is what stops the richest wallet simply buying the win.",
+    max: 10000,
   }],
 ];
 
 // Sponsored QOTD: a member pays to queue their own question; refunded if a mod
 // denies it or it expires unreviewed. Charged once at submit (not a rental).
 const QOTD_FIELDS = [
-  ["price_qotd_sponsor", "Sponsored question", {
-    hint: "Charged when a member submits a paid question; refunded on denial or if it expires unreviewed. 0 makes sponsoring free.",
+  ["price_qotd_sponsor", "Sponsored Question", {
+    hint: "Charged when a member submits a paid question of the day. Refunded if it is turned down or expires unreviewed. 0 lets members sponsor questions for free.",
   }],
-  ["qotd_sponsor_expire_days", "Review timeout (days)", {
-    hint: "A pending sponsored question nobody reviews refunds itself after this many days.",
+  ["qotd_sponsor_expire_days", "Review Window (days)", {
+    hint: "A sponsored question nobody has reviewed within this many days expires and refunds itself.",
+    max: 365,
   }],
 ];
 
@@ -66,31 +80,38 @@ const QOTD_FIELDS = [
 // Both default 0 (off) — like the raffle, turning either on is a
 // communications decision, so announce before setting a rate.
 const DEMURRAGE_FIELDS = [
-  ["demurrage_rate_pct", "Hoard tax rate (%)", {
-    hint: "Percent of the excess above the threshold collected at each weekly roll. 0 (the default) = off; 100 = a hard wealth cap at the threshold. Suggested ≈ 2.",
+  ["demurrage_rate_pct", "Hoard Tax Rate (percent)", {
+    hint: "The share of everything above the protected floor that is collected at each weekly roll. 0 (the default) turns the tax off; 100 makes the floor a hard wealth cap. Around 2 percent is a gentle setting.",
+    max: 100,
   }],
-  ["demurrage_threshold", "Protected floor", {
-    hint: "Balances at or below this are never touched — only the excess above it is taxed, so nobody can be taxed below the floor.",
+  ["demurrage_threshold", "Protected Floor", {
+    hint: "Balances at or below this figure are never touched — only what sits above it is taxed, so no member can ever be taxed below the floor.",
   }],
-  ["wager_rake_pct", "Wager rake (%)", {
-    hint: "House cut of each settled PvP wager pot (max 50). 0 (the default) keeps wagers a pure winner-takes-all transfer; refunds are never raked. The winner's payout names the cut.",
+  ["wager_rake_pct", "Wager Rake (percent)", {
+    hint: "The house's cut of each settled member-versus-member wager pot. 0 (the default) keeps wagers a straight winner-takes-all transfer. Refunded wagers are never raked, and the winner's payout message names the cut.",
+    max: 50,
   }],
-  ["bounty_rake_pct", "Bounty rake (%)", {
-    hint: "House cut when a community bounty is awarded (0–100). 0 (the default) means the winner takes the whole pot. Cancelled or expired bounties are never raked — every contributor is refunded in full. Set the board channel on the Economy config page to switch bounties on.",
+  ["bounty_rake_pct", "Bounty Rake (percent)", {
+    hint: "The house's cut when a community bounty is awarded. 0 (the default) means the winner takes the whole pot. Cancelled or expired bounties are never raked — every contributor gets everything back. Set the board channel on the Economy Settings page to switch bounties on at all.",
+    max: 100,
   }],
 ];
 
 // Sponsored emojis: weekly rentals opened by mod approval (queue below).
 const EMOJI_FIELDS = [
-  ["price_emoji", "Emoji / week", {
-    hint: "Weekly rent for a sponsored custom emoji, escrowed for week one at submit. 0 disables new sponsorships (running ones keep billing).",
+  ["price_emoji", "Sponsored Emoji, Per Week", {
+    hint: "Weekly rent for a member-sponsored custom emoji. The first week is held in escrow the moment they submit it. 0 stops new sponsorships; emojis already running keep being billed.",
   }],
-  ["price_emoji_animated", "Animated emoji / week", {}],
-  ["emoji_sponsor_slots", "Sponsored slots", {
-    hint: "Max sponsorships in flight (pending + live). Sponsors also never take the server's last free emoji slot.",
+  ["price_emoji_animated", "Sponsored Animated Emoji, Per Week", {
+    hint: "Weekly rent for an animated sponsored emoji. Animated slots are scarcer, so this normally costs more.",
   }],
-  ["emoji_sponsor_expire_days", "Review timeout (days)", {
-    hint: "A pending submission nobody reviews refunds itself after this many days.",
+  ["emoji_sponsor_slots", "Sponsored Emoji Slots", {
+    hint: "The most sponsorships that can be in flight at once, counting both those awaiting review and those already live. Sponsored emojis also never take the server's last free emoji slot.",
+    max: 200,
+  }],
+  ["emoji_sponsor_expire_days", "Review Window (days)", {
+    hint: "A submission nobody has reviewed within this many days expires and refunds itself.",
+    max: 365,
   }],
 ];
 
@@ -99,17 +120,28 @@ const ALL_NUM_FIELDS = [
   ...QOTD_FIELDS, ...DEMURRAGE_FIELDS,
 ];
 
-function numField(key, label, { hint } = {}, pricing) {
+// Every numeric field is capped somewhere so a typo can't create a price no
+// member could ever pay; DEFAULT_MAX applies where the field has no natural
+// ceiling of its own.
+const DEFAULT_MAX = 100000000;
+
+function fieldMax(opts) {
+  return opts && opts.max != null ? opts.max : DEFAULT_MAX;
+}
+
+function numField(key, label, opts = {}, pricing) {
+  const { hint } = opts;
   const hintHtml = hint ? `<div class="field-hint">${esc(hint)}</div>` : "";
   const suggested = pricing && pricing.hints ? pricing.hints[key] : null;
   const median = pricing ? Math.round(pricing.median || 0) : 0;
   const suggest = suggested != null
-    ? `<div class="field-hint">suggested ≈ ${suggested} (from median weekly income ${median})</div>`
+    ? `<div class="field-hint">Suggested: about ${suggested}, based on a median weekly income of ${median}.</div>`
     : "";
   return `
     <div class="field">
-      <label>${esc(label)}</label>
-      <input type="number" name="${key}" min="0" step="1" style="max-width:140px;" />
+      <label for="sink-${key}">${esc(label)}</label>
+      <input type="number" name="${key}" id="sink-${key}" required
+        min="0" max="${fieldMax(opts)}" step="1" style="max-width:140px;" />
       ${hintHtml}
       ${suggest}
     </div>`;
@@ -118,7 +150,7 @@ function numField(key, label, { hint } = {}, pricing) {
 function iconRow(icon) {
   const bust = Date.now();
   const usedBadge = icon.in_use
-    ? `<span class="badge" title="Members are renting this icon">in use</span>`
+    ? `<span class="badge" title="Members are renting this icon right now">In use</span>`
     : "";
   const enabledAttr = icon.enabled ? " checked" : "";
   return `
@@ -133,11 +165,11 @@ function iconRow(icon) {
         <input type="text" data-name maxlength="64" value="${esc(icon.name)}" style="max-width:200px;" />
       </div>
       <div class="field" style="margin:0;">
-        <label>Price / week</label>
-        <input type="number" data-price min="0" step="1" value="${icon.price}" style="max-width:120px;" />
+        <label>Price Per Week</label>
+        <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${icon.price}" style="max-width:120px;" />
       </div>
       <label style="display:flex;gap:6px;align-items:center;">
-        <input type="checkbox" data-enabled${enabledAttr} /> Enabled
+        <input type="checkbox" data-enabled${enabledAttr} /> Offer in the shop
       </label>
       ${usedBadge}
       <div style="display:flex;gap:8px;margin-left:auto;">
@@ -149,7 +181,7 @@ function iconRow(icon) {
 }
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading sinks…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading prices…</div></div>`;
 
   (async () => {
     const [cfg, metrics, icons] = await Promise.all([
@@ -164,15 +196,26 @@ export function mount(container) {
   })();
 }
 
+// The economy master switch lives on Economy Settings. With it off, nothing on
+// this page has any effect — say so instead of letting an admin price a shop
+// nobody can open (W-C6).
+export function economyOffBanner(cfg) {
+  if (cfg && cfg.enabled) return "";
+  return `<div class="empty" role="status" style="margin-bottom:12px;">
+    The economy is currently off, so nothing below takes effect until it is switched
+    on under <a href="#/economy-config">Economy Settings</a>.</div>`;
+}
+
 function render(container, cfg, pricing, icons) {
   container.innerHTML = `
     <div class="panel">
       <header>
         <h2>Sinks</h2>
-        <div class="subtitle">Everything members spend currency on — perk-shop prices and
-          the rentable icon catalog. Faucet rates live on
+        <div class="subtitle">Everything members can spend currency on — perk-shop prices
+          and the rentable icon catalog. What they earn is set on
           <a href="#/economy-income-sources">Income Sources</a>.</div>
       </header>
+      ${economyOffBanner(cfg)}
 
       <form class="form form-cards" data-price-form>
         <div class="card">
@@ -191,29 +234,36 @@ function render(container, cfg, pricing, icons) {
 
         <div class="card">
           <div class="section-label">Weekly Raffle</div>
-          <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
-            <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-              <input type="checkbox" name="raffle_enabled" /> Enabled
+          <div class="field" style="margin-bottom:8px;">
+            <label style="display:flex;gap:6px;align-items:center;">
+              <input type="checkbox" name="raffle_enabled" /> Run a weekly raffle
             </label>
+            <div class="field-hint">When checked, members can buy tickets and a winner
+              is drawn at the weekly roll. Unchecked, no tickets are sold and no draw
+              happens.</div>
+          </div>
+          <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
             ${RAFFLE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
           </div>
           <div class="field-hint">
-            Drawn at the ISO-week roll; the prize is a free weekly perk payment
-            (a voucher, never coins) and the winner is announced by name on the
-            leaderboard panel — announce the raffle before enabling it.
+            The draw happens when the week rolls over. The prize is one week of perks
+            paid for the winner — a voucher, never coins — and the winner is named
+            publicly on the leaderboard panel. Tell members the raffle exists before
+            you switch it on.
           </div>
         </div>
 
         <div class="card">
-          <div class="section-label">Evaporation — hoard tax &amp; wager rake</div>
+          <div class="section-label">Hoard Tax and Rakes</div>
           <div class="field-row" style="flex-wrap:wrap;">
             ${DEMURRAGE_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing)).join("")}
           </div>
           <div class="field-hint">
-            Both ship at 0 (off). The hoard tax is collected at the weekly roll
-            from wallets above the floor; the rake comes out of each settled
-            wager pot. Every collection shows in the register feed like any
-            other transaction — announce before setting either rate.
+            These are the dials that take currency back out of circulation, and all of
+            them start at 0, meaning off. The hoard tax is collected at the weekly roll
+            from wallets sitting above the protected floor; each rake comes out of a pot
+            as it settles. Every collection appears in the register feed like any other
+            transaction, so members will see it. Announce a rate before you set one.
           </div>
         </div>
 
@@ -232,7 +282,7 @@ function render(container, cfg, pricing, icons) {
         </div>
 
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit" class="btn btn-primary">Save Prices</button>
+          <button type="submit" class="btn btn-primary">Save</button>
           <span data-price-status></span>
         </div>
       </form>
@@ -240,45 +290,48 @@ function render(container, cfg, pricing, icons) {
       <section class="form card" style="margin-top:1.5rem;">
         <div class="section-label">Emoji Approval Queue</div>
         <div class="field-hint" style="margin-bottom:1rem;">
-          Member-sponsored emojis waiting for review. Approving uploads the
-          emoji and starts its weekly rental (the escrow already paid week
-          one); denying refunds in full. A lapsed rental takes the emoji down
-          automatically.
+          Emojis members have sponsored and paid for, waiting on your decision.
+          Approving uploads the emoji to the server and starts its weekly rent — the
+          first week is already paid. Turning one down refunds the member in full. If a
+          rental later lapses, the emoji comes back down on its own.
         </div>
         <div data-emoji-queue></div>
-        <div data-emoji-empty class="field-hint" style="display:none;">Nothing waiting.</div>
+        <div data-emoji-empty class="field-hint" style="display:none;">Nothing is waiting for review.</div>
       </section>
 
       <section class="form card" style="margin-top:1.5rem;">
         <div class="section-label">Rentable Icon Catalog</div>
         <div class="field-hint" style="margin-bottom:1rem;">
-          Curated role icons members rent from <code>/bank shop</code>, each with its own
-          weekly price. Renting bills the icon's price; a price change applies at the
-          renter's next weekly renewal. An icon that members are currently renting can't be
-          deleted — disable it instead, and current renters keep it. Images are downscaled to
-          a small PNG (Discord caps role icons at 256&nbsp;KB); requires the server to have
-          the Role Icons feature.
+          Role icons you curate, which members rent from <code>/bank shop</code> at whatever
+          price you give each one. A price change takes effect at each renter's next weekly
+          renewal, never mid-week. An icon somebody is currently renting cannot be deleted —
+          stop offering it instead, and the people already renting it keep it. Uploaded
+          images are shrunk to a small PNG, because Discord will not accept a role icon over
+          256&nbsp;kilobytes, and your server needs Discord's Role Icons feature for any of
+          this to appear.
         </div>
 
         <div data-catalog></div>
         <div data-catalog-empty class="field-hint" style="display:none;">
-          No catalog icons yet — add one below.
+          No icons in the catalog yet. Add one below and members will see it in the shop.
         </div>
 
         <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--border,#333);">
           <div class="section-label">Add an Icon</div>
           <div class="field-row" style="flex-wrap:wrap;align-items:flex-end;">
             <div class="field">
-              <label>Name</label>
-              <input type="text" data-add-name maxlength="64" placeholder="e.g. Golden crown" style="max-width:200px;" />
+              <label for="sink-add-name">Name</label>
+              <input type="text" id="sink-add-name" data-add-name maxlength="64" placeholder="e.g. Golden Crown" style="max-width:200px;" />
+              <div class="field-hint">What members see in the shop.</div>
             </div>
             <div class="field">
-              <label>Price / week</label>
-              <input type="number" data-add-price min="0" step="1" value="75" style="max-width:120px;" />
+              <label for="sink-add-price">Price Per Week</label>
+              <input type="number" id="sink-add-price" data-add-price min="0" max="${DEFAULT_MAX}" step="1" value="75" style="max-width:120px;" />
             </div>
             <div class="field">
-              <label>Image (PNG/WEBP)</label>
-              <input type="file" data-add-file accept="image/png,image/webp,image/jpeg,image/gif" />
+              <label for="sink-add-file">Image</label>
+              <input type="file" id="sink-add-file" data-add-file accept="image/png,image/webp,image/jpeg,image/gif" />
+              <div class="field-hint">A PNG, WEBP, JPEG, or GIF. Square images look best.</div>
             </div>
             <button type="button" class="btn btn-primary" data-add>Add Icon</button>
             <span data-add-status></span>
@@ -306,8 +359,8 @@ function emojiRow(sub) {
         <div class="field-hint">from <span data-member-id="${esc(sub.user_id)}">${esc(sub.user_id)}</span></div>
       </div>
       <div style="display:flex;gap:8px;margin-left:auto;">
-        <button type="button" class="btn btn-primary" data-approve>Approve &amp; upload</button>
-        <button type="button" class="btn btn-danger" data-deny>Deny</button>
+        <button type="button" class="btn btn-primary" data-approve>Approve and Upload</button>
+        <button type="button" class="btn btn-danger" data-deny>Turn Down</button>
       </div>
       <span data-row-status></span>
     </div>`;
@@ -342,12 +395,18 @@ function wireEmojiQueue(container) {
         const out = await apiPost(`/api/economy/emoji-submissions/${id}/approve`, {});
         showStatus(rowStatus, out.ok, out.ok ? "Live" : out.error);
       } else if (btn.hasAttribute("data-deny")) {
-        const reason = prompt("Reason (sent to the member):");
+        // Shared dialog rather than the browser's native prompt(), so it is
+        // themed, focus-trapped, and keyboard-accessible like every other
+        // confirmation on the dashboard.
+        const reason = await promptDialog(
+          "This member is refunded in full and sent your reason. What should they be told?",
+          { title: "Turn down this emoji?", confirmLabel: "Turn Down", danger: true },
+        );
         if (reason === null) { btn.disabled = false; return; }
         await apiPost(`/api/economy/emoji-submissions/${id}/deny`, {
           reason: reason.trim() || "not a fit for the server",
         });
-        showStatus(rowStatus, true, "Denied & refunded");
+        showStatus(rowStatus, true, "Turned down and refunded");
       }
       await refresh();
     } catch (err) {
@@ -364,11 +423,25 @@ function wirePrices(container, cfg) {
     form.querySelector(`[name=${key}]`).value = cfg[key];
   }
   form.querySelector("[name=raffle_enabled]").checked = !!cfg.raffle_enabled;
+
+  guardForm(form);
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const payload = {};
-    for (const [key] of ALL_NUM_FIELDS) {
-      payload[key] = parseInt(form.querySelector(`[name=${key}]`).value, 10);
+    // A blank box used to become NaN, then null, and came back as a raw
+    // "Input should be a valid integer" naming no field. Check here and say
+    // exactly which field is wrong (W-C5).
+    for (const [key, label, opts] of ALL_NUM_FIELDS) {
+      const input = form.querySelector(`[name=${key}]`);
+      const max = fieldMax(opts);
+      const n = parseInt(input.value, 10);
+      if (!Number.isFinite(n) || n < 0 || n > max) {
+        showStatus(status, false, `${label} must be a whole number from 0 to ${max}`);
+        input.focus();
+        return;
+      }
+      payload[key] = n;
     }
     payload.raffle_enabled = form.querySelector("[name=raffle_enabled]").checked;
     try {
@@ -399,12 +472,25 @@ function wireCatalog(container, icons) {
     const rowStatus = row.querySelector("[data-row-status]");
 
     if (btn.hasAttribute("data-save")) {
+      const nameInput = row.querySelector("[data-name]");
+      const priceInput = row.querySelector("[data-price]");
+      if (!nameInput.value.trim()) {
+        showStatus(rowStatus, false, "Name cannot be empty");
+        nameInput.focus();
+        return;
+      }
+      const price = parseInt(priceInput.value, 10);
+      if (!Number.isFinite(price) || price < 0 || price > DEFAULT_MAX) {
+        showStatus(rowStatus, false, `Price Per Week must be a whole number from 0 to ${DEFAULT_MAX}`);
+        priceInput.focus();
+        return;
+      }
       btn.disabled = true;
       try {
         await request("PATCH", `/api/economy/icon-catalog/${id}`, {
           body: {
-            name: row.querySelector("[data-name]").value.trim(),
-            price: parseInt(row.querySelector("[data-price]").value, 10),
+            name: nameInput.value.trim(),
+            price,
             enabled: row.querySelector("[data-enabled]").checked,
           },
         });
@@ -415,6 +501,16 @@ function wireCatalog(container, icons) {
         btn.disabled = false;
       }
     } else if (btn.hasAttribute("data-delete")) {
+      // Deleting throws away the curated icon AND the image that was uploaded
+      // for it, with no undo — every sibling flow confirms first (W-C9).
+      const iconName = row.querySelector("[data-name]").value.trim() || "this icon";
+      const ok = await confirmDialog(
+        `"${iconName}" and the image uploaded for it are deleted for good, and it disappears from the shop. `
+        + "This cannot be undone. To retire an icon while keeping it for current renters, "
+        + "clear \"Offer in the shop\" and save instead.",
+        { title: "Delete this icon?", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
       btn.disabled = true;
       try {
         await apiDelete(`/api/economy/icon-catalog/${id}`);
@@ -435,11 +531,25 @@ function wireCatalog(container, icons) {
     const name = container.querySelector("[data-add-name]");
     const price = container.querySelector("[data-add-price]");
     const file = container.querySelector("[data-add-file]");
-    if (!name.value.trim()) { showStatus(addStatus, false, "Name required"); return; }
-    if (!file.files.length) { showStatus(addStatus, false, "Pick an image"); return; }
+    if (!name.value.trim()) {
+      showStatus(addStatus, false, "Give the icon a Name first");
+      name.focus();
+      return;
+    }
+    if (!file.files.length) {
+      showStatus(addStatus, false, "Choose an Image first");
+      file.focus();
+      return;
+    }
+    const priceValue = parseInt(price.value, 10);
+    if (!Number.isFinite(priceValue) || priceValue < 0 || priceValue > DEFAULT_MAX) {
+      showStatus(addStatus, false, `Price Per Week must be a whole number from 0 to ${DEFAULT_MAX}`);
+      price.focus();
+      return;
+    }
     const fd = new FormData();
     fd.append("name", name.value.trim());
-    fd.append("price", parseInt(price.value, 10) || 0);
+    fd.append("price", priceValue);
     fd.append("image", file.files[0]);
     addBtn.disabled = true;
     showStatus(addStatus, true, "Uploading…");

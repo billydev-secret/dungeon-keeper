@@ -1,66 +1,54 @@
-import { loadConfig, apiPut, showStatus, buildField } from "../config-helpers.js";
+import { loadConfig, apiPut, showStatus, guardForm } from "../config-helpers.js";
 
 export function mount(container) {
-  container.textContent = "";
-  const loading = document.createElement("div");
-  loading.className = "panel";
-  loading.innerHTML = '<div class="empty">Loading config…</div>';
-  container.appendChild(loading);
+  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
     const config = await loadConfig();
     const p = config.policy || {};
     const currentHours = Number.isInteger(p.vote_timeout_hours) ? p.vote_timeout_hours : 72;
 
-    container.textContent = "";
-    const panel = document.createElement("div");
-    panel.className = "panel";
+    container.innerHTML = `
+      <div class="panel">
+        <header>
+          <h2>Policy Ticket Settings</h2>
+          <div class="subtitle">How long the moderator team has to vote on a policy proposal</div>
+        </header>
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Voting</div>
+            <div class="field">
+              <label for="pt-timeout">Voting Deadline (hours)</label>
+              <input type="number" name="vote_timeout_hours" id="pt-timeout" required
+                min="1" max="720" step="1" value="${currentHours}" style="max-width:140px;" />
+              <div class="field-hint">Once a proposal has been open this long, any
+                moderator who has not voted counts as absent and is left out of the
+                tally. A single "no" still rejects the proposal, and a proposal nobody
+                voted on fails. Longer deadlines give a scattered team time to weigh in;
+                shorter ones keep decisions moving.</div>
+            </div>
+          </div>
 
-    const header = document.createElement("header");
-    const h2 = document.createElement("h2");
-    h2.textContent = "Policy Tickets";
-    const sub = document.createElement("div");
-    sub.className = "subtitle";
-    sub.textContent = "Voting rules for policy proposals";
-    header.appendChild(h2);
-    header.appendChild(sub);
-    panel.appendChild(header);
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-status></span>
+          </div>
+        </form>
+      </div>
+    `;
 
-    const form = document.createElement("form");
-    form.className = "form";
+    const form = container.querySelector("[data-form]");
+    const status = container.querySelector("[data-status]");
+    const input = form.querySelector("[name=vote_timeout_hours]");
 
-    const input = document.createElement("input");
-    input.type = "number";
-    input.name = "vote_timeout_hours";
-    input.min = "1";
-    input.max = "720";
-    input.value = String(currentHours);
-    form.appendChild(
-      buildField(
-        "Vote Timeout (hours)",
-        input,
-        "After this many hours, mods who haven't voted are treated as absent and ignored. A 'no' from anyone still rejects; if nobody has voted, the policy fails.",
-      ),
-    );
-
-    const actions = document.createElement("div");
-    const submitBtn = document.createElement("button");
-    submitBtn.type = "submit";
-    submitBtn.className = "btn btn-primary";
-    submitBtn.textContent = "Save";
-    const status = document.createElement("span");
-    actions.appendChild(submitBtn);
-    actions.appendChild(status);
-    form.appendChild(actions);
-
-    panel.appendChild(form);
-    container.appendChild(panel);
+    guardForm(form);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const hours = parseInt(input.value, 10);
-      if (!hours || hours < 1) {
-        showStatus(status, false, "Hours must be at least 1");
+      if (!Number.isFinite(hours) || hours < 1 || hours > 720) {
+        showStatus(status, false, "Voting Deadline must be a number of hours from 1 to 720");
+        input.focus();
         return;
       }
       try {
