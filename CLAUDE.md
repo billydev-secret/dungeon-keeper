@@ -66,7 +66,8 @@ SQLite-backed. Tests in `tests/`.
   `*_service.py` code should land ~80% of its new lines exercised. Don't chase
   whole-repo line %; don't lower `fail_under` in pyproject.toml — raise it when a
   feature adds headroom. The scoped gate below **hard-fails** if a *new*
-  `*_logic.py` / `*_service.py` file has no mapped test.
+  logic-layer file (`logic.py`, `store.py`, `service.py`, or anything ending
+  `_logic.py` / `_service.py`) has no mapped test.
 
 ## Gates (before every commit)
 
@@ -76,7 +77,8 @@ SQLite-backed. Tests in `tests/`.
   `models/`, `migrations/`, deps, any `conftest.py`, `gate.py`) falls back to
   the full suite, so those commits pause longer; changed source with no
   matching test prints "unmapped (CI/nightly covers it)". A **new**
-  `*_logic.py`/`*_service.py` file with no mapped test is a hard failure, not a
+  logic-layer file (`logic.py`/`store.py`/`service.py`/`*_logic.py`/
+  `*_service.py`) with no mapped test is a hard failure, not a
   warning (add `tests/test_<feature>_logic.py`, or `--no-verify` if it's
   genuinely covered by an existing test under another name). `git commit
   --no-verify` bypasses the hook.

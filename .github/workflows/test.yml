@@ -43,11 +43,10 @@ jobs:
 
   # Frontend lint. The browser JS/CSS was never linted in CI (the pytest
   # eslint/stylelint items silently skip when node_modules is absent).
-  # This job runs them for real. Kept non-blocking (continue-on-error) for
-  # now — flip to blocking once it reports clean.
+  # This job runs them for real, and it is blocking: the deferral to
+  # continue-on-error was only ever meant to last until it reported clean.
   js-lint:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
