@@ -17,12 +17,22 @@ export function toast(message, type) {
   const el = document.createElement("div");
   el.className = "toast" + (type === "error" ? " toast-error" : type === "info" ? " toast-info" : "");
   if (type === "error") el.setAttribute("role", "alert");
-  el.textContent = message;
-  el.addEventListener("click", () => dismiss(el));
+  const msg = document.createElement("span");
+  msg.textContent = message;
+  el.appendChild(msg);
+  // Visually-quiet, keyboard-focusable dismiss control (clicking anywhere on
+  // the toast still dismisses; this gives keyboard/AT users a target).
+  const x = document.createElement("button");
+  x.type = "button";
+  x.className = "toast-x";
+  x.setAttribute("aria-label", "Dismiss");
+  x.textContent = "×";
+  x.style.cssText = "background:none;border:0;color:inherit;font:inherit;cursor:pointer;margin-left:10px;padding:0 2px;opacity:.7;";
+  el.appendChild(x);
+  const t = setTimeout(() => dismiss(el), type === "error" ? 6000 : 3500);
+  el.addEventListener("click", () => { clearTimeout(t); dismiss(el); });
   getToastWrap().appendChild(el);
   requestAnimationFrame(() => el.classList.add("show"));
-  const t = setTimeout(() => dismiss(el), type === "error" ? 6000 : 3500);
-  el.addEventListener("click", () => clearTimeout(t), { once: true });
 }
 
 function dismiss(el) {
@@ -68,19 +78,20 @@ function _mountModal(overlay, box, { initialFocus, onEscape }) {
 }
 
 export function confirmDialog(message, opts = {}) {
-  const { danger = false, confirmLabel = "Confirm" } = opts;
+  const { title, danger = false, confirmLabel = "Confirm" } = opts;
   return new Promise(resolve => {
     const overlay = document.createElement("div");
     overlay.className = "confirm-overlay";
     const msgId = `dlg-msg-${++_dialogSeq}`;
     overlay.innerHTML = `
       <div class="confirm-box" role="dialog" aria-modal="true" aria-labelledby="${msgId}">
-        <p id="${msgId}"></p>
+        ${title ? `<h3 id="${msgId}"></h3><p></p>` : `<p id="${msgId}"></p>`}
         <div class="confirm-actions">
           <button class="btn btn-ghost" data-cancel>Cancel</button>
           <button class="btn ${danger ? "btn-danger" : "btn-primary"}" data-confirm></button>
         </div>
       </div>`;
+    if (title) overlay.querySelector("h3").textContent = title;
     overlay.querySelector("p").textContent = message;
     overlay.querySelector("[data-confirm]").textContent = confirmLabel;
     const box = overlay.querySelector(".confirm-box");

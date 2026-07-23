@@ -121,8 +121,13 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
 
     card.appendChild(content);
 
-    // Tile click-through to report page (not in edit mode)
-    if (!opts.editMode && widget.nav) {
+    // Tile click-through to report page (not in edit mode). Several default
+    // widgets point at pages that live in moderator-only sections, so only
+    // offer the affordance when this user can actually open the target —
+    // otherwise the click lands on the "not available" notice (W-N9).
+    const navVisible =
+      widget.nav && (window.__dkVisiblePages?.has(widget.nav) ?? true);
+    if (!opts.editMode && navVisible) {
       card.style.cursor = "pointer";
       card.classList.add("home-card-clickable");
       card.addEventListener("click", () => {

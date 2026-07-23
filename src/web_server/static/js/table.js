@@ -11,11 +11,21 @@
  *     data: entries,           // array of objects
  *     defaultSort: "score",    // initial sort key
  *     defaultAsc: false,       // initial sort direction
+ *     emptyMsg: "No members match this filter.",
+ *                              // optional: styled empty state when data is
+ *                              // empty (omit to keep the legacy clear-to-
+ *                              // nothing behavior)
+ *     maxRows: 200,            // optional row cap; adds a "Showing first
+ *                              // N of M rows." footer when data exceeds it
  *   });
  */
+import { renderEmpty } from "./states.js";
 
-export function renderSortableTable(container, { columns, data, defaultSort, defaultAsc }) {
-  if (!data || !data.length) { container.innerHTML = ""; return; }
+export function renderSortableTable(container, { columns, data, defaultSort, defaultAsc, emptyMsg, maxRows }) {
+  if (!data || !data.length) {
+    container.innerHTML = emptyMsg ? renderEmpty(emptyMsg) : "";
+    return;
+  }
 
   let sortKey = defaultSort || columns[0].key;
   let sortAsc = defaultAsc ?? false;
@@ -33,7 +43,12 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
   }
 
   function render() {
-    const rows = sorted();
+    let rows = sorted();
+    let capNote = "";
+    if (maxRows && rows.length > maxRows) {
+      capNote = `<div class="field-hint" style="padding:6px 2px;">Showing first ${maxRows} of ${rows.length} rows.</div>`;
+      rows = rows.slice(0, maxRows);
+    }
     const headCells = columns.map((c) => {
       const cls = c.key === sortKey ? (sortAsc ? "sort-asc" : "sort-desc") : "";
       return `<th data-sort="${c.key}" class="${cls}">${c.label}</th>`;
@@ -53,7 +68,7 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
         <thead><tr>${headCells}</tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
-    `;
+    ${capNote}`;
   }
 
   render();

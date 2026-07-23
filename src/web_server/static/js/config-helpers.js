@@ -10,6 +10,62 @@ let _configCache = null;
 let _channels = null;
 let _roles = null;
 
+// ── Unsaved-changes tracker (W-C1) ─────────────────────────────────────
+// Contract (app.js consumes the window globals):
+//   - guardForm(form) — call once per panel mount on the form/container
+//     element; any `input` or `change` event inside it marks the page dirty.
+//   - window.__dkDirty()      → boolean: are there unsaved edits?
+//   - window.__dkDirtyReset() → clear the flag (app.js calls this after the
+//     user confirms discarding, and on every panel mount).
+//   - A successful save shown via showStatus(el, true, …) clears the flag.
+//   - A beforeunload handler (wired once, below) warns when dirty.
+let _dirty = false;
+
+window.__dkDirty = () => _dirty;
+window.__dkDirtyReset = () => { _dirty = false; };
+
+window.addEventListener("beforeunload", (e) => {
+  if (!_dirty) return;
+  e.preventDefault();
+  e.returnValue = ""; // legacy browsers need a non-null returnValue
+});
+
+/**
+ * Track unsaved edits on a config form. Attach once per panel mount to the
+ * form (or any container) element; edits inside it set the dirty flag that
+ * app.js checks before navigation/guild switches. Returns `form` for
+ * chaining. See the contract comment above.
+ */
+export function guardForm(form) {
+  const mark = () => { _dirty = true; };
+  form.addEventListener("input", mark);
+  form.addEventListener("change", mark);
+  return form;
+}
+
+// ── Meta loaders (W-C2: failures are remembered, never silently []) ────
+// A failed /api/meta/* fetch used to be swallowed to [] — legacy selects
+// then rendered "(disabled)" and an unrelated save posted "0" for every
+// channel/role field. Now: the failure is recorded (metaLoadFailed()),
+// nothing is cached so a remount retries, and the *Select builders below
+// fail SAFE by preserving the currently-saved id as a synthetic option.
+const _metaFailed = new Set();
+
+/** True when any /api/meta/* load has failed and not since succeeded. */
+export function metaLoadFailed() { return _metaFailed.size > 0; }
+
+/**
+ * Inline warning banner for panels to prepend when metaLoadFailed().
+ * Returns an HTML string ("" when everything loaded fine).
+ */
+export function renderMetaWarning() {
+  if (!metaLoadFailed()) return "";
+  return '<div class="meta-warning" role="alert" '
+    + 'style="color:var(--red);font-size:13px;margin:0 0 12px;">'
+    + "Channel and role lists failed to load. Your saved settings are kept, "
+    + "but reload the page before changing channel or role fields.</div>";
+}
+
 export async function loadConfig() {
   _configCache = await api("/api/config");
   return _configCache;
@@ -19,18 +75,48 @@ export function getCachedConfig() { return _configCache; }
 
 export async function loadChannels() {
   if (_channels) return _channels;
-  try { _channels = await api("/api/meta/channels"); } catch (_) { _channels = []; }
+  try {
+    _channels = await api("/api/meta/channels");
+    _metaFailed.delete("channels");
+  } catch (_) {
+    _metaFailed.add("channels");
+    return [];
+  }
   return _channels;
 }
 
 let _categories = null;
 export async function loadCategories() {
   if (_categories) return _categories;
-  try { _categories = await api("/api/meta/channels?types=category"); } catch (_) { _categories = []; }
+  try {
+    _categories = await api("/api/meta/channels?types=category");
+    _metaFailed.delete("categories");
+  } catch (_) {
+    _metaFailed.add("categories");
+    return [];
+  }
   return _categories;
 }
 
+// Fail-safe option HTML for legacy <select> builders when the backing meta
+// list failed to load: keep the saved id selected (so a save on an unrelated
+// field can't zero it) and surface the failure as a disabled option.
+function _failedSelectOptions(kind, selected, noneLabel) {
+  let html = "";
+  const id = String(selected || "0");
+  if (id !== "0") {
+    html += `<option value="${esc(id)}" selected>Current setting (id ${esc(id)})</option>`;
+  } else {
+    html += `<option value="0" selected>${noneLabel}</option>`;
+  }
+  html += `<option disabled>${kind} failed to load — reload before saving</option>`;
+  return html;
+}
+
 export function categorySelect(categories, selected, { allowNone = true } = {}) {
+  if (_metaFailed.has("categories") && !categories.length) {
+    return _failedSelectOptions("Categories", selected, "(none)");
+  }
   let html = allowNone ? '<option value="0">(none)</option>' : "";
   for (const c of categories) {
     const sel = c.id === selected ? " selected" : "";
@@ -41,14 +127,26 @@ export function categorySelect(categories, selected, { allowNone = true } = {}) 
 
 export async function loadRoles() {
   if (_roles) return _roles;
-  try { _roles = await api("/api/meta/roles"); } catch (_) { _roles = []; }
+  try {
+    _roles = await api("/api/meta/roles");
+    _metaFailed.delete("roles");
+  } catch (_) {
+    _metaFailed.add("roles");
+    return [];
+  }
   return _roles;
 }
 
 let _members = null;
 export async function loadMembers() {
   if (_members) return _members;
-  try { _members = await api("/api/meta/members"); } catch (_) { _members = []; }
+  try {
+    _members = await api("/api/meta/members");
+    _metaFailed.delete("members");
+  } catch (_) {
+    _metaFailed.add("members");
+    return [];
+  }
   return _members;
 }
 
@@ -85,6 +183,9 @@ function _normalizeIds(values) {
 
 // Mount a single-value searchable picker, replacing `slotEl`. `opts` is passed
 // through to filterSelect (so callers can supply `filter`, `emptyLabel`, etc.).
+// Pass `label` with the visible field label to give the search input an
+// accessible name (aria-label) — otherwise every picker announces only its
+// placeholder. Applies to every mount* helper below.
 export function mountPicker(slotEl, options, value, opts = {}) {
   const fs = filterSelect(opts.placeholder || "Type to filter…", options, opts);
   fs.setValue(value);
@@ -138,6 +239,9 @@ export function roleName(roles, id) {
 }
 
 export function channelSelect(channels, selected, { allowNone = true } = {}) {
+  if (_metaFailed.has("channels") && !channels.length) {
+    return _failedSelectOptions("Channels", selected, "(disabled)");
+  }
   let html = allowNone ? '<option value="0">(disabled)</option>' : "";
   for (const ch of channels) {
     const sel = ch.id === selected ? " selected" : "";
@@ -147,11 +251,25 @@ export function channelSelect(channels, selected, { allowNone = true } = {}) {
 }
 
 export function roleSelect(roles, selected, { allowNone = true } = {}) {
+  if (_metaFailed.has("roles") && !roles.length) {
+    return _failedSelectOptions("Roles", selected, "(none)");
+  }
   let html = allowNone ? '<option value="0">(none)</option>' : "";
   for (const r of roles) {
     const sel = r.id === selected ? " selected" : "";
     html += `<option value="${r.id}"${sel}>@${esc(r.name)}</option>`;
   }
+  return html;
+}
+
+// Fail-safe options for the legacy multi-selects: every saved id stays
+// selected so a save on an unrelated field can't drop the list.
+function _failedMultiOptions(kind, selectedIds) {
+  let html = "";
+  for (const id of selectedIds) {
+    html += `<option value="${esc(id)}" selected>Current setting (id ${esc(id)})</option>`;
+  }
+  html += `<option disabled>${kind} failed to load — reload before saving</option>`;
   return html;
 }
 
@@ -163,6 +281,9 @@ export function channelSelectMulti(channels, selected) {
       .map((s) => String(s).trim())
       .filter(Boolean),
   );
+  if (_metaFailed.has("channels") && !channels.length) {
+    return _failedMultiOptions("Channels", selectedIds);
+  }
   let html = "";
   for (const ch of channels) {
     const sel = selectedIds.has(ch.id) ? " selected" : "";
@@ -179,6 +300,9 @@ export function roleSelectMulti(roles, selected) {
       .map((s) => String(s).trim())
       .filter(Boolean),
   );
+  if (_metaFailed.has("roles") && !roles.length) {
+    return _failedMultiOptions("Roles", selectedIds);
+  }
   let html = "";
   for (const r of roles) {
     const sel = selectedIds.has(r.id) ? " selected" : "";
@@ -197,6 +321,7 @@ export async function saveSection(section, body) {
 }
 
 export function showStatus(el, ok, msg) {
+  if (ok) _dirty = false; // a successful save clears the unsaved-edits flag
   el.className = `save-status ${ok ? "save-ok" : "save-err"}`;
   el.textContent = msg || (ok ? "Saved" : "Error");
   // Errors linger longer than successes, but both clear — a stale "Error"

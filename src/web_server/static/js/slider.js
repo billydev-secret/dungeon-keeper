@@ -68,6 +68,25 @@ export function mountTimeSlider(parent, { totalPoints, labels, onChange }) {
   loInput.addEventListener("input", clampAndEmit);
   hiInput.addEventListener("input", clampAndEmit);
 
+  // The range inputs are pointer-events:none except their thumbs (so the two
+  // overlaid sliders don't fight), which left only the 14px thumbs grabbable.
+  // Make the rest of the track clickable: jump the nearest thumb to the
+  // clicked position (W-A6).
+  const track = el.querySelector(".time-slider-track");
+  track.addEventListener("pointerdown", (e) => {
+    if (e.target === loInput || e.target === hiInput) return; // thumb drag
+    const r = track.getBoundingClientRect();
+    if (!r.width) return;
+    const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const idx = Math.round(frac * (totalPoints - 1));
+    const lo = parseInt(loInput.value);
+    const hi = parseInt(hiInput.value);
+    const target = Math.abs(idx - lo) <= Math.abs(idx - hi) ? loInput : hiInput;
+    target.value = idx;
+    clampAndEmit.call(target);
+    target.focus();
+  });
+
   updateFill();
 
   return {

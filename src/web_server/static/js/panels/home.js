@@ -122,9 +122,32 @@ export function mount(container) {
     `;
   }
 
+  // A 136-panel dashboard needs a "start here" for people seeing it for the
+  // first time. Shown to admins (who do the setup) until dismissed (W-H3).
+  const HINT_KEY = "dk_home_hint_dismissed";
+
+  function renderHint() {
+    if (!isAdmin) return "";
+    try {
+      if (localStorage.getItem(HINT_KEY) === "1") return "";
+    } catch (_) {}
+    return `
+      <div class="home-hint">
+        <p>New here? The First-Time Setup guide walks through the settings worth
+           configuring before you invite members.</p>
+        <a class="btn" href="#/help-start">Open Setup Guide</a>
+        <button class="home-hint-x" type="button" aria-label="Dismiss">&times;</button>
+      </div>`;
+  }
+
   async function render() {
     const panel = container.querySelector(".panel");
-    panel.innerHTML = renderHeader() + '<div class="home-grid"></div>';
+    panel.innerHTML = renderHeader() + renderHint() + '<div class="home-grid"></div>';
+
+    panel.querySelector(".home-hint-x")?.addEventListener("click", () => {
+      try { localStorage.setItem(HINT_KEY, "1"); } catch (_) {}
+      panel.querySelector(".home-hint")?.remove();
+    });
 
     const gridEl = panel.querySelector(".home-grid");
     if (editMode) gridEl.classList.add("edit-mode");
