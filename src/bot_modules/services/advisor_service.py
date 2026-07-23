@@ -37,11 +37,16 @@ from bot_modules.games.utils.ai_client import get_client
 log = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5"
+# Staff (mods/admins) get a stronger default: their asks are the ones that run
+# the multi-round config tool loop, where the weaker model costs more in wrong
+# turns than the price difference saves.
+STAFF_MODEL = "claude-sonnet-5"
 
-# Model is configurable per-guild from the dashboard "Billy-bot" panel.
+# Both models are configurable per-guild from the dashboard "Billy-bot" panel.
 ADVISOR_MODEL_KEY = "advisor_model"
+ADVISOR_STAFF_MODEL_KEY = "advisor_staff_model"
 ADVISOR_MODELS: list[dict[str, str]] = [
-    {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5 — fast & cheap (default)"},
+    {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5 — fast & cheap"},
     {"id": "claude-sonnet-5", "label": "Claude Sonnet 5 — higher quality"},
     {"id": "claude-opus-4-8", "label": "Claude Opus 4.8 — highest quality, priciest"},
 ]
@@ -49,16 +54,47 @@ _MODEL_IDS = {m["id"] for m in ADVISOR_MODELS}
 
 
 def get_advisor_model(conn: sqlite3.Connection, guild_id: int = 0) -> str:
-    """Return the guild's configured advisor model, or the default."""
+    """Return the guild's configured advisor model for regular members."""
     val = get_config_value(conn, ADVISOR_MODEL_KEY, MODEL, guild_id)
     return val if val in _MODEL_IDS else MODEL
 
 
 def set_advisor_model(conn: sqlite3.Connection, model: str, guild_id: int = 0) -> None:
-    """Persist the guild's advisor model. Raises ValueError on an unknown id."""
+    """Persist the guild's member advisor model. ValueError on an unknown id."""
     if model not in _MODEL_IDS:
         raise ValueError(f"unknown advisor model: {model}")
     set_config_value(conn, ADVISOR_MODEL_KEY, model, guild_id)
+
+
+def get_advisor_staff_model(conn: sqlite3.Connection, guild_id: int = 0) -> str:
+    """Return the guild's configured advisor model for mods/admins."""
+    val = get_config_value(conn, ADVISOR_STAFF_MODEL_KEY, STAFF_MODEL, guild_id)
+    return val if val in _MODEL_IDS else STAFF_MODEL
+
+
+def set_advisor_staff_model(
+    conn: sqlite3.Connection, model: str, guild_id: int = 0
+) -> None:
+    """Persist the guild's staff advisor model. ValueError on an unknown id."""
+    if model not in _MODEL_IDS:
+        raise ValueError(f"unknown advisor model: {model}")
+    set_config_value(conn, ADVISOR_STAFF_MODEL_KEY, model, guild_id)
+
+
+def resolve_advisor_model(
+    conn: sqlite3.Connection, guild_id: int = 0, *, staff: bool = False
+) -> str:
+    """Pick the model for one ask, by who is asking.
+
+    ``staff`` is ``advisor_context.is_staff(member)`` — mods and admins, a wider
+    net than the admin-only config gate, since a mod's how-do-I question is
+    still the kind that benefits from the better model.
+    """
+    return (
+        get_advisor_staff_model(conn, guild_id)
+        if staff
+        else get_advisor_model(conn, guild_id)
+    )
 
 
 # Live per-server context (channel topics, pins, announcements, server docs) is

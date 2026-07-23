@@ -48,6 +48,7 @@ async def help_advisor(
         build_asker_context,
         can_see_config,
         fetch_feature_settings,
+        is_staff,
         visible_text_channels,
     )
     from bot_modules.services.advisor_service import (
@@ -55,8 +56,8 @@ async def help_advisor(
         AdvisorTools,
         answer_advisor,
         get_advisor_context_enabled,
-        get_advisor_model,
         get_advisor_tools_enabled,
+        resolve_advisor_model,
     )
 
     ctx = get_ctx(request)
@@ -68,15 +69,16 @@ async def help_advisor(
     tools = None
     channels: dict[str, str] = {}
     if guild is not None:
+        # Resolve the dashboard user to a guild member up front: it decides
+        # which model handles the ask, and (when live context is on) scopes the
+        # context to what THEY can see. Falls back to public (@everyone) when
+        # they aren't a resolvable member.
+        member = guild.get_member(user.user_id)
         with ctx.open_db() as conn:
-            model = get_advisor_model(conn, guild_id)
+            model = resolve_advisor_model(conn, guild_id, staff=is_staff(member))
             context_on = get_advisor_context_enabled(conn, guild_id)
             tools_on = get_advisor_tools_enabled(conn, guild_id)
         if context_on:
-            # Resolve the dashboard user to a guild member so the context is
-            # scoped to what THEY can see; fall back to public (@everyone) if
-            # they aren't a resolvable member.
-            member = guild.get_member(user.user_id)
             # Admins get on-demand settings lookup instead of the inline dump.
             # Read-only here: the dashboard edits settings in its own panels,
             # and the confirm-button flow only exists on the Discord surface.
@@ -110,6 +112,7 @@ async def help_advisor(
 
 class AdvisorConfigBody(BaseModel):
     model: str
+    staff_model: str
     server_context: bool
 
 
@@ -123,6 +126,7 @@ async def get_advisor_config(
         ADVISOR_MODELS,
         get_advisor_context_enabled,
         get_advisor_model,
+        get_advisor_staff_model,
     )
 
     ctx = get_ctx(request)
@@ -131,6 +135,7 @@ async def get_advisor_config(
         with ctx.open_db() as conn:
             return {
                 "model": get_advisor_model(conn, guild_id),
+                "staff_model": get_advisor_staff_model(conn, guild_id),
                 "server_context": get_advisor_context_enabled(conn, guild_id),
             }
 
@@ -148,6 +153,7 @@ async def put_advisor_config(
     from bot_modules.services.advisor_service import (
         set_advisor_context_enabled,
         set_advisor_model,
+        set_advisor_staff_model,
     )
 
     ctx = get_ctx(request)
@@ -155,6 +161,7 @@ async def put_advisor_config(
     def _q():
         with ctx.open_db() as conn:
             set_advisor_model(conn, body.model, guild_id)
+            set_advisor_staff_model(conn, body.staff_model, guild_id)
             set_advisor_context_enabled(conn, body.server_context, guild_id)
 
     try:

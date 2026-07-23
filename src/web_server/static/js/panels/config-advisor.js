@@ -13,12 +13,13 @@ export function mount(container) {
       return;
     }
 
-    const options = (cfg.models || [])
-      .map(
-        (m) =>
-          `<option value="${esc(m.id)}" ${m.id === cfg.model ? "selected" : ""}>${esc(m.label)}</option>`,
-      )
-      .join("");
+    const optionsFor = (selected) =>
+      (cfg.models || [])
+        .map(
+          (m) =>
+            `<option value="${esc(m.id)}" ${m.id === selected ? "selected" : ""}>${esc(m.label)}</option>`,
+        )
+        .join("");
 
     container.innerHTML = `
       <div class="panel">
@@ -28,9 +29,14 @@ export function mount(container) {
         </header>
         <form class="form" data-form>
           <div class="field">
-            <label>Model</label>
-            <select name="model">${options}</select>
-            <div class="field-hint">Which Claude model answers questions. Haiku is the default — fastest and cheapest, and plenty for grounded help. Bump to Sonnet 5 for higher quality, or Opus for the best (and priciest).</div>
+            <label>Model — members</label>
+            <select name="model">${optionsFor(cfg.model)}</select>
+            <div class="field-hint">Which Claude model answers regular members. Haiku is the default — fastest and cheapest, and plenty for grounded help.</div>
+          </div>
+          <div class="field">
+            <label>Model — mods &amp; admins</label>
+            <select name="staff_model">${optionsFor(cfg.staff_model)}</select>
+            <div class="field-hint">Which model answers anyone with a moderator or admin permission. Defaults to Sonnet 5: staff asks are the ones that look up and change settings, where a stronger model pays for itself. Set it to Haiku to treat everyone the same.</div>
           </div>
           <div class="field">
             <label><input type="checkbox" name="server_context" ${cfg.server_context ? "checked" : ""} /> Use live server context</label>
@@ -56,6 +62,7 @@ export function mount(container) {
       try {
         await apiPut("/api/config/advisor", {
           model: form.querySelector('select[name="model"]').value,
+          staff_model: form.querySelector('select[name="staff_model"]').value,
           server_context: form.querySelector('input[name="server_context"]').checked,
         });
         showStatus(status, true, "Saved");

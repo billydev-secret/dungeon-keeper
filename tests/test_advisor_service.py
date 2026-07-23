@@ -149,6 +149,55 @@ def test_set_advisor_model_roundtrip_and_validation():
     assert raised
 
 
+def test_get_advisor_staff_model_defaults_to_sonnet_and_ignores_unknown():
+    conn = _config_conn()
+    assert adv.get_advisor_staff_model(conn) == adv.STAFF_MODEL == "claude-sonnet-5"
+    conn.execute("INSERT INTO config VALUES (0, 'advisor_staff_model', 'bogus')")
+    assert adv.get_advisor_staff_model(conn) == adv.STAFF_MODEL
+
+
+def test_set_advisor_staff_model_roundtrip_and_validation():
+    conn = _config_conn()
+    adv.set_advisor_staff_model(conn, "claude-opus-4-8")
+    assert adv.get_advisor_staff_model(conn) == "claude-opus-4-8"
+    # The member model is a separate key and must not move with it.
+    assert adv.get_advisor_model(conn) == adv.MODEL
+    try:
+        adv.set_advisor_staff_model(conn, "not-a-model")
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+
+def test_resolve_advisor_model_tiers_by_asker():
+    conn = _config_conn()
+    # Defaults: members on Haiku, staff on Sonnet.
+    assert adv.resolve_advisor_model(conn, staff=False) == "claude-haiku-4-5"
+    assert adv.resolve_advisor_model(conn, staff=True) == "claude-sonnet-5"
+    # Each tier is independently configurable.
+    adv.set_advisor_model(conn, "claude-sonnet-5")
+    adv.set_advisor_staff_model(conn, "claude-opus-4-8")
+    assert adv.resolve_advisor_model(conn, staff=False) == "claude-sonnet-5"
+    assert adv.resolve_advisor_model(conn, staff=True) == "claude-opus-4-8"
+
+
+def test_resolve_advisor_model_is_per_guild():
+    conn = _config_conn()
+    adv.set_advisor_staff_model(conn, "claude-opus-4-8", 42)
+    assert adv.resolve_advisor_model(conn, 42, staff=True) == "claude-opus-4-8"
+    # A different guild keeps the default rather than inheriting guild 42's pick.
+    assert adv.resolve_advisor_model(conn, 99, staff=True) == adv.STAFF_MODEL
+
+
+def test_advisor_staff_model_defaults_to_stronger_than_member_model():
+    """The whole point of the tier: staff must not silently get the cheap model."""
+    conn = _config_conn()
+    assert adv.resolve_advisor_model(conn, staff=True) != adv.resolve_advisor_model(
+        conn, staff=False
+    )
+
+
 def test_server_context_toggle_defaults_off():
     conn = _config_conn()
     assert adv.get_advisor_context_enabled(conn) is False

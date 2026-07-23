@@ -32,14 +32,15 @@ from bot_modules.services.advisor_context import (
     build_asker_context,
     can_see_config,
     fetch_feature_settings,
+    is_staff,
 )
 from bot_modules.services.advisor_service import (
     MODEL,
     AdvisorTools,
     answer_advisor,
     get_advisor_context_enabled,
-    get_advisor_model,
     get_advisor_tools_enabled,
+    resolve_advisor_model,
 )
 
 if TYPE_CHECKING:
@@ -158,16 +159,18 @@ class AdvisorCog(commands.Cog):
         proposals: list[ConfigProposal] = []
         if guild is not None:
             db_path = self.ctx.db_path
+            member = (
+                interaction.user
+                if isinstance(interaction.user, discord.Member)
+                else None
+            )
             with open_db(db_path) as conn:
-                model = get_advisor_model(conn, guild.id)
+                # Staff asks get the stronger model whether or not live context
+                # is on — the tiering is about answer quality, not context.
+                model = resolve_advisor_model(conn, guild.id, staff=is_staff(member))
                 context_on = get_advisor_context_enabled(conn, guild.id)
                 tools_on = get_advisor_tools_enabled(conn, guild.id)
             if context_on:
-                member = (
-                    interaction.user
-                    if isinstance(interaction.user, discord.Member)
-                    else None
-                )
                 if tools_on and member is not None and can_see_config(member):
                     tools = _make_tools(guild, member, db_path, proposals)
                 # Tools replace the inline settings dump; the rest of the
