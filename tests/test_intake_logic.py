@@ -512,14 +512,17 @@ def test_report_skipped_steps(db_path):
 # ── watch registry ────────────────────────────────────────────────────
 
 
-def test_warm_only_seeds_enabled_guilds(db_path):
+def test_warm_seeds_open_cards_even_when_disabled(db_path):
+    # Regression: warm() used to skip disabled guilds, stranding open cards
+    # as zombies across a disable → restart → enable cycle (no auto-ticks,
+    # no leave/ban close). Open cards are watched regardless of the flag.
     with open_db(db_path) as conn:
         _enable(conn)
         svc.create_card(conn, GUILD, NEWCOMER, 100.0)
-        svc.create_card(conn, 99, 5, 100.0)  # guild 99 stays dark
+        svc.create_card(conn, 99, 5, 100.0)  # guild 99 is dark but carded
     svc.warm(db_path, [GUILD, 99])
     assert svc.is_watched(GUILD, NEWCOMER) is True
-    assert svc.is_watched(99, 5) is False
+    assert svc.is_watched(99, 5) is True
 
 
 def test_warm_excludes_resolved_cards(db_path):

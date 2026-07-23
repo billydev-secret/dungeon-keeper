@@ -653,12 +653,21 @@ def open_card_user_ids(conn: sqlite3.Connection, guild_id: int) -> set[int]:
 
 
 def warm(db_path, guild_ids) -> None:
-    """Seed the watch registry at startup for every enabled guild."""
+    """Seed the watch registry at startup with every open card, enabled or
+    not.
+
+    Deliberately NOT filtered on :func:`is_enabled`: the hooks re-check
+    config for behavior that should pause while disabled (greet/code/role
+    ticks), but open cards must keep closing on leave/ban — and resume
+    ticking after a re-enable — even across a disable → restart → enable
+    cycle. Filtering here stranded such cards as zombies.
+    """
     with open_db(db_path) as conn:
         seeded: dict[int, set[int]] = {}
         for gid in guild_ids:
-            if is_enabled(conn, gid):
-                seeded[gid] = open_card_user_ids(conn, gid)
+            ids = open_card_user_ids(conn, gid)
+            if ids:
+                seeded[gid] = ids
     with _lock:
         _watch.clear()
         _watch.update(seeded)

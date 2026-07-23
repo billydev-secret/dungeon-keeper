@@ -620,7 +620,12 @@ class EventsCog(commands.Cog):
         ):
             from bot_modules.services.intake_views import handle_intake_message
 
-            await handle_intake_message(self.ctx, message)
+            # Guarded: an intake failure must never abort the rest of the
+            # pipeline (spoiler enforcement, wellness, persistence, XP).
+            try:
+                await handle_intake_message(self.ctx, message)
+            except Exception:
+                log.exception("intake: message hook failed in guild %s", guild_id)
 
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
@@ -1470,13 +1475,14 @@ class EventsCog(commands.Cog):
             and cfg.unverified_role_id in (before_ids - after_ids)
             and cfg.welcome_channel_id > 0
         ):
-            from bot_modules.services.intake_views import intake_enabled
-
             await self._send_welcome(after, cfg)
-            # With intake enabled the join already posted the card — the
-            # verified-trigger arrival ping would be a duplicate surface.
-            if cfg.greeter_chat_channel_id > 0 and not await intake_enabled(
-                self.ctx, _guild_id
+            # Suppress the arrival ping only when this member actually has an
+            # open intake card (the card is the replacement surface). A
+            # per-guild enabled check isn't enough: a member who joined while
+            # the bot was down / intake was off / the card post failed has no
+            # card, and their verification must still reach the greeters.
+            if cfg.greeter_chat_channel_id > 0 and not intake_svc.is_watched(
+                _guild_id, _member_id
             ):
                 greeter_channel = after.guild.get_channel(cfg.greeter_chat_channel_id)
                 if isinstance(greeter_channel, discord.TextChannel):
@@ -1634,9 +1640,12 @@ class EventsCog(commands.Cog):
         if intake_svc.is_watched(guild.id, user.id):
             from bot_modules.services.intake_views import close_member_card
 
-            await close_member_card(
-                self.ctx, guild, user.id, intake_svc.RESOLUTION_BANNED
-            )
+            try:
+                await close_member_card(
+                    self.ctx, guild, user.id, intake_svc.RESOLUTION_BANNED
+                )
+            except Exception:
+                log.exception("intake: ban-close failed for %s", user.id)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
@@ -1654,9 +1663,14 @@ class EventsCog(commands.Cog):
         if intake_svc.is_watched(_guild_id, _member_id):
             from bot_modules.services.intake_views import close_member_card
 
-            await close_member_card(
-                self.ctx, member.guild, _member_id, intake_svc.RESOLUTION_LEFT
-            )
+            # Guarded: a card-close failure must not swallow the
+            # leave-channel announcement below.
+            try:
+                await close_member_card(
+                    self.ctx, member.guild, _member_id, intake_svc.RESOLUTION_LEFT
+                )
+            except Exception:
+                log.exception("intake: leave-close failed for %s", _member_id)
 
         cfg = self.ctx.guild_config(member.guild.id)
         if cfg.leave_channel_id <= 0:

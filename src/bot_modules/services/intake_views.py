@@ -288,21 +288,15 @@ async def _render_resolved(
 # ---------------------------------------------------------------------------
 
 
-async def intake_enabled(ctx: AppContext, guild_id: int) -> bool:
-    def _check() -> bool:
-        with ctx.open_db() as conn:
-            return svc.is_enabled(conn, guild_id)
-
-    return await asyncio.to_thread(_check)
-
-
 async def post_intake_card(ctx: AppContext, member: discord.Member) -> bool:
-    """Post a card for a fresh join. Returns True when intake owns arrivals.
+    """Post a card for a fresh join. Returns True only when a card surface
+    actually exists for this member (freshly posted, or a still-open card
+    from a previous join — create_card dedupes those).
 
-    A True return tells the caller to skip the legacy bare greeter ping even
-    if the send failed (logged) — with intake enabled there is exactly one
-    arrival surface. A rejoin while the old card is still open keeps that
-    card (create_card dedupes) and re-pings nothing.
+    Returns False when intake is dark **or the card could not be posted**
+    (channel missing, send rejected): the caller then falls back to the
+    legacy bare greeter ping, preserving the every-join-gets-announced
+    invariant even while the intake channel is broken.
     """
     guild = member.guild
     guild_id = guild.id
@@ -340,7 +334,7 @@ async def post_intake_card(ctx: AppContext, member: discord.Member) -> bool:
     if not isinstance(channel, (discord.TextChannel, discord.Thread)):
         log.warning("intake: channel %s missing in guild %s", channel_id, guild_id)
         await asyncio.to_thread(_delete_card, ctx, card_id)
-        return True
+        return False  # no card surface — let the legacy ping announce them
 
     accent = await resolve_accent_color(ctx.db_path, guild)
     embed = build_intake_embed(
@@ -368,7 +362,7 @@ async def post_intake_card(ctx: AppContext, member: discord.Member) -> bool:
     except discord.HTTPException:
         log.warning("intake: failed to post card in guild %s", guild_id)
         await asyncio.to_thread(_delete_card, ctx, card_id)
-        return True
+        return False  # no card surface — let the legacy ping announce them
 
     await asyncio.to_thread(_attach_message, ctx, card_id, channel.id, posted.id)
     svc.add_watched(guild_id, member.id)

@@ -19,9 +19,12 @@ slash commands:
   (allow-listed); embed carries a `▰▱` progress bar
   (`economy.leaderboard.progress_bar`), ✅/⬜/⏭️ checklist lines (done shows
   who/when; `done_by 0` renders "auto"), account age, invited-by
-  (`invite_edges`). While enabled, the legacy bare `@here — has arrived`
-  ping (join + verified-trigger variants) is suppressed; while dark, join
-  behavior is unchanged.
+  (`invite_edges`). The legacy bare `@here — has arrived` ping is
+  suppressed only when a card surface actually exists: the join variant
+  falls back to the ping whenever the card could not post (channel
+  missing/send failed — `post_intake_card` returns False), and the
+  verified-trigger variant suppresses per-member (`is_watched`, i.e. an
+  open card), not per-guild. While dark, join behavior is unchanged.
 - **Steps** are snapshotted onto the card at creation from `intake_steps`
   (JSON; invalid entries drop, empty/invalid falls back to the default
   six-step list) — config edits never mutate in-flight cards. Kinds:
@@ -47,7 +50,11 @@ slash commands:
 - **Hot path:** `on_message` pre-filters via an O(1) watch set of members
   with open cards (`intake_service.is_watched`, seeded at startup, same
   pattern as promotion review); decisions live in
-  `intake_service.evaluate_message`.
+  `intake_service.evaluate_message`. The warm seed covers open cards in
+  **all** guilds, enabled or not, so cards survive a disable → restart →
+  enable cycle; hook calls in `events_cog` are individually guarded so an
+  intake failure can never abort spoiler enforcement, persistence, or the
+  leave announcement.
 
 ## Ledger
 
