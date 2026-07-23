@@ -135,6 +135,25 @@ def pair_env(sync_db_path, monkeypatch):
     return bot, channel, created
 
 
+# ── _post_intro ───────────────────────────────────────────────────────
+
+
+async def test_post_intro_embed_lists_new_question_and_end_commands():
+    channel = MagicMock(spec=discord.TextChannel)
+    intro_msg = MagicMock()
+    intro_msg.pin = AsyncMock()
+    channel.send = AsyncMock(side_effect=[intro_msg, MagicMock()])
+    user1 = FakeUser(1, "Alice")
+    user2 = FakeUser(2, "Bob")
+
+    await pp._post_intro(channel, user1, user2, time.time() + 3600, "A question?")
+
+    embed = channel.send.call_args_list[0].kwargs["embed"]
+    commands_field = next(f for f in embed.fields if f.name == "Commands")
+    assert "/penpals new-question" in commands_field.value
+    assert "/penpals end" in commands_field.value
+
+
 # ── _channel_name ─────────────────────────────────────────────────────
 
 
