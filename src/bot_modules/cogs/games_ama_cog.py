@@ -941,6 +941,13 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
         ama_view._bottom_msg = new_msg
         if hasattr(bottom_view, "message_id"):
             bottom_view.message_id = new_msg.id
+        # Keep the persisted id in step so recovery rebinds the current bar.
+        try:
+            def _store_bottom(p, _mid=new_msg.id):
+                p["bottom_message_id"] = _mid
+            await modify_payload(ama_view.db, game_id, _store_bottom)
+        except Exception:
+            pass
     finally:
         ama_view._suppress_resend = False
 
@@ -949,7 +956,6 @@ class AMACog(commands.Cog):
     def __init__(self, bot: "Bot"):
         self.bot = bot
         self._active_channels: dict[int, str] = {}
-        self._question_views_rehydrated: bool = False
         self._question_maintenance_task: asyncio.Task | None = None
         self._resend_tasks: dict[int, asyncio.Task] = {}  # channel_id → pending debounce task
 
@@ -1046,80 +1052,107 @@ class AMACog(commands.Cog):
             return False
         return True
 
-    async def _recover_question_views(self):
-        rows = await self.db.fetchall(
-            "SELECT game_id, channel_id FROM games_active_games WHERE game_type = 'ama'"
-        )
-        if not rows:
-            return
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Rebuild an in-flight AMA's persistent views after a bot restart.
 
+        Registered in ``bot.game_recoverers["ama"]`` and driven by the shared
+        startup sweep, which hands us the game's main embed *message*. On a
+        restart ``bot.active_views`` is bare and discord.py's persistent-view
+        registry is empty, so every AMA button (Volunteer / Ask / New Hot Seat,
+        the sticky bottom bar, and each open question card) is dead and the
+        channel stays "in progress".
+
+        We rebuild the top control panel (``AMAView``) bound to the main embed,
+        the sticky bottom bar (``AMABottomView``) rebound to its persisted
+        message so it can keep re-sticking, and every unresolved question card
+        (``QuestionView``) — crucially wired to the live ``ama_view`` so Reply /
+        Pass refresh the main embed — and repopulate ``_active_channels`` so the
+        ``on_message`` re-stick loop re-arms. Expired cards are pruned in passing.
+        """
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        game_format = normalize_format(payload.get("format"))
+        mode = payload.get("mode", "unfiltered")
+        guild = getattr(message, "guild", None) or getattr(channel, "guild", None)
+
+        # Top control panel — bound to the main embed message.
+        view = AMAView(game_id, host_id, mode, self.db, self.bot, game_format=game_format)
+        view._game_msg = message
+        hot_seat_id = payload.get("hot_seat_id")
+        if hot_seat_id:
+            view.hot_seat_id = int(hot_seat_id)
+            member = guild.get_member(int(hot_seat_id)) if guild else None
+            if member:
+                view._hot_seat_name = member.display_name
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=int(message.id))
+
+        # Sticky bottom bar — rebound to its persisted message when it survived,
+        # otherwise registered as a bare persistent view so its buttons still work.
+        bottom_view = AMABottomView(game_id, self.db, view, message.jump_url)
+        bottom_id = payload.get("bottom_message_id")
+        bottom_msg = None
+        if bottom_id:
+            try:
+                bottom_msg = await channel.fetch_message(int(bottom_id))
+            except Exception:
+                bottom_msg = None
+        if bottom_msg is not None:
+            view._bottom_msg = bottom_msg
+            bottom_view.message_id = bottom_msg.id
+            self.bot.add_view(bottom_view, message_id=bottom_msg.id)
+        else:
+            self.bot.add_view(bottom_view)
+        self.bot.active_views[f"{game_id}_bottom"] = bottom_view
+
+        # Per-question cards — rebuilt with the live ama_view; expired cards pruned.
         now = datetime.now(timezone.utc)
-        recovered = 0
-        expired = 0
-        games_updated = 0
-
-        for row in rows:
-            game_id = row["game_id"]
-            channel = await self._resolve_channel(row["channel_id"])
-            if channel is None:
+        questions = payload.get("questions", [])
+        changed = False
+        for idx, question in enumerate(questions):
+            msg_id = question.get("question_message_id") or question.get("message_id")
+            if not msg_id:
                 continue
-
-            payload = await get_game_payload(self.db, game_id)
-            questions = payload.get("questions", [])
-            changed = False
-
-            for idx, question in enumerate(questions):
-                msg_id = question.get("question_message_id") or question.get("message_id")
-                if not msg_id:
-                    continue
-
-                status = (question.get("status") or "").lower()
-                if is_resolved_status(status):
-                    await self._prune_question_message_view(channel, msg_id)
-                    continue
-
-                asked_at = parse_iso_ts(
-                    question.get("asked_at")
-                    or question.get("created_at")
-                    or question.get("posted_at")
+            status = (question.get("status") or "").lower()
+            if is_resolved_status(status):
+                await self._prune_question_message_view(channel, msg_id)
+                continue
+            asked_at = parse_iso_ts(
+                question.get("asked_at")
+                or question.get("created_at")
+                or question.get("posted_at")
+            )
+            if should_expire(asked_at, now):
+                pruned = await self._prune_question_message_view(
+                    channel,
+                    msg_id,
+                    footer_text="Expired after 7 days without an answer",
                 )
-                if should_expire(asked_at, now):
-                    pruned = await self._prune_question_message_view(
-                        channel,
-                        msg_id,
-                        footer_text="Expired after 7 days without an answer",
-                    )
-                    if pruned:
-                        mark_question_expired(question)
-                        changed = True
-                        expired += 1
-                    continue
+                if pruned:
+                    mark_question_expired(question)
+                    changed = True
+                continue
+            q_hot_seat = question.get("hot_seat_id") or payload.get("hot_seat_id")
+            if not q_hot_seat:
+                continue
+            qview = QuestionView(
+                game_id=game_id,
+                hot_seat_id=q_hot_seat,
+                db=self.db,
+                question_idx=idx,
+                asker_id=question.get("asker_id", 0),
+                ama_view=view,
+                question_text=question.get("text", ""),
+            )
+            self.bot.add_view(qview, message_id=int(msg_id))
 
-                hot_seat_id = question.get("hot_seat_id") or payload.get("hot_seat_id")
-                if not hot_seat_id:
-                    continue
+        if changed:
+            recompute_totals(payload)
+            await update_game_payload(self.db, game_id, payload)
 
-                view = QuestionView(
-                    game_id=game_id,
-                    hot_seat_id=hot_seat_id,
-                    db=self.db,
-                    question_idx=idx,
-                    asker_id=question.get("asker_id", 0),
-                    ama_view=None,
-                    question_text=question.get("text", ""),
-                )
-                self.bot.add_view(view, message_id=int(msg_id))
-                recovered += 1
-
-            if changed:
-                recompute_totals(payload)
-                await update_game_payload(self.db, game_id, payload)
-                games_updated += 1
-
-        log.info(
-            "AMA question view recovery complete: %d restored, %d expired, %d games updated.",
-            recovered, expired, games_updated,
-        )
+        self._active_channels[channel.id] = game_id
+        log.info("Recovered ama game %s in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
 
     async def _prune_stale_question_views(self):
         rows = await self.db.fetchall(
@@ -1181,9 +1214,9 @@ class AMACog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if not self._question_views_rehydrated:
-            await self._recover_question_views()
-            self._question_views_rehydrated = True
+        # View re-registration now runs through the shared startup recovery
+        # sweep (bot.game_recoverers["ama"] -> recover_game); on_ready only
+        # (re)arms the periodic stale-question prune loop.
         if self._question_maintenance_task is None or self._question_maintenance_task.done():
             self._question_maintenance_task = asyncio.create_task(self._question_maintenance_loop())
 
@@ -1320,6 +1353,11 @@ class AMACog(commands.Cog):
             view._bottom_msg = bottom_msg
             bottom_view.message_id = bottom_msg.id
             self.bot.active_views[f"{game_id}_bottom"] = bottom_view
+            # Persist the bottom-bar message id so crash recovery can rebind it
+            # (and keep re-sticking it) after a restart.
+            def _store_bottom(p, _mid=bottom_msg.id):
+                p["bottom_message_id"] = _mid
+            await modify_payload(self.db, game_id, _store_bottom)
         except Exception:
             log.warning("ama launch: failed to post bottom bar in channel %s", channel.id)
         self._active_channels[channel.id] = game_id
@@ -1332,3 +1370,4 @@ async def setup(bot: "Bot"):
     bot.tree.remove_command("ama")
     play.add_command(cog.ama, override=True)
     bot.game_launchers["ama"] = cog.launch
+    bot.game_recoverers["ama"] = cog.recover_game

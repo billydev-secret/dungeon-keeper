@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game, finish_launch_response
+from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game, finish_launch_response, end_game
 from bot_modules.games.command_groups import play
 from .data import seed_templates_from_file
 from .modes.quiplash import run_quiplash
@@ -100,6 +100,30 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         log.info("legitlibs launch: mode %r not available", mode)
         return None
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Recover a LegitLibs round after a bot restart.
+
+        Both modes (classic + quiplash share the ``legitlibs`` game type) run
+        entirely inside a blocking fill/reveal loop that the restart tore down;
+        there is no phase view to rebind and no resumable state, so — like the
+        Story recovery — we end the round and post a notice. This unblocks the
+        channel immediately (the ``games_active_games`` row is deleted) instead
+        of leaving dead buttons until the 24h cleanup sweep.
+        """
+        game_id = row["game_id"]
+        label = "Quiplash" if (payload.get("mode") == "quiplash") else "LegitLibs"
+        try:
+            await channel.send(
+                f"🎲 This {label} round was interrupted by a bot restart and can't "
+                "be resumed — start a new one with `/games play legitlibs`."
+            )
+        except discord.HTTPException:
+            pass
+        await end_game(self.db, game_id)
+        self.bot.active_views.pop(game_id, None)
+        self._game_canceled.add(game_id)
+        log.info("legitlibs game %s ended after restart (mode=%s).", game_id, payload.get("mode"))
+        return True
 
 
 async def setup(bot):
@@ -108,3 +132,4 @@ async def setup(bot):
     bot.tree.remove_command("legitlibs")
     play.add_command(cog.legitlibs)
     bot.game_launchers["legitlibs"] = cog.launch
+    bot.game_recoverers["legitlibs"] = cog.recover_game
