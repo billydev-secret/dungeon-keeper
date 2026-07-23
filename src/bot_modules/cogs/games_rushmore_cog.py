@@ -620,7 +620,7 @@ class RushmoreRecapView(discord.ui.View):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
         await interaction.response.send_message(
-            "Type the **/rushmore** command to start a new game as the new host!",
+            "Type **/games play rushmore** to start a new game as the new host!",
             ephemeral=True,
         )
         disable_all_items(self)

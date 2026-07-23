@@ -360,7 +360,7 @@ class WYRCog(commands.Cog):
             if not question:
                 await channel.send(
                     "❌ The question bank is empty! Use **✍️ Pose Question** to submit your own, "
-                    "or ask an admin to add questions with `/bank add`."
+                    "or ask an admin to add questions from the Games question bank on the web dashboard."
                 )
                 await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
                 self.bot.active_views.pop(game_id, None)

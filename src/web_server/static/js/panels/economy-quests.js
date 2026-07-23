@@ -449,7 +449,7 @@ function fromEpoch(sec) {
 }
 
 const COMPLETION_HINTS = {
-  manual: "Members claim it themselves from /bank quests (or /quests).",
+  manual: "Members claim it themselves from /bank quests.",
   phrase: "Saying one of the phrases in chat completes it — no manual claim.",
   game: "Completes on its own when the member does this in a game. Daily/weekly: once per period. Event: every single time.",
 };

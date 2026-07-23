@@ -494,7 +494,7 @@ class MLTCog(commands.Cog):
         if not prompt:
             await channel.send(
                 "❌ The prompt bank is empty! Use **✍️ Pose Prompt** to submit your own, "
-                "or ask an admin to add prompts with `/bank add`."
+                "or ask an admin to add prompts from the Games question bank on the web dashboard."
             )
             await self._emit_final_standings(channel, game_id)
             await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))

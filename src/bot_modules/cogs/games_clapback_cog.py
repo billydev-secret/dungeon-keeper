@@ -572,7 +572,7 @@ class ClapbackCog(commands.Cog):
         if not await has_clapback_prompts(self.db):
             await interaction.response.send_message(
                 "No prompts in the bank for Clapback. "
-                "Add some with `/bank add clapback` or in the dashboard.",
+                "Add some from the Games question bank on the web dashboard.",
                 ephemeral=True,
             )
             return

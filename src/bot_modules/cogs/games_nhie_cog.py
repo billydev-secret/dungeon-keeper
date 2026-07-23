@@ -339,7 +339,7 @@ class NHIECog(commands.Cog):
         if not statement:
             await channel.send(
                 "❌ The statement bank is empty! Use **✍️ Pose Statement** to submit your own, "
-                "or ask an admin to add statements with `/bank add`."
+                "or ask an admin to add statements from the Games question bank on the web dashboard."
             )
             await end_game(self.db, game_id)
             self.bot.active_views.pop(game_id, None)

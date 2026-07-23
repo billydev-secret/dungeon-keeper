@@ -643,7 +643,7 @@ def flip_announcement_content(
     """
     lines = [
         f"📋 **This week's quests are up!** {pool} weeklies in the pool — "
-        f"`/quests` shows yours.",
+        f"`/bank quests` shows yours.",
     ]
     if spot_label:
         lines.append(f"⚡ **Spotlight:** {spot_label} pays **double** all week.")
