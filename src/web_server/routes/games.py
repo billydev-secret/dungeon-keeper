@@ -1374,8 +1374,11 @@ async def get_allowed_channels(
             return {
                 "channels": [
                     {
-                        "channel_id": r[0],
-                        "added_by": r[1],
+                        # Snowflakes as strings: past 2^53 a bare JSON number
+                        # rounds in the browser, and this id is written straight
+                        # back into the per-channel tier/remove requests.
+                        "channel_id": str(r[0]),
+                        "added_by": str(r[1]),
                         "added_at": r[2],
                         "legitlibs_max_tier": r[3] if r[3] is not None else 4,
                     }

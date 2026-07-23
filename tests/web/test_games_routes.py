@@ -918,7 +918,7 @@ def test_channels_add_and_appear_in_list(open_client, fake_ctx):
     assert resp.status_code == 200
     channels = resp.json()["channels"]
     assert len(channels) == 1
-    assert channels[0]["channel_id"] == 123456789
+    assert channels[0]["channel_id"] == "123456789"
     assert channels[0]["legitlibs_max_tier"] == 4
 
 
@@ -1002,3 +1002,29 @@ def test_audit_update_replaces_channel(open_client, fake_ctx):
 
     data = open_client.get(f"{BASE}/config/audit").json()
     assert data["channel_id"] == 222
+
+
+def test_channels_list_keeps_snowflake_precision(open_client):
+    """Ids must survive as strings — the panel writes this value straight back.
+
+    Past 2^53 a bare JSON number rounds in the browser, so the per-channel
+    LegitLibs tier PUT would target a channel id that doesn't exist: the real
+    channel keeps no row, silently falling back to the max tier (4) while the
+    dashboard reports the save succeeded.
+    """
+    big = "1387654321098765432"  # a realistic snowflake, well past 2^53
+    assert int(big) > 2**53
+    assert open_client.post(
+        f"{BASE}/config/channels", json={"channel_id": big}
+    ).status_code == 200
+
+    row = open_client.get(f"{BASE}/config/channels").json()["channels"][0]
+    assert row["channel_id"] == big, "snowflake lost precision in the response"
+    assert isinstance(row["added_by"], str)
+
+    # And the id round-trips: a tier set against it lands on the same row.
+    assert open_client.put(
+        f"{BASE}/config/channels/{big}/legitlibs-max-tier", json={"max_tier": 2}
+    ).status_code == 200
+    row = open_client.get(f"{BASE}/config/channels").json()["channels"][0]
+    assert row["legitlibs_max_tier"] == 2
