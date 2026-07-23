@@ -644,6 +644,66 @@ def process_login(
     )
 
 
+def top_up_voice_login(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    *,
+    local_day: str,
+    booster: bool = False,
+) -> int:
+    """Pay the text→voice difference when voice presence follows a text login.
+
+    The daily login pays whichever source fires first, and text almost always
+    wins — a member types before they join a call. Live data (2026-07-23): 688
+    text logins against 30 voice ones, so ``login_voice_base`` (15) was paid on
+    4% of days while the guide advertised it as the voice rate. Voice presence
+    is the signal we most want to reward — it reaches members who never trigger
+    command-based faucets — and it was quietly worth a third of list price.
+
+    So a qualifying voice session on a day already claimed by text tops the
+    member up by the difference. The streak bonus is deliberately *not*
+    recomputed: it was already paid by the text login and rides on whichever
+    base won, so the delta is the flat base gap and nothing else.
+
+    Returns the credited amount (0 when there is nothing to do). Exactly-once
+    via the UPDATE's ``source = 'text'`` guard: the row flips to 'voice', so a
+    replay — or a second voice tick the same day — matches no row and pays
+    nothing. Never downgrades voice→text.
+    """
+    delta = int(settings.login_voice_base) - int(settings.login_text_base)
+    if delta <= 0:
+        return 0
+    cur = conn.execute(
+        """
+        UPDATE econ_logins SET source = 'voice'
+        WHERE guild_id = ? AND user_id = ? AND local_day = ? AND source = 'text'
+        """,
+        (guild_id, user_id, local_day),
+    )
+    if (cur.rowcount or 0) == 0:
+        return 0
+    paid = apply_credit(
+        conn,
+        guild_id,
+        user_id,
+        delta,
+        "login",
+        meta={"local_day": local_day, "source": "voice", "upgrade": True},
+        booster=booster,
+        multiplier=settings.booster_multiplier,
+    )
+    conn.execute(
+        """
+        UPDATE econ_logins SET paid = paid + ?
+        WHERE guild_id = ? AND user_id = ? AND local_day = ?
+        """,
+        (paid, guild_id, user_id, local_day),
+    )
+    return paid
+
+
 def purchase_streak_shield(
     conn: sqlite3.Connection,
     settings: EconSettings,

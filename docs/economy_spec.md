@@ -71,6 +71,17 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   The main guild needs an explicit tz row set at rollout (it currently inherits global −7).
 - **Reward:** text login 5 base; **voice login 15 base** (voice deliberately richer —
   decided). +1 per consecutive day, streak bonus capped at +10.
+- **Voice top-up (2026-07-23).** The login pays whichever source fires *first*,
+  and text nearly always wins — a member types before they join a call. Live
+  data showed **688 text logins against 30 voice ones**, so the richer voice
+  base was paid on 4% of days while the guide advertised it as the voice rate.
+  A qualifying voice session on a day already claimed by text now tops the
+  member up by the base difference (`top_up_voice_login`, ledger kind `login`
+  with `meta.upgrade`). The streak bonus is **not** recomputed — it was already
+  paid on the text base, so the delta is the flat base gap only. Exactly-once
+  via the `source = 'text'` UPDATE guard: the row flips to `'voice'`, so a
+  replay or a second voice tick the same day matches nothing. Never downgrades
+  voice→text, and a guild that prices voice at or below text pays nothing.
 - **Grace:** one free missed day per rolling 7, automatic and silent; second miss resets.
 - **Streak shield (sinks round 3, stage 2):** a prepaid one-shot bought in `/bank shop`
   (`price_streak_shield`, default 30; 0 hides the row), held at most ONE, auto-burned
