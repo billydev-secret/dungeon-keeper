@@ -1,8 +1,10 @@
 import { wGet, wPost, wPut, wDelete, esc, showStatus } from "../wellness-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { guardForm } from "../config-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading caps…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading your activity caps…")}</div>`;
 
   let chart = null;
   let currentMode = "daily";
@@ -19,7 +21,8 @@ export function mount(container) {
         wGet(`/api/wellness/xp-histogram?mode=${currentMode}&days=${currentDays}`),
       ]);
     } catch (e) {
-      container.querySelector(".panel").innerHTML = `<div class="error">${e.message}</div>`;
+      container.querySelector(".panel").innerHTML =
+        renderError(`Couldn’t load your activity caps — try again. (${e.message})`);
       return;
     }
 
@@ -48,18 +51,19 @@ export function mount(container) {
               <strong>${esc(c.label)}</strong>
               <span class="chip">${c.scope}</span>
               <span class="chip">${c.window}</span>
-              <span class="chip">${c.limit} msgs</span>
-              ${c.exclude_exempt ? '<span class="chip chip-neutral">excl. exempt</span>' : ""}
+              <span class="chip">${c.limit} messages</span>
+              ${c.exclude_exempt ? '<span class="chip chip-neutral">Skips exempt channels</span>' : ""}
             </div>
             <div class="w-row-actions">
-              <input type="number" min="1" value="${c.limit}" style="width:70px" data-edit-limit />
+              <input type="number" min="1" value="${c.limit}" style="width:70px" data-edit-limit
+                     aria-label="Message limit for ${esc(c.label)}" />
               <button class="btn btn-sm" data-save-cap="${c.id}">Save</button>
               <button class="btn btn-sm btn-danger" data-del-cap="${c.id}">Remove</button>
               <span data-cap-status="${c.id}"></span>
             </div>
           </div>
         `).join("")
-      : '<div class="empty">No manual caps.</div>';
+      : renderEmpty("No manual caps. The sliders above cover most needs — add a manual cap here only when you want a single flat limit for one channel or window.");
 
     // Compute a good max for sliders
     const maxAvg = Math.max(...bucketAvgs, 1);
@@ -68,7 +72,7 @@ export function mount(container) {
     container.querySelector(".panel").innerHTML = `
       <header>
         <h2>Activity Caps</h2>
-        <div class="subtitle">Set message limits based on your real activity patterns</div>
+        <div class="subtitle">Set your own message limits, shaped by how you actually post</div>
       </header>
 
       <div class="w-histo-help">
@@ -85,19 +89,21 @@ export function mount(container) {
 
       <div class="w-histo-controls">
         <div class="field">
-          <label>Pattern</label>
-          <select data-control="mode">
-            <option value="daily" ${currentMode === "daily" ? "selected" : ""}>Daily (by hour)</option>
-            <option value="weekly" ${currentMode === "weekly" ? "selected" : ""}>Weekly (by day)</option>
-          </select>
+          <label>Pattern
+            <select data-control="mode">
+              <option value="daily" ${currentMode === "daily" ? "selected" : ""}>Daily (one bar per hour)</option>
+              <option value="weekly" ${currentMode === "weekly" ? "selected" : ""}>Weekly (one bar per day)</option>
+            </select>
+          </label>
         </div>
         <div class="field">
-          <label>Lookback</label>
-          <select data-control="days">
-            <option value="14" ${currentDays === 14 ? "selected" : ""}>2 weeks</option>
-            <option value="30" ${currentDays === 30 ? "selected" : ""}>30 days</option>
-            <option value="90" ${currentDays === 90 ? "selected" : ""}>90 days</option>
-          </select>
+          <label>Based on the Last
+            <select data-control="days">
+              <option value="14" ${currentDays === 14 ? "selected" : ""}>2 weeks</option>
+              <option value="30" ${currentDays === 30 ? "selected" : ""}>30 days</option>
+              <option value="90" ${currentDays === 90 ? "selected" : ""}>90 days</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -109,7 +115,8 @@ export function mount(container) {
         ${sliderValues.map((v, i) => `
           <div class="w-histo-slider-cell">
             <input type="range" min="1" max="${sliderMax}" value="${v}"
-                   orient="vertical" data-slider-idx="${i}" />
+                   orient="vertical" data-slider-idx="${i}"
+                   aria-label="Cap for ${esc(labels[i])}" />
             <span class="w-histo-slider-val" data-val-idx="${i}">${v}</span>
             <span class="w-histo-slider-label">${labels[i]}</span>
           </div>
@@ -118,36 +125,42 @@ export function mount(container) {
 
       <div class="w-histo-actions">
         <button class="btn btn-primary" data-save-histo>Save Caps</button>
-        <button class="btn btn-ghost" data-reset-histo>Reset to Averages</button>
+        <button class="btn btn-ghost" data-reset-histo>Reset to My Averages</button>
         <span data-histo-status></span>
       </div>
 
       <details class="form-section w-histo-legacy">
         <summary class="form-section-summary">Manual Caps</summary>
+        <p class="field-hint">A flat limit for one scope and window, independent of the sliders above.</p>
         <div class="w-list">${flatCapsHTML}</div>
 
         <div class="section-label">Add Manual Cap</div>
         <form data-add-form class="form">
           <div class="field">
-            <label>Label</label>
-            <input type="text" name="label" required maxlength="40" placeholder="e.g. daily limit" />
+            <label>Label
+              <input type="text" name="label" required maxlength="40" placeholder="e.g. Daily Limit" />
+            </label>
           </div>
           <div class="field-row">
             <div class="field">
-              <label>Scope</label>
-              <select name="scope">${caps.scopes.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
+              <label>Scope
+                <select name="scope">${caps.scopes.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
+              </label>
             </div>
             <div class="field">
-              <label>Window</label>
-              <select name="window">${caps.windows.map(w => `<option value="${w}">${w}</option>`).join("")}</select>
+              <label>Window
+                <select name="window">${caps.windows.map(w => `<option value="${w}">${w}</option>`).join("")}</select>
+              </label>
             </div>
             <div class="field">
-              <label>Limit</label>
-              <input type="number" name="limit" min="1" value="50" required />
+              <label>Message Limit
+                <input type="number" name="limit" min="1" value="50" required />
+              </label>
             </div>
           </div>
           <div class="field">
-            <label><input type="checkbox" name="exclude_exempt" checked /> Exclude exempt channels</label>
+            <label><input type="checkbox" name="exclude_exempt" checked /> Don’t Count Exempt Channels</label>
+            <div class="field-hint">Messages in channels your server marked exempt won’t count toward this cap.</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Add Cap</button><span data-add-status></span></div>
         </form>
@@ -327,11 +340,11 @@ export function mount(container) {
             bucket_limits: sliderValues,
           });
         }
-        showStatus(histoStatus, true, "Caps saved");
+        showStatus(histoStatus, true, "Caps saved.");
         // Reload to update existingHistoCap reference
         load();
       } catch (e) {
-        showStatus(histoStatus, false, e.message);
+        showStatus(histoStatus, false, `Couldn’t save — ${e.message}`);
       }
     });
 
@@ -355,19 +368,23 @@ export function mount(container) {
         const limit = parseInt(row.querySelector("[data-edit-limit]").value, 10);
         const st = container.querySelector(`[data-cap-status="${id}"]`);
         try { await wPut(`/api/wellness/caps/${id}`, { limit }); showStatus(st, true); }
-        catch (e) { showStatus(st, false, e.message); }
+        catch (e) { showStatus(st, false, `Couldn’t save — ${e.message}`); }
       });
     });
 
     container.querySelectorAll("[data-del-cap]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        if (!(await confirmDialog("Remove this cap?", { danger: true, confirmLabel: "Remove" }))) return;
+        const ok = await confirmDialog(
+          "Remove this cap? Dungeon Keeper will stop nudging you when you pass it.",
+          { title: "Remove Cap", danger: true, confirmLabel: "Remove" },
+        );
+        if (!ok) return;
         try { await wDelete(`/api/wellness/caps/${btn.dataset.delCap}`); load(); }
-        catch (e) { toast(e.message, "error"); }
+        catch (e) { toast(`Couldn’t remove that cap — ${e.message}`, "error"); }
       });
     });
 
-    const form = container.querySelector("[data-add-form]");
+    const form = guardForm(container.querySelector("[data-add-form]"));
     const addSt = container.querySelector("[data-add-status]");
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -380,9 +397,9 @@ export function mount(container) {
           limit: parseInt(fd.get("limit"), 10),
           exclude_exempt: form.querySelector("[name=exclude_exempt]").checked,
         });
-        toast("Cap added");
+        toast("Cap added.");
         load();
-      } catch (err) { showStatus(addSt, false, err.message); }
+      } catch (err) { showStatus(addSt, false, `Couldn’t add that cap — ${err.message}`); }
     });
   }
 

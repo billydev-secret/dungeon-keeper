@@ -1,4 +1,5 @@
-import { api, apiPost, esc } from "../api.js";
+import { api, apiPost, esc, fmtTs } from "../api.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 const GENDERS = [
   { value: "male",      label: "Male" },
@@ -11,11 +12,11 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>Gender Tagging</h2>
-        <div class="subtitle">Tag members for NSFW analytics. Tags are private; only used for the NSFW-by-gender report.</div>
+        <div class="subtitle">Tag members so the NSFW by Gender report can split its numbers. Tags stay private — members never see them, and nothing else on the dashboard uses them.</div>
       </header>
-      <div class="tabs" style="margin-bottom:12px;">
-        <button data-tab="classify" class="tab-btn active">Classify Next</button>
-        <button data-tab="list" class="tab-btn">Tagged Members</button>
+      <div class="tabs" role="group" aria-label="Gender tagging views" style="margin-bottom:12px;">
+        <button data-tab="classify" class="tab-btn active" aria-pressed="true">Classify Next</button>
+        <button data-tab="list" class="tab-btn" aria-pressed="false">Tagged Members</button>
       </div>
       <div data-pane="classify"></div>
       <div data-pane="list" style="display:none;"></div>
@@ -27,8 +28,12 @@ export function mount(container) {
   const listPane = container.querySelector('[data-pane="list"]');
   container.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      container.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+      container.querySelectorAll(".tab-btn").forEach((b) => {
+        b.classList.remove("active");
+        b.setAttribute("aria-pressed", "false");
+      });
       btn.classList.add("active");
+      btn.setAttribute("aria-pressed", "true");
       classifyPane.style.display = btn.dataset.tab === "classify" ? "" : "none";
       listPane.style.display = btn.dataset.tab === "list" ? "" : "none";
       if (btn.dataset.tab === "list") loadList();
@@ -40,24 +45,27 @@ export function mount(container) {
   let cursor = 0;
 
   async function loadClassify() {
-    classifyPane.textContent = "Loading unclassified members…";
+    classifyPane.innerHTML = renderLoading("Loading untagged members…");
     try {
       const data = await api("/api/gender/unclassified", {});
       queue = data.members || [];
       cursor = 0;
       renderClassify();
     } catch (err) {
-      classifyPane.textContent = `Error: ${err.message}`;
+      classifyPane.innerHTML = renderError(`Couldn’t load untagged members — try again. (${err.message})`);
     }
   }
 
   function renderClassify() {
     if (cursor >= queue.length) {
-      classifyPane.innerHTML = `<div class="empty">All members tagged. 🎉<br><br>Total tagged: <span data-tagged-count></span></div>`;
+      classifyPane.innerHTML = `<div class="empty">Everyone is tagged — nothing left in the queue. New members show up here as they join.<br><br>Members tagged so far: <span data-tagged-count>…</span></div>`;
       api("/api/gender/list", {}).then((d) => {
         const el = classifyPane.querySelector("[data-tagged-count]");
         if (el) el.textContent = d.classified.length;
-      }).catch(() => {});
+      }).catch(() => {
+        const el = classifyPane.querySelector("[data-tagged-count]");
+        if (el) el.textContent = "unavailable";
+      });
       return;
     }
     const m = queue[cursor];
@@ -66,20 +74,22 @@ export function mount(container) {
       <div style="padding:24px; text-align:center;">
         <div style="font-size:1.5em; margin-bottom:8px;">${esc(m.display_name || m.user_id)}</div>
         <div class="subtitle" style="margin-bottom:16px;">${cursor + 1} of ${queue.length}</div>
-        <div style="display:flex; gap:8px; justify-content:center;">${buttons}<button class="btn btn-ghost" data-skip>Skip</button></div>
+        <div style="display:flex; gap:8px; justify-content:center;">${buttons}<button class="btn btn-ghost" data-skip title="Leave this member untagged for now">Skip</button></div>
         <div data-cstatus style="margin-top:12px;"></div>
       </div>
     `;
     classifyPane.querySelectorAll("[data-gender]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const status = classifyPane.querySelector("[data-cstatus]");
+        status.className = "";
         status.textContent = "Saving…";
         try {
           await apiPost("/api/gender/set", { user_id: m.user_id, gender: btn.dataset.gender });
           cursor++;
           renderClassify();
         } catch (err) {
-          status.textContent = `Error: ${err.message}`;
+          status.className = "error";
+          status.textContent = `Couldn’t save that tag — try again. (${err.message})`;
         }
       });
     });
@@ -113,7 +123,7 @@ export function mount(container) {
     const opts = GENDERS.map(
       (g) => `<option value="${g.value}"${g.value === current ? " selected" : ""}>${g.label}</option>`,
     ).join("");
-    return `<select class="gender-edit" data-user="${esc(userId)}">${opts}</select>`;
+    return `<select class="gender-edit" data-user="${esc(userId)}" aria-label="Gender tag">${opts}</select>`;
   }
 
   function renderListTable() {
@@ -121,12 +131,12 @@ export function mount(container) {
     const countEl = listPane.querySelector("[data-count]");
     if (!body) return;
     const rows = listRows();
-    countEl.textContent = `${rows.length} of ${listState.all.length} tagged`;
+    countEl.textContent = `Showing ${rows.length} of ${listState.all.length} tagged members`;
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="4" style="padding:20px; color:var(--ink-dim); text-align:center;">No members match this filter.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="4" style="padding:20px; color:var(--ink-dim); text-align:center;">No tagged members match this filter. Clear the search box or set Gender back to All.</td></tr>`;
     } else {
       body.innerHTML = rows.map((r) => {
-        const when = r.set_at ? new Date(r.set_at * 1000).toLocaleString() : "";
+        const when = r.set_at ? fmtTs(r.set_at) : "—";
         return `<tr>
           <td>${esc(r.display_name || r.user_id)}</td>
           <td>${genderSelectHtml(r.user_id, r.gender)}</td>
@@ -144,12 +154,12 @@ export function mount(container) {
   }
 
   async function loadList() {
-    listPane.textContent = "Loading…";
+    listPane.innerHTML = renderLoading("Loading tagged members…");
     try {
       const data = await api("/api/gender/list", {});
       listState.all = data.classified || [];
       if (!listState.all.length) {
-        listPane.textContent = "No tagged members yet.";
+        listPane.innerHTML = renderEmpty("No members tagged yet. Use the Classify Next tab to work through the queue — the NSFW by Gender report stays empty until some members are tagged.");
         return;
       }
       listPane.innerHTML = `
@@ -159,7 +169,7 @@ export function mount(container) {
           </label>
           <label>Gender
             <select data-gender-filter>
-              <option value="">All</option>
+              <option value="">All genders</option>
               ${GENDERS.map((g) => `<option value="${g.value}">${g.label}</option>`).join("")}
             </select>
           </label>
@@ -170,8 +180,8 @@ export function mount(container) {
             <thead><tr>
               <th data-sort="display_name" style="cursor:pointer;">Member</th>
               <th data-sort="gender" style="cursor:pointer;">Gender</th>
-              <th data-sort="set_at" style="cursor:pointer;">Tagged at</th>
-              <th>Saved</th>
+              <th data-sort="set_at" style="cursor:pointer;">Tagged</th>
+              <th>Save Status</th>
             </tr></thead>
             <tbody data-table-body></tbody>
           </table>
@@ -220,14 +230,14 @@ export function mount(container) {
         } catch (err) {
           if (rec) rec.gender = prev;
           sel.value = prev;
-          statusEl.textContent = `Error: ${err.message}`;
+          statusEl.textContent = `Couldn’t save — ${err.message}`;
           statusEl.style.color = "var(--red)";
         } finally {
           sel.disabled = false;
         }
       });
     } catch (err) {
-      listPane.textContent = `Error: ${err.message}`;
+      listPane.innerHTML = renderError(`Couldn’t load tagged members — try again. (${err.message})`);
     }
   }
 

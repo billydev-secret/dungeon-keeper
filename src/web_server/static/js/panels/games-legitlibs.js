@@ -1,5 +1,6 @@
 import { api, apiPost, esc } from "../api.js";
-import { apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { apiPut, apiDelete, showStatus, guardForm } from "../config-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { toast, confirmDialog } from "../ui.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
@@ -24,7 +25,7 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>LegitLibs Templates</h2>
-        <div class="subtitle">Manage LegitLibs fill-in-the-blank game templates. Use {blank_id} placeholders in body text.</div>
+        <div class="subtitle">Fill-in-the-blank stories players complete together. Write the story, mark each gap as {b1}, {b2} and so on, then publish it so games can draw it.</div>
       </header>
 
       <section>
@@ -33,7 +34,7 @@ export function mount(container) {
           <div class="field m-0">
             <label>Tier
               <select data-ctrl="filter-tier">
-                <option value="">All</option>
+                <option value="">All tiers</option>
                 ${tierOptions}
               </select>
             </label>
@@ -41,13 +42,13 @@ export function mount(container) {
           <div class="field m-0">
             <label>Status
               <select data-ctrl="filter-status">
-                <option value="">All</option>
+                <option value="">All statuses</option>
                 ${statusOptions}
               </select>
             </label>
           </div>
           <div class="field m-0">
-            <label>Tag / title
+            <label>Title or Tag
               <input type="text" data-ctrl="filter-tag" placeholder="Search…" style="width:120px;" />
             </label>
           </div>
@@ -57,7 +58,7 @@ export function mount(container) {
 
       <section>
         <div class="section-label">Templates</div>
-        <div data-region="list"><div class="empty">Loading</div></div>
+        <div data-region="list">${renderLoading("Loading templates…")}</div>
       </section>
 
       <section style="margin-top:16px;">
@@ -79,6 +80,7 @@ export function mount(container) {
   function buildPosSelect(selectedValue) {
     const sel = document.createElement("select");
     sel.className = "blank-pos";
+    sel.setAttribute("aria-label", "Part of speech for this blank");
     sel.style.fontSize = "12px";
     const none = document.createElement("option");
     none.value = ""; none.textContent = "—";
@@ -134,6 +136,7 @@ export function mount(container) {
     inp.type = "text"; inp.className = "blank-id";
     inp.style.cssText = "font-family:monospace;font-size:12px;width:80px;";
     inp.value = id || ""; inp.placeholder = "b1";
+    inp.setAttribute("aria-label", "Blank marker, e.g. b1");
     tdId.appendChild(inp);
 
     const tdPos = document.createElement("td");
@@ -145,6 +148,7 @@ export function mount(container) {
     tdDom.style.padding = "3px 4px";
     const domSel = document.createElement("select");
     domSel.className = "blank-domain"; domSel.style.fontSize = "12px";
+    domSel.setAttribute("aria-label", "Domain for this blank");
     domSel.dataset.initial = domain || "";
     domSel.innerHTML = `<option value="">— (none)</option>`; domSel.disabled = true;
     tdDom.appendChild(domSel);
@@ -153,6 +157,7 @@ export function mount(container) {
     tdForm.style.padding = "3px 4px";
     const formSel = document.createElement("select");
     formSel.className = "blank-form"; formSel.style.fontSize = "12px";
+    formSel.setAttribute("aria-label", "Word form for this blank");
     formSel.dataset.initial = form || "";
     formSel.innerHTML = `<option value="">— (none)</option>`; formSel.disabled = true;
     tdForm.appendChild(formSel);
@@ -161,6 +166,8 @@ export function mount(container) {
     tdBtn.style.padding = "3px 4px";
     const removeBtn = document.createElement("button");
     removeBtn.type = "button"; removeBtn.className = "btn btn-sm"; removeBtn.textContent = "×";
+    removeBtn.title = "Remove this blank";
+    removeBtn.setAttribute("aria-label", "Remove this blank");
     removeBtn.addEventListener("click", () => { tr.remove(); syncBlanksEmpty(blanksSection); });
     tdBtn.appendChild(removeBtn);
 
@@ -238,12 +245,12 @@ export function mount(container) {
     if (!resultsEl) return;
     const blanks = gatherBlanksFromTable(formEl);
     if (!blanks || !blanks.length) {
-      resultsEl.innerHTML = `<div class="empty" style="font-size:12px;">No blanks to resolve.</div>`;
+      resultsEl.innerHTML = `<div class="empty" style="font-size:12px;">Add at least one blank first — then this shows the prompt each one will use.</div>`;
       return;
     }
     const tierEl = formEl.querySelector(`[data-ctrl="${prefix}-tier"]`);
     const tier = parseInt(tierEl?.value) || 2;
-    resultsEl.innerHTML = `<div class="empty" style="font-size:12px;">Checking…</div>`;
+    resultsEl.innerHTML = `<div class="empty" style="font-size:12px;">Checking each blank…</div>`;
     try {
       const data = await apiPost("/api/games/legitlibs/resolve", { blanks, tier });
       const rows = (data.resolutions || []).map((r) => {
@@ -260,9 +267,9 @@ export function mount(container) {
       }).join("");
       resultsEl.innerHTML = rows
         ? `<table style="width:100%;border-collapse:collapse;margin-top:4px;"><tbody>${rows}</tbody></table>`
-        : `<div class="empty" style="font-size:12px;">No resolutions returned.</div>`;
+        : `<div class="empty" style="font-size:12px;">Nothing came back for these blanks — check that each one has a part of speech set.</div>`;
     } catch (err) {
-      resultsEl.innerHTML = `<div class="empty" style="font-size:12px;color:var(--red,#f55);">Error: ${esc(err.message)}</div>`;
+      resultsEl.innerHTML = `<div class="error" style="font-size:12px;">Couldn’t check the blanks — try again. (${esc(err.message)})</div>`;
     }
   }
 
@@ -280,7 +287,7 @@ export function mount(container) {
       const btn = blanksSection.querySelector('[data-action="ai-prep"]');
       if (!bodyEl) return;
       const rawText = bodyEl.value.trim();
-      if (!rawText) { toast("Paste some text into the Body field first.", "info"); return; }
+      if (!rawText) { toast("Paste your story into the Body box first.", "info"); return; }
       const tier = parseInt(tierEl?.value) || 2;
       const origLabel = btn.textContent;
       btn.disabled = true; btn.textContent = "Working…";
@@ -292,7 +299,7 @@ export function mount(container) {
         syncBlanksEmpty(blanksSection);
         renderStoryPreview(formEl);
       } catch (err) {
-        toast(`AI prep failed: ${err.message}`, "error");
+        toast(`AI prep failed — try again. (${err.message})`, "error");
       } finally {
         btn.disabled = false; btn.textContent = origLabel;
       }
@@ -302,7 +309,7 @@ export function mount(container) {
       const bodyEl = formEl.querySelector(".template-body");
       if (!bodyEl) return;
       const unique = [...new Set([...bodyEl.value.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]))];
-      if (!unique.length) { toast("No {blank_id} placeholders found in body.", "info"); return; }
+      if (!unique.length) { toast("No {blank_id} markers found in the body — wrap each gap in curly braces, like {b1}.", "info"); return; }
       const tbody = blanksSection.querySelector(".blanks-tbody");
       const existing = new Set([...tbody.querySelectorAll(".blank-id")].map((i) => i.value.trim()));
       for (const id of unique) {
@@ -326,14 +333,17 @@ export function mount(container) {
   async function loadAxes() {
     try {
       axesData = await api("/api/games/legitlibs/axes");
-    } catch (_) {
+    } catch (err) {
+      // Without the axis lists every blank dropdown is empty, which reads as
+      // "there are no options" rather than "the request failed".
       axesData = { pos_values: [], domains_by_pos: {}, forms_by_pos: {} };
+      toast(`Couldn’t load the blank types — reload before editing templates. (${err.message})`, "error");
     }
   }
 
   async function loadList() {
     const listEl = region("list");
-    listEl.innerHTML = `<div class="empty">Loading</div>`;
+    listEl.innerHTML = renderLoading("Loading templates…");
     try {
       const params = {};
       if (currentTier) params.tier = currentTier;
@@ -342,7 +352,7 @@ export function mount(container) {
       cachedTemplates = data.templates || [];
       renderList(cachedTemplates, currentTagFilter);
     } catch (err) {
-      listEl.innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
+      listEl.innerHTML = renderError(`Couldn’t load LegitLibs templates — try again. (${err.message})`);
     }
   }
 
@@ -366,8 +376,9 @@ export function mount(container) {
 
     if (!visible.length) {
       listEl.innerHTML = templates.length
-        ? `<div class="empty">No templates match "${esc(tagFilter)}".</div>`
-        : `<div class="empty">No templates yet. Create the first one below.</div>`;
+        ? renderEmpty(`No templates match "${tagFilter}". Clear the search box, or reset the tier and status filters.`)
+        : renderEmpty("No templates yet. Open New Template below to write your first story — "
+            + "players fill in the gaps you mark, and only Published templates are ever drawn.");
       return;
     }
 
@@ -427,11 +438,15 @@ export function mount(container) {
 
     listEl.querySelectorAll('[data-action="del-template"]').forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!(await confirmDialog(`Delete template #${btn.dataset.tid}?`, { danger: true, confirmLabel: "Delete" }))) return;
+        const ok = await confirmDialog(
+          `Delete template #${btn.dataset.tid}? Games in progress finish, but it can’t be drawn again. This can’t be undone.`,
+          { title: "Delete Template", danger: true, confirmLabel: "Delete" },
+        );
+        if (!ok) return;
         try {
           await apiDelete(`/api/games/legitlibs/templates/${btn.dataset.tid}`);
           loadList();
-        } catch (err) { toast(`Delete failed: ${err.message}`, "error"); }
+        } catch (err) { toast(`Couldn’t delete that template — ${err.message}`, "error"); }
       });
     });
 
@@ -440,7 +455,7 @@ export function mount(container) {
         try {
           await apiPut(`/api/games/legitlibs/templates/${btn.dataset.tid}`, { status: "published" });
           loadList();
-        } catch (err) { toast(`Publish failed: ${err.message}`, "error"); }
+        } catch (err) { toast(`Couldn’t publish that template — ${err.message}`, "error"); }
       });
     });
 
@@ -449,7 +464,7 @@ export function mount(container) {
         try {
           await apiPut(`/api/games/legitlibs/templates/${btn.dataset.tid}`, { status: "draft" });
           loadList();
-        } catch (err) { toast(`Unpublish failed: ${err.message}`, "error"); }
+        } catch (err) { toast(`Couldn’t unpublish that template — ${err.message}`, "error"); }
       });
     });
 
@@ -458,7 +473,7 @@ export function mount(container) {
         try {
           const t = await api(`/api/games/legitlibs/templates/${btn.dataset.tid}`);
           openEditForm(t, btn.closest(".ll-card"));
-        } catch (err) { toast(`Load failed: ${err.message}`, "error"); }
+        } catch (err) { toast(`Couldn’t open that template — ${err.message}`, "error"); }
       });
     });
   }
@@ -499,14 +514,16 @@ export function mount(container) {
         await apiPut(`/api/games/legitlibs/templates/${t.template_id}`, gatherFormBody(editDiv, prefix));
         editDiv.remove();
         loadList();
-      } catch (err) { showStatus(st, false, err.message); }
+      } catch (err) { showStatus(st, false, `Couldn’t save — ${err.message}`); }
     });
+    guardForm(editDiv);
   }
 
   // -- New form setup ---------------------------------------------------------
 
   const newFormEl = region("new-form");
   initBlanksTable(newFormEl, "new");
+  guardForm(newFormEl);
 
   newFormEl.querySelector('[data-action="cancel-form"]').addEventListener("click", () => {
     newFormEl.querySelectorAll("input,textarea,select").forEach((el) => {
@@ -522,9 +539,9 @@ export function mount(container) {
     const st = newFormEl.querySelector('[data-status="form"]');
     try {
       const r = await apiPost("/api/games/legitlibs/templates", gatherFormBody(newFormEl, "new"));
-      showStatus(st, true, `Created #${r.template_id}`);
+      showStatus(st, true, `Created template #${r.template_id}.`);
       loadList();
-    } catch (err) { showStatus(st, false, err.message); }
+    } catch (err) { showStatus(st, false, `Couldn’t create that template — ${err.message}`); }
   });
 
   function gatherFormBody(formEl, prefix) {
@@ -578,14 +595,14 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
         <label>Status<select data-ctrl="${prefix}-status">${statusOptions}</select></label>
       </div>
       <div class="field">
-        <label>Min players<input type="number" data-ctrl="${prefix}-player_min" style="width:70px;" min="2" /></label>
+        <label>Minimum Players<input type="number" data-ctrl="${prefix}-player_min" style="width:70px;" min="2" /></label>
       </div>
       <div class="field">
-        <label>Max players<input type="number" data-ctrl="${prefix}-player_max" style="width:70px;" /></label>
+        <label>Maximum Players<input type="number" data-ctrl="${prefix}-player_max" style="width:70px;" /></label>
       </div>
     </div>
     <div class="field">
-      <label>Body <small style="font-weight:normal;color:var(--ink-dim,#888);">use {blank_id} for fill-in slots</small>
+      <label>Body <small style="font-weight:normal;color:var(--ink-dim,#888);">wrap each gap in curly braces, like {b1}</small>
         <textarea data-ctrl="${prefix}-body" class="template-body" rows="5" style="width:100%;font-family:monospace;"></textarea>
       </label>
     </div>
@@ -597,10 +614,10 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
         <div>
           <span style="font-weight:600;font-size:13px;">Blanks</span>
-          <span class="field-hint" style="margin-left:6px;">map each {bN} marker to a type</span>
+          <span class="field-hint" style="margin-left:6px;">tell each marker what kind of word to ask for</span>
         </div>
         <div style="display:flex;gap:6px;">
-          <button type="button" class="btn btn-sm btn-primary" data-action="ai-prep">AI prep</button>
+          <button type="button" class="btn btn-sm btn-primary" data-action="ai-prep" title="Let the AI pick the gaps and fill in this table for you">AI Prep</button>
           <button type="button" class="btn btn-sm" data-action="detect-blanks">Detect from Body</button>
           <button type="button" class="btn btn-sm" data-action="add-blank-row">+ Row</button>
         </div>
@@ -609,7 +626,7 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
         <thead>
           <tr>
             <th style="width:90px;">Marker</th>
-            <th style="width:120px;">POS</th>
+            <th style="width:120px;">Part of Speech</th>
             <th style="width:140px;">Domain</th>
             <th style="width:140px;">Form</th>
             <th style="width:36px;"></th>
@@ -618,10 +635,10 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
         <tbody class="blanks-tbody"></tbody>
       </table>
       <p class="blanks-empty empty" style="padding:10px 0;margin:0;">
-        No blanks yet — click Detect from Body or + Row.
+        No blanks yet. Choose Detect from Body to pull the {b1} markers out of your story, or + Row to add one by hand.
       </p>
       <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--rule);">
-        <button type="button" class="btn btn-sm" data-action="check-resolutions">Check Resolutions</button>
+        <button type="button" class="btn btn-sm" data-action="check-resolutions" title="Preview the prompt players will see for each blank">Check Blanks</button>
         <div class="resolution-results mt-8"></div>
       </div>
     </div>

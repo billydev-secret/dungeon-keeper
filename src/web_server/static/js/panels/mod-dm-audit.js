@@ -36,8 +36,8 @@ function restNotes(e) {
 export function mount(container) {
   return auditPanel(container, {
     title: "DM Audit Log",
-    subtitle: "DM permission request and relationship history",
-    empty: "No DM audit entries found.",
+    subtitle: "Who asked whom for DM permission, and what happened next",
+    empty: "No DM or friend-request activity matches these filters. Entries appear as members ask for, accept, or revoke DM permission.",
     filters: [
       {
         name: "action",

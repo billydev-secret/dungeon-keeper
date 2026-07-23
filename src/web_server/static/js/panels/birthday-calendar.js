@@ -17,7 +17,7 @@ function fmtDate(m, d) {
 }
 
 function fmtDaysUntil(n) {
-  if (n === 0) return "Today!";
+  if (n === 0) return "Today";
   if (n === 1) return "Tomorrow";
   return `${n} days`;
 }
@@ -52,9 +52,10 @@ export function mount(container) {
   // Window selector
   const controls = el("div", null);
   controls.className = "controls";
-  const label = el("label", null, "Window ");
+  const label = el("label", null, "Show Birthdays ");
   const windowEl = document.createElement("select");
   windowEl.setAttribute("data-window", "");
+  windowEl.setAttribute("aria-label", "How far ahead to show birthdays");
   for (const w of WINDOWS) {
     const opt = document.createElement("option");
     opt.value = String(w.value);
@@ -75,7 +76,7 @@ export function mount(container) {
 
   async function refresh() {
     const days = parseInt(windowEl.value, 10);
-    summaryEl.textContent = "Loading…";
+    summaryEl.textContent = "Loading birthdays…";
     listEl.innerHTML = "";
 
     let entries;
@@ -83,14 +84,20 @@ export function mount(container) {
       entries = await api("/api/birthday/calendar", { days });
     } catch (err) {
       summaryEl.textContent = "";
-      const errDiv = el("div", null, err.message);
+      const errDiv = el("div", null,
+        `Couldn’t load the birthday calendar — try again. (${err.message})`);
       errDiv.className = "error";
       listEl.appendChild(errDiv);
       return;
     }
 
     if (!entries.length) {
-      summaryEl.textContent = "No birthdays in this window.";
+      summaryEl.textContent = "";
+      const emptyDiv = el("div", null,
+        "No birthdays coming up in this window. Members add theirs with /birthday in "
+        + "Discord — widen the window above to look further ahead.");
+      emptyDiv.className = "empty";
+      listEl.appendChild(emptyDiv);
       return;
     }
 
@@ -102,7 +109,7 @@ export function mount(container) {
     const thead = document.createElement("thead");
     const hrow = document.createElement("tr");
     hrow.style.cssText = "text-align:left; border-bottom:2px solid var(--rule);";
-    for (const label of ["Member", "Date", "In", "Birthday Request"]) {
+    for (const label of ["Member", "Date", "Coming Up In", "Birthday Request"]) {
       const th = el("th", "padding:6px 10px; font-weight:600; font-size:12px; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.05em;", label);
       hrow.appendChild(th);
     }

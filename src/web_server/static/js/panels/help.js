@@ -142,6 +142,31 @@ function extractSectionContent(doc, anchorId) {
   return frag;
 }
 
+// The panel header already renders the section's title, so the manual's own
+// heading (which carries a section number) would show as a second, slightly
+// different title right under it (W-H6). Drop it when it says the same thing
+// as the nav label — but keep an element with the same id in its place so
+// deep links (`?focus=<anchor>`) still have something to scroll to.
+function normalizeTitle(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function dropDuplicateHeading(root, label) {
+  const heading = root.querySelector("h2, h3");
+  if (!heading || heading !== root.firstElementChild) return;
+  const clone = heading.cloneNode(true);
+  clone.querySelectorAll(".section-num").forEach((n) => n.remove());
+  if (normalizeTitle(clone.textContent) !== normalizeTitle(label)) return;
+  if (heading.id) {
+    const anchor = document.createElement("div");
+    anchor.id = heading.id;
+    anchor.className = "dk-help-anchor";
+    heading.replaceWith(anchor);
+  } else {
+    heading.remove();
+  }
+}
+
 function rewriteInternalLinks(root) {
   // Manual uses href="#section-id"; rewrite links whose target is a known
   // help page (h2 or h3 anchor) to dashboard hash routes. Other intra-section
@@ -289,7 +314,7 @@ export async function mount(container, params = {}) {
   h2.textContent = meta.label;
   const subtitle = document.createElement("div");
   subtitle.className = "subtitle";
-  subtitle.textContent = "DungeonKeeper Reference Guide";
+  subtitle.textContent = "Dungeon Keeper Reference Guide";
   titleBox.appendChild(h2);
   titleBox.appendChild(subtitle);
 
@@ -335,6 +360,7 @@ export async function mount(container, params = {}) {
     body.replaceChildren();
     if (sectionFragment) {
       body.appendChild(sectionFragment.cloneNode(true));
+      dropDuplicateHeading(body, meta.label);
       rewriteInternalLinks(body);
     } else {
       const err = document.createElement("p");

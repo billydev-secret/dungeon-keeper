@@ -1,13 +1,15 @@
 import { wGet, wPost, wDelete, esc } from "../wellness-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading partners…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading your partners…")}</div>`;
 
   async function load() {
     let d;
     try { d = await wGet("/api/wellness/partners"); } catch (e) {
-      container.querySelector(".panel").innerHTML = `<div class="error">${e.message}</div>`;
+      container.querySelector(".panel").innerHTML =
+        renderError(`Couldn’t load your partners — try again. (${e.message})`);
       return;
     }
 
@@ -23,7 +25,7 @@ export function mount(container) {
             </div>
           </div>
         `).join("")
-      : '<div class="empty">No active partnerships.</div>';
+      : renderEmpty("No partners yet. Send a request below and, once they accept, you’ll see each other’s streaks.");
 
     const pendingHTML = pending.length
       ? `<div class="section-label">Pending</div>` + pending.map(p => `
@@ -50,8 +52,12 @@ export function mount(container) {
       <div class="section-label">Request Partner</div>
       <form data-req-form class="form w-inline-form">
         <div class="field">
-          <label>Discord User ID</label>
-          <input type="text" name="user_id" required placeholder="e.g. 123456789012345678" />
+          <label for="w-partner-id">Discord User ID
+            <input type="text" name="user_id" id="w-partner-id" required
+                   placeholder="e.g. 123456789012345678" />
+          </label>
+          <div class="field-hint">Turn on Developer Mode in Discord, then right-click your
+            partner and choose Copy User ID. They get a DM asking them to accept.</div>
         </div>
         <button type="submit" class="btn btn-primary">Send Request</button>
         <span data-req-status></span>
@@ -61,9 +67,13 @@ export function mount(container) {
     // Dissolve
     container.querySelectorAll("[data-dissolve]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        if (!(await confirmDialog("Dissolve this partnership?", { danger: true, confirmLabel: "Dissolve" }))) return;
+        const ok = await confirmDialog(
+          "End this partnership? You’ll both stop seeing each other’s streaks and nudges.",
+          { title: "End Partnership", danger: true, confirmLabel: "End Partnership" },
+        );
+        if (!ok) return;
         try { await wDelete(`/api/wellness/partners/${btn.dataset.dissolve}`); load(); }
-        catch (e) { toast(e.message, "error"); }
+        catch (e) { toast(`Couldn’t end the partnership — ${e.message}`, "error"); }
       });
     });
 
@@ -75,11 +85,11 @@ export function mount(container) {
       st.textContent = "";
       try {
         await wPost("/api/wellness/partners/request", { user_id: new FormData(form).get("user_id") });
-        toast("Partner request sent");
+        toast("Partner request sent — they’ll get a DM.");
         load();
       } catch (err) {
         st.className = "save-status save-err";
-        st.textContent = err.message;
+        st.textContent = `Couldn’t send the request — ${err.message}`;
       }
     });
   }

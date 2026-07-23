@@ -10,7 +10,7 @@ export function mount(container, initialParams) {
         <div class="subtitle">Which inviters bring members that stick around</div>
       </header>
       <div class="controls">
-        <label>Active window (days)
+        <label>Counts as Active Within (Days)
           <input type="number" data-control="active_days" min="1" max="365" value="${initialParams.active_days || 30}" />
         </label>
       </div>
@@ -40,7 +40,12 @@ export function mount(container, initialParams) {
   ];
 
   function renderTable() {
-    if (!currentData.length) { tableWrap.innerHTML = ""; return; }
+    if (!currentData.length) {
+      tableWrap.innerHTML = '<div class="empty">No invites recorded in this window. '
+        + 'Dungeon Keeper needs the Manage Server permission to read invites, and only '
+        + 'counts joins from after it started tracking.</div>';
+      return;
+    }
 
     const sorted = [...currentData].sort((a, b) => {
       let av = a[sortKey], bv = b[sortKey];
@@ -80,7 +85,7 @@ export function mount(container, initialParams) {
                 ${i.active ? "Active" : "Inactive"}
               </td>
             </tr>`).join("")
-        : `<tr class="invitee-row"><td colspan="5" style="padding-left:2rem; color:var(--ink-mute)">No invitees recorded</td></tr>`;
+        : `<tr class="invitee-row"><td colspan="5" style="padding-left:2rem; color:var(--ink-mute)">No joins recorded for this inviter</td></tr>`;
 
       return mainRow + inviteeRows;
     }).join("");
@@ -132,12 +137,12 @@ export function mount(container, initialParams) {
 
       statsEl.textContent = data.total_invites
         ? `Total invites: ${data.total_invites}  \u00b7  Still active: ${data.total_active}  \u00b7  Retention: ${data.overall_retention_pct}%`
-        : "No invite data found.";
+        : "No invites recorded in this window.";
 
       const wrap = container.querySelector(".chart-wrap");
       const inviters = data.inviters.slice(0, 20);
       if (!inviters.length) {
-        wrap.innerHTML = `<div class="empty">No invite data for the selected period.</div>`;
+        wrap.innerHTML = `<div class="empty">No invites recorded in this window. Widen the range to see older invites.</div>`;
         currentData = [];
         renderTable();
         return;
@@ -155,7 +160,7 @@ export function mount(container, initialParams) {
       renderTable();
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load invite effectiveness — try again. (${esc(err.message)})</div>`;
       currentData = [];
       renderTable();
     }

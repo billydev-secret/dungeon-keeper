@@ -6,10 +6,10 @@ import { renderSortableTable } from "../table.js";
 const METRICS = [
   { value: "message_count",  label: "Messages" },
   { value: "total_xp",       label: "XP Earned" },
-  { value: "gini",           label: "Gini Coefficient" },
-  { value: "avg_sentiment",  label: "Avg Sentiment" },
+  { value: "gini",           label: "Gini Coefficient (Conversation Spread)" },
+  { value: "avg_sentiment",  label: "Average Sentiment" },
   { value: "unique_authors", label: "Unique Authors" },
-  { value: "trend_pct",      label: "Trend %" },
+  { value: "trend_pct",      label: "Trend (Percent Change)" },
 ];
 
 export function mount(container, initialParams) {
@@ -64,7 +64,7 @@ export function mount(container, initialParams) {
       const channels = sorted.slice(0, 25);
 
       if (!channels.length) {
-        wrap.innerHTML = `<div class="empty">No channel data for the selected period.</div>`;
+        wrap.innerHTML = `<div class="empty">No channel activity in this window. Pick a longer range, or check that Dungeon Keeper can read your busy channels.</div>`;
         tableWrap.innerHTML = "";
         return;
       }
@@ -96,9 +96,10 @@ export function mount(container, initialParams) {
         ],
         data: data.channels,
         defaultSort: metric,
+        emptyMsg: "No channel activity in this window.",
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load the channel comparison — try again. (${esc(err.message)})</div>`;
       tableWrap.innerHTML = "";
     }
   }

@@ -26,12 +26,12 @@ export function mount(container, initialParams) {
 
   // Inject focus-user selector into controls
   const focusLabel = document.createElement("label");
-  focusLabel.textContent = "Focus user ";
+  focusLabel.textContent = "Focus Member ";
   const focusSel = document.createElement("select");
   focusSel.dataset.control = "focus-user";
   const defaultOpt = document.createElement("option");
   defaultOpt.value = "";
-  defaultOpt.textContent = "— all pairs —";
+  defaultOpt.textContent = "All pairs";
   focusSel.appendChild(defaultOpt);
   focusLabel.appendChild(focusSel);
   container.querySelector(".controls").appendChild(focusLabel);
@@ -68,6 +68,8 @@ export function mount(container, initialParams) {
         ],
         data: lastPairs,
         defaultSort: "weight",
+        emptyMsg: "No interaction pairs in this window.",
+        maxRows: 300,
       });
       return;
     }
@@ -89,6 +91,8 @@ export function mount(container, initialParams) {
       ],
       data: rows,
       defaultSort: "pct_share",
+      emptyMsg: "This member has no recorded replies or mentions in this window.",
+      maxRows: 300,
     });
   }
 
@@ -107,7 +111,7 @@ export function mount(container, initialParams) {
 
       if (!data.top_pairs.length) {
         if (chart) { chart.destroy(); chart = null; }
-        wrap.innerHTML = `<div class="empty">No interaction data.</div>`;
+        wrap.innerHTML = `<div class="empty">No replies or mentions recorded in this window. Widen the range, or run Config › Admin Backfill › Interaction Graph to fill in history from before Dungeon Keeper started tracking.</div>`;
         pairsWrap.innerHTML = "";
         nodesWrap.innerHTML = "";
         return;
@@ -142,9 +146,11 @@ export function mount(container, initialParams) {
         ],
         data: data.nodes,
         defaultSort: "total_outbound",
+        emptyMsg: "No members with recorded interactions in this window.",
+        maxRows: 300,
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load the interaction graph — try again. (${esc(err.message)})</div>`;
       pairsWrap.innerHTML = "";
       nodesWrap.innerHTML = "";
     }

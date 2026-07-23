@@ -31,10 +31,6 @@ export function mount(container, initialParams) {
   }
 
   function renderTable(entries) {
-    if (!entries || !entries.length) {
-      tableWrap.innerHTML = "";
-      return;
-    }
     renderSortableTable(tableWrap, {
       columns: [
         { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
@@ -45,8 +41,11 @@ export function mount(container, initialParams) {
         { key: "greeter_name", label: "Greeted By", format: (v, r) => r.greeter_name || r.greeter_id || "—" },
         { key: "left_at", label: "Left", format: (v) => fmtTs(v) },
       ],
-      data: entries,
+      data: entries || [],
       defaultSort: "joined_at",
+      emptyMsg: "No joins in this window. This report reads the join / leave log and the "
+        + "greeter chat channel — set both in Config › Welcome & Leave if they look empty.",
+      maxRows: 300,
     });
   }
 
@@ -74,7 +73,7 @@ export function mount(container, initialParams) {
 
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
-        wrap.innerHTML = `<div class="empty">No greeted joins for the selected period.</div>`;
+        wrap.innerHTML = `<div class="empty">Nobody was greeted in this window. New members are still listed below if they joined.</div>`;
         renderTable(data.entries || []);
         return;
       }
@@ -90,7 +89,7 @@ export function mount(container, initialParams) {
       renderTable(data.entries || []);
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load greeter response times — try again. (${esc(err.message)})</div>`;
       tableWrap.innerHTML = "";
     }
   }

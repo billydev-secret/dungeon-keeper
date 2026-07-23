@@ -35,14 +35,14 @@ export function mount(container) {
 
   return auditPanel(container, {
     title: "Guess Who Audit",
-    subtitle: "Recent submit, delete, solve, and guess-cap events for the Guess game",
-    empty: "No audit events yet.",
+    subtitle: "Recent submit, delete, solve, and guess-cap events from Guess Who",
+    empty: "No Guess Who activity yet. Submissions, deletions, and solves appear here once members start a round.",
     filters: [
       {
         name: "action",
         label: "Action",
         options: [
-          { value: "", label: "All" },
+          { value: "", label: "All actions" },
           ...Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label })),
         ],
       },

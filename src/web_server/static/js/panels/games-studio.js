@@ -1,5 +1,6 @@
 import { api, apiPost, esc } from "../api.js";
-import { apiPut, showStatus } from "../config-helpers.js";
+import { apiPut, showStatus, guardForm } from "../config-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -32,21 +33,21 @@ export function mount(container, params = {}) {
     <div class="panel">
       <header>
         <h2>${esc(gameName)} — Prompts &amp; AI</h2>
-        <div class="subtitle">${esc(hint)} Edit AI prompts and test generation.</div>
+        <div class="subtitle">${esc(hint)} Edit the prompts Dungeon Keeper sends the AI, then generate a batch and keep the lines you like.</div>
       </header>
 
       <section>
         <div class="section-label">Game Prompt</div>
         <div class="form" data-region="game-form">
-          <div class="empty">Loading…</div>
+          ${renderLoading("Loading prompts…")}
         </div>
       </section>
 
       <section style="margin-top:20px;">
         <div class="section-label">Global Context</div>
-        <div class="field-hint">Shared across all games. Changes here affect every game type.</div>
+        <div class="field-hint">Shared by every game. Editing anything here changes generation for all of them, not just this one.</div>
         <div class="form" data-region="global-form">
-          <div class="empty">Loading…</div>
+          ${renderLoading("Loading global context…")}
         </div>
       </section>
 
@@ -63,7 +64,7 @@ export function mount(container, params = {}) {
               </label>
             </div>
             <div class="field m-0">
-              <label>Count
+              <label>How Many
                 <select data-ctrl="count">
                   <option value="1">1</option>
                   <option value="3">3</option>
@@ -76,13 +77,13 @@ export function mount(container, params = {}) {
             <button class="btn btn-primary" data-action="generate">Generate</button>
           </div>
           <div class="mt-8">
-            <button class="btn" data-action="toggle-custom" style="font-size:12px;padding:2px 8px;">Custom Prompt</button>
+            <button class="btn" data-action="toggle-custom" style="font-size:12px;padding:2px 8px;">Try a One-Off Prompt</button>
             <div data-region="custom-prompt" style="display:none;margin-top:6px;">
-              <textarea class="w-full" data-ctrl="custom-prompt" rows="3" placeholder="Override the user prompt sent to the AI (optional)"></textarea>
+              <textarea class="w-full" data-ctrl="custom-prompt" rows="3" placeholder="Optional: replace the user prompt above for this run only. Nothing is saved."></textarea>
             </div>
           </div>
         </div>
-        <div data-region="results" style="margin-top:12px;"><div class="empty">Results will appear here after generation.</div></div>
+        <div data-region="results" style="margin-top:12px;"><div class="empty">Nothing generated yet. Pick a category and a count, then choose Generate — you can edit each line before adding it to the bank.</div></div>
         <div data-region="add-selected" style="display:none;margin-top:10px;">
           <button class="btn btn-primary" data-action="add-selected">Add Selected to Bank</button>
           <span data-status="add-sel" class="save-status" style="margin-left:8px;"></span>
@@ -104,17 +105,19 @@ export function mount(container, params = {}) {
           <label>Descriptor
             <input class="w-full" type="text" data-ctrl="descriptor" value="${esc((g.descriptor || "")).replace(/"/g, "&quot;")}" />
           </label>
-          <div class="field-hint">Short label used in the AI system prompt context.</div>
+          <div class="field-hint">A short phrase describing this game, dropped into the AI system prompt — for example "two-option dilemmas".</div>
         </div>
         <div class="field">
-          <label>User prompt
+          <label>User Prompt
             <textarea class="w-full" data-ctrl="user_prompt" rows="4">${esc(g.user_prompt || "")}</textarea>
           </label>
+          <div class="field-hint">The instruction the AI actually receives. One question per line is what the importer expects.</div>
         </div>
         <div class="field">
-          <label>Max tokens
+          <label>Maximum Tokens
             <input type="number" data-ctrl="max_tokens" value="${g.max_tokens || 200}" min="50" max="800" style="width:120px;" />
           </label>
+          <div class="field-hint">Caps how long one generation can run. Raise it if long batches come back cut off.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;">
           <button class="btn btn-primary" data-action="save-game">Save Game Prompt</button>
@@ -124,29 +127,33 @@ export function mount(container, params = {}) {
 
       region("global-form").innerHTML = `
         <div class="field">
-          <label>Audience description
+          <label>Audience Description
             <textarea class="w-full" data-ctrl="audience" rows="3">${esc(cfg.audience || "")}</textarea>
           </label>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
           <div class="field m-0">
-            <label>SFW tone
+            <label>SFW Tone
               <textarea class="w-full" data-ctrl="sfw_tone" rows="3">${esc(cfg.sfw_tone || "")}</textarea>
             </label>
           </div>
           <div class="field m-0">
-            <label>NSFW tone
+            <label>NSFW Tone
               <textarea class="w-full" data-ctrl="nsfw_tone" rows="3">${esc(cfg.nsfw_tone || "")}</textarea>
             </label>
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-          <button class="btn btn-primary" data-action="save-global">Save Global</button>
+          <button class="btn btn-primary" data-action="save-global">Save Global Context</button>
           <span data-status="global" class="save-status"></span>
         </div>
       `;
+      guardForm(region("game-form"));
+      guardForm(region("global-form"));
     } catch (err) {
-      region("game-form").innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
+      const msg = `Couldn’t load the AI prompts — try again. (${err.message})`;
+      region("game-form").innerHTML = renderError(msg);
+      region("global-form").innerHTML = renderError(msg);
     }
   }
 
@@ -164,7 +171,7 @@ export function mount(container, params = {}) {
         });
         showStatus(st, true, "Saved");
       } catch (err) {
-        showStatus(st, false, err.message);
+        showStatus(st, false, `Couldn’t save — ${err.message}`);
       }
       return;
     }
@@ -179,14 +186,18 @@ export function mount(container, params = {}) {
         });
         showStatus(st, true, "Saved");
       } catch (err) {
-        showStatus(st, false, err.message);
+        showStatus(st, false, `Couldn’t save — ${err.message}`);
       }
       return;
     }
 
     if (action === "toggle-custom") {
       const r = region("custom-prompt");
-      r.style.display = r.style.display === "none" ? "" : "none";
+      const opening = r.style.display === "none";
+      r.style.display = opening ? "" : "none";
+      const tbtn = e.target.closest("[data-action]");
+      tbtn.setAttribute("aria-expanded", opening ? "true" : "false");
+      tbtn.textContent = opening ? "Use the Saved Prompt" : "Try a One-Off Prompt";
       return;
     }
 
@@ -198,7 +209,7 @@ export function mount(container, params = {}) {
 
       btn.disabled = true;
       btn.textContent = "Generating…";
-      region("results").innerHTML = `<div class="empty">Generating ${count} question(s)…</div>`;
+      region("results").innerHTML = renderLoading(`Generating ${count} question${count === 1 ? "" : "s"}…`);
       region("add-selected").style.display = "none";
       pendingResults = [];
 
@@ -216,7 +227,7 @@ export function mount(container, params = {}) {
           region("results").appendChild(errEl);
         }
       } catch (err) {
-        region("results").innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
+        region("results").innerHTML = renderError(`Generation failed — try again. (${err.message})`);
       } finally {
         btn.disabled = false;
         btn.textContent = "Generate";
@@ -237,7 +248,7 @@ export function mount(container, params = {}) {
           if (text) toAdd.push(text);
         }
       });
-      if (!toAdd.length) { showStatus(st, false, "Nothing selected"); return; }
+      if (!toAdd.length) { showStatus(st, false, "Tick at least one line first."); return; }
       let added = 0, failed = 0;
       for (const text of toAdd) {
         try {
@@ -245,21 +256,29 @@ export function mount(container, params = {}) {
           added++;
         } catch (_) { failed++; }
       }
-      showStatus(st, failed === 0, `Added ${added}${failed ? ", " + failed + " failed" : ""}`);
+      showStatus(
+        st,
+        failed === 0,
+        failed
+          ? `Added ${added}, but ${failed} couldn’t be saved — try those again.`
+          : `Added ${added} question${added === 1 ? "" : "s"} to the bank.`,
+      );
     }
   });
 
   function renderResults(results) {
     const reg = region("results");
     if (!results.length) {
-      reg.innerHTML = `<div class="empty">No results generated.</div>`;
+      reg.innerHTML = renderEmpty("The AI returned nothing. Try again, or loosen the prompt above.");
       return;
     }
     let html = `<div style="display:flex;flex-direction:column;gap:8px;">`;
     for (let i = 0; i < results.length; i++) {
       html += `<div style="display:flex;gap:8px;align-items:flex-start;">
-        <input type="checkbox" data-check="${i}" checked style="margin-top:6px;flex-shrink:0;" />
-        <textarea data-result="${i}" rows="2" style="flex:1;">${esc(results[i])}</textarea>
+        <input type="checkbox" data-check="${i}" checked style="margin-top:6px;flex-shrink:0;"
+               aria-label="Add generated question ${i + 1} to the bank" />
+        <textarea data-result="${i}" rows="2" style="flex:1;"
+                  aria-label="Generated question ${i + 1}">${esc(results[i])}</textarea>
       </div>`;
     }
     html += `</div>`;

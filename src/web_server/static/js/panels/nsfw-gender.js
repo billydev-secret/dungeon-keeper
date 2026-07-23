@@ -24,8 +24,8 @@ export function mount(container, initialParams) {
         </label>
         <label>Display
           <select data-control="display">
-            <option value="bar">Stacked bar</option>
-            <option value="line">Line chart</option>
+            <option value="bar">Stacked Bar</option>
+            <option value="line">Line Chart</option>
           </select>
         </label>
         <label>Channel
@@ -33,7 +33,7 @@ export function mount(container, initialParams) {
         </label>
         <label style="flex-direction:row; align-items:center; gap:6px;">
           <input type="checkbox" data-control="media_only" />
-          Media only
+          Media Only
         </label>
       </div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
@@ -64,7 +64,12 @@ export function mount(container, initialParams) {
         chanEl.appendChild(opt);
       }
       if (initialParams.channel_id) chanEl.value = initialParams.channel_id;
-    } catch (_) {}
+    } catch (err) {
+      const opt = document.createElement("option");
+      opt.disabled = true;
+      opt.textContent = "Channel list failed to load — reload the page";
+      chanEl.appendChild(opt);
+    }
   }
 
   async function refresh() {
@@ -87,7 +92,7 @@ export function mount(container, initialParams) {
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
       if (!data.series.length) {
-        wrap.innerHTML = `<div class="empty">No posting data for this period.</div>`;
+        wrap.innerHTML = `<div class="empty">No NSFW posting recorded in this window. Widen the resolution, or clear the Media Only filter.</div>`;
         sliderWrap.innerHTML = "";
         return;
       }
@@ -108,7 +113,7 @@ export function mount(container, initialParams) {
       sliderWrap.innerHTML = "";
       slider = mountTimeSlider(sliderWrap, { totalPoints: data.labels.length, labels: data.labels, onChange: renderChart });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load NSFW activity by gender — try again. (${esc(err.message)})</div>`;
     }
   }
 

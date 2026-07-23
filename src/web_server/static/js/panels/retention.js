@@ -11,7 +11,7 @@ export function mount(container, initialParams) {
         <div class="subtitle">Members who slowed down or stopped posting</div>
       </header>
       <div class="controls">
-        <label>Min previous msgs
+        <label>Minimum Previous Messages
           <input type="number" data-control="min_previous" min="1" max="100" value="${initialParams.min_previous || 5}" />
         </label>
         <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
@@ -49,7 +49,7 @@ export function mount(container, initialParams) {
     const dropKey = normalize ? "normalized_drop_pct" : "drop_pct";
     const serverChg = data.server_activity_change_pct;
     const normNote = normalize
-      ? ` (normalized \u2014 server activity ${serverChg >= 0 ? "+" : ""}${serverChg}%)`
+      ? ` (normalized — server activity ${serverChg >= 0 ? "+" : ""}${serverChg}%)`
       : "";
 
     statsEl.textContent = `${data.total_dropoffs} members with activity drops over ${data.period_days}-day window${normNote}`;
@@ -59,7 +59,7 @@ export function mount(container, initialParams) {
     const wrap = container.querySelector(".chart-wrap");
     const entries = sorted.slice(0, 20);
     if (!entries.length) {
-      wrap.innerHTML = `<div class="empty">No dropoffs detected for this period.</div>`;
+      wrap.innerHTML = `<div class="empty">Nobody slowed down in this window — that is good news. Shorten the period, or lower the minimum-messages bar, to widen the search.</div>`;
       tableWrap.innerHTML = "";
       return;
     }
@@ -77,15 +77,17 @@ export function mount(container, initialParams) {
         { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
         { key: "msgs_prev", label: "Previous" },
         { key: "msgs_recent", label: "Recent" },
-        { key: "drop_pct", label: "Raw Drop", format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
-        { key: "normalized_drop_pct", label: "Normalized", format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
-        { key: "days_active_prev", label: "Days (prev)" },
-        { key: "days_active_recent", label: "Days (recent)" },
+        { key: "drop_pct", label: "Raw Drop %", format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
+        { key: "normalized_drop_pct", label: "Normalized Drop %", format: (v) => `<span style="color:#9E3B2E">${v}%</span>` },
+        { key: "days_active_prev", label: "Active Days (Previous)" },
+        { key: "days_active_recent", label: "Active Days (Recent)" },
         { key: "last_seen_ts", label: "Last Seen", format: (v) => fmtDate(v) },
         { key: "level", label: "Level" },
       ],
       data: sorted,
       defaultSort: dropKey,
+      emptyMsg: "Nobody slowed down in this window.",
+      maxRows: 300,
     });
   }
 
@@ -102,7 +104,7 @@ export function mount(container, initialParams) {
       render(cachedData);
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load activity drops — try again. (${esc(err.message)})</div>`;
       tableWrap.innerHTML = "";
     }
   }

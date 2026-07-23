@@ -47,7 +47,7 @@ export function mount(container, initialParams) {
 
       statsEl.textContent = data.total_sessions
         ? `Sessions: ${data.total_sessions}  ·  Total: ${fmtMin(data.total_minutes)}  ·  Avg: ${fmtMin(data.avg_session_minutes)}`
-        : "No voice data.";
+        : "No voice sessions in this window. Voice time is tracked from the moment Dungeon Keeper joined — widen the range, or wait for members to hop into a voice channel.";
 
       // Hour chart
       const hourWrap = container.querySelector("[data-chart-hour]").parentElement;
@@ -79,18 +79,22 @@ export function mount(container, initialParams) {
       if (data.top_users.length) {
         renderSortableTable(tableWrap, {
           columns: [
-            { key: "user_name", label: "User", format: (v, r) => r.user_name || r.user_id },
+            { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
             { key: "total_minutes", label: "Total Time", format: (v) => fmtMin(v) },
             { key: "session_count", label: "Sessions" },
             { key: "avg_minutes", label: "Avg Session", format: (v) => fmtMin(v) },
           ],
           data: data.top_users,
           defaultSort: "total_minutes",
+          emptyMsg: "No voice sessions in this window.",
+          maxRows: 200,
         });
-      } else { tableWrap.innerHTML = ""; }
+      } else {
+        tableWrap.innerHTML = `<div class="empty">No voice sessions in this window.</div>`;
+      }
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector("[data-chart-hour]").parentElement.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector("[data-chart-hour]").parentElement.innerHTML = `<div class="error">Couldn’t load voice activity — try again. (${esc(err.message)})</div>`;
       tableWrap.innerHTML = "";
     }
   }

@@ -18,10 +18,10 @@ export function mount(container, initialParams) {
         <div class="subtitle">Members missing a grant role, split by why</div>
       </header>
       <div class="controls">
-        <label>Grant role
-          <select data-control="grant"><option value="">Loading…</option></select>
+        <label>Grant Role
+          <select data-control="grant"><option value="">Loading grant roles…</option></select>
         </label>
-        <label>Min level
+        <label>Minimum Level
           <input data-control="min-level" type="number" min="1" max="100" value="${parseInt(initialParams.min_level) || 5}" style="width:5em;">
         </label>
       </div>
@@ -59,20 +59,23 @@ export function mount(container, initialParams) {
     try {
       const config = await loadConfig();
       names = Object.entries(config.roles || {});
-    } catch (_) { /* select stays empty; refresh() will no-op */ }
+    } catch (err) {
+      statusEl.className = "error";
+      statusEl.textContent = "Couldn’t load your grant roles — reload the page to try again.";
+    }
     const wanted = initialParams.grant_name || "nsfw";
     grantEl.innerHTML = names
       .map(([name, cfg]) => {
         const sel = name === wanted ? " selected" : "";
         return `<option value="${esc(name)}"${sel}>${esc(cfg.label || name)}</option>`;
       })
-      .join("") || '<option value="">(no grant roles configured)</option>';
+      .join("") || '<option value="">No grant roles configured yet</option>';
     if (grantEl.value) refresh();
   })();
 
-  function renderBucket(wrap, rows, { withPruned }) {
+  function renderBucket(wrap, rows, { withPruned, emptyMsg }) {
     if (!rows.length) {
-      wrap.innerHTML = '<p class="subtitle">Nobody in this bucket. 🎉</p>';
+      wrap.innerHTML = `<div class="empty">${emptyMsg}</div>`;
       return;
     }
     const columns = [
@@ -82,22 +85,25 @@ export function mount(container, initialParams) {
     if (withPruned) {
       columns.push({
         key: "pruned_at",
-        label: "Days since stripped",
+        label: "Days Since Stripped",
         // null = implicit strip: grant recorded, removal never was (bot downtime)
-        format: (v) => (v == null ? "unrecorded" : daysSince(v)),
+        format: (v) => (v == null ? "Not recorded" : daysSince(v)),
       });
     }
     renderSortableTable(wrap, {
       columns,
       data: rows,
       defaultSort: withPruned ? "pruned_at" : "level",
+      emptyMsg,
+      maxRows: 200,
     });
   }
 
   async function refresh() {
     if (!grantEl.value) return;
     const minLevel = Math.max(1, parseInt(minLevelEl.value) || 5);
-    statusEl.textContent = "Loading…";
+    statusEl.className = "";
+    statusEl.textContent = "Loading grant audit…";
     history.replaceState(
       null,
       "",
@@ -109,16 +115,29 @@ export function mount(container, initialParams) {
         api("/api/reports/grant-audit", { grant_name: grantEl.value, min_level: minLevel })
       );
       statusEl.textContent =
-        `${data.label} — ${data.waiting_first_grant.length} waiting, ` +
-        `${data.stripped_returned.length} stripped-but-returned, ` +
-        `${data.recent_inactive.length} recently stripped (still inactive). ` +
-        `Inactivity window: ${data.inactivity_days}d.`;
-      renderBucket(wraps.waiting, data.waiting_first_grant, { withPruned: false });
-      renderBucket(wraps.returned, data.stripped_returned, { withPruned: true });
-      renderBucket(wraps.inactive, data.recent_inactive, { withPruned: true });
+        `${data.label} — ${data.waiting_first_grant.length} waiting for a first grant, ` +
+        `${data.stripped_returned.length} stripped but back, ` +
+        `${data.recent_inactive.length} recently stripped and still quiet. ` +
+        `Inactivity window: ${data.inactivity_days} days.`;
+      renderBucket(wraps.waiting, data.waiting_first_grant, {
+        withPruned: false,
+        emptyMsg: "Nobody is waiting — everyone at or above the level bar already has the role.",
+      });
+      renderBucket(wraps.returned, data.stripped_returned, {
+        withPruned: true,
+        emptyMsg: "Nobody who was stripped for inactivity has come back and stayed unre-granted.",
+      });
+      renderBucket(wraps.inactive, data.recent_inactive, {
+        withPruned: true,
+        emptyMsg: "Nobody has been stripped for inactivity recently.",
+      });
     } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
-      for (const wrap of Object.values(wraps)) wrap.textContent = "";
+      statusEl.className = "";
+      statusEl.textContent = "";
+      const msg = `Couldn’t load the grant audit — try again. (${err.message})`;
+      for (const wrap of Object.values(wraps)) {
+        wrap.innerHTML = `<div class="error">${esc(msg)}</div>`;
+      }
     }
   }
 

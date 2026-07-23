@@ -15,13 +15,13 @@ export function mount(container, initialParams) {
         <div class="subtitle">When members joined the server</div>
       </header>
       <div class="controls">
-        <label>Group by
+        <label>Group By
           <select data-control="resolution">
             ${RESOLUTIONS.map((r) => `<option value="${r.value}">${r.label}</option>`).join("")}
           </select>
         </label>
       </div>
-      <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div class="chart-wrap"><div class="empty">Loading join times…</div></div>
     </div>
   `;
 
@@ -35,6 +35,11 @@ export function mount(container, initialParams) {
     try {
       const data = await withLoading(wrap, api("/api/reports/join-times", { resolution: resEl.value }));
       if (chart) { chart.destroy(); chart = null; }
+      if (!data.counts || !data.counts.some((n) => n > 0)) {
+        wrap.innerHTML = '<div class="empty">No join history recorded yet. '
+          + 'Dungeon Keeper logs joins from the moment it joined your server.</div>';
+        return;
+      }
       wrap.innerHTML = '<canvas data-chart></canvas>';
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: data.labels,
@@ -43,7 +48,7 @@ export function mount(container, initialParams) {
         yLabel: "Members joined",
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load join times — try again. (${esc(err.message)})</div>`;
     }
   }
 

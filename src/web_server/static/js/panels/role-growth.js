@@ -22,9 +22,9 @@ export function mount(container, initialParams) {
             ${RESOLUTIONS.map((r) => `<option value="${r.value}">${r.label}</option>`).join("")}
           </select>
         </label>
-        <label>Add Role
+        <label>Add a Role
           <div class="filter-select" data-role-search>
-            <input class="filter-select-input" data-role-input type="text" placeholder="Search roles…" autocomplete="off" />
+            <input class="filter-select-input" data-role-input type="text" placeholder="Search roles…" aria-label="Search roles to add to the chart" autocomplete="off" />
             <div class="filter-select-list" data-role-list></div>
           </div>
         </label>
@@ -119,7 +119,9 @@ export function mount(container, initialParams) {
       }
       renderPills();
     } catch (err) {
-      console.warn("could not load roles list:", err);
+      // Console-only failure looked like "this server has no roles" — say so.
+      selectedWrap.innerHTML =
+        '<div class="error">Couldn’t load the role list — reload the page to try again.</div>';
     }
   }
 
@@ -140,7 +142,7 @@ export function mount(container, initialParams) {
       if (slider) { slider.destroy(); slider = null; }
       if (!data.series.length) {
         const wrap = container.querySelector(".chart-wrap");
-        wrap.innerHTML = `<div class="empty">No role grant history recorded yet.</div>`;
+        wrap.innerHTML = `<div class="empty">No role changes recorded for these roles yet. Dungeon Keeper logs grants and removals from the moment it joined — run Config › Admin Backfill › Role Events to fill in history from before that.</div>`;
         sliderWrap.innerHTML = "";
         return;
       }
@@ -164,7 +166,7 @@ export function mount(container, initialParams) {
       });
     } catch (err) {
       const wrap = container.querySelector(".chart-wrap");
-      wrap.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      wrap.innerHTML = `<div class="error">Couldn’t load role growth — try again. (${esc(err.message)})</div>`;
     }
   }
 

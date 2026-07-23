@@ -1,19 +1,21 @@
 import { wGet, esc } from "../wellness-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading history…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading your weekly reports…")}</div>`;
 
   (async () => {
     let d;
     try { d = await wGet("/api/wellness/history"); } catch (e) {
-      container.querySelector(".panel").innerHTML = `<div class="error">${e.message}</div>`;
+      container.querySelector(".panel").innerHTML =
+        renderError(`Couldn’t load your weekly reports — try again. (${e.message})`);
       return;
     }
 
     if (!d.reports.length) {
       container.querySelector(".panel").innerHTML = `
         <header><h2>Weekly Reports</h2></header>
-        <div class="empty">No weekly reports yet. Reports are generated each Sunday.</div>`;
+        ${renderEmpty("No weekly reports yet. Dungeon Keeper writes one every Sunday once you have a full week of wellness history.")}`;
       return;
     }
 
@@ -21,8 +23,8 @@ export function mount(container) {
       const s = r.summary;
       const statsHTML = s.total_messages !== undefined
         ? `<div class="w-report-stats">
-            <span>${s.total_messages || 0} msgs</span>
-            <span>${s.caps_hit || 0} cap hits</span>
+            <span>${s.total_messages || 0} messages</span>
+            <span>${s.caps_hit || 0} caps hit</span>
             <span>${s.blackout_violations || 0} blackout violations</span>
             <span>${Math.round((s.compliance_pct || 0) * 100)}% compliance</span>
           </div>`

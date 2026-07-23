@@ -26,15 +26,15 @@ const ACTION_COLORS = {
 
 export function mount(container) {
   return auditPanel(container, {
-    title: "Audit Log",
-    subtitle: "Moderation action history",
-    empty: "No audit entries found.",
+    title: "Moderation Audit Log",
+    subtitle: "Every jail, warning, and ticket action your moderators have taken",
+    empty: "No moderation actions match these filters. Jails, warnings, and ticket activity land here as moderators use them.",
     filters: [
       {
         name: "action",
         label: "Action",
         options: [
-          { value: "", label: "All" },
+          { value: "", label: "All actions" },
           ...Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label })),
         ],
       },
