@@ -47,6 +47,13 @@ from migrations import apply_migrations_sync
         "sup",
         "what's up",
         "greetings",
+        "good timezone",
+        "Good Timezone!",
+        "how's everyone's evening",
+        "how's everyone's evening going",
+        "how is your morning",
+        "how's your day",
+        "how's y'all's evening",
     ],
 )
 def test_is_greeting_positive(text):
@@ -65,6 +72,9 @@ def test_is_greeting_positive(text):
         "himalayan salt lamps are great",  # "hi" prefix only
         "I said good morning earlier",  # greeting not at the start
         "hey can someone explain this whole ranked system to me in detail please",  # >8 words
+        "how's this bug even possible",  # "how's" without a check-in subject
+        "how's the weather where you live today at all",  # not everyone/your + time word
+        "how do I fix this",
     ],
 )
 def test_is_greeting_negative(text):
