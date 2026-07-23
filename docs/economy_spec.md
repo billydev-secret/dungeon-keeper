@@ -1032,18 +1032,20 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
 - **Shop panel (shipped):** **`/bank post-shop [channel]`** [mod] posts the
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
-  prices templated from `EconSettings`, feature-gated rows annotated and
-  their buttons disabled) with one **`ShopRentButton` per self-perk — a
-  `DynamicItem` (`econ_shop_panel:<perk>`) re-registered in `cog_load`, so
-  the buttons survive restarts with no per-message view store.** Any member
-  can click; settings and the feature gate are re-read on every click (the
-  panel can outlive a re-pricing), and every reply is ephemeral to the
-  clicker. The rent flow itself (`_rent_perk_flow`) is shared with the
-  ephemeral `/bank shop` view. Panel ids persist as `econ_shop_channel_id` /
-  `econ_shop_message_id` (guide-panel pattern: same-channel repost edits in
-  place — embed **and** view — another channel deletes + reposts). Button
-  labels carry no price (the embed's table does), so re-pricing only needs
-  the embed refreshed. Gifting stays command-only (`/bank gift` needs a
+  prices templated from `EconSettings`, feature-gated rows annotated) with a
+  **single 🛍️ Open Shop button** (`ShopPanelView`, static custom_id
+  `econ_shop_open`, re-registered in `cog_load` — the GuideView pattern).
+  Clicking it serves the clicker's exact `/bank shop` ephemeral menu
+  (`open_personal_shop`, shared with the slash command), so the panel and
+  the personal menu are one code path — rent, customise, and Cancel & Refund
+  all exist on both surfaces by construction, and everything is re-read at
+  click time (the panel can outlive a re-pricing). **Legacy panels** posted
+  before the launcher carried one `ShopRentButton` per perk (`DynamicItem`,
+  `econ_shop_panel:<perk>`); those stay registered but now also just open
+  the personal menu — a repost replaces them. Panel ids persist as
+  `econ_shop_channel_id` / `econ_shop_message_id` (guide-panel pattern:
+  same-channel repost edits in place — embed **and** view — another channel
+  deletes + reposts). Gifting stays command-only (`/bank gift` needs a
   target member, which a button can't carry).
 - **Leaderboard panel (shipped, live):** **`/bank post-leaderboard
   [channel]`** [mod] posts a single live status embed — the economy's

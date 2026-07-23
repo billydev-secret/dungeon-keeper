@@ -1158,8 +1158,7 @@ async def _rent_perk_flow(
 ) -> None:
     """Rent a self-perk from a shop button, then project the role.
 
-    Shared by the ephemeral /bank shop view and the persistent channel panel —
-    every reply is ephemeral to the clicker, and a successful rent carries the
+    Every reply is ephemeral to the clicker, and a successful rent carries the
     perk's customise button so styling happens without leaving the message.
     """
     ctx = cog.ctx
@@ -1223,17 +1222,62 @@ async def _rent_perk_flow(
     )
 
 
+async def _open_shop_from_panel(interaction: discord.Interaction) -> None:
+    """Route a persistent panel click to the clicker's personal shop menu.
+
+    Shared by the panel's Open Shop button and legacy per-perk rent buttons.
+    The cog is resolved at click time — the panel outlives reloads, so
+    nothing rendered at post time is trusted at click time.
+    """
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "❌ The shop only works in a server.", ephemeral=True
+        )
+        return
+    bot = cast("Bot", interaction.client)
+    cog = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
+    if cog is None:  # cog unloaded mid-flight; the panel button outlives it
+        await interaction.response.send_message(
+            "❌ The shop isn't available right now.", ephemeral=True
+        )
+        return
+    await cog.open_personal_shop(interaction)
+
+
+class ShopPanelView(discord.ui.View):
+    """The channel shop panel's single persistent Open Shop button.
+
+    Carries no per-message state, so it's a static-custom_id view (the
+    GuideView pattern) re-registered in ``cog_load`` rather than a
+    DynamicItem. The button serves the clicker's exact `/bank shop` menu as
+    an ephemeral reply — one shop menu, so the panel can't drift from it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="🛍️ Open Shop",
+        style=discord.ButtonStyle.primary,
+        custom_id="econ_shop_open",
+    )
+    async def _open(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        await _open_shop_from_panel(interaction)
+
+
 class ShopRentButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(r"econ_shop_panel:(?P<perk>[a-z_]+)"),
 ):
-    """Persistent shop-panel rent button; ``custom_id`` carries the perk.
+    """Legacy per-perk panel button; now a launcher for the personal shop.
 
-    Unlike the ephemeral /bank shop view, settings and the feature gate are
-    re-read on every click — the panel can sit in a channel for months, so
-    nothing rendered at post time is trusted at click time. Labels carry no
-    price (the embed's table does), so re-pricing only needs the embed
-    refreshed, not the buttons re-labelled.
+    Panels posted before the single Open Shop button carried one of these
+    per perk. They stay registered so stale panels keep working across
+    restarts, but every click now opens the clicker's personal shop menu
+    (where renting that perk is one more click) instead of renting directly
+    — one menu, no drift. A `/bank post-shop` refresh replaces them.
     """
 
     def __init__(
@@ -1264,81 +1308,7 @@ class ShopRentButton(
         return cls(str(match["perk"]))
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None or (
-            self.perk not in _SELF_PERKS
-            and self.perk not in ("voice_style", "streak_shield", "raffle_ticket")
-        ):
-            await interaction.response.send_message(
-                "❌ That perk isn't available.", ephemeral=True
-            )
-            return
-        bot = cast("Bot", interaction.client)
-        ctx = bot.ctx
-
-        def _load() -> EconSettings:
-            with ctx.open_db() as conn:
-                return load_econ_settings(conn, guild.id)
-
-        settings = await asyncio.to_thread(_load)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if self.perk in _FEATURE_GATED and not await feature_gate_ok(
-            bot, guild.id, self.perk
-        ):
-            await interaction.response.send_message(
-                "❌ That perk needs a server feature that isn't enabled here.",
-                ephemeral=True,
-            )
-            return
-        cog = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
-        if cog is None:  # cog unloaded mid-flight; the panel button outlives it
-            await interaction.response.send_message(
-                "❌ That perk isn't available right now.", ephemeral=True
-            )
-            return
-        if self.perk == "voice_style" and settings.price_voice_style <= 0:
-            # The lease shipped dark (price 0) — a stale panel button from a
-            # priced era refuses rather than renting a perk that gates nothing.
-            await interaction.response.send_message(
-                "❌ The voice-style lease isn't active here right now.",
-                ephemeral=True,
-            )
-            return
-        if self.perk == "raffle_ticket":
-            if not raffle_svc.raffle_enabled(settings):
-                await interaction.response.send_message(
-                    "❌ The raffle isn't running here right now.", ephemeral=True
-                )
-                return
-            cog2 = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
-            if cog2 is None:
-                await interaction.response.send_message(
-                    "❌ That isn't available right now.", ephemeral=True
-                )
-                return
-            await interaction.response.send_modal(
-                _RaffleBuyModal(cog2, settings)
-            )
-            return
-        if self.perk == "streak_shield":
-            # One-shot purchase, not a rental. Settings were re-read above, so
-            # a panel that predates a price-0 (disabled) change refuses here.
-            if settings.price_streak_shield <= 0:
-                await interaction.response.send_message(
-                    "❌ Streak shields aren't for sale here right now.",
-                    ephemeral=True,
-                )
-                return
-            await cog.do_buy_shield(interaction, settings, guild)
-            return
-        if self.perk == "role_icon" and await asyncio.to_thread(
-            cog._has_catalog, guild.id
-        ):
-            await cog.open_icon_catalog(interaction, settings, guild)
-            return
-        await _rent_perk_flow(interaction, cog, settings, guild, self.perk)
+        await _open_shop_from_panel(interaction)
 
 
 def _shop_row_price(
@@ -1394,7 +1364,8 @@ def _build_shop_embed(
         header
         + "\n"
         + (
-            "Tap a button to rent — the reply is private to you."
+            "Tap **Open Shop** for your personal menu — rent, customize, "
+            "and refund, all private to you."
             if panel
             else "Green buttons customize what you've already rented."
         )
@@ -1485,58 +1456,6 @@ def _build_shop_embed(
         )
     )
     return embed
-
-
-def _shop_panel_view(
-    settings: EconSettings,
-    gated: set[str],
-    *,
-    has_catalog: bool = False,
-) -> discord.ui.View:
-    """A never-expiring view of ShopRentButtons, priced at post time.
-
-    With a curated icon catalog, the role-icon button becomes a catalog opener
-    (its click routes to the picker); its custom_id is unchanged so existing
-    panels keep working across a restart.
-    """
-    view = discord.ui.View(timeout=None)
-    for perk in _SELF_PERKS:
-        if perk == "role_icon" and has_catalog:
-            view.add_item(
-                ShopRentButton(
-                    perk,
-                    label="🖼️ Browse Icons",
-                    style=discord.ButtonStyle.secondary,
-                    disabled=perk in gated,
-                )
-            )
-            continue
-        view.add_item(
-            ShopRentButton(
-                perk,
-                label=f"{_PERK_EMOJI[perk]} {_PERK_SHORT[perk]}",
-                disabled=perk in gated,
-            )
-        )
-    if settings.price_voice_style > 0:
-        view.add_item(ShopRentButton("voice_style", label="🎙️ Voice"))
-    if raffle_svc.raffle_enabled(settings):
-        view.add_item(
-            ShopRentButton(
-                "raffle_ticket",
-                label="🎟️ Tickets",
-                style=discord.ButtonStyle.secondary,
-            )
-        )
-    if settings.price_streak_shield > 0:
-        view.add_item(
-            ShopRentButton(
-                "streak_shield",
-                label="🛡️ Shield",
-                style=discord.ButtonStyle.secondary,
-            )
-        )
-    return view
 
 
 class EconomyCog(commands.Cog):
@@ -1945,6 +1864,15 @@ class EconomyCog(commands.Cog):
 
     @bank.command(name="shop", description="Browse and rent personal-role perks.")
     async def bank_shop(self, interaction: discord.Interaction) -> None:
+        await self.open_personal_shop(interaction)
+
+    async def open_personal_shop(self, interaction: discord.Interaction) -> None:
+        """Serve the member's personal shop menu, ephemeral to them.
+
+        The one real shop: `/bank shop` and the channel panel's Open Shop
+        button both land here, so every shop feature (rent, customise,
+        refunds) exists on both surfaces by construction.
+        """
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
@@ -4511,12 +4439,11 @@ class EconomyCog(commands.Cog):
                 gated.add(perk)
 
         icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
-        has_catalog = icon_range is not None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = _build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range
         )
-        view = _shop_panel_view(settings, gated, has_catalog=has_catalog)
+        view = ShopPanelView()
 
         # Same channel and the old panel is still there → edit in place (the
         # view is re-sent too, so re-pricing refreshes the button labels).
@@ -4570,8 +4497,8 @@ class EconomyCog(commands.Cog):
     async def cog_load(self) -> None:
         # Re-register the persistent buttons so clicks on existing messages
         # still route after a restart — the custom_ids carry the state
-        # (econ_claim:{approve,deny}:<id>, econ_shop_panel:<perk>,
-        # econ_qotd_sub:{approve,deny}:<id>).
+        # (econ_claim:{approve,deny}:<id>, econ_shop_panel:<perk> on
+        # pre-Open-Shop panels, econ_qotd_sub:{approve,deny}:<id>).
         self.bot.add_dynamic_items(
             QuestApproveButton,
             QuestDenyButton,
@@ -4584,11 +4511,12 @@ class EconomyCog(commands.Cog):
             BountyAwardButton,
             BountyCancelButton,
         )
-        # The guide panel's 🔔 toggle and the quest board's "Show my quests"
-        # button carry no per-message state, so they are plain static-custom_id
-        # views rather than dynamic items.
+        # The guide panel's 🔔 toggle, the quest board's "Show my quests"
+        # button, and the shop panel's Open Shop button carry no per-message
+        # state, so they are plain static-custom_id views, not dynamic items.
         self.bot.add_view(GuideView())
         self.bot.add_view(QuestBoardView())
+        self.bot.add_view(ShopPanelView())
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:
