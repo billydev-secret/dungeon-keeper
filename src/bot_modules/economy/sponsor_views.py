@@ -33,6 +33,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     notify_member,
 )
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -72,15 +73,15 @@ def render_sponsor_card_embed(
     """
     if state == "approved":
         embed = discord.Embed(
-            title="✅ Sponsored Question Approved", color=discord.Color.green()
+            title="✅ Sponsored Question Approved", color=discord.Color(COLOR_GREEN)
         )
     elif state in ("denied", "expired"):
         embed = discord.Embed(
-            title="❌ Sponsored Question Declined", color=discord.Color.red()
+            title="❌ Sponsored Question Declined", color=discord.Color(COLOR_RED)
         )
     elif state == "posted":
         embed = discord.Embed(
-            title="📮 Sponsored Question Posted", color=discord.Color.green()
+            title="📮 Sponsored Question Posted", color=discord.Color(COLOR_GREEN)
         )
     else:
         embed = discord.Embed(title="📋 Sponsored Question Submitted", color=accent)

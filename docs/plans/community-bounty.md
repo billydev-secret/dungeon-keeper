@@ -41,7 +41,8 @@ bounty past `bounty_expire_days` (default 14) and marks it expired.
   (persistent `DynamicItem`, custom_id carries the bounty id):
   - 💰 **Chip in** — any member; opens an amount modal, escrows into the pot.
   - 🏆 **Award** — mod only; opens a `UserSelect`, pays the winner minus rake.
-  - ✖️ **Cancel** — mod only; refunds every contributor.
+  - **Cancel** — mod only; refunds every contributor (plain label, no glyph — the
+  style guide's Cancel rule).
 - Posting is member self-service: `/bounty` opens a modal (title, description,
   opening stake).
 
