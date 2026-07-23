@@ -106,6 +106,56 @@ def test_writable_keys_is_a_strict_subset():
     assert w < set(sr.SETTINGS_BY_KEY)  # some settings are panel-only
 
 
+# ── admin_only tier ─────────────────────────────────────────────────────────
+
+
+def test_writable_keys_narrows_for_a_non_admin():
+    admin = sr.writable_keys(is_admin=True)
+    managed = sr.writable_keys(is_admin=False)
+    assert managed < admin  # strictly fewer
+    assert "jailed_role_id" in admin
+    assert "jailed_role_id" not in managed
+    # Ordinary settings are in both tiers.
+    assert "welcome_channel_id" in managed
+
+
+def test_access_granting_roles_are_writable_but_admin_only():
+    for key in (
+        "jailed_role_id",
+        "qa_role_id",
+        "whisper_role_id",
+        "greeter_role_id",
+        "inactive_role_id",
+    ):
+        s = sr.get_setting(key)
+        assert s is not None, key
+        assert s.writable is True, key
+        assert s.admin_only is True, key
+
+
+def test_ping_only_roles_are_writable_without_admin():
+    for key in ("welcome_ping_role_id", "guess_role_id"):
+        s = sr.get_setting(key)
+        assert s is not None and s.writable and not s.admin_only, key
+
+
+def test_admin_only_never_covers_a_privilege_key():
+    """The two are different mechanisms — a privilege key isn't a higher tier,
+    it's off the table. No amount of permission should reach one."""
+    for key in sr.PRIVILEGE_KEYS:
+        assert key not in sr.writable_keys(is_admin=True), key
+
+
+def test_check_registry_rejects_admin_only_without_writable(monkeypatch):
+    monkeypatch.setattr(sr, "FEATURES", (
+        sr.Feature(slug="a", label="A", panel="p", blurb="b",
+                   settings=(sr.Setting("welcome_channel_id", "W", "channel",
+                                        writable=False, admin_only=True),)),
+    ))
+    with pytest.raises(ValueError, match="meaningless without writable"):
+        sr._check_registry()
+
+
 # ── is_set (what "configured" means) ────────────────────────────────────────
 
 

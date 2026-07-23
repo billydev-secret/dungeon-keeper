@@ -171,6 +171,20 @@ def test_is_staff_true_for_each_staff_permission():
         assert ac.is_staff(m) is True, flag
 
 
+def test_is_server_admin_is_stricter_than_can_see_config():
+    """Manage Server sees settings; only administrator gets the admin_only tier."""
+    manage = FakeMember(1, "Manager", FakeGuildPerms(manage_guild=True))
+    assert ac.can_see_config(manage) is True
+    assert ac.is_server_admin(manage) is False
+
+    admin = FakeMember(2, "Boss", FakeGuildPerms(administrator=True))
+    assert ac.can_see_config(admin) is True
+    assert ac.is_server_admin(admin) is True
+
+    assert ac.is_server_admin(None) is False
+    assert ac.is_server_admin(FakeMember(3, "Mod", FakeGuildPerms(manage_messages=True))) is False
+
+
 def test_is_staff_is_wider_than_can_see_config():
     """A message-moderating mod gets the better model but not settings access."""
     mod = FakeMember(1, "Mod", FakeGuildPerms(manage_messages=True))

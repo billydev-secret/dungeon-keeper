@@ -88,9 +88,51 @@ def test_key_present_in_db_but_not_in_registry_is_rejected():
 
 
 def test_registry_key_marked_panel_only_is_rejected_with_a_pointer():
-    conn = _conn([("jailed_role_id", "0")])
+    conn = _conn([("ticket_category_id", "0")])
     with pytest.raises(ValueError, match="dashboard"):
+        aa.validate_config_change(conn, _guild(), "ticket_category_id", "123")
+
+
+# ── admin_only settings ─────────────────────────────────────────────────────
+
+
+def test_admin_only_setting_rejected_for_manage_guild_asker():
+    """Manage Server can change ordinary settings but not access-granting ones."""
+    conn = _conn([("jailed_role_id", "0")])
+    with pytest.raises(ValueError, match="full server administrator"):
         aa.validate_config_change(conn, _guild(), "jailed_role_id", str(ROLE_ID))
+
+
+def test_admin_only_setting_allowed_for_full_admin():
+    conn = _conn([("jailed_role_id", "0")])
+    prop = aa.validate_config_change(
+        conn, _guild(), "jailed_role_id", "@Greeter", is_admin=True
+    )
+    assert prop.value == str(ROLE_ID)
+    assert prop.display == "Jailed role → @Greeter"
+
+
+def test_is_admin_defaults_to_false_so_callers_fail_closed():
+    conn = _conn([("qa_role_id", "0")])
+    with pytest.raises(ValueError, match="full server administrator"):
+        aa.validate_config_change(conn, _guild(), "qa_role_id", str(ROLE_ID))
+
+
+def test_ordinary_settings_need_no_admin_flag():
+    conn = _conn([(ROLE_KEY, "0")])
+    assert aa.validate_config_change(conn, _guild(), ROLE_KEY, "@Greeter").value == str(
+        ROLE_ID
+    )
+
+
+def test_privilege_keys_stay_blocked_even_for_a_full_admin():
+    """admin_role_ids / mod_role_ids / message_storage_level are not a tier —
+    they're off the table at any permission level."""
+    conn = _conn([("admin_role_ids", "1"), ("mod_role_ids", "1"),
+                  ("message_storage_level", "1")])
+    for key in ("admin_role_ids", "mod_role_ids", "message_storage_level"):
+        with pytest.raises(ValueError, match="isn't a setting I can change"):
+            aa.validate_config_change(conn, _guild(), key, "2", is_admin=True)
 
 
 def test_secret_key_rejected_even_if_present():
@@ -260,10 +302,30 @@ def test_apply_revalidates_stale_proposal(tmp_path):
 
 def test_apply_refuses_a_proposal_for_a_panel_only_key(tmp_path):
     """A forged/stale proposal naming a non-writable key must not write."""
+    path = _db_file(tmp_path, [("ticket_category_id", "0")])
+    prop = aa.ConfigProposal("ticket_category_id", "123", "x")
+    with pytest.raises(ValueError):
+        aa.apply_config_change(path, _guild(), prop, is_admin=True)
+    conn = sqlite3.connect(path)
+    row = conn.execute("SELECT value FROM config WHERE key = 'ticket_category_id'").fetchone()
+    assert row[0] == "0"
+
+
+def test_apply_rechecks_admin_only_against_the_clicker(tmp_path):
+    """The asker may have been a full admin; whoever clicks must be one too."""
     path = _db_file(tmp_path, [("jailed_role_id", "0")])
     prop = aa.ConfigProposal("jailed_role_id", str(ROLE_ID), "x")
-    with pytest.raises(ValueError):
-        aa.apply_config_change(path, _guild(), prop)
+
+    with pytest.raises(ValueError, match="full server administrator"):
+        aa.apply_config_change(path, _guild(), prop, is_admin=False)
     conn = sqlite3.connect(path)
-    row = conn.execute("SELECT value FROM config WHERE key = 'jailed_role_id'").fetchone()
-    assert row[0] == "0"
+    assert conn.execute(
+        "SELECT value FROM config WHERE key = 'jailed_role_id'"
+    ).fetchone()[0] == "0"
+    conn.close()
+
+    aa.apply_config_change(path, _guild(), prop, is_admin=True)
+    conn = sqlite3.connect(path)
+    assert conn.execute(
+        "SELECT value FROM config WHERE key = 'jailed_role_id'"
+    ).fetchone()[0] == str(ROLE_ID)

@@ -360,18 +360,47 @@ def test_build_tools_includes_gap_finder_only_when_wired():
     assert defs[1]["input_schema"]["properties"] == {}
 
 
+def _propose_enum(*, is_admin):
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: "",
+        propose_change=lambda k, v: "",
+        is_admin=is_admin,
+    )
+    defs = adv.build_tools(tools)
+    propose = next(t for t in defs if t["name"] == "propose_config_change")
+    return set(propose["input_schema"]["properties"]["key"]["enum"])
+
+
 def test_propose_tool_enum_is_the_registry_writable_set():
     """The model can't name a key that isn't vetted for writing."""
     from bot_modules.services.settings_registry import writable_keys
 
-    rw = adv.AdvisorTools(
+    enum = _propose_enum(is_admin=True)
+    assert enum == set(writable_keys(is_admin=True))
+    assert "admin_role_ids" not in enum
+    assert "mod_role_ids" not in enum
+    assert "message_storage_level" not in enum
+
+
+def test_propose_tool_enum_narrows_for_a_non_admin_asker():
+    """A Manage Server asker isn't offered keys they'd only be rejected for."""
+    admin, managed = _propose_enum(is_admin=True), _propose_enum(is_admin=False)
+    assert managed < admin
+    assert "jailed_role_id" in admin and "jailed_role_id" not in managed
+    assert "welcome_channel_id" in managed
+
+
+def test_propose_tool_defaults_to_the_narrow_enum():
+    """AdvisorTools.is_admin defaults False, so a surface that forgets to set
+    it under-offers rather than over-offers."""
+    default = adv.AdvisorTools(
         feature_keys=["general"], fetch_settings=lambda f: "", propose_change=lambda k, v: ""
     )
-    propose = next(t for t in adv.build_tools(rw) if t["name"] == "propose_config_change")
-    enum = propose["input_schema"]["properties"]["key"]["enum"]
-    assert set(enum) == set(writable_keys())
-    assert "admin_role_ids" not in enum
-    assert "jailed_role_id" not in enum
+    propose = next(
+        t for t in adv.build_tools(default) if t["name"] == "propose_config_change"
+    )
+    assert "jailed_role_id" not in propose["input_schema"]["properties"]["key"]["enum"]
 
 
 async def test_tool_loop_runs_the_gap_finder(monkeypatch):

@@ -389,6 +389,10 @@ class AdvisorTools:
     fetch_settings: Callable[[str], str]
     fetch_gaps: Callable[[], str] | None = None
     propose_change: Callable[[str, str], str] | None = None
+    #: Whether the asker has full ``administrator``. Narrows the propose tool's
+    #: key enum, so a Manage Server admin isn't offered access-granting keys it
+    #: would only be rejected for naming.
+    is_admin: bool = False
 
 
 def build_tools(tools: AdvisorTools) -> list[dict]:
@@ -456,7 +460,7 @@ def build_tools(tools: AdvisorTools) -> list[dict]:
                     "properties": {
                         "key": {
                             "type": "string",
-                            "enum": sorted(writable_keys()),
+                            "enum": sorted(writable_keys(is_admin=tools.is_admin)),
                             "description": "The exact settings key.",
                         },
                         "value": {"type": "string", "description": "The new value."},

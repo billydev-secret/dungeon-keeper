@@ -99,7 +99,7 @@ def _resolve_role(guild, raw: str) -> tuple[str, str]:
     raise ValueError(f"no role named '{s}' in this server")
 
 
-def _resolve_setting(key: str) -> Setting:
+def _resolve_setting(key: str, *, is_admin: bool) -> Setting:
     """The schema for a proposable key, or a ValueError explaining why not."""
     setting = get_setting(key)
     if setting is None:
@@ -112,11 +112,23 @@ def _resolve_setting(key: str) -> Setting:
         feature = feature_for_key(key)
         where = f" — set it from {feature.panel}" if feature else ""
         raise ValueError(f"'{key}' has to be changed on the dashboard{where}.")
+    if setting.admin_only and not is_admin:
+        raise ValueError(
+            f"'{key}' grants access or authority, so it needs a full server "
+            "administrator — Manage Server isn't enough. Ask an admin, or set "
+            "it from the dashboard."
+        )
     return setting
 
 
 def validate_config_change(
-    conn: sqlite3.Connection, guild, key: str, raw_value: str, *, allow_noop: bool = False
+    conn: sqlite3.Connection,
+    guild,
+    key: str,
+    raw_value: str,
+    *,
+    allow_noop: bool = False,
+    is_admin: bool = False,
 ) -> ConfigProposal:
     """Validate one proposed change; return the normalized proposal.
 
@@ -129,6 +141,11 @@ def validate_config_change(
     ``allow_noop`` skips the last check. Re-validation at apply time passes it,
     so clicking a button whose value is already stored is a harmless rewrite
     rather than a confusing "no change needed" failure.
+
+    ``is_admin`` is full ``administrator``, required for ``admin_only``
+    settings. It defaults to False so a caller that forgets to thread it
+    through fails closed, and it is re-checked at apply time against whoever
+    clicks — not just whoever asked.
     """
     key = (key or "").strip()
     raw = (raw_value or "").strip()
@@ -139,7 +156,7 @@ def validate_config_change(
     if len(raw) > _MAX_VALUE_CHARS:
         raise ValueError(f"value too long (max {_MAX_VALUE_CHARS} chars)")
 
-    setting = _resolve_setting(key)
+    setting = _resolve_setting(key, is_admin=is_admin)
     label = setting.label
     low_raw = raw.casefold()
 
@@ -158,12 +175,20 @@ def validate_config_change(
     return ConfigProposal(key, value, f"{label} → {shown}")
 
 
-def apply_config_change(db_path, guild, proposal: ConfigProposal) -> None:
-    """Write one confirmed proposal. Re-validates so a stale button can't
-    apply a change that stopped making sense (channel deleted, key removed)."""
+def apply_config_change(
+    db_path, guild, proposal: ConfigProposal, *, is_admin: bool = False
+) -> None:
+    """Write one confirmed proposal.
+
+    Re-validates so a stale button can't apply a change that stopped making
+    sense (channel deleted, key removed) — and so ``admin_only`` is enforced
+    against the person who actually clicked, which may not be the person who
+    asked. Defaults to non-admin so a caller that forgets fails closed.
+    """
     with open_db(db_path) as conn:
         checked = validate_config_change(
-            conn, guild, proposal.key, proposal.value, allow_noop=True
+            conn, guild, proposal.key, proposal.value,
+            allow_noop=True, is_admin=is_admin,
         )
         set_config_value(conn, checked.key, checked.value, guild.id)
     log.info(

@@ -55,9 +55,29 @@ schema lookup, which unblocks:
   human Apply gate
 - a machine-readable list of what a guild has *not* configured (Stage 3 needs this)
 
-`writable_by_model` is opt-in per key, not default-open: widening what model
-output can touch is a real expansion of blast radius, and the Apply gate is
-the only thing between a prompt-injected pin and a config write.
+`writable` is opt-in per key, not default-open: widening what model output can
+touch is a real expansion of blast radius, and the Apply gate is the only thing
+between a prompt-injected pin and a config write.
+
+Three tiers, not two:
+
+- **ordinary** — proposable by any asker who passes the settings gate
+  (`administrator` *or* `manage_guild`). Channels, flags, numbers, copy, and
+  ping-only roles.
+- **`admin_only`** — proposable, but only for full `administrator`. Everything
+  that grants access or moderation authority: the jailed role, who may mark Q&A
+  answers, who may whisper, the greeter role, the role the inactivity sweep
+  applies in bulk. Re-checked against whoever *clicks* Apply, not just whoever
+  asked, since the two need not be the same person.
+- **`PRIVILEGE_KEYS`** — never writable at any permission level:
+  `admin_role_ids`, `mod_role_ids`, `message_storage_level`. Handing out admin
+  or widening message retention isn't a higher tier, it's off the table; a
+  mistaken click there is unrecoverable in a way the rest aren't.
+
+`is_admin` defaults to `False` everywhere it's threaded, so a surface that
+forgets to pass it under-offers rather than over-offers. The propose tool's key
+enum is built per-asker, so a Manage Server admin is never shown a key they'd
+only be rejected for naming.
 
 ### Stage 3 — `find_setup_gaps` tool
 

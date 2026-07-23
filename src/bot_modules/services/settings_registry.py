@@ -24,11 +24,16 @@ Two safety rules govern entries:
   ``advisor_actions`` is the only thing between a prompt-injected pinned message
   and a config write, so widening what model output can propose is deliberate,
   never a default.
-* Keys that define a **permission boundary** (``admin_role_ids``,
-  ``mod_role_ids``, and the access roles gating NSFW/veiled content) are never
-  writable, at any confirmation level. A confirmed-by-click privilege escalation
-  is still a privilege escalation, and an admin skimming an Apply button is not
-  a reliable check on one.
+* ``admin_only`` raises the bar for settings that grant access or moderation
+  authority (the jailed role, NSFW/veil access roles, who may mark Q&A answers).
+  These are proposable, but only for an asker with full ``administrator`` — not
+  merely ``manage_guild``, which is all the ordinary settings gate requires —
+  and the check is re-run against whoever clicks Apply, not just whoever asked.
+* Keys that define the **top-level permission boundary** (``admin_role_ids``,
+  ``mod_role_ids``) or a **privacy default** (``message_storage_level``) are
+  never writable at any confirmation level. Handing out admin, or widening what
+  message data is retained, is not something an Apply button should be able to
+  do — a mistaken click there is unrecoverable in a way the rest aren't.
 
 Defaults are recorded only where a gap check needs them. Most live in each
 feature's own service module, and duplicating them here would just create drift;
@@ -48,20 +53,13 @@ _SECRET_KEY_RE = re.compile(
     re.I,
 )
 
-# Keys that confer access or authority. Never writable by the model regardless
-# of the per-setting flag — enforced in _check_registry below.
+# Never writable by the model regardless of the per-setting flag — enforced in
+# _check_registry below. Deliberately short: everything else that grants access
+# or authority is writable behind ``admin_only`` instead.
 PRIVILEGE_KEYS: frozenset[str] = frozenset({
-    "admin_role_ids",
-    "mod_role_ids",
-    "nsfw_role_id",
-    "veil_role_id",
-    "unverified_role_id",
-    "jailed_role_id",
-    "greeter_role_id",
-    "denizen_role_id",
-    "veteran_role_id",
-    "support_access_enabled",
-    "message_storage_level",
+    "admin_role_ids",       # handing out admin
+    "mod_role_ids",         # handing out moderation
+    "message_storage_level",  # privacy default: what message data is retained
 })
 
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
@@ -79,6 +77,10 @@ class Setting:
     required: bool = False
     #: Whether Billy-bot may propose a change (still human-confirmed).
     writable: bool = False
+    #: Requires full ``administrator`` to propose *and* to apply, rather than
+    #: the ``manage_guild`` that ordinary settings accept. For anything that
+    #: grants access or moderation authority.
+    admin_only: bool = False
     #: Value meaning "not configured". Channels/roles use "0" by convention.
     default: str | None = None
     #: Inclusive bounds for ``kind == "int"``.
@@ -131,9 +133,9 @@ def _ch(key, label, *, required=False, writable=True, help="") -> Setting:
                    default="0", help=help)
 
 
-def _role(key, label, *, required=False, writable=False, help="") -> Setting:
+def _role(key, label, *, required=False, writable=True, admin_only=False, help="") -> Setting:
     return Setting(key, label, "role", required=required, writable=writable,
-                   default="0", help=help)
+                   admin_only=admin_only, default="0", help=help)
 
 
 def _flag(key, label, *, required=False, writable=True, default="0", help="") -> Setting:
@@ -164,8 +166,8 @@ FEATURES: tuple[Feature, ...] = (
             _text("welcome_message", "Welcome message",
                   help="Supports placeholders for the member's name."),
             _flag("welcome_ping_member", "Ping the new member"),
-            # Ping-only: naming this role grants nothing, so it's safe to propose.
-            _role("welcome_ping_role_id", "Role to ping on join", writable=True),
+            # Ping-only: naming this role grants nothing.
+            _role("welcome_ping_role_id", "Role to ping on join"),
             _text("welcome_trigger", "What triggers the welcome"),
         ),
     ),
@@ -201,7 +203,8 @@ FEATURES: tuple[Feature, ...] = (
             _ch("qa_channel_id", "Q&A channel", required=True),
             _num("qa_reward", "Coins per accepted answer", minimum=0, maximum=100000),
             _num("qa_daily_cap", "Daily reward cap", minimum=0, maximum=100000),
-            _role("qa_role_id", "Role that can mark answers"),
+            _role("qa_role_id", "Role that can mark answers", admin_only=True,
+                  help="Confers authority over payouts — full admin only."),
         ),
     ),
     Feature(
@@ -217,6 +220,8 @@ FEATURES: tuple[Feature, ...] = (
             _num("greeting_watch_window_minutes", "Minutes before nudging",
                  minimum=1, maximum=1440),
             _ch("greeter_chat_channel_id", "Fallback chat channel"),
+            _role("greeter_role_id", "Greeter role", admin_only=True,
+                  help="Who gets nudged to greet — full admin only."),
         ),
     ),
     Feature(
@@ -239,7 +244,9 @@ FEATURES: tuple[Feature, ...] = (
         settings=(
             _flag("inactive_auto_sweep", "Automatic sweep"),
             _ch("inactive_channel_id", "Sleeper report channel", required=True),
-            _role("inactive_role_id", "Role applied to inactive members"),
+            _role("inactive_role_id", "Role applied to inactive members",
+                  admin_only=True,
+                  help="Applied to members in bulk by the sweep — full admin only."),
             _num("inactive_threshold_days", "Days of silence before flagging",
                  minimum=1, maximum=3650),
             _num("inactive_sweep_cap", "Max members per sweep", minimum=1, maximum=10000),
@@ -266,8 +273,8 @@ FEATURES: tuple[Feature, ...] = (
         settings=(
             _num("jail_category_id", "Jail category", required=True, writable=False,
                  help="A category — set it from the panel."),
-            _role("jailed_role_id", "Jailed role", required=True,
-                  help="Set from the panel: it controls what a jailed member can reach."),
+            _role("jailed_role_id", "Jailed role", required=True, admin_only=True,
+                  help="Controls what a jailed member can reach — full admin only."),
         ),
     ),
     Feature(
@@ -278,7 +285,8 @@ FEATURES: tuple[Feature, ...] = (
         settings=(
             _ch("whisper_channel_id", "Whisper channel", required=True),
             _ch("whisper_log_channel_id", "Whisper mod log"),
-            _role("whisper_role_id", "Role allowed to whisper"),
+            _role("whisper_role_id", "Role allowed to whisper", admin_only=True,
+                  help="Gates who can send anonymous notes — full admin only."),
         ),
     ),
     Feature(
@@ -316,7 +324,7 @@ FEATURES: tuple[Feature, ...] = (
         blurb="A rolling image-guessing game members can play in one channel.",
         settings=(
             _ch("guess_channel_id", "Guess channel", required=True),
-            _role("guess_role_id", "Role pinged for new rounds", writable=True),
+            _role("guess_role_id", "Role pinged for new rounds"),
             _num("guess_guess_cooldown_seconds", "Seconds between guesses",
                  minimum=0, maximum=3600),
             _num("guess_inactivity_ping_hours", "Hours of silence before a nudge",
@@ -374,6 +382,8 @@ def _check_registry() -> None:
                 raise ValueError(f"{s.key}: secret-shaped key must not be in the registry")
             if s.writable and s.key in PRIVILEGE_KEYS:
                 raise ValueError(f"{s.key}: privilege key must never be model-writable")
+            if s.admin_only and not s.writable:
+                raise ValueError(f"{s.key}: admin_only is meaningless without writable")
             if s.key in seen:
                 raise ValueError(f"{s.key}: listed in two features")
             seen.add(s.key)
@@ -391,9 +401,17 @@ def get_setting(key: str) -> Setting | None:
     return SETTINGS_BY_KEY.get((key or "").strip())
 
 
-def writable_keys() -> frozenset[str]:
-    """Every key Billy-bot may propose a change to."""
-    return frozenset(k for k, s in SETTINGS_BY_KEY.items() if s.writable)
+def writable_keys(*, is_admin: bool = True) -> frozenset[str]:
+    """Every key Billy-bot may propose a change to for this asker.
+
+    ``is_admin`` is full ``administrator``; a ``manage_guild``-only asker sees
+    the same list minus the settings that grant access or authority.
+    """
+    return frozenset(
+        k
+        for k, s in SETTINGS_BY_KEY.items()
+        if s.writable and (is_admin or not s.admin_only)
+    )
 
 
 def feature_for_key(key: str) -> Feature | None:

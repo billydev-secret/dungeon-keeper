@@ -32,6 +32,7 @@ from bot_modules.services.advisor_context import (
     build_asker_context,
     can_see_config,
     fetch_feature_settings,
+    is_server_admin,
     is_staff,
 )
 from bot_modules.services.advisor_gaps import fetch_setup_gaps
@@ -75,7 +76,9 @@ def _make_tools(
             return "Rejected: only server admins can change settings."
         try:
             with open_db(db_path) as conn:
-                prop = validate_config_change(conn, guild, key, value)
+                prop = validate_config_change(
+                    conn, guild, key, value, is_admin=is_server_admin(member)
+                )
         except ValueError as e:
             return f"Rejected: {e}"
         proposals[:] = [p for p in proposals if p.key != prop.key]
@@ -92,6 +95,7 @@ def _make_tools(
         fetch_settings=_fetch,
         fetch_gaps=_gaps,
         propose_change=_propose,
+        is_admin=is_server_admin(member),
     )
 
 
@@ -125,7 +129,13 @@ class _ApplyConfigView(discord.ui.View):
                 )
                 return
             try:
-                apply_config_change(self._db_path, self._guild, prop)
+                # admin_only settings are re-checked against the clicker, not
+                # the asker — the reply is ephemeral, but the gate shouldn't
+                # depend on that being true.
+                apply_config_change(
+                    self._db_path, self._guild, prop,
+                    is_admin=is_server_admin(member),
+                )
             except ValueError as e:
                 btn.disabled = True
                 btn.style = discord.ButtonStyle.secondary
