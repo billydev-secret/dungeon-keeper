@@ -1557,3 +1557,45 @@ def test_flip_has_no_ping_without_a_role():
     assert ping == 0
     assert "<@&" not in content
     assert "Spotlight" not in content  # no spotlight line when none is featured
+
+
+# ── DB work never blocks the event loop (review A1) ───────────────────────────
+
+
+def _direct_open_db_calls(source: str) -> list[str]:
+    """Async functions in the module that call ``open_db`` on the event loop.
+
+    A blocking ``with open_db(...)`` inside an ``async def`` body stalls every
+    other coroutine for the duration of the transaction. The loop's convention
+    is to push the query into a sync closure and ``await asyncio.to_thread``
+    it, so ``open_db`` may only appear inside a nested plain ``def``.
+    """
+    import ast
+
+    offenders: list[str] = []
+
+    def _scan(node: ast.AST, owner: str) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef):
+                continue  # a sync closure — that's the to_thread target
+            if isinstance(child, ast.AsyncFunctionDef):
+                _scan(child, child.name)
+                continue
+            if (
+                isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "open_db"
+                and owner
+            ):
+                offenders.append(owner)
+            _scan(child, owner)
+
+    _scan(ast.parse(source), "")
+    return offenders
+
+
+def test_no_blocking_db_calls_in_async_bodies():
+    from pathlib import Path
+
+    source = Path(economy_loop.__file__).read_text(encoding="utf-8")
+    assert _direct_open_db_calls(source) == []

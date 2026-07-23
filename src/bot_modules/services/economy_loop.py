@@ -1010,20 +1010,27 @@ async def run_guild_rentals(
     commits before any Discord effect runs, and each effect is fail-safe so an
     outage cannot corrupt billing state.
     """
-    with open_db(db_path) as conn:
-        settings = load_econ_settings(conn, guild_id)
-        if not settings.enabled:
-            return
-        live = list_rentals(conn, guild_id, states=("active", "grace"))
+    def _load_live() -> list[sqlite3.Row]:
+        with open_db(db_path) as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled:
+                return []
+            return list_rentals(conn, guild_id, states=("active", "grace"))
 
+    live = await asyncio.to_thread(_load_live)
     if not live:
         return
 
     gate_ok = await _gather_feature_gates(bot, guild_id, live)
 
-    with open_db(db_path) as conn:
-        settings = load_econ_settings(conn, guild_id)
-        outcome = run_guild_rental_billing(conn, settings, guild_id, gate_ok, now_ts)
+    def _bill() -> RentalTickOutcome:
+        with open_db(db_path) as conn:
+            settings = load_econ_settings(conn, guild_id)
+            return run_guild_rental_billing(
+                conn, settings, guild_id, gate_ok, now_ts
+            )
+
+    outcome = await asyncio.to_thread(_bill)
 
     await _dispatch_rental_effects(bot, db_path, guild_id, outcome)
 
@@ -1460,9 +1467,12 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
     it commits. Per-guild roll failures are logged and isolated so one guild
     never stalls the rest.
     """
-    try:
+    def _expire_claims():
         with open_db(db_path) as conn:
-            notices = run_claim_expiry(conn, now_ts)
+            return run_claim_expiry(conn, now_ts)
+
+    try:
+        notices = await asyncio.to_thread(_expire_claims)
     except Exception:
         log.exception("Economy loop: claim-expiry sweep failed.")
         notices = []
@@ -1492,12 +1502,15 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         sponsor_notices: list[ExpiredSponsorNotice] = []
         week_rolled = False
         raffle_draw: raffle_svc.DrawResult | None = None
-        try:
+        def _day_roll(gid: int = guild.id) -> DayRollResult:
             with open_db(db_path) as conn:
-                roll = run_guild_day_roll(bot, conn, guild.id, now_ts)
-                beats.extend(roll.beats)
-                week_rolled = roll.week_rolled
-                raffle_draw = roll.raffle
+                return run_guild_day_roll(bot, conn, gid, now_ts)
+
+        try:
+            roll = await asyncio.to_thread(_day_roll)
+            beats.extend(roll.beats)
+            week_rolled = roll.week_rolled
+            raffle_draw = roll.raffle
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1510,12 +1523,22 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         sponsor_notices, emoji_notices = [], []
         pin_sweep = PinSweep(refunds=[], unpins=[])
         bounty_notices: list[ExpiredBountyNotice] = []
-        try:
+        def _expiry_sweeps(gid: int = guild.id):
             with open_db(db_path) as conn:
-                sponsor_notices = run_sponsor_expiry(conn, guild.id, now_ts)
-                emoji_notices = run_emoji_expiry(conn, guild.id, now_ts)
-                pin_sweep = run_pin_expiry(conn, guild.id, now_ts)
-                bounty_notices = run_bounty_expiry(conn, guild.id, now_ts)
+                return (
+                    run_sponsor_expiry(conn, gid, now_ts),
+                    run_emoji_expiry(conn, gid, now_ts),
+                    run_pin_expiry(conn, gid, now_ts),
+                    run_bounty_expiry(conn, gid, now_ts),
+                )
+
+        try:
+            (
+                sponsor_notices,
+                emoji_notices,
+                pin_sweep,
+                bounty_notices,
+            ) = await asyncio.to_thread(_expiry_sweeps)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1673,9 +1696,12 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                     guild.id,
                 )
 
-        try:
+        def _hourly_beats(gid: int = guild.id):
             with open_db(db_path) as conn:
-                beats.extend(community_hourly_beats(conn, guild.id, now_ts))
+                return community_hourly_beats(conn, gid, now_ts)
+
+        try:
+            beats.extend(await asyncio.to_thread(_hourly_beats))
         except asyncio.CancelledError:
             raise
         except Exception:
