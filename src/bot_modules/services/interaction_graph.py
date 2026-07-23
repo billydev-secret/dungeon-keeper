@@ -174,6 +174,19 @@ def record_interactions(
         )
 
 
+# A member repeatedly "talking at" a bot is not a real one-sided relationship,
+# so bots are noise for every social-graph surface. Allowlisted bots are
+# recorded in known_users with is_bot=1 (the rest never make it into the
+# interaction tables). Excluding either endpoint drops the whole edge. Each use
+# of this fragment consumes two guild_id parameters (one per sub-select).
+_EXCLUDE_BOT_ENDPOINTS = (
+    "from_user_id NOT IN "
+    "(SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1) "
+    "AND to_user_id NOT IN "
+    "(SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1)"
+)
+
+
 def query_connection_web(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -201,10 +214,12 @@ def query_connection_web(
                 SELECT user_id FROM (
                     SELECT from_user_id AS user_id, COUNT(*) AS w
                     FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+                      AND {exclude_bots}
                     GROUP BY from_user_id
                     UNION ALL
                     SELECT to_user_id AS user_id, COUNT(*) AS w
                     FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+                      AND {exclude_bots}
                     GROUP BY to_user_id
                 )
                 GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
@@ -216,8 +231,13 @@ def query_connection_web(
               AND to_user_id   IN (SELECT user_id FROM top_users)
             GROUP BY from_user_id, to_user_id
             ORDER BY weight DESC
-            """,
-            (guild_id, after_ts, guild_id, after_ts, limit_users, guild_id, after_ts),
+            """.format(exclude_bots=_EXCLUDE_BOT_ENDPOINTS),
+            (
+                guild_id, after_ts, guild_id, guild_id,
+                guild_id, after_ts, guild_id, guild_id,
+                limit_users,
+                guild_id, after_ts,
+            ),
         ).fetchall()
     else:
         rows = conn.execute(
@@ -226,10 +246,12 @@ def query_connection_web(
                 SELECT user_id FROM (
                     SELECT from_user_id AS user_id, SUM(weight) AS w
                     FROM user_interactions WHERE guild_id = ?
+                      AND {exclude_bots}
                     GROUP BY from_user_id
                     UNION ALL
                     SELECT to_user_id AS user_id, SUM(weight) AS w
                     FROM user_interactions WHERE guild_id = ?
+                      AND {exclude_bots}
                     GROUP BY to_user_id
                 )
                 GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
@@ -240,8 +262,13 @@ def query_connection_web(
               AND from_user_id IN (SELECT user_id FROM top_users)
               AND to_user_id   IN (SELECT user_id FROM top_users)
             ORDER BY weight DESC
-            """,
-            (guild_id, guild_id, limit_users, guild_id),
+            """.format(exclude_bots=_EXCLUDE_BOT_ENDPOINTS),
+            (
+                guild_id, guild_id, guild_id,
+                guild_id, guild_id, guild_id,
+                limit_users,
+                guild_id,
+            ),
         ).fetchall()
 
     # Merge A→B and B→A into a single undirected edge

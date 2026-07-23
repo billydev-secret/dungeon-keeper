@@ -197,6 +197,44 @@ def test_home_top_users_reports_top_by_count(authed_client, fake_ctx):
     assert top[0]["count"] == 3
 
 
+def test_home_social_butterflies_excludes_bots(authed_client, fake_ctx):
+    """A bot must not be ranked as a social butterfly, nor inflate a member's
+    unique-partner count."""
+    now = int(time.time())
+    gid = fake_ctx.guild_id
+    with open_db(fake_ctx.db_path) as conn:
+        # Member 100 has 2 human partners; bot 999 "interacts with" many humans.
+        for i, to in enumerate((200, 300)):
+            conn.execute(
+                "INSERT INTO user_interactions_log (guild_id, from_user_id, to_user_id, ts, message_id)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (gid, 100, to, now - 60, 10 + i),
+            )
+        for i, to in enumerate((200, 300, 400, 500)):
+            conn.execute(
+                "INSERT INTO user_interactions_log (guild_id, from_user_id, to_user_id, ts, message_id)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (gid, 999, to, now - 60, 20 + i),
+            )
+        # Member 100 also talks at the bot — must not count as a partner.
+        conn.execute(
+            "INSERT INTO user_interactions_log (guild_id, from_user_id, to_user_id, ts, message_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (gid, 100, 999, now - 60, 30),
+        )
+        conn.execute(
+            "INSERT INTO known_users (guild_id, user_id, is_bot) VALUES (?, ?, 1)"
+            " ON CONFLICT(guild_id, user_id) DO UPDATE SET is_bot = 1",
+            (gid, 999),
+        )
+
+    butterflies = authed_client.get("/api/home?fields=butterflies").json()["social_butterflies"]
+    ids = {b["user_id"] for b in butterflies}
+    assert "999" not in ids  # bot is not a butterfly
+    entry = next(b for b in butterflies if b["user_id"] == "100")
+    assert entry["unique"] == 2  # the bot partner is excluded from the count
+
+
 # ── Moderation/audit aggregations ─────────────────────────────────────
 
 

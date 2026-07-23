@@ -850,6 +850,18 @@ class InteractionGraphData(TypedDict, total=False):
     metrics: dict
 
 
+# Bots are noise for the interaction graph — a member replying to a bot is not a
+# real relationship. Allowlisted bots live in known_users with is_bot=1; drop any
+# edge touching one. Each use consumes two guild_id params (mirrors the same
+# fragment in interaction_graph.query_connection_web).
+_EXCLUDE_BOT_ENDPOINTS = (
+    "from_user_id NOT IN "
+    "(SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1) "
+    "AND to_user_id NOT IN "
+    "(SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1)"
+)
+
+
 def get_interaction_graph_data(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -863,24 +875,26 @@ def get_interaction_graph_data(
     if days is not None:
         cutoff = now - days * 86400
         rows = conn.execute(
-            """
+            f"""
             SELECT from_user_id, to_user_id, COUNT(*) as weight
             FROM user_interactions_log
             WHERE guild_id = ? AND ts >= ?
+              AND {_EXCLUDE_BOT_ENDPOINTS}
             GROUP BY from_user_id, to_user_id
             ORDER BY weight DESC
             """,
-            (guild_id, cutoff),
+            (guild_id, cutoff, guild_id, guild_id),
         ).fetchall()
     else:
         rows = conn.execute(
-            """
+            f"""
             SELECT from_user_id, to_user_id, weight
             FROM user_interactions
             WHERE guild_id = ?
+              AND {_EXCLUDE_BOT_ENDPOINTS}
             ORDER BY weight DESC
             """,
-            (guild_id,),
+            (guild_id, guild_id, guild_id),
         ).fetchall()
 
     edges: list[InteractionEdge] = []
@@ -1766,20 +1780,28 @@ def get_animated_heatmap_data(
     since_ts = int(time.time()) - days * 86400
 
     # --- Stage 1: stable user set (top N by total volume) ---
+    # Exclude bots here; stage 2 filters edges to this set, so it inherits the
+    # exclusion and never renders a member↔bot cell.
     user_rows = conn.execute(
-        """
+        f"""
         SELECT user_id FROM (
             SELECT from_user_id AS user_id, COUNT(*) AS w
             FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+              AND {_EXCLUDE_BOT_ENDPOINTS}
             GROUP BY from_user_id
             UNION ALL
             SELECT to_user_id AS user_id, COUNT(*) AS w
             FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+              AND {_EXCLUDE_BOT_ENDPOINTS}
             GROUP BY to_user_id
         )
         GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
         """,
-        (guild_id, since_ts, guild_id, since_ts, top_n),
+        (
+            guild_id, since_ts, guild_id, guild_id,
+            guild_id, since_ts, guild_id, guild_id,
+            top_n,
+        ),
     ).fetchall()
 
     ordered_uids = [int(r[0]) for r in user_rows]
