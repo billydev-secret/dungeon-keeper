@@ -760,7 +760,6 @@ active trailing periods of the kind fall back to the deterministic
 `(user, quest, period)`) — the cold-start behavior, and the entire behavior
 before migration 080's ledger accrued history. Sandbagging by going quiet
 floors out at `target_min` and is self-defeating (less activity is less
-<<<<<<< HEAD
 income anyway). **Channel-scoped band quests** on message-shaped kinds
 (`quests.CHANNEL_SHARE_KINDS`: message_sent, reply_sent, media_post) scale
 the member's median by *their own* share of traffic in the scoped channel
@@ -771,7 +770,6 @@ is never scaled (the author wrote the band for the channel already).
 Thread messages archive under the thread's id while scoped fires credit
 the parent, so shares read slightly low in thready channels — targets err
 forgiving.
-=======
 income anyway).
 
 Kinds in `quests.PERSONAL_P25_KINDS` (currently `reaction_given`) resolve
@@ -781,7 +779,6 @@ one-click acts with a heavy-tailed distribution, so the target means "at
 least your own quiet-week level" — stretching past typical pace would turn
 the anti-freebie fix into a grind on a heavy reactor's off week. Zeros
 still count in the quantile, same as the median path.
->>>>>>> main
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.
