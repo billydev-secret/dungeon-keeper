@@ -174,7 +174,10 @@ const SECTIONS = [
       ]},
       { heading: "AI & Maintenance", items: [
         { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true, keywords: "models prompts llm", help: "help-ai" },
-        { id: "config-advisor",    label: "Billy-bot",         module: "./panels/config-advisor.js", adminOnly: true, keywords: "advisor assistant ai ask", help: "help-ask" },
+        // Neutral label: the assistant's name is per-guild branding now, and
+        // the nav is built once from this static list. "Billy-bot" stays as a
+        // search keyword so the old name still finds the page.
+        { id: "config-advisor",    label: "AI Assistant",      module: "./panels/config-advisor.js", adminOnly: true, keywords: "advisor assistant ai ask billy billy-bot", help: "help-ask" },
         { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
       ]},
     ],

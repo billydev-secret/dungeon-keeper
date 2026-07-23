@@ -476,7 +476,7 @@ class QuoteCog(commands.Cog):
     @app_commands.guild_only()
     @app_commands.describe(
         text="The quote to put on the banner.",
-        theme="Color grading for the card (default: Golden Meadow).",
+        theme="Color grading for the card (default: your server's brand color).",
         font="Typeface for the quote (default: Times).",
         title="Optional heading shown above the quote.",
     )

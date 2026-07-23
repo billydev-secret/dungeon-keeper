@@ -1,4 +1,4 @@
-"""Views and modals for the Golden Meadow casino — Discord glue only.
+"""Views and modals for the casino — Discord glue only.
 
 Two persistence styles, per the house rules: the hub panel is a static
 custom_id view (state-free buttons, one instance registered at cog_load);

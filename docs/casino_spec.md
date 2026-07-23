@@ -1,10 +1,18 @@
-# The Golden Meadow Casino — Feature Spec
+# Casino — Feature Spec
 
 House gambling games staking the guild currency, played publicly in one
 admin-configured **casino channel**. Built 2026-07-22 (plan:
-[plans/casino.md](plans/casino.md)). Golden-meadow theming over an
-unmistakably Vegas core — the server is The Golden Meadow, the casino leans
-into it.
+[plans/casino.md](plans/casino.md)). Sunny-meadow theming over an
+unmistakably Vegas core.
+
+**The casino's name is per-guild branding**, not a constant: it comes from
+`branding_config.casino_name` (`branding_service.resolve_casino_name*`,
+default `DEFAULT_CASINO_NAME = "Golden Meadow"` — the home server's name, kept
+as the fallback so nothing moved for it). The cog reads it alongside its other
+settings and passes it to the pure builders; the hub title is
+`🌻 The {name} Casino` and the help embed `How the {name} pays`
+(`casino/embeds.casino_title`). Edited on **Config → Branding**, which
+dispatches `casino_config_change` so a rename repaints the hub panel.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
@@ -74,7 +82,9 @@ All movement goes through `services/casino_service.py`:
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
 Dashboard: **Economy → Casino** (`config-casino.js`, admin-only;
-`PUT /api/config/casino`, ids as strings). Saves dispatch
+`PUT /api/config/casino`, ids as strings) — the panel titles itself with the
+guild's casino name, which is edited on **Config → Branding**
+(`PUT /api/config/branding`, `casino_name`; blank = the built-in default). Saves dispatch
 `casino_config_change` so the cog re-ensures the panel without a restart
 (post/edit/move/tear down; a channel move deletes the old panel).
 

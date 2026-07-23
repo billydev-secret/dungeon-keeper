@@ -2,7 +2,7 @@ import { api } from "../api.js";
 import { auditPanel, badge, tsColumn } from "../audit-helpers.js";
 
 const THEME_LABELS = {
-  golden_meadow: "Golden Meadow",
+  golden_meadow: "Golden",
   midnight:      "Midnight",
   rose:          "Rose",
 };

@@ -141,8 +141,10 @@ class QuoteTheme:
 
 
 THEMES: dict[str, QuoteTheme] = {
+    # Key is historical (stored on every rendered card); the label is the
+    # colour, not a server name.
     "golden_meadow": QuoteTheme(
-        name="Golden Meadow",
+        name="Golden",
         overlay_color=(212, 160, 40),   # warm amber-gold
         overlay_alpha=0.38,
         desaturate=0.55,

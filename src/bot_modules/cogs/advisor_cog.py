@@ -1,8 +1,8 @@
-"""`/ask` — member self-service help, answered by Billy-bot.
+"""`/ask` — member self-service help, answered by the AI advisor.
 
 Thin glue over ``bot_modules.services.advisor_service``; the same brain powers
-the dashboard Help panel's "Ask Billy-bot" box. Answers are grounded in the user
-manual, so Billy-bot can't invent commands. Ephemeral + per-user cooldown so one
+the dashboard Help panel's ask box. Answers are grounded in the user
+manual, so the advisor can't invent commands. Ephemeral + per-user cooldown so one
 member can't spend the shared Anthropic budget.
 
 Admin askers additionally get config tools: settings are fetched on demand
@@ -22,6 +22,10 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_grant_roles, open_db
+from bot_modules.services.branding_service import (
+    DEFAULT_ASSISTANT_NAME,
+    resolve_assistant_name_conn,
+)
 from bot_modules.services.advisor_actions import (
     ConfigProposal,
     apply_config_change,
@@ -177,7 +181,7 @@ class _ApplyConfigView(discord.ui.View):
                 await interaction.response.edit_message(view=self)
                 return
             log.info(
-                "%s applied Billy-bot proposal in guild %s: %s",
+                "%s applied advisor proposal in guild %s: %s",
                 member.display_name, self._guild.id, prop.display,
             )
             btn.disabled = True
@@ -195,7 +199,7 @@ class AdvisorCog(commands.Cog):
 
     @app_commands.command(
         name="ask",
-        description="Ask Billy-bot how to use the server — games, commands, settings.",
+        description="Ask the server assistant how to use the server — games, commands, settings.",
     )
     @app_commands.describe(question="What do you want to know how to do?")
     @app_commands.checks.cooldown(1, 12.0, key=lambda i: i.user.id)
@@ -205,6 +209,7 @@ class AdvisorCog(commands.Cog):
 
         guild = interaction.guild
         model = MODEL
+        assistant_name = DEFAULT_ASSISTANT_NAME
         guild_context: str | None = None
         tools: AdvisorTools | None = None
         proposals: list[ConfigProposal] = []
@@ -219,6 +224,7 @@ class AdvisorCog(commands.Cog):
                 # Staff asks get the stronger model whether or not live context
                 # is on — the tiering is about answer quality, not context.
                 model = resolve_advisor_model(conn, guild.id, staff=is_staff(member))
+                assistant_name = resolve_assistant_name_conn(conn, guild.id)
                 context_on = get_advisor_context_enabled(conn, guild.id)
                 tools_on = get_advisor_tools_enabled(conn, guild.id)
             if context_on:
@@ -231,7 +237,8 @@ class AdvisorCog(commands.Cog):
                 )
 
         result = await answer_advisor(
-            question, model=model, guild_context=guild_context, tools=tools
+            question, model=model, guild_context=guild_context, tools=tools,
+            assistant_name=assistant_name,
         )
         answer = result.answer
         if len(answer) > _MAX_DESC:
@@ -243,11 +250,13 @@ class AdvisorCog(commands.Cog):
             else None
         )
         embed = discord.Embed(
-            title="🤖 Billy-bot",
+            title=f"🤖 {assistant_name}",
             description=answer,
             color=color,
         )
-        embed.set_footer(text="Billy-bot • grounded in the server guide, not always perfect")
+        embed.set_footer(
+            text=f"{assistant_name} • grounded in the server guide, not always perfect"
+        )
         view = (
             _ApplyConfigView(self.ctx.db_path, guild, proposals)
             if proposals and guild is not None

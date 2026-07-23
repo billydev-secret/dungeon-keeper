@@ -1,6 +1,6 @@
-"""Per-asker server context for Billy-bot.
+"""Per-asker server context for the AI advisor.
 
-Billy-bot's static grounding is the user manual (``advisor_service``). This
+The advisor's static grounding is the user manual (``advisor_service``). This
 module adds *live, per-server* grounding — server docs, recent announcements,
 channel topics, and pinned messages — plus a summary of what the asker can
 **do** (their roles/permissions), so answers are tailored to them.
@@ -12,7 +12,7 @@ Two hard rules, both enforced here and covered by tests:
   (``is_nsfw()``) are never included. ``/ask`` is open to everyone, so this is
   the gate that stops a member extracting mod-only content.
 - **Do:** the capability summary reflects the asker's real permissions, so
-  Billy-bot only suggests actions they can actually perform.
+  the advisor only suggests actions they can actually perform.
 
 Pins require an API call per channel, so they come from a per-guild snapshot
 refreshed by ``guild_pins_loop`` rather than fetched on every ``/ask``. The
@@ -265,7 +265,7 @@ can_see_config = _can_see_config  # public alias for surface wiring
 def fetch_feature_settings(
     guild, member: discord.Member | None, db_path, feature: str
 ) -> str:
-    """One feature's settings on demand — the handler behind Billy-bot's
+    """One feature's settings on demand — the handler behind the advisor's
     ``get_server_settings`` tool.
 
     Same formatting, secret filtering, and admin gate as the inline summary,
@@ -466,7 +466,7 @@ def build_asker_context(
     guild's public (@everyone) visibility.
 
     ``include_config=False`` skips the inline admin settings dump — used when
-    the caller gives Billy-bot the ``get_server_settings`` tool instead, so
+    the caller gives the advisor the ``get_server_settings`` tool instead, so
     settings are fetched on demand rather than paid for on every ask.
     """
     visible = visible_text_channels(guild, viewer)

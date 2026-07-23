@@ -1,6 +1,6 @@
-"""Admin-confirmed config changes proposed by Billy-bot.
+"""Admin-confirmed config changes proposed by the AI advisor.
 
-Billy-bot can *propose* a settings change via its ``propose_config_change``
+The advisor can *propose* a settings change via its ``propose_config_change``
 tool, but never applies one itself: the proposal is validated here, attached
 to the reply as an Apply button, and only written when an admin clicks it
 (``advisor_cog``). That human gate is the prompt-injection defence — pinned

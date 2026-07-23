@@ -60,6 +60,10 @@ export function mount(container) {
   (async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const c = config.casino || {};
+    // Name is edited on the Branding panel; this panel just wears it.
+    const br = config.branding || {};
+    const casinoName =
+      (br.casino_name || "").trim() || br.default_casino_name || "Golden Meadow";
 
     container.textContent = "";
     const panel = document.createElement("div");
@@ -67,12 +71,13 @@ export function mount(container) {
 
     const hdr = document.createElement("header");
     const h2 = document.createElement("h2");
-    h2.textContent = "The Golden Meadow Casino";
+    h2.textContent = `The ${casinoName} Casino`;
     const sub = document.createElement("div");
     sub.className = "subtitle";
     sub.textContent =
       "House gambling games played for your server currency. Picking a channel " +
-      "opens the casino; the bot keeps its hub panel there.";
+      "opens the casino; the bot keeps its hub panel there. Rename it on the " +
+      "Branding panel.";
     hdr.append(h2, sub);
     panel.appendChild(hdr);
 

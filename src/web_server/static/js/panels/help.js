@@ -4,7 +4,23 @@
 // nav so the sidebar can't drift from the manual).
 
 import { HELP_PAGES } from "./help-sections.js?v=24";
-import { apiPost, esc } from "../api.js";
+import { api, apiPost, esc } from "../api.js";
+
+// The assistant's name is per-guild branding (Config → Branding); the built-in
+// default only shows if the lookup fails.
+const DEFAULT_ASSISTANT_NAME = "Billy-bot";
+let _assistantName = null;
+
+async function assistantName() {
+  if (_assistantName) return _assistantName;
+  try {
+    const res = await api("/api/help/advisor/name");
+    _assistantName = res.assistant_name || DEFAULT_ASSISTANT_NAME;
+  } catch {
+    _assistantName = DEFAULT_ASSISTANT_NAME;
+  }
+  return _assistantName;
+}
 
 // Render the advisor's plaintext answer with a safe markdown-lite pass. `esc`
 // runs first, so the tag substitutions below can only ever produce our own tags.
@@ -33,7 +49,8 @@ function renderAnswerHtml(text, meta = {}) {
     .replace(/\n/g, "<br>");
 }
 
-// The "Ask Billy-bot" box: a grounded chat over the manual (POST /api/help/advisor).
+// The ask box: a grounded chat over the manual (POST /api/help/advisor). Its
+// labels carry the guild's own name for the assistant once that resolves.
 function buildAskBox() {
   const box = document.createElement("div");
   box.className = "dk-help-ask";
@@ -45,8 +62,13 @@ function buildAskBox() {
 
   const input = document.createElement("input");
   input.type = "text";
-  input.placeholder = "Ask Billy-bot — e.g. “How do I start a game?”";
-  input.setAttribute("aria-label", "Ask Billy-bot a question");
+  const nameSoFar = _assistantName || DEFAULT_ASSISTANT_NAME;
+  input.placeholder = `Ask ${nameSoFar} — e.g. “How do I start a game?”`;
+  input.setAttribute("aria-label", `Ask ${nameSoFar} a question`);
+  assistantName().then((name) => {
+    input.placeholder = `Ask ${name} — e.g. “How do I start a game?”`;
+    input.setAttribute("aria-label", `Ask ${name} a question`);
+  });
   input.maxLength = 500;
   input.style.cssText = "flex:1;min-width:0;";
 
@@ -78,7 +100,7 @@ function buildAskBox() {
       answer.textContent =
         err && /429/.test(String(err.message))
           ? "You're asking a lot quickly — give it a few seconds and try again."
-          : "Couldn't reach Billy-bot just now — try again in a moment.";
+          : `Couldn't reach ${_assistantName || DEFAULT_ASSISTANT_NAME} just now — try again in a moment.`;
     } finally {
       btn.disabled = false;
       input.disabled = false;

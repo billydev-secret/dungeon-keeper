@@ -1,4 +1,4 @@
-"""The Golden Meadow casino — settings + the single money choke point.
+"""The casino — settings + the single money choke point.
 
 Every coin that enters or leaves a casino game moves through this module:
 :func:`take_stake` (the only debit path, guarding economy-enabled → casino

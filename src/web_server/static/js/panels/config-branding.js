@@ -11,13 +11,17 @@ export function mount(container) {
     const bi = config.bot_identity || { nick: "", avatar_url: "" };
     const br = config.branding || { accent_mode: "avatar", accent_hex: "" };
     const mode = br.accent_mode === "custom" ? "custom" : "avatar";
+    // Defaults come from the server so the placeholder can never drift from
+    // the name the bot actually falls back to.
+    const defaultCasinoName = br.default_casino_name || "Golden Meadow";
+    const defaultAssistantName = br.default_assistant_name || "Billy-bot";
     const pickerValue = br.accent_hex || DEFAULT_ACCENT;
 
     container.innerHTML = `
       <div class="panel">
         <header>
           <h2>Branding</h2>
-          <div class="subtitle">This server's bot name, avatar, and embed accent color</div>
+          <div class="subtitle">This server's bot name, avatar, embed accent color, and feature names</div>
         </header>
 
         <form class="form card" data-identity-form>
@@ -69,6 +73,25 @@ export function mount(container) {
           <div style="display:flex;gap:8px;align-items:center;">
             <button type="submit" class="btn btn-primary">Save Accent Color</button>
             <span data-accent-status></span>
+          </div>
+        </form>
+
+        <form class="form card" data-names-form style="margin-top:12px;">
+          <div class="section-label">Feature Names</div>
+          <div class="field-hint" style="margin-bottom:1rem">Two features carry a name of their own. Rename them to fit this server, or leave a field blank to keep the built-in name.</div>
+          <div class="field">
+            <label for="cb-casino-name">Casino Name</label>
+            <input type="text" id="cb-casino-name" data-casino-name maxlength="60" value="${escapeHtml(br.casino_name || "")}" placeholder="${escapeHtml(defaultCasinoName)}" />
+            <div class="field-hint">Used in the casino's hub panel and payout guide — "The ${escapeHtml(defaultCasinoName)} Casino", "How the ${escapeHtml(defaultCasinoName)} pays". Blank uses <strong>${escapeHtml(defaultCasinoName)}</strong>.</div>
+          </div>
+          <div class="field">
+            <label for="cb-assistant-name">AI Assistant Name</label>
+            <input type="text" id="cb-assistant-name" data-assistant-name maxlength="60" value="${escapeHtml(br.assistant_name || "")}" placeholder="${escapeHtml(defaultAssistantName)}" />
+            <div class="field-hint">What the <code>/ask</code> helper calls itself — in its reply title, in the Help panel's ask box, and in its own answers. Blank uses <strong>${escapeHtml(defaultAssistantName)}</strong>.</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-names-status></span>
           </div>
         </form>
 
@@ -126,6 +149,25 @@ export function mount(container) {
       // Choosing a color implies you want it — switch to custom.
       const customRadio = container.querySelector('input[name="accent_mode"][value="custom"]');
       customRadio.checked = true;
+    });
+
+    // ── Feature names ────────────────────────────────────────────────────────
+    const namesForm = container.querySelector("[data-names-form]");
+    const namesStatus = container.querySelector("[data-names-status]");
+    guardForm(namesForm);
+
+    namesForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        // Blank clears the override — the bot falls back to the built-in name.
+        await apiPut("/api/config/branding", {
+          casino_name: container.querySelector("[data-casino-name]").value.trim(),
+          assistant_name: container.querySelector("[data-assistant-name]").value.trim(),
+        });
+        showStatus(namesStatus, true, "Saved");
+      } catch (err) {
+        showStatus(namesStatus, false, err.message);
+      }
     });
 
     accentForm.addEventListener("submit", async (e) => {
