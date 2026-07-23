@@ -117,10 +117,17 @@ SQLite-backed. Tests in `tests/`.
 
 ## Conventions
 
-- No Node on this box — syntax-check dashboard JS with a
-  `gjs` `Reflect.parse` one-liner. Static-asset cache-busting is automatic
-  (per-boot `?v=` rewrite in `server.py`); JS edits show up after the next
-  service restart, not before.
+- **Node 20 is installed user-local** at `~/.local/lib/node20` (symlinked into
+  `~/.local/bin`, already on PATH) purely as dev tooling — nothing the bot or
+  dashboard runs at runtime depends on it, and it is not a system package.
+  It exists so the **blocking** CI lint job can be reproduced before pushing:
+  `npm install --no-save` once, then `npx eslint src/web_server/static/js` and
+  `npx stylelint "src/web_server/static/**/*.css"` — the exact commands
+  `.github/workflows/test.yml` runs. Run both after touching dashboard JS/CSS;
+  stylelint takes `--fix` for the mechanical ones. The `gjs` `Reflect.parse`
+  one-liner still works for a quick syntax-only check without npm.
+  Static-asset cache-busting is automatic (per-boot `?v=` rewrite in
+  `server.py`); JS edits show up after the next service restart, not before.
 - **Dashboard test suite** (`docs/web_testing.md`). Cross-cutting sweeps beyond
   per-route tests: an **authz sweep** (every route rejects an unauthenticated
   caller — a new route is covered automatically; add to `PUBLIC_PATHS` only if

@@ -665,12 +665,12 @@ a { text-decoration: none; }
 /* Games panels: inputs/selects/textareas wrapped inside <label> within .field.
    Non-games panels use the sibling pattern (<label> then <input> as siblings of .field),
    so this rule only activates where the label wraps the control. */
-.field > label:has(> input:not([type="checkbox"]):not([type="radio"]), > select, > textarea) {
+.field > label:has(> input:not([type="checkbox"], [type="radio"]), > select, > textarea) {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.field > label > input:not([type="checkbox"]):not([type="radio"]),
+.field > label > input:not([type="checkbox"], [type="radio"]),
 .field > label > textarea,
 .field > label > select {
   background: var(--bg-input);
@@ -682,7 +682,7 @@ a { text-decoration: none; }
   font-weight: 400;
   font-family: inherit;
 }
-.field > label > input:not([type="checkbox"]):not([type="radio"]):focus,
+.field > label > input:not([type="checkbox"], [type="radio"]):focus,
 .field > label > textarea:focus,
 .field > label > select:focus {
   outline: none;
@@ -3485,7 +3485,7 @@ select option { background: var(--bg-input); color: var(--ink); }
   border-radius: 4px; padding: 4px 8px; white-space: nowrap;
 }
 .doc-ed-accent {
-  width: 84px; padding: 8px 8px; font-size: 13px; text-align: center;
+  width: 84px; padding: 8px; font-size: 13px; text-align: center;
   border: 1px solid var(--rule); border-radius: 4px;
   background: var(--bg-input); color: var(--ink);
 }
