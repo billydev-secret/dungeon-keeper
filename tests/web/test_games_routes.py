@@ -983,7 +983,7 @@ def test_channels_delete_nonexistent_is_ok(open_client):
     assert resp.status_code == 200
 
 
-# ── Guild scoping (migration 115) ───────────────────────────────────────────────
+# ── Guild scoping (migration 122) ───────────────────────────────────────────────
 #
 # The active guild for open_client is FakeCtx.guild_id (123); a row stamped with
 # any other guild_id belongs to a *different* guild and must never surface.

@@ -114,7 +114,7 @@ async def check_allowed_channel(
     ``channel_id`` is a globally-unique Discord snowflake, so matching on it
     alone is not a cross-guild leak. When *guild_id* is supplied the match is
     additionally scoped to that guild for defence-in-depth, treating a stored
-    ``guild_id = 0`` as a wildcard so legacy rows (added before migration 115
+    ``guild_id = 0`` as a wildcard so legacy rows (added before migration 122
     stamped a guild on new rows) keep working until a reconcile assigns them.
     """
     if channel_id is None:

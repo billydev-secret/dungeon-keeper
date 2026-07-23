@@ -1,4 +1,4 @@
-"""Guild scoping for check_allowed_channel (migration 118).
+"""Guild scoping for check_allowed_channel (migration 122).
 
 channel_id is a globally-unique snowflake, so the legacy channel-only match is
 not itself a cross-guild leak; these tests lock in the optional guild_id filter
@@ -42,7 +42,7 @@ async def test_legacy_zero_guild_is_wildcard(sync_db_path):
     assert await check_allowed_channel(db, 111, guild_id=7) is True
 
 
-# ── migration 118 single-guild backfill ─────────────────────────────
+# ── migration 122 single-guild backfill ─────────────────────────────
 # The dashboard reads these tables filtered by the active guild, so legacy
 # rows (guild_id = 0) must be assigned to the sole guild on a single-guild
 # install or they vanish from the panels. On a multi-guild install the

@@ -1,4 +1,4 @@
--- 118_games_guild_scope.sql
+-- 122_games_guild_scope.sql
 -- Scopes per-guild games tables by guild_id.
 --
 -- games_allowed_channels and games_game_history were keyed on row/channel id

@@ -235,7 +235,7 @@ async def get_stats(
     def _q():
         with ctx.open_db() as conn:
             # games_question_bank is intentionally global/unscoped for now
-            # (shared cross-guild library — see migration 115's open question).
+            # (shared cross-guild library — see migration 122's open question).
             total_q = conn.execute(
                 "SELECT COUNT(*) FROM games_question_bank"
             ).fetchone()[0]
