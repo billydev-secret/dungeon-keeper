@@ -658,3 +658,21 @@ def test_compute_social_graph_empty_returns_keys(db_conn):
     assert "sfw_nsfw_bridge_pct" in out
     # graph_metrics output keys should be present
     assert isinstance(out, dict)
+
+
+def test_compute_social_graph_excludes_bot_interactions(db_conn):
+    """A bot on either endpoint must not inflate the social graph's node count."""
+    now = 1_700_000_000.0
+    recent = int(now) - 86400  # within the 30-day window
+    # Two humans interacting, plus everyone talking at a bot.
+    _seed_known_user(db_conn, 1)
+    _seed_known_user(db_conn, 2)
+    _seed_known_user(db_conn, 99, is_bot=1)
+    _seed_interaction(db_conn, frm=1, to=2, ts=recent)
+    _seed_interaction(db_conn, frm=1, to=99, ts=recent)
+    _seed_interaction(db_conn, frm=99, to=2, ts=recent)
+
+    out = hm.compute_social_graph(db_conn, GUILD, now=now)
+    # Only humans 1 and 2 form the graph; the bot's edges are dropped.
+    assert out["node_count"] == 2
+    assert out["edge_count"] == 1

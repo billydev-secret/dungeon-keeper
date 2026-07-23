@@ -482,16 +482,23 @@ async def home_data(
             # Social butterflies
             social_butterflies: list[dict] = []
             if _need("butterflies"):
+                # Exclude bots on either endpoint — a member who mostly talks at
+                # bots isn't a social butterfly, and a bot shouldn't be listed as
+                # one. Allowlisted bots live in known_users with is_bot=1.
                 butterfly_rows = conn.execute(
                     """
                     SELECT from_user_id AS user_id, COUNT(DISTINCT to_user_id) AS unique_partners
                     FROM user_interactions_log
                     WHERE guild_id = ? AND ts >= ?
+                      AND from_user_id NOT IN
+                          (SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1)
+                      AND to_user_id NOT IN
+                          (SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1)
                     GROUP BY from_user_id
                     ORDER BY unique_partners DESC
                     LIMIT 5
                     """,
-                    (guild_id, int(one_day)),
+                    (guild_id, int(one_day), guild_id, guild_id),
                 ).fetchall()
                 social_butterflies = [
                     {

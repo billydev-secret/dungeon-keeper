@@ -30,10 +30,11 @@ Tiles group into a few areas:
 - **Membership health** — join-time histogram, cohort retention, NSFW-channel activity grouped by recorded gender, members inactive ≥ N days, the oldest members without the NSFW role, message-rate-drops, dropoff.
 - **Greeter performance** — greeter response time and missed joins, derived from the configured greeter chat channel and welcome / leave audit.
 - **XP** — top-N leaderboard for a window, days-to-level-5 histogram, and a generalised days-to-level-N report (level 2–100). Source data is owned by [[xp-spec]].
-- **Interaction graph** — force-directed network of replies and mentions, plus an animated adjacency-matrix heatmap by day or week.
+- **Interaction graph** — force-directed network of replies and mentions, plus an animated adjacency-matrix heatmap by day or week. Any interaction touching a bot on either endpoint is excluded, so a member replying to a bot never reads as a one-sided relationship — the exclusion is applied in the queries (`query_connection_web`, `get_interaction_graph_data`) so the connection web, the interaction-graph tables, and the Health **Social Graph** metrics all share it. Recorded bots (see State) still have their raw interactions logged; they're just filtered out at report time.
 - **Invite effectiveness** — per-inviter table of active invitees joined through them.
 - **Quality score** — the Member Quality Score table (described below).
 - **Chilling effect** — members whose arrival in a channel correlates with others going quiet.
+- **One-Sided Attention** (Reports → People, mod-gated) — flags member *pairs* with sustained, unreciprocated attention (replies+mentions, reactions, voice-follows), gated on a volume floor plus an asymmetry cut and presented as evidence chips, never a black-box score. Bots are excluded on either endpoint: `get_one_sided_attention_data` reads the recorded-bot set from `known_users` and passes it as the report's `exclude_ids`, so a member reacting to or following a bot never surfaces as a lopsided pair, and bot targets don't inflate a member's concentration/distinct-target evidence.
 
 ### Message Review
 

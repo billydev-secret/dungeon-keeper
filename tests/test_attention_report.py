@@ -67,6 +67,42 @@ def test_lopsided_pair_is_flagged(db):
     assert "target never responded in-window" in c.reasons
 
 
+def test_excluded_ids_drop_pairs_on_either_endpoint(db):
+    """A bot (excluded) as initiator OR target never surfaces as a candidate."""
+    # Human 1 → bot 99: textbook lopsided, would flag if not excluded.
+    for i in range(20):
+        _text(db, 1, 99, NOW - (20 - i) * 3600)
+    # Bot 99 → human 2: also lopsided in the other direction.
+    for i in range(20):
+        _text(db, 99, 2, NOW - (20 - i) * 3600)
+
+    cands = compute_one_sided_attention(db, GUILD, now_ts=NOW, exclude_ids={99})
+    assert _find(cands, 1, 99) is None
+    assert _find(cands, 99, 2) is None
+    assert all(99 not in (c.initiator_id, c.target_id) for c in cands)
+
+
+def test_excluded_ids_removed_from_concentration_evidence(db):
+    """Attention toward an excluded id doesn't inflate a human's concentration/HHI."""
+    # Human 1 spreads text across humans 2..7 (6 distinct human targets),
+    # and also hammers bot 99 hard. The real one-sided pair is 1→2 (target
+    # silent). Bot volume must not enter 1's outbound totals.
+    for t in range(2, 8):
+        for i in range(16):
+            _text(db, 1, t, NOW - (16 - i) * 3600 - t)
+    for i in range(40):
+        _text(db, 1, 99, NOW - (40 - i) * 600)
+
+    cands = compute_one_sided_attention(db, GUILD, now_ts=NOW, exclude_ids={99})
+    c = _find(cands, 1, 2)
+    assert c is not None
+    # 6 human targets, none of them the bot.
+    assert c.distinct_targets == 6
+    # Concentration is w_out/(sum over human targets) — bot weight excluded, so
+    # each of 6 equal targets is ~1/6, well under any bot-inflated figure.
+    assert c.concentration == pytest.approx(1 / 6, abs=0.02)
+
+
 def test_balanced_pair_is_not_flagged(db):
     for i in range(15):
         _text(db, 1, 2, NOW - i * 3600)

@@ -4,8 +4,11 @@ import sqlite3
 
 import pytest
 
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.interaction_graph import init_interaction_tables, record_interactions
 from bot_modules.services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
-from bot_modules.services.reports_data import get_greeter_log_sessions, get_greeter_response_data
+from bot_modules.services.reports_data import get_animated_heatmap_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_one_sided_attention_data
+from migrations import apply_migrations_sync
 
 
 @pytest.fixture
@@ -103,3 +106,95 @@ def test_rejoin_pairs_correctly(conn):
     assert len(sessions) == 2
     assert sessions[0]["left_at"] == 200.0
     assert sessions[1]["left_at"] is None
+
+
+@pytest.fixture
+def ig_conn(tmp_path):
+    """Migrated DB with interaction tables — for the interaction-graph report."""
+    path = tmp_path / "ig.db"
+    apply_migrations_sync(path)
+    with open_db(path) as c:
+        init_interaction_tables(c)
+        yield c
+
+
+def _mark_bot(conn, guild_id, user_id):
+    conn.execute(
+        "INSERT INTO known_users (guild_id, user_id, is_bot) VALUES (?, ?, 1)"
+        " ON CONFLICT(guild_id, user_id) DO UPDATE SET is_bot = 1",
+        (guild_id, user_id),
+    )
+
+
+def test_interaction_graph_excludes_bots(ig_conn):
+    """Bots on either endpoint drop out of nodes, edges, and top pairs."""
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], amount=3)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], amount=9)
+    record_interactions(ig_conn, guild_id=1, from_user_id=99, to_user_ids=[2], amount=7)
+    _mark_bot(ig_conn, 1, 99)
+
+    data = get_interaction_graph_data(ig_conn, guild_id=1)
+
+    node_ids = {n["user_id"] for n in data["nodes"]}
+    assert node_ids == {"1", "2"}
+    assert "99" not in node_ids
+    edge_ids = {e["from_id"] for e in data["edges"]} | {e["to_id"] for e in data["edges"]}
+    assert "99" not in edge_ids
+    pair_ids = {p["from_id"] for p in data["top_pairs"]} | {p["to_id"] for p in data["top_pairs"]}
+    assert "99" not in pair_ids
+
+
+def test_interaction_graph_excludes_bots_windowed(ig_conn):
+    """Bot exclusion also holds on the days-windowed (log-table) query path."""
+    import time as _t
+
+    now = int(_t.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], ts=now, message_id=2)
+    _mark_bot(ig_conn, 1, 99)
+
+    data = get_interaction_graph_data(ig_conn, guild_id=1, days=7)
+    node_ids = {n["user_id"] for n in data["nodes"]}
+    assert node_ids == {"1", "2"}
+
+
+def test_animated_heatmap_excludes_bots(ig_conn):
+    """The stable top-N user set for the heatmap never includes a bot."""
+    import time as _t
+
+    now = int(_t.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    # Bot 99 is heavily interacted with — would top the volume ranking if kept.
+    for i in range(5):
+        record_interactions(
+            ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], ts=now, message_id=100 + i
+        )
+    _mark_bot(ig_conn, 1, 99)
+
+    data = get_animated_heatmap_data(ig_conn, guild_id=1, days=30)
+    assert "99" not in {u["user_id"] for u in data["users"]}
+
+
+def test_one_sided_attention_report_excludes_bots(ig_conn):
+    """The One-Sided Attention report pulls bot ids from known_users and drops
+    any pair touching one, while a lopsided human pair still surfaces."""
+    import time as _t
+
+    now = int(_t.time())
+    # Lopsided human 1 → human 2 (target silent): should flag.
+    for i in range(20):
+        record_interactions(
+            ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now - i * 3600, message_id=i
+        )
+    # Lopsided human 1 → bot 99: must NOT flag once 99 is marked a bot.
+    for i in range(20):
+        record_interactions(
+            ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], ts=now - i * 3600, message_id=100 + i
+        )
+    _mark_bot(ig_conn, 1, 99)
+
+    data = get_one_sided_attention_data(ig_conn, guild_id=1)
+    pairs = {(c["from_id"], c["to_id"]) for c in data["candidates"]}
+    assert ("1", "2") in pairs
+    assert ("1", "99") not in pairs
+    assert all("99" not in (c["from_id"], c["to_id"]) for c in data["candidates"])

@@ -242,6 +242,45 @@ def test_query_connection_web_returns_empty_on_empty_guild(db_conn):
     assert edges == []
 
 
+def _mark_bot(conn, guild_id, user_id):
+    conn.execute(
+        "INSERT INTO known_users (guild_id, user_id, is_bot) VALUES (?, ?, 1)"
+        " ON CONFLICT(guild_id, user_id) DO UPDATE SET is_bot = 1",
+        (guild_id, user_id),
+    )
+
+
+def test_query_connection_web_excludes_bot_endpoints(db_conn):
+    """Edges touching a bot (either direction) are dropped as false positives."""
+    # Human 1 ↔ human 2 (real edge); everyone talks at bot 99 (one-sided noise).
+    record_interactions(db_conn, guild_id=10, from_user_id=1, to_user_ids=[2], amount=3)
+    record_interactions(db_conn, guild_id=10, from_user_id=1, to_user_ids=[99], amount=8)
+    record_interactions(db_conn, guild_id=10, from_user_id=2, to_user_ids=[99], amount=5)
+    record_interactions(db_conn, guild_id=10, from_user_id=99, to_user_ids=[1], amount=4)
+    _mark_bot(db_conn, 10, 99)
+
+    edges = query_connection_web(db_conn, guild_id=10, min_weight=1)
+    assert len(edges) == 1
+    u, v, w = edges[0]
+    assert {u, v} == {1, 2}
+    assert w == 3  # only the human↔human interactions counted
+    assert 99 not in {n for e in edges for n in (e[0], e[1])}
+
+
+def test_query_connection_web_excludes_bot_endpoints_windowed(db_conn):
+    """Bot exclusion also applies to the after_ts (log-table) code path."""
+    record_interactions(
+        db_conn, guild_id=10, from_user_id=1, to_user_ids=[2], ts=500, message_id=1
+    )
+    record_interactions(
+        db_conn, guild_id=10, from_user_id=1, to_user_ids=[99], ts=500, message_id=2
+    )
+    _mark_bot(db_conn, 10, 99)
+
+    edges = query_connection_web(db_conn, guild_id=10, after_ts=400)
+    assert {n for e in edges for n in (e[0], e[1])} == {1, 2}
+
+
 def test_query_connection_web_excludes_self_loops(db_conn):
     """record_interactions skips self loops, but verify the query also drops them."""
     # Force a self-loop directly into the aggregate table (bypassing record_interactions).

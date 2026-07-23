@@ -648,13 +648,19 @@ def compute_social_graph(
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
 
-    # Build adjacency list from interaction log (30-day window)
+    # Build adjacency list from interaction log (30-day window). Exclude bots on
+    # either endpoint — allowlisted bots live in known_users with is_bot=1, and a
+    # member interacting with one is not a real social edge.
     rows = conn.execute(
         """SELECT from_user_id, to_user_id, COUNT(*) AS weight
            FROM user_interactions_log
            WHERE guild_id=? AND ts>=?
+             AND from_user_id NOT IN
+                 (SELECT user_id FROM known_users WHERE guild_id=? AND is_bot=1)
+             AND to_user_id NOT IN
+                 (SELECT user_id FROM known_users WHERE guild_id=? AND is_bot=1)
            GROUP BY from_user_id, to_user_id""",
-        (guild_id, int(thirty_days_ago)),
+        (guild_id, int(thirty_days_ago), guild_id, guild_id),
     ).fetchall()
 
     metrics = compute_graph_metrics(
