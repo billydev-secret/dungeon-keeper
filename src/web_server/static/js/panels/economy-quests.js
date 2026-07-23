@@ -8,7 +8,7 @@ import { toast, confirmDialog } from "../ui.js";
 import { KIND_LABELS, CHANNEL_SCOPED_KINDS } from "./economy-sources-shared.js";
 
 // Advisory reward bands (client-side hint only — the server saves any value).
-const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [75, 200] };
+const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [50, 90] };
 
 // Plain-language cadence per quest type (shown under the Type select).
 const TYPE_HINTS = {

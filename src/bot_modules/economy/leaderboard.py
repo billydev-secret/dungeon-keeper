@@ -640,11 +640,11 @@ def build_leaderboard_embed(
                 for label, desc, pay in rows
             ]
         if overflow:
-            body.append(f"…and {overflow} more on `/quests`.")
+            body.append(f"…and {overflow} more on `/bank quests`.")
         if body:
             quest_lines.extend(body)
             quest_lines.append(
-                "Boards reshuffle each reset — `/quests` shows yours."
+                "Boards reshuffle each reset — `/bank quests` shows yours."
             )
         board = "\n".join(quest_lines)
         if not board:
@@ -675,7 +675,7 @@ def build_leaderboard_embed(
     embed.add_field(
         name="👤 Your Progress",
         value=(
-            "`/quests` shows your own quest progress and claims, and "
+            "`/bank quests` shows your own quest progress and claims, and "
             f"`/bank wallet` your {plural} balance and recent earnings — "
             "both are private, only you see the reply."
         ),

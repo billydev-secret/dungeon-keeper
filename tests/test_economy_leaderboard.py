@@ -366,7 +366,7 @@ def test_embed_quest_board_summarizes_per_cadence():
     assert "Monthly" not in board
     # No individual titles leak into the summary.
     assert "Quest 0" not in board and "Solo weekly" not in board
-    assert "reshuffle each reset" in board and "/quests" in board
+    assert "reshuffle each reset" in board and "/bank quests" in board
 
 
 def test_embed_quest_board_lists_event_quests():
@@ -393,7 +393,7 @@ def test_embed_empty_states_and_personal_blurb():
     assert "No quests running" in fields["📋 Quest board"]
     assert not any("Community goals" in (n or "") for n in fields)
     personal = fields["👤 Your Progress"]
-    assert "/quests" in personal and "/bank wallet" in personal
+    assert "/bank quests" in personal and "/bank wallet" in personal
     assert "only you" in personal
 
 
