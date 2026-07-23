@@ -99,6 +99,39 @@ def _can_see_config(member: discord.Member | None) -> bool:
     return bool(p.administrator or p.manage_guild)
 
 
+def is_server_admin(member: discord.Member | None) -> bool:
+    """Full ``administrator`` — stricter than :func:`_can_see_config`.
+
+    Gates the registry's ``admin_only`` settings (access roles, the jailed
+    role, who may mark Q&A answers). Manage Server is enough to *see* settings
+    and change ordinary ones; handing out access is a step above that.
+    """
+    if member is None:
+        return False
+    return bool(member.guild_permissions.administrator)
+
+
+def is_staff(member: discord.Member | None) -> bool:
+    """Whether the asker is a mod or admin — anyone with a staff-ish power.
+
+    Deliberately wider than :func:`_can_see_config` (admin/manage-server only):
+    this drives *answer quality* (which model handles the ask), not access to
+    settings, so a message-moderating mod counts even though they can't see
+    config.
+    """
+    if member is None:
+        return False
+    p = member.guild_permissions
+    return bool(
+        p.administrator
+        or p.manage_guild
+        or p.manage_messages
+        or p.moderate_members
+        or p.kick_members
+        or p.ban_members
+    )
+
+
 # Never surface these — the config KV table holds at least one secret
 # (spotify_bot_refresh_token), and future *_token/*_secret keys must stay hidden.
 _SECRET_KEY_RE = re.compile(

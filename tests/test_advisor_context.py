@@ -148,6 +148,56 @@ def test_capability_summary_none_is_generic_member():
     assert "regular member" in ac.capability_summary(None)
 
 
+# ── is_staff (which model tier answers) ─────────────────────────────────────
+
+
+def test_is_staff_none_and_plain_member():
+    assert ac.is_staff(None) is False
+    assert ac.is_staff(FakeMember(1, "Reg", FakeGuildPerms())) is False
+    # A named role alone doesn't make someone staff — permissions do.
+    assert ac.is_staff(FakeMember(1, "Reg", FakeGuildPerms(), role_names=("Mod",))) is False
+
+
+def test_is_staff_true_for_each_staff_permission():
+    for flag in (
+        "administrator",
+        "manage_guild",
+        "manage_messages",
+        "moderate_members",
+        "kick_members",
+        "ban_members",
+    ):
+        m = FakeMember(1, "Staff", FakeGuildPerms(**{flag: True}))
+        assert ac.is_staff(m) is True, flag
+
+
+def test_is_server_admin_is_stricter_than_can_see_config():
+    """Manage Server sees settings; only administrator gets the admin_only tier."""
+    manage = FakeMember(1, "Manager", FakeGuildPerms(manage_guild=True))
+    assert ac.can_see_config(manage) is True
+    assert ac.is_server_admin(manage) is False
+
+    admin = FakeMember(2, "Boss", FakeGuildPerms(administrator=True))
+    assert ac.can_see_config(admin) is True
+    assert ac.is_server_admin(admin) is True
+
+    assert ac.is_server_admin(None) is False
+    assert ac.is_server_admin(FakeMember(3, "Mod", FakeGuildPerms(manage_messages=True))) is False
+
+
+def test_is_staff_is_wider_than_can_see_config():
+    """A message-moderating mod gets the better model but not settings access."""
+    mod = FakeMember(1, "Mod", FakeGuildPerms(manage_messages=True))
+    assert ac.is_staff(mod) is True
+    assert ac.can_see_config(mod) is False
+
+
+def test_is_staff_ignores_non_staff_manage_permissions():
+    """manage_roles/manage_channels aren't in the staff set — keep it deliberate."""
+    m = FakeMember(1, "Decorator", FakeGuildPerms(manage_roles=True, manage_channels=True))
+    assert ac.is_staff(m) is False
+
+
 # ── build_asker_context ─────────────────────────────────────────────────────
 
 

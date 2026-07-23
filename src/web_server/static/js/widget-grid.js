@@ -110,6 +110,8 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
         renderTile(content, data.home);
       } else if (widget.source === "economy" && data.economy) {
         renderTile(content, data.economy);
+      } else if (widget.source === "suggestions" && data.suggestions) {
+        renderTile(content, data.suggestions);
       } else {
         content.innerHTML = `<div class="home-card-label">${esc(widget.label)}</div><div class="home-dim">Loading…</div>`;
       }

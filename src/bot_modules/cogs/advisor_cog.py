@@ -21,25 +21,29 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_grant_roles, open_db
 from bot_modules.services.advisor_actions import (
     ConfigProposal,
     apply_config_change,
     validate_config_change,
+    validate_grant_role_change,
 )
 from bot_modules.services.advisor_context import (
     FEATURE_KEYS,
     build_asker_context,
     can_see_config,
     fetch_feature_settings,
+    is_server_admin,
+    is_staff,
 )
+from bot_modules.services.advisor_gaps import fetch_setup_gaps
 from bot_modules.services.advisor_service import (
     MODEL,
     AdvisorTools,
     answer_advisor,
     get_advisor_context_enabled,
-    get_advisor_model,
     get_advisor_tools_enabled,
+    resolve_advisor_model,
 )
 
 if TYPE_CHECKING:
@@ -65,15 +69,15 @@ def _make_tools(
     def _fetch(feature: str) -> str:
         return fetch_feature_settings(guild, member, db_path, feature)
 
-    def _propose(key: str, value: str) -> str:
-        if not can_see_config(member):  # defense in depth; wiring already gates
-            return "Rejected: only server admins can change settings."
-        try:
-            with open_db(db_path) as conn:
-                prop = validate_config_change(conn, guild, key, value)
-        except ValueError as e:
-            return f"Rejected: {e}"
-        proposals[:] = [p for p in proposals if p.key != prop.key]
+    def _gaps() -> str:
+        return fetch_setup_gaps(db_path, guild.id, member)
+
+    def _queue(prop: ConfigProposal) -> str:
+        """Dedupe by what the change targets, then queue it for a button."""
+        ident = (prop.target, prop.grant_name, prop.key)
+        proposals[:] = [
+            p for p in proposals if (p.target, p.grant_name, p.key) != ident
+        ]
         if len(proposals) >= _MAX_PROPOSALS:
             return f"Rejected: at most {_MAX_PROPOSALS} changes per ask."
         proposals.append(prop)
@@ -82,8 +86,50 @@ def _make_tools(
             "attached to your reply; tell the admin to press it to confirm."
         )
 
+    def _propose(key: str, value: str) -> str:
+        if not can_see_config(member):  # defense in depth; wiring already gates
+            return "Rejected: only server admins can change settings."
+        try:
+            with open_db(db_path) as conn:
+                prop = validate_config_change(
+                    conn, guild, key, value, is_admin=is_server_admin(member)
+                )
+        except ValueError as e:
+            return f"Rejected: {e}"
+        return _queue(prop)
+
+    def _propose_grant(grant_name: str, field: str, value: str) -> str:
+        if not can_see_config(member):  # defense in depth
+            return "Rejected: only server admins can change settings."
+        try:
+            with open_db(db_path) as conn:
+                prop = validate_grant_role_change(
+                    conn, guild, grant_name, field, value,
+                    is_admin=is_server_admin(member),
+                )
+        except ValueError as e:
+            return f"Rejected: {e}"
+        return _queue(prop)
+
+    # Only offer the grant tool to a full admin — every field on it decides who
+    # ends up with a role, so a Manage Server asker would only be refused.
+    admin = is_server_admin(member)
+    grant_names: list[str] = []
+    if admin:
+        try:
+            with open_db(db_path) as conn:
+                grant_names = sorted(get_grant_roles(conn, guild.id))
+        except Exception:
+            log.exception("advisor: couldn't list grant roles for guild %s", guild.id)
+
     return AdvisorTools(
-        feature_keys=FEATURE_KEYS, fetch_settings=_fetch, propose_change=_propose
+        feature_keys=FEATURE_KEYS,
+        fetch_settings=_fetch,
+        fetch_gaps=_gaps,
+        propose_change=_propose,
+        propose_grant=_propose_grant if grant_names else None,
+        grant_names=grant_names,
+        is_admin=admin,
     )
 
 
@@ -117,7 +163,13 @@ class _ApplyConfigView(discord.ui.View):
                 )
                 return
             try:
-                apply_config_change(self._db_path, self._guild, prop)
+                # admin_only settings are re-checked against the clicker, not
+                # the asker — the reply is ephemeral, but the gate shouldn't
+                # depend on that being true.
+                apply_config_change(
+                    self._db_path, self._guild, prop,
+                    is_admin=is_server_admin(member),
+                )
             except ValueError as e:
                 btn.disabled = True
                 btn.style = discord.ButtonStyle.secondary
@@ -158,16 +210,18 @@ class AdvisorCog(commands.Cog):
         proposals: list[ConfigProposal] = []
         if guild is not None:
             db_path = self.ctx.db_path
+            member = (
+                interaction.user
+                if isinstance(interaction.user, discord.Member)
+                else None
+            )
             with open_db(db_path) as conn:
-                model = get_advisor_model(conn, guild.id)
+                # Staff asks get the stronger model whether or not live context
+                # is on — the tiering is about answer quality, not context.
+                model = resolve_advisor_model(conn, guild.id, staff=is_staff(member))
                 context_on = get_advisor_context_enabled(conn, guild.id)
                 tools_on = get_advisor_tools_enabled(conn, guild.id)
             if context_on:
-                member = (
-                    interaction.user
-                    if isinstance(interaction.user, discord.Member)
-                    else None
-                )
                 if tools_on and member is not None and can_see_config(member):
                     tools = _make_tools(guild, member, db_path, proposals)
                 # Tools replace the inline settings dump; the rest of the

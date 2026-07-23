@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 from anthropic.types import TextBlock, ToolUseBlock
 
 from bot_modules.services import advisor_service as adv
+from bot_modules.services.advisor_actions import GRANT_FIELDS
 
 
 def _config_conn() -> sqlite3.Connection:
@@ -147,6 +148,55 @@ def test_set_advisor_model_roundtrip_and_validation():
     except ValueError:
         raised = True
     assert raised
+
+
+def test_get_advisor_staff_model_defaults_to_sonnet_and_ignores_unknown():
+    conn = _config_conn()
+    assert adv.get_advisor_staff_model(conn) == adv.STAFF_MODEL == "claude-sonnet-5"
+    conn.execute("INSERT INTO config VALUES (0, 'advisor_staff_model', 'bogus')")
+    assert adv.get_advisor_staff_model(conn) == adv.STAFF_MODEL
+
+
+def test_set_advisor_staff_model_roundtrip_and_validation():
+    conn = _config_conn()
+    adv.set_advisor_staff_model(conn, "claude-opus-4-8")
+    assert adv.get_advisor_staff_model(conn) == "claude-opus-4-8"
+    # The member model is a separate key and must not move with it.
+    assert adv.get_advisor_model(conn) == adv.MODEL
+    try:
+        adv.set_advisor_staff_model(conn, "not-a-model")
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+
+
+def test_resolve_advisor_model_tiers_by_asker():
+    conn = _config_conn()
+    # Defaults: members on Haiku, staff on Sonnet.
+    assert adv.resolve_advisor_model(conn, staff=False) == "claude-haiku-4-5"
+    assert adv.resolve_advisor_model(conn, staff=True) == "claude-sonnet-5"
+    # Each tier is independently configurable.
+    adv.set_advisor_model(conn, "claude-sonnet-5")
+    adv.set_advisor_staff_model(conn, "claude-opus-4-8")
+    assert adv.resolve_advisor_model(conn, staff=False) == "claude-sonnet-5"
+    assert adv.resolve_advisor_model(conn, staff=True) == "claude-opus-4-8"
+
+
+def test_resolve_advisor_model_is_per_guild():
+    conn = _config_conn()
+    adv.set_advisor_staff_model(conn, "claude-opus-4-8", 42)
+    assert adv.resolve_advisor_model(conn, 42, staff=True) == "claude-opus-4-8"
+    # A different guild keeps the default rather than inheriting guild 42's pick.
+    assert adv.resolve_advisor_model(conn, 99, staff=True) == adv.STAFF_MODEL
+
+
+def test_advisor_staff_model_defaults_to_stronger_than_member_model():
+    """The whole point of the tier: staff must not silently get the cheap model."""
+    conn = _config_conn()
+    assert adv.resolve_advisor_model(conn, staff=True) != adv.resolve_advisor_model(
+        conn, staff=False
+    )
 
 
 def test_server_context_toggle_defaults_off():
@@ -297,6 +347,138 @@ def test_build_tools_read_only_vs_write():
     assert [t["name"] for t in adv.build_tools(rw)] == [
         "get_server_settings", "propose_config_change",
     ]
+
+
+def test_build_tools_includes_gap_finder_only_when_wired():
+    base = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "")
+    assert "find_setup_gaps" not in [t["name"] for t in adv.build_tools(base)]
+    with_gaps = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "", fetch_gaps=lambda: ""
+    )
+    defs = adv.build_tools(with_gaps)
+    assert [t["name"] for t in defs] == ["get_server_settings", "find_setup_gaps"]
+    # No arguments — the model shouldn't be inventing a filter.
+    assert defs[1]["input_schema"]["properties"] == {}
+
+
+def _propose_enum(*, is_admin):
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: "",
+        propose_change=lambda k, v: "",
+        is_admin=is_admin,
+    )
+    defs = adv.build_tools(tools)
+    propose = next(t for t in defs if t["name"] == "propose_config_change")
+    return set(propose["input_schema"]["properties"]["key"]["enum"])
+
+
+def test_propose_tool_enum_is_the_registry_writable_set():
+    """The model can't name a key that isn't vetted for writing."""
+    from bot_modules.services.settings_registry import writable_keys
+
+    enum = _propose_enum(is_admin=True)
+    assert enum == set(writable_keys(is_admin=True))
+    assert "admin_role_ids" not in enum
+    assert "mod_role_ids" not in enum
+    assert "message_storage_level" not in enum
+
+
+def test_propose_tool_enum_narrows_for_a_non_admin_asker():
+    """A Manage Server asker isn't offered keys they'd only be rejected for."""
+    admin, managed = _propose_enum(is_admin=True), _propose_enum(is_admin=False)
+    assert managed < admin
+    assert "jailed_role_id" in admin and "jailed_role_id" not in managed
+    assert "welcome_channel_id" in managed
+
+
+def test_propose_tool_defaults_to_the_narrow_enum():
+    """AdvisorTools.is_admin defaults False, so a surface that forgets to set
+    it under-offers rather than over-offers."""
+    default = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "", propose_change=lambda k, v: ""
+    )
+    propose = next(
+        t for t in adv.build_tools(default) if t["name"] == "propose_config_change"
+    )
+    assert "jailed_role_id" not in propose["input_schema"]["properties"]["key"]["enum"]
+
+
+def test_grant_tool_appears_only_with_names_and_a_callback():
+    base = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "")
+    assert "propose_grant_role_change" not in [t["name"] for t in adv.build_tools(base)]
+
+    # A callback with no grants (or grants with no callback) offers nothing —
+    # an empty enum would let the model pass anything.
+    no_names = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "",
+        propose_grant=lambda g, f, v: "", grant_names=[],
+    )
+    assert "propose_grant_role_change" not in [t["name"] for t in adv.build_tools(no_names)]
+
+    wired = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "",
+        propose_grant=lambda g, f, v: "", grant_names=["nsfw", "denizen"],
+    )
+    defs = adv.build_tools(wired)
+    grant = next(t for t in defs if t["name"] == "propose_grant_role_change")
+    props = grant["input_schema"]["properties"]
+    assert props["grant_name"]["enum"] == ["denizen", "nsfw"]
+    assert set(props["field"]["enum"]) == set(GRANT_FIELDS)
+    assert grant["input_schema"]["required"] == ["grant_name", "field", "value"]
+
+
+async def test_tool_loop_runs_the_grant_proposer(monkeypatch):
+    client = _mock_client_seq(monkeypatch, [
+        _resp(
+            _tool_block("propose_grant_role_change",
+                        {"grant_name": "nsfw", "field": "role_id", "value": "@Adults"}),
+            stop_reason="tool_use",
+        ),
+        _resp(TextBlock(type="text", text="Press Apply to confirm.")),
+    ])
+    seen = []
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: "",
+        propose_grant=lambda g, f, v: (seen.append((g, f, v)), "Queued")[1],
+        grant_names=["nsfw"],
+    )
+    res = await adv.answer_advisor("point NSFW at @Adults", tools=tools)
+    assert res.ok is True
+    assert seen == [("nsfw", "role_id", "@Adults")]
+    assert client.messages.create.call_count == 2
+
+
+async def test_tool_loop_runs_the_gap_finder(monkeypatch):
+    client = _mock_client_seq(monkeypatch, [
+        _resp(_tool_block("find_setup_gaps", {}), stop_reason="tool_use"),
+        _resp(TextBlock(type="text", text="Try turning on Q&A rewards.")),
+    ])
+    calls = []
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: "",
+        fetch_gaps=lambda: (calls.append(1), "- Q&A rewards — not set up at all")[1],
+    )
+    res = await adv.answer_advisor("what am I missing?", tools=tools)
+    assert res.ok is True
+    assert res.answer == "Try turning on Q&A rewards."
+    assert len(calls) == 1
+    assert client.messages.create.call_count == 2
+
+
+async def test_gap_tool_call_is_ignored_when_not_wired(monkeypatch):
+    """A model that hallucinates the tool gets a readable refusal, not a crash."""
+    _mock_client_seq(monkeypatch, [
+        _resp(_tool_block("find_setup_gaps", {}), stop_reason="tool_use"),
+        _resp(TextBlock(type="text", text="Sorry, can't check that.")),
+    ])
+    tools = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "")
+    res = await adv.answer_advisor("what am I missing?", tools=tools)
+    assert res.ok is True
 
 
 async def test_answer_without_tools_never_passes_tools(monkeypatch):

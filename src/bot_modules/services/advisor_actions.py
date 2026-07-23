@@ -7,10 +7,16 @@ to the reply as an Apply button, and only written when an admin clicks it
 messages, server docs, and announcements are all in the model's context, so
 model output alone must never mutate config.
 
-Scope is deliberately narrow for v1: only keys in the shared ``config`` KV
-table, and only keys that already exist for the guild. Feature-table settings
-(economy prices, voice master, …) have their own validated dashboard panels
-and stay read-only to the model.
+Scope comes from ``settings_registry``: a key is proposable only if it is listed
+there *and* flagged ``writable``. That is a deliberate narrowing of the old rule
+("any non-secret key that already has a row"), which let the model reach keys
+nobody had vetted — including ``admin_role_ids`` and ``message_storage_level``.
+Feature-table settings (economy prices, voice master dials, …) have their own
+validated dashboard panels and stay read-only to the model.
+
+The registry also removes the old requirement that the key already exist. Shape
+now comes from the schema rather than from the stored value, so Billy-bot can
+set up a feature that has never been configured — the case adoption depends on.
 """
 
 from __future__ import annotations
@@ -21,27 +27,41 @@ import sqlite3
 from dataclasses import dataclass
 
 from bot_modules.core.db_utils import open_db, set_config_value
+from bot_modules.services.settings_registry import (
+    Setting,
+    coerce_value,
+    feature_for_key,
+    get_setting,
+)
 
 log = logging.getLogger(__name__)
 
 # Same secret pattern as the read side (advisor_context) — never touch these.
+# The registry rejects secret-shaped keys at import; this is belt-and-braces for
+# a caller that reaches validate_config_change with something unexpected.
 _SECRET_KEY_RE = re.compile(
     r"token|secret|refresh|password|passwd|api[_-]?key|webhook|oauth|credential",
     re.I,
 )
 _MAX_VALUE_CHARS = 200
 _CLEAR_WORDS = {"none", "off", "clear", "unset", "0"}
-_TRUE_WORDS = {"1", "on", "true", "yes", "enable", "enabled"}
-_FALSE_WORDS = {"0", "off", "false", "no", "disable", "disabled"}
 
 
 @dataclass(frozen=True)
 class ConfigProposal:
-    """A validated, not-yet-applied change to one config KV key."""
+    """A validated, not-yet-applied settings change.
+
+    ``target`` says where it lands: the shared ``config`` KV table, or the
+    ``grant_roles`` table (community/NSFW role grants, which have their own
+    per-grant row rather than a KV key). The surface renders both the same way
+    — one Apply button — and :func:`apply_config_change` dispatches on it.
+    """
 
     key: str
     value: str  # normalized, exactly as it would be stored
-    display: str  # human-readable, e.g. "welcome_channel_id → #welcome"
+    display: str  # human-readable, e.g. "Welcome channel → #welcome"
+    target: str = "config"  # "config" | "grant_role"
+    grant_name: str = ""  # which grant_roles row, when target == "grant_role"
 
 
 def _current_value(conn: sqlite3.Connection, guild_id: int, key: str) -> str | None:
@@ -87,15 +107,53 @@ def _resolve_role(guild, raw: str) -> tuple[str, str]:
     raise ValueError(f"no role named '{s}' in this server")
 
 
+def _resolve_setting(key: str, *, is_admin: bool) -> Setting:
+    """The schema for a proposable key, or a ValueError explaining why not."""
+    setting = get_setting(key)
+    if setting is None:
+        raise ValueError(
+            f"'{key}' isn't a setting I can change. I can only change settings "
+            "on my vetted list — point the admin to the feature's dashboard "
+            "panel instead."
+        )
+    if not setting.writable:
+        feature = feature_for_key(key)
+        where = f" — set it from {feature.panel}" if feature else ""
+        raise ValueError(f"'{key}' has to be changed on the dashboard{where}.")
+    if setting.admin_only and not is_admin:
+        raise ValueError(
+            f"'{key}' grants access or authority, so it needs a full server "
+            "administrator — Manage Server isn't enough. Ask an admin, or set "
+            "it from the dashboard."
+        )
+    return setting
+
+
 def validate_config_change(
-    conn: sqlite3.Connection, guild, key: str, raw_value: str
+    conn: sqlite3.Connection,
+    guild,
+    key: str,
+    raw_value: str,
+    *,
+    allow_noop: bool = False,
+    is_admin: bool = False,
 ) -> ConfigProposal:
     """Validate one proposed change; return the normalized proposal.
 
-    Raises ``ValueError`` with a model-readable reason on anything off —
-    unknown key, secret key, unresolvable channel/role, bad boolean/number.
-    The value's expected shape is inferred from the key suffix and the
-    currently stored value, mirroring how ``_fmt_value`` reads them.
+    Shape comes from ``settings_registry``, so a key that has never been set on
+    this server is still proposable — that's how Billy-bot can stand up an
+    unconfigured feature. Raises ``ValueError`` with a model-readable reason on
+    anything off: unlisted or panel-only key, unresolvable channel/role, bad
+    boolean/number/choice, or a change that wouldn't change anything.
+
+    ``allow_noop`` skips the last check. Re-validation at apply time passes it,
+    so clicking a button whose value is already stored is a harmless rewrite
+    rather than a confusing "no change needed" failure.
+
+    ``is_admin`` is full ``administrator``, required for ``admin_only``
+    settings. It defaults to False so a caller that forgets to thread it
+    through fails closed, and it is re-checked at apply time against whoever
+    clicks — not just whoever asked.
     """
     key = (key or "").strip()
     raw = (raw_value or "").strip()
@@ -106,48 +164,156 @@ def validate_config_change(
     if len(raw) > _MAX_VALUE_CHARS:
         raise ValueError(f"value too long (max {_MAX_VALUE_CHARS} chars)")
 
-    current = _current_value(conn, guild.id, key)
-    if current is None:
+    setting = _resolve_setting(key, is_admin=is_admin)
+    label = setting.label
+    low_raw = raw.casefold()
+
+    if setting.kind in ("channel", "role") and low_raw in _CLEAR_WORDS:
+        value, shown = "0", "(cleared)"
+    elif setting.kind == "channel":
+        value, shown = _resolve_channel(guild, raw)
+    elif setting.kind == "role":
+        value, shown = _resolve_role(guild, raw)
+    else:
+        value = coerce_value(setting, raw)
+        shown = ("on" if value == "1" else "off") if setting.kind == "bool" else value
+
+    if not allow_noop and _current_value(conn, guild.id, key) == value:
+        raise ValueError(f"{label} is already set to {shown} — no change needed.")
+    return ConfigProposal(key, value, f"{label} → {shown}")
+
+
+# ---------------------------------------------------------------------------
+# Grant roles (the grant_roles table, not the config KV)
+# ---------------------------------------------------------------------------
+
+# NSFW, Denizen, Veteran and any custom grants live here rather than in the KV
+# table, which is why the legacy *_role_id keys in `config` are dead rows the
+# code no longer reads. Every field below governs who gets a role or where the
+# grant is logged, so the whole surface is admin_only.
+GRANT_FIELDS: dict[str, tuple[str, str]] = {
+    # field -> (kind, human label)
+    "role_id": ("role", "granted role"),
+    "required_role_id": ("role", "role required before granting"),
+    "log_channel_id": ("channel", "grant log channel"),
+    "announce_channel_id": ("channel", "grant announcement channel"),
+    "grant_message": ("text", "grant message"),
+}
+
+
+def validate_grant_role_change(
+    conn: sqlite3.Connection,
+    guild,
+    grant_name: str,
+    field: str,
+    raw_value: str,
+    *,
+    is_admin: bool = False,
+    allow_noop: bool = False,
+) -> ConfigProposal:
+    """Validate a change to one field of one existing grant role.
+
+    Only grants that already exist for the guild can be edited: creating one is
+    a dashboard action, and letting the model invent grant names would let it
+    mint role-handing rows nobody asked for. Requires full ``administrator``
+    for the same reason the registry's ``admin_only`` tier does — every field
+    here decides who ends up with a role, NSFW access included.
+    """
+    from bot_modules.core.db_utils import get_grant_roles
+
+    if not is_admin:
         raise ValueError(
-            f"'{key}' isn't a saved setting on this server — I can only change "
-            "settings that already exist. Point the admin to the feature's "
-            "dashboard panel to set it up first."
+            "changing a role grant needs a full server administrator — "
+            "Manage Server isn't enough."
+        )
+    grant_name = (grant_name or "").strip().lower()
+    field = (field or "").strip().lower()
+    raw = (raw_value or "").strip()
+    if not grant_name or not field or not raw:
+        raise ValueError("grant name, field, and value are all required")
+    if len(raw) > _MAX_VALUE_CHARS:
+        raise ValueError(f"value too long (max {_MAX_VALUE_CHARS} chars)")
+    if field not in GRANT_FIELDS:
+        raise ValueError(
+            f"'{field}' isn't a grant field. Available: {', '.join(GRANT_FIELDS)}."
         )
 
-    low_key = key.lower()
-    low_raw = raw.casefold()
-    if low_key.endswith(("channel_id", "channel")):
-        if low_raw in _CLEAR_WORDS:
-            return ConfigProposal(key, "0", f"{key} → (cleared)")
-        value, shown = _resolve_channel(guild, raw)
-        return ConfigProposal(key, value, f"{key} → {shown}")
-    if low_key.endswith(("role_id", "role")):
-        if low_raw in _CLEAR_WORDS:
-            return ConfigProposal(key, "0", f"{key} → (cleared)")
+    grants = get_grant_roles(conn, guild.id)
+    if grant_name not in grants:
+        known = ", ".join(sorted(grants)) or "none"
+        raise ValueError(
+            f"this server has no '{grant_name}' role grant. Existing grants: "
+            f"{known}. New ones are created from Config → Roles."
+        )
+
+    kind, field_label = GRANT_FIELDS[field]
+    current = str(grants[grant_name].get(field, "") or "")
+    label = f"{grants[grant_name]['label']} {field_label}"
+
+    if kind in ("role", "channel") and raw.casefold() in _CLEAR_WORDS:
+        value, shown = "0", "(cleared)"
+    elif kind == "role":
         value, shown = _resolve_role(guild, raw)
-        return ConfigProposal(key, value, f"{key} → {shown}")
-    if current in ("0", "1"):
-        if low_raw in _TRUE_WORDS:
-            return ConfigProposal(key, "1", f"{key} → on")
-        if low_raw in _FALSE_WORDS:
-            return ConfigProposal(key, "0", f"{key} → off")
-        raise ValueError(f"'{key}' is an on/off setting — say on or off")
-    if current.lstrip("-").isdigit():
-        try:
-            num = int(raw.replace(",", ""))
-        except ValueError:
-            raise ValueError(f"'{key}' expects a whole number") from None
-        return ConfigProposal(key, str(num), f"{key} → {num}")
-    return ConfigProposal(key, raw, f"{key} → {raw}")
+    elif kind == "channel":
+        value, shown = _resolve_channel(guild, raw)
+    else:
+        value = shown = raw
+
+    if not allow_noop and current == value:
+        raise ValueError(f"{label} is already {shown} — no change needed.")
+    return ConfigProposal(
+        key=field, value=value, display=f"{label} → {shown}",
+        target="grant_role", grant_name=grant_name,
+    )
 
 
-def apply_config_change(db_path, guild, proposal: ConfigProposal) -> None:
-    """Write one confirmed proposal. Re-validates so a stale button can't
-    apply a change that stopped making sense (channel deleted, key removed)."""
+def _apply_grant_role(conn, guild, proposal: ConfigProposal) -> None:
+    """Read-modify-write one grant row (upsert_grant_role takes the whole row)."""
+    from bot_modules.core.db_utils import get_grant_roles, upsert_grant_role
+
+    grants = get_grant_roles(conn, guild.id)
+    row = grants.get(proposal.grant_name)
+    if row is None:
+        raise ValueError(f"the '{proposal.grant_name}' role grant no longer exists")
+    fields = {
+        "label": row["label"],
+        "role_id": int(row["role_id"] or 0),
+        "log_channel_id": int(row["log_channel_id"] or 0),
+        "announce_channel_id": int(row["announce_channel_id"] or 0),
+        "grant_message": row["grant_message"] or "",
+        "required_role_id": int(row["required_role_id"] or 0),
+    }
+    kind, _ = GRANT_FIELDS[proposal.key]
+    fields[proposal.key] = proposal.value if kind == "text" else int(proposal.value)
+    upsert_grant_role(conn, guild.id, proposal.grant_name, **fields)
+
+
+def apply_config_change(
+    db_path, guild, proposal: ConfigProposal, *, is_admin: bool = False
+) -> None:
+    """Write one confirmed proposal.
+
+    Re-validates so a stale button can't apply a change that stopped making
+    sense (channel deleted, key removed) — and so ``admin_only`` is enforced
+    against the person who actually clicked, which may not be the person who
+    asked. Defaults to non-admin so a caller that forgets fails closed.
+    """
     with open_db(db_path) as conn:
-        checked = validate_config_change(conn, guild, proposal.key, proposal.value)
-        set_config_value(conn, checked.key, checked.value, guild.id)
+        if proposal.target == "grant_role":
+            checked = validate_grant_role_change(
+                conn, guild, proposal.grant_name, proposal.key, proposal.value,
+                allow_noop=True, is_admin=is_admin,
+            )
+            _apply_grant_role(conn, guild, checked)
+        else:
+            checked = validate_config_change(
+                conn, guild, proposal.key, proposal.value,
+                allow_noop=True, is_admin=is_admin,
+            )
+            set_config_value(conn, checked.key, checked.value, guild.id)
     log.info(
-        "advisor applied config change for guild %s: %s = %s",
-        guild.id, checked.key, checked.value,
+        "advisor applied %s change for guild %s: %s%s = %s",
+        proposal.target, guild.id,
+        f"{checked.grant_name}." if checked.grant_name else "",
+        checked.key, checked.value,
     )

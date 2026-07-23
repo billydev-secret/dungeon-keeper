@@ -48,6 +48,7 @@ async def help_advisor(
         build_asker_context,
         can_see_config,
         fetch_feature_settings,
+        is_staff,
         visible_text_channels,
     )
     from bot_modules.services.advisor_service import (
@@ -55,8 +56,8 @@ async def help_advisor(
         AdvisorTools,
         answer_advisor,
         get_advisor_context_enabled,
-        get_advisor_model,
         get_advisor_tools_enabled,
+        resolve_advisor_model,
     )
 
     ctx = get_ctx(request)
@@ -68,23 +69,29 @@ async def help_advisor(
     tools = None
     channels: dict[str, str] = {}
     if guild is not None:
+        # Resolve the dashboard user to a guild member up front: it decides
+        # which model handles the ask, and (when live context is on) scopes the
+        # context to what THEY can see. Falls back to public (@everyone) when
+        # they aren't a resolvable member.
+        member = guild.get_member(user.user_id)
         with ctx.open_db() as conn:
-            model = get_advisor_model(conn, guild_id)
+            model = resolve_advisor_model(conn, guild_id, staff=is_staff(member))
             context_on = get_advisor_context_enabled(conn, guild_id)
             tools_on = get_advisor_tools_enabled(conn, guild_id)
         if context_on:
-            # Resolve the dashboard user to a guild member so the context is
-            # scoped to what THEY can see; fall back to public (@everyone) if
-            # they aren't a resolvable member.
-            member = guild.get_member(user.user_id)
             # Admins get on-demand settings lookup instead of the inline dump.
             # Read-only here: the dashboard edits settings in its own panels,
             # and the confirm-button flow only exists on the Discord surface.
             if tools_on and member is not None and can_see_config(member):
+                from bot_modules.services.advisor_gaps import fetch_setup_gaps
+
                 tools = AdvisorTools(
                     feature_keys=FEATURE_KEYS,
                     fetch_settings=lambda f, _m=member: fetch_feature_settings(
                         guild, _m, ctx.db_path, f
+                    ),
+                    fetch_gaps=lambda _m=member: fetch_setup_gaps(
+                        ctx.db_path, guild_id, _m
                     ),
                 )
             guild_context = build_asker_context(
@@ -105,11 +112,57 @@ async def help_advisor(
     }
 
 
+# ── GET /help/suggestions — "what isn't this server using?" ────────────────
+
+
+@router.get("/help/suggestions")
+async def help_suggestions(
+    request: Request,
+    limit: int = 3,
+    guild_id: int = Depends(get_active_guild_id),
+    # Admin-gated for the same reason the gap tool is: a list of what a server
+    # hasn't set up is reconnaissance, and only admins can act on it anyway.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """The dashboard suggestion widget's data — the pushed half of setup help.
+
+    Same scan as Billy-bot's ``find_setup_gaps`` tool, rendered as structured
+    rows instead of prose. No model call: this is a DB read against the
+    registry, so it's cheap enough to sit on the home page.
+    """
+    from bot_modules.services.advisor_gaps import suggestions
+
+    ctx = get_ctx(request)
+    limit = max(1, min(int(limit), 10))
+
+    def _q():
+        with ctx.open_db() as conn:
+            return suggestions(conn, guild_id, limit)
+
+    gaps = await run_query(_q)
+    return {
+        "guild_id": str(guild_id),
+        "suggestions": [
+            {
+                "slug": g.feature.slug,
+                "label": g.feature.label,
+                "blurb": g.feature.blurb,
+                "panel": g.feature.panel,
+                "status": g.status,
+                "effort": g.effort,
+                "missing": [{"key": s.key, "label": s.label} for s in g.missing],
+            }
+            for g in gaps
+        ],
+    }
+
+
 # ── GET/PUT /config/advisor — the "Billy-bot" config panel ─────────────────
 
 
 class AdvisorConfigBody(BaseModel):
     model: str
+    staff_model: str
     server_context: bool
 
 
@@ -123,6 +176,7 @@ async def get_advisor_config(
         ADVISOR_MODELS,
         get_advisor_context_enabled,
         get_advisor_model,
+        get_advisor_staff_model,
     )
 
     ctx = get_ctx(request)
@@ -131,6 +185,7 @@ async def get_advisor_config(
         with ctx.open_db() as conn:
             return {
                 "model": get_advisor_model(conn, guild_id),
+                "staff_model": get_advisor_staff_model(conn, guild_id),
                 "server_context": get_advisor_context_enabled(conn, guild_id),
             }
 
@@ -148,6 +203,7 @@ async def put_advisor_config(
     from bot_modules.services.advisor_service import (
         set_advisor_context_enabled,
         set_advisor_model,
+        set_advisor_staff_model,
     )
 
     ctx = get_ctx(request)
@@ -155,6 +211,7 @@ async def put_advisor_config(
     def _q():
         with ctx.open_db() as conn:
             set_advisor_model(conn, body.model, guild_id)
+            set_advisor_staff_model(conn, body.staff_model, guild_id)
             set_advisor_context_enabled(conn, body.server_context, guild_id)
 
     try:

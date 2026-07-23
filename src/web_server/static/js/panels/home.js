@@ -7,6 +7,29 @@ const STORAGE_VERSION = 3;
 
 function entryId(e) { return typeof e === "string" ? e : e?.id; }
 
+// Widgets added after a user already had a saved layout would otherwise never
+// appear for them. Each entry is offered exactly once: if they remove it, the
+// flag stays set and it doesn't come back.
+const ONE_TIME_ADDITIONS = [
+  { id: "setup-suggestions", flag: "dk_seen_setup_suggestions", adminOnly: true },
+];
+
+function injectNewWidgets(layout, userId, isAdmin) {
+  const present = new Set(layout.map(entryId));
+  for (const { id, flag, adminOnly } of ONE_TIME_ADDITIONS) {
+    if (adminOnly && !isAdmin) continue;
+    const key = `${flag}_${userId}`;
+    try {
+      if (localStorage.getItem(key)) continue;
+      localStorage.setItem(key, "1");
+    } catch (_) {
+      continue; // no storage → don't nag every load
+    }
+    if (!present.has(id)) layout.unshift(id);
+  }
+  return layout;
+}
+
 function getLayout(userId, isAdmin, isMod) {
   try {
     const raw = localStorage.getItem(`dk_layout_${userId}`);
@@ -15,7 +38,7 @@ function getLayout(userId, isAdmin, isMod) {
       if (Array.isArray(parsed.widgets) &&
           [1, 2, STORAGE_VERSION].includes(parsed.version)) {
         const valid = parsed.widgets.filter(e => WIDGET_MAP[entryId(e)]);
-        if (valid.length) return valid;
+        if (valid.length) return injectNewWidgets(valid, userId, isAdmin);
       }
     }
   } catch (_) {}
@@ -52,13 +75,14 @@ export function mount(container) {
   let layout = getLayout(userId, isAdmin, isMod);
   let editMode = false;
   let refreshTimer = null;
-  let data = { home: null, health: null, economy: null };
+  let data = { home: null, health: null, economy: null, suggestions: null };
 
   async function fetchData() {
     // Determine which sources are needed
     const needsHome = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "home");
     const needsHealth = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "health");
     const needsEconomy = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "economy");
+    const needsSuggestions = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "suggestions");
 
     const promises = [];
     if (needsHome) promises.push(api("/api/home").then(d => { data.home = d; }));
@@ -67,6 +91,14 @@ export function mount(container) {
     else promises.push(Promise.resolve());
     if (needsEconomy) promises.push(api("/api/economy/metrics").then(d => { data.economy = d; }));
     else promises.push(Promise.resolve());
+    // Suggestions are advisory — a failure here must not blank the dashboard.
+    if (needsSuggestions) {
+      promises.push(
+        api("/api/help/suggestions?limit=3")
+          .then(d => { data.suggestions = d; })
+          .catch(() => { data.suggestions = { suggestions: [] }; }),
+      );
+    } else promises.push(Promise.resolve());
 
     await Promise.all(promises);
   }
