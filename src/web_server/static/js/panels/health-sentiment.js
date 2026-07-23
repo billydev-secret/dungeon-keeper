@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeLineChart, makeHorizontalBarChart } from "../charts.js";
 
 
@@ -16,6 +17,13 @@ export function mount(container) {
       api("/api/health/sentiment-feed").catch(() => ({ messages: [] })),
     ]);
     const panel = container.querySelector(".panel");
+
+
+    if (!d.scored_count) {
+      panel.innerHTML = `<header><h2>Sentiment &amp; Tone</h2><div class="subtitle">Emotional temperature of the community</div></header>` +
+        renderEmpty("No messages have been scored for sentiment yet. Scoring runs on new messages, so this fills in after a few days of conversation.");
+      return;
+    }
 
     const emotions = d.emotions || {};
     const emotionHTML = Object.entries(emotions)
@@ -152,7 +160,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load sentiment — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

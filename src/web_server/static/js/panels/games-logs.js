@@ -1,4 +1,5 @@
-﻿import { api, esc } from "../api.js";
+﻿import { api, esc, fmtTs } from "../api.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -9,6 +10,16 @@ const GAME_NAMES = {
   rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
   photo: "Photo Challenge",
 };
+
+// History timestamps are ISO strings recorded in UTC, and some are naive (no
+// offset) — Date() would read those as local time, so pin them to UTC before
+// handing them to the shared local-time formatter (W-D12).
+function fmtGameTs(iso) {
+  if (!iso) return "—";
+  const s = String(iso).trim();
+  const hasZone = /[zZ]$|[+-]\d{2}:?\d{2}$/.test(s);
+  return fmtTs(hasZone ? s : s.replace(" ", "T") + "Z");
+}
 
 function gameLabel(gt) {
   return `${GAME_ICONS[gt] || ""} ${esc(GAME_NAMES[gt] || gt)}`;
@@ -31,7 +42,7 @@ export function mount(container) {
       <section>
         <div class="section-label">Stats</div>
         <div class="card-grid" data-region="stats">
-          <div class="empty">Loading</div>
+          ${renderLoading("Loading stats…")}
         </div>
       </section>
 
@@ -39,11 +50,11 @@ export function mount(container) {
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;align-items:start;">
           <div>
             <div class="section-label">Games by Type</div>
-            <div data-region="by-type"><div class="empty">Loading</div></div>
+            <div data-region="by-type">${renderLoading("Loading…")}</div>
           </div>
           <div>
             <div class="section-label">Recent Sessions</div>
-            <div data-region="recent"><div class="empty">Loading</div></div>
+            <div data-region="recent">${renderLoading("Loading…")}</div>
           </div>
         </div>
       </section>
@@ -52,7 +63,7 @@ export function mount(container) {
         <div class="section-label">Game History</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
           <div class="field" style="margin:0;">
-            <label>Game type
+            <label>Game Type
               <select data-ctrl="filter-gt">
                 <option value="">All</option>
                 ${gtOptions}
@@ -60,7 +71,7 @@ export function mount(container) {
             </label>
           </div>
           <div class="field" style="margin:0;">
-            <label>Per page
+            <label>Per Page
               <select data-ctrl="per-page">
                 <option value="25">25</option>
                 <option value="50" selected>50</option>
@@ -70,7 +81,7 @@ export function mount(container) {
           </div>
           <button class="btn btn-primary" data-action="filter">Filter</button>
         </div>
-        <div data-region="table-wrap"><div class="empty">Loading</div></div>
+        <div data-region="table-wrap">${renderLoading("Loading game history…")}</div>
         <div data-region="pagination" style="display:flex;gap:8px;align-items:center;margin-top:8px;"></div>
       </section>
     </div>
@@ -116,9 +127,9 @@ export function mount(container) {
         <thead><tr><th>Game</th><th class="num">Played</th><th></th></tr></thead>
         <tbody>${gtRows}</tbody>
       </table>`;
-    } catch (_) {
-      region("stats").innerHTML = `<div class="empty">Stats unavailable</div>`;
-      region("by-type").innerHTML = `<div class="empty">Unavailable</div>`;
+    } catch (err) {
+      region("stats").innerHTML = renderError(`Couldn't load game stats — ${err.message}. Reload the page to try again.`);
+      region("by-type").innerHTML = renderError(`Couldn't load the per-game breakdown — ${err.message}.`);
     }
   }
 
@@ -127,13 +138,13 @@ export function mount(container) {
       const data = await api("/api/games/history", { page: 1, per_page: 10 });
       const el = region("recent");
       if (!data.rows.length) {
-        el.innerHTML = `<div class="empty">No games yet.</div>`;
+        el.innerHTML = renderEmpty("No games played yet. Sessions appear here once someone starts a game in Discord.");
         return;
       }
       el.innerHTML = data.rows.map((r) => {
         const icon = esc(GAME_ICONS[r.game_type] || "");
         const name = esc(GAME_NAMES[r.game_type] || r.game_type);
-        const ended = r.ended_at ? String(r.ended_at).slice(0, 16).replace("T", " ") : "—";
+        const ended = fmtGameTs(r.ended_at);
         return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--rule-soft);">
           <div>
             <span>${icon}</span>
@@ -143,14 +154,14 @@ export function mount(container) {
           <span style="font-size:11px;color:var(--ink-mute);white-space:nowrap;margin-left:8px;">${esc(ended)}</span>
         </div>`;
       }).join("");
-    } catch (_) {
-      region("recent").innerHTML = `<div class="empty">Unavailable</div>`;
+    } catch (err) {
+      region("recent").innerHTML = renderError(`Couldn't load recent sessions — ${err.message}. Reload the page to try again.`);
     }
   }
 
   async function loadTable() {
     const wrap = region("table-wrap");
-    wrap.innerHTML = `<div class="empty">Loading</div>`;
+    wrap.innerHTML = renderLoading("Loading game history…");
     try {
       const params = { page: currentPage, per_page: currentPerPage };
       if (currentGameType) params.game_type = currentGameType;
@@ -158,21 +169,21 @@ export function mount(container) {
       renderTable(data);
       renderPagination(data.total, data.page, data.total_pages);
     } catch (err) {
-      wrap.innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
+      wrap.innerHTML = renderError(`Couldn't load game history — ${err.message}. Press Filter to try again.`);
     }
   }
 
   function renderTable(data) {
     const wrap = region("table-wrap");
     if (!data.rows.length) {
-      wrap.innerHTML = `<div class="empty">No game history found.</div>`;
+      wrap.innerHTML = renderEmpty("No sessions match this filter. Pick All under Game Type, or come back after a game has been played.");
       return;
     }
     const rows = data.rows.map((r) => {
       const icon = esc(GAME_ICONS[r.game_type] || "");
       const name = esc(GAME_NAMES[r.game_type] || r.game_type);
-      const started = r.started_at ? String(r.started_at).slice(0, 16).replace("T", " ") : "";
-      const ended = r.ended_at ? String(r.ended_at).slice(0, 16).replace("T", " ") : "—";
+      const started = r.started_at ? fmtGameTs(r.started_at) : "";
+      const ended = fmtGameTs(r.ended_at);
       return `<tr>
         <td><span style="margin-right:5px;">${icon}</span>${name}</td>
         <td class="num">${r.player_count ?? "—"}</td>
@@ -192,7 +203,7 @@ export function mount(container) {
   function renderPagination(total, page, totalPages) {
     const el = region("pagination");
     if (totalPages <= 1) {
-      el.innerHTML = `<span style="font-size:12px;color:var(--ink-dim);">${total} session(s)</span>`;
+      el.innerHTML = `<span style="font-size:12px;color:var(--ink-dim);">${total} session${total === 1 ? "" : "s"}</span>`;
       return;
     }
     el.innerHTML = `

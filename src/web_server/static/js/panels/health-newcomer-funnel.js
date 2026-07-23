@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 
 
 export function mount(container) {
@@ -8,7 +9,14 @@ export function mount(container) {
     const d = await api("/api/health/newcomer-funnel");
     const panel = container.querySelector(".panel");
 
+
     const f = d.funnel || {};
+    if (!f.joined) {
+      panel.innerHTML = `<header><h2>Newcomer Funnel</h2><div class="subtitle">How new members turn into participants</div></header>` +
+        renderEmpty("No members have joined in the last 90 days. The funnel fills in as newcomers arrive and start posting.");
+      return;
+    }
+
     const stages = [
       { label: "Joined", count: f.joined, desc: "New members (90d)" },
       { label: "First Message", count: f.first_message, desc: "Sent at least one message" },
@@ -85,7 +93,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load the newcomer funnel — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() {} };

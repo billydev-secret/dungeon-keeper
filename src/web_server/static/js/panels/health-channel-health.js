@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeHorizontalBarChart, makeBarChart, makeDoughnutChart } from "../charts.js";
 
 
@@ -22,6 +23,12 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/channel-health");
     const panel = container.querySelector(".panel");
+    if (!(d.channels || []).length) {
+      panel.innerHTML = `<header><h2>Channel Health</h2><div class="subtitle">Per-channel activity and staleness</div></header>` +
+        renderEmpty("No channel activity on record yet. This report fills in once members have been posting for about a week.");
+      return;
+    }
+
     const chs = d.channels || [];
 
     // Derived stats
@@ -167,7 +174,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load channel health — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

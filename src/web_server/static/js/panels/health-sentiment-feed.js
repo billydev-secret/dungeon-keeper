@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 
 
 function fmtTime(ts) {
@@ -21,6 +22,12 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/sentiment-feed");
     const panel = container.querySelector(".panel");
+    if (!(d.messages || []).length) {
+      panel.innerHTML = `<header><h2>Sentiment Feed</h2><div class="subtitle">Recent messages with strong positive or negative sentiment</div></header>` +
+        renderEmpty("No scored messages yet. Sentiment scoring runs on new messages, so this fills in after a few days of conversation.");
+      return;
+    }
+
     render(panel, d);
   }
 
@@ -101,7 +108,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load the sentiment feed — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() {} };

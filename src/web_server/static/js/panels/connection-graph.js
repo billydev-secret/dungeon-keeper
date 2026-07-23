@@ -1,4 +1,7 @@
 import { api, esc } from "../api.js";
+import { filterSelect } from "../filter-select.js";
+import { renderEmpty, renderError, renderLoading } from "../states.js";
+import { rangePicker } from "../report-helpers.js";
 
 // Force-directed network graph rendered on a <canvas>.
 // Mirrors /connection_web command options.
@@ -15,34 +18,6 @@ const COMMUNITY_COLORS = [
   "#E6B84C", "#7F8F3A", "#B36A92", "#9E3B2E", "#B88A2C", "#949ba4",
   "#c9a84c", "#8a6b7d", "#6b7a3a", "#7e3028", "#d4a84c", "#a89470",
 ];
-
-
-function filterSelect(placeholder, options) {
-  const wrap = document.createElement("div");
-  wrap.className = "filter-select";
-  const input = document.createElement("input");
-  input.type = "text"; input.placeholder = placeholder; input.className = "filter-select-input";
-  wrap.appendChild(input);
-  const list = document.createElement("div");
-  list.className = "filter-select-list";
-  wrap.appendChild(list);
-  let selectedId = "", selectedLabel = "";
-  function render(filter) {
-    const lc = filter.toLowerCase();
-    const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
-    const show = lc ? matches : matches.slice(0, 300);
-    list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--ink-dim)">(none)</em></div>` +
-      show.map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`).join("");
-  }
-  input.addEventListener("focus", () => { render(input.value); list.style.display = "block"; });
-  input.addEventListener("input", () => { selectedId = ""; selectedLabel = ""; render(input.value); list.style.display = "block"; });
-  list.addEventListener("mousedown", (e) => {
-    const item = e.target.closest(".filter-select-item"); if (!item) return;
-    selectedId = item.dataset.id; selectedLabel = selectedId ? item.textContent : ""; input.value = selectedLabel; list.style.display = "none";
-  });
-  input.addEventListener("blur", () => { setTimeout(() => { list.style.display = "none"; }, 150); });
-  return { el: wrap, get id() { return selectedId; }, set id(v) { selectedId = v; const o = options.find((x) => x.id === v); input.value = o ? o.label : ""; } };
-}
 
 export function mount(container, initialParams) {
   container.innerHTML = `
@@ -76,42 +51,34 @@ export function mount(container, initialParams) {
             <option value="hierarchical">Hierarchical</option>
           </select>
         </label>
-        <label>Period
-          <select data-control="timescale">
-            <option value="">All time</option>
-            <option value="1">Last 24h</option>
-            <option value="7">Last 7 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="90">Last 90 days</option>
-          </select>
-        </label>
-        <label>Edge type
-          <select data-control="edge_type" disabled title="Requires log schema migration — replies/mentions/reactions aren't distinguished yet">
+        <label data-slot="period"></label>
+        <label>Edge Type
+          <select data-control="edge_type" disabled title="Needs a log schema migration — replies, mentions, and reactions aren't recorded separately yet">
             <option value="all">All</option>
             <option value="reply">Replies</option>
             <option value="mention">Mentions</option>
             <option value="reaction">Reactions</option>
           </select>
         </label>
-        <label>Focus member <span data-slot="member" style="display:inline-block;vertical-align:middle;"></span></label>
-        <label>Min edge %
-          <input type="number" data-control="min_pct" min="0" max="100" value="${initialParams.min_pct || 5}" title="Hide weak connections below this %" />
+        <span class="ctrl-field">Focus Member <span data-slot="member" style="display:inline-block;vertical-align:middle;"></span></span>
+        <label>Min Edge %
+          <input type="number" data-control="min_pct" min="0" max="100" value="${initialParams.min_pct || 5}" title="Hide connections weaker than this share of a member's interactions" />
         </label>
         <label>Layers
-          <input type="number" data-control="layers" min="1" max="5" value="${initialParams.layers || 2}" title="How many hops out from the focused member" />
+          <input type="number" data-control="layers" min="1" max="5" value="${initialParams.layers || 2}" title="How many hops out from the focused member to include" />
         </label>
-        <label>Max nodes
+        <label>Max Nodes
           <input type="number" data-control="limit" min="5" max="100" value="${initialParams.limit || 40}" />
         </label>
         <label>Spread
           <input type="range" data-control="spread" min="0.5" max="3" step="0.1" value="${initialParams.spread || 1.0}" style="width:80px;" />
         </label>
-        <label title="Higher values break up large clusters; lower values merge them. Affects server-side clustering.">Granularity
+        <label title="Higher values break large clusters apart; lower values merge them. Applied server-side.">Granularity
           <input type="range" data-control="resolution" min="0.5" max="3.0" step="0.1" value="${initialParams.resolution || 1.2}" style="width:80px;" />
           <span data-resolution-val style="font-size:11px;color:#949ba4;margin-left:4px;">${initialParams.resolution || 1.2}</span>
         </label>
-        <label>Max edges/node
-          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="Max connections per person (0 = no limit)" />
+        <label>Max Edges Per Node
+          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="Most connections to draw per person (0 = no limit)" />
         </label>
         <label>Clusters
           <span data-slot="cluster-filter" style="display:inline-block;vertical-align:middle;"></span>
@@ -119,10 +86,11 @@ export function mount(container, initialParams) {
       </div>
       <div data-graph-wrap style="position:relative; height:60vh; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
         <canvas data-graph></canvas>
+        <div data-graph-msg hidden style="position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;background:rgba(43,45,49,0.88);"></div>
         <button data-fullscreen class="btn btn-icon" title="Toggle fullscreen" style="position:absolute;top:6px;right:6px;z-index:5;background:rgba(0,0,0,0.5);">⛶</button>
       </div>
       <div data-legend style="margin-top:4px; font-size:11px; color:#949ba4;">
-        Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight · Node color = detected community
+        Drag nodes · Ctrl+scroll to zoom · Drag the background to pan · Node size = interactions · Edge width = weight · Node color = detected community
       </div>
       <div class="mt-8" data-isolates></div>
       <div data-metrics-tables class="home-grid mt-14"></div>
@@ -131,7 +99,16 @@ export function mount(container, initialParams) {
   `;
 
   const layoutEl      = container.querySelector('[data-control="layout"]');
-  const timescaleEl   = container.querySelector('[data-control="timescale"]');
+  // Standard day-range picker (report-helpers) in place of the old bespoke
+  // "Period" select, so every report offers the same choices.
+  const periodPicker  = rangePicker({
+    value: initialParams.timescale || "",
+    allowAll: true,
+    label: "Period",
+  });
+  const timescaleEl   = periodPicker.querySelector("select");
+  timescaleEl.dataset.control = "timescale";
+  container.querySelector('[data-slot="period"]').replaceWith(periodPicker);
   const minPctEl      = container.querySelector('[data-control="min_pct"]');
   const layersEl      = container.querySelector('[data-control="layers"]');
   const limitEl       = container.querySelector('[data-control="limit"]');
@@ -145,15 +122,31 @@ export function mount(container, initialParams) {
   const heatmapEl     = container.querySelector("[data-heatmap]");
   const clusterFilterSlot = container.querySelector('[data-slot="cluster-filter"]');
   const wrap          = container.querySelector("[data-graph-wrap]");
-  let canvas          = container.querySelector("[data-graph]");
-  let ctx2d           = canvas.getContext("2d");
+  // The canvas is created once and never replaced — loading/empty/error states
+  // render as an overlay on top of it, so the mouse listeners bound below stay
+  // live through every empty → data cycle.
+  const canvas        = container.querySelector("[data-graph]");
+  const ctx2d         = canvas.getContext("2d");
+  const msgEl         = container.querySelector("[data-graph-msg]");
+
+  function showMessage(html) {
+    msgEl.innerHTML = html;
+    msgEl.hidden = false;
+  }
+  function clearMessage() {
+    msgEl.innerHTML = "";
+    msgEl.hidden = true;
+  }
 
   // Clusters hidden by the user (cluster_id values). Empty = show all.
   const hiddenClusters = new Set();
   // Cluster-id lookup keyed by user_id string, populated from API metrics.
   let clusterByUser = {};
 
-  let memberFS = filterSelect("Loading…", []);
+  const memberFS = filterSelect("Type to filter…", [], {
+    label: "Focus member",
+    emptyLabel: "(no focus member)",
+  });
   container.querySelector('[data-slot="member"]').appendChild(memberFS.el);
   const isolatesEl = container.querySelector("[data-isolates]");
   let allMembers = [];
@@ -166,10 +159,12 @@ export function mount(container, initialParams) {
       label: (m.display_name || m.name) + (m.left_server ? " (left)" : ""),
       left: !!m.left_server,
     })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
-    const fs = filterSelect("Type to filter…", opts);
-    if (initialParams.member) fs.id = initialParams.member;
-    memberFS.el.replaceWith(fs.el);
-    memberFS = fs;
+    memberFS.setOptions(opts);
+    if (initialParams.member) {
+      memberFS.setValue(initialParams.member);
+      lastMemberId = memberFS.getValue();
+      rebuildGraph();
+    }
   }).catch(() => {});
 
   layoutEl.value = initialParams.layout || "community";
@@ -500,8 +495,11 @@ export function mount(container, initialParams) {
 
   const COMM_GRAVITY = 0.08;  // pull toward community center
 
+  /** Advance the simulation one step. Returns the fastest node speed so the
+   *  animation loop can stop once the layout has settled (W-D10). Static
+   *  layouts never move, so they report 0 and the loop ends after one draw. */
   function tick() {
-    if (currentLayout !== "force" && currentLayout !== "community") return;
+    if (currentLayout !== "force" && currentLayout !== "community") return 0;
     const isCommunity = currentLayout === "community";
     const W = canvas.width / devicePixelRatio;
     const H = canvas.height / devicePixelRatio;
@@ -560,11 +558,15 @@ export function mount(container, initialParams) {
       ni.vy = (ni.vy + fy) * DAMPING;
     }
 
+    let fastest = 0;
     for (const n of nodes) {
       if (n === dragged) continue;
       n.x += n.vx;
       n.y += n.vy;
+      const speed = Math.abs(n.vx) + Math.abs(n.vy);
+      if (speed > fastest) fastest = speed;
     }
+    return fastest;
   }
 
   function draw() {
@@ -651,7 +653,38 @@ export function mount(container, initialParams) {
     ctx2d.restore();
   }
 
-  function animate() { tick(); draw(); sim = requestAnimationFrame(animate); }
+  // Repaint strategy (W-D10): the simulation loop runs only while the layout
+  // is actually moving. Static layouts (radial/circular/hierarchical) and a
+  // cooled force layout draw on demand instead of burning a frame every 16ms.
+  const SETTLED_SPEED = 0.05;
+  let drawQueued = false;
+
+  /** One repaint on the next frame, unless the sim loop is already running. */
+  function requestDraw() {
+    if (sim || drawQueued) return;
+    drawQueued = true;
+    requestAnimationFrame(() => { drawQueued = false; draw(); });
+  }
+
+  function animate() {
+    const speed = tick();
+    draw();
+    if (dragged || isPanning || speed > SETTLED_SPEED) {
+      sim = requestAnimationFrame(animate);
+    } else {
+      sim = null; // settled — stop repainting until something changes
+    }
+  }
+
+  /** Restart the physics loop (dynamic layouts) or schedule a single repaint. */
+  function startSim() {
+    if (currentLayout !== "force" && currentLayout !== "community") {
+      requestDraw();
+      return;
+    }
+    if (sim) return;
+    sim = requestAnimationFrame(animate);
+  }
 
   // ── Mouse interaction ─────────────────────────────────────────────────
 
@@ -669,15 +702,21 @@ export function mount(container, initialParams) {
     const hit = hitTest(e.clientX, e.clientY);
     if (hit) { dragged = hit; wrap.style.cursor = "grabbing"; }
     else { isPanning = true; dragStartX = e.clientX - panX; dragStartY = e.clientY - panY; wrap.style.cursor = "grabbing"; }
+    startSim();
   });
   canvas.addEventListener("mousemove", (e) => {
+    const wasHovered = hovered;
     if (dragged) { const [cx, cy] = toCanvas(e.clientX, e.clientY); dragged.x = cx; dragged.y = cy; dragged.vx = 0; dragged.vy = 0; }
     else if (isPanning) { panX = e.clientX - dragStartX; panY = e.clientY - dragStartY; }
     else { hovered = hitTest(e.clientX, e.clientY); wrap.style.cursor = hovered ? "pointer" : "grab"; }
+    if (dragged || isPanning || hovered !== wasHovered) requestDraw();
   });
-  canvas.addEventListener("mouseup", () => { dragged = null; isPanning = false; wrap.style.cursor = "grab"; });
-  canvas.addEventListener("mouseleave", () => { dragged = null; isPanning = false; hovered = null; wrap.style.cursor = "grab"; });
+  canvas.addEventListener("mouseup", () => { dragged = null; isPanning = false; wrap.style.cursor = "grab"; requestDraw(); });
+  canvas.addEventListener("mouseleave", () => { dragged = null; isPanning = false; hovered = null; wrap.style.cursor = "grab"; requestDraw(); });
   canvas.addEventListener("wheel", (e) => {
+    // Ctrl+scroll to zoom, matching the chart panels — a bare scroll keeps
+    // scrolling the page instead of trapping it over the graph.
+    if (!e.ctrlKey) return;
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
@@ -686,6 +725,7 @@ export function mount(container, initialParams) {
     panX = mx - (mx - panX) * (newScale / scale);
     panY = my - (my - panY) * (newScale / scale);
     scale = newScale;
+    requestDraw();
   }, { passive: false });
 
   // ── Client-side filtering (mirrors /connection_web logic) ─────────────
@@ -694,7 +734,7 @@ export function mount(container, initialParams) {
     const minPct = (parseInt(minPctEl.value) || 0) / 100;
     const maxPerNode = parseInt(maxPerNodeEl.value) || 0;
     const layerCount = parseInt(layersEl.value) || 2;
-    focusId = memberFS.id || null;
+    focusId = memberFS.getValue() || null;
     secondLevelIds = new Set();
 
     // Build node total interaction map
@@ -924,7 +964,7 @@ export function mount(container, initialParams) {
 
   function renderClusterFilter(clusters) {
     if (!clusters || !clusters.length) {
-      clusterFilterSlot.innerHTML = `<span style="color:#949ba4;font-size:11px;">—</span>`;
+      clusterFilterSlot.innerHTML = `<span style="color:#949ba4;font-size:11px;">None detected</span>`;
       return;
     }
     const items = clusters.map((c, i) => {
@@ -971,7 +1011,24 @@ export function mount(container, initialParams) {
     if (!isNaN(d) && d > 0) params.days = d;
     const res = parseFloat(resolutionEl.value);
     if (!isNaN(res)) params.resolution = res;
-    cachedData = await api("/api/reports/interaction-graph", params);
+    showMessage(renderLoading("Building the connection graph…"));
+    try {
+      cachedData = await api("/api/reports/interaction-graph", params);
+    } catch (err) {
+      // Stop the sim and blank the canvas so a stale graph can't be mistaken
+      // for fresh data, then say what failed and what to do about it.
+      cachedData = null;
+      if (sim) { cancelAnimationFrame(sim); sim = null; }
+      nodes = []; edges = [];
+      draw();
+      scorecardEl.innerHTML = "";
+      metricsTablesEl.innerHTML = "";
+      heatmapEl.innerHTML = "";
+      isolatesEl.innerHTML = "";
+      renderClusterFilter([]);
+      showMessage(renderError(`Couldn't load the connection graph — ${err.message}. Change a control to try again.`));
+      return;
+    }
     const metrics = cachedData.metrics || null;
     clusterByUser = {};
     for (const n of cachedData.nodes || []) {
@@ -990,7 +1047,7 @@ export function mount(container, initialParams) {
     const qs = new URLSearchParams();
     qs.set("layout", layoutEl.value);
     if (timescaleEl.value) qs.set("timescale", timescaleEl.value);
-    if (memberFS.id) qs.set("member", memberFS.id);
+    if (memberFS.getValue()) qs.set("member", memberFS.getValue());
     qs.set("min_pct", minPctEl.value);
     qs.set("layers", layersEl.value);
     qs.set("limit", limitEl.value);
@@ -1006,17 +1063,18 @@ export function mount(container, initialParams) {
     const { nodes: fNodes, pairs } = applyFilters(cachedData);
 
     if (!fNodes.length) {
-      wrap.innerHTML = `<div class="empty" style="padding:40px; text-align:center;">No connections meet the current filters.</div>`;
+      // Overlay, never innerHTML — replacing the wrapper would throw away the
+      // canvas the mouse listeners are bound to and leave the panel inert.
+      nodes = []; edges = [];
+      resize();
+      draw();
+      isolatesEl.innerHTML = "";
+      showMessage(renderEmpty(
+        "No connections match these filters. Widen the period, lower Min Edge %, raise Max Nodes, or clear the focus member."
+      ));
       return;
     }
-
-    // Ensure canvas exists
-    if (!wrap.querySelector("[data-graph]")) {
-      wrap.innerHTML = `<canvas data-graph></canvas>`;
-      canvas = wrap.querySelector("[data-graph]");
-      ctx2d = canvas.getContext("2d");
-      // Rebind mouse events
-    }
+    clearMessage();
 
     resize();
 
@@ -1062,7 +1120,7 @@ export function mount(container, initialParams) {
     else if (currentLayout === "circular") positionCircular();
     else if (currentLayout === "hierarchical") positionHierarchical();
 
-    animate();
+    startSim();
 
     // Show isolates — members with no interactions in the graph
     if (allMembers.length && cachedData) {
@@ -1105,17 +1163,18 @@ export function mount(container, initialParams) {
   });
   // Watch for member selection — rebuild after dropdown closes
   const memberSlot = container.querySelector('[data-slot="member"]');
-  let lastMemberId = memberFS.id;
+  let lastMemberId = memberFS.getValue();
   memberSlot.addEventListener("focusout", () => {
     setTimeout(() => {
-      if (memberFS.id !== lastMemberId) { lastMemberId = memberFS.id; rebuildGraph(); }
+      const cur = memberFS.getValue();
+      if (cur !== lastMemberId) { lastMemberId = cur; rebuildGraph(); }
     }, 200);
   });
 
   resize();
   fetchData();
 
-  const ro = new ResizeObserver(() => resize());
+  const ro = new ResizeObserver(() => { resize(); requestDraw(); });
   ro.observe(wrap);
 
   return {

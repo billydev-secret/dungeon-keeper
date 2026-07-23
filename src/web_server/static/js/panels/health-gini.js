@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeLineChart, makeHorizontalBarChart, makeDoughnutChart } from "../charts.js";
 
 
@@ -9,6 +10,13 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/gini");
     const panel = container.querySelector(".panel");
+
+
+    if (!(d.tiers || []).length) {
+      panel.innerHTML = `<header><h2>Participation Gini</h2><div class="subtitle">Message distribution inequality</div></header>` +
+        renderEmpty("No messages in the last 30 days, so there's no distribution to measure. This needs about a week of messages from a handful of members.");
+      return;
+    }
 
     const tiers = d.tiers || {};
 
@@ -133,7 +141,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load the participation spread — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

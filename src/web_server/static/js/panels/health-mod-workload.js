@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeHorizontalBarChart, makeDoughnutChart, ROLE_COLORS } from "../charts.js";
 
 
@@ -9,6 +10,13 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/mod-workload");
     const panel = container.querySelector(".panel");
+
+
+    if (!(d.mod_actions || []).length) {
+      panel.innerHTML = `<header><h2>Moderator Workload</h2><div class="subtitle">Who is carrying the moderation load</div></header>` +
+        renderEmpty("No moderator actions on record yet. Warnings, jails, timeouts, and deletions show up here as your team uses them.");
+      return;
+    }
 
     const modRows = (d.mod_actions || []).map((m, i) => `
       <tr>
@@ -129,7 +137,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load moderator workload — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

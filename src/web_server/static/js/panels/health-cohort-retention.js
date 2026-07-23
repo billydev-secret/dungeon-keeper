@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeLineChart, ROLE_COLORS } from "../charts.js";
 
 
@@ -9,6 +10,13 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/cohort-retention");
     const panel = container.querySelector(".panel");
+
+
+    if (!(d.cohorts || []).length) {
+      panel.innerHTML = `<header><h2>Cohort Retention</h2><div class="subtitle">How well each week's arrivals stick around</div></header>` +
+        renderEmpty("No cohorts to chart yet. A cohort appears once a group of members has joined and had at least a day to come back.");
+      return;
+    }
 
     // Cohort table
     const checkpoints = ["d1", "d7", "d14", "d30", "d60", "d90"];
@@ -94,7 +102,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load retention — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

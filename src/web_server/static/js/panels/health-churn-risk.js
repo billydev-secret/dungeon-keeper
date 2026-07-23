@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeBarChart } from "../charts.js";
 
 
@@ -18,6 +19,13 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/churn-risk");
     const panel = container.querySelector(".panel");
+
+
+    if (!(d.at_risk || []).length) {
+      panel.innerHTML = `<header><h2>Churn Risk</h2><div class="subtitle">Members drifting away</div></header>` +
+        renderEmpty("No members are showing churn-risk signals right now. Members appear here when their posting frequency, channel spread, reciprocity, or sentiment drops — which needs about a week of messages to detect.");
+      return;
+    }
 
     const signalLabels = ["Frequency", "Channels", "Reciprocity", "Sentiment", "Gap"];
     const signalKeys = ["frequency", "channels", "reciprocity", "sentiment", "gap"];
@@ -117,7 +125,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load churn risk — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

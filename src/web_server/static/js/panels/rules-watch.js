@@ -1,7 +1,13 @@
 import { api, apiPost, esc, fmtTs } from "../api.js";
 import { toast } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { syncHash } from "../report-helpers.js";
+
+// Server-side caps — when a result fills one, say so rather than silently
+// dropping the rest (W-D13).
+const QUEUE_LIMIT = 100;
+const LEDGER_LIMIT = 200;
 
 const TIER_BADGE = {
   immediate: '<span class="badge badge-danger">Immediate</span>',
@@ -52,7 +58,7 @@ function renderRow(ev, activeId) {
 }
 
 function renderDetail(ev) {
-  if (!ev || !ev.id) return '<div class="empty">Select an event to review.</div>';
+  if (!ev || !ev.id) return renderEmpty("Select an event from the queue to review it.");
 
   let windowHtml = "";
   let windowFlagged = false;
@@ -104,7 +110,7 @@ function renderDetail(ev) {
 }
 
 function renderStatsTab(stats) {
-  if (!stats) return renderEmpty("No stats yet.");
+  if (!stats) return renderEmpty("No label stats yet. They build up as moderators mark events as violations or false positives.");
   const fpPct = stats.fp_rate != null ? `${(stats.fp_rate * 100).toFixed(0)}%` : "—";
   const tierRows = Object.entries(stats.by_tier || {})
     .map(([t, n]) => `<tr><td>${esc(t)}</td><td>${n}</td></tr>`).join("");
@@ -160,7 +166,7 @@ function renderLedgerRepeats(rows) {
   </div>`;
 }
 
-export function mount(container) {
+export function mount(container, initialParams = {}) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -182,12 +188,12 @@ export function mount(container) {
           <button data-tier="logged">Logged</button>
         </div>
         <label class="rw-pending-toggle">
-          <input type="checkbox" data-pending-only checked> Unlabeled only
+          <input type="checkbox" data-pending-only checked> Unlabeled Only
         </label>
 
         <div class="rw-layout">
           <div class="rw-list" data-list>
-            ${renderLoading("Loading…")}
+            ${renderLoading("Loading alerts…")}
           </div>
           <div class="rw-detail-pane" data-detail>
             <div class="empty">Select an event to review.</div>
@@ -207,11 +213,11 @@ export function mount(container) {
           <button data-kind="cross_platform">Cross-platform</button>
         </div>
         <div data-ledger-repeats></div>
-        <div data-ledger-content>${renderLoading("Loading…")}</div>
+        <div data-ledger-content>${renderLoading("Loading the ledger…")}</div>
       </div>
 
       <div data-tab-content="stats" style="display:none">
-        <div data-stats-content>${renderLoading("Loading…")}</div>
+        <div data-stats-content>${renderLoading("Loading label stats…")}</div>
       </div>
     </div>
 
@@ -301,11 +307,37 @@ export function mount(container) {
   const statsContent = container.querySelector("[data-stats-content]");
 
   let events = [];
-  let activeId = null;
-  let currentTier = "";
-  let pendingOnly = true;
-  let activeTab = "queue";
-  let ledgerKind = "";
+  let activeId = initialParams.event ? Number(initialParams.event) : null;
+  let currentTier = ["immediate", "digest", "logged"].includes(initialParams.tier) ? initialParams.tier : "";
+  let pendingOnly = initialParams.pending !== "0";
+  let activeTab = ["queue", "ledger", "stats"].includes(initialParams.tab) ? initialParams.tab : "queue";
+  let ledgerKind = ["dm_consent", "cross_platform"].includes(initialParams.kind) ? initialParams.kind : "";
+
+  pendingOnlyEl.checked = pendingOnly;
+  function markStrip(groupEl, attr, value) {
+    for (const btn of groupEl.querySelectorAll(`[${attr}]`)) {
+      const on = btn.getAttribute(attr) === value;
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
+  markStrip(container.querySelector("[data-tabs]"), "data-tab", activeTab);
+  markStrip(filterGroup, "data-tier", currentTier);
+  markStrip(ledgerFilter, "data-kind", ledgerKind);
+  queuePane.style.display = activeTab === "queue" ? "" : "none";
+  ledgerPane.style.display = activeTab === "ledger" ? "" : "none";
+  statsPane.style.display = activeTab === "stats" ? "" : "none";
+
+  /** Mirror tab, filters, and the open event into the URL (W-D9). */
+  function pushHash() {
+    syncHash("rules-watch", {
+      tab: activeTab === "queue" ? "" : activeTab,
+      tier: currentTier,
+      pending: pendingOnly ? "" : "0",
+      kind: ledgerKind,
+      event: activeTab === "queue" ? (activeId || "") : "",
+    });
+  }
 
   // --- Tab switching ---
   makeFilterStrip(container.querySelector("[data-tabs]"), (tab) => {
@@ -315,28 +347,33 @@ export function mount(container) {
     statsPane.style.display = activeTab === "stats" ? "" : "none";
     if (activeTab === "stats") loadStats();
     if (activeTab === "ledger") loadLedger();
+    pushHash();
   }, { attr: "data-tab" });
 
   // --- Ledger kind filter ---
   makeFilterStrip(ledgerFilter, (kind) => {
     ledgerKind = kind;
+    pushHash();
     loadLedger();
   }, { attr: "data-kind" });
 
   // --- Tier filter ---
   makeFilterStrip(filterGroup, (tier) => {
     currentTier = tier;
+    pushHash();
     loadQueue();
   }, { attr: "data-tier" });
 
   pendingOnlyEl.addEventListener("change", () => {
     pendingOnly = pendingOnlyEl.checked;
+    pushHash();
     loadQueue();
   });
 
   // --- Select an event (renders detail, syncs list, handles mobile master/detail) ---
   function selectEvent(id) {
     activeId = id;
+    pushHash();
     renderList();
     const ev = id != null ? events.find(x => x.id === id) || null : null;
     detailEl.innerHTML = renderDetail(ev);
@@ -399,12 +436,12 @@ export function mount(container) {
           } else {
             activeId = null;
             renderList();
-            detailEl.innerHTML = '<div class="empty">✅ Nothing left to review in this queue.</div>';
+            detailEl.innerHTML = renderEmpty("Nothing left to review in this queue. New alerts appear here as the monitor flags them.");
             layoutEl.classList.remove("rw-layout--detail");
           }
         } catch (err) {
           toast(err.message, "error");
-          btn.textContent = "Error — try again";
+          btn.textContent = "Couldn't save — try again";
         }
       });
     });
@@ -412,15 +449,20 @@ export function mount(container) {
 
   function renderList() {
     if (!events.length) {
-      listEl.innerHTML = '<div class="empty" style="padding:16px">No events match this filter.</div>';
+      listEl.innerHTML = renderEmpty(pendingOnly
+        ? "Nothing left to label in this view. Untick Unlabeled Only to see events you've already judged."
+        : "No events match this filter. The monitor only records messages that trip a guard rule, so a quiet queue is a good sign.");
       return;
     }
-    listEl.innerHTML = events.map(ev => renderRow(ev, activeId)).join("");
+    const capNote = events.length >= QUEUE_LIMIT
+      ? `<div class="field-hint" style="padding:8px 10px;">Showing the first ${QUEUE_LIMIT} events — more exist. Narrow by tier to see the rest.</div>`
+      : "";
+    listEl.innerHTML = events.map(ev => renderRow(ev, activeId)).join("") + capNote;
   }
 
   async function loadQueue() {
-    listEl.innerHTML = '<div class="empty" style="padding:16px">Loading…</div>';
-    const params = { limit: 100, pending_only: pendingOnly };
+    listEl.innerHTML = renderLoading("Loading alerts…");
+    const params = { limit: QUEUE_LIMIT, pending_only: pendingOnly };
     if (currentTier) params.tier = currentTier;
     try {
       events = await api("/api/rules-watch/events", params);
@@ -429,20 +471,23 @@ export function mount(container) {
         const ev = events.find(x => x.id === activeId);
         if (ev) { detailEl.innerHTML = renderDetail(ev); bindDetailActions(ev); }
       }
-    } catch {
-      listEl.innerHTML = '<div class="empty" style="padding:16px">Failed to load events.</div>';
+    } catch (err) {
+      listEl.innerHTML = renderError(`Couldn't load the alert queue — ${err.message}. Switch tabs and back to try again.`);
     }
   }
 
   async function loadLedger() {
-    ledgerContent.innerHTML = renderLoading("Loading…");
-    const params = { limit: 200 };
+    ledgerContent.innerHTML = renderLoading("Loading the ledger…");
+    const params = { limit: LEDGER_LIMIT };
     if (ledgerKind) params.kind = ledgerKind;
     try {
       const rows = await api("/api/rules-watch/ledger", params);
-      ledgerContent.innerHTML = renderLedgerTab(rows);
-    } catch {
-      ledgerContent.innerHTML = '<div class="empty">Failed to load ledger.</div>';
+      ledgerContent.innerHTML = renderLedgerTab(rows)
+        + (rows.length >= LEDGER_LIMIT
+          ? `<div class="field-hint" style="padding:8px 2px;">Showing the first ${LEDGER_LIMIT} entries — more exist. Filter by kind to see the rest.</div>`
+          : "");
+    } catch (err) {
+      ledgerContent.innerHTML = renderError(`Couldn't load the ledger — ${err.message}. Switch tabs and back to try again.`);
       return;
     }
     try {
@@ -454,14 +499,16 @@ export function mount(container) {
   }
 
   async function loadStats() {
-    statsContent.innerHTML = renderLoading("Loading…");
+    statsContent.innerHTML = renderLoading("Loading label stats…");
     try {
       const stats = await api("/api/rules-watch/stats");
       statsContent.innerHTML = renderStatsTab(stats);
-    } catch {
-      statsContent.innerHTML = '<div class="empty">Failed to load stats.</div>';
+    } catch (err) {
+      statsContent.innerHTML = renderError(`Couldn't load label stats — ${err.message}. Switch tabs and back to try again.`);
     }
   }
 
   loadQueue();
+  if (activeTab === "ledger") loadLedger();
+  if (activeTab === "stats") loadStats();
 }

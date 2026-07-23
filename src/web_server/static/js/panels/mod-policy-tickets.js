@@ -30,14 +30,14 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>Policy Tickets</h2>
-        <div class="subtitle">Community policy proposals and votes</div>
+        <div class="subtitle">Policy changes members have proposed, and how the votes went</div>
       </header>
 
       <div class="mod-stats" data-stats>
-        <div class="mod-stat open"><div class="lbl">Open</div><div class="v">\u2014</div><div class="sub">loading\u2026</div></div>
-        <div class="mod-stat claimed"><div class="lbl">Voting</div><div class="v">\u2014</div><div class="sub"></div></div>
-        <div class="mod-stat resolved"><div class="lbl">Closed</div><div class="v">\u2014</div><div class="sub"></div></div>
-        <div class="mod-stat avg"><div class="lbl">Total</div><div class="v">\u2014</div><div class="sub"></div></div>
+        <div class="mod-stat open"><div class="lbl">Open</div><div class="v">—</div><div class="sub">loading\u2026</div></div>
+        <div class="mod-stat claimed"><div class="lbl">Voting</div><div class="v">—</div><div class="sub"></div></div>
+        <div class="mod-stat resolved"><div class="lbl">Closed</div><div class="v">—</div><div class="sub"></div></div>
+        <div class="mod-stat avg"><div class="lbl">Total</div><div class="v">—</div><div class="sub"></div></div>
       </div>
 
       <div class="ticket-list-head" style="margin-bottom:8px">
@@ -57,7 +57,7 @@ export function mount(container) {
       </div>
 
       <div class="table-scroll" data-table-wrap>
-        ${renderLoading("Loading…")}
+        ${renderLoading("Loading policy tickets…")}
       </div>
     </div>
   `;
@@ -76,12 +76,19 @@ export function mount(container) {
   // fetches from rapid typing.
   let allTickets = null;
   let allPromise = null;
+  // A failed search fetch used to be console-only: the user saw "no matches"
+  // for a request that never landed. Remember it and say so instead.
+  let searchFailed = false;
   function ensureAll() {
     if (allTickets) return Promise.resolve();
     if (!allPromise) {
       allPromise = api("/api/moderation/policy-tickets")
-        .then((data) => { allTickets = data.policy_tickets || []; })
-        .catch((err) => { console.error("Failed to load all policy tickets for search:", err); allTickets = []; })
+        .then((data) => { allTickets = data.policy_tickets || []; searchFailed = false; })
+        .catch((err) => {
+          console.error("Failed to load all policy tickets for search:", err);
+          allTickets = [];
+          searchFailed = true;
+        })
         .finally(() => { allPromise = null; });
     }
     return allPromise;
@@ -89,11 +96,20 @@ export function mount(container) {
 
   function renderTable() {
     const searching = currentSearch.trim() !== "";
+    if (searching && searchFailed) {
+      tableWrap.innerHTML = renderError(
+        "Couldn’t load the full ticket list to search — try again.",
+      );
+      return;
+    }
     const source = searching ? (allTickets || []) : loadedTickets;
     const tickets = source.filter((t) => matchesSearch(t, currentSearch));
     if (!tickets.length) {
       tableWrap.innerHTML = renderEmpty(
-        currentSearch ? "No policy tickets match your search." : "No policy tickets found.",
+        currentSearch
+          ? "No policy tickets match your search. Try fewer words, or clear the search box."
+          : "No policy tickets in this queue yet. Members open them with the policy "
+            + "command in Discord, and moderators put them to a vote.",
       );
       return;
     }
@@ -168,7 +184,9 @@ export function mount(container) {
       loadedTickets = data.policy_tickets || [];
       renderTable();
     } catch (err) {
-      tableWrap.innerHTML = renderError(err);
+      // Don't leave the stat strip frozen on "loading…" after a failure.
+      statsEl.querySelectorAll(".sub").forEach((el) => { el.textContent = ""; });
+      tableWrap.innerHTML = renderError(`Couldn’t load policy tickets — try again. (${err.message})`);
     }
   }
 

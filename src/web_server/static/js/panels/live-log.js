@@ -9,10 +9,10 @@ export function mount(container) {
       </header>
       <div class="controls" style="gap:8px;">
         <label>Filter
-          <input type="text" data-filter placeholder="e.g. ERROR, dungeonkeeper.web" style="min-width:220px;" />
+          <input type="search" data-filter placeholder="e.g. ERROR, dungeonkeeper.web" style="min-width:220px;" />
         </label>
         <label style="flex-direction:row;align-items:center;gap:6px;">
-          <input type="checkbox" data-autoscroll checked /> Auto-scroll
+          <input type="checkbox" data-autoscroll checked /> Auto-Scroll
         </label>
         <button data-clear class="btn btn-sm">Clear</button>
       </div>
@@ -33,8 +33,17 @@ export function mount(container) {
   const statusEl = container.querySelector("[data-status]");
 
   const MAX_LINES = 2000;
-  let lineCount = 0;
+  // Every line received stays in this ring buffer, filtered or not, so changing
+  // the filter can re-run it over the whole session instead of only over lines
+  // that arrive afterwards (W-D15).
+  const buffer = [];
   let evtSource = null;
+  let connState = "Connecting…";
+  let matchNote = "";
+
+  function renderStatus() {
+    statusEl.textContent = [connState, matchNote].filter(Boolean).join(" · ");
+  }
 
   const LEVEL_COLORS = {
     "ERROR": "var(--red)",
@@ -53,13 +62,21 @@ export function mount(container) {
     return esc(text);
   }
 
-  function appendLine(raw) {
+  function matchesFilter(raw) {
     const filter = filterEl.value.trim().toLowerCase();
-    if (filter && !raw.toLowerCase().includes(filter)) return;
+    return !filter || raw.toLowerCase().includes(filter);
+  }
 
-    lineCount++;
-    if (lineCount > MAX_LINES) {
-      // Remove oldest lines
+  function scrollIfPinned() {
+    if (autoEl.checked) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function appendLine(raw) {
+    buffer.push(raw);
+    if (buffer.length > MAX_LINES) buffer.shift();
+
+    if (!matchesFilter(raw)) return;
+    if (logEl.childElementCount >= MAX_LINES) {
       const first = logEl.firstChild;
       if (first) logEl.removeChild(first);
     }
@@ -67,18 +84,34 @@ export function mount(container) {
     const div = document.createElement("div");
     div.innerHTML = colorize(raw);
     logEl.appendChild(div);
-
-    if (autoEl.checked) {
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+    scrollIfPinned();
   }
 
+  /** Re-run the current filter over every buffered line. */
+  function rerenderLog() {
+    const shown = buffer.filter(matchesFilter);
+    logEl.innerHTML = shown.map((raw) => `<div>${colorize(raw)}</div>`).join("");
+    matchNote = shown.length === buffer.length
+      ? ""
+      : `Showing ${shown.length} of ${buffer.length} buffered lines`;
+    renderStatus();
+    scrollIfPinned();
+  }
+
+  let filterTimer = null;
+  filterEl.addEventListener("input", () => {
+    if (filterTimer) clearTimeout(filterTimer);
+    filterTimer = setTimeout(rerenderLog, 150);
+  });
+
   function connect() {
-    statusEl.textContent = "Connecting…";
+    connState = "Connecting…";
+    renderStatus();
     evtSource = new EventSource("/api/logs/stream");
 
     evtSource.onopen = () => {
-      statusEl.textContent = "Connected";
+      connState = "Connected — streaming live";
+      renderStatus();
     };
 
     evtSource.onmessage = (e) => {
@@ -86,19 +119,23 @@ export function mount(container) {
     };
 
     evtSource.onerror = () => {
-      statusEl.textContent = "Disconnected — reconnecting…";
+      connState = "Disconnected from the log stream — reconnecting…";
+      renderStatus();
     };
   }
 
   clearBtn.addEventListener("click", () => {
+    buffer.length = 0;
     logEl.innerHTML = "";
-    lineCount = 0;
+    matchNote = "";
+    renderStatus();
   });
 
   connect();
 
   return {
     unmount() {
+      if (filterTimer) clearTimeout(filterTimer);
       if (evtSource) {
         evtSource.close();
         evtSource = null;
