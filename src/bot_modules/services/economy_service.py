@@ -151,6 +151,18 @@ class EconSettings:
     bounty_max_open: int = 3
     bounty_expire_days: int = 14
     bounty_rake_pct: int = 0
+    # Live auctions (plan: docs/plans/economy-auctions.md): a mod opens a
+    # freeform, mod-fulfilled auction with `/bank auction start`; members bid up
+    # in the open, the outbid bidder is refunded instantly, and the winning bid
+    # is burned (the sink). `min_bid` is the opening floor; each new bid must
+    # beat the standing high by `min_increment`. `soft_close_seconds` is the
+    # anti-snipe window — a bid landing that close to the end pushes the end out
+    # by the same amount. `max_duration_hours` guard-rails what a mod can set.
+    # Naturally dark: no auction exists until a mod opens one, so no kill switch.
+    auction_min_bid: int = 10
+    auction_min_increment: int = 5
+    auction_soft_close_seconds: int = 300
+    auction_max_duration_hours: int = 168
     # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
     # held (max 1) until a login gap would reset the streak, then auto-burned
     # to save it — covers what the free grace day can't. 0 hides the shop row
