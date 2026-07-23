@@ -759,10 +759,14 @@ class EventsCog(commands.Cog):
         # channel, stamp it so the background loop can DM the notify user when
         # nobody replies to or mentions the greeter in time. Content is judged
         # here in-memory — the default "none" storage level drops it before it
-        # reaches the DB, so it can't be matched after the fact.
+        # reaches the DB, so it can't be matched after the fact. A reply is
+        # addressed to whoever it replies to, not the room, so it's excluded
+        # even when the text happens to open with a hello-ish token (e.g.
+        # "hey, no worries" replying to someone).
         if (
             cfg.greeting_watch_enabled
             and message.channel.id in cfg.greeting_watch_channel_ids
+            and not reply_to_id
             and is_greeting(message.content)
         ):
 

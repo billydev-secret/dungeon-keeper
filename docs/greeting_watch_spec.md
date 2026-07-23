@@ -34,6 +34,10 @@ web" rule.
    while the first is still pending is a no-op, so a "gm 🙂 … hey all" double
    post can't queue two alerts.
 
+   **Replies never count**, even when the text opens with a hello-ish token —
+   a Discord reply is addressed to whoever it replies to, not the room (e.g.
+   "hey, no worries" as a reply shouldn't queue an unanswered-greeting alert).
+
 2. **Verdict (background loop).** `greeting_watch_loop` ticks every 60s. For each
    guild with pending rows, it reads config fresh from the DB (so dashboard
    changes apply without a restart) and picks up greetings whose window has
