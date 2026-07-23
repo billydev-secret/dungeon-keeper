@@ -71,12 +71,23 @@ _MAX_QUEST_LINES = 12
 _PACE_OK = 0.9
 
 
+def bar_fill(current: int, target: int, width: int = 10) -> str:
+    """Just the ``▰▱`` meter glyphs (no numbers) for a running total.
+
+    Shared by ``progress_bar`` and the login-digest meter so both draw the
+    fill the same way; an empty/zero target reads as an all-empty bar.
+    """
+    if target <= 0:
+        return "▱" * width
+    filled = max(0, min(width, round(width * current / target)))
+    return "▰" * filled + "▱" * (width - filled)
+
+
 def progress_bar(current: int, target: int, width: int = 10) -> str:
     """A text meter for a community quest's running total."""
     if target <= 0:
         return f"{current:,}"
-    filled = max(0, min(width, round(width * current / target)))
-    return f"{'▰' * filled}{'▱' * (width - filled)} {current:,}/{target:,}"
+    return f"{bar_fill(current, target, width)} {current:,}/{target:,}"
 
 
 def community_progress_bar(current: int, target: int, width: int = 12) -> str:

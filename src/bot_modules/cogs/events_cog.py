@@ -59,14 +59,15 @@ from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
-from bot_modules.economy.leaderboard import progress_bar
+from bot_modules.economy import quest_digest
 from bot_modules.economy.logic import (
     is_economy_manager,
     local_day_for,
     qotd_marker_question,
 )
-from bot_modules.economy.quests import TRIGGER_KINDS
+from bot_modules.economy.quests import previous_local_day
 from bot_modules.services.economy_quests_service import (
+    community_gains_for_day,
     fire_trigger_inline,
     fire_trigger_quests,
     load_member_quest_board,
@@ -125,44 +126,6 @@ def _counts_as_member_activity(message: discord.Message) -> bool:
         discord.MessageType.default,
         discord.MessageType.reply,
     }
-
-
-# How many still-open quests the login DM lists before pointing at /bank
-# quests for the rest — keeps the digest a glance, not a wall of text.
-_LOGIN_QUEST_RECAP_LIMIT = 6
-
-
-def _quest_recap_line(q: dict) -> str:
-    """One friendly line for a quest in the login digest: title + a status bar."""
-    title = q["title"]
-    state = q.get("state")
-    if state == "community":
-        return f"🔹 **{title}** {progress_bar(q['current'], q['target'])}"
-    if q.get("progress_target"):
-        return f"🔹 **{title}** {progress_bar(q['progress_current'], q['progress_target'])}"
-    if state == "claimable":
-        return f"🔹 **{title}** — ✅ ready to claim!"
-    if state == "pending":
-        return f"🔹 **{title}** — ⏳ awaiting sign-off"
-    hint = TRIGGER_KINDS.get(state or "", "")
-    return f"🔹 **{title}** — {hint}" if hint else f"🔹 **{title}**"
-
-
-def _quest_recap_field(quests_out: list[dict]) -> str | None:
-    """The login DM's quest checklist: what's still open, most relevant first.
-
-    None when nothing's open, so a quiet guild's DM doesn't grow an empty
-    "nothing to do" field.
-    """
-    open_quests = [q for q in quests_out if q.get("state") != "done"]
-    if not open_quests:
-        return None
-    shown = open_quests[:_LOGIN_QUEST_RECAP_LIMIT]
-    lines = [_quest_recap_line(q) for q in shown]
-    leftover = len(open_quests) - len(shown)
-    if leftover > 0:
-        lines.append(f"…and {leftover} more — check `/bank quests`")
-    return "\n".join(lines)
 
 
 _collect_backfill_channels = collect_messageable_channels
@@ -942,7 +905,9 @@ class EventsCog(commands.Cog):
             thread_deep_id = message.channel.id
         hop_channel_id = parent_id or channel_id
 
-        def _econ_work() -> tuple[EconSettings, LoginOutcome, int, list[dict]] | None:
+        def _econ_work() -> (
+            tuple[EconSettings, LoginOutcome, int, list[dict], list[dict]] | None
+        ):
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 if not settings.enabled:
@@ -1136,15 +1101,22 @@ class EventsCog(commands.Cog):
                 quests_out = load_member_quest_board(
                     conn, settings, guild_id, user_id, today
                 )
-                return settings, outcome, prior_streak, quests_out
+                # The community goals that moved the most yesterday — empty
+                # until the day roll has snapshotted both days.
+                gains = community_gains_for_day(
+                    conn, guild_id, previous_local_day(today)
+                )
+                return settings, outcome, prior_streak, quests_out, gains
 
         result = await asyncio.to_thread(_econ_work)
         if result is None:
             return
-        settings, outcome, prior_streak, quests_out = result
+        settings, outcome, prior_streak, quests_out, gains = result
 
         accent = await resolve_accent_color(self.ctx.db_path, message.guild)
-        embed = self._econ_login_embed(settings, outcome, prior_streak, quests_out, accent)
+        embed = self._econ_login_embed(
+            settings, outcome, prior_streak, quests_out, gains, accent
+        )
         # A daily digest (streak + quest recap) is recurring engagement —
         # only DM players who took the opt-in economy role. Payout stays
         # silent for everyone else (matches the quest-card path and the
@@ -1164,6 +1136,7 @@ class EventsCog(commands.Cog):
         outcome: LoginOutcome,
         prior_streak: int,
         quests_out: list[dict],
+        gains: list[dict],
         accent: discord.Color,
     ) -> discord.Embed:
         """Daily digest DM: streak update + a fun little quest checklist."""
@@ -1208,13 +1181,11 @@ class EventsCog(commands.Cog):
                 ),
                 inline=False,
             )
-        quest_field = _quest_recap_field(quests_out)
-        if quest_field:
-            embed.add_field(
-                name="🎯 Quests to Play With Today",
-                value=quest_field,
-                inline=False,
-            )
+        # Every open quest, grouped by cadence, plus yesterday's movers — the
+        # digest formatting (aligned bars, blurbs, channel links, ≤1024-char
+        # field packing) lives in quest_digest so it's unit-tested there.
+        for name, value in quest_digest.digest_sections(quests_out, gains):
+            embed.add_field(name=name, value=value, inline=False)
         return embed
 
     async def _fetch_reaction_message(

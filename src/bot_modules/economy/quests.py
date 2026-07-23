@@ -12,7 +12,7 @@ import hashlib
 import random
 import re
 import statistics
-from datetime import date
+from datetime import date, timedelta
 
 # Library slot limits per guild. Daily/weekly/monthly active quests form a
 # per-cadence *pool*: each member is shown/paid a personal subset of N drawn
@@ -374,6 +374,15 @@ def iso_week_for(local_day: str) -> str:
     """
     iso = date.fromisoformat(local_day).isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
+
+
+def previous_local_day(local_day: str) -> str:
+    """The guild-local calendar day before ``local_day`` (both "YYYY-MM-DD").
+
+    Used to diff a day's community-progress snapshot against the prior day's
+    for the login digest's "biggest movers yesterday" section.
+    """
+    return (date.fromisoformat(local_day) - timedelta(days=1)).isoformat()
 
 
 def month_for(local_day: str) -> str:
