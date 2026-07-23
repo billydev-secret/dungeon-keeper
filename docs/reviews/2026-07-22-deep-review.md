@@ -400,3 +400,58 @@ Re-read and **confirmed exactly as written**: the four S1s (#1–#4); `/penpals 
 - Item 5 (`gate.py`): the suffix fix must match `logic.py`/`store.py` as basenames (34 files currently exempt), not just broaden the underscore-suffix list.
 
 *Verification pass performed single-reviewer, same day as the main report; every claim above was re-read directly from the working tree at the cited lines.*
+
+---
+
+# Addendum 3 — novel-findings hunt (2026-07-23, partial run)
+
+A second sweep hunted deliberately along angles the main review never used:
+money-flow race analysis, JS↔API contract checking, Discord hard limits,
+command-reference drift, cross-guild IDOR, restart/mid-flight state machines,
+time/boundary logic, content injection, schema↔code drift, panel runtime
+logic, and line-by-line reads of the god-files.
+
+**⚠️ The run was cut short by a quota exhaustion partway through.** Only the
+two money-race hunters returned before the cutoff; the other fourteen angles
+and the adversarial-verification stage never ran. What follows is therefore a
+**partial result from one angle** — the remaining angles are unexplored, not
+clean. Re-running the hunt is the single highest-value follow-up in this
+document.
+
+## The pattern: read-check-write across an autocommit boundary
+
+All five findings are one bug shape. `open_db()` uses `isolation_level="DEFERRED"`
+(`core/db_utils.py:24`), so statements before a connection's **first write** run
+in autocommit, outside the serializing transaction. Every one of these services
+reads a limit or a state, decides in Python, then writes — and the read is
+outside the transaction that the write starts. Two concurrent Discord
+interactions therefore both observe the pre-write state and both proceed.
+
+Discord button/command handlers run concurrently on one event loop, and each of
+these paths opens its own connection inside `to_thread`, so the overlap is
+genuine rather than theoretical. The codebase already contains the correct
+pattern in three places — `place_roulette_bet`'s claim `UPDATE` before
+`take_stake` (`casino_service.py:943`), `resolve_blackjack_action`'s claim
+(`:709`), and `purchase_streak_shield`'s guarded conditional upsert
+(`economy_service.py:663`) — so this is drift from an established local
+convention, not a missing idea.
+
+| Sev | Evidence | Finding | Fix |
+|---|---|---|---|
+| **S2** | `services/economy_wager_service.py:126` | **Double-clicked duel Accept burns an ante.** The `state == 'held'` early-return at :103 is a replay guard, but it reads outside the write transaction, so it only catches *sequential* replays. Two concurrent Accepts both read `pending`, both `apply_debit` (both succeed if the balance covers it), and both set the single row to `held` — the challenger is debited twice and escrowed once. **Independently re-verified during this pass.** | Claim the row first: `UPDATE ... SET state='held' WHERE id=? AND state='pending'` and proceed only on `rowcount == 1`. |
+| **S2** | `services/economy_bounty_service.py:205` | **Chip-in racing an award/cancel evaporates the contribution.** A contribution committing just after a bounty reaches a terminal state is debited, excluded from the payout snapshot, and never refunded — no path refunds a `refunded_at IS NULL` contribution on a non-open bounty. | Re-check `state='open'` inside the contributing transaction; on a terminal bounty, refuse and refund. |
+| S3 | `services/economy_raffle_service.py:97` | Weekly per-member ticket cap is bypassable by simultaneous buys — both reads see the pre-buy count, so a member exceeds `raffle_max_tickets` and carries extra weighted odds into the draw all week. | Enforce the cap in the upsert itself (`... WHERE count + ? <= cap`), mirroring `purchase_streak_shield`. |
+| S3 | `services/casino_service.py:210` | `daily_wager_cap` — the casino's only spend limit — is bypassable the same way from coinflip/slots/blackjack-deal. Roulette and double-down are already safe because they take a claim first, which proves the intended pattern. | Guarded conditional upsert on `casino_daily` before the debit. |
+| S3 | `services/casino_service.py:710` | **Griefable blackjack idle clock.** The claim `UPDATE` bumps `last_action_at` for *any* clicker before the ownership check at :716, and the mismatch returns a value rather than raising — so the bump commits. A stranger clicking someone's Hit button resets the 180s auto-stand indefinitely, locking the owner's stake and (via the one-live-hand rule) locking them out of blackjack until a restart. | Fold `guild_id`/`user_id` into the claim's `WHERE`. |
+
+## Status
+
+Only the wager finding was independently re-verified during this pass (the
+adversarial stage never ran). The other four carry the citations and failure
+scenarios their hunter produced; each is confirmable in one read via its
+citation. **None is fixed** — all five are open, and none appears in the main
+report or Addendum 1.
+
+The shared root cause makes these cheap to fix together, and worth a single
+convention note afterwards: *any limit or state check that gates a write must
+live in the same transaction as that write.*
