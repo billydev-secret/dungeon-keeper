@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 
 import discord
 
+from bot_modules.services.gender_service import get_gender_map
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -70,6 +72,19 @@ STATUS_LEAVE = "Leave of Absence"
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class MemberStandIn:
+    """Duck-typed stand-in for discord.Member (id / bot / joined_at).
+
+    Used where live Member objects aren't available: the offline dashboard
+    path and the cache warmer's member snapshots.
+    """
+
+    id: int
+    bot: bool
+    joined_at: datetime | None
 
 
 @dataclass
@@ -176,6 +191,17 @@ def _week_key(ts: float) -> int:
     return int(ts) // (7 * 86400)
 
 
+def _fetch_tuples(conn: sqlite3.Connection, sql: str, params: tuple) -> list[tuple]:
+    """Fetch as plain tuples regardless of the connection's row factory.
+
+    sqlite3.Row construction is measurable at hundreds of thousands of rows;
+    the bulk queries here only need positional access.
+    """
+    cur = conn.execute(sql, params)
+    cur.row_factory = None  # type: ignore[assignment]
+    return cur.fetchall()
+
+
 def _initiative_multiplier(initiated_ratio: float) -> float:
     for threshold, mult in INITIATIVE_TIERS:
         if initiated_ratio >= threshold:
@@ -186,11 +212,14 @@ def _initiative_multiplier(initiated_ratio: float) -> float:
 def _tenure_buffer(
     joined_at: datetime | None,
     now: datetime,
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
+    months_active: int,
 ) -> int:
-    """Compute tenure buffer days based on join date and historical activity."""
+    """Compute tenure buffer days based on join date and historical activity.
+
+    *months_active* is the member's count of distinct active months across all
+    history, batch-fetched for every author at once in compute_quality_scores
+    rather than one query per member.
+    """
     if joined_at is None:
         return 0
     tenure_days = (now - joined_at).days
@@ -200,16 +229,6 @@ def _tenure_buffer(
     # Check "consistent historical activity": at least 1 active week per month
     # for the majority of tenure.
     tenure_months = max(1, tenure_days // 30)
-    active_months = conn.execute(
-        """
-        SELECT COUNT(DISTINCT CAST(ts / 2592000 AS INTEGER)) AS months
-        FROM messages
-        WHERE guild_id = ? AND author_id = ?
-        """,
-        (guild_id, user_id),
-    ).fetchone()
-    months_active = int(active_months["months"]) if active_months else 0
-
     if months_active < tenure_months * 0.5:
         return 0  # Not consistently active
 
@@ -308,15 +327,18 @@ def compute_quality_scores(
     # ------------------------------------------------------------------
     id_set = set(scored_ids)
 
-    # Messages in window
-    msg_rows = conn.execute(
-        "SELECT message_id, author_id, channel_id, ts, content, reply_to_id "
+    # Messages in window. Only the content *length* matters (reply-quality
+    # check), so avoid hauling hundreds of MB of text out of SQLite.
+    msg_rows = _fetch_tuples(
+        conn,
+        "SELECT message_id, author_id, ts, LENGTH(content), reply_to_id "
         "FROM messages WHERE guild_id = ? AND ts >= ? ORDER BY ts",
         (guild_id, int(window_start)),
-    ).fetchall()
+    )
 
     # Attachment message IDs in window
-    attach_rows = conn.execute(
+    attach_rows = _fetch_tuples(
+        conn,
         """
         SELECT DISTINCT ma.message_id
         FROM message_attachments ma
@@ -324,18 +346,20 @@ def compute_quality_scores(
         WHERE m.guild_id = ? AND m.ts >= ?
         """,
         (guild_id, int(window_start)),
-    ).fetchall()
-    attachment_msg_ids = {int(r["message_id"]) for r in attach_rows}
+    )
+    attachment_msg_ids = {r[0] for r in attach_rows}
 
     # Reaction log (individual reactions given)
-    react_rows = conn.execute(
+    react_rows = _fetch_tuples(
+        conn,
         "SELECT reactor_id, author_id, ts FROM reaction_log "
         "WHERE guild_id = ? AND ts >= ?",
         (guild_id, int(window_start)),
-    ).fetchall()
+    )
 
     # Reaction counts received (aggregate per message)
-    reaction_count_rows = conn.execute(
+    reaction_count_rows = _fetch_tuples(
+        conn,
         """
         SELECT mr.message_id, SUM(mr.count) AS total
         FROM message_reactions mr
@@ -344,55 +368,47 @@ def compute_quality_scores(
         GROUP BY mr.message_id
         """,
         (guild_id, int(window_start)),
-    ).fetchall()
-    reaction_counts: dict[int, int] = {
-        int(r["message_id"]): int(r["total"]) for r in reaction_count_rows
-    }
+    )
+    reaction_counts: dict[int, int] = {r[0]: r[1] for r in reaction_count_rows}
 
     # ------------------------------------------------------------------
     # Per-member aggregation
     # ------------------------------------------------------------------
 
-    # Message-level data
-    msgs_by_author: dict[int, list[dict]] = defaultdict(list)
+    # Single pass over all message rows (the dominant data volume): build the
+    # author map and per-author tuples, and set aside the much smaller reply
+    # subset for the reply-derived lookups below.
+    msgs_by_author: dict[int, list[tuple[int, int, int | None, int | None]]] = (
+        defaultdict(list)
+    )  # author -> [(message_id, ts, content_len, reply_to_id)]
     msg_author_map: dict[int, int] = {}  # message_id -> author_id
-    for row in msg_rows:
-        uid = int(row["author_id"])
-        msg_author_map[int(row["message_id"])] = uid
+    reply_rows: list[tuple[int, int, int]] = []  # (ts, author_id, reply_to_id)
+    for mid, uid, ts, content_len, reply_to in msg_rows:
+        msg_author_map[mid] = uid
         if uid in id_set:
-            msgs_by_author[uid].append(
-                {
-                    "message_id": int(row["message_id"]),
-                    "ts": int(row["ts"]),
-                    "content": row["content"],
-                    "reply_to_id": row["reply_to_id"],
-                    "channel_id": int(row["channel_id"]),
-                }
-            )
-
-    # Reaction log data
-    reactions_given: dict[int, list[tuple[int, int]]] = defaultdict(
-        list
-    )  # reactor -> [(author, ts)]
-    for row in react_rows:
-        rid = int(row["reactor_id"])
-        if rid in id_set:
-            reactions_given[rid].append((int(row["author_id"]), int(row["ts"])))
-
-    # Replies received per author (from all messages in window)
-    replies_received: dict[int, int] = defaultdict(int)
-    for row in msg_rows:
-        reply_to = row["reply_to_id"]
+            msgs_by_author[uid].append((mid, ts, content_len, reply_to))
         if reply_to is not None:
-            target_uid = msg_author_map.get(int(reply_to))
-            if target_uid is not None and target_uid in id_set:
-                replies_received[target_uid] += 1
+            reply_rows.append((ts, uid, reply_to))
 
-    # Replies per message (for content resonance per-post lookup)
+    # Reaction log data: outbound (reactor -> [(author, ts)]) and inbound
+    # (author -> [(ts, reactor)]) built in one pass.
+    reactions_given: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    reactions_to_user: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for reactor, author, ts in react_rows:
+        if reactor in id_set:
+            reactions_given[reactor].append((author, ts))
+        if reactor != author:
+            reactions_to_user[author].append((ts, reactor))
+
+    # Reply-derived lookups: replies per message (content resonance) and
+    # replies received per author (initiative reverse-engagement).
     replies_per_msg: dict[int, int] = defaultdict(int)
-    for row in msg_rows:
-        if row["reply_to_id"] is not None:
-            replies_per_msg[int(row["reply_to_id"])] += 1
+    replies_to_user: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for ts, uid, reply_to in reply_rows:
+        replies_per_msg[reply_to] += 1
+        target_uid = msg_author_map.get(reply_to)
+        if target_uid is not None and target_uid != uid:
+            replies_to_user[target_uid].append((ts, uid))
 
     # ------------------------------------------------------------------
     # Compute raw metrics per member
@@ -411,77 +427,87 @@ def compute_quality_scores(
     active_days_arr = [0] * n
     active_weeks_arr = [0] * n
 
-    # Pre-build reverse engagement indices (others engaging with each user)
-    replies_to_user: dict[int, list[tuple[int, int]]] = defaultdict(list)
-    for row in msg_rows:
-        if row["reply_to_id"] is not None:
-            _rev_target = msg_author_map.get(int(row["reply_to_id"]))
-            if _rev_target is not None:
-                _from_uid = int(row["author_id"])
-                if _from_uid != _rev_target:
-                    replies_to_user[_rev_target].append((int(row["ts"]), _from_uid))
-
-    reactions_to_user: dict[int, list[tuple[int, int]]] = defaultdict(list)
-    for rr in react_rows:
-        _rr_author = int(rr["author_id"])
-        _rr_reactor = int(rr["reactor_id"])
-        if _rr_reactor != _rr_author:
-            reactions_to_user[_rr_author].append((int(rr["ts"]), _rr_reactor))
-
     for idx, uid in enumerate(scored_ids):
         user_msgs = msgs_by_author.get(uid, [])
         user_reactions = reactions_given.get(uid, [])
 
-        # Active days and weeks
+        # One pass over this member's messages: activity days/weeks, last-seen,
+        # reply quality, outbound engagement events, posts, and posting caps.
         activity_days: set[int] = set()
         activity_weeks: set[int] = set()
-        all_ts: list[int] = []
+        last_ts = 0.0
+        qualifying_replies = 0
+        engagement_events: list[tuple[int, int]] = []  # (ts, target_uid)
+        posts_count = 0
+        posts_resonance = 0.0
+        daily_attachments: dict[int, int] = defaultdict(int)
+        daily_starters: dict[int, int] = defaultdict(int)
 
-        for msg in user_msgs:
-            ts = msg["ts"]
-            all_ts.append(ts)
-            activity_days.add(_day_key(ts))
-            activity_weeks.add(_week_key(ts))
+        for mid, ts, content_len, reply_to in user_msgs:
+            day = ts // 86400
+            activity_days.add(day)
+            activity_weeks.add(ts // 604800)
+            if ts > last_ts:
+                last_ts = ts
+            is_attachment = mid in attachment_msg_ids
+            if is_attachment:
+                daily_attachments[day] += 1
+            if reply_to is not None:
+                if content_len is not None and content_len >= MIN_REPLY_CHARS:
+                    qualifying_replies += 1
+                reply_target = msg_author_map.get(reply_to)
+                if reply_target is not None and reply_target != uid:
+                    engagement_events.append((ts, reply_target))
+                is_post = is_attachment
+            else:
+                daily_starters[day] += 1
+                is_post = True
+            if is_post:
+                posts_count += 1
+                posts_resonance += reaction_counts.get(mid, 0) + replies_per_msg.get(
+                    mid, 0
+                )
 
-        for _target, ts in user_reactions:
-            all_ts.append(ts)
-            activity_days.add(_day_key(ts))
-            activity_weeks.add(_week_key(ts))
+        # One pass over reactions given: activity, anti-gaming tally, outbound
+        # engagement events (appended after message events, order restored by
+        # the sort below just as before).
+        reaction_target_days: dict[tuple[int, int], int] = defaultdict(
+            int
+        )  # (day, target) -> count
+        for target, ts in user_reactions:
+            day = ts // 86400
+            activity_days.add(day)
+            activity_weeks.add(ts // 604800)
+            if ts > last_ts:
+                last_ts = ts
+            reaction_target_days[(day, target)] += 1
+            if target != uid:
+                engagement_events.append((ts, target))
+        engagement_events.sort()
 
         n_active_days = len(activity_days)
         n_active_weeks = len(activity_weeks)
         active_days_arr[idx] = n_active_days
         active_weeks_arr[idx] = n_active_weeks
-
-        # Last active
-        last_ts = max(all_ts) if all_ts else 0.0
         last_active[idx] = last_ts
 
         # -- Engagement Given --
 
-        # Reaction rate (per active day), with anti-gaming
+        # Reaction rate (per active day), with anti-gaming same-person caps
         reaction_credit = 0.0
-        daily_reaction_targets: dict[int, dict[int, int]] = defaultdict(
-            lambda: defaultdict(int)
-        )
-        for target, ts in user_reactions:
-            day = _day_key(ts)
-            daily_reaction_targets[day][target] += 1
-
-        for day_targets in daily_reaction_targets.values():
-            for count in day_targets.values():
-                if count <= REACTION_SAME_PERSON_HALF:
-                    reaction_credit += count
-                elif count <= REACTION_SAME_PERSON_CAP:
-                    reaction_credit += (
-                        REACTION_SAME_PERSON_HALF
-                        + (count - REACTION_SAME_PERSON_HALF) * 0.5
-                    )
-                else:
-                    reaction_credit += (
-                        REACTION_SAME_PERSON_HALF
-                        + (REACTION_SAME_PERSON_CAP - REACTION_SAME_PERSON_HALF) * 0.5
-                    )
+        for count in reaction_target_days.values():
+            if count <= REACTION_SAME_PERSON_HALF:
+                reaction_credit += count
+            elif count <= REACTION_SAME_PERSON_CAP:
+                reaction_credit += (
+                    REACTION_SAME_PERSON_HALF
+                    + (count - REACTION_SAME_PERSON_HALF) * 0.5
+                )
+            else:
+                reaction_credit += (
+                    REACTION_SAME_PERSON_HALF
+                    + (REACTION_SAME_PERSON_CAP - REACTION_SAME_PERSON_HALF) * 0.5
+                )
 
         reaction_rates[idx] = (
             (reaction_credit / n_active_days) if n_active_days > 0 else 0.0
@@ -489,28 +515,7 @@ def compute_quality_scores(
 
         # Reply ratio
         total_msgs = len(user_msgs)
-        qualifying_replies = sum(
-            1
-            for msg in user_msgs
-            if msg["reply_to_id"] is not None
-            and msg["content"] is not None
-            and len(msg["content"]) >= MIN_REPLY_CHARS
-        )
         reply_ratios[idx] = (qualifying_replies / total_msgs) if total_msgs > 0 else 0.0
-
-        # Initiative ratio
-
-        # Build chronological engagement events for this user
-        engagement_events: list[tuple[int, int]] = []  # (ts, target_uid)
-        for msg in user_msgs:
-            if msg["reply_to_id"] is not None:
-                reply_target = msg_author_map.get(int(msg["reply_to_id"]))
-                if reply_target is not None and reply_target != uid:
-                    engagement_events.append((msg["ts"], reply_target))
-        for react_target, react_ts in user_reactions:
-            if react_target != uid:
-                engagement_events.append((react_ts, react_target))
-        engagement_events.sort()
 
         # Also track reverse engagement (others engaging with this user)
         reverse_events = replies_to_user.get(uid, []) + reactions_to_user.get(uid, [])
@@ -547,33 +552,14 @@ def compute_quality_scores(
         )
 
         # -- Content Resonance --
-        # "Posts" = messages with attachment OR conversation starters (non-replies)
-        user_posts: list[int] = []  # message_ids that qualify as posts
-        for msg in user_msgs:
-            is_attachment = msg["message_id"] in attachment_msg_ids
-            is_starter = msg["reply_to_id"] is None
-            if is_attachment or is_starter:
-                user_posts.append(msg["message_id"])
-
-        if user_posts:
-            total_resonance = 0.0
-            for mid in user_posts:
-                total_resonance += reaction_counts.get(mid, 0)
-                total_resonance += replies_per_msg.get(mid, 0)
-            resonance_values[idx] = total_resonance / len(user_posts)
+        # "Posts" = messages with attachment OR conversation starters
+        # (non-replies); tallied in the message pass above.
+        if posts_count:
+            resonance_values[idx] = posts_resonance / posts_count
         else:
             resonance_values[idx] = -1.0  # sentinel for "non-poster"
 
         # -- Posting Activity --
-        daily_attachments: dict[int, int] = defaultdict(int)
-        daily_starters: dict[int, int] = defaultdict(int)
-        for msg in user_msgs:
-            day = _day_key(msg["ts"])
-            if msg["message_id"] in attachment_msg_ids:
-                daily_attachments[day] += 1
-            if msg["reply_to_id"] is None:
-                daily_starters[day] += 1
-
         capped_posts = sum(
             min(v, ATTACHMENT_DAILY_CAP) for v in daily_attachments.values()
         ) + sum(min(v, STARTER_DAILY_CAP) for v in daily_starters.values())
@@ -602,6 +588,11 @@ def compute_quality_scores(
     # ------------------------------------------------------------------
 
     scored_results: list[QualityScore] = []
+
+    # Distinct active months per author over all history, for the tenure
+    # buffer. One grouped query, fetched lazily the first time a member is
+    # tenured enough to need it (instead of one query per member).
+    months_active_by_user: dict[int, int] | None = None
 
     for idx, uid in enumerate(scored_ids):
         # Check minimum active days
@@ -653,13 +644,22 @@ def compute_quality_scores(
 
         # Tenure buffer
         mbr = member_map.get(uid)
-        buffer_days = _tenure_buffer(
-            mbr.joined_at if mbr else None,
-            now,
-            conn,
-            guild_id,
-            uid,
-        )
+        joined = mbr.joined_at if mbr else None
+        buffer_days = 0
+        if joined is not None and (now - joined).days >= TENURE_6MO_DAYS:
+            if months_active_by_user is None:
+                months_active_by_user = {
+                    r[0]: r[1]
+                    for r in conn.execute(
+                        "SELECT author_id,"
+                        " COUNT(DISTINCT CAST(ts / 2592000 AS INTEGER))"
+                        " FROM messages WHERE guild_id = ? GROUP BY author_id",
+                        (guild_id,),
+                    )
+                }
+            buffer_days = _tenure_buffer(
+                joined, now, months_active_by_user.get(uid, 0)
+            )
 
         scored_results.append(
             QualityScore(
@@ -682,3 +682,49 @@ def compute_quality_scores(
 
     # Combine: scored first, then onboarding/leave/insufficient
     return scored_results + results
+
+
+def build_quality_report(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    members: Sequence[discord.Member],
+    now: datetime | None = None,
+    window_days: int | None = None,
+    min_active_days: int | None = None,
+) -> dict:
+    """Compute scores and shape them for the dashboard report.
+
+    Shared by the web route and the hourly cache warmer so both store an
+    identical payload under the same cache key. ``user_name`` is left blank —
+    the route resolves display names per request.
+    """
+    scores = compute_quality_scores(
+        conn,
+        guild_id,
+        members,
+        now=now,
+        window_days=window_days,
+        min_active_days=min_active_days,
+    )
+    # Gender tags for the panel's per-gender totals (member_gender is the
+    # mod-maintained roster; absent rows render as "unknown").
+    genders = get_gender_map(conn, guild_id, [s.user_id for s in scores])
+
+    entries = [
+        {
+            "user_id": str(s.user_id),
+            "user_name": "",
+            "final_score": s.final_score,
+            "engagement_given": s.engagement_given,
+            "consistency_recency": s.consistency_recency,
+            "content_resonance": s.content_resonance,
+            "posting_activity": s.posting_activity,
+            "status": s.status,
+            "active_days": s.active_days,
+            "active_weeks": s.active_weeks,
+            "gender": genders.get(s.user_id, "unknown"),
+        }
+        for s in scores
+    ]
+    scored = sum(1 for e in entries if e["status"] == STATUS_ACTIVE)
+    return {"total_scored": scored, "entries": entries}
