@@ -1,11 +1,11 @@
-import { loadConfig, loadChannels, loadMembers, channelSelectMulti, toMemberOptions, mountPicker, apiPut, showStatus } from "../config-helpers.js";
+import { loadConfig, loadChannels, loadMembers, channelSelectMulti, mountMemberMultiPicker, apiPut, showStatus } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
   (async () => {
     const [config, channels, members] = await Promise.all([loadConfig(), loadChannels(), loadMembers()]);
-    const g = config.greeting_watch || { enabled: false, channel_ids: "", notify_user_id: "0", window_minutes: 10 };
+    const g = config.greeting_watch || { enabled: false, channel_ids: "", notify_user_ids: [], window_minutes: 10 };
 
     container.innerHTML = `
       <div class="panel">
@@ -24,9 +24,9 @@ export function mount(container) {
             <div class="field-hint">Your “main chat” channel(s) to watch. Ctrl/Cmd-click to select several. Nothing selected = nothing is watched.</div>
           </div>
           <div class="field">
-            <label>Notify (DM) this member</label>
-            <span data-picker="notify_user"></span>
-            <div class="field-hint">Who receives the direct message when a greeting goes unanswered. Leave empty and nothing is sent.</div>
+            <label>Notify (DM) these members</label>
+            <span data-picker="notify_users"></span>
+            <div class="field-hint">Everyone selected gets the direct message when a greeting goes unanswered. Add as many as you like; leave empty and nothing is sent.</div>
           </div>
           <div class="field">
             <label>Unanswered window (minutes)</label>
@@ -38,11 +38,11 @@ export function mount(container) {
       </div>
     `;
 
-    const notifyPicker = mountPicker(
-      container.querySelector('[data-picker="notify_user"]'),
-      toMemberOptions(members),
-      String(g.notify_user_id || "0"),
-      { emptyValue: "0", emptyLabel: "(nobody)", placeholder: "Search members…" },
+    const notifyPicker = mountMemberMultiPicker(
+      container.querySelector('[data-picker="notify_users"]'),
+      members,
+      g.notify_user_ids || [],
+      { placeholder: "Search members…" },
     );
 
     const form = container.querySelector("[data-form]");
@@ -59,7 +59,7 @@ export function mount(container) {
         await apiPut("/api/config/greeting-watch", {
           enabled: form.querySelector('input[name="enabled"]').checked,
           channel_ids: collectMulti("channel_ids"),
-          notify_user_id: notifyPicker.getValue() || "0",
+          notify_user_ids: notifyPicker.getValues().join(","),
           window_minutes: parseInt(fd.get("window_minutes")) || 10,
         });
         showStatus(status, true, "Saved");

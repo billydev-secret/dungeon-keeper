@@ -26,6 +26,7 @@ from bot_modules.services.greeting_watch_service import (
     guilds_with_pending,
     list_due_greetings,
     mark_resolved,
+    parse_notify_ids,
     was_acknowledged,
 )
 
@@ -41,8 +42,14 @@ DEFAULT_WINDOW_MINUTES = 10
 # ── sync wrappers (run via asyncio.to_thread) ──────────────────────────
 
 
-def _load_settings(db_path: Path, guild_id: int) -> tuple[bool, int, int]:
-    """Return (enabled, window_minutes, notify_user_id) for a guild."""
+def _load_settings(db_path: Path, guild_id: int) -> tuple[bool, int, list[int]]:
+    """Return (enabled, window_minutes, notify_user_ids) for a guild.
+
+    ``notify_user_ids`` is the list of members to DM — read from the
+    ``greeting_watch_notify_user_ids`` CSV, falling back to the legacy single
+    ``greeting_watch_notify_user_id`` key for a guild configured before
+    multi-subscriber support shipped.
+    """
     with open_db(db_path) as conn:
         enabled = parse_bool(
             get_config_value(conn, "greeting_watch_enabled", "false", guild_id)
@@ -61,15 +68,11 @@ def _load_settings(db_path: Path, guild_id: int) -> tuple[bool, int, int]:
             )
         except (TypeError, ValueError):
             window = DEFAULT_WINDOW_MINUTES
-        try:
-            notify = int(
-                get_config_value(
-                    conn, "greeting_watch_notify_user_id", "0", guild_id
-                )
-            )
-        except (TypeError, ValueError):
-            notify = 0
-    return enabled, window, notify
+        notify_ids = parse_notify_ids(
+            get_config_value(conn, "greeting_watch_notify_user_ids", "", guild_id),
+            get_config_value(conn, "greeting_watch_notify_user_id", "", guild_id),
+        )
+    return enabled, window, notify_ids
 
 
 def _guilds_with_pending_sync(db_path: Path) -> list[int]:
@@ -147,7 +150,7 @@ async def _notify(
 async def _process_guild(
     bot: Bot, db_path: Path, guild_id: int, now_ts: float
 ) -> None:
-    enabled, window_minutes, notify_user_id = await asyncio.to_thread(
+    enabled, window_minutes, notify_user_ids = await asyncio.to_thread(
         _load_settings, db_path, guild_id
     )
     window_seconds = window_minutes * 60
@@ -156,9 +159,9 @@ async def _process_guild(
     if not due:
         return
 
-    # Turned off (or notify user cleared) mid-window: retire the stragglers
-    # quietly so they don't linger unresolved forever.
-    if not enabled or not notify_user_id:
+    # Turned off (or every notify user cleared) mid-window: retire the
+    # stragglers quietly so they don't linger unresolved forever.
+    if not enabled or not notify_user_ids:
         await asyncio.to_thread(
             _resolve_sync,
             db_path,
@@ -188,9 +191,10 @@ async def _process_guild(
                 int(now_ts),
             )
             continue
-        await _notify(bot, guild_id, notify_user_id, g, window_minutes)
-        # Resolve whether or not the DM landed — a closed-DM failure would
-        # otherwise wedge the row into re-alerting every tick. The failure is
+        for notify_user_id in notify_user_ids:
+            await _notify(bot, guild_id, notify_user_id, g, window_minutes)
+        # Resolve whether or not the DMs landed — a closed-DM failure would
+        # otherwise wedge the row into re-alerting every tick. Each failure is
         # already logged in _notify.
         await asyncio.to_thread(
             _resolve_sync,

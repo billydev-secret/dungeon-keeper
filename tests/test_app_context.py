@@ -167,7 +167,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         admin_role_ids=frozenset({20}),
         greeting_watch_enabled=False,
         greeting_watch_channel_ids=frozenset(),
-        greeting_watch_notify_user_id=0,
+        greeting_watch_notify_user_ids=frozenset(),
         greeting_watch_window_minutes=10,
         spoiler_required_channels=frozenset(),
         bypass_role_ids=frozenset(),

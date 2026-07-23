@@ -7,7 +7,8 @@
 Catches "good morning" / "hello" style messages in your main chat that go
 **unanswered**, so nobody who says hi to the room falls through the cracks. When
 a greeting isn't replied to or @mentioned within a configurable window, the bot
-**DMs a chosen member** (e.g. an admin/greeter) with a jump link.
+**DMs the chosen members** (e.g. admins/greeters) with a jump link — one or
+several people can subscribe to the alerts.
 
 There is no Discord command surface — it's configured entirely on the dashboard
 (**Config → Greeting Watch**, admin-only), per the project's "config lives on the
@@ -40,9 +41,10 @@ web" rule.
    already records one edge there for every **reply target** and **@mention**.
    If anyone *other than the greeter* has an edge pointing **to** the greeter
    inside `[greeting_ts, greeting_ts + window]`, it's `acknowledged`; otherwise
-   it's `unanswered` and the notify user is DMed. Either way the row is resolved
-   so it's never re-processed. If the feature is turned off (or the notify user
-   cleared) mid-window, still-pending rows are retired as `skipped`.
+   it's `unanswered` and **every** notify member is DMed. Either way the row is
+   resolved so it's never re-processed. If the feature is turned off (or every
+   notify member cleared) mid-window, still-pending rows are retired as
+   `skipped`.
 
 Definition of "answered": a Discord **reply** to the greeter, or a message that
 **@mentions** them. A bare "hey!" that neither replies nor tags them can't be
@@ -54,7 +56,7 @@ attributed and so reads as unanswered — the practical soft edge of the feature
 |---|---|---|
 | Enable greeting watch | `greeting_watch_enabled` | Master on/off. |
 | Watched channels | `greeting_watch_channel_ids` | CSV of channel ids — your "main chat". Empty = nothing watched. |
-| Notify (DM) this member | `greeting_watch_notify_user_id` | Who gets the DM. `0`/empty = no DM sent. |
+| Notify (DM) these members | `greeting_watch_notify_user_ids` | CSV of member ids — everyone listed gets the DM. Empty = no DM sent. Falls back to the legacy single `greeting_watch_notify_user_id` if the CSV is unset. |
 | Unanswered window (minutes) | `greeting_watch_window_minutes` | Wait before flagging (default 10). |
 
 `greeting_watch_enabled` and `greeting_watch_channel_ids` are read on the ingest
@@ -87,7 +89,7 @@ greeting message id, so one hello credits an answerer once). See
 - **Silence variant.** Only the "ignored in a crowd" definition ships (nobody
   acknowledged the greeter). A "channel went dead-silent after the greeting"
   detector could be added off `processed_messages` if wanted.
-- **Alert routing.** v1 DMs a single member. Routing to a mod channel or role
-  ping would reuse the `mod_channel_id` / Rules Watch alert patterns.
+- **Alert routing.** DMs one or more chosen members. Routing to a mod channel
+  or role ping would reuse the `mod_channel_id` / Rules Watch alert patterns.
 - **Dashboard log.** Resolved rows carry a verdict but aren't surfaced anywhere;
   a small "recent unanswered greetings" view could live under Reports.

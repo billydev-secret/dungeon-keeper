@@ -466,7 +466,7 @@ class _StubGuildConfig:
         auto_role_ids: Any = None,
         greeting_watch_enabled: bool = False,
         greeting_watch_channel_ids: Any = None,
-        greeting_watch_notify_user_id: int = 0,
+        greeting_watch_notify_user_ids: Any = None,
         greeting_watch_window_minutes: int = 10,
     ):
         self.welcome_channel_id = welcome_channel_id
@@ -505,7 +505,11 @@ class _StubGuildConfig:
             if greeting_watch_channel_ids is None
             else frozenset(greeting_watch_channel_ids)
         )
-        self.greeting_watch_notify_user_id = greeting_watch_notify_user_id
+        self.greeting_watch_notify_user_ids = (
+            frozenset()
+            if greeting_watch_notify_user_ids is None
+            else frozenset(greeting_watch_notify_user_ids)
+        )
         self.greeting_watch_window_minutes = greeting_watch_window_minutes
 
     @property

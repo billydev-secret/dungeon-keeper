@@ -327,7 +327,7 @@ class GuildConfig:
     # greeting watch — flag unanswered "good morning"/"hello" in watched chats
     greeting_watch_enabled: bool
     greeting_watch_channel_ids: frozenset[int]
-    greeting_watch_notify_user_id: int
+    greeting_watch_notify_user_ids: frozenset[int]
     greeting_watch_window_minutes: int
     # message archival / spoiler enforcement
     spoiler_required_channels: frozenset[int]
@@ -410,7 +410,10 @@ class GuildConfig:
             greeting_watch_channel_ids=_parse_id_csv(
                 _val("greeting_watch_channel_ids")
             ),
-            greeting_watch_notify_user_id=_int("greeting_watch_notify_user_id"),
+            greeting_watch_notify_user_ids=_parse_id_csv(
+                _val("greeting_watch_notify_user_ids")
+                or _val("greeting_watch_notify_user_id")
+            ),
             greeting_watch_window_minutes=_int(
                 "greeting_watch_window_minutes", 10
             ),

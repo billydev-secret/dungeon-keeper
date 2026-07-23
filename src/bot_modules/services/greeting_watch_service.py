@@ -57,6 +57,32 @@ def is_greeting(content: str) -> bool:
     return _GREETING_RE.match(text) is not None
 
 
+def parse_notify_ids(raw: str | None, legacy: str | None = None) -> list[int]:
+    """Parse the notify-user CSV into an ordered, de-duplicated list of ids.
+
+    ``raw`` is the ``greeting_watch_notify_user_ids`` CSV (the multi-subscriber
+    key). ``legacy`` is the pre-multi ``greeting_watch_notify_user_id`` single
+    value, used only as a fallback when the CSV holds no ids — so a guild that
+    configured one notify member before this shipped keeps that subscriber
+    without a data migration. Blank/zero/non-numeric entries are dropped; order
+    is preserved so the DM order is stable.
+    """
+    ids: list[int] = []
+    seen: set[int] = set()
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            value = int(part)
+            if value and value not in seen:
+                seen.add(value)
+                ids.append(value)
+    if not ids and legacy:
+        legacy = legacy.strip()
+        if legacy.isdigit() and int(legacy):
+            ids.append(int(legacy))
+    return ids
+
+
 class PendingGreeting(NamedTuple):
     message_id: int
     channel_id: int
