@@ -59,6 +59,7 @@ const SECTIONS = [
         { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js" },
         { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js" },
         { id: "reaction-analytics",   label: "Reactions",             module: "./panels/reaction-analytics.js" },
+        { id: "one-sided-attention",  label: "One-Sided Attention",   module: "./panels/one-sided-attention.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
       ]},

@@ -1851,3 +1851,48 @@ def get_animated_heatmap_data(
         "frames": frames,
         "global_max": global_max,
     }
+
+
+# ── One-sided (unreciprocated) attention ───────────────────────────────
+
+
+def get_one_sided_attention_data(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    window_days: int = 30,
+    limit: int = 50,
+) -> dict:
+    """Moderator-review report of lopsided attention between member pairs.
+
+    Thin adapter over attention_report.compute_one_sided_attention: runs the
+    metrics, then serialises each candidate for the web layer with both user
+    IDs stringified (JS Number precision — see snowflake convention).
+    """
+    from bot_modules.services.attention_report import compute_one_sided_attention
+
+    candidates = compute_one_sided_attention(
+        conn, guild_id, window_days=window_days, limit=limit
+    )
+    rows = [
+        {
+            "from_id": str(c.initiator_id),
+            "from_name": "",
+            "to_id": str(c.target_id),
+            "to_name": "",
+            "text_out": c.text_out,
+            "react_out": c.react_out,
+            "voice_follow_out": c.voice_follow_out,
+            "weight_out": round(c.weight_out, 1),
+            "weight_back": round(c.weight_back, 1),
+            "asymmetry": round(c.asymmetry, 3),
+            "concentration": round(c.concentration, 3),
+            "distinct_targets": c.distinct_targets,
+            "escalation": (round(c.escalation, 2) if c.escalation is not None else None),
+            "ever_reciprocated": c.ever_reciprocated,
+            "max_burst": c.max_burst,
+            "reasons": list(c.reasons),
+            "cautions": list(c.cautions),
+        }
+        for c in candidates
+    ]
+    return {"window_days": window_days, "candidates": rows}

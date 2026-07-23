@@ -45,6 +45,7 @@ from web_server.schemas import (
     MessageRateResponse,
     NsfwGenderResponse,
     OldestSfwResponse,
+    OneSidedAttentionResponse,
     QualityScoreResponse,
     ReactionAnalyticsResponse,
     RetentionResponse,
@@ -653,6 +654,44 @@ async def interaction_graph(
     metrics = result.get("metrics")
     if metrics and metrics.get("bridge_users"):
         await _resolve_names(ctx, guild, metrics["bridge_users"], ("user_id", "user_name"))
+    return result
+
+
+# ── One-sided attention (moderator review) ─────────────────────────────
+
+
+@router.get("/one-sided-attention", response_model=OneSidedAttentionResponse)
+async def one_sided_attention(
+    request: Request,
+    window_days: int = 30,
+    limit: int = 50,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    window_days = max(7, min(int(window_days), 180))
+
+    def _q():
+        with ctx.open_db() as conn:
+            return reports_data.get_one_sided_attention_data(
+                conn, guild_id, window_days=window_days, limit=min(limit, 100)
+            )
+
+    result = await cached_run_query(
+        "one-sided-attention",
+        guild_id,
+        {"window_days": window_days, "limit": limit},
+        _q,
+    )
+    await _resolve_names(
+        ctx,
+        guild,
+        result.get("candidates", []),
+        ("from_id", "from_name"),
+        ("to_id", "to_name"),
+    )
     return result
 
 
