@@ -129,7 +129,35 @@ def test_quality_score_shape(open_client):
 _SMOKE_ENDPOINTS = [
     "/api/reports/interaction-graph",
     "/api/reports/interaction-heatmap",
+    "/api/reports/one-sided-attention",
 ]
+
+
+def test_one_sided_attention_flags_lopsided_pair(open_client, web_db):
+    invalidate_report_cache()
+    now = int(time.time())
+    with open_db(web_db) as conn:
+        # 20 one-directional replies/mentions, target never reciprocates.
+        for i in range(20):
+            conn.execute(
+                """INSERT INTO user_interactions_log
+                   (guild_id, from_user_id, to_user_id, ts, message_id)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (123, 4001, 4002, now - i * 3600, None),
+            )
+        conn.commit()
+    resp = open_client.get("/api/reports/one-sided-attention?window_days=30")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "candidates" in data and data["window_days"] == 30
+    pair = next(
+        (c for c in data["candidates"] if c["from_id"] == "4001" and c["to_id"] == "4002"),
+        None,
+    )
+    assert pair is not None
+    assert pair["asymmetry"] == 1.0
+    assert pair["ever_reciprocated"] is False
+    assert any("never responded" in r for r in pair["reasons"])
 
 
 @pytest.mark.parametrize("path", _SMOKE_ENDPOINTS)

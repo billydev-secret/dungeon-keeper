@@ -311,6 +311,34 @@ class InteractionGraphResponse(BaseModel):
     metrics: InteractionGraphMetricsSchema | None = None
 
 
+# ── One-sided attention (moderator review) ──────────────────────────────
+
+
+class AttentionCandidateSchema(BaseModel):
+    from_id: str
+    from_name: str = ""
+    to_id: str
+    to_name: str = ""
+    text_out: int
+    react_out: int
+    voice_follow_out: int
+    weight_out: float
+    weight_back: float
+    asymmetry: float
+    concentration: float
+    distinct_targets: int
+    escalation: float | None = None
+    ever_reciprocated: bool
+    max_burst: int
+    reasons: list[str] = []
+    cautions: list[str] = []
+
+
+class OneSidedAttentionResponse(BaseModel):
+    window_days: int
+    candidates: list[AttentionCandidateSchema]
+
+
 # ── Member retention ───────────────────────────────────────────────────
 
 
