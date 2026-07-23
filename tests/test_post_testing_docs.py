@@ -252,6 +252,23 @@ def test_post_commit_honors_configured_card_channel(mod, monkeypatch, qa_db) -> 
     assert row["channel_id"] == 555000555000555549  # written back verbatim
 
 
+def test_configured_channel_is_read_from_this_guild_only(
+    mod, monkeypatch, qa_db
+) -> None:
+    """config is per-guild: another server's qa_channel_id must be ignored,
+    or a multi-guild install cross-posts the checklist to the wrong server."""
+    set_configured_channel(qa_db, "999000999000999549", guild_id=GUILD_ID + 1)
+    set_configured_channel(qa_db, "555000555000555549")  # ours, inserted second
+    calls = wire(mod, monkeypatch, qa_db)
+
+    mod.post_commit("x", dry_run=False)
+
+    posts = [
+        u for m, u, p in calls if m == "POST" and p is not None and "embeds" in p
+    ]
+    assert posts == [f"{mod.API}/channels/555000555000555549/messages"]
+
+
 def test_unset_channel_setting_falls_back_to_hardcoded(mod, monkeypatch, qa_db) -> None:
     """No config table at all (the tmp DB default) → DEFAULT_QA_CHANNEL."""
     calls = wire(mod, monkeypatch, qa_db)
@@ -328,15 +345,18 @@ def test_featured_checklist_posts_cards_to_its_own_channel(
     assert keys == {"admin-tests: auto-delete", "admin-tests: hidden channels"}
 
 
-def set_configured_channel(db: Path, channel_id: str) -> None:
+def set_configured_channel(db: Path, channel_id: str, guild_id: int = GUILD_ID) -> None:
+    """Set one guild's qa_channel_id; defaults to the guild the fake REST
+    reports as owning DEFAULT_QA_CHANNEL (the install this hook posts for)."""
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, "
+        "CREATE TABLE IF NOT EXISTS config ("
+        "guild_id INTEGER NOT NULL DEFAULT 0, "
         "key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
     )
     conn.execute(
-        "INSERT INTO config (guild_id, key, value) VALUES (1, 'qa_channel_id', ?)",
-        (channel_id,),
+        "INSERT INTO config (guild_id, key, value) VALUES (?, 'qa_channel_id', ?)",
+        (guild_id, channel_id),
     )
     conn.commit()
     conn.close()
