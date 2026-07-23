@@ -233,20 +233,38 @@ def take_stake(
                 f"{settings.daily_wager_cap} {unit} — you have {left} left "
                 f"today (resets <t:{int(day_end)}:R>)."
             )
+        # Book the wager against the cap *before* charging for it. The read
+        # above runs in autocommit, so two simultaneous bets would otherwise
+        # both clear the check and jointly overshoot the only spend limit the
+        # casino has. Roulette and double-down already take a claim first;
+        # this brings coinflip/slots/blackjack-deal onto the same footing.
+        if conn.execute(
+            "INSERT INTO casino_daily (guild_id, user_id, local_day, wagered) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(guild_id, user_id, local_day) "
+            "DO UPDATE SET wagered = wagered + excluded.wagered "
+            "WHERE wagered + excluded.wagered <= ?",
+            (guild_id, user_id, day, amount, settings.daily_wager_cap),
+        ).rowcount != 1:
+            left = max(0, settings.daily_wager_cap - wagered_today(conn, guild_id, user_id, day))
+            return (
+                f"That bet would pass your daily casino cap of "
+                f"{settings.daily_wager_cap} {unit} — you have {left} left today."
+            )
     if not apply_debit(
         conn, guild_id, user_id, amount, STAKE_KIND,
         actor_id=user_id, meta={"game": game},
     ):
+        if settings.daily_wager_cap:
+            # Give the allowance back — an unaffordable bet must not eat into
+            # the day's cap.
+            conn.execute(
+                "UPDATE casino_daily SET wagered = wagered - ? "
+                "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+                (amount, guild_id, user_id, day),
+            )
         have = get_balance(conn, guild_id, user_id)
         return f"You need {amount} {unit} for that bet — you have {have}."
-    if settings.daily_wager_cap:
-        conn.execute(
-            "INSERT INTO casino_daily (guild_id, user_id, local_day, wagered) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(guild_id, user_id, local_day) "
-            "DO UPDATE SET wagered = wagered + excluded.wagered",
-            (guild_id, user_id, day, amount),
-        )
     return None
 
 
@@ -737,15 +755,25 @@ def resolve_blackjack_action(
     caller-supplied, and only a two-card hand may double.
     """
     ts = time.time() if now is None else now
+    # Ownership rides in the claim itself. The buttons live on a public message
+    # anyone can press, so bumping last_action_at before checking the owner let
+    # a stranger reset the idle clock on someone else's hand indefinitely —
+    # blocking the auto-stand and stranding the owner's stake (and, under the
+    # one-live-hand rule, locking them out of blackjack) until a restart.
     row = conn.execute(
         "UPDATE casino_blackjack_hands SET last_action_at = ? "
-        "WHERE id = ? AND settled_at IS NULL RETURNING *",
-        (ts, hand_id),
+        "WHERE id = ? AND settled_at IS NULL AND guild_id = ? AND user_id = ? "
+        "RETURNING *",
+        (ts, hand_id, guild_id, user_id),
     ).fetchone()
     if row is None:
+        # Distinguish "not yours" from "already over" without touching the row.
+        other = conn.execute(
+            "SELECT settled_at FROM casino_blackjack_hands WHERE id = ?", (hand_id,)
+        ).fetchone()
+        if other is not None and other["settled_at"] is None:
+            return BlackjackStep(err="That's not your hand — deal your own!")
         return BlackjackStep(err="That hand is already finished.")
-    if int(row["guild_id"]) != guild_id or int(row["user_id"]) != user_id:
-        return BlackjackStep(err="That's not your hand — deal your own!")
     deck, player, dealer = deserialize_blackjack(str(row["state_json"]))
     stake = int(row["stake"])
     doubled = bool(row["doubled"])

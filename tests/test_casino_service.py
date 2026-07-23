@@ -779,3 +779,80 @@ def test_blackjack_step_carries_pot_on_a_loss(db):
         step = svc.resolve_blackjack_action(conn, GUILD, hand2, A, "stand", now=NOW)
         assert (step.outcome, step.payout) == ("win", 80)
         assert step.pot_after == 0
+def test_concurrent_bets_cannot_overshoot_the_daily_cap(db, monkeypatch):
+    """Simultaneous bets must not jointly pass the day's wager cap.
+
+    wagered_today is read in autocommit, so without the cap enforced inside
+    the casino_daily upsert both bets clear the check and the only spend
+    limit the casino has is bypassable by betting from two places at once.
+    """
+    real_debit = svc.apply_debit
+    fired: list[bool] = []
+
+    def racing_debit(conn, *args, **kwargs):
+        if not fired:
+            fired.append(True)
+            svc.take_stake(conn, GUILD, A, 30, "slots", now=NOW)
+        return real_debit(conn, *args, **kwargs)
+
+    monkeypatch.setattr(svc, "apply_debit", racing_debit)
+
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 50})
+        _fund(conn, A, 1_000)
+
+        svc.take_stake(conn, GUILD, A, 30, "slots", now=NOW)
+
+        assert fired, "the racing bet never fired — test is not exercising the race"
+        booked = conn.execute(
+            "SELECT wagered FROM casino_daily WHERE guild_id = ? AND user_id = ?",
+            (GUILD, A),
+        ).fetchone()["wagered"]
+        assert booked <= 50, f"daily cap overshot: {booked} booked against a cap of 50"
+
+
+def test_unaffordable_bet_does_not_eat_the_daily_cap(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 100})
+        _fund(conn, A, 10)
+        assert svc.take_stake(conn, GUILD, A, 40, "slots", now=NOW) is not None
+        # Refused for funds — the day's allowance must be untouched.
+        assert svc.wagered_today(
+            conn, GUILD, A, svc.local_day_for(NOW, 0)
+        ) == 0
+
+
+def test_stranger_pressing_hit_cannot_reset_the_idle_clock(db):
+    """The hand's buttons sit on a public message anyone can press.
+
+    Bumping last_action_at before checking ownership let a stranger hold the
+    auto-stand off forever, stranding the owner's stake in a hand they had
+    walked away from — and locking them out of dealing another.
+    """
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal(conn)
+        before = conn.execute(
+            "SELECT last_action_at FROM casino_blackjack_hands WHERE id = ?", (hand_id,)
+        ).fetchone()["last_action_at"]
+
+        step = svc.resolve_blackjack_action(
+            conn, GUILD, hand_id, B, "hit", now=NOW + 120
+        )
+        assert step.err is not None and "not your hand" in step.err
+
+        after = conn.execute(
+            "SELECT last_action_at FROM casino_blackjack_hands WHERE id = ?", (hand_id,)
+        ).fetchone()["last_action_at"]
+        assert after == before, "a stranger's click reset the owner's idle clock"
+
+
+def test_owner_pressing_hit_still_resets_the_idle_clock(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hand_id = _deal(conn)
+        svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "hit", now=NOW + 120)
+        after = conn.execute(
+            "SELECT last_action_at FROM casino_blackjack_hands WHERE id = ?", (hand_id,)
+        ).fetchone()["last_action_at"]
+        assert after == NOW + 120
