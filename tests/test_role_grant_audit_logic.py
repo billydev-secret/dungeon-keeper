@@ -458,6 +458,27 @@ def test_embed_caps_waiting_with_overflow_line():
     assert embed.fields[0].name == "🕐 Waiting for first grant (20)"
 
 
+def test_embed_caps_returned_with_overflow_line():
+    # A large "stripped but came back" bucket must not overrun Discord's 1024
+    # char field limit — cap it with an overflow line like the waiting bucket.
+    returned = [
+        {
+            "user_id": i,
+            "display_name": f"returned-member-{i}",
+            "level": 12,
+            "pruned_at": 1_700_000_000.0,
+        }
+        for i in range(30)
+    ]
+    embed = build_grant_audit_embed(
+        "NSFW", _snapshot(returned=returned), now_ts=0.0
+    )
+    value = str(embed.fields[1].value)
+    assert len(value) <= 1024
+    assert "…and 15 more on the dashboard." in value
+    assert embed.fields[1].name == "↩️ Stripped but came back (30)"
+
+
 # ── card ref storage ──────────────────────────────────────────────────
 
 
