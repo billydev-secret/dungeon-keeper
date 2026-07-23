@@ -18,7 +18,7 @@ function styleInput(input, placeholder) {
   input.type = "text";
   input.placeholder = placeholder;
   input.className = "filter-select-input";
-  // Keep mobile keyboards from auto-capitalising / autocorrecting names.
+  // Keep mobile keyboards from auto-capitalizing / autocorrecting names.
   input.autocomplete = "off";
   input.autocapitalize = "off";
   input.spellcheck = false;
@@ -79,6 +79,8 @@ function attachPopover(input, list) {
  * @param {(option) => boolean} [opts.filter]  applied before the text filter
  * @param {string} [opts.emptyLabel="(any)"]   label of the clear-selection row
  * @param {string|number} [opts.emptyValue=""] value getValue() returns when empty
+ * @param {string} [opts.label]  accessible name (aria-label) for the input —
+ *   pass the visible field label so AT doesn't announce only the placeholder
  * @returns {{el, getValue, setValue, setOptions, setFilter, getInput}}
  */
 export function filterSelect(placeholder, options, opts = {}) {
@@ -99,6 +101,7 @@ export function filterSelect(placeholder, options, opts = {}) {
   input.setAttribute("aria-haspopup", "listbox");
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", `${uid}-list`);
+  if (opts.label) input.setAttribute("aria-label", opts.label);
   wrap.appendChild(input);
 
   const list = document.createElement("div");
@@ -238,6 +241,8 @@ export function filterSelect(placeholder, options, opts = {}) {
  * @param {Array<{id: string, label: string}>} options
  * @param {object} [opts]
  * @param {(option) => boolean} [opts.filter]  applied before the text filter
+ * @param {string} [opts.label]  accessible name (aria-label) for the input —
+ *   pass the visible field label so AT doesn't announce only the placeholder
  * @returns {{el, getValues, setValues, setOptions, setFilter, getInput}}
  */
 export function multiFilterSelect(placeholder, options, opts = {}) {
@@ -260,6 +265,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   input.setAttribute("aria-haspopup", "listbox");
   input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", `${uid}-list`);
+  if (opts.label) input.setAttribute("aria-label", opts.label);
   wrap.appendChild(input);
 
   const list = document.createElement("div");
@@ -282,7 +288,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
       const x = document.createElement("button");
       x.type = "button";
       x.className = "filter-chip-x";
-      x.setAttribute("aria-label", "Remove");
+      x.setAttribute("aria-label", `Remove ${label}`);
       x.textContent = "×";
       chip.appendChild(x);
       chipsRow.appendChild(chip);

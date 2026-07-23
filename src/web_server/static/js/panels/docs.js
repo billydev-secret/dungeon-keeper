@@ -2,6 +2,7 @@ import { api, apiPost, apiPut, apiDelete, request, esc, fmtTs } from "../api.js"
 import { loadChannels, channelName, mountChannelPicker, showStatus } from "../config-helpers.js";
 import { mdToHtml } from "../md-preview.js";
 import { renderLoading, renderEmpty } from "../states.js";
+import { confirmDialog, promptDialog, toast } from "../ui.js";
 
 function renderList(docs, activeKey) {
   if (!docs.length) return renderEmpty("No docs yet. Create one to get started.");
@@ -228,16 +229,19 @@ export function mount(container) {
   });
 
   newBtn.addEventListener("click", async () => {
-    const key = prompt("Key for the new doc (letters, digits, dashes) — e.g. rules, mod-faq:");
+    const key = await promptDialog(
+      "Letters, digits and dashes — for example rules or mod-faq.",
+      { title: "New doc", confirmLabel: "Create", required: true },
+    );
     if (key == null) return;
     const slug = key.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-    if (!slug) { alert("Key must contain letters or digits."); return; }
+    if (!slug) { toast("Key must contain letters or digits.", "error"); return; }
     try {
       const doc = await apiPost("/api/docs", { doc_key: slug, title: key.trim(), body_md: "", accent: "" });
       await refreshList();
       selectDoc(doc.doc_key);
     } catch (err) {
-      alert(err.message);
+      toast(err.message, "error");
     }
   });
 
@@ -276,7 +280,11 @@ export function mount(container) {
     }
 
     if (e.target.closest("[data-delete]")) {
-      if (!confirm(`Delete "${doc.title || doc.doc_key}"? This removes its posted messages too.`)) return;
+      const ok = await confirmDialog(
+        `Delete “${doc.title || doc.doc_key}”? Its posted messages are deleted too.`,
+        { title: "Delete doc", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
       try {
         await apiDelete(`/api/docs/${encodeURIComponent(doc.doc_key)}`);
         state.doc = null;
@@ -284,7 +292,7 @@ export function mount(container) {
         editorEl.innerHTML = '<div class="empty" style="padding:24px">Document deleted.</div>';
         await refreshList();
       } catch (err) {
-        alert(err.message);
+        toast(err.message, "error");
       }
       return;
     }
@@ -340,7 +348,11 @@ export function mount(container) {
     const removeCh = e.target.closest("[data-remove-ch]");
     if (removeCh) {
       const chId = removeCh.dataset.removeCh;
-      if (!confirm("Remove this doc from that channel? Its messages there will be deleted.")) return;
+      const ok = await confirmDialog(
+        "Remove this doc from that channel? Its messages there are deleted.",
+        { title: "Remove placement", danger: true, confirmLabel: "Remove" },
+      );
+      if (!ok) return;
       try {
         await apiDelete(`/api/docs/${encodeURIComponent(doc.doc_key)}/placements/${chId}`);
         await selectDoc(doc.doc_key);

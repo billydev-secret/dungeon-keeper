@@ -1,54 +1,17 @@
-import { loadConfig, loadChannels, loadRoles, apiPut, showStatus } from "../config-helpers.js";
-
-function mkSel(name) {
-  const s = document.createElement("select");
-  s.name = name;
-  return s;
-}
-
-function mkOpt(value, text, selected) {
-  const o = document.createElement("option");
-  o.value = value;
-  o.textContent = text;
-  o.selected = !!selected;
-  return o;
-}
-
-function mkNum(name, value, min) {
-  const i = document.createElement("input");
-  i.type = "number";
-  i.name = name;
-  i.value = value;
-  i.min = String(min);
-  i.style.maxWidth = "90px";
-  return i;
-}
-
-function mkField(labelText, ctrl, hint) {
-  const d = document.createElement("div");
-  d.className = "field";
-  const l = document.createElement("label");
-  l.textContent = labelText;
-  d.appendChild(l);
-  d.appendChild(ctrl);
-  if (hint) {
-    const h = document.createElement("div");
-    h.className = "field-hint";
-    h.textContent = hint;
-    d.appendChild(h);
-  }
-  return d;
-}
+import {
+  loadConfig,
+  loadChannels,
+  loadRoles,
+  apiPut,
+  showStatus,
+  guardForm,
+  renderMetaWarning,
+  mountChannelPicker,
+  mountRolePicker,
+} from "../config-helpers.js";
 
 export function mount(container) {
-  container.textContent = "";
-  const wrap = document.createElement("div");
-  wrap.className = "panel";
-  const loading = document.createElement("div");
-  loading.className = "empty";
-  loading.textContent = "Loading config…";
-  wrap.appendChild(loading);
-  container.appendChild(wrap);
+  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
     const [config, channels, roles] = await Promise.all([
@@ -58,80 +21,120 @@ export function mount(container) {
     ]);
     const w = config.whisper;
 
-    container.textContent = "";
-    const panel = document.createElement("div");
-    panel.className = "panel";
+    container.innerHTML = `
+      <div class="panel">
+        <header>
+          <h2>Whisper</h2>
+          <div class="subtitle">Lets members send each other anonymous notes through Dungeon Keeper</div>
+        </header>
+        ${renderMetaWarning()}
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Where Whispers Go</div>
+            <div class="field">
+              <label>Whisper Channel</label>
+              <span data-picker="channel_id"></span>
+              <div class="field-hint">Whispers are posted here without naming the
+                sender. Whisper does nothing until this is set — "(disabled)" turns the
+                whole feature off.</div>
+            </div>
+            <div class="field">
+              <label>Log Channel</label>
+              <span data-picker="log_channel_id"></span>
+              <div class="field-hint">A moderator-only record naming who sent each
+                whisper, so abuse can be traced. "(disabled)" means nobody, including
+                moderators, can find out who sent a whisper.</div>
+            </div>
+          </div>
 
-    const hdr = document.createElement("header");
-    const h2 = document.createElement("h2");
-    h2.textContent = "Whisper";
-    const sub = document.createElement("div");
-    sub.className = "subtitle";
-    sub.textContent = "Anonymous whisper relay settings";
-    hdr.append(h2, sub);
-    panel.appendChild(hdr);
+          <div class="card">
+            <div class="section-label">Who Can Whisper</div>
+            <div class="field">
+              <label>Required Role</label>
+              <span data-picker="role_id"></span>
+              <div class="field-hint">Only members holding this role may send
+                whispers. "(none)" lets everyone in the server send them.</div>
+            </div>
+          </div>
 
-    const form = document.createElement("form");
-    form.className = "form";
-    panel.appendChild(form);
+          <div class="card">
+            <div class="section-label">Rate Limits</div>
+            <div class="field">
+              <label for="wh-cooldown">Wait Between Whispers (seconds)</label>
+              <input type="number" name="cooldown_seconds" id="wh-cooldown" required
+                min="0" max="86400" step="1" value="${w.cooldown_seconds ?? 30}"
+                style="max-width:140px;" />
+              <div class="field-hint">How long a member must wait after sending one
+                whisper before they can send another. 0 removes the wait entirely,
+                which makes spamming easy.</div>
+            </div>
+            <div class="field">
+              <label for="wh-cap">Whispers Per Hour to the Same Person</label>
+              <input type="number" name="hourly_cap_per_target" id="wh-cap" required
+                min="1" max="1000" step="1" value="${w.hourly_cap_per_target ?? 5}"
+                style="max-width:140px;" />
+              <div class="field-hint">The most whispers one member may send to the same
+                recipient within an hour. Keep this low — it is the main protection
+                against anonymous harassment.</div>
+            </div>
+          </div>
 
-    // Whisper Channel
-    const chSel = mkSel("channel_id");
-    chSel.appendChild(mkOpt("0", "(disabled)", w.channel_id === "0" || !w.channel_id));
-    for (const ch of channels) {
-      chSel.appendChild(mkOpt(ch.id, "#" + ch.name, ch.id === w.channel_id));
-    }
-    form.appendChild(mkField("Whisper Channel", chSel, "Channel where whispers are posted. Required for the feature to work."));
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-status></span>
+          </div>
+        </form>
+      </div>
+    `;
 
-    // Required Role
-    const roleSel = mkSel("role_id");
-    roleSel.appendChild(mkOpt("0", "(none)", w.role_id === "0" || !w.role_id));
-    for (const r of roles) {
-      roleSel.appendChild(mkOpt(r.id, "@" + r.name, r.id === w.role_id));
-    }
-    form.appendChild(mkField("Required Role", roleSel, "Role required to send whispers. \"(none)\" allows everyone."));
+    const form = container.querySelector("[data-form]");
+    const status = container.querySelector("[data-status]");
 
-    // Log Channel
-    const logSel = mkSel("log_channel_id");
-    logSel.appendChild(mkOpt("0", "(disabled)", w.log_channel_id === "0" || !w.log_channel_id));
-    for (const ch of channels) {
-      logSel.appendChild(mkOpt(ch.id, "#" + ch.name, ch.id === w.log_channel_id));
-    }
-    form.appendChild(mkField("Log Channel", logSel, "Moderator-visible audit log of whisper authors. \"(disabled)\" turns logging off."));
+    const channelPicker = mountChannelPicker(
+      form.querySelector('[data-picker="channel_id"]'),
+      channels, String(w.channel_id || "0"), { label: "Whisper Channel" },
+    );
+    const logChannelPicker = mountChannelPicker(
+      form.querySelector('[data-picker="log_channel_id"]'),
+      channels, String(w.log_channel_id || "0"), { label: "Log Channel" },
+    );
+    const rolePicker = mountRolePicker(
+      form.querySelector('[data-picker="role_id"]'),
+      roles, String(w.role_id || "0"), { label: "Required Role" },
+    );
 
-    // Rate limits
-    const cooldownInput = mkNum("cooldown_seconds", w.cooldown_seconds ?? 30, 0);
-    form.appendChild(mkField("Send Cooldown (seconds)", cooldownInput, "How long a member must wait between sending whispers. 0 disables the cooldown."));
-
-    const hourlyCapInput = mkNum("hourly_cap_per_target", w.hourly_cap_per_target ?? 5, 1);
-    form.appendChild(mkField("Hourly Cap Per Recipient", hourlyCapInput, "Max whispers a member can send to the same recipient within an hour."));
-
-    const row = document.createElement("div");
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "submit";
-    saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save";
-    const statusEl = document.createElement("span");
-    row.append(saveBtn, statusEl);
-    form.appendChild(row);
+    guardForm(form);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
+
+      const cooldown = parseInt(fd.get("cooldown_seconds"), 10);
+      if (!Number.isFinite(cooldown) || cooldown < 0 || cooldown > 86400) {
+        showStatus(status, false, "Wait Between Whispers must be a number of seconds from 0 to 86400");
+        form.querySelector("[name=cooldown_seconds]").focus();
+        return;
+      }
+      const cap = parseInt(fd.get("hourly_cap_per_target"), 10);
+      if (!Number.isFinite(cap) || cap < 1 || cap > 1000) {
+        showStatus(status, false, "Whispers Per Hour to the Same Person must be a number from 1 to 1000");
+        form.querySelector("[name=hourly_cap_per_target]").focus();
+        return;
+      }
+
       try {
         await apiPut("/api/config/whisper", {
-          channel_id: fd.get("channel_id"),
-          role_id: fd.get("role_id"),
-          log_channel_id: fd.get("log_channel_id"),
-          cooldown_seconds: Number(fd.get("cooldown_seconds")),
-          hourly_cap_per_target: Number(fd.get("hourly_cap_per_target")),
+          // Ids stay strings, same values the plain selects posted.
+          channel_id: channelPicker.getValue() || "0",
+          role_id: rolePicker.getValue() || "0",
+          log_channel_id: logChannelPicker.getValue() || "0",
+          cooldown_seconds: cooldown,
+          hourly_cap_per_target: cap,
         });
-        showStatus(statusEl, true);
+        showStatus(status, true);
       } catch (err) {
-        showStatus(statusEl, false, err.message);
+        showStatus(status, false, err.message);
       }
     });
-
-    container.appendChild(panel);
   })();
 }

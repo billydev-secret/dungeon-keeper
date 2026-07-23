@@ -24,6 +24,10 @@ checkout's `.env` (which gate.py does not otherwise load). Absent
     REMOTE_TEST_CD        Override the `cd` template if the remote shell needs
                           it (e.g. "cd /d {dir} && {cmd}" for a cmd.exe remote
                           on a different drive letter).
+    REMOTE_TEST_WORKSPACE Sub-directory of REMOTE_TEST_DIR to sync into (default
+                          derived per checkout, so parallel checkouts don't
+                          collide). Set to "off" for the legacy layout: sync
+                          straight over REMOTE_TEST_DIR, and don't prune.
     GATE_NO_REMOTE=1      Force local for one run.
 
 The real environment takes precedence over `.env`, so a one-off
@@ -42,6 +46,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,8 +63,14 @@ LOCK_FILES = ("requirements.lock", "requirements-dev.lock")
 # side changes — silently, since nothing else re-syncs it.
 SYNC_PATHS = ("src", "tests", "scripts", "pyproject.toml", "README.md", *LOCK_FILES)
 
-# Records which lock hash the remote venv was last installed from.
+# Records which lock hash the remote venv was last installed from. Kept beside
+# the venv rather than in a workspace: workspaces come and go per checkout, and
+# re-running a multi-GB pip install for each one would defeat the point.
 STAMP_FILE = ".remote-test-stamp"
+
+# Shipped inside each workspace; lists every file the sync sent, so the remote
+# can prune whatever it still has that we did not.
+MANIFEST_FILE = ".remote-manifest"
 
 # Exit code meaning "the remote could not prepare itself — run locally
 # instead". Chosen outside pytest's 0-5 range so it can never collide with a
@@ -88,34 +99,90 @@ class RemoteConfig:
     jobs: int = DEFAULT_JOBS
     cd_template: str = DEFAULT_CD
     lock: str = DEFAULT_LOCK
+    # Sub-directory of `directory` this checkout syncs into. Empty means the
+    # legacy behaviour of syncing straight over the remote checkout.
+    workspace: str = ""
+
+    @property
+    def run_dir(self) -> str:
+        """Where pytest runs on the remote."""
+        return f"{self.directory}/{self.workspace}" if self.workspace else self.directory
+
+
+def workspace_slug(root: Path = ROOT) -> str:
+    """A stable, filesystem-safe directory name for one local checkout.
+
+    Several session checkouts share one test host, and they must not extract
+    over each other: two concurrent runs sharing a directory interleave their
+    writes and both report nonsense. Keyed on the absolute path so the same
+    checkout reuses its workspace (and so its venv-independent state survives),
+    but two checkouts — even two with the same basename — never collide.
+    """
+    resolved = root.resolve()
+    digest = hashlib.sha256(str(resolved).encode()).hexdigest()[:10]
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in resolved.name)[:24]
+    return f"ws-{safe or 'checkout'}-{digest}"
+
+
+def _git(root: Path, *args: str) -> str | None:
+    """Run a read-only git command in root, or None if it can't be run."""
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def env_path(root: Path = ROOT) -> Path | None:
     """Locate the .env holding this config, or None.
 
-    Prefers the current checkout. Project convention is to do edits in a git
-    worktree, and worktrees have no .env of their own — so fall back to the
-    main checkout, found via `git rev-parse --git-common-dir`. Without this,
-    dispatch would silently never fire for the majority of commits.
+    Prefers the current checkout. Two fallbacks, because .env is gitignored and
+    so never travels with the code:
+
+    1. **Worktrees** (`git rev-parse --git-common-dir`) — the documented edit
+       workflow, and a worktree has no .env of its own.
+    2. **Local clones** (`git config remote.origin.url`) — session checkouts are
+       cloned from the main checkout rather than added as worktrees, and for
+       those `--git-common-dir` resolves back to the clone itself, so step 1
+       finds nothing. Only a filesystem path is followed; a real URL is ignored.
+
+    Without these, dispatch silently never fires and every run falls back to the
+    slow local box — the failure mode is a quiet 10x slowdown, not an error.
     """
     local = root / ".env"
     if local.exists():
         return local
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
-            cwd=root, capture_output=True, text=True, timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    common_dir = _git(root, "rev-parse", "--git-common-dir")
+    if common_dir is None:
         return None
-    if result.returncode != 0:
-        return None
-
     # --git-common-dir points at the main checkout's .git; its parent is the
-    # working tree that owns the .env.
-    candidate = (root / result.stdout.strip()).resolve().parent / ".env"
-    return candidate if candidate.exists() else None
+    # working tree that owns the .env. In a plain clone it is this checkout's
+    # own .git, so this resolves back to `local` and finds nothing.
+    candidate = (root / common_dir).resolve().parent / ".env"
+    if candidate.exists():
+        return candidate
+
+    origin = _git(root, "config", "--get", "remote.origin.url")
+    if not origin:
+        return None
+    # Filesystem paths only: "user@host:repo" and "https://…" are remote and
+    # have no .env we could read.
+    if "://" in origin or (":" in origin and not Path(origin).is_absolute()):
+        return None
+    candidate = Path(origin).expanduser()
+    if not candidate.is_absolute():
+        candidate = (root / candidate).resolve()
+    # origin may point at the bare .git or at the working tree above it.
+    for base in (candidate, candidate.parent):
+        if base.name == ".git":
+            continue
+        env = base / ".env"
+        if env.exists():
+            return env
+    return None
 
 
 def env_file_values(root: Path = ROOT) -> dict[str, str]:
@@ -201,11 +268,20 @@ def load_config(env: Mapping[str, str] | None = None) -> RemoteConfig | None:
     if jobs < 1:
         raise ValueError(f"REMOTE_TEST_JOBS must be >= 1, got {jobs}")
 
+    workspace = env.get("REMOTE_TEST_WORKSPACE", "").strip()
+    if workspace.lower() in ("0", "off", "false", "none"):
+        workspace = ""          # opt back into syncing over the checkout itself
+    elif not workspace:
+        workspace = workspace_slug()
+    if workspace:               # empty is legal (legacy layout); "" fails check_args
+        check_args([workspace])
+
     return RemoteConfig(
         host=host,
         directory=directory,
         python=python,
         jobs=jobs,
+        workspace=workspace,
         cd_template=env.get("REMOTE_TEST_CD", "").strip() or DEFAULT_CD,
         lock=env.get("REMOTE_TEST_LOCK", "").strip() or DEFAULT_LOCK,
     )
@@ -237,16 +313,29 @@ def probe_command(cfg: RemoteConfig, timeout: int = 3) -> list[str]:
     ]
 
 
-def remote_command(cfg: RemoteConfig, command: str) -> list[str]:
-    """Wrap a command string so it runs inside the remote repo directory."""
+def remote_command(cfg: RemoteConfig, command: str, *, base: bool = False) -> list[str]:
+    """Wrap a command string so it runs on the remote.
+
+    `base=True` runs in the configured directory (where the venv lives and
+    where workspaces are extracted); otherwise it runs in this checkout's
+    workspace, which is where the code under test actually is.
+    """
+    directory = cfg.directory if base else cfg.run_dir
     return ["ssh", "-o", "BatchMode=yes", cfg.host,
-            cfg.cd_template.format(dir=cfg.directory, cmd=command)]
+            cfg.cd_template.format(dir=directory, cmd=command)]
 
 
-def tar_command(paths: Sequence[str] = SYNC_PATHS) -> list[str]:
-    """Local half of the sync: stream a gzipped tar of the source to stdout."""
+def tar_command(paths: Sequence[str] = SYNC_PATHS, prefix: str = "") -> list[str]:
+    """Local half of the sync: stream a gzipped tar of the source to stdout.
+
+    `prefix` re-roots every member under that directory, so the remote's plain
+    `tar -xzf -` creates the workspace itself. That avoids needing a portable
+    mkdir — cmd.exe, PowerShell and bash disagree about `mkdir -p`, and the
+    whole transport deliberately assumes nothing beyond `cd X && Y`.
+    """
+    transform = [f"--transform=s,^,{prefix}/,"] if prefix else []
     return ["tar", "-czf", "-", "--exclude=__pycache__", "--exclude=*.pyc",
-            "-C", str(ROOT), *paths]
+            *transform, "-C", str(ROOT), *paths]
 
 
 def pytest_command(cfg: RemoteConfig, args: Sequence[str]) -> list[str]:
@@ -264,6 +353,8 @@ def pytest_command(cfg: RemoteConfig, args: Sequence[str]) -> list[str]:
         f"{cfg.python} scripts/remote_test.py --bootstrap --lock {cfg.lock} "
         f"-n {cfg.jobs} " + " ".join(args)
     )
+    # Runs in the workspace, whose freshly synced scripts/ is the copy that
+    # matches the code under test.
     return remote_command(cfg, inner.strip())
 
 
@@ -280,6 +371,26 @@ def lock_hash(root: Path = ROOT) -> str:
     return digest.hexdigest()
 
 
+def stamp_dir(python: str | None = None) -> Path:
+    """Where the venv-freshness stamp lives: beside the venv, not in a workspace.
+
+    Workspaces are per-checkout and disposable; the venv is shared and costs
+    gigabytes to rebuild. Keying the stamp to the interpreter means every
+    workspace using that venv agrees about whether it is current.
+    """
+    # Deliberately not resolve()d: this always runs on the remote against its
+    # own native path, and resolving a Windows path from a Linux test would
+    # silently graft the cwd onto the front of it.
+    exe = Path(python or sys.executable)
+    parent = exe.parent
+    # .../.venv/bin/python or ...\.venv\Scripts\python.exe → .../.venv. A system
+    # python (/usr/bin/python3) also has a "bin" parent, so only strip when the
+    # grandparent actually looks like a venv — otherwise keep the bin dir.
+    if parent.name in ("bin", "Scripts") and "venv" in parent.parent.name.lower():
+        return parent.parent
+    return parent
+
+
 def read_stamp(root: Path) -> str:
     try:
         return (root / STAMP_FILE).read_text(encoding="utf-8").strip()
@@ -288,7 +399,47 @@ def read_stamp(root: Path) -> str:
 
 
 def write_stamp(root: Path, digest: str) -> None:
-    (root / STAMP_FILE).write_text(digest, encoding="utf-8")
+    try:
+        (root / STAMP_FILE).write_text(digest, encoding="utf-8")
+    except OSError:
+        # A read-only venv directory just means we re-check next run.
+        pass
+
+
+def prune_to_manifest(root: Path) -> list[str]:
+    """Delete files under the synced roots that this sync did not ship.
+
+    tar only adds and overwrites, so without this a file deleted from the
+    branch — or left behind by a different branch tested here earlier — keeps
+    running as a phantom test. Returns what was removed, for reporting.
+    """
+    manifest = root / MANIFEST_FILE
+    try:
+        shipped = {
+            line.strip() for line in
+            manifest.read_text(encoding="utf-8").splitlines() if line.strip()
+        }
+    except OSError:
+        return []  # Older sender: leave the tree alone rather than guess.
+
+    removed: list[str] = []
+    for entry in SYNC_PATHS:
+        target = root / entry
+        if not target.is_dir():
+            continue
+        for path in sorted(target.rglob("*"), reverse=True):
+            if path.is_dir():
+                continue
+            if "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            rel = path.relative_to(root).as_posix()
+            if rel not in shipped:
+                try:
+                    path.unlink()
+                    removed.append(rel)
+                except OSError:
+                    pass
+    return removed
 
 
 def needs_install(root: Path, expected: str) -> bool:
@@ -317,13 +468,19 @@ def bootstrap(
     root = Path.cwd() if root is None else root
     python = sys.executable if python is None else python
 
+    removed = prune_to_manifest(root)
+    if removed:
+        shown = ", ".join(removed[:5]) + (f" (+{len(removed) - 5} more)" if len(removed) > 5 else "")
+        print(f"remote-test: pruned {len(removed)} stale file(s): {shown}", flush=True)
+
+    stamps = stamp_dir(python)
     expected = lock_hash(root)
-    if needs_install(root, expected):
+    if needs_install(stamps, expected):
         print("remote-test: dependency lock changed — reinstalling remote venv", flush=True)
         if install_deps(python, root, lock) != 0:
             print("remote-test: remote pip install failed", file=sys.stderr, flush=True)
             return BOOTSTRAP_FAILED
-        write_stamp(root, expected)
+        write_stamp(stamps, expected)
 
     return subprocess.run([python, "-m", "pytest", *args], cwd=root).returncode
 
@@ -344,16 +501,52 @@ def is_available(cfg: RemoteConfig, timeout: int = 3) -> bool:
     return result.returncode == 0
 
 
+def manifest_lines(paths: Sequence[str] = SYNC_PATHS, root: Path = ROOT) -> list[str]:
+    """Every file the sync ships, as forward-slash paths relative to the root.
+
+    Shipped alongside the tree so the remote can delete anything it still has
+    that we did not send. tar only ever adds and overwrites, so without this a
+    file removed from a branch — or belonging to a branch tested here earlier —
+    survives indefinitely and runs as a phantom test.
+    """
+    out: list[str] = []
+    for entry in paths:
+        target = root / entry
+        if target.is_file():
+            out.append(entry)
+            continue
+        for path in sorted(target.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            out.append(path.relative_to(root).as_posix())
+    return out
+
+
 def sync(cfg: RemoteConfig) -> bool:
-    """Ship the source tree. Returns False if the transfer failed."""
-    extract = remote_command(cfg, "tar -xzf -")
-    tar = subprocess.Popen(tar_command(), stdout=subprocess.PIPE)
-    assert tar.stdout is not None
-    try:
-        pushed = subprocess.run(extract, stdin=tar.stdout)
-    finally:
-        tar.stdout.close()
-        tar.wait()
+    """Ship the source tree into this checkout's workspace.
+
+    Returns False if the transfer failed, which the caller treats as "run
+    locally" rather than reporting a broken transfer as a test failure.
+    """
+    # Extract at the base: the archive carries the workspace directory as its
+    # own prefix, so tar creates it and no remote mkdir is needed.
+    extract = remote_command(cfg, "tar -xzf -", base=bool(cfg.workspace))
+
+    with TemporaryDirectory() as staging:
+        manifest = Path(staging) / MANIFEST_FILE
+        manifest.write_text("\n".join(manifest_lines()) + "\n", encoding="utf-8")
+        argv = tar_command(prefix=cfg.workspace)
+        # A second -C switches directory for the members that follow, so the
+        # manifest joins the stream without ever being written into the repo.
+        argv += ["-C", staging, MANIFEST_FILE]
+
+        tar = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        assert tar.stdout is not None
+        try:
+            pushed = subprocess.run(extract, stdin=tar.stdout)
+        finally:
+            tar.stdout.close()
+            tar.wait()
     return pushed.returncode == 0 and tar.returncode == 0
 
 

@@ -1,16 +1,11 @@
-import { api, esc } from "../api.js";
-import { withLoading } from "../report-helpers.js";
-import { makeBarChart, makeDoughnutChart } from "../charts.js";
+import { api } from "../api.js";
+import { withLoading, rangePicker } from "../report-helpers.js";
+import { makeBarChart, makeDoughnutChart, CHART_BAR, CHART_ACCENT, ROLE_COLORS } from "../charts.js";
 import { renderSortableTable } from "../table.js";
+import { renderError } from "../states.js";
 
-const INTERVALS = [
-  { value: "",   label: "All Time" },
-  { value: "1",  label: "Last 24h" },
-  { value: "7",  label: "Last 7 Days" },
-  { value: "14", label: "Last 14 Days" },
-  { value: "30", label: "Last 30 Days" },
-  { value: "90", label: "Last 90 Days" },
-];
+// The table is unbounded server-side, so cap the DOM and say so (W-D14).
+const MAX_TABLE_ROWS = 200;
 
 export function mount(container, initialParams) {
   container.innerHTML = `
@@ -20,11 +15,7 @@ export function mount(container, initialParams) {
         <div class="subtitle">XP distribution, level spread, and top earners</div>
       </header>
       <div class="controls">
-        <label>Time Period
-          <select data-control="days">
-            ${INTERVALS.map((i) => `<option value="${i.value}">${i.label}</option>`).join("")}
-          </select>
-        </label>
+        <label data-slot="range"></label>
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
@@ -36,14 +27,21 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  // Shared day-range picker, so every report offers the same windows (W-D8).
+  const rangeCtl = rangePicker({
+    value: initialParams.days || "",
+    allowAll: true,
+    label: "Time Period",
+  });
+  const daysEl = rangeCtl.querySelector("select");
+  daysEl.dataset.control = "days";
+  container.querySelector('[data-slot="range"]').replaceWith(rangeCtl);
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chartLevels = null;
   let chartSources = null;
   let chartHistogram = null;
 
-  if (initialParams.days) daysEl.value = initialParams.days;
 
   function fmtXp(n) {
     if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
@@ -62,8 +60,10 @@ export function mount(container, initialParams) {
       if (chartSources) { chartSources.destroy(); chartSources = null; }
       if (chartHistogram) { chartHistogram.destroy(); chartHistogram = null; }
 
-      const label = INTERVALS.find((i) => i.value === daysEl.value)?.label || "All Time";
-      statsEl.textContent = `${data.total_users} users tracked · ${label}`;
+      const label = daysEl.value
+        ? `last ${daysEl.value} day${daysEl.value === "1" ? "" : "s"}`
+        : "all time";
+      statsEl.textContent = `${data.total_users} member${data.total_users === 1 ? "" : "s"} tracked · ${label}`;
 
       // Level distribution
       const levelWrap = container.querySelector("[data-chart-levels]").parentElement;
@@ -74,7 +74,7 @@ export function mount(container, initialParams) {
           data: data.level_distribution.map((b) => b.count),
           title: "Level Distribution",
           yLabel: "Members",
-          color: "#E6B84C",
+          color: CHART_BAR,
         });
       }
 
@@ -117,7 +117,7 @@ export function mount(container, initialParams) {
           title: "XP Distribution",
           xLabel: "XP Range",
           yLabel: "Members",
-          color: "#B36A92",
+          color: CHART_ACCENT,
         });
       }
 
@@ -148,7 +148,7 @@ export function mount(container, initialParams) {
             { key: "total_xp", label: "Total XP", format: (v) => fmtXp(v) },
             { key: "_diff", label: "vs Median", format: (v) => {
               const s = v >= 0 ? "+" + fmtXp(v) : "\u2212" + fmtXp(Math.abs(v));
-              const color = v >= 0 ? "#7F8F3A" : "#9E3B2E";
+              const color = v >= 0 ? ROLE_COLORS[2] : ROLE_COLORS[3];
               return `<span style="color:${color}">${s}</span>`;
             }},
             { key: "text_xp", label: "Text", format: (v) => fmtXp(v) },
@@ -159,11 +159,21 @@ export function mount(container, initialParams) {
           data: data.leaderboard,
           defaultSort: "_rank",
           defaultAsc: true,
+          maxRows: MAX_TABLE_ROWS,
+          emptyMsg: "No members have earned XP in this period.",
         });
-      } else { tableWrap.innerHTML = ""; }
+      } else {
+        renderSortableTable(tableWrap, {
+          columns: [],
+          data: [],
+          emptyMsg: "No members have earned XP in this period. Try a longer time period, or check that XP tracking is enabled.",
+        });
+      }
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector("[data-chart-levels]").parentElement.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector("[data-chart-levels]").parentElement.innerHTML = renderError(
+        `Couldn't load the XP leaderboard — ${err.message}. Change the time period to try again.`
+      );
       tableWrap.innerHTML = "";
     }
   }

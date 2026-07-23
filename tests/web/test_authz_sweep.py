@@ -34,6 +34,10 @@ PUBLIC_PATHS = {
     "/api/_docs/oauth2-redirect",
     "/api/openapi.json",
 }
+# /static assets (css/js) are public — except manual.html, which is served by a
+# dedicated session-gated route registered ahead of the mount (server.py). The
+# openapi()-driven sweep below can't see that route (include_in_schema=False),
+# so it gets its own explicit tests at the bottom of this file.
 PUBLIC_PREFIXES = ("/static",)
 
 # Auth rejects an unauthenticated caller with one of these. A 2xx or a redirect
@@ -111,3 +115,37 @@ def test_no_route_serves_an_unauthenticated_caller(noauth_client):
             leaks.append(f"{method} {path} → {code} (expected 401/403)")
 
     assert not leaks, "Auth gaps:\n" + "\n".join(leaks)
+
+
+# ── Manual gating (W-H1) ────────────────────────────────────────────────────
+# The staff/mod manual is the one static file that must NOT be world-readable:
+# it documents the entire mod toolkit. server.py serves it via a session-gated
+# route registered ahead of the /static mount.
+
+
+def test_manual_requires_a_session(noauth_client):
+    """Anonymous GET of the manual redirects to login instead of serving it."""
+    client, _ = noauth_client
+    resp = client.get("/static/manual.html")
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/login"
+
+
+def test_manual_served_to_authenticated_session(authed_client):
+    resp = authed_client.get("/static/manual.html")
+    assert resp.status_code == 200
+    assert "Dungeon Keeper" in resp.text
+
+
+def test_manual_served_under_open_auth(open_client):
+    """The explicit LAN-only OpenAuth backend keeps the manual reachable."""
+    resp = open_client.get("/static/manual.html")
+    assert resp.status_code == 200
+
+
+def test_other_static_assets_stay_public(noauth_client):
+    """Gating the manual must not gate the rest of /static (login page & app
+    assets load pre-session)."""
+    client, _ = noauth_client
+    resp = client.get("/static/app.css")
+    assert resp.status_code == 200

@@ -15,9 +15,15 @@
 export function makeFilterStrip(groupEl, onChange, { attr = "data-filter" } = {}) {
   function setActive(value) {
     groupEl.querySelectorAll(`button[${attr}]`).forEach((b) => {
-      b.classList.toggle("active", b.getAttribute(attr) === value);
+      const on = b.getAttribute(attr) === value;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
     });
   }
+  // Expose the initial selection to assistive tech, not just visually.
+  groupEl.querySelectorAll(`button[${attr}]`).forEach((b) => {
+    b.setAttribute("aria-pressed", b.classList.contains("active") ? "true" : "false");
+  });
   groupEl.addEventListener("click", (e) => {
     const btn = e.target.closest(`button[${attr}]`);
     if (!btn || !groupEl.contains(btn)) return;

@@ -4,8 +4,8 @@ import { auditPanel, el, tsColumn } from "../audit-helpers.js";
 export function mount(container) {
   return auditPanel(container, {
     title: "Confessions Audit Log",
-    subtitle: "Confession submission history with real author identity",
-    empty: "No confessions found.",
+    subtitle: "Every confession submitted, with the real author behind it",
+    empty: "No confessions have been submitted yet. When members post one, this log ties it back to the real author.",
     filters: [],
     columns: [
       { label: "Author", render: (e) => e.author_name || e.author_id },

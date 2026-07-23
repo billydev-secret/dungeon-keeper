@@ -1,99 +1,18 @@
-import { api, apiPost, apiDelete } from "../api.js";
-import { showStatus, buildField } from "../config-helpers.js";
+import { api, apiPost, apiDelete, esc } from "../api.js";
+import { showStatus, guardForm, mountPicker, mountRolePicker } from "../config-helpers.js";
 import { toast } from "../ui.js";
 
-function clearChildren(el) {
-  while (el.firstChild) el.removeChild(el.firstChild);
-}
-
-function selectFromChannels(name, channels, selectedId, kind) {
-  const sel = document.createElement("select");
-  sel.name = name;
-  const none = document.createElement("option");
-  none.value = "0";
-  none.textContent = "(unset)";
-  sel.appendChild(none);
-  for (const ch of channels) {
-    if (kind && ch.type !== kind) continue;
-    const opt = document.createElement("option");
-    opt.value = ch.id;
-    opt.textContent = (kind === "voice" ? "🔊 " : kind === "category" ? "📁 " : "# ") + ch.name;
-    if (ch.id === selectedId) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  return sel;
-}
-
-function selectFromRoles(name, roles, selectedId) {
-  const sel = document.createElement("select");
-  sel.name = name;
-  const none = document.createElement("option");
-  none.value = "0";
-  none.textContent = "(none — open to everyone)";
-  sel.appendChild(none);
-  for (const r of roles) {
-    const opt = document.createElement("option");
-    opt.value = r.id;
-    opt.textContent = "@" + r.name;
-    if (String(r.id) === String(selectedId)) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  return sel;
-}
-
-function numberInput(name, value, min = 0) {
-  const inp = document.createElement("input");
-  inp.type = "number";
-  inp.name = name;
-  inp.min = String(min);
-  inp.value = String(value ?? 0);
-  return inp;
-}
-
-function textInput(name, value) {
-  const inp = document.createElement("input");
-  inp.type = "text";
-  inp.name = name;
-  inp.value = value || "";
-  return inp;
-}
-
-function boolSelect(name, value) {
-  const sel = document.createElement("select");
-  sel.name = name;
-  for (const [v, label] of [["false", "No"], ["true", "Yes"]]) {
-    const o = document.createElement("option");
-    o.value = v;
-    o.textContent = label;
-    if ((value && v === "true") || (!value && v === "false")) o.selected = true;
-    sel.appendChild(o);
-  }
-  return sel;
-}
-
-function checkboxList(name, options, selectedSet) {
-  const div = document.createElement("div");
-  div.className = "checkbox-list";
-  for (const opt of options) {
-    const lbl = document.createElement("label");
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.name = name;
-    cb.value = opt;
-    if (selectedSet.has(opt)) cb.checked = true;
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(" " + opt));
-    div.appendChild(lbl);
-  }
-  return div;
-}
+// Saveable-profile fields owners may persist between sessions.
+const SAVEABLE_FIELDS = [
+  ["name", "Room name"],
+  ["limit", "User limit"],
+  ["access", "Room access"],
+  ["trusted", "Trust list"],
+  ["blocked", "Block list"],
+];
 
 export function mount(container) {
-  clearChildren(container);
-  const loading = document.createElement("div");
-  loading.className = "panel";
-  loading.textContent = "Loading Voice Master config…";
-  container.appendChild(loading);
+  container.innerHTML = `<div class="panel"><div class="empty">Loading Voice Master configuration…</div></div>`;
 
   (async () => {
     let cfg, channels, roles;
@@ -104,193 +23,261 @@ export function mount(container) {
         api("/api/meta/roles"),
       ]);
     } catch (err) {
-      loading.textContent = "Failed to load: " + err.message;
+      container.innerHTML = `<div class="panel"><div class="empty">Failed to load: ${esc(err.message)}</div></div>`;
       return;
     }
 
-    clearChildren(container);
-    const panel = document.createElement("div");
-    panel.className = "panel";
-    container.appendChild(panel);
+    const numField = (name, label, value, hint, { min = 0, max = null } = {}) => `
+      <div class="field">
+        <label for="vm-${name}">${esc(label)}</label>
+        <input type="number" name="${name}" id="vm-${name}" required min="${min}"${max != null ? ` max="${max}"` : ""}
+          step="1" value="${esc(String(value ?? 0))}" style="max-width:140px;" />
+        ${hint ? `<div class="field-hint">${hint}</div>` : ""}
+      </div>`;
 
-    const h2 = document.createElement("h2");
-    h2.textContent = "Voice Master";
-    panel.appendChild(h2);
-    const sub = document.createElement("div");
-    sub.className = "subtitle";
-    sub.textContent = "Member-owned voice channels created by joining the Hub.";
-    panel.appendChild(sub);
+    const toggleField = (name, label, checked, hint) => `
+      <div class="field">
+        <label style="display:flex; gap:6px; align-items:center;">
+          <input type="checkbox" name="${name}"${checked ? " checked" : ""} /> ${esc(label)}
+        </label>
+        <div class="field-hint">${hint}</div>
+      </div>`;
 
-    const form = document.createElement("form");
-    form.className = "form";
-    panel.appendChild(form);
+    container.innerHTML = `
+      <div class="panel">
+        <header>
+          <h2>Voice Master</h2>
+          <div class="subtitle">Member-owned voice channels created by joining the Hub</div>
+        </header>
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Wiring</div>
+            <div class="field">
+              <label>Hub Channel</label>
+              <span data-picker="hub_channel_id"></span>
+              <div class="field-hint">The voice channel members join to spin up their own room. "(unset)" turns Voice Master off.</div>
+            </div>
+            <div class="field">
+              <label>Target Category</label>
+              <span data-picker="category_id"></span>
+              <div class="field-hint">Created rooms are placed under this category.</div>
+            </div>
+            <div class="field">
+              <label>Control Channel</label>
+              <span data-picker="control_channel_id"></span>
+              <div class="field-hint">Text channel that hosts the persistent control panel and knock requests.</div>
+            </div>
+          </div>
 
-    form.appendChild(buildField(
-      "Hub channel",
-      selectFromChannels("hub_channel_id", channels, cfg.hub_channel_id, "voice"),
-      "Voice channel members join to spin up their own room.",
-    ));
-    form.appendChild(buildField(
-      "Target category",
-      selectFromChannels("category_id", channels, cfg.category_id, "category"),
-      "Category where created channels live.",
-    ));
-    form.appendChild(buildField(
-      "Control channel",
-      selectFromChannels("control_channel_id", channels, cfg.control_channel_id, "text"),
-      "Text channel for the persistent panel and knock requests.",
-    ));
-    form.appendChild(buildField(
-      "Default name template",
-      textInput("default_name_template", cfg.default_name_template),
-      "Tokens: {display_name}, {username}.",
-    ));
-    form.appendChild(buildField("Default user limit (0 = no cap)", numberInput("default_user_limit", cfg.default_user_limit)));
-    form.appendChild(buildField("Default bitrate (0 = guild default)", numberInput("default_bitrate", cfg.default_bitrate)));
-    form.appendChild(buildField("Create cooldown (seconds)", numberInput("create_cooldown_s", cfg.create_cooldown_s)));
-    form.appendChild(buildField("Max channels per member", numberInput("max_per_member", cfg.max_per_member, 1)));
-    form.appendChild(buildField("Trust list cap", numberInput("trust_cap", cfg.trust_cap)));
-    form.appendChild(buildField("Block list cap", numberInput("block_cap", cfg.block_cap)));
-    form.appendChild(buildField("Owner-disconnect grace (s) before claim", numberInput("owner_grace_s", cfg.owner_grace_s)));
-    form.appendChild(buildField("Empty-channel grace (s) before delete", numberInput("empty_grace_s", cfg.empty_grace_s)));
-    form.appendChild(buildField("Trusted prune (days, 0 = never)", numberInput("trusted_prune_days", cfg.trusted_prune_days)));
-    form.appendChild(buildField("Disable saves (force defaults)", boolSelect("disable_saves", cfg.disable_saves)));
-    form.appendChild(buildField(
-      "Post panel in new channel chat",
-      boolSelect("post_inline_panel", cfg.post_inline_panel),
-      "Auto-post the control panel into each new channel's text chat.",
-    ));
-    form.appendChild(buildField(
-      "Spectator gate role",
-      selectFromRoles("spectator_gate_role_id", roles, cfg.spectator_gate_role_id),
-      "If set, only members with this role can join spectator-mode channels. " +
-      "Others see the channel exists but can't join or read its chat (Discord " +
-      "ties the voice text-chat to the Connect permission). Leave as (none) to " +
-      "let anyone spectate (then non-members can still read, just not speak).",
-    ));
-    form.appendChild(buildField(
-      "Saveable fields",
-      checkboxList("saveable_fields",
-        ["name", "limit", "access", "trusted", "blocked"],
-        new Set(cfg.saveable_fields),
-      ),
-      "Which profile fields owners may persist. \"access\" covers the single " +
-        "open / NSFW / locked / spectator room-access state.",
-    ));
+          <div class="card">
+            <div class="section-label">New-Room Defaults</div>
+            <div class="field">
+              <label for="vm-default_name_template">Default Name Template</label>
+              <input type="text" name="default_name_template" id="vm-default_name_template"
+                value="${esc(cfg.default_name_template || "")}" />
+              <div class="field-hint">Name given to a freshly created room. Tokens: {display_name}, {username}.</div>
+            </div>
+            ${numField("default_user_limit", "Default User Limit", cfg.default_user_limit,
+              "How many members a new room admits. 0 means no cap.")}
+            ${numField("default_bitrate", "Default Bitrate (bits per second)", cfg.default_bitrate,
+              "Audio quality for new rooms, e.g. 64000. 0 uses the highest bitrate the server's boost tier allows.")}
+            ${toggleField("post_inline_panel", "Post the control panel in each new room's chat", cfg.post_inline_panel,
+              "When checked, every new room gets its own copy of the control panel in its text chat, so owners don't have to find the control channel.")}
+          </div>
 
-    const saveRow = document.createElement("div");
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "submit";
-    saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save Settings";
-    const saveStatus = document.createElement("span");
-    saveRow.appendChild(saveBtn);
-    saveRow.appendChild(saveStatus);
-    form.appendChild(saveRow);
+          <div class="card">
+            <div class="section-label">Limits & Cleanup</div>
+            ${numField("create_cooldown_s", "Create Cooldown (seconds)", cfg.create_cooldown_s,
+              "A member must wait this long between creating rooms. 0 means no cooldown.")}
+            ${numField("max_per_member", "Max Rooms per Member", cfg.max_per_member,
+              "How many rooms one member can own at once.", { min: 1 })}
+            ${numField("owner_grace_s", "Owner-Disconnect Grace (seconds)", cfg.owner_grace_s,
+              "After the owner disconnects, the room waits this long before offering the Claim button to whoever is left.")}
+            ${numField("empty_grace_s", "Empty-Room Grace (seconds)", cfg.empty_grace_s,
+              "An empty room is deleted after this long, giving members a window to hop back in.")}
+          </div>
+
+          <div class="card">
+            <div class="section-label">Trust & Access</div>
+            ${numField("trust_cap", "Trust List Cap", cfg.trust_cap,
+              "The most members a room owner can add to their trust list. 0 means no cap.")}
+            ${numField("block_cap", "Block List Cap", cfg.block_cap,
+              "The most members a room owner can block. 0 means no cap.")}
+            ${numField("trusted_prune_days", "Trusted-Entry Expiry (days)", cfg.trusted_prune_days,
+              "Trust-list entries unused for this many days are dropped automatically. 0 keeps them forever.")}
+            <div class="field">
+              <label>Spectator Gate Role</label>
+              <span data-picker="spectator_gate_role_id"></span>
+              <div class="field-hint">If set, only members with this role can join spectator-mode rooms. Others see the room exists but can't join or read its chat (Discord ties the voice text chat to the Connect permission). Leave as "(none — open to everyone)" to let anyone spectate; non-members can then still read, just not speak.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-label">Saved Layouts</div>
+            ${toggleField("saves_enabled", "Save member layouts", !cfg.disable_saves,
+              "When checked, room owners can save their room setup (name, limit, access, lists) and get it back next time. Unchecked, every new room starts from the defaults above.")}
+            <div class="field">
+              <label>Saveable Fields</label>
+              <div style="display:flex; flex-wrap:wrap; gap:8px 16px;">
+                ${SAVEABLE_FIELDS.map(([value, label]) => `
+                  <label style="display:flex; gap:6px; align-items:center;">
+                    <input type="checkbox" name="saveable_fields" value="${value}"${(cfg.saveable_fields || []).includes(value) ? " checked" : ""} /> ${esc(label)}
+                  </label>`).join("")}
+              </div>
+              <div class="field-hint">Which parts of a room's setup owners may persist. "Room access" covers the single open / NSFW / locked / spectator state.</div>
+            </div>
+          </div>
+
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-status></span>
+          </div>
+        </form>
+
+        <div class="section-label" style="margin-top:20px;">Post How-To Guide</div>
+        <form class="form" data-howto-form>
+          <div class="field">
+            <label>Guide Channel</label>
+            <span data-picker="howto_channel_id"></span>
+            <div class="field-hint">Posts a member-facing "how Voice Master works" embed here (e.g. in your lobby). Safe to re-run anytime.</div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn">Post Guide</button>
+            <span data-howto-status></span>
+          </div>
+        </form>
+
+        <div class="section-label" style="margin-top:20px;">Room-Name Blocklist</div>
+        <div class="field-hint" style="margin-bottom:8px;">Room names containing any of these phrases are rejected. Matching ignores upper/lower case.</div>
+        <form class="form" data-bl-form style="display:flex; gap:8px; align-items:center;">
+          <label for="vm-bl-input" class="visually-hidden" style="position:absolute; left:-9999px;">Blocked phrase</label>
+          <input type="text" id="vm-bl-input" placeholder="Phrase to block…" />
+          <button type="submit" class="btn">Add</button>
+        </form>
+        <ul data-bl-list style="margin-top:10px;"></ul>
+      </div>`;
+
+    const form = container.querySelector("[data-form]");
+    const status = container.querySelector("[data-status]");
+
+    const voiceOptions = channels
+      .filter((c) => c.type === "voice")
+      .map((c) => ({ id: String(c.id), label: `🔊 ${c.name}` }));
+    const categoryOptions = channels
+      .filter((c) => c.type === "category")
+      .map((c) => ({ id: String(c.id), label: `📁 ${c.name}` }));
+    const textOptions = channels
+      .filter((c) => c.type === "text")
+      .map((c) => ({ id: String(c.id), label: `#${c.name}` }));
+
+    const hubPicker = mountPicker(
+      form.querySelector('[data-picker="hub_channel_id"]'),
+      voiceOptions, String(cfg.hub_channel_id || "0"),
+      { emptyValue: "0", emptyLabel: "(unset)", label: "Hub Channel" },
+    );
+    const categoryPicker = mountPicker(
+      form.querySelector('[data-picker="category_id"]'),
+      categoryOptions, String(cfg.category_id || "0"),
+      { emptyValue: "0", emptyLabel: "(unset)", label: "Target Category" },
+    );
+    const controlPicker = mountPicker(
+      form.querySelector('[data-picker="control_channel_id"]'),
+      textOptions, String(cfg.control_channel_id || "0"),
+      { emptyValue: "0", emptyLabel: "(unset)", label: "Control Channel" },
+    );
+    const spectatorPicker = mountRolePicker(
+      form.querySelector('[data-picker="spectator_gate_role_id"]'),
+      roles, String(cfg.spectator_gate_role_id || "0"),
+      { emptyLabel: "(none — open to everyone)", label: "Spectator Gate Role" },
+    );
+
+    guardForm(form);
+
+    // Client-side validation names the offending field (W-C5).
+    const NUM_FIELDS = [
+      ["default_user_limit", "Default User Limit", 0],
+      ["default_bitrate", "Default Bitrate", 0],
+      ["create_cooldown_s", "Create Cooldown", 0],
+      ["max_per_member", "Max Rooms per Member", 1],
+      ["trust_cap", "Trust List Cap", 0],
+      ["block_cap", "Block List Cap", 0],
+      ["owner_grace_s", "Owner-Disconnect Grace", 0],
+      ["empty_grace_s", "Empty-Room Grace", 0],
+      ["trusted_prune_days", "Trusted-Entry Expiry", 0],
+    ];
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
-      const saveable = [...form.querySelectorAll('input[name="saveable_fields"]:checked')].map(el => el.value);
+      const nums = {};
+      for (const [name, label, min] of NUM_FIELDS) {
+        const v = parseInt(fd.get(name), 10);
+        if (!Number.isFinite(v) || v < min) {
+          showStatus(status, false, `${label} must be a number ≥ ${min}`);
+          form.querySelector(`[name=${name}]`).focus();
+          return;
+        }
+        nums[name] = v;
+      }
+      const saveable = [...form.querySelectorAll('input[name="saveable_fields"]:checked')].map((el) => el.value);
       const payload = {
-        hub_channel_id: String(fd.get("hub_channel_id") || "0"),
-        category_id: String(fd.get("category_id") || "0"),
-        control_channel_id: String(fd.get("control_channel_id") || "0"),
+        // Snowflakes stay strings end-to-end; "0" is the unset sentinel.
+        hub_channel_id: hubPicker.getValue() || "0",
+        category_id: categoryPicker.getValue() || "0",
+        control_channel_id: controlPicker.getValue() || "0",
         default_name_template: String(fd.get("default_name_template") || ""),
-        default_user_limit: parseInt(fd.get("default_user_limit"), 10) || 0,
-        default_bitrate: parseInt(fd.get("default_bitrate"), 10) || 0,
-        create_cooldown_s: parseInt(fd.get("create_cooldown_s"), 10) || 0,
-        max_per_member: parseInt(fd.get("max_per_member"), 10) || 1,
-        trust_cap: parseInt(fd.get("trust_cap"), 10) || 0,
-        block_cap: parseInt(fd.get("block_cap"), 10) || 0,
-        owner_grace_s: parseInt(fd.get("owner_grace_s"), 10) || 0,
-        empty_grace_s: parseInt(fd.get("empty_grace_s"), 10) || 0,
-        trusted_prune_days: parseInt(fd.get("trusted_prune_days"), 10) || 0,
-        disable_saves: fd.get("disable_saves") === "true",
+        ...nums,
+        disable_saves: !fd.has("saves_enabled"),
         saveable_fields: saveable,
-        post_inline_panel: fd.get("post_inline_panel") === "true",
-        spectator_gate_role_id: String(fd.get("spectator_gate_role_id") || "0"),
+        post_inline_panel: fd.has("post_inline_panel"),
+        spectator_gate_role_id: spectatorPicker.getValue() || "0",
       };
       try {
         await apiPost("/api/voice-master/config", payload);
-        showStatus(saveStatus, true);
+        showStatus(status, true);
       } catch (err) {
-        showStatus(saveStatus, false, err.message);
+        showStatus(status, false, err.message);
       }
     });
 
     // ── How-to guide ──────────────────────────────────────────────────
-    const howtoHeader = document.createElement("div");
-    howtoHeader.className = "section-label";
-    howtoHeader.textContent = "Post How-To Guide";
-    panel.appendChild(howtoHeader);
-
-    const howtoForm = document.createElement("form");
-    howtoForm.className = "form";
-    panel.appendChild(howtoForm);
-    howtoForm.appendChild(buildField(
-      "Channel for the guide",
-      selectFromChannels("howto_channel_id", channels, "0", "text"),
-      "Posts a member-facing 'how Voice Master works' embed (e.g. in your lobby). Re-run anytime.",
-    ));
-    const howtoRow = document.createElement("div");
-    const howtoBtn = document.createElement("button");
-    howtoBtn.type = "submit";
-    howtoBtn.className = "btn";
-    howtoBtn.textContent = "Post Guide";
-    const howtoStatus = document.createElement("span");
-    howtoRow.appendChild(howtoBtn);
-    howtoRow.appendChild(howtoStatus);
-    howtoForm.appendChild(howtoRow);
+    const howtoForm = container.querySelector("[data-howto-form]");
+    const howtoStatus = container.querySelector("[data-howto-status]");
+    const howtoPicker = mountPicker(
+      howtoForm.querySelector('[data-picker="howto_channel_id"]'),
+      textOptions, "0",
+      { emptyValue: "0", emptyLabel: "(pick a channel)", label: "Guide Channel" },
+    );
 
     howtoForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const fd = new FormData(howtoForm);
-      const channel_id = String(fd.get("howto_channel_id") || "0");
+      const channel_id = howtoPicker.getValue() || "0";
       if (channel_id === "0") {
         showStatus(howtoStatus, false, "Pick a channel first");
         return;
       }
       try {
         await apiPost("/api/voice-master/post-howto", { channel_id });
-        showStatus(howtoStatus, true);
+        showStatus(howtoStatus, true, "Guide posted");
       } catch (err) {
         showStatus(howtoStatus, false, err.message);
       }
     });
 
     // ── Name blocklist ────────────────────────────────────────────────
-    const blHeader = document.createElement("div");
-    blHeader.className = "section-label";
-    blHeader.textContent = "Channel-Name Blocklist";
-    panel.appendChild(blHeader);
-
-    const blForm = document.createElement("form");
-    blForm.className = "form";
-    panel.appendChild(blForm);
-    const blInput = document.createElement("input");
-    blInput.type = "text";
-    blInput.placeholder = "substring (case-insensitive)";
-    blForm.appendChild(blInput);
-    const blAddBtn = document.createElement("button");
-    blAddBtn.type = "submit";
-    blAddBtn.className = "btn";
-    blAddBtn.textContent = "Add";
-    blForm.appendChild(blAddBtn);
-
-    const blList = document.createElement("ul");
-    blList.style.marginTop = "10px";
-    panel.appendChild(blList);
+    const blForm = container.querySelector("[data-bl-form]");
+    const blInput = container.querySelector("#vm-bl-input");
+    const blList = container.querySelector("[data-bl-list]");
 
     function renderList(patterns) {
-      clearChildren(blList);
+      blList.textContent = "";
       for (const p of patterns) {
         const li = document.createElement("li");
         li.textContent = p + " ";
         const del = document.createElement("button");
         del.type = "button";
         del.className = "btn btn-danger btn-sm";
-        del.textContent = "remove";
+        del.textContent = "Remove";
         del.addEventListener("click", async () => {
           try {
             await apiDelete("/api/voice-master/name-blocklist/" + encodeURIComponent(p));

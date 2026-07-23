@@ -16,7 +16,12 @@ FULL_ENV = {
     "REMOTE_TEST_HOST": "ben@bigbox",
     "REMOTE_TEST_DIR": "C:/dev/dungeon-keeper",
     "REMOTE_TEST_PYTHON": "C:/dev/dungeon-keeper/.venv/Scripts/python.exe",
+    # Pin the workspace so path assertions stay stable and don't depend on the
+    # slug of whatever checkout the tests happen to run in. Dedicated tests
+    # below cover slug generation and the disabled/legacy layout.
+    "REMOTE_TEST_WORKSPACE": "wsfixed",
 }
+RUN_DIR = "C:/dev/dungeon-keeper/wsfixed"
 
 
 # ── load_config ────────────────────────────────────────────────────────────────
@@ -71,7 +76,7 @@ def test_invalid_jobs_rejected(bad):
 def test_cd_template_override_for_cmd_exe():
     cfg = rt.load_config({**FULL_ENV, "REMOTE_TEST_CD": "cd /d {dir} && {cmd}"})
     assert cfg is not None
-    assert rt.remote_command(cfg, "echo hi")[-1] == "cd /d C:/dev/dungeon-keeper && echo hi"
+    assert rt.remote_command(cfg, "echo hi")[-1] == "cd /d " + RUN_DIR + " && echo hi"
 
 
 # ── argument safety ────────────────────────────────────────────────────────────
@@ -127,7 +132,7 @@ def test_pytest_command_includes_targets_and_jobs():
     assert cfg is not None
     inner = rt.pytest_command(cfg, ["tests/test_a.py", "tests/test_b.py"])[-1]
 
-    assert inner.startswith("cd C:/dev/dungeon-keeper && ")
+    assert inner.startswith("cd " + RUN_DIR + " && ")
     assert "scripts/remote_test.py --bootstrap --lock requirements-dev.lock -n 8 " in inner
     assert inner.endswith("tests/test_a.py tests/test_b.py")
 
@@ -211,7 +216,7 @@ def test_bootstrap_skips_install_when_stamp_current(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "install_deps", lambda py, root, lock: calls.append("install") or 0)
     monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
 
-    assert rt.bootstrap(["-q"], root=tmp_path, python="py") == 0
+    assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 0
     assert calls == []
 
 
@@ -221,7 +226,7 @@ def test_bootstrap_installs_then_stamps_when_stale(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "install_deps", lambda py, root, lock: 0)
     monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
 
-    assert rt.bootstrap(["-q"], root=tmp_path, python="py") == 0
+    assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 0
     assert rt.read_stamp(tmp_path) == rt.lock_hash(tmp_path)
 
 
@@ -232,7 +237,7 @@ def test_bootstrap_returns_sentinel_when_install_fails(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: ran.append(a) or None)
 
-    assert rt.bootstrap(["-q"], root=tmp_path, python="py") == rt.BOOTSTRAP_FAILED
+    assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == rt.BOOTSTRAP_FAILED
     assert ran == [], "pytest must not run against a half-installed venv"
     assert rt.read_stamp(tmp_path) == "", "a failed install must not be stamped"
 
@@ -246,7 +251,7 @@ def test_bootstrap_propagates_test_failure(tmp_path, monkeypatch):
     rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
     monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1})())
 
-    assert rt.bootstrap(["-q"], root=tmp_path, python="py") == 1
+    assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 1
 
 
 def test_run_falls_back_locally_on_bootstrap_sentinel(monkeypatch, capsys):
@@ -418,7 +423,7 @@ def test_bootstrap_passes_lock_through_to_install(tmp_path, monkeypatch):
     monkeypatch.setattr(rt.subprocess, "run",
                         lambda *a, **k: type("R", (), {"returncode": 0})())
 
-    rt.bootstrap(["-q"], root=tmp_path, python="py", lock="requirements-win.lock")
+    rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python"), lock="requirements-win.lock")
     assert seen["lock"] == "requirements-win.lock"
 
 
@@ -488,3 +493,195 @@ def test_is_available_is_false_without_ssh(monkeypatch):
     cfg = rt.load_config(FULL_ENV)
     assert cfg is not None
     assert rt.is_available(cfg) is False
+
+
+# ── Session checkouts are clones, not worktrees ───────────────────────
+#
+# The worktree fallback resolves --git-common-dir, which in a plain clone is
+# the clone's *own* .git — so it lands back on the checkout that had no .env
+# to begin with. Session checkouts are cloned from the main one, so without
+# the origin fallback every gate run in them silently went local: a ~10x
+# slowdown that reports nothing, because "no config" legitimately means
+# "run locally".
+
+
+def _fake_git(mapping):
+    """Stub subprocess.run for the read-only git calls env_path makes."""
+    def run(cmd, **kwargs):
+        key = tuple(cmd[1:])
+        out = mapping.get(key)
+        rc = 0 if out is not None else 128
+        return type("R", (), {"returncode": rc, "stdout": out or ""})()
+    return run
+
+
+def test_env_path_follows_a_local_origin_from_a_clone(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    (main / ".git").mkdir(parents=True)
+    _write_env(main, "REMOTE_TEST_HOST=ben@box")
+
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        # A clone reports its own .git, so the worktree fallback finds nothing.
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): str(main),
+    }))
+    assert rt.env_path(clone) == main / ".env"
+
+
+def test_env_path_follows_an_origin_pointing_at_a_bare_git_dir(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    (main / ".git").mkdir(parents=True)
+    _write_env(main, "REMOTE_TEST_HOST=ben@box")
+
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): str(main / ".git"),
+    }))
+    assert rt.env_path(clone) == main / ".env"
+
+
+@pytest.mark.parametrize("origin", [
+    "https://github.com/example/dk.git",
+    "git@github.com:example/dk.git",
+    "ssh://git@example.com/dk.git",
+])
+def test_env_path_ignores_non_filesystem_origins(tmp_path, monkeypatch, origin):
+    """A network remote has no .env to read; don't try to treat it as a path."""
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): origin,
+    }))
+    assert rt.env_path(clone) is None
+
+
+def test_env_path_is_none_when_origin_has_no_env(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    (main / ".git").mkdir(parents=True)  # exists, but no .env in it
+    clone = tmp_path / "session"
+    (clone / ".git").mkdir(parents=True)
+    monkeypatch.setattr(rt.subprocess, "run", _fake_git({
+        ("rev-parse", "--git-common-dir"): ".git",
+        ("config", "--get", "remote.origin.url"): str(main),
+    }))
+    assert rt.env_path(clone) is None
+
+
+# ── Per-checkout workspaces ───────────────────────────────────────────
+#
+# One test host serves several session checkouts. Before workspaces they all
+# extracted over the same directory, so two concurrent runs interleaved their
+# writes; and because tar only adds and overwrites, a file removed from a
+# branch (or belonging to another branch tested earlier) survived forever and
+# ran as a phantom test. That is exactly how a stale src/ once produced 22
+# failures that did not reproduce locally.
+
+
+def test_workspace_slug_is_stable_and_safe(tmp_path):
+    first = rt.workspace_slug(tmp_path)
+    assert first == rt.workspace_slug(tmp_path)
+    assert first.startswith("ws-")
+    assert not (rt._UNSAFE & set(first))
+    assert "/" not in first and "\\" not in first
+
+
+def test_workspace_slug_differs_per_checkout_even_with_the_same_name(tmp_path):
+    a = tmp_path / "one" / "gambling"
+    b = tmp_path / "two" / "gambling"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    assert rt.workspace_slug(a) != rt.workspace_slug(b)
+
+
+def test_run_dir_nests_the_workspace_under_the_configured_directory():
+    cfg = rt.RemoteConfig(host="h", directory="C:/dev/dk", python="py", workspace="ws-x")
+    assert cfg.run_dir == "C:/dev/dk/ws-x"
+
+
+def test_run_dir_is_the_directory_itself_without_a_workspace():
+    cfg = rt.RemoteConfig(host="h", directory="C:/dev/dk", python="py")
+    assert cfg.run_dir == "C:/dev/dk"
+
+
+def test_tar_prefixes_every_member_with_the_workspace():
+    argv = rt.tar_command(prefix="ws-x")
+    assert "--transform=s,^,ws-x/," in argv
+
+
+def test_extraction_happens_at_the_base_so_tar_creates_the_workspace():
+    cfg = rt.RemoteConfig(host="h", directory="C:/dev/dk", python="py", workspace="ws-x")
+    assert "cd C:/dev/dk &&" in rt.remote_command(cfg, "tar -xzf -", base=True)[-1]
+    # pytest, by contrast, must run inside the workspace
+    assert "cd C:/dev/dk/ws-x &&" in rt.pytest_command(cfg, ["-q"])[-1]
+
+
+def test_workspace_can_be_disabled_for_the_legacy_layout():
+    env = {
+        "REMOTE_TEST_HOST": "ben@box", "REMOTE_TEST_DIR": "C:/dev/dk",
+        "REMOTE_TEST_PYTHON": "py.exe", "REMOTE_TEST_WORKSPACE": "off",
+    }
+    assert rt.load_config(env).workspace == ""
+
+
+def test_manifest_lists_shipped_files_and_skips_bytecode(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / "src" / "__pycache__").mkdir()
+    (tmp_path / "src" / "__pycache__" / "a.cpython-314.pyc").write_bytes(b"\x00")
+    (tmp_path / "README.md").write_text("hi", encoding="utf-8")
+
+    lines = rt.manifest_lines(("src", "README.md"), root=tmp_path)
+    assert lines == ["src/a.py", "README.md"]
+
+
+def test_prune_removes_files_the_sync_did_not_ship(tmp_path):
+    (tmp_path / "tests").mkdir()
+    keep = tmp_path / "tests" / "test_keep.py"
+    phantom = tmp_path / "tests" / "test_phantom.py"
+    keep.write_text("", encoding="utf-8")
+    phantom.write_text("", encoding="utf-8")
+    (tmp_path / rt.MANIFEST_FILE).write_text("tests/test_keep.py\n", encoding="utf-8")
+
+    removed = rt.prune_to_manifest(tmp_path)
+    assert removed == ["tests/test_phantom.py"]
+    assert keep.exists() and not phantom.exists()
+
+
+def test_prune_leaves_bytecode_and_unsynced_roots_alone(tmp_path):
+    (tmp_path / "tests" / "__pycache__").mkdir(parents=True)
+    cached = tmp_path / "tests" / "__pycache__" / "x.cpython-314.pyc"
+    cached.write_bytes(b"\x00")
+    outside = tmp_path / ".venv"
+    outside.mkdir()
+    lib = outside / "lib.py"
+    lib.write_text("", encoding="utf-8")
+    (tmp_path / rt.MANIFEST_FILE).write_text("tests/test_keep.py\n", encoding="utf-8")
+
+    rt.prune_to_manifest(tmp_path)
+    assert cached.exists(), "bytecode is not ours to manage"
+    assert lib.exists(), "only synced roots may be pruned — never the venv"
+
+
+def test_prune_is_a_no_op_without_a_manifest(tmp_path):
+    (tmp_path / "tests").mkdir()
+    survivor = tmp_path / "tests" / "test_a.py"
+    survivor.write_text("", encoding="utf-8")
+    assert rt.prune_to_manifest(tmp_path) == []
+    assert survivor.exists(), "an older sender must not trigger deletions"
+
+
+@pytest.mark.parametrize("exe,expected", [
+    ("C:/dev/dk/.venv/Scripts/python.exe", "C:/dev/dk/.venv"),
+    ("/srv/dk/.venv/bin/python", "/srv/dk/.venv"),
+    ("/usr/bin/python3", "/usr/bin"),
+])
+def test_stamp_dir_sits_beside_the_venv_not_in_a_workspace(exe, expected):
+    """Workspaces are disposable; a multi-GB reinstall per checkout is not."""
+    assert rt.stamp_dir(exe).as_posix() == expected

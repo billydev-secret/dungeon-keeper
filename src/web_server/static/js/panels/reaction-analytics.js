@@ -41,7 +41,7 @@ export function mount(container, initialParams) {
       const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/reaction-analytics", params));
       if (chart) { chart.destroy(); chart = null; }
 
-      statsEl.textContent = `Total reactions: ${data.total_reactions.toLocaleString()}`;
+      statsEl.textContent = `${data.total_reactions.toLocaleString()} reactions in this window.`;
 
       const wrap = container.querySelector(".chart-wrap");
       if (data.top_emoji.length) {
@@ -54,7 +54,7 @@ export function mount(container, initialParams) {
           color: "#E6B84C",
         });
       } else {
-        wrap.innerHTML = `<div class="empty">No reaction data.</div>`;
+        wrap.innerHTML = `<div class="empty">No reactions recorded in this window. Reactions are counted from the moment Dungeon Keeper joined — widen the range, or give members time to react.</div>`;
       }
 
       if (data.top_givers.length) {
@@ -65,8 +65,13 @@ export function mount(container, initialParams) {
             { key: "given", label: "Given" },
           ],
           data: data.top_givers, defaultSort: "given",
+          emptyMsg: "Nobody has given a reaction in this window.",
+          maxRows: 100,
         });
-      } else { giversWrap.innerHTML = ""; }
+      } else {
+        giversWrap.innerHTML = `<h3 style="color:var(--ink);font-size:13px;margin:0 0 6px;">Top Givers</h3>`
+          + `<div class="empty">Nobody has given a reaction in this window.</div>`;
+      }
 
       if (data.top_receivers.length) {
         receiversWrap.innerHTML = `<h3 style="color:#dbdee1;font-size:13px;margin:0 0 6px;">Top Receivers</h3><div data-receivers-table></div>`;
@@ -76,11 +81,16 @@ export function mount(container, initialParams) {
             { key: "received", label: "Received" },
           ],
           data: data.top_receivers, defaultSort: "received",
+          emptyMsg: "Nobody has received a reaction in this window.",
+          maxRows: 100,
         });
-      } else { receiversWrap.innerHTML = ""; }
+      } else {
+        receiversWrap.innerHTML = `<h3 style="color:var(--ink);font-size:13px;margin:0 0 6px;">Top Receivers</h3>`
+          + `<div class="empty">Nobody has received a reaction in this window.</div>`;
+      }
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load reaction analytics — try again. (${esc(err.message)})</div>`;
       giversWrap.innerHTML = "";
       receiversWrap.innerHTML = "";
     }

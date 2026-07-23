@@ -9,6 +9,11 @@ the two-model config round-trip.
 from __future__ import annotations
 
 from bot_modules.core.db_utils import set_config_value
+from starlette.testclient import TestClient
+
+from bot_modules.services.branding_service import BrandingConfig, upsert_branding
+from web_server.auth import DiscordOAuthAuth
+from web_server.server import create_app
 
 CH = "111111111111111111"
 
@@ -117,3 +122,44 @@ def test_advisor_config_requires_both_models(open_client):
         json={"model": "claude-haiku-4-5", "server_context": False},
     )
     assert r.status_code == 422
+
+
+# ── /api/help/advisor/name + assistant_name in config (per-guild branding) ──
+#
+# The assistant's *name* is branding_config now (default "Billy-bot"): the
+# member-facing Help panel and the admin config panel both read it from there
+# rather than printing a baked-in name.
+
+
+def test_advisor_name_defaults_to_the_builtin(authed_client):
+    resp = authed_client.get("/api/help/advisor/name")
+    assert resp.status_code == 200
+    assert resp.json()["assistant_name"] == "Billy-bot"
+
+
+def test_advisor_name_follows_branding(authed_client, fake_ctx):
+    upsert_branding(
+        fake_ctx.db_path,
+        BrandingConfig(guild_id=fake_ctx.guild_id, assistant_name="Sam-bot"),
+    )
+    assert authed_client.get("/api/help/advisor/name").json()["assistant_name"] == "Sam-bot"
+
+
+def test_advisor_config_reports_the_name(authed_client, fake_ctx):
+    body = authed_client.get("/api/config/advisor").json()
+    assert body["assistant_name"] == "Billy-bot"
+    assert body["model"]  # unchanged fields still present
+    assert body["server_context"] is False
+
+    upsert_branding(
+        fake_ctx.db_path,
+        BrandingConfig(guild_id=fake_ctx.guild_id, assistant_name="Sam-bot"),
+    )
+    assert authed_client.get("/api/config/advisor").json()["assistant_name"] == "Sam-bot"
+
+
+def test_advisor_name_requires_a_session(fake_ctx):
+    """Member-facing, but still authenticated — no cookie, no name."""
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    with TestClient(create_app(fake_ctx, auth=auth), follow_redirects=False) as client:
+        assert client.get("/api/help/advisor/name").status_code in (401, 403)

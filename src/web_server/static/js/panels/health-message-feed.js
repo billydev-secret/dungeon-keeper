@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 
 
 function fmtTime(ts) {
@@ -135,7 +136,7 @@ export function mount(container) {
               <th>Eng.</th><th>Sent.</th><th>Emotion</th><th>Author</th>
               <th>Channel</th><th>Content</th><th>Reply</th><th>Conn.</th><th>Time</th>
             </tr></thead>
-            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:var(--ink-dim)">No messages match filters</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:var(--ink-dim)">No messages match these filters. Widen the time range, or lower the minimum engagement and connection thresholds.</td></tr>'}</tbody>
           </table>
           </div>
           ${allMessages.length < total ? '<div style="text-align:center;margin-top:10px;"><button class="sf-filter-btn" id="mf-load-more">Load More</button></div>' : ""}
@@ -188,7 +189,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load the message feed — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() {} };

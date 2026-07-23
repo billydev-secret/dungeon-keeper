@@ -1,10 +1,15 @@
 import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 import { makeFilterStrip } from "../tab-strip.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { syncHash } from "../report-helpers.js";
 
-function renderList(todos, activeId) {
+function renderList(todos, activeId, filter) {
   if (!todos.length) {
-    return renderEmpty("No todos match this filter.");
+    return renderEmpty(filter === "completed"
+      ? "Nothing completed yet. Tasks move here once someone marks them done."
+      : filter === "pending"
+        ? "No pending tasks — the list is clear. Add one below, or use /todo in Discord."
+        : "No tasks yet. Add one below, or use /todo in Discord.");
   }
   return todos
     .map((t) => {
@@ -35,7 +40,7 @@ function renderList(todos, activeId) {
 
 function renderDetail(t, completing) {
   if (!t) {
-    return '<div class="empty">Select a todo to view details.</div>';
+    return renderEmpty("Select a task from the list to view its details.");
   }
   const completedLine = t.completed_at
     ? `<div class="td-section">Completed</div>
@@ -90,7 +95,7 @@ const FILTERS = {
   all:       () => true,
 };
 
-export function mount(container) {
+export function mount(container, initialParams = {}) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -114,16 +119,16 @@ export function mount(container) {
             </div>
           </div>
           <div class="ticket-list" data-list>
-            ${renderLoading("Loading…")}
+            ${renderLoading("Loading tasks…")}
           </div>
         </div>
         <div class="ticket-detail" data-detail>
-          ${renderLoading("Loading…")}
+          ${renderLoading("Loading tasks…")}
         </div>
       </section>
 
       <form class="todo-add" data-add-form style="display:flex;gap:8px;margin-top:12px;align-items:flex-start;">
-        <input type="text" data-add-input maxlength="500" placeholder="Add a new task…"
+        <input type="text" data-add-input maxlength="500" placeholder="Add a new task…" aria-label="New task"
                style="flex:1;padding:8px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--bg-rail);color:var(--ink);font-size:13px;font-family:inherit;" />
         <button type="submit" class="act-btn" data-add-btn>Add</button>
         <span data-add-status style="font-size:12px;align-self:center;"></span>
@@ -140,16 +145,35 @@ export function mount(container) {
   const addBtn = container.querySelector("[data-add-btn]");
   const addStatus = container.querySelector("[data-add-status]");
 
-  const state = { todos: [], filter: "pending", activeId: null, completing: false };
+  const state = {
+    todos: [],
+    filter: Object.keys(FILTERS).includes(initialParams.filter) ? initialParams.filter : "pending",
+    activeId: initialParams.task ? Number(initialParams.task) : null,
+    completing: false,
+  };
+  for (const btn of filterGroup.querySelectorAll("[data-filter]")) {
+    const on = btn.dataset.filter === state.filter;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  /** Mirror the tab and selected task into the URL (W-D9). */
+  function pushHash() {
+    syncHash("todo", {
+      filter: state.filter === "pending" ? "" : state.filter,
+      task: state.activeId || "",
+    });
+  }
 
   function render() {
     const filtered = state.todos.filter(FILTERS[state.filter]);
     if (!filtered.find((t) => t.id === state.activeId)) {
       state.activeId = filtered[0]?.id ?? null;
     }
-    listEl.innerHTML = renderList(filtered, state.activeId);
+    listEl.innerHTML = renderList(filtered, state.activeId, state.filter);
     const active = state.todos.find((t) => t.id === state.activeId) || null;
     detailEl.innerHTML = renderDetail(active, state.completing);
+    pushHash();
   }
 
   function renderStats() {
@@ -167,7 +191,7 @@ export function mount(container) {
       renderStats();
       render();
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      listEl.innerHTML = renderError(`Couldn't load the todo list — ${err.message}. Reload the page to try again.`);
       detailEl.innerHTML = "";
     }
   }
@@ -188,7 +212,7 @@ export function mount(container) {
       });
       await refresh();
     } catch (err) {
-      addStatus.textContent = err.message;
+      addStatus.textContent = `Couldn't add that task — ${err.message}`;
       addStatus.style.color = "var(--red, #e55)";
     } finally {
       addBtn.disabled = false;
@@ -221,7 +245,7 @@ export function mount(container) {
       render();
       detailEl.insertAdjacentHTML(
         "beforeend",
-        `<div class="error" style="padding:8px 16px;color:var(--red)">${esc(err.message)}</div>`
+        renderError(`Couldn't mark that task complete — ${err.message}. Try again.`)
       );
     } finally {
       state.completing = false;

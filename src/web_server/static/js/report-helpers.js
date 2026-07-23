@@ -1,10 +1,12 @@
 // Shared helpers for the analytics report panels (js/panels/*.js).
 //
-// Two exports:
+// Three exports:
 //   rangePicker() — builds the day-range <select> control shown in a panel's
 //                   `.controls` row.
 //   withLoading() — wraps an in-flight request so the target element shows the
 //                   refresh spinner (the `.is-loading` state styled in app.css).
+//   syncHash()   — mirrors a panel's control state into the URL hash so
+//                  filters/tabs/selection survive refresh and deep-link.
 
 // Quick-select day ranges offered by every range picker. A panel's requested
 // `value` is injected on top of these when it isn't already present, so any
@@ -23,13 +25,15 @@ const DEFAULT_RANGES = [1, 2, 3, 7, 14, 30, 60, 90];
  * @param {number|string} opts.value     initially-selected value ("" = All)
  * @param {boolean}       opts.allowAll  include an "All time" (no-limit) option
  * @param {string}        opts.label     control label text
+ * @param {number[]}      [opts.ranges]  override the offered day counts
+ *                                       (defaults to DEFAULT_RANGES)
  * @returns {HTMLLabelElement}
  */
-export function rangePicker({ value = "", allowAll = false, label = "Range" } = {}) {
+export function rangePicker({ value = "", allowAll = false, label = "Range", ranges = null } = {}) {
   const wrap = document.createElement("label");
   const select = document.createElement("select");
 
-  const days = [...DEFAULT_RANGES];
+  const days = [...(Array.isArray(ranges) && ranges.length ? ranges : DEFAULT_RANGES)];
   const numeric = parseInt(value, 10);
   if (!isNaN(numeric) && numeric > 0 && !days.includes(numeric)) {
     days.push(numeric);
@@ -76,4 +80,26 @@ export async function withLoading(el, promise) {
   } finally {
     if (el) el.classList.remove("is-loading");
   }
+}
+
+/**
+ * Write a panel's control state into the URL hash via history.replaceState
+ * (no new history entries), so filters/tabs/search/selection survive a
+ * refresh and can be shared as a link. The router (app.js parseHash) hands
+ * the query params back to mount() as `initialParams`.
+ *
+ * Entries whose value is null/undefined/""/false are omitted, so defaults
+ * keep the URL clean.
+ *
+ * @param {string} panelId  route id, e.g. "mod-tickets"
+ * @param {object} params   control state to encode
+ */
+export function syncHash(panelId, params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === "" || v === false) continue;
+    qs.set(k, String(v));
+  }
+  const q = qs.toString();
+  history.replaceState(null, "", `#/${panelId}${q ? "?" + q : ""}`);
 }

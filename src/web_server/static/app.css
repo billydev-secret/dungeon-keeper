@@ -25,6 +25,12 @@
   --yellow:        #f0b232;
   --red:           #f23f43;
   --red-soft:      #f23f431a;
+  /* Text tiers for status copy. The saturated --red/--green are for borders,
+     badges and fills; as 13-14px text on --bg they measure 3.35:1 and 3.97:1,
+     under the WCAG AA 4.5:1 floor. These lightened pairs measure 4.86:1 and
+     6.45:1 on --bg — use them wherever the colour carries meaning as text. */
+  --red-text:      #f87a7d;
+  --green-text:    #4ad17f;
   --blurple:       #5865f2;
   --plum:          #c07aa1;
   --plum-soft:     #c07aa11a;
@@ -51,8 +57,10 @@ html, body {
 button, a { font: inherit; color: inherit; }
 a { text-decoration: none; }
 
+/* --blurple measures 2.74:1 on --bg, below the 3:1 WCAG 1.4.11 floor for a
+   focus indicator. --gold-solid measures 6.82:1 and reads on every surface. */
 :focus-visible {
-  outline: 2px solid var(--blurple);
+  outline: 2px solid var(--gold-solid);
   outline-offset: 1px;
   border-radius: var(--r-sm);
 }
@@ -3723,4 +3731,415 @@ select option { background: var(--bg-input); color: var(--ink); }
   font-size: 11px;
   margin-top: 8px;
   font-style: italic;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   UX cleanup round (2026-07-22) — see docs/reviews/2026-07-22-website-ux-review.md
+   Everything below is additive and deliberately last in the cascade so it
+   wins over the earlier rules it is correcting.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── Keyboard focus (W-A2) ────────────────────────────────────────────
+   The rules above swap a 1px border colour on :focus and suppress the
+   outline. That hairline is a weak indicator on a phone, so re-assert the
+   real ring for keyboard focus specifically; mouse focus keeps the quiet
+   border treatment. Selectors mirror the outline:none rules one-for-one. */
+.field > input:focus-visible,
+.field > textarea:focus-visible,
+.field > select:focus-visible,
+.field > label > input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+.field > label > textarea:focus-visible,
+.field > label > select:focus-visible,
+.field-input:focus-visible,
+[data-edit-text]:focus-visible,
+[data-edit-cat]:focus-visible,
+[data-result]:focus-visible,
+.blanks-section input:focus-visible,
+.blanks-section select:focus-visible,
+.ticket-search input[type="search"]:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--gold-solid);
+  outline-offset: 1px;
+}
+
+/* ── Skip link (W-A1) ─────────────────────────────────────────────────
+   Off-screen until focused, then pinned top-left over everything. */
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: 8px;
+  z-index: 400;
+  padding: 10px 16px;
+  background: var(--bg-card);
+  color: var(--ink-bright);
+  border: 1px solid var(--gold-solid);
+  border-radius: var(--r-sm);
+  transition: top .12s ease;
+}
+.skip-link:focus { top: calc(8px + env(safe-area-inset-top, 0px)); }
+#panel-root:focus { outline: none; }
+#panel-root:focus-visible { outline: none; }
+
+/* ── Status text colours (W-A3) ───────────────────────────────────────
+   Meaningful colour as text needs the lighter tier; fills/borders keep the
+   saturated tokens. */
+.error,
+.save-err,
+.num-err { color: var(--red-text); }
+.save-ok { color: var(--green-text); }
+
+/* Meta-load warning banner published by config-helpers.js (W-C2). */
+.meta-warning {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--red);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+  background: var(--red-soft);
+  color: var(--red-text);
+  font-size: 13px;
+}
+
+/* ── Nav: locked (admin-only) items and the collapsed rail (W-N3/W-N5) ── */
+.nav-item.nav-locked {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.nav-item.nav-locked:hover { background: none; }
+.nav-item .lock {
+  margin-left: auto;
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+/* On the collapsed rail the per-section glyph is the only visible label, so
+   it must not be dimmed into illegibility. Tooltips carry the full name. */
+.collapsed .nav-item .icn {
+  font-size: 15px;
+  color: var(--ink-dim);
+  width: auto;
+}
+.collapsed .nav-item {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+.collapsed .nav-item .lock { display: none; }
+.collapsed .nav-item.active .icn { color: var(--gold-solid); }
+
+/* Nav filter clear button (W-N13) */
+.nav-filter { position: relative; }
+.nav-filter input { padding-right: 26px; }
+.nav-filter-clear {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--ink-mute);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nav-filter-clear:hover { color: var(--ink-bright); background: var(--hover); }
+
+/* Single-guild picker has nothing to open, so drop the affordance (W-N15) */
+.guild-picker.single-guild .guild-picker__chevron { display: none; }
+.guild-picker.single-guild .guild-picker__toggle { cursor: default; }
+
+/* ── Panel meta bar: contextual help + related links (W-H2/W-N14) ────── */
+.panel-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.panel-meta-link {
+  font-size: 12px;
+  color: var(--ink-mute);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.panel-meta-link:hover { color: var(--ink-bright); border-color: var(--gold-solid); }
+.panel-meta-help {
+  margin-left: auto;
+  min-width: 26px;
+  text-align: center;
+  font-weight: 600;
+}
+
+/* Unknown / inaccessible route notice (W-N4) */
+.panel-missing { padding: 8px 4px 4px; max-width: 60ch; }
+.panel-missing h2 { margin: 0 0 8px; }
+.panel-missing p { margin: 0 0 12px; color: var(--ink-dim); }
+
+/* Dismissable Home banner (W-H3) */
+.home-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--gold-solid);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+}
+.home-hint p { margin: 0; flex: 1 1 220px; color: var(--ink-dim); font-size: 13px; }
+.home-hint .home-hint-x {
+  border: 0;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 6px;
+}
+.home-hint .home-hint-x:hover { color: var(--ink-bright); }
+
+/* Toast dismiss button published by ui.js (W-A12) */
+.toast-x {
+  margin-left: 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: .65;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.toast-x:hover { opacity: 1; }
+
+/* ── Reduced motion (W-A8) ────────────────────────────────────────────
+   Honour the OS switch; iOS "Reduce Motion" is common on the phones this
+   dashboard is mostly read on. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Horizontal-overflow fixes found by the phone sweep (W-M1) ───────── */
+/* The quick-reference tables come from manual.html (which carries its own
+   <style>) and have no wrapper element to make scrollable. Promoting the
+   table itself to a block box gives it its own scroll container, so the rows
+   stay reachable instead of being clipped by .panel's overflow-x:hidden. */
+.qr-table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+/* Long URLs and command strings in manual prose (help-setup). */
+#panel-root a,
+#panel-root code { overflow-wrap: anywhere; }
+
+@media (max-width: 768px) {
+  /* Filter/action button rows must wrap instead of running off-screen
+     (qa-tracker, config-ai). */
+  .ctrl-group,
+  .ctrl-group[data-filter-group] {
+    flex-wrap: wrap;
+  }
+  .panel .btn-row,
+  .panel form .btn-row { flex-wrap: wrap; }
+
+  /* Stat-card grids shrink rather than forcing a fixed track width
+     (health-mod-engagement). */
+  .home-grid {
+    grid-template-columns: 1fr;
+    min-width: 0;
+  }
+  .home-card { min-width: 0; }
+  .home-card-label { overflow-wrap: anywhere; }
+
+  /* Histogram slider rows (wellness-caps). */
+  .w-histo-slider-cell { min-width: 0; }
+  .w-histo-slider-cell input[type="range"] { width: 100%; min-width: 0; }
+  .w-histo-slider-label,
+  .w-histo-slider-val { overflow-wrap: anywhere; }
+
+  /* ── Tap targets (W-A6) — Apple HIG floor is 44px ─────────────────── */
+  .ctrl-group button,
+  .ctrl-group .tab-btn,
+  /* Outranks the .ticket-list-head variant's 3px/9px padding, which is
+     otherwise more specific than the rule above. */
+  .ticket-list-head .ctrl-group button {
+    padding: 10px 14px;
+    min-height: 44px;
+    font-size: 13px;
+  }
+  .mobile-menu-btn {
+    width: 44px;
+    height: 44px;
+    top: calc(10px + env(safe-area-inset-top, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+  }
+  #sidebar-toggle {
+    width: 32px;
+    height: 32px;
+    padding: 8px;
+  }
+  .filter-chip-x,
+  .transcript-close {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Range thumbs are dragged with a fingertip, not a mouse pointer. The
+     track click-to-move handler in slider.js covers the rest of the row. */
+  input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
+  input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; }
+
+  /* ── Safe-area insets (W-A9) ──────────────────────────────────────── */
+  #sidebar { padding-left: env(safe-area-inset-left, 0px); }
+  .toast-wrap {
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    right: calc(16px + env(safe-area-inset-right, 0px));
+  }
+
+  /* ── Closed drawer must leave the tab order (W-A10) ───────────────── */
+  #sidebar:not(.open) {
+    visibility: hidden;
+    transition: transform .18s ease, visibility 0s linear .18s;
+  }
+  #sidebar.open {
+    visibility: visible;
+    transition: transform .18s ease, visibility 0s;
+  }
+  /* Scroll lock while the drawer is open. */
+  body.sidebar-locked { overflow: hidden; }
+}
+
+/* ── Interaction heatmap (W-D3) ───────────────────────────────────────
+   These classes were emitted by the panel but never had rules; the tooltip
+   in particular was positioning against no containing block. */
+.ihm-canvas-wrap {
+  position: relative;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.ihm-tooltip {
+  position: absolute;
+  z-index: 6;
+  pointer-events: none;
+  background: var(--bg-floor);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--ink-bright);
+}
+.ihm-transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ihm-frame-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.ihm-msg { padding: 12px 0; }
+
+/* Freshness row on the polled moderation queues (W-D5) */
+.queue-freshness {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* Layout box for a custom widget in a control row. Lets panels stop using a
+   <label> that wraps no labelable control purely for flex layout (W-A7); the
+   widget carries its own accessible name via the picker's `label` option. */
+.controls .ctrl-field,
+.ctrl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+/* ── Feature-off notice banners (W-C6) ────────────────────────────────
+   Panels announce a disabled master toggle with `.empty[role="status"]`.
+   Styled as a notice rather than an absence: an empty state says "nothing
+   here yet", but these say "this IS configured and it is not running". */
+.empty[role="status"],
+.notice-banner {
+  border-left: 3px solid var(--gold-solid);
+  border-radius: var(--r-sm);
+  background: var(--gold-soft);
+  color: var(--ink);
+  padding: 10px 12px;
+  text-align: left;
+}
+.empty[role="status"] a,
+.notice-banner a { color: var(--gold-solid); text-decoration: underline; }
+
+/* Control rows that must reflow rather than overflow at phone width. */
+.ann-btn-row,
+.vt-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Control rows in the AI panel and panel tab strips must reflow at phone
+   width rather than run past the panel edge (W-M1). */
+.ai-prompt-actions,
+.ai-model-row,
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Follow-up phone-sweep fixes (second pass). */
+@media (max-width: 768px) {
+  /* Chart columns carry inline min-widths sized for desktop; at phone width
+     they must be free to shrink inside their wrapping flex row. */
+  .chart-wrap { min-width: 0 !important; }
+
+  /* Stat cards: let long labels/values wrap instead of widening the grid. */
+  .mod-stat { min-width: 0; }
+  .mod-stat .lbl,
+  .mod-stat .v,
+  .mod-stat .sub { overflow-wrap: anywhere; }
+}
+
+/* Checkbox groups (weekday pickers) use fieldset/legend for a real group name
+   instead of an orphan <label>; match the .field > label treatment. */
+fieldset.field {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
+}
+.field > legend {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  padding: 0;
 }

@@ -1,9 +1,12 @@
 import { api, apiPost, esc } from "../api.js";
-import { loadConfig, loadRoles, loadChannels, channelSelect, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import {
+  loadConfig, loadRoles, loadChannels, apiPut, apiDelete, showStatus,
+  guardForm, renderMetaWarning, mountRolePicker, mountChannelPicker,
+} from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading booster roles…</div></div>`;
 
   (async () => {
     const [config, roles, channels] = await Promise.all([
@@ -23,28 +26,33 @@ export function mount(container) {
 
 function render(container, boosterRoles, panelChannelId, roles, channels) {
   function roleCard(r) {
+    const key = esc(r.role_key);
     return `
-      <form class="form card" style="margin-bottom:16px;" data-key="${r.role_key}">
-        <div class="section-label">${r.role_key}</div>
+      <form class="form card" style="margin-bottom:16px;" data-key="${key}">
+        <div class="section-label">${esc(r.label || r.role_key)}</div>
         <div class="field">
-          <label>Label</label>
-          <input type="text" name="label" value="${r.label}" />
+          <label for="br-label-${key}">Display Name</label>
+          <input type="text" name="label" id="br-label-${key}" required value="${esc(r.label || "")}" />
+          <div class="field-hint">The color's name on the booster panel button. Its internal key is <code>${key}</code> and can't be changed.</div>
         </div>
         <div class="field">
-          <label>Role</label>
-          <select name="role_id">${roleSelect(roles, r.role_id)}</select>
+          <label>Discord Role</label>
+          <span data-picker="role_id" data-key="${key}"></span>
+          <div class="field-hint">The role a booster receives when they choose this color. Choose "(none)" and the button does nothing.</div>
         </div>
         <div class="field">
-          <label>Image Path</label>
-          <input type="text" name="image_path" value="${r.image_path || ""}" />
+          <label for="br-image-${key}">Swatch Image File</label>
+          <input type="text" name="image_path" id="br-image-${key}" value="${esc(r.image_path || "")}" />
+          <div class="field-hint">The file name of the color swatch shown next to this option, e.g. <code>Ruby_ff0000_8b0000.png</code>. Upload the file under Swatch Images below; leave this blank for no swatch.</div>
         </div>
         <div class="field">
-          <label>Sort Order</label>
-          <input type="number" name="sort_order" value="${r.sort_order}" min="0" />
+          <label for="br-sort-${key}">Position in the List</label>
+          <input type="number" name="sort_order" id="br-sort-${key}" required value="${esc(String(r.sort_order ?? 0))}" min="0" step="1" style="max-width:140px;" />
+          <div class="field-hint">Lower numbers appear first on the panel. Ties are broken by display name.</div>
         </div>
-        <div style="display:flex; gap:8px; align-items:center;">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button type="submit" class="btn btn-primary">Save</button>
-          <button type="button" class="btn btn-danger" data-remove="${r.role_key}">Remove</button>
+          <button type="button" class="btn btn-danger" data-remove="${key}">Delete Color</button>
           <span data-status></span>
         </div>
       </form>`;
@@ -54,101 +62,151 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     <div class="panel">
       <header>
         <h2>Booster Roles</h2>
-        <div class="subtitle">Custom color roles for server boosters.</div>
+        <div class="subtitle">Name colors your server boosters can choose from as a thank-you perk</div>
       </header>
-      <div data-roles>${boosterRoles.length ? boosterRoles.map(roleCard).join("") : '<div class="empty">No booster roles configured.</div>'}</div>
+      ${renderMetaWarning()}
+      <div data-roles>${boosterRoles.length
+        ? boosterRoles.map(roleCard).join("")
+        : '<div class="empty">No booster colors yet. Upload swatch images below and sync, or add one by hand.</div>'}</div>
 
-      <div class="section-label">Swatch Folder</div>
+      <div class="section-label">Swatch Images</div>
       <form class="form card" data-upload-form>
         <div class="field-hint" style="margin-bottom:10px;">
-          Upload swatch images for this server. Name each file
-          <code>ColorName_HEX1_HEX2.png</code> (e.g. <code>Ruby_ff0000_8b0000.png</code>)
-          — the two hex codes become the role's gradient. Files are stored in a
-          folder unique to this server.
+          Upload one image per color. Name each file
+          <code>ColorName_HEX1_HEX2.png</code> — for example
+          <code>Ruby_ff0000_8b0000.png</code> — and the two hex codes become that
+          role's gradient. Images are stored for this server only.
         </div>
         <div data-swatch-active class="field-hint" style="margin-bottom:10px;"></div>
-        <div data-swatch-list style="margin-bottom:12px;"><div class="empty">Loading swatches…</div></div>
+        <div data-swatch-list style="margin-bottom:12px;"><div class="empty">Loading swatch images…</div></div>
         <div class="field">
-          <label>Add images</label>
-          <input type="file" name="files" accept="image/png,image/jpeg,image/gif,image/webp" multiple data-swatch-input />
+          <label for="br-swatch-input">Image Files</label>
+          <input type="file" id="br-swatch-input" name="files" accept="image/png,image/jpeg,image/gif,image/webp" multiple data-swatch-input />
+          <div class="field-hint">You can select several files at once. Uploading doesn't create any roles on its own — press Sync Colors afterwards.</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit" class="btn btn-primary" data-upload-btn>Upload</button>
+          <button type="submit" class="btn btn-primary" data-upload-btn>Upload Images</button>
           <span data-upload-status></span>
         </div>
       </form>
 
-      <div class="section-label">Sync Swatches</div>
+      <div class="section-label">Sync Colors From Swatches</div>
       <form class="form card" data-sync-form>
         <div class="field-hint" style="margin-bottom:10px;">
-          Scans the swatch folder and creates/updates/removes booster roles
-          (with gradient colors) to match the uploaded files.
+          Reads the swatch images above and makes the booster colors match them:
+          creating Discord roles with the right gradient for new images, updating
+          existing ones, and <strong>deleting colors whose image is gone</strong>.
+          Boosters wearing a deleted color lose it.
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit" class="btn btn-primary" data-sync-btn>Sync Swatches</button>
+          <button type="submit" class="btn btn-primary" data-sync-btn>Sync Colors</button>
           <span data-sync-status></span>
         </div>
       </form>
 
-      <div class="section-label">Add Booster Role</div>
+      <div class="section-label">Add a Color by Hand</div>
       <form class="form card" data-add-form>
         <div class="field">
-          <label>Key (short lowercase identifier)</label>
-          <input type="text" name="role_key" required placeholder="e.g. ruby, sapphire" pattern="[a-z0-9_]+" />
+          <label for="br-new-key">Internal Key</label>
+          <input type="text" name="role_key" id="br-new-key" required placeholder="ruby" pattern="[a-z0-9_]+" />
+          <div class="field-hint">A short lowercase name — letters, numbers, and underscores only. It can't be changed later.</div>
         </div>
         <div class="field">
-          <label>Label</label>
-          <input type="text" name="label" required placeholder="e.g. Ruby" />
+          <label for="br-new-label">Display Name</label>
+          <input type="text" name="label" id="br-new-label" required placeholder="Ruby" />
+          <div class="field-hint">What boosters see on the panel button.</div>
         </div>
         <div class="field">
-          <label>Role</label>
-          <select name="role_id">${roleSelect(roles, "0")}</select>
+          <label>Discord Role</label>
+          <span data-picker="role_id" data-key="__new__"></span>
+          <div class="field-hint">The role a booster receives when they choose this color.</div>
         </div>
         <div class="field">
-          <label>Image Path</label>
-          <input type="text" name="image_path" placeholder="/path/to/image.png" />
+          <label for="br-new-image">Swatch Image File</label>
+          <input type="text" name="image_path" id="br-new-image" placeholder="Ruby_ff0000_8b0000.png" />
+          <div class="field-hint">The file name of the swatch shown next to this option. Leave blank for no swatch.</div>
         </div>
         <div class="field">
-          <label>Sort Order</label>
-          <input type="number" name="sort_order" value="0" min="0" />
+          <label for="br-new-sort">Position in the List</label>
+          <input type="number" name="sort_order" id="br-new-sort" required value="0" min="0" step="1" style="max-width:140px;" />
+          <div class="field-hint">Lower numbers appear first on the panel.</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit" class="btn btn-primary">Add</button>
+          <button type="submit" class="btn btn-primary">Add Color</button>
           <span data-add-status></span>
         </div>
       </form>
 
-      <div class="section-label">Repost Panel</div>
+      <div class="section-label">Booster Panel</div>
       <form class="form card" data-repost-form>
         <div class="field-hint" style="margin-bottom:10px;">
-          Deletes the previously posted booster panel messages and posts a fresh
-          set in the chosen channel.
+          Posts the panel where boosters pick their color. The panel messages
+          posted last time are <strong>deleted</strong> first, so post it again
+          whenever you change the colors above.
         </div>
         <div class="field">
           <label>Channel</label>
-          <select name="channel_id">${channelSelect(channels, panelChannelId, { allowNone: false })}</select>
+          <span data-picker="panel_channel_id"></span>
+          <div class="field-hint">Where the panel is posted. Boosters press its buttons to claim a color.</div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit" class="btn btn-primary" data-repost-btn>Repost Panel</button>
+          <button type="submit" class="btn btn-primary" data-repost-btn>Post Panel</button>
           <span data-repost-status></span>
         </div>
       </form>
     </div>`;
 
+  // ── Searchable pickers replace the old plain <select>s (W-C4). ────────
+  const rolePickers = {};
+  for (const r of boosterRoles) {
+    const slot = container.querySelector(
+      `[data-picker="role_id"][data-key="${CSS.escape(r.role_key)}"]`,
+    );
+    rolePickers[r.role_key] = mountRolePicker(
+      slot, roles, String(r.role_id || "0"), { label: "Discord Role" },
+    );
+  }
+  rolePickers.__new__ = mountRolePicker(
+    container.querySelector('[data-picker="role_id"][data-key="__new__"]'),
+    roles, "0", { label: "Discord Role" },
+  );
+
+  // Read + validate one color's fields. Returns null after reporting an error.
+  function readColor(form, status, key) {
+    const fd = new FormData(form);
+    const label = String(fd.get("label") || "").trim();
+    if (!label) {
+      showStatus(status, false, "Display Name cannot be empty.");
+      form.querySelector('[name="label"]').focus();
+      return null;
+    }
+    const rawSort = String(fd.get("sort_order") ?? "").trim();
+    const sort = parseInt(rawSort, 10);
+    if (rawSort === "" || !Number.isFinite(sort) || sort < 0) {
+      showStatus(status, false, "Position in the List must be a whole number of 0 or more.");
+      form.querySelector('[name="sort_order"]').focus();
+      return null;
+    }
+    return {
+      label,
+      // Snowflakes stay strings; "0" is the unset sentinel.
+      role_id: rolePickers[key].getValue() || "0",
+      image_path: fd.get("image_path"),
+      sort_order: sort,
+    };
+  }
+
   // Save handlers for existing roles
   for (const r of boosterRoles) {
-    const form = container.querySelector(`[data-key="${r.role_key}"]`);
+    const form = container.querySelector(`[data-key="${CSS.escape(r.role_key)}"]`);
     const status = form.querySelector("[data-status]");
+    guardForm(form);
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const fd = new FormData(form);
+      const payload = readColor(form, status, r.role_key);
+      if (!payload) return;
       try {
-        await apiPut(`/api/config/booster-roles/${r.role_key}`, {
-          label: fd.get("label"),
-          role_id: fd.get("role_id"),
-          image_path: fd.get("image_path"),
-          sort_order: parseInt(fd.get("sort_order"), 10) || 0,
-        });
+        await apiPut(`/api/config/booster-roles/${r.role_key}`, payload);
         showStatus(status, true);
       } catch (err) {
         showStatus(status, false, err.message);
@@ -159,9 +217,16 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   // Remove handlers
   container.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!(await confirmDialog(`Remove booster role "${btn.dataset.remove}"?`, { danger: true, confirmLabel: "Remove" }))) return;
+      const key = btn.dataset.remove;
+      const entry = boosterRoles.find((r) => r.role_key === key);
+      const ok = await confirmDialog(
+        `Delete the "${entry ? entry.label || key : key}" booster color? It disappears from the panel `
+        + "and boosters can no longer choose it.",
+        { title: "Delete Booster Color", danger: true, confirmLabel: "Delete Color" },
+      );
+      if (!ok) return;
       try {
-        await apiDelete(`/api/config/booster-roles/${btn.dataset.remove}`);
+        await apiDelete(`/api/config/booster-roles/${key}`);
         const fresh = await loadConfig();
         render(
           container,
@@ -179,18 +244,30 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   // Add handler
   const addForm = container.querySelector("[data-add-form]");
   const addStatus = container.querySelector("[data-add-status]");
+  guardForm(addForm);
   addForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(addForm);
-    const key = fd.get("role_key").trim().toLowerCase().replace(/\s+/g, "_");
-    if (!key) return;
+    const key = String(fd.get("role_key") || "").trim().toLowerCase().replace(/\s+/g, "_");
+    if (!key) {
+      showStatus(addStatus, false, "Internal Key cannot be empty.");
+      addForm.querySelector('[name="role_key"]').focus();
+      return;
+    }
+    if (!/^[a-z0-9_]+$/.test(key)) {
+      showStatus(addStatus, false, "Internal Key may only contain lowercase letters, numbers, and underscores.");
+      addForm.querySelector('[name="role_key"]').focus();
+      return;
+    }
+    if (boosterRoles.some((r) => r.role_key === key)) {
+      showStatus(addStatus, false, `A color with the key "${key}" already exists.`);
+      addForm.querySelector('[name="role_key"]').focus();
+      return;
+    }
+    const payload = readColor(addForm, addStatus, "__new__");
+    if (!payload) return;
     try {
-      await apiPut(`/api/config/booster-roles/${key}`, {
-        label: fd.get("label"),
-        role_id: fd.get("role_id"),
-        image_path: fd.get("image_path"),
-        sort_order: parseInt(fd.get("sort_order"), 10) || 0,
-      });
+      await apiPut(`/api/config/booster-roles/${key}`, payload);
       const fresh = await loadConfig();
       render(
         container,
@@ -211,7 +288,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   function renderSwatchList(data) {
     const files = data.files || [];
     if (!files.length) {
-      swatchList.innerHTML = `<div class="empty">No swatches uploaded yet.</div>`;
+      swatchList.innerHTML = `<div class="empty">No swatch images uploaded yet.</div>`;
     } else {
       swatchList.innerHTML = files
         .map((f) => {
@@ -220,9 +297,9 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
             : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
           const meta = f.valid
             ? `<span>${esc(f.label)}</span>`
-            : `<span style="color:var(--danger,#e55)">⚠ rename to ColorName_HEX1_HEX2.ext — won't sync</span>`;
+            : `<span style="color:var(--danger,#e55)">⚠ This file is skipped when syncing — rename it to ColorName_HEX1_HEX2 plus its extension.</span>`;
           return `
-            <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border,#2a2a2a);">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border,#2a2a2a);">
               ${chip}
               <span style="flex:none;font-family:monospace;opacity:.85;">${esc(f.name)}</span>
               ${meta}
@@ -234,13 +311,17 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     if (data.using_managed) {
       swatchActive.textContent = "";
     } else {
-      swatchActive.innerHTML = `<strong>Sync currently scans an external folder:</strong> <code>${esc(data.active_dir)}</code>. Upload at least one validly named swatch to switch syncing to this server's uploaded set.`;
+      swatchActive.innerHTML = `<strong>Syncing currently reads a folder on the server:</strong> <code>${esc(data.active_dir)}</code>. Upload at least one correctly named image here to switch syncing over to this server's own set.`;
     }
     // Delete handlers
     swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const name = btn.dataset.swatchDel;
-        if (!(await confirmDialog(`Delete swatch "${name}"?`, { danger: true, confirmLabel: "Delete" }))) return;
+        const ok = await confirmDialog(
+          `Delete the image "${name}"? The next sync will remove the color it belongs to, and boosters wearing it lose the role.`,
+          { title: "Delete Swatch Image", danger: true, confirmLabel: "Delete Image" },
+        );
+        if (!ok) return;
         try {
           const fresh = await apiDelete(
             `/api/config/booster-roles/swatches/${encodeURIComponent(name)}`,
@@ -257,7 +338,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     try {
       renderSwatchList(await api("/api/config/booster-roles/swatches"));
     } catch (err) {
-      swatchList.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      swatchList.innerHTML = `<div class="error">Couldn't load the swatch images: ${esc(err.message)}</div>`;
     }
   }
 
@@ -267,21 +348,24 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   const uploadBtn = container.querySelector("[data-upload-btn]");
   const uploadStatus = container.querySelector("[data-upload-status]");
   const swatchInput = container.querySelector("[data-swatch-input]");
+  guardForm(uploadForm);
   uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!swatchInput.files.length) {
-      showStatus(uploadStatus, false, "Pick a file");
+      showStatus(uploadStatus, false, "Choose at least one image file first.");
+      swatchInput.focus();
       return;
     }
     const fd = new FormData();
     for (const file of swatchInput.files) fd.append("files", file);
     uploadBtn.disabled = true;
-    showStatus(uploadStatus, true, "Uploading…");
+    uploadStatus.textContent = "Uploading…";
     try {
       const data = await apiPost("/api/config/booster-roles/swatches", fd);
       renderSwatchList(data);
       swatchInput.value = "";
-      showStatus(uploadStatus, true, `Uploaded ${data.saved?.length || 0}`);
+      const n = data.saved?.length || 0;
+      showStatus(uploadStatus, true, `Uploaded ${n} image${n === 1 ? "" : "s"}`);
     } catch (err) {
       showStatus(uploadStatus, false, err.message);
     } finally {
@@ -295,14 +379,20 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   const syncStatus = container.querySelector("[data-sync-status]");
   syncForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const ok = await confirmDialog(
+      "Make the booster colors match the uploaded swatch images? Colors whose image is missing "
+      + "are deleted, and any booster wearing one loses that role.",
+      { title: "Sync Colors", danger: true, confirmLabel: "Sync Colors" },
+    );
+    if (!ok) return;
     syncBtn.disabled = true;
-    showStatus(syncStatus, true, "Syncing…");
+    syncStatus.textContent = "Syncing…";
     try {
       const data = await apiPost("/api/config/booster-roles/sync-swatches");
       const parts = [];
-      if (data.created?.length) parts.push(`created ${data.created.length}`);
-      if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
-      const msg = parts.length ? parts.join(", ") : "already in sync";
+      if (data.created?.length) parts.push(`added ${data.created.length}`);
+      if (data.removed?.length) parts.push(`deleted ${data.removed.length}`);
+      const msg = parts.length ? parts.join(", ") : "Already up to date";
       showStatus(syncStatus, true, msg);
       const fresh = await loadConfig();
       render(
@@ -323,19 +413,29 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   const repostForm = container.querySelector("[data-repost-form]");
   const repostBtn = container.querySelector("[data-repost-btn]");
   const repostStatus = container.querySelector("[data-repost-status]");
+  const repostPicker = mountChannelPicker(
+    repostForm.querySelector('[data-picker="panel_channel_id"]'),
+    channels, String(panelChannelId || "0"),
+    { emptyValue: "0", emptyLabel: "(pick a channel)", label: "Channel" },
+  );
+  guardForm(repostForm);
   repostForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const fd = new FormData(repostForm);
-    const channelId = fd.get("channel_id");
-    if (!channelId || channelId === "0") {
-      showStatus(repostStatus, false, "Pick a channel");
+    const channelId = repostPicker.getValue() || "0";
+    if (channelId === "0") {
+      showStatus(repostStatus, false, "Pick a channel first.");
       return;
     }
-    if (!(await confirmDialog("Repost the booster panel? The previously posted panel messages will be deleted.", { danger: true, confirmLabel: "Repost" }))) return;
+    const ok = await confirmDialog(
+      "Post the booster panel? The panel posted last time is deleted first, so its buttons stop working.",
+      { title: "Post Booster Panel", danger: true, confirmLabel: "Post Panel" },
+    );
+    if (!ok) return;
     repostBtn.disabled = true;
     try {
       const data = await apiPost("/api/config/booster-roles/post-panel", { channel_id: channelId });
-      showStatus(repostStatus, true, `Posted ${data.message_count || ""} message(s)`);
+      const n = data.message_count || 0;
+      showStatus(repostStatus, true, `Posted ${n} message${n === 1 ? "" : "s"}`);
     } catch (err) {
       showStatus(repostStatus, false, err.message);
     } finally {

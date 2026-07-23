@@ -1,8 +1,9 @@
-import { api, apiPost, esc } from "../api.js";
+import { api, apiPost, esc, fmtTs } from "../api.js";
 import {
-  apiPut, apiDelete, showStatus,
+  apiPut, apiDelete, showStatus, guardForm,
   loadChannels, loadRoles, channelSelect, roleSelect,
 } from "../config-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { toast, confirmDialog } from "../ui.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
@@ -24,16 +25,11 @@ function fmtTime(min) {
 }
 
 function fmtNextRun(ts) {
-  if (!ts) return "—";
-  try {
-    return new Date(ts * 1000).toLocaleString();
-  } catch (_) {
-    return "—";
-  }
+  return fmtTs(ts);
 }
 
 function recurrenceLabel(row) {
-  if (row.recurrence === "once") return `Once · ${row.start_date || "?"}`;
+  if (row.recurrence === "once") return `Once · ${row.start_date || "no date set"}`;
   if (row.recurrence === "daily") return "Daily";
   if (row.recurrence === "weekly") {
     const names = (row.recur_days || []).map((d) => WEEKDAYS[d] ? WEEKDAYS[d][1] : d);
@@ -47,7 +43,7 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>Game Scheduling</h2>
-        <div class="subtitle">Auto-launch party games at set times. Times are in server-local time.</div>
+        <div class="subtitle">Launch party games on their own, at times you pick. Every time below is server time.</div>
       </header>
 
       <section>
@@ -79,7 +75,7 @@ export function mount(container) {
               </label>
             </div>
             <div class="field" style="flex:1;min-width:140px;">
-              <label>Time (server-local)
+              <label>Time of Day (Server Time)
                 <input class="w-full" type="time" data-ctrl="time" value="20:00" />
               </label>
             </div>
@@ -90,19 +86,21 @@ export function mount(container) {
             </div>
           </div>
 
-          <div class="field" data-region="weekday-field" style="display:none;">
-            <label>On days</label>
+          <fieldset class="field" data-region="weekday-field"
+                    style="display:none;border:0;padding:0;margin:0;min-inline-size:0;">
+            <legend style="font-size:12px;font-weight:600;color:var(--ink-dim);padding:0;">On These Days</legend>
             <div data-region="weekdays" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;"></div>
-          </div>
+          </fieldset>
 
           <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
             <div class="field m-0">
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                <input type="checkbox" data-ctrl="announce" /> Announce before launch
+                <input type="checkbox" data-ctrl="announce" /> Announce Before Launch
               </label>
+              <div class="field-hint">Posts a heads-up in the channel a few minutes ahead, so people can gather.</div>
             </div>
             <div class="field" data-region="role-field" style="flex:1;min-width:200px;display:none;">
-              <label>Ping role (optional)
+              <label>Ping Role (Optional)
                 <select class="w-full" data-ctrl="role"></select>
               </label>
             </div>
@@ -118,7 +116,7 @@ export function mount(container) {
 
       <section>
         <div class="section-label">Scheduled Games</div>
-        <div data-region="list"><div class="empty">Loading</div></div>
+        <div data-region="list">${renderLoading("Loading schedules…")}</div>
       </section>
     </div>
   `;
@@ -126,7 +124,7 @@ export function mount(container) {
   _editingId = null;
   init(container).catch((e) => {
     container.querySelector('[data-region="list"]').innerHTML =
-      `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+      renderError(`Couldn’t load game scheduling — try again. (${e.message})`);
   });
 }
 
@@ -159,6 +157,8 @@ async function init(root) {
 
   renderGameOptions(root);
   wireEvents(root);
+  // Warn before a sidebar click throws away a half-built schedule.
+  guardForm(root.querySelector(".form"));
   await refreshList(root);
 }
 
@@ -182,7 +182,7 @@ function renderGameOptions(root, values = {}) {
       control = `<select class="w-full" data-opt="${esc(f.name)}" data-opt-type="choice">${opts}</select>`;
     } else if (f.type === "bool") {
       control = `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
-        <input type="checkbox" data-opt="${esc(f.name)}" data-opt-type="bool"${v ? " checked" : ""} /> enable
+        <input type="checkbox" data-opt="${esc(f.name)}" data-opt-type="bool"${v ? " checked" : ""} /> On
       </label>`;
     } else if (f.type === "int") {
       const minA = f.min !== undefined ? ` min="${f.min}"` : "";
@@ -191,8 +191,10 @@ function renderGameOptions(root, values = {}) {
     } else {
       control = `<input class="w-full" type="text" data-opt="${esc(f.name)}" data-opt-type="str" value="${esc(String(v ?? ""))}" />`;
     }
+    // Wrap idiom: the control lives inside its label, so a click on the text
+    // focuses the field and screen readers announce the right name.
     html += `<div class="field" style="flex:1;min-width:180px;margin:0;">
-      <label>${esc(f.label)}</label>${control}
+      <label>${esc(f.label)} ${control}</label>
     </div>`;
   }
   html += "</div>";
@@ -256,11 +258,11 @@ async function save(root) {
   const status = root.querySelector('[data-status="save"]');
   const body = readForm(root);
   if (!body.channel_id || body.channel_id === "0") {
-    showStatus(status, false, "Pick a channel");
+    showStatus(status, false, "Pick a channel first.");
     return;
   }
   if (!body.time) {
-    showStatus(status, false, "Pick a time");
+    showStatus(status, false, "Pick a time of day first.");
     return;
   }
   try {
@@ -273,7 +275,7 @@ async function save(root) {
     resetForm(root);
     await refreshList(root);
   } catch (e) {
-    showStatus(status, false, e.message);
+    showStatus(status, false, `Couldn’t save that schedule — ${e.message}`);
   }
 }
 
@@ -315,9 +317,10 @@ function startEdit(root, row) {
 }
 
 const STATUS_LABEL = {
-  launched: "✅ launched", skipped_active: "⏭️ channel busy",
-  skipped_disabled: "🚫 game disabled", skipped_giveup: "⌛ gave up (busy)",
-  error: "⚠️ error", launching: "▶️ launching",
+  launched: "✅ Launched", skipped_active: "⏭️ Skipped — channel was busy",
+  skipped_disabled: "🚫 Skipped — game is off",
+  skipped_giveup: "⌛ Gave up — channel stayed busy",
+  error: "⚠️ Failed", launching: "▶️ Launching now",
 };
 
 async function refreshList(root) {
@@ -326,11 +329,14 @@ async function refreshList(root) {
   try {
     rows = await api("/api/games/schedule");
   } catch (e) {
-    region.innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    region.innerHTML = renderError(`Couldn’t load your schedules — try again. (${e.message})`);
     return;
   }
   if (!rows.length) {
-    region.innerHTML = '<div class="empty">No schedules yet.</div>';
+    region.innerHTML = renderEmpty(
+      "No scheduled games yet. Fill in the form above to have Dungeon Keeper start a "
+      + "game on its own — handy for a standing games night.",
+    );
     return;
   }
   const chName = (id) => {
@@ -340,8 +346,8 @@ async function refreshList(root) {
   region.innerHTML = rows.map((r) => {
     const paused = r.status === "paused";
     const done = r.status === "done" || r.status === "cancelled";
-    const last = r.last_status ? ` · last: ${esc(STATUS_LABEL[r.last_status] || r.last_status)}` : "";
-    const statusTag = paused ? '<span class="tag">paused</span>'
+    const last = r.last_status ? ` · Last run: ${esc(STATUS_LABEL[r.last_status] || r.last_status)}` : "";
+    const statusTag = paused ? '<span class="tag">Paused</span>'
       : done ? `<span class="tag">${esc(r.status)}</span>` : "";
     return `
       <div class="card" data-id="${r.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--border,#333);border-radius:8px;">
@@ -349,10 +355,10 @@ async function refreshList(root) {
           <div style="font-weight:600;">${esc(r.game_icon)} ${esc(r.game_name)} ${statusTag}</div>
           <div class="field-hint" style="margin:2px 0 0;">
             ${esc(chName(r.channel_id))} · ${esc(recurrenceLabel(r))} · ${esc(fmtTime(r.time_of_day))}
-            ${r.announce ? " · 📣 announce" : ""}
+            ${r.announce ? " · 📣 Announced ahead" : ""}
           </div>
           <div class="field-hint" style="margin:2px 0 0;">
-            ${done ? "" : `next: ${esc(fmtNextRun(r.next_run_at))}`}${last}
+            ${done ? "" : `Next launch: ${esc(fmtNextRun(r.next_run_at))}`}${last}
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;">
@@ -381,7 +387,11 @@ async function handleRowAction(root, btn, rows) {
       return;
     }
     if (act === "delete") {
-      if (!(await confirmDialog("Delete this schedule?", { danger: true, confirmLabel: "Delete" }))) return;
+      const ok = await confirmDialog(
+        "Delete this schedule? Games already running keep going.",
+        { title: "Delete Schedule", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
       await apiDelete(`/api/games/schedule/${id}`);
     } else if (act === "pause") {
       await apiPost(`/api/games/schedule/${id}/pause`, {});
@@ -392,6 +402,6 @@ async function handleRowAction(root, btn, rows) {
     }
     await refreshList(root);
   } catch (e) {
-    toast(e.message, "error");
+    toast(`Couldn’t ${act === "delete" ? "delete that schedule" : "update that schedule"} — ${e.message}`, "error");
   }
 }

@@ -1,8 +1,21 @@
 import { api, esc } from "../api.js";
-import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
+import {
+  loadConfig,
+  loadChannels,
+  loadRoles,
+  apiPut,
+  showStatus,
+  guardForm,
+  renderMetaWarning,
+  mountChannelPicker,
+  mountRoleMultiPicker,
+} from "../config-helpers.js";
+
+// A Discord user id is a snowflake: 17–20 digits, no other characters.
+const SNOWFLAKE_RE = /^\d{17,20}$/;
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
     const [config, channels, roles, supportResp] = await Promise.all([
@@ -14,44 +27,91 @@ export function mount(container) {
     container.innerHTML = `
       <div class="panel">
         <header>
-          <h2>Global Config</h2>
-          <div class="subtitle">Timezone, mod channel, bypass roles, and recorded bots</div>
+          <h2>Global Settings</h2>
+          <div class="subtitle">Server-wide basics every other Dungeon Keeper feature builds on</div>
         </header>
-        <form class="form" data-form>
-          <div class="field">
-            <label>Timezone Offset (hours from UTC)</label>
-            <input type="number" step="0.5" name="tz_offset_hours" value="${esc(g.tz_offset_hours)}" />
-            <div class="field-hint">e.g. -5 for EST, 1 for CET</div>
+        ${renderMetaWarning()}
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Time &amp; Reporting</div>
+            <div class="field">
+              <label for="cg-tz">Time Zone Offset (hours from UTC)</label>
+              <input type="number" step="0.5" min="-12" max="14" required
+                name="tz_offset_hours" id="cg-tz" value="${esc(g.tz_offset_hours)}"
+                style="max-width:140px;" />
+              <div class="field-hint">Sets the day boundary Dungeon Keeper uses for
+                daily quests, streaks, digests, and every "today" figure in reports.
+                Enter hours from UTC — for example -5 for US Eastern time, 1 for
+                Central European time. Half-hour zones are allowed (5.5 for India).</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Mod Channel</label>
-            <select name="mod_channel_id">${channelSelect(channels, g.mod_channel_id)}</select>
+
+          <div class="card">
+            <div class="section-label">Staff Channel</div>
+            <div class="field">
+              <label>Moderator Channel</label>
+              <span data-picker="mod_channel_id"></span>
+              <div class="field-hint">The fallback channel for staff-facing notices
+                that have no channel of their own. "(disabled)" means those notices
+                are not posted anywhere.</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Bypass Roles</label>
-            <select name="bypass_role_ids" multiple size="6">${roleSelectMulti(roles, g.bypass_role_ids)}</select>
-            <div class="field-hint">Roles that bypass spoiler guard and other restrictions (Ctrl/Cmd-click to select multiple)</div>
+
+          <div class="card">
+            <div class="section-label">Exemptions</div>
+            <div class="field">
+              <label>Bypass Roles</label>
+              <span data-picker="bypass_role_ids"></span>
+              <div class="field-hint">Members holding any of these roles skip the
+                spoiler guard and the other automatic content restrictions. Give this
+                to trusted staff only — it removes protections rather than adding
+                powers.</div>
+            </div>
+            <div class="field">
+              <label for="cg-bots">Recorded Bot User IDs</label>
+              <input type="text" name="recorded_bot_user_ids" id="cg-bots"
+                value="${esc((g.recorded_bot_user_ids || []).join(", "))}"
+                placeholder="e.g. 123456789012345678, 234567890123456789" />
+              <div class="field-hint">Bot accounts whose messages Dungeon Keeper
+                stores anyway — for example a dice roller whose results you want kept
+                in transcripts. Enter Discord user IDs separated by commas (right-click
+                the bot with Developer Mode on and choose "Copy User ID"). These bots
+                still earn no XP and never trigger wellness or moderation checks.
+                Leave empty to store no bot messages.</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Recorded Bot User IDs</label>
-            <input type="text" name="recorded_bot_user_ids" value="${esc((g.recorded_bot_user_ids || []).join(", "))}" />
-            <div class="field-hint">Bot accounts whose messages should be stored (e.g. Risky Roller). Comma-separated user IDs. These bots still don't earn XP or trigger wellness/moderation.</div>
+
+          <div class="card">
+            <div class="section-label">Server File Paths</div>
+            <div class="field">
+              <label for="cg-swatch">Booster Swatch Directory</label>
+              <input type="text" name="booster_swatch_dir" id="cg-swatch"
+                value="${esc(g.booster_swatch_dir || "")}"
+                placeholder="e.g. /srv/dungeon-keeper/swatches" />
+              <div class="field-hint">A folder path on the machine running Dungeon
+                Keeper (not on your computer, and not a link) holding the booster
+                color swatch images. Leave empty to use the built-in swatches. A path
+                that does not exist means boosters see no swatch preview.</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Booster Swatch Directory</label>
-            <input type="text" name="booster_swatch_dir" value="${esc(g.booster_swatch_dir || "")}" />
-            <div class="field-hint">Folder with booster color swatch images</div>
+
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <span data-status></span>
           </div>
-          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
 
         <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
           <h3 style="margin:0 0 0.25rem">Support Access</h3>
-          <div class="field-hint" style="margin-bottom:1rem">Allow the Dungeon Keeper developer to access this server's dashboard to help troubleshoot issues or assist with configuration. You can revoke access at any time.</div>
+          <div class="field-hint" style="margin-bottom:1rem">Lets the Dungeon Keeper
+            developer open this server's dashboard to troubleshoot a problem or help
+            with setup. While it is on, they can see everything a server admin can see
+            here. Turn it off again as soon as you are done — it takes effect
+            immediately.</div>
           <div style="display:flex;align-items:center;gap:12px;">
             <label style="margin:0;cursor:pointer;display:flex;align-items:center;gap:8px;">
               <input type="checkbox" data-support-toggle ${supportResp.enabled ? "checked" : ""} />
-              Enable developer support access
+              Allow the Dungeon Keeper developer to access this dashboard
             </label>
             <span data-support-status></span>
           </div>
@@ -61,15 +121,46 @@ export function mount(container) {
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
+
+    const modChannelPicker = mountChannelPicker(
+      form.querySelector('[data-picker="mod_channel_id"]'),
+      channels, String(g.mod_channel_id || "0"), { label: "Moderator Channel" },
+    );
+    const bypassRolesPicker = mountRoleMultiPicker(
+      form.querySelector('[data-picker="bypass_role_ids"]'),
+      roles, g.bypass_role_ids, { label: "Bypass Roles" },
+    );
+
+    guardForm(form);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
+
+      const tz = parseFloat(fd.get("tz_offset_hours"));
+      if (!Number.isFinite(tz) || tz < -12 || tz > 14) {
+        showStatus(status, false, "Time Zone Offset must be a number from -12 to 14");
+        form.querySelector("[name=tz_offset_hours]").focus();
+        return;
+      }
+
+      const botIds = String(fd.get("recorded_bot_user_ids") || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+      const badId = botIds.find((id) => !SNOWFLAKE_RE.test(id));
+      if (badId) {
+        showStatus(status, false,
+          `Recorded Bot User IDs: "${badId}" is not a Discord user ID (17–20 digits)`);
+        form.querySelector("[name=recorded_bot_user_ids]").focus();
+        return;
+      }
+
       try {
         await apiPut("/api/config/global", {
-          tz_offset_hours: parseFloat(fd.get("tz_offset_hours")) || 0,
-          mod_channel_id: fd.get("mod_channel_id"),
-          bypass_role_ids: Array.from(form.querySelector('select[name="bypass_role_ids"]').selectedOptions).map((o) => o.value),
-          recorded_bot_user_ids: fd.get("recorded_bot_user_ids").split(",").map((s) => s.trim()).filter(Boolean),
+          tz_offset_hours: tz,
+          // Snowflakes stay strings — parseInt rounds 19-digit ids.
+          mod_channel_id: modChannelPicker.getValue() || "0",
+          bypass_role_ids: bypassRolesPicker.getValues(),
+          recorded_bot_user_ids: botIds,
           booster_swatch_dir: fd.get("booster_swatch_dir"),
         });
         showStatus(status, true);

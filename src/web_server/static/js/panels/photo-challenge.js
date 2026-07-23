@@ -1,8 +1,9 @@
-import { api, apiPost, esc } from "../api.js";
+import { api, apiPost, esc, fmtTs } from "../api.js";
 import {
-  apiPut, apiDelete, showStatus,
+  apiPut, apiDelete, showStatus, guardForm,
   loadChannels, loadRoles, channelSelect, roleSelect,
 } from "../config-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { toast, confirmDialog } from "../ui.js";
 import { mountGamePanel } from "./games-panel-shared.js";
 
@@ -19,9 +20,10 @@ const WEEKDAYS = [
 ];
 
 const STATUS_LABEL = {
-  launched: "✅ launched", skipped_active: "⏭️ channel busy",
-  skipped_disabled: "🚫 disabled", skipped_giveup: "⌛ gave up (busy)",
-  error: "⚠️ error", launching: "▶️ launching",
+  launched: "✅ Posted", skipped_active: "⏭️ Skipped — channel was busy",
+  skipped_disabled: "🚫 Skipped — Photo Challenge is off",
+  skipped_giveup: "⌛ Gave up — channel stayed busy",
+  error: "⚠️ Failed", launching: "▶️ Posting now",
 };
 
 function fmtTime(min) {
@@ -31,12 +33,11 @@ function fmtTime(min) {
 }
 
 function fmtNextRun(ts) {
-  if (!ts) return "—";
-  try { return new Date(ts * 1000).toLocaleString(); } catch (_) { return "—"; }
+  return fmtTs(ts);
 }
 
 function recurrenceLabel(row) {
-  if (row.recurrence === "once") return `Once · ${row.start_date || "?"}`;
+  if (row.recurrence === "once") return `Once · ${row.start_date || "no date set"}`;
   if (row.recurrence === "daily") return "Daily";
   if (row.recurrence === "weekly") {
     const names = (row.recur_days || []).map((d) => (WEEKDAYS[d] ? WEEKDAYS[d][0] : d));
@@ -63,19 +64,19 @@ export function mount(container) {
             <div class="field-hint">The channel every challenge card posts in.</div>
           </div>
           <div class="field" style="flex:1;min-width:220px;">
-            <label>Ping role on post
+            <label>Ping Role
               <select class="w-full" data-ctrl="role"></select>
             </label>
-            <div class="field-hint">Mentioned with every card. Leave as (none) for no ping.</div>
+            <div class="field-hint">Mentioned every time a card posts. Leave on (none) to post without a ping.</div>
           </div>
         </div>
         <div class="field-hint" style="margin-bottom:8px;">Posting a photo here pays out on its own — add an active <strong>photo_post</strong> quest under Economy → Quests to set the reward.</div>
         <div class="field m-0">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
             <input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />
-            <span>Enabled</span>
+            <span>Post Challenges on Schedule</span>
           </label>
-          <div class="field-hint">When off, scheduled challenges are skipped.</div>
+          <div class="field-hint">When off, every schedule below is skipped — nothing posts, and nothing is deleted.</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
           <button class="btn btn-primary" data-action="save-config">Save Setup</button>
@@ -97,7 +98,7 @@ export function mount(container) {
               </label>
             </div>
             <div class="field" style="flex:1;min-width:140px;">
-              <label>Time (server-local)
+              <label>Time of Day (Server Time)
                 <input class="w-full" type="time" data-ctrl="time" value="20:00" />
               </label>
             </div>
@@ -107,10 +108,11 @@ export function mount(container) {
               </label>
             </div>
           </div>
-          <div class="field" data-region="weekday-field" style="display:none;">
-            <label>On days</label>
+          <fieldset class="field" data-region="weekday-field"
+                    style="display:none;border:0;padding:0;margin:0;min-inline-size:0;">
+            <legend style="font-size:12px;font-weight:600;color:var(--ink-dim);padding:0;">On These Days</legend>
             <div data-region="weekdays" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:4px;"></div>
-          </div>
+          </fieldset>
           <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
             <button class="btn btn-primary" data-action="save-schedule">Create Schedule</button>
             <button class="btn" data-action="cancel-edit" style="display:none;">Cancel</button>
@@ -118,7 +120,7 @@ export function mount(container) {
           </div>
         </div>
         <div class="section-label" style="margin-top:16px;">Schedules</div>
-        <div data-region="list"><div class="empty">Loading</div></div>
+        <div data-region="list">${renderLoading("Loading schedules…")}</div>
       </section>
 
       <div data-region="bank"></div>
@@ -143,10 +145,17 @@ export function mount(container) {
   });
 
   initConfig(container).catch((e) => {
-    showStatus(container.querySelector('[data-status="config"]'), false, e.message);
+    showStatus(
+      container.querySelector('[data-status="config"]'),
+      false,
+      `Couldn’t load the setup — reload before saving. (${e.message})`,
+    );
   });
   wireSchedule(container, state);
-  refreshList(container, state).catch(() => {});
+  refreshList(container, state).catch((e) => {
+    container.querySelector('[data-region="list"]').innerHTML =
+      renderError(`Couldn’t load your schedules — try again. (${e.message})`);
+  });
 }
 
 // ── Setup (config) ───────────────────────────────────────────────────────────
@@ -173,9 +182,10 @@ async function initConfig(root) {
       });
       showStatus(st, true, "Saved");
     } catch (e) {
-      showStatus(st, false, e.message);
+      showStatus(st, false, `Couldn’t save — ${e.message}`);
     }
   });
+  guardForm(root.querySelector("section"));
 }
 
 // ── Schedule editor ──────────────────────────────────────────────────────────
@@ -207,7 +217,7 @@ function readForm(root) {
 async function saveSchedule(root, state) {
   const status = root.querySelector('[data-status="schedule"]');
   const body = readForm(root);
-  if (!body.time) { showStatus(status, false, "Pick a time"); return; }
+  if (!body.time) { showStatus(status, false, "Pick a time of day first."); return; }
   try {
     if (state.editingId !== null) {
       await apiPut(`/api/photo-challenge/schedule/${state.editingId}`, body);
@@ -218,7 +228,7 @@ async function saveSchedule(root, state) {
     resetForm(root, state);
     await refreshList(root, state);
   } catch (e) {
-    showStatus(status, false, e.message);
+    showStatus(status, false, `Couldn’t save that schedule — ${e.message}`);
   }
 }
 
@@ -256,25 +266,28 @@ async function refreshList(root, state) {
   try {
     rows = await api("/api/photo-challenge/schedule");
   } catch (e) {
-    region.innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    region.innerHTML = renderError(`Couldn’t load your schedules — try again. (${e.message})`);
     return;
   }
   if (!rows.length) {
-    region.innerHTML = '<div class="empty">No schedules yet. Add one above.</div>';
+    region.innerHTML = renderEmpty(
+      "No schedules yet. Use the form above to pick a day and time — Dungeon Keeper "
+      + "will post a challenge card in your chosen channel each time it comes around.",
+    );
     return;
   }
   region.innerHTML = rows.map((r) => {
     const paused = r.status === "paused";
     const done = r.status === "done" || r.status === "cancelled";
-    const last = r.last_status ? ` · last: ${esc(STATUS_LABEL[r.last_status] || r.last_status)}` : "";
-    const statusTag = paused ? '<span class="tag">paused</span>'
+    const last = r.last_status ? ` · Last run: ${esc(STATUS_LABEL[r.last_status] || r.last_status)}` : "";
+    const statusTag = paused ? '<span class="tag">Paused</span>'
       : done ? `<span class="tag">${esc(r.status)}</span>` : "";
     return `
       <div class="card" data-id="${r.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--border,#333);border-radius:8px;">
         <div style="min-width:0;">
           <div style="font-weight:600;">${esc(recurrenceLabel(r))} · ${esc(fmtTime(r.time_of_day))} ${statusTag}</div>
           <div class="field-hint" style="margin:2px 0 0;">
-            ${done ? "" : `next: ${esc(fmtNextRun(r.next_run_at))}`}${last}
+            ${done ? "" : `Next post: ${esc(fmtNextRun(r.next_run_at))}`}${last}
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;">
@@ -303,7 +316,11 @@ async function handleRowAction(root, state, btn, rows) {
       return;
     }
     if (act === "delete") {
-      if (!(await confirmDialog("Delete this schedule?", { danger: true, confirmLabel: "Delete" }))) return;
+      const ok = await confirmDialog(
+        "Delete this schedule? Cards already posted stay where they are.",
+        { title: "Delete Schedule", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
       await apiDelete(`/api/photo-challenge/schedule/${id}`);
     } else if (act === "pause") {
       await apiPost(`/api/photo-challenge/schedule/${id}/pause`, {});
@@ -314,6 +331,6 @@ async function handleRowAction(root, state, btn, rows) {
     }
     await refreshList(root, state);
   } catch (e) {
-    toast(e.message, "error");
+    toast(`Couldn’t ${act === "delete" ? "delete that schedule" : "update that schedule"} — ${e.message}`, "error");
   }
 }

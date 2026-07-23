@@ -52,7 +52,12 @@ export function mount(container, initialParams) {
         chanEl.appendChild(opt);
       }
       if (initialParams.channel_id) chanEl.value = initialParams.channel_id;
-    } catch (_) {}
+    } catch (err) {
+      const opt = document.createElement("option");
+      opt.disabled = true;
+      opt.textContent = "Channel list failed to load — reload the page";
+      chanEl.appendChild(opt);
+    }
   }
 
   async function refresh() {
@@ -66,7 +71,7 @@ export function mount(container, initialParams) {
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
       if (!data.buckets.length) {
-        wrap.innerHTML = `<div class="empty">No message data for this period.</div>`;
+        wrap.innerHTML = `<div class="empty">No messages in this window. Pick a coarser resolution, or choose All channels.</div>`;
         sliderWrap.innerHTML = "";
         return;
       }
@@ -83,7 +88,7 @@ export function mount(container, initialParams) {
       sliderWrap.innerHTML = "";
       slider = mountTimeSlider(sliderWrap, { totalPoints: data.buckets.length, labels, onChange: renderChart });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load message cadence — try again. (${esc(err.message)})</div>`;
     }
   }
 

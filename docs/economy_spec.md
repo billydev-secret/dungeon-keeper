@@ -760,7 +760,6 @@ active trailing periods of the kind fall back to the deterministic
 `(user, quest, period)`) — the cold-start behavior, and the entire behavior
 before migration 080's ledger accrued history. Sandbagging by going quiet
 floors out at `target_min` and is self-defeating (less activity is less
-<<<<<<< HEAD
 income anyway). **Channel-scoped band quests** on message-shaped kinds
 (`quests.CHANNEL_SHARE_KINDS`: message_sent, reply_sent, media_post) scale
 the member's median by *their own* share of traffic in the scoped channel
@@ -771,7 +770,6 @@ is never scaled (the author wrote the band for the channel already).
 Thread messages archive under the thread's id while scoped fires credit
 the parent, so shares read slightly low in thready channels — targets err
 forgiving.
-=======
 income anyway).
 
 Kinds in `quests.PERSONAL_P25_KINDS` (currently `reaction_given`) resolve
@@ -781,7 +779,6 @@ one-click acts with a heavy-tailed distribution, so the target means "at
 least your own quiet-week level" — stretching past typical pace would turn
 the anti-freebie fix into a grind on a heavy reactor's off week. Zeros
 still count in the quantile, same as the median path.
->>>>>>> main
 `0/0` (the default) means no band — the fixed `target_count` applies, so existing
 quests are unchanged. Both the counted-claim path and the `/quests` progress
 meter read the same `effective_target`.
@@ -884,7 +881,7 @@ takes effect on the next cycle, never retroactively.
 | PvP game wager | player-chosen, uncapped | **Sinks round 2, stage 4b** (built 2026-07-20). Optional `wager:` on all six duel/group games: equal ante, winner takes the pot minus the optional house rake — `wager_rake_pct`, default **0 (dark)**, capped 50, added 2026-07-20 revising the round's original no-rake stance (at 0 a wager is still the pure transfer that made the games matter; a priced rake evaporates its cut of every settled pot, read at settlement time like rental renewals, never snapshotted). Refunds are never raked, nor is a single-stake pot (a winner reclaiming their own ante isn't a contest); the payout announcement and register memo both name the cut (`meta.rake`) so the arithmetic visibly adds up. Escrow in `econ_game_wagers` (migration 094) keyed to (game_type, game_id, user_id); duels declare at challenge and debit both sides at accept (decline/timeout costs nothing), lobbies debit on join and refund on leave. Settlement/refund rides the stage-4a terminal seam, exactly-once via `settled_at`. Every non-settling terminal state (ABANDONED / VOID / EXPIRED_LOBBY / DECLINED) and a `winner_id` of None refunds; a guild-leaver's stake is refunded by the economy cog's member-remove listener. Ledger kinds `wager_stake` / `wager_payout` / `wager_refund`, payout and refund unboosted so a wager can never mint |
 | Raffle ticket | 10 each, ≤10/member/week | **Sinks round 3, stage 5.** Week-scoped tickets (`raffle_ticket` burn, no refunds); weighted draw at the ISO-week roll, exactly-once via the `econ_raffle_draws` PK (claim-before-side-effect). Prize is NEVER coins: a `free_week` voucher (28-day expiry) auto-covers the winner's next rental debit — renewal or first week of a new rent — as a 0-amount `rental` ledger row (`meta.voucher_id`). Winner DMed (opt-in-role gated) and **named** on the leaderboard panel's raffle section (the deliberate anonymous-ticker carve-out — buying in is opting in). `raffle_enabled` default **off**; enabling is a comms decision, announce first. Shop: ticket row + quantity modal (ephemeral + persistent panel). Migration 093 |
 | Hoard tax (demurrage) | **0% (dark)**, suggested 2%/wk over a 500 floor | **Built 2026-07-20 (migration 100).** The only sink that needs no buyer: at the ISO-week roll, every wallet above `demurrage_threshold` loses `demurrage_rate_pct`% of the **excess** only — the floor is protected, so nobody is taxed below it and 100% is a hard wealth cap, not a wipe. Floor-division grace: a tax that rounds to 0 goes uncollected. Exactly-once via the `econ_demurrage_sweeps` (guild, week) PK — claim-before-debit, the raffle-draw pattern — with per-sweep totals recorded for metrics. Ledger kind `demurrage` (meta: closed week + pre-tax balance) narrated by the register feed (🐉 "Hoard tax") — no separate announcement. Rate 0 default = off; both knobs on the Sinks page; enabling is a comms decision, announce first (`economy_demurrage_service.py`, swept from the week roll beside the raffle draw) |
-| Casino (Golden Meadow) | fixed paytables, not priced | **Built 2026-07-22** — house gambling (coinflip, slots, blackjack, roulette) in one configured channel; net sink via tested house edges, bounded by a per-member daily wager cap. Kinds `casino_stake`/`casino_payout`/`casino_refund`, payouts never boosted. Own spec: [casino_spec.md](casino_spec.md) (dashboard: Economy → Casino) |
+| Casino | fixed paytables, not priced | **Built 2026-07-22** — house gambling (coinflip, slots, blackjack, roulette) in one configured channel; net sink via tested house edges, bounded by a per-member daily wager cap. Kinds `casino_stake`/`casino_payout`/`casino_refund`, payouts never boosted. Own spec: [casino_spec.md](casino_spec.md) (dashboard: Economy → Casino) |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
 **Curated role-icon catalog (currency sink).** Alongside bring-your-own icon

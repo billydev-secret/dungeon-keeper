@@ -330,7 +330,42 @@ def test_intake_report_panel_escapes_member_controlled_columns():
     interpolated into innerHTML by renderSortableTable (stored-XSS shape)."""
     from pathlib import Path
 
-    src = Path("src/web_server/static/js/panels/intake-report.js").read_text()
+    src = Path("src/web_server/static/js/panels/intake-report.js").read_text(encoding="utf-8")
     assert 'format: (v, r) => esc(v || r.user_id)' in src  # both name columns
     assert src.count("esc(v || r.user_id)") == 2
     assert '{ key: "label", label: "Step", format: (v) => esc(v) }' in src
+# ── time-to-level-5 name resolution ───────────────────────────────────
+
+
+def test_time_to_level5_resolves_names_for_departed_members(open_client, fake_ctx):
+    """A member the guild cache no longer knows must not render as a raw ID.
+
+    resolve_names() only fills a name field that is falsy, so seeding the
+    response with str(user_id) silently defeated both its known_users lookup
+    and its "User <id>" fallback. This asserts the fallback actually fires.
+    """
+    invalidate_report_cache()
+    guild_id = fake_ctx.guild_id
+    user_id = 4242
+    now = int(time.time())
+    # Enough XP in one go to clear level 5, with a gap so the duration is > 0.
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            """INSERT INTO xp_events (guild_id, user_id, amount, source, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (guild_id, user_id, 1, "message", now - 86400),
+        )
+        conn.execute(
+            """INSERT INTO xp_events (guild_id, user_id, amount, source, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (guild_id, user_id, 100_000, "message", now),
+        )
+        conn.commit()
+
+    resp = open_client.get("/api/reports/time-to-level-5")
+    assert resp.status_code == 200
+    members = resp.json()["members"]
+    assert members, "expected the seeded member to have reached level 5"
+    row = next(m for m in members if int(m["user_id"]) == user_id)
+    assert row["display_name"] != str(user_id)
+    assert row["display_name"] == f"User {user_id}"

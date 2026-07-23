@@ -5,7 +5,8 @@
 import { api, apiPost, apiPut, esc } from "../api.js";
 import { toast, confirmDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { syncHash } from "../report-helpers.js";
 import {
   showStatus, loadRoles, loadChannels, loadMembers,
   mountRolePicker, mountChannelPicker,
@@ -46,7 +47,7 @@ function tally(test) {
     .join(" · ");
 }
 
-export function mount(container) {
+export function mount(container, initialParams = {}) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -66,17 +67,17 @@ export function mount(container) {
             <button data-filter="archived">Archived</button>
           </div>
         </div>
-        <div data-board>${renderLoading("Loading…")}</div>
+        <div data-board>${renderLoading("Loading the board…")}</div>
       </section>
 
       <section class="card">
         <div class="section-label">Top Testers</div>
-        <div data-testers>${renderLoading("Loading…")}</div>
+        <div data-testers>${renderLoading("Loading top testers…")}</div>
       </section>
 
       <section class="card">
         <div class="section-label">Config</div>
-        <form class="form" data-form>${renderLoading("Loading…")}</form>
+        <form class="form" data-form>${renderLoading("Loading settings…")}</form>
       </section>
     </div>
   `;
@@ -86,12 +87,26 @@ export function mount(container) {
   const formEl = container.querySelector("[data-form]");
   const filterGroup = container.querySelector("[data-filter-group]");
 
+  const FILTER_VALUES = ["all", "pending", "passed", "failed", "blocked", "archived"];
   const state = {
     tests: [],
     members: [],
-    filter: "all",
-    expandedId: null,
+    filter: FILTER_VALUES.includes(initialParams.filter) ? initialParams.filter : "all",
+    expandedId: initialParams.test ? Number(initialParams.test) : null,
   };
+  for (const btn of filterGroup.querySelectorAll("[data-filter]")) {
+    const on = btn.dataset.filter === state.filter;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  /** Mirror the board filter and the expanded card into the URL (W-D9). */
+  function pushHash() {
+    syncHash("qa-tracker", {
+      filter: state.filter === "all" ? "" : state.filter,
+      test: state.expandedId || "",
+    });
+  }
 
   function memberLabel(id) {
     const m = state.members.find((x) => String(x.id) === String(id));
@@ -143,8 +158,11 @@ export function mount(container) {
     const tests = state.filter === "all"
       ? state.tests
       : state.tests.filter((t) => t.status === state.filter);
+    pushHash();
     if (!tests.length) {
-      boardEl.innerHTML = renderEmpty("No tests match this filter.");
+      boardEl.innerHTML = renderEmpty(state.filter === "all"
+        ? "No test cards yet. The post-commit hook posts one for every commit that ships a Testing checklist."
+        : `No ${state.filter} test cards. Pick All to see the rest of the board.`);
       return;
     }
     const rows = tests.map((t) => {
@@ -174,7 +192,7 @@ export function mount(container) {
       state.tests = data.tests || [];
       renderBoard();
     } catch (err) {
-      boardEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      boardEl.innerHTML = renderError(`Couldn't load the QA board — ${err.message}. Reload the page to try again.`);
     }
   }
 
@@ -232,7 +250,7 @@ export function mount(container) {
       const data = await api("/api/qa/top-testers");
       const testers = data.testers || [];
       if (!testers.length) {
-        testersEl.innerHTML = renderEmpty("No verdicts recorded yet.");
+        testersEl.innerHTML = renderEmpty("No verdicts recorded yet. Testers appear here once they start clicking Pass, Fail, or Blocked on the cards.");
         return;
       }
       const rows = testers.map((t) => `
@@ -249,7 +267,7 @@ export function mount(container) {
           </table>
         </div>`;
     } catch (err) {
-      testersEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      testersEl.innerHTML = renderError(`Couldn't load top testers — ${err.message}. Reload the page to try again.`);
     }
   }
 
@@ -262,7 +280,7 @@ export function mount(container) {
         api("/api/qa/settings"), loadRoles(), loadChannels(),
       ]);
     } catch (err) {
-      formEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      formEl.innerHTML = renderError(`Couldn't load QA settings — ${err.message}. Reload the page to try again.`);
       return;
     }
 
@@ -272,27 +290,29 @@ export function mount(container) {
         <div class="field-hint">Off pauses verdict buttons; existing cards stay put.</div>
       </div>
       <div class="field-row">
-        <div class="field"><label>QA crew role</label>
+        <div class="field"><label>QA Crew Role</label>
           <span data-picker="role"></span>
           <div class="field-hint">Members allowed to click verdict buttons. (none) = admins only.</div></div>
-        <div class="field"><label>Cards channel</label>
+        <div class="field"><label>Cards Channel</label>
           <span data-picker="channel"></span>
           <div class="field-hint">Where the post-commit hook posts new cards.</div></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Reward per verdict</label>
-          <input type="number" name="reward" min="0" max="10000" step="1" value="${Number(settings.reward) || 0}" style="max-width:120px;" /></div>
-        <div class="field"><label>Daily paid cap</label>
-          <input type="number" name="daily_cap" min="0" max="1000" step="1" value="${Number(settings.daily_cap) || 0}" style="max-width:120px;" />
+        <div class="field"><label for="qa-reward">Reward Per Verdict</label>
+          <input id="qa-reward" type="number" name="reward" min="0" max="10000" step="1" value="${Number(settings.reward) || 0}" style="max-width:120px;" /></div>
+        <div class="field"><label for="qa-daily-cap">Daily Paid Cap</label>
+          <input id="qa-daily-cap" type="number" name="daily_cap" min="0" max="1000" step="1" value="${Number(settings.daily_cap) || 0}" style="max-width:120px;" />
           <div class="field-hint">Paid verdicts per tester per day; later verdicts still record, unpaid.</div></div>
       </div>
       <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
     `;
 
     const rolePicker = mountRolePicker(
-      formEl.querySelector('[data-picker="role"]'), roles, settings.role_id);
+      formEl.querySelector('[data-picker="role"]'), roles, settings.role_id,
+      { label: "QA crew role" });
     const channelPicker = mountChannelPicker(
-      formEl.querySelector('[data-picker="channel"]'), channels, settings.channel_id);
+      formEl.querySelector('[data-picker="channel"]'), channels, settings.channel_id,
+      { label: "Cards channel" });
     const status = formEl.querySelector("[data-status]");
 
     formEl.addEventListener("submit", async (e) => {

@@ -25,7 +25,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
 | [booster_roles_spec.md](booster_roles_spec.md) | Booster cosmetic roles: swatch-synced gradient color roles, persistent claim buttons (boosters only, mutually exclusive), dashboard panel posting |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
-| [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders) |
+| [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders); dashboard panel shipped 2026-07-23 — before that the routes existed with no UI and live guilds were configured by hand |
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
@@ -81,7 +81,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |
 | [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |
-| [casino_spec.md](casino_spec.md) | The Golden Meadow casino: house gambling (coinflip, slots, blackjack, roulette), button-only | Built 2026-07-22 ([plans/casino.md](plans/casino.md)) |
+| [casino_spec.md](casino_spec.md) | Casino (per-guild name, default "Golden Meadow"): house gambling (coinflip, slots, blackjack, roulette), button-only | Built 2026-07-22 ([plans/casino.md](plans/casino.md)) |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sink round 2: paid quest rerolls, sponsor-a-QOTD (mod-approved), burn list, PvP coin wagers | All stages built (4b landed 2026-07-20) |
 | [events_spec.md](events_spec.md) | Events cog | |
 | [music_spec.md](music_spec.md) | Music cog (Lavalink) | Built |
@@ -103,7 +103,7 @@ feature and also appear in the Design table above.
 
 | Plan | What it covers | Status |
 |---|---|---|
-| [plans/ai-advisor.md](plans/ai-advisor.md) | Billy-bot: grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
+| [plans/ai-advisor.md](plans/ai-advisor.md) | AI advisor (per-guild name, default "Billy-bot"): grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
 | [plans/help_bot_knowledge.md](plans/help_bot_knowledge.md) | Billy-bot as a setup guide: model tiering, settings registry, gap detection, proactive suggestions | Stages 1–3 built 2026-07-23; stage 4 in progress |
 | [plans/chat-revive.md](plans/chat-revive.md) | Chat Revive ("Ember") v1: rhythm-aware lull questions | Built 2026-07-14 |
 | [plans/chat-revive-session-model.md](plans/chat-revive-session-model.md) | Session-gap lull model (replaces v1's rhythm fire threshold) | Built 2026-07-18 |
@@ -153,6 +153,7 @@ These describe features or shapes of the system that don't match reality. They'r
 | [reviews/2026-07-01-rules-watch-followups.md](reviews/2026-07-01-rules-watch-followups.md) | Rules Watch follow-ups (audit follow-up) |
 | [reviews/2026-07-20-rules-watch-tuning.md](reviews/2026-07-20-rules-watch-tuning.md) | Rules Watch tuning investigation (2026-07-20): why the guard flagged 98.7% of everything, what the ban record shows, and three failed attempts at automated detection. Boundary-gate fix shipped (45.4→7.7 alerts/day); **detection unsolved, human reporting primary** |
 | [reviews/2026-07-20-automated-moderation-research.md](reviews/2026-07-20-automated-moderation-research.md) | Literature review companion to the tuning spec (2026-07-20): external evidence that the 0.61–0.66 detection ceiling is **structural, not local** — the closest published analogue (CGA derailment forecasting) hits the same wall with 1000× the labels and a 34–44% FPR. Confirms 13 positives is below every supervised/PU/weak-supervision floor; endorses the ledger + human-primary approach |
+| [reviews/2026-07-22-website-ux-review.md](reviews/2026-07-22-website-ux-review.md) | Dashboard UX deep review (2026-07-22): browser mobile sweep of all 179 panel routes + 5-dimension code review (nav/IA, config workflow, analytics states, a11y, help). Confirms the July a11y push landed (U1a–k fixed, 173/179 panels clean on phone); ~60 findings W-* remain, headlined by config data-loss traps, inert-canvas bugs, and ~10% adoption of the shared state helpers. Ends with 7 suggested fix batches |
 
 ---
 

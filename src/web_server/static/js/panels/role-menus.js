@@ -1,7 +1,8 @@
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
-import { loadChannels, channelName, mountChannelPicker, showStatus } from "../config-helpers.js";
+import { loadChannels, channelName, mountChannelPicker, showStatus, guardForm } from "../config-helpers.js";
 import { mdToHtml } from "../md-preview.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { confirmDialog, promptDialog, toast } from "../ui.js";
 
 const MODES = [
   ["toggle", "Toggle", "Click to get the role, click again to drop it."],
@@ -27,7 +28,12 @@ function emojiHtml(raw) {
 }
 
 function renderList(menus, activeId) {
-  if (!menus.length) return renderEmpty("No role menus yet. Create one to get started.");
+  if (!menus.length) {
+    return renderEmpty(
+      "No role menus yet. Choose New Menu to build one — members pick their own roles "
+      + "from buttons or a dropdown you publish to a channel.",
+    );
+  }
   return menus.map((m) => {
     const cls = m.id === activeId ? " active" : "";
     const where = m.published ? "published" : "draft";
@@ -61,7 +67,7 @@ export function mount(container) {
           <div class="ticket-list" data-list>${renderLoading("Loading…")}</div>
         </div>
         <div class="ticket-detail" data-editor>
-          <div class="empty" style="padding:24px">Select a menu, or create one.</div>
+          <div class="empty" style="padding:24px">Pick a menu on the left to edit it, or choose New Menu to build one.</div>
         </div>
       </section>
     </div>`;
@@ -75,10 +81,19 @@ export function mount(container) {
     channels: [], roles: [], saving: false, previewTimer: null,
   };
 
+  // Warn before a sidebar click or guild switch throws away unsaved menu edits.
+  // Attached once to the editor container (it survives every re-render).
+  guardForm(editorEl);
+
   loadChannels().then((chs) => { state.channels = chs || []; });
   api("/api/role-menus/roles")
     .then((data) => { state.roles = data.roles || []; })
-    .catch(() => { state.roles = []; });
+    .catch((err) => {
+      // Silently empty role dropdowns would look like "this server has no
+      // assignable roles" — say what actually happened instead.
+      state.roles = [];
+      toast(`Couldn't load the role list — reload before editing choices (${err.message})`, "error");
+    });
 
   function renderMenuList() {
     listEl.innerHTML = renderList(state.menus, state.activeId);
@@ -90,7 +105,7 @@ export function mount(container) {
       state.menus = data.menus || [];
       renderMenuList();
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      listEl.innerHTML = renderError(`Couldn't load your role menus — try again. (${err.message})`);
     }
   }
 
@@ -102,7 +117,7 @@ export function mount(container) {
       state.menu = await api(`/api/role-menus/${id}`);
       renderEditor();
     } catch (err) {
-      editorEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      editorEl.innerHTML = renderError(`Couldn't open that menu — try again. (${err.message})`);
     }
   }
 
@@ -243,18 +258,20 @@ export function mount(container) {
       <div class="doc-ed">
         ${healthHtml(menu.health)}
         <div class="doc-ed-head">
-          <input class="doc-ed-title" data-title type="text" maxlength="256"
+          <input class="doc-ed-title" data-title type="text" maxlength="256" id="rm-title"
+                 aria-label="Menu title"
                  placeholder="Menu title" value="${esc(menu.title)}" />
-          <input class="doc-ed-accent" data-accent type="text" maxlength="7"
-                 placeholder="#hex" value="${esc(menu.accent)}" title="Accent color (blank = server branding)" />
+          <input class="doc-ed-accent" data-accent type="text" maxlength="7" id="rm-accent"
+                 aria-label="Accent color (hex)"
+                 placeholder="#hex" value="${esc(menu.accent)}" title="Accent color — leave blank to use your server branding" />
         </div>
         <div class="doc-ed-grid">
           <div class="doc-ed-col">
-            <label class="doc-ed-lbl">Description (markdown)</label>
-            <textarea class="doc-ed-area rm-desc" data-desc spellcheck="true"
+            <label class="doc-ed-lbl" for="rm-desc">Description (Markdown)</label>
+            <textarea class="doc-ed-area rm-desc" data-desc id="rm-desc" spellcheck="true"
                       placeholder="Pick your colors…">${esc(menu.description)}</textarea>
-            <label class="doc-ed-lbl">Thumbnail URL (optional)</label>
-            <input type="text" class="rm-wide-input" data-thumb placeholder="https://…" value="${esc(menu.thumbnail_url)}">
+            <label class="doc-ed-lbl" for="rm-thumb">Thumbnail URL (Optional)</label>
+            <input type="text" class="rm-wide-input" data-thumb id="rm-thumb" placeholder="https://…" value="${esc(menu.thumbnail_url)}">
             <div class="rm-settings">
               <label>Style
                 <select data-style>
@@ -266,21 +283,21 @@ export function mount(container) {
                 <select data-mode>${MODES.map(([v, l]) =>
                   `<option value="${v}"${menu.mode === v ? " selected" : ""}>${l}</option>`).join("")}</select>
               </label>
-              <label>Max roles
-                <input type="number" data-max-roles min="0" max="25" value="${menu.max_roles}" title="0 = no cap">
+              <label>Max Roles
+                <input type="number" data-max-roles min="0" max="25" value="${menu.max_roles}" title="How many roles one member may hold from this menu. 0 means no cap.">
               </label>
-              <label>Cooldown (s)
-                <input type="number" data-cooldown min="0" max="3600" value="${menu.cooldown_seconds}" title="0 = none">
+              <label>Cooldown (Seconds)
+                <input type="number" data-cooldown min="0" max="3600" value="${menu.cooldown_seconds}" title="How long a member must wait between picks. 0 means no wait.">
               </label>
-              <label class="rm-required">Required role
+              <label class="rm-required">Required Role
                 <span data-required-picker></span>
               </label>
-              <label class="rm-placeholder-field"${menu.style === "dropdown" ? "" : " hidden"}>Dropdown placeholder
+              <label class="rm-placeholder-field"${menu.style === "dropdown" ? "" : " hidden"}>Dropdown Placeholder
                 <input type="text" data-placeholder maxlength="150" value="${esc(menu.placeholder)}" placeholder="Pick your colors…">
               </label>
             </div>
             <div class="field-hint" data-mode-hint>${esc(modeMeta[2])}</div>
-            <label class="doc-ed-lbl" style="margin-top:8px">Choices</label>
+            <div class="doc-ed-lbl" style="margin-top:8px">Choices</div>
             <div data-options></div>
             <div class="doc-ed-actions">
               <button class="act-btn" data-save>Save${menu.published ? " &amp; update live" : ""}</button>
@@ -290,7 +307,7 @@ export function mount(container) {
             </div>
           </div>
           <div class="doc-ed-col">
-            <label class="doc-ed-lbl">Preview</label>
+            <div class="doc-ed-lbl">Preview</div>
             <div class="doc-preview" data-preview></div>
             <div class="rm-publish">
               <div class="doc-place-head"><h4>Publishing</h4></div>
@@ -317,7 +334,7 @@ export function mount(container) {
     const picker = mountChannelPicker(
       editorEl.querySelector("[data-ch-picker]"), state.channels,
       menu.channel_id !== "0" ? menu.channel_id : "0",
-      { placeholder: "Pick a channel…" });
+      { placeholder: "Pick a channel…", label: "Channel to publish this menu to" });
     editorEl._picker = picker;
 
     const reqRoles = state.roles.filter((r) => !r.dangerous || r.id === menu.required_role_id);
@@ -380,14 +397,17 @@ export function mount(container) {
   });
 
   newBtn.addEventListener("click", async () => {
-    const title = prompt("Title for the new menu — e.g. Colors, Ping Roles:");
+    const title = await promptDialog(
+      "Give the menu a title members will see — for example Colors or Ping Roles.",
+      { title: "New Role Menu", confirmLabel: "Create Menu", required: true },
+    );
     if (title == null) return;
     try {
       const menu = await apiPost("/api/role-menus", { title: title.trim() });
       await refreshList();
       selectMenu(menu.id);
     } catch (err) {
-      alert(err.message);
+      toast(`Couldn't create the menu — ${err.message}`, "error");
     }
   });
 
@@ -510,15 +530,19 @@ export function mount(container) {
     }
 
     if (e.target.closest("[data-delete]")) {
-      if (!confirm(`Delete "${menu.title || "this menu"}"? The posted message comes down too. Grant history is kept.`)) return;
+      const ok = await confirmDialog(
+        `Delete "${menu.title || "this menu"}"? The posted message comes down too. Members keep the roles they already have, and grant history is kept.`,
+        { title: "Delete Role Menu", danger: true, confirmLabel: "Delete Menu" },
+      );
+      if (!ok) return;
       try {
         await apiDelete(`/api/role-menus/${menu.id}`);
         state.menu = null;
         state.activeId = null;
-        editorEl.innerHTML = '<div class="empty" style="padding:24px">Menu deleted.</div>';
+        editorEl.innerHTML = renderEmpty("Menu deleted. Pick another menu on the left, or create a new one.");
         await refreshList();
       } catch (err) {
-        alert(err.message);
+        toast(`Couldn't delete the menu — ${err.message}`, "error");
       }
     }
   });

@@ -72,13 +72,13 @@ export function mount(container, initialParams) {
             <option value="365">Last year</option>
           </select>
         </label>
-        <label>Min active days
+        <label>Minimum Active Days
           <input type="number" data-control="min_days" min="1" max="90" value="${initialParams.min_days || 7}" />
         </label>
         <label>Status
           <select data-control="status">
-            <option value="Active">Active only</option>
-            <option value="">All</option>
+            <option value="Active">Active members only</option>
+            <option value="">Everyone</option>
           </select>
         </label>
       </div>
@@ -123,15 +123,15 @@ export function mount(container, initialParams) {
         const maleSum = maleEntries.reduce((sum, e) => sum + e.final_score, 0) * 100;
         const femaleSum = femaleEntries.reduce((sum, e) => sum + e.final_score, 0) * 100;
         summaryEl.innerHTML = `
-          <span style="color:${GENDER_COLORS.male}">Male total: ${maleSum.toFixed(1)} (${maleEntries.length})</span>
-          <span style="color:${GENDER_COLORS.female}">Female total: ${femaleSum.toFixed(1)} (${femaleEntries.length})</span>
+          <span style="color:${GENDER_COLORS.male}">Male total: ${maleSum.toFixed(1)} across ${maleEntries.length} members</span>
+          <span style="color:${GENDER_COLORS.female}">Female total: ${femaleSum.toFixed(1)} across ${femaleEntries.length} members</span>
         `;
       } else {
         summaryEl.innerHTML = "";
       }
 
       if (!entries.length) {
-        container.querySelector("[data-top-chart]").innerHTML = `<div class="empty">No quality score data.</div>`;
+        container.querySelector("[data-top-chart]").innerHTML = `<div class="empty">No members clear the bar yet. Quality Score needs members with at least the minimum active days above — lower that number, widen the period, or switch Status to Everyone.</div>`;
         container.querySelector("[data-bottom-chart]").innerHTML = "";
         tableWrap.innerHTML = "";
         return;
@@ -158,19 +158,21 @@ export function mount(container, initialParams) {
         columns: [
           { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
           { key: "final_score", label: "Score", format: (v) => `<span style="color:${scoreColor(v)};font-weight:700">${(v * 100).toFixed(1)}</span>` },
-          { key: "engagement_given", label: "Engage", format: (v) => (v * 100).toFixed(0) },
-          { key: "consistency_recency", label: "Consist", format: (v) => (v * 100).toFixed(0) },
-          { key: "content_resonance", label: "Reson", format: (v) => (v * 100).toFixed(0) },
-          { key: "posting_activity", label: "Post", format: (v) => (v * 100).toFixed(0) },
+          { key: "engagement_given", label: "Engagement", format: (v) => (v * 100).toFixed(0) },
+          { key: "consistency_recency", label: "Consistency", format: (v) => (v * 100).toFixed(0) },
+          { key: "content_resonance", label: "Resonance", format: (v) => (v * 100).toFixed(0) },
+          { key: "posting_activity", label: "Posting", format: (v) => (v * 100).toFixed(0) },
           { key: "status", label: "Status" },
-          { key: "active_days", label: "Days" },
-          { key: "active_weeks", label: "Weeks" },
+          { key: "active_days", label: "Active Days" },
+          { key: "active_weeks", label: "Active Weeks" },
         ],
         data: entries,
         defaultSort: "final_score",
+        emptyMsg: "No members match this filter.",
+        maxRows: 300,
       });
     } catch (err) {
-      container.querySelector("[data-top-chart]").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector("[data-top-chart]").innerHTML = `<div class="error">Couldn’t load quality scores — try again. (${esc(err.message)})</div>`;
       container.querySelector("[data-bottom-chart]").innerHTML = "";
       tableWrap.innerHTML = "";
     }

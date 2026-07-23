@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -43,13 +44,17 @@ function computeInsights(grid) {
   const dayTotals = grid.map(row => row.reduce((a, b) => a + b, 0));
   const busiestDay = dayTotals.indexOf(Math.max(...dayTotals));
   const quietestDay = dayTotals.indexOf(Math.min(...dayTotals));
-  const ratio = dayTotals[quietestDay] > 0
-    ? (dayTotals[busiestDay] / dayTotals[quietestDay]).toFixed(1)
-    : "∞";
-  insights.push({
-    icon: "📅",
-    text: `<b>${DOW[busiestDay]}</b> is the busiest day (${Math.round(dayTotals[busiestDay])} msgs/hr total), <b>${DOW[quietestDay]}</b> is the quietest. ${ratio}× difference.`,
-  });
+  // A busiest day of zero means the whole grid is empty — no ratio to state,
+  // and certainly not the "∞× difference" this used to print.
+  if (dayTotals[busiestDay] > 0) {
+    const diff = dayTotals[quietestDay] > 0
+      ? ` ${(dayTotals[busiestDay] / dayTotals[quietestDay]).toFixed(1)}× difference.`
+      : ` No messages at all on ${DOW[quietestDay]}.`;
+    insights.push({
+      icon: "📅",
+      text: `<b>${DOW[busiestDay]}</b> is the busiest day (${Math.round(dayTotals[busiestDay])} msgs/hr total), <b>${DOW[quietestDay]}</b> is the quietest.${diff}`,
+    });
+  }
 
   // Weekday vs weekend
   const wdAvg = dayTotals.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
@@ -168,7 +173,15 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/heatmap");
     const panel = container.querySelector(".panel");
-    const insights = computeInsights(d.grid);
+
+    const grid = d.grid || [];
+    if (!grid.some(row => row.some(v => v > 0))) {
+      panel.innerHTML = `<header><h2>Activity Heatmap</h2><div class="subtitle">When your server is most active, by hour and day (30-day average)</div></header>` +
+        renderEmpty("No messages in the last 30 days, so every slot is empty. The heatmap becomes readable after about a week of conversation.");
+      return;
+    }
+
+    const insights = computeInsights(grid);
 
     const perChannelHTML = (d.per_channel || []).map(ch => {
       const name = ch.channel_name || ch.channel_id;
@@ -238,7 +251,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load the activity heatmap — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() {} };

@@ -1,6 +1,14 @@
-import { api, esc } from "../api.js";
+import { api, esc, fmtTs } from "../api.js";
 import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
+
+// The endpoint hands back pre-formatted UTC strings ("2026-07-01 12:00").
+// Re-stamp them as UTC so fmtTs can render them in the reader's own timezone,
+// consistent with every other timestamp on the dashboard.
+function utcToLocal(raw) {
+  if (!raw) return "—";
+  return fmtTs(`${String(raw).replace(" ", "T")}:00Z`);
+}
 
 export function mount(container, initialParams) {
   container.innerHTML = `
@@ -36,12 +44,12 @@ export function mount(container, initialParams) {
       if (chart) { chart.destroy(); chart = null; }
 
       statsEl.textContent = data.count
-        ? `Mean: ${data.mean_days}d  \u00b7  Median: ${data.median_days}d  \u00b7  Std Dev: ${data.stddev_days}d  \u00b7  Mode: ${data.mode_days}d  \u00b7  n=${data.count}  \u00b7  ${data.xp_required} XP required`
+        ? `Mean: ${data.mean_days}d  \u00b7  Median: ${data.median_days}d  \u00b7  Std. deviation: ${data.stddev_days}d  \u00b7  Mode: ${data.mode_days}d  \u00b7  n=${data.count}  \u00b7  ${data.xp_required} XP required`
         : "";
 
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
-        wrap.innerHTML = `<div class="empty">No time-to-level-5 data for the selected period.</div>`;
+        wrap.innerHTML = `<div class="empty">Nobody reached level 5 in this window. Pick a longer range, or switch to All time.</div>`;
         membersEl.innerHTML = "";
         return;
       }
@@ -49,7 +57,7 @@ export function mount(container, initialParams) {
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: data.histogram.map((b) => b.label),
         data: data.histogram.map((b) => b.count),
-        title: `Time to Reach Level 5 \u2014 ${data.window_label}`,
+        title: `Time to Reach Level 5 — ${data.window_label}`,
         xLabel: "Days",
         yLabel: "Members",
       });
@@ -58,12 +66,12 @@ export function mount(container, initialParams) {
         const rows = data.members
           .map(
             (m) =>
-              `<tr><td>${m.display_name}</td><td>${m.first_at}</td><td>${m.reached_at}</td><td>${m.days}d</td></tr>`
+              `<tr><td>${esc(m.display_name)}</td><td>${esc(utcToLocal(m.first_at))}</td><td>${esc(utcToLocal(m.reached_at))}</td><td>${m.days}d</td></tr>`
           )
           .join("");
         membersEl.innerHTML = `
           <table class="data-table">
-            <thead><tr><th>Member</th><th>First Active</th><th>Reached Lv5</th><th>Duration</th></tr></thead>
+            <thead><tr><th>Member</th><th>First Active</th><th>Reached Level 5</th><th>Days Taken</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>`;
       } else {
@@ -72,7 +80,7 @@ export function mount(container, initialParams) {
     } catch (err) {
       statsEl.textContent = "";
       membersEl.innerHTML = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load time-to-level-5 — try again. (${esc(err.message)})</div>`;
     }
   }
 

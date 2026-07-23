@@ -1,13 +1,15 @@
 import { wGet, wPost, wPut, wDelete, esc } from "../wellness-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading blackouts…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading your blackout windows…")}</div>`;
 
   async function load() {
     let d;
     try { d = await wGet("/api/wellness/blackouts"); } catch (e) {
-      container.querySelector(".panel").innerHTML = `<div class="error">${e.message}</div>`;
+      container.querySelector(".panel").innerHTML =
+        renderError(`Couldn’t load your blackout windows — try again. (${e.message})`);
       return;
     }
 
@@ -21,14 +23,15 @@ export function mount(container) {
             </div>
             <div class="w-row-actions">
               <label class="w-toggle">
-                <input type="checkbox" data-toggle-bo="${b.id}" ${b.enabled ? "checked" : ""} />
+                <input type="checkbox" data-toggle-bo="${b.id}" ${b.enabled ? "checked" : ""}
+                       aria-label="Turn the ${esc(b.name)} blackout on or off" />
                 <span class="w-toggle-track"></span>
               </label>
               <button class="btn btn-sm btn-danger" data-del-bo="${b.id}">Remove</button>
             </div>
           </div>
         `).join("")
-      : '<div class="empty">No blackouts yet. Pick a template or build one below.</div>';
+      : renderEmpty("No blackout windows yet. Pick a quick template below, or build your own — Dungeon Keeper will nudge you to step away during the hours you choose.");
 
     const tplHTML = d.templates.map(t => {
       const labels = {
@@ -53,17 +56,20 @@ export function mount(container) {
       <div class="section-label">Custom Blackout</div>
       <form data-add-form class="form">
           <div class="field">
-            <label>Name</label>
-            <input type="text" name="name" required maxlength="40" placeholder="e.g. focus block" />
+            <label>Name
+              <input type="text" name="name" required maxlength="40" placeholder="e.g. Focus Block" />
+            </label>
           </div>
           <div class="field-row">
             <div class="field">
-              <label>Start</label>
-              <input type="time" name="start" required value="22:00" />
+              <label>Starts At
+                <input type="time" name="start" required value="22:00" />
+              </label>
             </div>
             <div class="field">
-              <label>End</label>
-              <input type="time" name="end" required value="07:00" />
+              <label>Ends At
+                <input type="time" name="end" required value="07:00" />
+              </label>
             </div>
           </div>
           <fieldset class="w-day-picker">
@@ -87,16 +93,20 @@ export function mount(container) {
           await wPut(`/api/wellness/blackouts/${cb.dataset.toggleBo}/toggle`, { enabled: cb.checked });
           toast(cb.checked ? "Blackout enabled" : "Blackout disabled");
         }
-        catch (e) { toast(e.message, "error"); cb.checked = !cb.checked; }
+        catch (e) { toast(`Couldn’t change that blackout — ${e.message}`, "error"); cb.checked = !cb.checked; }
       });
     });
 
     // Delete
     container.querySelectorAll("[data-del-bo]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        if (!(await confirmDialog("Remove this blackout?", { danger: true, confirmLabel: "Remove" }))) return;
+        const ok = await confirmDialog(
+          "Remove this blackout window? Dungeon Keeper will stop nudging you during those hours.",
+          { title: "Remove Blackout", danger: true, confirmLabel: "Remove" },
+        );
+        if (!ok) return;
         try { await wDelete(`/api/wellness/blackouts/${btn.dataset.delBo}`); load(); }
-        catch (e) { toast(e.message, "error"); }
+        catch (e) { toast(`Couldn’t remove that blackout — ${e.message}`, "error"); }
       });
     });
 
@@ -104,7 +114,7 @@ export function mount(container) {
     container.querySelectorAll("[data-tpl]").forEach(btn => {
       btn.addEventListener("click", async () => {
         try { await wPost("/api/wellness/blackouts", { template: btn.dataset.tpl }); toast("Blackout added"); load(); }
-        catch (e) { toast(e.message, "error"); }
+        catch (e) { toast(`Couldn’t add that blackout — ${e.message}`, "error"); }
       });
     });
 
@@ -120,7 +130,7 @@ export function mount(container) {
         });
         toast("Blackout added");
         load();
-      } catch (err) { toast(err.message, "error"); }
+      } catch (err) { toast(`Couldn’t add that blackout — ${err.message}`, "error"); }
     });
   }
 

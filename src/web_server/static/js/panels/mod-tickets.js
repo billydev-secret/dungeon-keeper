@@ -2,7 +2,13 @@ import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
 import { toast, promptDialog, confirmDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { syncHash } from "../report-helpers.js";
+
+// The queue is a live workspace, so it re-fetches itself while you have it
+// open. Long enough not to hammer the API, short enough that a ticket raised
+// mid-shift shows up without a manual reload.
+const POLL_MS = 45000;
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
 
@@ -95,7 +101,9 @@ function matchesSearch(t, query) {
 
 function renderList(tickets, activeId, searching) {
   if (!tickets.length) {
-    return renderEmpty(searching ? "No tickets match your search." : "No tickets match this filter.");
+    return renderEmpty(searching
+      ? "No tickets match your search. Try fewer words, or clear the search box to see the whole queue."
+      : "Nothing in this queue. Reports, flagged messages, and auto-mod hits land here as they come in.");
   }
   return tickets.map((t) => {
     const cls = priorityClass(t) + (t.id === activeId ? " active" : "");
@@ -144,7 +152,7 @@ function renderActions(t) {
   if (t && (t.status === "closed" || t.status === "deleted")) {
     return `
       <div class="td-actions">
-        <button class="act-btn" data-action="note">${ICON_NOTE}Add note</button>
+        <button class="act-btn" data-action="note">${ICON_NOTE}Add Note</button>
         <span class="act-spacer"></span>
         <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
         <button class="act-btn warn" data-action="reopen">Reopen Ticket</button>
@@ -161,19 +169,19 @@ function renderActions(t) {
         <button class="act-btn jail" data-action="jail">${ICON_JAIL}Jail · 24h</button>
         <button class="act-btn jail" data-action="jail-custom" aria-label="Change duration">${ICON_CHEV}</button>
       </div>
-      <button class="act-btn" data-action="note">${ICON_NOTE}Add note</button>
+      <button class="act-btn" data-action="note">${ICON_NOTE}Add Note</button>
       <button class="act-btn ghost" data-action="dismiss">Dismiss</button>
       <span class="act-spacer"></span>
       <button class="act-btn ghost" data-action="claim"${claimedByMe ? " disabled" : ""}>${esc(claimLabel)}</button>
       <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
-      <button class="act-btn" data-action="close">Close ticket${ICON_X}</button>
+      <button class="act-btn" data-action="close">Close Ticket${ICON_X}</button>
     </div>
   `;
 }
 
 function renderHistory(history) {
   if (!history.length) {
-    return `<div class="empty" style="padding:8px 0;color:var(--ink-mute);font-size:12px">No prior actions.</div>`;
+    return `<div class="empty" style="padding:8px 0;color:var(--ink-mute);font-size:12px">No warnings, jails, or notes on this member yet.</div>`;
   }
   return `<div class="history">${history.map((h) => {
     const dLabel = fmtShortDate(h.date);
@@ -304,12 +312,16 @@ const FILTERS = {
   all:    () => true,
 };
 
-export function mount(container) {
+export function mount(container, initialParams = {}) {
   container.innerHTML = `
     <div class="panel">
       <header>
         <h2>Tickets</h2>
         <div class="subtitle">Flagged messages, auto-mod hits, and member reports.</div>
+        <div class="queue-freshness" style="display:flex;align-items:center;gap:10px;margin-top:6px;font-size:12px;color:var(--ink-dim);">
+          <span data-updated>Loading…</span>
+          <button class="btn btn-ghost" data-refresh style="padding:2px 10px;font-size:12px;">Refresh</button>
+        </div>
       </header>
 
       <div class="mod-stats" data-stats>
@@ -352,16 +364,57 @@ export function mount(container) {
   const detailEl = container.querySelector("[data-detail]");
   const filterGroup = container.querySelector("[data-filter-group]");
   const searchEl = container.querySelector("[data-search]");
+  const updatedEl = container.querySelector("[data-updated]");
+  const refreshBtn = container.querySelector("[data-refresh]");
 
+  const validFilters = Object.keys(FILTERS);
   const state = {
     tickets: [],
     closedTickets: null,
-    filter: "open",
-    search: "",
-    activeId: null,
+    filter: validFilters.includes(initialParams.filter) ? initialParams.filter : "open",
+    search: initialParams.q || "",
+    activeId: initialParams.ticket ? Number(initialParams.ticket) : null,
     detailCache: new Map(),
     fetchToken: 0,
   };
+  searchEl.value = state.search;
+  for (const btn of filterGroup.querySelectorAll("[data-filter]")) {
+    const on = btn.dataset.filter === state.filter;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  /** Mirror the queue view into the URL so a tab, search, or open ticket can
+   *  be refreshed into or handed to a colleague as a link (W-D9). */
+  function pushHash() {
+    syncHash("mod-tickets", {
+      filter: state.filter === "open" ? "" : state.filter,
+      q: state.search.trim(),
+      ticket: state.activeId || "",
+    });
+  }
+
+  // ── Freshness stamp ────────────────────────────────────────────────────
+  let lastLoadedAt = 0;
+  let loadFailed = false;
+
+  function renderUpdatedStamp() {
+    if (loadFailed) {
+      updatedEl.textContent = "Last refresh failed";
+      return;
+    }
+    if (!lastLoadedAt) {
+      updatedEl.textContent = "Loading…";
+      return;
+    }
+    const secs = Math.max(0, Math.round((Date.now() - lastLoadedAt) / 1000));
+    if (secs < 5) updatedEl.textContent = "Updated just now";
+    else if (secs < 60) updatedEl.textContent = `Updated ${secs} seconds ago`;
+    else {
+      const mins = Math.round(secs / 60);
+      updatedEl.textContent = `Updated ${mins} minute${mins === 1 ? "" : "s"} ago`;
+    }
+  }
 
   function currentTicketSource() {
     return state.filter === "closed" ? (state.closedTickets || []) : state.tickets;
@@ -468,6 +521,8 @@ export function mount(container) {
     detailEl.innerHTML = renderDetail(active, detail);
     if (active && !detail) loadDetail(active.id);
     updateFilterBadges();
+    renderUpdatedStamp();
+    pushHash();
   }
 
   async function loadDetail(id) {
@@ -478,15 +533,24 @@ export function mount(container) {
       state.detailCache.set(id, detail);
       if (state.activeId === id) render();
     } catch (err) {
-      console.error("Failed to load ticket detail:", err);
+      // Show the failure where the detail should have been — a console-only
+      // error left the pane stuck on "Loading…" forever (W-D7).
+      if (token !== state.fetchToken || state.activeId !== id) return;
+      detailEl.innerHTML = renderError(
+        `Couldn't load ticket #${id} — ${err.message}. Pick the ticket again to retry.`
+      );
     }
   }
 
-  async function refresh() {
+  /** @param {boolean} quiet  background poll: keep the current view on screen
+   *  and never replace it with a spinner or an error. */
+  async function refresh(quiet = false) {
     try {
       const data = await api("/api/moderation/tickets");
       state.tickets = data.tickets || [];
       state.closedTickets = null;
+      lastLoadedAt = Date.now();
+      loadFailed = false;
       renderStats();
       if (state.filter === "closed") {
         await refreshClosed();
@@ -496,19 +560,24 @@ export function mount(container) {
         render();
       }
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      loadFailed = true;
+      renderUpdatedStamp();
+      if (quiet) return; // keep the last good queue on screen
+      listEl.innerHTML = renderError(`Couldn't load tickets — ${err.message}. Press Refresh to try again.`);
       detailEl.innerHTML = "";
     }
   }
 
   async function refreshClosed() {
-    listEl.innerHTML = renderLoading("Loading…");
+    if (state.closedTickets === null) listEl.innerHTML = renderLoading("Loading closed tickets…");
     try {
       const data = await api("/api/moderation/tickets?status=closed");
       state.closedTickets = data.tickets || [];
       render();
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      listEl.innerHTML = renderError(
+        `Couldn't load closed tickets — ${err.message}. Press Refresh to try again.`
+      );
     }
   }
 
@@ -639,7 +708,25 @@ export function mount(container) {
     }
   });
 
+  refreshBtn.addEventListener("click", () => { refresh(); });
+
   refresh();
 
-  return { unmount() {} };
+  // Poll while the panel is mounted. Skipped when the tab is hidden or a
+  // dialog is open, so a background refresh can't yank the queue out from
+  // under a confirm/prompt the moderator is answering.
+  const poll = setInterval(() => {
+    if (document.hidden) return;
+    if (document.querySelector(".confirm-overlay")) return;
+    refresh(true);
+  }, POLL_MS);
+  // Re-render the "Updated Xs ago" stamp so it never freezes at "just now".
+  const stampTimer = setInterval(renderUpdatedStamp, 1000);
+
+  return {
+    unmount() {
+      clearInterval(poll);
+      clearInterval(stampTimer);
+    },
+  };
 }

@@ -404,6 +404,23 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     # ── Static files & HTML entry points ────────────────────────────
     if _STATIC_DIR.exists():
+        # The staff/mod manual is session-gated: it documents the whole mod
+        # toolkit, so it must not be world-readable. This explicit route is
+        # registered BEFORE the /static mount so it wins route matching for
+        # exactly this path; every other static asset (css/js/images) stays
+        # public. Same auth pattern as the index route below. Covered by the
+        # manual-gating tests in tests/web/test_authz_sweep.py.
+        @app.get("/static/manual.html", include_in_schema=False)
+        async def _manual(request: Request):
+            if isinstance(app.state.auth, DiscordOAuthAuth):
+                user = await app.state.auth.authenticate(request)
+                if user is None:
+                    return RedirectResponse("/login", status_code=302)
+            return HTMLResponse(
+                content=_html_with_boot_id("manual.html"),
+                headers={"cache-control": "no-cache"},
+            )
+
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
         @app.get("/login", include_in_schema=False)

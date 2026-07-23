@@ -1,5 +1,14 @@
-import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, showStatus } from "../config-helpers.js";
-import { api, esc } from "../api.js";
+import {
+  loadConfig,
+  loadChannels,
+  loadRoles,
+  apiPut,
+  showStatus,
+  mountChannelPicker,
+  mountRolePicker,
+  guardForm,
+} from "../config-helpers.js";
+import { apiPost, esc } from "../api.js";
 
 // Template placeholders accepted by the welcome / leave message
 // templates. Order is the order they appear in the chip strip.
@@ -67,7 +76,7 @@ function insertAtCursor(textarea, snippet) {
 }
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   (async () => {
     const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
@@ -79,70 +88,91 @@ export function mount(container) {
       <div class="panel">
         <header>
           <h2>Welcome & Leave</h2>
-          <div class="subtitle">Welcome/leave channels, messages, greeter settings</div>
+          <div class="subtitle">Greet new members, say goodbye to leavers, and point your greeter team at the door</div>
         </header>
-        <form class="form" data-form>
-          <div class="field">
-            <label>Welcome Channel</label>
-            <select name="welcome_channel_id">${channelSelect(channels, w.welcome_channel_id)}</select>
+        <form class="form form-cards" data-form>
+          <div class="card">
+            <div class="section-label">Welcome Message</div>
+            <div class="field">
+              <label>Welcome Channel</label>
+              <span data-picker="welcome_channel_id"></span>
+              <div class="field-hint">Where the welcome embed is posted. "(disabled)" turns welcomes off.</div>
+            </div>
+            <div class="field">
+              <label for="cw-welcome-trigger">Welcome Trigger</label>
+              <select name="welcome_trigger" id="cw-welcome-trigger">
+                <option value="join"${trigger === "join" ? " selected" : ""}>At join</option>
+                <option value="verified"${trigger === "verified" ? " selected" : ""}>After verification (unverified role removed)</option>
+              </select>
+              <div class="field-hint">When to send the welcome message. "After verification" fires when the unverified role below is removed — e.g. once DoubleCounter finishes its scan and lifts the gate. No bio is required.</div>
+            </div>
+            <div class="field" data-verified-only style="${trigger === "verified" ? "" : "display:none"}">
+              <label>Unverified Role</label>
+              <span data-picker="unverified_role_id"></span>
+              <div class="field-hint">Role that is removed by your verification process (e.g. DoubleCounter). The welcome fires the moment this role is stripped.</div>
+            </div>
+            <div class="field">
+              <label for="cw-welcome-message">Welcome Message</label>
+              <textarea name="welcome_message" id="cw-welcome-message" data-template>${esc(w.welcome_message || "")}</textarea>
+              <div class="field-hint">Tap a placeholder below to insert it at the cursor:</div>
+              ${chipsHtml("welcome_message")}
+              ${legendHtml()}
+            </div>
+            <div class="field">
+              <label>Welcome Ping Role</label>
+              <span data-picker="welcome_ping_role_id"></span>
+              <div class="field-hint">This role is mentioned above the welcome embed so its holders get notified of every new arrival. "(none)" pings nobody.</div>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" name="welcome_ping_member" ${w.welcome_ping_member ? "checked" : ""} /> Ping the new member</label>
+              <div class="field-hint">Mention the joining member in the message so they get a notification. The <code>{member}</code> placeholder inside the message body looks like a mention but does not notify — only this option pings the member.</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Welcome Trigger</label>
-            <select name="welcome_trigger">
-              <option value="join"${trigger === "join" ? " selected" : ""}>At join</option>
-              <option value="verified"${trigger === "verified" ? " selected" : ""}>After verification (unverified role removed)</option>
-            </select>
-            <div class="field-hint">When to send the welcome message. "After verification" fires when the unverified role below is removed — e.g. once DoubleCounter finishes its scan and lifts the gate. No bio is required.</div>
+
+          <div class="card">
+            <div class="section-label">Leave Message</div>
+            <div class="field">
+              <label>Leave Channel</label>
+              <span data-picker="leave_channel_id"></span>
+              <div class="field-hint">Where the goodbye embed is posted when a member leaves. "(disabled)" turns leave messages off.</div>
+            </div>
+            <div class="field">
+              <label for="cw-leave-message">Leave Message</label>
+              <textarea name="leave_message" id="cw-leave-message" data-template>${esc(w.leave_message || "")}</textarea>
+              <div class="field-hint">Tap a placeholder below to insert it at the cursor:</div>
+              ${chipsHtml("leave_message")}
+            </div>
           </div>
-          <div class="field" data-verified-only style="${trigger === "verified" ? "" : "display:none"}">
-            <label>Unverified Role</label>
-            <select name="unverified_role_id">${roleSelect(roles, w.unverified_role_id)}</select>
-            <div class="field-hint">Role that is removed by your verification process (e.g. DoubleCounter). The welcome fires the moment this role is stripped.</div>
+
+          <div class="card">
+            <div class="section-label">Greeter Team</div>
+            <div class="field">
+              <label>Greeter Role</label>
+              <span data-picker="greeter_role_id"></span>
+              <div class="field-hint">Members with this role are your greeter team; the Greeter Response report scores how quickly they welcome newcomers.</div>
+            </div>
+            <div class="field">
+              <label>Greeter Chat Channel</label>
+              <span data-picker="greeter_chat_channel_id"></span>
+              <div class="field-hint">The channel where greeters chat with newcomers — the Greeter Response report watches it for first replies.</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Welcome Message</label>
-            <textarea name="welcome_message" data-template>${esc(w.welcome_message || "")}</textarea>
-            <div class="field-hint">Tap a placeholder below to insert it at the cursor:</div>
-            ${chipsHtml("welcome_message")}
-            ${legendHtml()}
+
+          <div class="card">
+            <div class="section-label">Newcomer Guide & Logging</div>
+            <div class="field">
+              <label>Server Guide Channel</label>
+              <span data-picker="server_guide_channel_id"></span>
+              <div class="field-hint">Optional — the channel that introduces newcomers to your server. When set, the {server_guide} placeholder above resolves to a clickable #mention of this channel.</div>
+            </div>
+            <div class="field">
+              <label>Join / Leave Log Channel</label>
+              <span data-picker="join_leave_log_channel_id"></span>
+              <div class="field-hint">Used by the Greeter Response report to time joins, greetings, and early departures.</div>
+            </div>
           </div>
-          <div class="field">
-            <label>Welcome Ping Role</label>
-            <select name="welcome_ping_role_id">${roleSelect(roles, w.welcome_ping_role_id)}</select>
-          </div>
-          <div class="field">
-            <label><input type="checkbox" name="welcome_ping_member" ${w.welcome_ping_member ? "checked" : ""} /> Ping the new member</label>
-            <div class="field-hint">Mention the joining member in the message so they get a notification. The <code>{member}</code> placeholder inside the message body looks like a mention but does not notify — only this option pings the member.</div>
-          </div>
-          <div class="field">
-            <label>Leave Channel</label>
-            <select name="leave_channel_id">${channelSelect(channels, w.leave_channel_id)}</select>
-          </div>
-          <div class="field">
-            <label>Leave Message</label>
-            <textarea name="leave_message" data-template>${esc(w.leave_message || "")}</textarea>
-            <div class="field-hint">Tap a placeholder below to insert it at the cursor:</div>
-            ${chipsHtml("leave_message")}
-          </div>
-          <div class="field">
-            <label>Greeter Role</label>
-            <select name="greeter_role_id">${roleSelect(roles, w.greeter_role_id)}</select>
-          </div>
-          <div class="field">
-            <label>Greeter Chat Channel</label>
-            <select name="greeter_chat_channel_id">${channelSelect(channels, w.greeter_chat_channel_id)}</select>
-          </div>
-          <div class="field">
-            <label>Server Guide Channel</label>
-            <select name="server_guide_channel_id">${channelSelect(channels, w.server_guide_channel_id)}</select>
-            <div class="field-hint">Optional — the channel that introduces newcomers to your server. When set, the {server_guide} placeholder above resolves to a clickable #mention of this channel.</div>
-          </div>
-          <div class="field">
-            <label>Join / Leave Log Channel</label>
-            <select name="join_leave_log_channel_id">${channelSelect(channels, w.join_leave_log_channel_id)}</select>
-            <div class="field-hint">Used by the Greeter Response report to time joins, greetings, and early departures.</div>
-          </div>
-          <div>
+
+          <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary">Save</button>
             <button type="button" class="btn" data-action="preview">Preview</button>
             <span data-status></span>
@@ -156,6 +186,30 @@ export function mount(container) {
     const status = container.querySelector("[data-status]");
     const previewWrap = container.querySelector("[data-preview-wrap]");
     const previewBtn = container.querySelector('[data-action="preview"]');
+
+    // Searchable pickers replace the old plain <select>s. getValue() falls
+    // back to "0", matching the legacy "(disabled)"/"(none)" contract.
+    const pickers = {};
+    const mountDefs = [
+      ["welcome_channel_id", mountChannelPicker, channels, "Welcome Channel"],
+      ["unverified_role_id", mountRolePicker, roles, "Unverified Role"],
+      ["welcome_ping_role_id", mountRolePicker, roles, "Welcome Ping Role"],
+      ["leave_channel_id", mountChannelPicker, channels, "Leave Channel"],
+      ["greeter_role_id", mountRolePicker, roles, "Greeter Role"],
+      ["greeter_chat_channel_id", mountChannelPicker, channels, "Greeter Chat Channel"],
+      ["server_guide_channel_id", mountChannelPicker, channels, "Server Guide Channel"],
+      ["join_leave_log_channel_id", mountChannelPicker, channels, "Join / Leave Log Channel"],
+    ];
+    for (const [name, mountFn, options, label] of mountDefs) {
+      pickers[name] = mountFn(
+        form.querySelector(`[data-picker="${name}"]`),
+        options,
+        String(w[name] || "0"),
+        { label },
+      );
+    }
+
+    guardForm(form);
 
     // Show/hide the unverified role selector based on trigger selection.
     const triggerSelect = form.querySelector("select[name='welcome_trigger']");
@@ -195,13 +249,20 @@ export function mount(container) {
     previewBtn.addEventListener("click", async () => {
       previewWrap.textContent = "Rendering preview…";
       try {
-        const data = await api("/api/config/welcome/preview", {});
+        // POST the on-screen values so the preview shows what's typed right
+        // now, saved or not (W-C3).
+        const fd = new FormData(form);
+        const data = await apiPost("/api/config/welcome/preview", {
+          welcome_message: fd.get("welcome_message"),
+          leave_message: fd.get("leave_message"),
+          server_guide_channel_id: pickers.server_guide_channel_id.getValue() || "0",
+        });
         previewWrap.innerHTML =
-          `<div class="subtitle">Sample member: ${esc(data.sample_user_name || "(you)")}</div>` +
+          `<div class="subtitle">Previewing the text in the form above (including unsaved edits). Sample member: ${esc(data.sample_user_name || "(you)")}</div>` +
           renderEmbed("Welcome embed", data.welcome) +
           renderEmbed("Leave embed", data.leave);
       } catch (err) {
-        previewWrap.textContent = `Error: ${err.message}`;
+        previewWrap.textContent = `Preview failed: ${err.message}`;
       }
     });
 
@@ -210,18 +271,18 @@ export function mount(container) {
       const fd = new FormData(form);
       try {
         await apiPut("/api/config/welcome", {
-          welcome_channel_id: fd.get("welcome_channel_id"),
+          welcome_channel_id: pickers.welcome_channel_id.getValue() || "0",
           welcome_message: fd.get("welcome_message"),
-          welcome_ping_role_id: fd.get("welcome_ping_role_id"),
+          welcome_ping_role_id: pickers.welcome_ping_role_id.getValue() || "0",
           welcome_ping_member: fd.get("welcome_ping_member") === "on",
           welcome_trigger: fd.get("welcome_trigger"),
-          unverified_role_id: fd.get("unverified_role_id"),
-          leave_channel_id: fd.get("leave_channel_id"),
+          unverified_role_id: pickers.unverified_role_id.getValue() || "0",
+          leave_channel_id: pickers.leave_channel_id.getValue() || "0",
           leave_message: fd.get("leave_message"),
-          greeter_role_id: fd.get("greeter_role_id"),
-          greeter_chat_channel_id: fd.get("greeter_chat_channel_id"),
-          server_guide_channel_id: fd.get("server_guide_channel_id"),
-          join_leave_log_channel_id: fd.get("join_leave_log_channel_id"),
+          greeter_role_id: pickers.greeter_role_id.getValue() || "0",
+          greeter_chat_channel_id: pickers.greeter_chat_channel_id.getValue() || "0",
+          server_guide_channel_id: pickers.server_guide_channel_id.getValue() || "0",
+          join_leave_log_channel_id: pickers.join_leave_log_channel_id.getValue() || "0",
         });
         showStatus(status, true);
       } catch (err) {

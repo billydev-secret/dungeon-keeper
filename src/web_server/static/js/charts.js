@@ -1,4 +1,14 @@
 // Chart.js helpers. Palettes mirror services/activity_graphs.py.
+//
+// The exported tokens below are the ONE chart palette for the dashboard —
+// panels that draw their own charts or canvases should import these instead
+// of hard-coding hex values (W-D15):
+//   ROLE_COLORS   — categorical series palette (lines, doughnut slices)
+//   GENDER_COLORS — fixed gender→color mapping
+//   CHART_BAR     — default single-series bar/fill color (gold)
+//   CHART_ACCENT  — secondary series/overlay color (mauve)
+//   CHART_TEXT    — axis/legend/label text color
+//   CHART_GRID    — gridline/border/wick color
 
 export const ROLE_COLORS = [
   "#E6B84C", // poppy gold
@@ -16,10 +26,15 @@ export const GENDER_COLORS = {
   unknown:   "#949ba4",
 };
 
-const BAR     = "#E6B84C";
-const ACCENT  = "#B36A92";
-const TEXT    = "#dbdee1";
-const GRID    = "#3f4147";
+export const CHART_BAR    = "#E6B84C";
+export const CHART_ACCENT = "#B36A92";
+export const CHART_TEXT   = "#dbdee1";
+export const CHART_GRID   = "#3f4147";
+
+const BAR     = CHART_BAR;
+const ACCENT  = CHART_ACCENT;
+const TEXT    = CHART_TEXT;
+const GRID    = CHART_GRID;
 
 Chart.defaults.color = TEXT;
 Chart.defaults.borderColor = GRID;
@@ -42,7 +57,9 @@ function pinXMinOnZoom({ chart }) {
 
 const ZOOM_OPTIONS = {
   zoom: {
-    wheel: { enabled: true },
+    // Ctrl gates wheel-zoom so plain scrolling over a chart still scrolls
+    // the page (W-D6). Pinch continues to zoom on touch.
+    wheel: { enabled: true, modifierKey: "ctrl" },
     pinch: { enabled: true },
     mode: "x",
     onZoomComplete: pinXMinOnZoom,
@@ -76,7 +93,7 @@ export function addResetZoom(chart) {
   const btn = document.createElement("button");
   btn.className = "chart-reset-zoom";
   btn.textContent = "Reset Zoom";
-  btn.title = "Double-click chart or press this button to reset zoom";
+  btn.title = "Ctrl+scroll or pinch to zoom, drag to pan. Double-click the chart or press this button to reset.";
   btn.addEventListener("click", () => chart.resetZoom());
   wrap.style.position = "relative";
   wrap.appendChild(btn);

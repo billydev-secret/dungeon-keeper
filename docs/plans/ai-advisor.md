@@ -2,7 +2,12 @@
 
 **Status:** Stage 1 shipped (grounded Q&A, both surfaces). Stage 2 shipped
 (Billy-bot rebrand; context-aware per-asker grounding; configurable model + a
-dashboard config panel). See INDEX.md → Design spec.
+dashboard config panel). Stage 2b shipped: the **name is per-guild branding**
+(`branding_config.assistant_name`, `branding_service.resolve_assistant_name*`,
+default `DEFAULT_ASSISTANT_NAME = "Billy-bot"`), edited on Config → Branding.
+Both surfaces resolve it and pass `assistant_name=` into `answer_advisor`,
+which threads it through the system prompt (`system_instructions(name)`) and
+the failure message (`error_msg(name)`). See INDEX.md → Design spec.
 
 ## Goal
 
@@ -12,7 +17,7 @@ it can't invent commands or promise unbuilt features.
 
 ## Decisions (locked)
 
-- **Model:** configurable per-guild from the Config → Billy-bot panel
+- **Model:** configurable per-guild from the assistant's Config panel
   (`advisor_model`), **default `claude-haiku-4-5`** — fast/cheap and plenty for
   grounded help; Sonnet 5 / Opus 4.8 are the higher-quality options. Thinking is
   **disabled** on all of them (help answers don't need multi-step reasoning;
@@ -58,9 +63,11 @@ it can't invent commands or promise unbuilt features.
   ephemeral) so repeat calls bill the corpus at ~0.1x. Grounding on shipped-only
   docs structurally prevents promising the Aspirational specs INDEX.md warns of.
 - **Two surfaces, one brain:**
-  - Dashboard: an "Ask Billy-bot" box inside the existing Help panel
-    (`help.js`), `POST /api/help/advisor`, gated to any authenticated user
-    (`require_perms(set())`), rate-limited on the existing `ai` tier.
+  - Dashboard: an ask box inside the existing Help panel (`help.js`),
+    `POST /api/help/advisor`, gated to any authenticated user
+    (`require_perms(set())`), rate-limited on the existing `ai` tier. It labels
+    itself from `GET /api/help/advisor/name` (same auth), so a member sees the
+    guild's own name for the assistant.
   - Discord: `/ask <question>` — ephemeral, per-user cooldown
     (`advisor_cog.py`).
 
@@ -71,7 +78,7 @@ it can't invent commands or promise unbuilt features.
                  ┌───────────────┴───────────────┐        (advisor_service.py)
    POST /api/help/advisor                    /ask (ephemeral)
    (routes/advisor.py)                       (cogs/advisor_cog.py)
-   → Help panel "Ask Billy-bot"              → Discord members
+   → Help panel ask box                     → Discord members
 ```
 
 - `advisor_service.py` owns corpus extraction (mtime-cached), system-prompt

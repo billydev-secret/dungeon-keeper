@@ -60,7 +60,7 @@ function renderStats(container, data) {
   container.innerHTML = `<div class="panel">
     <header>
       <h2>System Stats</h2>
-      <div class="subtitle">Host OS &mdash; uptime ${fmtUptime(data.uptime)}</div>
+      <div class="subtitle">The machine Dungeon Keeper runs on &mdash; up ${fmtUptime(data.uptime)}. Refreshes every 3 seconds.</div>
     </header>
 
     <div class="home-grid" style="margin-bottom:20px">
@@ -82,7 +82,7 @@ function renderStats(container, data) {
         ${pctBar(data.disk.percent, diskColor)}
       </div>
       <div class="home-card">
-        <div class="home-card-label">Network totals</div>
+        <div class="home-card-label">Network Totals</div>
         <div style="display:flex;gap:20px;margin-top:4px">
           <div>
             <div style="font-size:11px;color:var(--ink-dim)">Sent</div>
@@ -105,13 +105,13 @@ function renderStats(container, data) {
           <tr>
             <th>Interface</th>
             <th class="num">Sent</th>
-            <th class="num">Recv</th>
-            <th class="num">Send rate</th>
-            <th class="num">Recv rate</th>
+            <th class="num">Received</th>
+            <th class="num">Send Rate</th>
+            <th class="num">Receive Rate</th>
             <th class="num">Errors</th>
           </tr>
         </thead>
-        <tbody>${ifaceRows || '<tr><td colspan="6" class="empty">No active interfaces</td></tr>'}</tbody>
+        <tbody>${ifaceRows || '<tr><td colspan="6" class="empty">No network interface has sent or received anything yet.</td></tr>'}</tbody>
       </table>
     </div>
   </div>`;
@@ -127,7 +127,7 @@ export function mount(container) {
       if (!data || !alive) return;
       renderStats(container, data);
     } catch (err) {
-      container.innerHTML = `<div class="panel"><div class="error">Failed to load system stats: ${esc(err.message)}</div></div>`;
+      container.innerHTML = `<div class="panel"><div class="error">Couldn’t load system stats — retrying every 3 seconds. (${esc(err.message)})</div></div>`;
     }
     if (alive) timer = setTimeout(poll, 3000);
   }

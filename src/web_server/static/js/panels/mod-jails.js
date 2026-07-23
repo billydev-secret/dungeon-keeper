@@ -1,7 +1,14 @@
 import { api, esc } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
 import { makeFilterStrip } from "../tab-strip.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { syncHash } from "../report-helpers.js";
+
+// Jails expire on a timer, so the queue re-fetches itself while open and the
+// "time left" figures re-render every second in between.
+const POLL_MS = 45000;
+// Server-side cap on /api/moderation/jails (LIMIT 200).
+const RECORD_CAP = 200;
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
 
@@ -76,9 +83,13 @@ function statusChip(j) {
   return '<span class="t-chip open">Active</span>';
 }
 
-function renderList(jails, activeId) {
+function renderList(jails, activeId, filter) {
   if (!jails.length) {
-    return renderEmpty("No jails match this filter.");
+    return renderEmpty(filter === "released"
+      ? "No releases on record yet. Members show up here once a jail ends or a moderator lets them out."
+      : filter === "active"
+        ? "Nobody is jailed right now. Members appear here while a jail or hold is in force."
+        : "No jail records yet. Jails a moderator issues from Discord or from a ticket land here.");
   }
   return jails.map((j) => {
     const cls = priorityClass(j) + (j.id === activeId ? " active" : "");
@@ -173,7 +184,7 @@ function renderDetail(j) {
     ? fmtDuration(j.expires_at - j.created_at)
     : "Indefinite";
   const remainingPair = j.status === "active"
-    ? `<span class="pair"><span class="k">Remaining</span><b>${esc(fmtRemaining(j.expires_at))}</b></span>`
+    ? `<span class="pair"><span class="k">Remaining</span><b data-remaining>${esc(fmtRemaining(j.expires_at))}</b></span>`
     : "";
 
   const subjectName = j.user_name || j.user_id || "unknown";
@@ -214,12 +225,16 @@ const FILTERS = {
   all:      () => true,
 };
 
-export function mount(container) {
+export function mount(container, initialParams = {}) {
   container.innerHTML = `
     <div class="panel">
       <header>
         <h2>Jails <em>&amp; holds</em></h2>
         <div class="subtitle">Members currently restricted from posting, plus recent releases.</div>
+        <div class="queue-freshness" style="display:flex;align-items:center;gap:10px;margin-top:6px;font-size:12px;color:var(--ink-dim);">
+          <span data-updated>Loading…</span>
+          <button class="btn btn-ghost" data-refresh style="padding:2px 10px;font-size:12px;">Refresh</button>
+        </div>
       </header>
 
       <div class="mod-stats" data-stats>
@@ -240,12 +255,13 @@ export function mount(container) {
             </div>
           </div>
           <div class="ticket-list" data-list>
-            ${renderLoading("Loading…")}
+            ${renderLoading("Loading jails…")}
           </div>
+          <div data-cap-note class="field-hint" style="padding:6px 10px;"></div>
         </div>
 
         <div class="ticket-detail" data-detail>
-          ${renderLoading("Loading…")}
+          ${renderLoading("Loading jails…")}
         </div>
       </section>
     </div>
@@ -255,21 +271,74 @@ export function mount(container) {
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const filterGroup = container.querySelector("[data-filter-group]");
+  const updatedEl = container.querySelector("[data-updated]");
+  const refreshBtn = container.querySelector("[data-refresh]");
+  const capNoteEl = container.querySelector("[data-cap-note]");
 
   const state = {
     jails: [],
-    filter: "active",
-    activeId: null,
+    filter: Object.keys(FILTERS).includes(initialParams.filter) ? initialParams.filter : "active",
+    activeId: initialParams.jail ? Number(initialParams.jail) : null,
   };
+  for (const btn of filterGroup.querySelectorAll("[data-filter]")) {
+    const on = btn.dataset.filter === state.filter;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  /** Mirror tab + selected jail into the URL so the view survives a refresh
+   *  and can be linked to (W-D9). */
+  function pushHash() {
+    syncHash("mod-jails", {
+      filter: state.filter === "active" ? "" : state.filter,
+      jail: state.activeId || "",
+    });
+  }
+
+  let lastLoadedAt = 0;
+  let loadFailed = false;
+
+  function renderUpdatedStamp() {
+    if (loadFailed) { updatedEl.textContent = "Last refresh failed"; return; }
+    if (!lastLoadedAt) { updatedEl.textContent = "Loading…"; return; }
+    const secs = Math.max(0, Math.round((Date.now() - lastLoadedAt) / 1000));
+    if (secs < 5) updatedEl.textContent = "Updated just now";
+    else if (secs < 60) updatedEl.textContent = `Updated ${secs} seconds ago`;
+    else {
+      const mins = Math.round(secs / 60);
+      updatedEl.textContent = `Updated ${mins} minute${mins === 1 ? "" : "s"} ago`;
+    }
+  }
 
   function render() {
     const filtered = state.jails.filter(FILTERS[state.filter]);
     if (!filtered.find((j) => j.id === state.activeId)) {
       state.activeId = filtered[0]?.id ?? null;
     }
-    listEl.innerHTML = renderList(filtered, state.activeId);
+    listEl.innerHTML = renderList(filtered, state.activeId, state.filter);
     const active = state.jails.find((j) => j.id === state.activeId) || null;
     detailEl.innerHTML = renderDetail(active);
+    capNoteEl.textContent = state.jails.length >= RECORD_CAP
+      ? `Showing the ${RECORD_CAP} most recent jail records — older ones aren't listed.`
+      : "";
+    renderUpdatedStamp();
+    pushHash();
+  }
+
+  /** Re-time the "2h 10m left" figures in place, so a queue left open on a
+   *  second monitor doesn't show a countdown frozen at load time (W-D5). */
+  function tickCountdowns() {
+    for (const row of listEl.querySelectorAll(".ticket-item")) {
+      const j = state.jails.find((x) => x.id === Number(row.dataset.jailId));
+      if (!j || j.status !== "active") continue;
+      const ageEl = row.querySelector(".age");
+      if (ageEl) ageEl.textContent = fmtRemaining(j.expires_at) + " left";
+    }
+    const active = state.jails.find((j) => j.id === state.activeId);
+    const remEl = detailEl.querySelector("[data-remaining]");
+    if (active && active.status === "active" && remEl) {
+      remEl.textContent = fmtRemaining(active.expires_at);
+    }
   }
 
   function renderStats() {
@@ -298,19 +367,25 @@ export function mount(container) {
       <div class="mod-stat avg">
         <div class="lbl">Total</div>
         <div class="v">${total}</div>
-        <div class="sub">last 200 records</div>
+        <div class="sub">most recent ${RECORD_CAP} records</div>
       </div>
     `;
   }
 
-  async function refresh() {
+  /** @param {boolean} quiet  background poll: never replace a good view. */
+  async function refresh(quiet = false) {
     try {
       const data = await api("/api/moderation/jails");
       state.jails = data.jails || [];
+      lastLoadedAt = Date.now();
+      loadFailed = false;
       renderStats();
       render();
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      loadFailed = true;
+      renderUpdatedStamp();
+      if (quiet) return;
+      listEl.innerHTML = renderError(`Couldn't load jails — ${err.message}. Press Refresh to try again.`);
       detailEl.innerHTML = "";
     }
   }
@@ -336,7 +411,23 @@ export function mount(container) {
     }
   });
 
+  refreshBtn.addEventListener("click", () => { refresh(); });
+
   refresh();
 
-  return { unmount() {} };
+  const poll = setInterval(() => {
+    if (document.hidden) return;
+    refresh(true);
+  }, POLL_MS);
+  const countdownTimer = setInterval(() => {
+    tickCountdowns();
+    renderUpdatedStamp();
+  }, 1000);
+
+  return {
+    unmount() {
+      clearInterval(poll);
+      clearInterval(countdownTimer);
+    },
+  };
 }

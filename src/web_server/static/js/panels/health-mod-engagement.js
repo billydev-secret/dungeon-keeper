@@ -1,13 +1,7 @@
 import { api, esc } from "../api.js";
 import { makeHorizontalBarChart, ROLE_COLORS } from "../charts.js";
-
-
-const INTERVALS = [
-  { value: "7",  label: "Last 7 days" },
-  { value: "14", label: "Last 14 days" },
-  { value: "30", label: "Last 30 days" },
-  { value: "90", label: "Last 90 days" },
-];
+import { renderEmpty, renderError } from "../states.js";
+import { rangePicker } from "../report-helpers.js";
 
 export function mount(container, initialParams = {}) {
   container.innerHTML = `
@@ -17,23 +11,19 @@ export function mount(container, initialParams = {}) {
         <div class="subtitle">How mods are connecting with the broader community</div>
       </header>
       <div class="controls">
-        <label>Time Window
-          <select data-control="days">
-            ${INTERVALS.map(i => `<option value="${i.value}">${esc(i.label)}</option>`).join("")}
-          </select>
-        </label>
+        <label data-slot="range"></label>
       </div>
       <div class="panel-loading" data-body>Loading…</div>
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  // Shared day-range picker so this report offers the same windows as the rest.
+  const rangeCtl = rangePicker({ value: initialParams.days || 30, label: "Range" });
+  const daysEl = rangeCtl.querySelector("select");
+  daysEl.dataset.control = "days";
+  container.querySelector('[data-slot="range"]').replaceWith(rangeCtl);
   const bodyEl = container.querySelector("[data-body]");
   const charts = [];
-
-  if (initialParams.days && INTERVALS.some(i => i.value === initialParams.days)) {
-    daysEl.value = initialParams.days;
-  }
 
   function destroyCharts() {
     charts.forEach(c => c.destroy());
@@ -50,11 +40,20 @@ export function mount(container, initialParams = {}) {
     try {
       d = await api("/api/health/mod-engagement", { days });
     } catch (err) {
-      bodyEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      bodyEl.innerHTML = renderError(
+        `Couldn't load moderator engagement — ${err.message}. Change the range to try again.`
+      );
       return;
     }
 
-    const windowLabel = INTERVALS.find(i => i.value === String(d.days || days))?.label ?? `Last ${days} days`;
+    const windowLabel = `Last ${d.days || days} days`;
+
+    if (!(d.mods || []).length) {
+      bodyEl.innerHTML = renderEmpty(
+        "No moderator messages in this window. Widen the range, or check that your moderator roles are set on the Role Grants page — this report only counts members with a mod role."
+      );
+      return;
+    }
 
     const modRows = (d.mods || []).map((m, i) => {
       const initPct = m.public_messages

@@ -2,7 +2,9 @@
 // Settings, per-channel dials, the question bank, and the scoreboard, plus
 // the two Discord-side actions: "fire now" and posting the opt-in button.
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
-import { loadChannels, loadRoles } from "../config-helpers.js";
+import { loadChannels, loadRoles, guardForm, metaLoadFailed } from "../config-helpers.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { confirmDialog, toast } from "../ui.js";
 
 let channels = [];   // guild text channels [{id,name}]
 let roles = [];      // guild roles [{id,name}]
@@ -23,7 +25,7 @@ function roleOptions(selected) {
   const opts = roles
     .map((r) => `<option value="${r.id}" ${String(r.id) === String(selected) ? "selected" : ""}>${esc(r.name)}</option>`)
     .join("");
-  return `<option value="">— none —</option>${opts}`;
+  return `<option value="">(none)</option>${opts}`;
 }
 
 function catOptions(selected) {
@@ -38,13 +40,16 @@ function flash(el, text, isError) {
 }
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Chat Revive…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading Chat Revive…")}</div>`;
   (async () => {
     [channels, roles] = await Promise.all([
       loadChannels().catch(() => []),
       loadRoles().catch(() => []),
     ]);
     render(container);
+    if (metaLoadFailed()) {
+      toast("Couldn’t load the channel or role list — reload before saving.", "error");
+    }
   })();
   return null;
 }
@@ -55,32 +60,32 @@ function render(container) {
       <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
         <div>
           <h2>Chat Revive</h2>
-          <div class="subtitle">Stirs the coals when the hearth goes quiet — dashboard-managed</div>
+          <div class="subtitle">Posts a conversation starter when a channel has gone quiet. Everything is managed here — there are no slash commands.</div>
         </div>
         <button class="btn" data-refresh>Refresh</button>
       </header>
 
       <section class="card">
         <div class="section-label">Settings</div>
-        <div data-settings><div class="empty">Loading…</div></div>
+        <div data-settings>${renderLoading("Loading settings…")}</div>
         <div data-settings-status></div>
       </section>
 
       <section class="card">
         <div class="section-label">Channels</div>
-        <div class="field-hint">Revives only ever fire in channels listed here. "Check" explains, in plain language, whether it would fire right now and why.</div>
-        <div data-channels><div class="empty">Loading…</div></div>
+        <div class="field-hint">Chat Revive only ever posts in the channels listed here. Choose Check on any row for a plain-language answer to “would it fire right now, and why not?”</div>
+        <div data-channels>${renderLoading("Loading channels…")}</div>
         <div data-check-output></div>
       </section>
 
       <section class="card">
         <div class="section-label">Question Bank</div>
-        <div data-bank><div class="empty">Loading…</div></div>
+        <div data-bank>${renderLoading("Loading the question bank…")}</div>
       </section>
 
       <section class="card">
         <div class="section-label">Scoreboard</div>
-        <div data-stats><div class="empty">Loading…</div></div>
+        <div data-stats>${renderLoading("Loading the scoreboard…")}</div>
       </section>
     </div>`;
 
@@ -93,7 +98,11 @@ async function refresh(container) {
   try {
     overview = await api("/api/chat-revive/overview");
   } catch (err) {
-    container.querySelector("[data-settings]").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    const msg = renderError(`Couldn’t load Chat Revive — try again. (${err.message})`);
+    container.querySelector("[data-settings]").innerHTML = msg;
+    container.querySelector("[data-channels]").innerHTML = "";
+    container.querySelector("[data-bank]").innerHTML = "";
+    container.querySelector("[data-stats]").innerHTML = "";
     return;
   }
   categories = overview.categories || [];
@@ -110,42 +119,49 @@ function renderSettings(container, overview) {
   const host = container.querySelector("[data-settings]");
   host.innerHTML = `
     <div class="form-grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px;">
-      <label>Enabled
-        <select data-f="enabled"><option value="1" ${cfg.enabled ? "selected" : ""}>on</option><option value="0" ${cfg.enabled ? "" : "selected"}>off</option></select>
+      <label>Chat Revive
+        <select data-f="enabled"><option value="1" ${cfg.enabled ? "selected" : ""}>On</option><option value="0" ${cfg.enabled ? "" : "selected"}>Off</option></select>
+        <span class="field-hint">When off, nothing posts anywhere. Your channel settings below are kept.</span>
       </label>
-      <label>Opt-in ping role
+      <label>Opt-In Ping Role
         <select data-f="role_id">${roleOptions(cfg.role_id)}</select>
+        <span class="field-hint">Only members who opt in to this role get pinged.</span>
       </label>
-      <label>Quiet hours start
+      <label>Quiet Hours Start (0-23)
         <input data-f="quiet_start" type="number" min="0" max="23" value="${cfg.quiet_start}">
+        <span class="field-hint">Nothing posts between these two hours, server time.</span>
       </label>
-      <label>Quiet hours end
+      <label>Quiet Hours End (0-23)
         <input data-f="quiet_end" type="number" min="0" max="23" value="${cfg.quiet_end}">
       </label>
-      <label>Daily budget (server-wide)
+      <label>Revives Per Day (Whole Server)
         <input data-f="daily_budget" type="number" min="1" max="10" value="${cfg.daily_budget}">
+        <span class="field-hint">A hard ceiling across every channel, so it never gets chatty.</span>
       </label>
-      <label>Breathing room (minutes)
+      <label>Minimum Gap Between Revives (Minutes)
         <input data-f="guild_gap_minutes" type="number" min="10" max="720" value="${cfg.guild_gap_minutes}">
       </label>
-      <label>Max pings / channel / day
+      <label>Maximum Pings Per Channel Per Day
         <input data-f="ping_max_per_day" type="number" min="1" max="10" value="${cfg.ping_max_per_day}">
       </label>
-      <label>Ping cooldown (minutes)
+      <label>Ping Cooldown (Minutes)
         <input data-f="ping_cooldown_minutes" type="number" min="0" max="1440" value="${cfg.ping_cooldown_minutes}">
       </label>
-      <label title="How long the learned per-channel lull-timing cache is trusted before recomputing from raw history.">Rhythm cache staleness (hours)
+      <label>Recheck a Channel’s Rhythm Every (Hours)
         <input data-f="rhythm_max_age_hours" type="number" min="0.25" max="168" step="0.25" value="${(cfg.rhythm_max_age_seconds / 3600).toFixed(2)}">
+        <span class="field-hint">How long the learned quiet-gap for each channel is trusted before it is recalculated from message history.</span>
       </label>
-      <label>Flourish line
-        <select data-f="flourish_enabled"><option value="1" ${cfg.flourish_enabled ? "selected" : ""}>on ("stirring the coals…")</option><option value="0" ${cfg.flourish_enabled ? "" : "selected"}>off (bone-dry)</option></select>
+      <label>Flourish Line
+        <select data-f="flourish_enabled"><option value="1" ${cfg.flourish_enabled ? "selected" : ""}>On — adds “stirring the coals…”</option><option value="0" ${cfg.flourish_enabled ? "" : "selected"}>Off — question only</option></select>
       </label>
     </div>
     <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <button class="btn primary" data-save-settings>Save Settings</button>
-      <span class="field-hint">Bank: ${overview.bank_size} question(s)${overview.bank_size === 0 ? " — enabling seeds the starter pack" : ""}</span>
+      <span class="field-hint">${overview.bank_size} question${overview.bank_size === 1 ? "" : "s"} in the bank${overview.bank_size === 0 ? " — turning Chat Revive on seeds a starter pack for you" : ""}.</span>
       <span style="flex:1"></span>
-      <select data-optin-channel>${chanOptions("")}</select>
+      <label class="field-hint" style="display:inline-flex;align-items:center;gap:6px;">Post the opt-in button in
+        <select data-optin-channel>${chanOptions("")}</select>
+      </label>
       <button class="btn" data-optin-post>Post Opt-In Button</button>
     </div>`;
 
@@ -169,7 +185,7 @@ function renderSettings(container, overview) {
       flash(status, res.seeded ? `Saved — seeded ${res.seeded} starter questions.` : "Saved.");
       refresh(container);
     } catch (err) {
-      flash(status, err.message, true);
+      flash(status, `Couldn’t save — ${err.message}`, true);
     }
   });
 
@@ -180,9 +196,10 @@ function renderSettings(container, overview) {
       await apiPost("/api/chat-revive/optin-post", { channel_id: channelId });
       flash(status, `Opt-in button posted in ${chanName(channelId)}.`);
     } catch (err) {
-      flash(status, err.message, true);
+      flash(status, `Couldn’t post the opt-in button — ${err.message}`, true);
     }
   });
+  guardForm(host);
 }
 
 // ── channels ─────────────────────────────────────────────────────────
@@ -191,16 +208,16 @@ function channelRow(c) {
   return `
     <tr data-channel-id="${c.channel_id}">
       <td>${esc(chanName(c.channel_id))}</td>
-      <td><input data-c="enabled" type="checkbox" ${c.enabled ? "checked" : ""}></td>
-      <td><input data-c="categories" type="text" value="${esc((c.categories || []).join(", "))}" placeholder="all" style="width:110px"></td>
-      <td><input data-c="ping_enabled" type="checkbox" ${c.ping_enabled ? "checked" : ""}></td>
-      <td><select data-c="role_id_override" style="width:120px">${roleOptions(c.role_id_override)}</select></td>
-      <td><input data-c="rest_hours" type="number" min="1" max="72" step="0.5" value="${c.rest_hours}" style="width:60px"></td>
-      <td><input data-c="fire_multiplier" type="number" min="0.5" max="3" step="0.5" value="${c.fire_multiplier}" title="Patience: multiplies this channel's learned lull threshold (1.0 = its own p90 quiet gap; higher waits longer)" style="width:60px"></td>
+      <td><input data-c="enabled" type="checkbox" aria-label="Chat Revive on in ${esc(chanName(c.channel_id))}" ${c.enabled ? "checked" : ""}></td>
+      <td><input data-c="categories" type="text" aria-label="Question categories for ${esc(chanName(c.channel_id))} (blank means all)" value="${esc((c.categories || []).join(", "))}" placeholder="all" style="width:110px"></td>
+      <td><input data-c="ping_enabled" type="checkbox" aria-label="Ping the opt-in role in ${esc(chanName(c.channel_id))}" ${c.ping_enabled ? "checked" : ""}></td>
+      <td><select data-c="role_id_override" aria-label="Ping role override for ${esc(chanName(c.channel_id))}" style="width:120px">${roleOptions(c.role_id_override)}</select></td>
+      <td><input data-c="rest_hours" type="number" min="1" max="72" step="0.5" aria-label="Hours of rest after a revive in ${esc(chanName(c.channel_id))}" title="How long this channel is left alone after a revive." value="${c.rest_hours}" style="width:60px"></td>
+      <td><input data-c="fire_multiplier" type="number" min="0.5" max="3" step="0.5" value="${c.fire_multiplier}" aria-label="Patience multiplier for ${esc(chanName(c.channel_id))}" title="Multiplies this channel's learned quiet-gap. 1.0 uses the channel's own typical lull; higher numbers wait longer before posting." style="width:60px"></td>
       <td style="white-space:nowrap;">
         <button class="btn small" data-act="save">Save</button>
-        <button class="btn small" data-act="check">Check</button>
-        <button class="btn small" data-act="fire">Fire</button>
+        <button class="btn small" data-act="check" title="Explain whether a revive would fire here right now">Check</button>
+        <button class="btn small" data-act="fire" title="Post a revive here immediately">Fire Now</button>
         <button class="btn small danger" data-act="remove">Remove</button>
       </td>
     </tr>`;
@@ -214,14 +231,14 @@ function renderChannels(container, rows) {
     <table class="data-table">
       <thead><tr>
         <th>Channel</th><th>On</th><th>Categories</th><th>Ping</th>
-        <th>Role override</th><th>Rest (h)</th><th>Patience ×</th><th></th>
+        <th>Role Override</th><th>Rest (Hours)</th><th>Patience ×</th><th>Actions</th>
       </tr></thead>
       <tbody>
-        ${rows.map(channelRow).join("") || `<tr><td colspan="8" class="empty">No channels invited yet.</td></tr>`}
+        ${rows.map(channelRow).join("") || `<tr><td colspan="8" class="empty">No channels yet. Pick one below and choose Enable Channel — Chat Revive never posts anywhere you haven’t listed here.</td></tr>`}
       </tbody>
     </table>
     <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
-      <select data-add-channel>${addable.map((c) => `<option value="${c.id}">#${esc(c.name)}</option>`).join("")}</select>
+      <select data-add-channel aria-label="Channel to enable Chat Revive in">${addable.map((c) => `<option value="${c.id}">#${esc(c.name)}</option>`).join("")}</select>
       <button class="btn" data-add>Enable Channel</button>
       <span data-channels-status></span>
     </div>`;
@@ -235,7 +252,7 @@ function renderChannels(container, rows) {
       await apiPut(`/api/chat-revive/channels/${sel.value}`, {});
       refresh(container);
     } catch (err) {
-      flash(status(), err.message, true);
+      flash(status(), `Couldn’t enable that channel — ${err.message}`, true);
     }
   });
 
@@ -267,11 +284,16 @@ function renderChannels(container, rows) {
           flash(status(), `Revived ${chanName(cid)}${r.pinged ? " with a ping" : ""}: ${r.question}`);
           renderStats(container);
         } else if (act === "remove") {
+          const ok = await confirmDialog(
+            `Stop reviving ${chanName(cid)}? Its per-channel settings are discarded; the question bank is untouched.`,
+            { title: "Remove Channel", danger: true, confirmLabel: "Remove" },
+          );
+          if (!ok) return;
           await apiDelete(`/api/chat-revive/channels/${cid}`);
           refresh(container);
         }
       } catch (err) {
-        flash(status(), err.message, true);
+        flash(status(), `That didn’t work — ${err.message}`, true);
       }
     });
   });
@@ -282,18 +304,18 @@ function renderCheck(cid, r) {
     ? `🔥 <strong>${esc(chanName(cid))} would fire right now.</strong>`
     : `😴 <strong>${esc(chanName(cid))}: holding back.</strong>`;
   const bits = [];
-  if (r.silence_minutes != null) bits.push(`quiet ${r.silence_minutes}m`);
-  if (r.threshold_minutes != null) bits.push(`fires after ${r.threshold_minutes}m`);
-  if (r.band) bits.push(`band ${r.band}`);
-  if (r.mode) bits.push(`mode ${r.mode}`);
-  bits.push(`history ${r.history_days}d`);
+  if (r.silence_minutes != null) bits.push(`Quiet for ${r.silence_minutes} minutes`);
+  if (r.threshold_minutes != null) bits.push(`Fires after ${r.threshold_minutes} minutes`);
+  if (r.band) bits.push(`Time band: ${r.band}`);
+  if (r.mode) bits.push(`Mode: ${r.mode}`);
+  bits.push(`Based on ${r.history_days} days of history`);
   return `
     <div class="card" style="margin-top:8px;">
       <div>${head}</div>
       <div class="field-hint">${esc(r.reason)}</div>
       <div class="field-hint">${esc(bits.join(" · "))}</div>
-      <div>${r.would_ask ? `Would ask: <em>${esc(r.would_ask)}</em>${r.would_ping ? " (with a ping)" : ""}` : `<span class="error">No eligible question in the bank.</span>`}</div>
-      ${r.live_channel ? "" : `<div class="field-hint">Bot offline or channel unresolved — live checks (slowmode, active games) skipped.</div>`}
+      <div>${r.would_ask ? `Would ask: <em>${esc(r.would_ask)}</em>${r.would_ping ? " (with a ping)" : ""}` : `<span class="error">No question in the bank fits this channel — add one below, or widen its Categories.</span>`}</div>
+      ${r.live_channel ? "" : `<div class="field-hint">Dungeon Keeper is offline or can’t see this channel, so live checks — slowmode and running games — were skipped.</div>`}
     </div>`;
 }
 
@@ -309,17 +331,17 @@ async function renderBank(container) {
       include_retired: state.retired === "1",
     });
   } catch (err) {
-    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    host.innerHTML = renderError(`Couldn’t load the question bank — try again. (${err.message})`);
     return;
   }
   const qs = data.questions;
   host.innerHTML = `
     <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
-      <select data-bank-filter>
-        <option value="">all categories</option>${catOptions(state.filter || "")}
+      <select data-bank-filter aria-label="Filter questions by category">
+        <option value="">All categories</option>${catOptions(state.filter || "")}
       </select>
-      <label class="field-hint"><input type="checkbox" data-bank-retired ${state.retired === "1" ? "checked" : ""}> show retired</label>
-      <span class="field-hint">${qs.length} question(s)</span>
+      <label class="field-hint"><input type="checkbox" data-bank-retired ${state.retired === "1" ? "checked" : ""}> Show retired questions</label>
+      <span class="field-hint">${qs.length} question${qs.length === 1 ? "" : "s"}</span>
       <span data-bank-status></span>
     </div>
     <div style="max-height:320px; overflow-y:auto;">
@@ -333,19 +355,19 @@ async function renderBank(container) {
               <td>${esc(q.text)}</td>
               <td>${q.use_count}</td>
               <td>${q.active ? `<button class="btn small danger" data-retire="${q.id}">Retire</button>` : ""}</td>
-            </tr>`).join("") || `<tr><td colspan="5" class="empty">Nothing here.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="5" class="empty">No questions match this filter. Clear the category filter, or add one below.</td></tr>`}
         </tbody>
       </table>
     </div>
     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input data-new-text type="text" placeholder="Add a question…" style="flex:1; min-width:220px;">
-      <select data-new-cat>${catOptions("general")}</select>
-      <label class="field-hint"><input type="checkbox" data-new-nsfw> 🔞</label>
+      <input data-new-text type="text" aria-label="New question text" placeholder="Add a question…" style="flex:1; min-width:220px;">
+      <select data-new-cat aria-label="Category for the new question">${catOptions("general")}</select>
+      <label class="field-hint"><input type="checkbox" data-new-nsfw> 🔞 NSFW</label>
       <button class="btn" data-add-q>Add</button>
     </div>
     <details style="margin-top:8px;">
-      <summary class="field-hint">Bulk add (one per line; "deep: text" tags a category, "spicy,nsfw: text" flags adult-only)</summary>
-      <textarea data-bulk rows="5" style="width:100%; margin-top:6px;"></textarea>
+      <summary class="field-hint">Bulk Add — one question per line. Prefix with a category and a colon (“deep: What scared you as a kid?”), and add nsfw to mark it adult-only (“spicy,nsfw: …”).</summary>
+      <textarea data-bulk rows="5" aria-label="Questions to bulk add, one per line" style="width:100%; margin-top:6px;"></textarea>
       <button class="btn" data-bulk-add style="margin-top:6px;">Add All</button>
     </details>`;
 
@@ -370,7 +392,7 @@ async function renderBank(container) {
       });
       renderBank(container);
     } catch (err) {
-      flash(status(), err.message, true);
+      flash(status(), `Couldn’t add that question — ${err.message}`, true);
     }
   });
   host.querySelector("[data-bulk-add]").addEventListener("click", async () => {
@@ -378,19 +400,24 @@ async function renderBank(container) {
     if (!lines.trim()) return;
     try {
       const r = await apiPost("/api/chat-revive/questions/bulk", { lines });
-      flash(status(), `Added ${r.added}, skipped ${r.skipped}.`);
+      flash(status(), `Added ${r.added}, skipped ${r.skipped} duplicate${r.skipped === 1 ? "" : "s"}.`);
       renderBank(container);
     } catch (err) {
-      flash(status(), err.message, true);
+      flash(status(), `Couldn’t bulk add — ${err.message}`, true);
     }
   });
   host.querySelectorAll("[data-retire]").forEach((btn) => {
     btn.addEventListener("click", async () => {
+      const ok = await confirmDialog(
+        "Retire this question? It stops being served, but stays in the list so you can see how it did.",
+        { title: "Retire Question", danger: true, confirmLabel: "Retire" },
+      );
+      if (!ok) return;
       try {
         await apiPost(`/api/chat-revive/questions/${btn.dataset.retire}/retire`);
         renderBank(container);
       } catch (err) {
-        flash(status(), err.message, true);
+        flash(status(), `Couldn’t retire that question — ${err.message}`, true);
       }
     });
   });
@@ -404,36 +431,36 @@ async function renderStats(container) {
   try {
     s = await api("/api/chat-revive/stats");
   } catch (err) {
-    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    host.innerHTML = renderError(`Couldn’t load the scoreboard — try again. (${err.message})`);
     return;
   }
   if (!s.total) {
-    host.innerHTML = `<div class="empty">No revives yet — the scoreboard starts after the first one.</div>`;
+    host.innerHTML = renderEmpty("No revives yet. Once Chat Revive posts its first question, this scoreboard shows which questions actually get people talking.");
     return;
   }
-  const rate = s.measured ? `${Math.round((s.successes / s.measured) * 100)}%` : "n/a";
+  const rate = s.measured ? `${Math.round((s.successes / s.measured) * 100)}%` : "Not measured yet";
   const qRow = (q, ok) => `
     <tr><td>${q.question_id}</td><td>${esc(q.text)}</td><td>${ok ? `${q.successes}/${q.uses}` : `0/${q.uses}`}</td></tr>`;
   host.innerHTML = `
     <div class="card-grid" style="margin-bottom:8px;">
-      <div class="stat"><div class="stat-label">Revives all-time</div><div class="stat-value">${s.total}</div></div>
-      <div class="stat"><div class="stat-label">This week</div><div class="stat-value">${s.week_revives}</div></div>
-      <div class="stat"><div class="stat-label">Sparked conversation</div><div class="stat-value">${rate}</div></div>
+      <div class="stat"><div class="stat-label">Revives All Time</div><div class="stat-value">${s.total}</div></div>
+      <div class="stat"><div class="stat-label">This Week</div><div class="stat-value">${s.week_revives}</div></div>
+      <div class="stat"><div class="stat-label">Sparked Conversation</div><div class="stat-value">${rate}</div></div>
       <div class="stat"><div class="stat-label">Measured</div><div class="stat-value">${s.measured}/${s.total}</div></div>
     </div>
     <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));">
       <div>
-        <div class="section-label">Channels (30d)</div>
+        <div class="section-label">Channels (Last 30 Days)</div>
         <table class="data-table"><thead><tr><th>Channel</th><th>Revives</th><th>Sparked</th></tr></thead>
         <tbody>${(s.channels || []).map((c) => `
-          <tr><td>${esc(chanName(c.channel_id))}</td><td>${c.revives}</td><td>${c.successes}/${c.measured}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">—</td></tr>`}
+          <tr><td>${esc(chanName(c.channel_id))}</td><td>${c.revives}</td><td>${c.successes}/${c.measured}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">No revives in the last 30 days.</td></tr>`}
         </tbody></table>
       </div>
       <div>
         <div class="section-label">Carrying the Team</div>
-        <table class="data-table"><tbody>${(s.top_questions || []).map((q) => qRow(q, true)).join("") || `<tr><td class="empty">—</td></tr>`}</tbody></table>
+        <table class="data-table"><tbody>${(s.top_questions || []).map((q) => qRow(q, true)).join("") || `<tr><td class="empty">Not enough data yet to rank questions.</td></tr>`}</tbody></table>
         ${(s.dud_questions || []).length ? `
-          <div class="section-label" style="margin-top:8px;">Dead Weight (consider retiring)</div>
+          <div class="section-label" style="margin-top:8px;">Dead Weight — Consider Retiring</div>
           <table class="data-table"><tbody>${s.dud_questions.map((q) => qRow(q, false)).join("")}</tbody></table>` : ""}
       </div>
     </div>`;

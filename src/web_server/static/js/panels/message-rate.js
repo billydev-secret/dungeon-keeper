@@ -20,7 +20,7 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const rangeEl = rangePicker({ value: initialParams.days || 30, allowAll: false, label: "Days to average" });
+  const rangeEl = rangePicker({ value: initialParams.days || 30, allowAll: false, label: "Days to Average" });
   container.querySelector(".controls").prepend(rangeEl);
   const daysEl = rangeEl.querySelector("select");
   const chanEl = container.querySelector('[data-control="channel"]');
@@ -38,7 +38,13 @@ export function mount(container, initialParams) {
         chanEl.appendChild(opt);
       }
       if (initialParams.channel_id) chanEl.value = initialParams.channel_id;
-    } catch (_) {}
+    } catch (err) {
+      // A silently empty channel list reads as "this server has one channel".
+      const opt = document.createElement("option");
+      opt.disabled = true;
+      opt.textContent = "Channel list failed to load — reload the page";
+      chanEl.appendChild(opt);
+    }
   }
 
   function bucketLabels() {
@@ -62,7 +68,7 @@ export function mount(container, initialParams) {
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
       if (!data.avg_per_day.some((v) => v > 0)) {
-        wrap.innerHTML = `<div class="empty">No message activity for the selected window.</div>`;
+        wrap.innerHTML = `<div class="empty">No messages in this window. Pick more days, or choose All channels.</div>`;
         sliderWrap.innerHTML = "";
         return;
       }
@@ -82,7 +88,7 @@ export function mount(container, initialParams) {
       sliderWrap.innerHTML = "";
       slider = mountTimeSlider(sliderWrap, { totalPoints: labels.length, labels, onChange: renderChart });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load the message rate — try again. (${esc(err.message)})</div>`;
     }
   }
 

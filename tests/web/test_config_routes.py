@@ -1194,13 +1194,12 @@ def test_booster_post_panel_400_when_channel_not_text(authed_client, fake_ctx):
 
 
 def test_welcome_preview_503_when_bot_unavailable(authed_client):
-    resp = authed_client.get("/api/config/welcome/preview")
+    resp = authed_client.post("/api/config/welcome/preview", json={})
     assert resp.status_code == 503
 
 
-def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
-    """When the bot guild and the auth user are reachable, preview returns
-    rendered embed dicts for both welcome and leave."""
+def _welcome_preview_guild(fake_ctx):
+    """Wire a minimal bot/guild/member mock good enough for the preview route."""
     from unittest.mock import MagicMock
 
     guild = MagicMock()
@@ -1229,7 +1228,10 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
     bot = MagicMock()
     bot.get_guild = MagicMock(return_value=guild)
     fake_ctx.bot = bot
+    return guild
 
+
+def _post_preview(authed_client, payload):
     import discord
     from unittest.mock import AsyncMock, patch
 
@@ -1237,13 +1239,65 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
         "bot_modules.core.branding.resolve_accent_color",
         new=AsyncMock(return_value=discord.Color(0x123456)),
     ):
-        resp = authed_client.get("/api/config/welcome/preview")
+        return authed_client.post("/api/config/welcome/preview", json=payload)
+
+
+def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
+    """When the bot guild and the auth user are reachable, preview returns
+    rendered embed dicts for both welcome and leave."""
+    _welcome_preview_guild(fake_ctx)
+
+    resp = _post_preview(authed_client, {})
     # 200 happy path; the route's build_*_embed helpers are exercised. If the
     # preview shape changes later, this is a useful regression bait.
     assert resp.status_code == 200
     body = resp.json()
     assert "welcome" in body
     assert "leave" in body
+
+
+def test_welcome_preview_uses_posted_values_over_stored(authed_client, fake_ctx):
+    """W-C3: the preview must reflect the form's current (unsaved) edits, not
+    the stored config — posted welcome/leave messages win over saved ones."""
+    from bot_modules.core.db_utils import set_config_value
+
+    _welcome_preview_guild(fake_ctx)
+
+    # Store different values so we can tell which source the preview used.
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "welcome_message", "STORED WELCOME", fake_ctx.guild_id)
+        set_config_value(conn, "leave_message", "STORED LEAVE", fake_ctx.guild_id)
+
+    resp = _post_preview(
+        authed_client,
+        {
+            "welcome_message": "UNSAVED WELCOME {member_name}",
+            "leave_message": "UNSAVED LEAVE",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "UNSAVED WELCOME" in body["welcome"]["description"]
+    assert "STORED WELCOME" not in body["welcome"]["description"]
+    assert "UNSAVED LEAVE" in body["leave"]["description"]
+    # Placeholders in posted values still resolve.
+    assert "tester" in body["welcome"]["description"]
+
+
+def test_welcome_preview_falls_back_to_stored_values(authed_client, fake_ctx):
+    """Fields omitted from the POST body fall back to the saved config."""
+    from bot_modules.core.db_utils import set_config_value
+
+    _welcome_preview_guild(fake_ctx)
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "welcome_message", "STORED WELCOME", fake_ctx.guild_id)
+
+    resp = _post_preview(authed_client, {"leave_message": "UNSAVED LEAVE"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "STORED WELCOME" in body["welcome"]["description"]
+    assert "UNSAVED LEAVE" in body["leave"]["description"]
 
 
 # ── PUT /api/config/guess — NSFW channel guard ─────────────────────────
@@ -1440,3 +1494,154 @@ def test_update_intake_normalizes_keys_for_button_dispatch(authed_client):
     keys = [s["key"] for s in authed_client.get("/api/config").json()["intake"]["steps"]]
     assert all(_re.fullmatch(r"[\w-]{1,64}", k) for k in keys)
     assert len(set(keys)) == 3  # dedupe survived the cap
+# ── Bump Tracker ──────────────────────────────────────────────────────
+#
+# The reminder loop is driven entirely by this config, and until the dashboard
+# panel shipped these routes had no coverage at all. They are the only way to
+# set up the feature, so the round-trip is worth pinning.
+
+
+def test_bump_tracker_config_round_trip(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/bump-tracker", json={
+        "channel_id": "7001", "role_id": "7002", "enabled": True,
+    })
+    assert resp.status_code == 200
+
+    section = authed_client.get("/api/config").json()["bump_tracker"]
+    assert section["configured"] is True
+    assert section["enabled"] is True
+    # Snowflakes must survive as strings — a bare JSON number loses precision.
+    assert section["channel_id"] == "7001"
+    assert section["role_id"] == "7002"
+    assert isinstance(section["channel_id"], str)
+
+
+def test_bump_tracker_site_add_update_and_delete(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/bump-tracker/sites/disboard", json={
+        "cooldown_hours": 2, "detector_bot_id": "302050872383242240",
+    })
+    assert resp.status_code == 200
+
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    site = next(s for s in sites if s["site_name"] == "disboard")
+    assert site["cooldown_seconds"] == 7200
+    assert site["detector_bot_id"] == "302050872383242240"
+    # Never bumped: the panel shows it as ready to bump right now.
+    assert site["bumped_at"] is None
+    assert site["ready"] is True
+
+    # Re-PUT is an update, not a duplicate row.
+    authed_client.put("/api/config/bump-tracker/sites/disboard", json={"cooldown_hours": 6})
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    matching = [s for s in sites if s["site_name"] == "disboard"]
+    assert len(matching) == 1
+    assert matching[0]["cooldown_seconds"] == 21600
+
+    resp = authed_client.delete("/api/config/bump-tracker/sites/disboard")
+    assert resp.status_code == 200
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    assert not [s for s in sites if s["site_name"] == "disboard"]
+
+
+def test_bump_tracker_log_starts_the_cooldown(authed_client, fake_ctx):
+    authed_client.put("/api/config/bump-tracker/sites/discadia", json={"cooldown_hours": 24})
+
+    resp = authed_client.post("/api/config/bump-tracker/sites/discadia/log")
+    assert resp.status_code == 200
+
+    sites = authed_client.get("/api/config").json()["bump_tracker"]["sites"]
+    site = next(s for s in sites if s["site_name"] == "discadia")
+    assert site["bumped_at"] is not None
+    assert site["ready"] is False
+    # Just bumped, so nearly the whole 24h should remain.
+    assert 23 * 3600 < site["seconds_remaining"] <= 24 * 3600
+
+
+def test_bump_tracker_rejects_unknown_site(authed_client, fake_ctx):
+    assert authed_client.post("/api/config/bump-tracker/sites/nope/log").status_code == 404
+    resp = authed_client.put(
+        "/api/config/bump-tracker/sites/nope/detector",
+        json={"detector_bot_id": "123"},
+    )
+    assert resp.status_code == 404
+
+
+# ── Branding: per-guild product names ──────────────────────────────────
+#
+# The casino's and the AI assistant's names used to be hardcoded, which showed
+# the home server's branding to every other guild. They're branding_config
+# columns now; blank means "use the built-in default".
+
+
+def test_branding_section_reports_names_and_defaults(authed_client):
+    br = authed_client.get("/api/config").json()["branding"]
+    # Nothing set yet — empty overrides, defaults advertised for the placeholder.
+    assert br["casino_name"] == ""
+    assert br["assistant_name"] == ""
+    assert br["default_casino_name"] == "Golden Meadow"
+    assert br["default_assistant_name"] == "Billy-bot"
+
+
+def test_branding_put_round_trips_names(authed_client):
+    resp = authed_client.put(
+        "/api/config/branding",
+        json={"casino_name": "  Neon Pines  ", "assistant_name": "Sam-bot"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["casino_name"] == "Neon Pines"  # trimmed
+    assert resp.json()["assistant_name"] == "Sam-bot"
+
+    br = authed_client.get("/api/config").json()["branding"]
+    assert br["casino_name"] == "Neon Pines"
+    assert br["assistant_name"] == "Sam-bot"
+
+
+def test_branding_put_blank_name_falls_back_to_default(authed_client, fake_ctx):
+    from bot_modules.services.branding_service import (
+        DEFAULT_CASINO_NAME,
+        resolve_casino_name,
+    )
+
+    authed_client.put("/api/config/branding", json={"casino_name": "Neon Pines"})
+    resp = authed_client.put("/api/config/branding", json={"casino_name": "   "})
+    assert resp.status_code == 200
+    assert resp.json()["casino_name"] == ""
+
+    assert authed_client.get("/api/config").json()["branding"]["casino_name"] == ""
+    # And the bot-side resolver is back on the built-in name.
+    assert resolve_casino_name(fake_ctx.db_path, fake_ctx.guild_id) == DEFAULT_CASINO_NAME
+
+
+def test_branding_put_names_leave_the_accent_alone(authed_client):
+    authed_client.put(
+        "/api/config/branding", json={"accent_mode": "custom", "accent_hex": "#112233"}
+    )
+    authed_client.put("/api/config/branding", json={"casino_name": "Neon Pines"})
+
+    br = authed_client.get("/api/config").json()["branding"]
+    assert br["accent_mode"] == "custom"
+    assert br["accent_hex"] == "#112233"
+    assert br["casino_name"] == "Neon Pines"
+
+
+def test_branding_put_rejects_an_overlong_name(authed_client):
+    resp = authed_client.put(
+        "/api/config/branding", json={"assistant_name": "x" * 200}
+    )
+    assert resp.status_code == 400
+
+
+def test_branding_names_are_per_guild(fake_ctx):
+    from bot_modules.services.branding_service import (
+        DEFAULT_CASINO_NAME,
+        resolve_casino_name,
+    )
+
+    client = _second_guild_client(fake_ctx)
+    assert client.put(
+        "/api/config/branding", json={"casino_name": "Neon Pines"}
+    ).status_code == 200
+
+    assert resolve_casino_name(fake_ctx.db_path, _SECOND_GUILD) == "Neon Pines"
+    # The home guild keeps the built-in name.
+    assert resolve_casino_name(fake_ctx.db_path, fake_ctx.guild_id) == DEFAULT_CASINO_NAME

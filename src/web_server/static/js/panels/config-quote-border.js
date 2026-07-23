@@ -1,5 +1,6 @@
 import { api, apiPost, apiDelete } from "../api.js";
-import { showStatus } from "../config-helpers.js";
+import { showStatus, guardForm } from "../config-helpers.js";
+import { confirmDialog } from "../ui.js";
 
 // Cache-buster so a freshly uploaded/removed border isn't served stale by the
 // browser when we repoint the same <img>.
@@ -58,67 +59,69 @@ export function mount(container) {
           <div class="subtitle">The border framing this server's quote cards</div>
         </header>
 
-        <section class="form">
-          <h3 style="margin:0 0 1rem">Quote Card Border</h3>
+        <form class="form card" data-border-form>
+          <div class="section-label">Quote Card Border</div>
           <div class="field-hint" style="margin-bottom:1rem">
-            Upload a frame that's composited over every quote card. It becomes this
-            server's default border (members can still pick a bundled frame per quote).
-            The quote text and avatar are fit <strong>inside the frame's opening</strong> —
-            any shape works (rectangle, oval, arch), and the text auto-shrinks to fit.
-            Requirements: a <strong>PNG or WEBP with a see-through center</strong> — a frame
-            that leaves no clear opening is rejected. If the opening is too small for an
-            avatar, the card falls back to a centered layout (avatar as background, name as
-            a header). Cards render at about <strong>900×500</strong> (1.8:1); match that
-            aspect for best results.
+            Upload a frame that is drawn over every quote card. It becomes this server's
+            default border — members can still choose one of the bundled frames for an
+            individual quote. The quote text and avatar are fitted
+            <strong>inside the frame's opening</strong>; any shape works (rectangle, oval,
+            arch) and the text shrinks itself to fit.
+            The file must be a <strong>PNG or WEBP with a see-through center</strong> —
+            a frame with no clear opening is rejected. If the opening is too small for an
+            avatar, the card falls back to a centered layout with the avatar as the
+            background and the name as a header. Cards are rendered at about
+            <strong>900 × 500 pixels</strong> (1.8:1), so match that shape for the best result.
           </div>
 
           <div data-preview-wrap style="margin-bottom:1rem;display:none">
-            <div class="field-hint" style="margin-bottom:.5rem">Current border</div>
-            <img data-preview alt="Current quote border"
+            <div class="field-hint" style="margin-bottom:.5rem">Border in use right now</div>
+            <img data-preview alt="The quote card border currently in use"
               style="max-width:100%;width:450px;border-radius:8px;background:
               repeating-conic-gradient(#808080 0% 25%, #a0a0a0 0% 50%) 50% / 20px 20px" />
             <div data-dims class="field-hint" style="margin-top:.35rem"></div>
           </div>
           <div data-empty class="field-hint" style="margin-bottom:1rem;display:none">
-            No custom border set — the bundled <em>Golden Poppy</em> frame is used.
+            No custom border yet — quote cards use the bundled <em>Golden Poppy</em> frame.
           </div>
 
           <div class="field">
-            <label>Upload border</label>
-            <input type="file" data-border-file accept="image/png,image/webp" />
+            <label for="qb-file">Border Image File</label>
+            <input type="file" id="qb-file" data-border-file accept="image/png,image/webp" />
+            <div class="field-hint">Pick a PNG or WEBP from your device. Saving replaces the border on every new quote card immediately.</div>
           </div>
-          <div style="display:flex;align-items:center;gap:12px">
-            <button type="button" class="btn btn-primary" data-upload>Upload</button>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <button type="submit" class="btn btn-primary">Save Border</button>
             <button type="button" class="btn btn-danger" data-remove
-              style="display:none">Remove</button>
+              style="display:none">Remove Border</button>
             <span data-status></span>
           </div>
-        </section>
+        </form>
 
-        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
-          <h3 style="margin:0 0 .5rem">Don't have a border? Generate one</h3>
+        <section class="form card" style="margin-top:12px;">
+          <div class="section-label">No Border Yet? Generate One</div>
           <div class="field-hint" style="margin-bottom:1rem">
-            Paste this into an image AI (ChatGPT/DALL·E, Midjourney, Stable Diffusion…),
-            swap the <em>"golden art-nouveau florals"</em> part for any style you like, then
-            upload the result above. Export it as a <strong>PNG with a transparent
-            background</strong> and keep the <strong>center clear</strong> — that's where the
-            quote goes.
+            Paste the prompt below into any image generator (ChatGPT, Midjourney, Stable
+            Diffusion, and so on), swap <em>"golden art-nouveau florals"</em> for whatever
+            style you want, then upload the result above. Export it as a
+            <strong>PNG with a transparent background</strong> and keep the
+            <strong>center clear</strong> — that space is where the quote goes.
           </div>
           <div class="field">
-            <label>Prompt</label>
-            <textarea data-gen-prompt readonly rows="5"
+            <label for="qb-prompt">Prompt</label>
+            <textarea id="qb-prompt" data-gen-prompt readonly rows="5"
               style="width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;line-height:1.45"></textarea>
           </div>
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem">
             <button type="button" class="btn btn-secondary" data-copy-prompt>Copy Prompt</button>
           </div>
           <div class="field">
-            <label>Negative prompt <span style="font-weight:400;opacity:.6">(optional — for Stable Diffusion &amp; similar)</span></label>
-            <textarea data-gen-negative readonly rows="2"
+            <label for="qb-negative">Things to Avoid <span style="font-weight:400;opacity:.6">(optional — for Stable Diffusion and similar tools)</span></label>
+            <textarea id="qb-negative" data-gen-negative readonly rows="2"
               style="width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;line-height:1.45"></textarea>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
-            <button type="button" class="btn btn-secondary" data-copy-negative>Copy Negative</button>
+            <button type="button" class="btn btn-secondary" data-copy-negative>Copy List</button>
           </div>
         </section>
       </div>
@@ -129,9 +132,11 @@ export function mount(container) {
     const dims = container.querySelector("[data-dims]");
     const emptyMsg = container.querySelector("[data-empty]");
     const fileInput = container.querySelector("[data-border-file]");
-    const uploadBtn = container.querySelector("[data-upload]");
+    const borderForm = container.querySelector("[data-border-form]");
+    const uploadBtn = borderForm.querySelector('button[type="submit"]');
     const removeBtn = container.querySelector("[data-remove]");
     const status = container.querySelector("[data-status]");
+    guardForm(borderForm);
 
     // Generation-prompt helper. Set via .value (not innerHTML) so the text can't
     // break out of the textarea.
@@ -162,9 +167,11 @@ export function mount(container) {
     }
     render(meta);
 
-    uploadBtn.addEventListener("click", async () => {
+    borderForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
       if (!fileInput.files.length) {
-        showStatus(status, false, "Pick a file");
+        showStatus(status, false, "Choose a border image file first.");
+        fileInput.focus();
         return;
       }
       const fd = new FormData();
@@ -184,6 +191,11 @@ export function mount(container) {
     });
 
     removeBtn.addEventListener("click", async () => {
+      const ok = await confirmDialog(
+        "Delete this server's custom border? Quote cards go back to the bundled Golden Poppy frame, and you'll need the original file to restore it.",
+        { title: "Remove Border", danger: true, confirmLabel: "Remove Border" },
+      );
+      if (!ok) return;
       removeBtn.disabled = true;
       showStatus(status, true, "Removing…");
       try {

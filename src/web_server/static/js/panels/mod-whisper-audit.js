@@ -23,17 +23,17 @@ export function mount(container) {
   return auditPanel(container, {
     title: "Whisper Audit Log",
     subtitle: "Whisper send history — shows each whisper's current status, not every past change",
-    empty: "No whispers found.",
+    empty: "No whispers match these filters. Every whisper a member sends is logged here with its current status.",
     filters: [
       {
         name: "state",
         label: "State",
         options: [
-          { value: "", label: "All" },
+          { value: "", label: "All states" },
           ...Object.entries(STATE_LABELS).map(([value, label]) => ({ value, label })),
         ],
       },
-      { name: "reported_only", label: "Reported only", type: "checkbox" },
+      { name: "reported_only", label: "Reported whispers only", type: "checkbox" },
     ],
     columns: [
       { label: "#", render: (e) => String(e.id) },

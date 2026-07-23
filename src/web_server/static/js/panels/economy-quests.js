@@ -3,7 +3,7 @@
 // settlement, grants, the ledger — lives on the Operations page. Gated by
 // the economy manager role (or admin).
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
-import { showStatus, loadChannels, mountChannelPicker } from "../config-helpers.js";
+import { showStatus, guardForm, loadChannels, mountChannelPicker } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 import { KIND_LABELS, CHANNEL_SCOPED_KINDS } from "./economy-sources-shared.js";
 
@@ -41,14 +41,24 @@ function bandHint(qtype, reward) {
 }
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Quests…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading quests…</div></div>`;
   (async () => {
-    const channels = await loadChannels().catch(() => []);
-    // Admin probe, same as Income Sources: the config GET is admin-gated, so
-    // a success means this user may edit the board sizes. Manager-role
-    // holders get a 403 and the read-only view.
-    boardCfg = await api("/api/economy/config").catch(() => null);
-    render(container, channels, boardCfg);
+    // All three loads are independent — fetch them together rather than one
+    // after another (W-D11). The quest list is handed straight to the first
+    // render so the library doesn't flash "Loading…" a second time.
+    const [channelsResult, cfgResult, questsResult] = await Promise.allSettled([
+      loadChannels(),
+      // Admin probe, same as Income Sources: the config GET is admin-gated, so
+      // a success means this user may edit the board sizes. Manager-role
+      // holders get a 403 and the read-only view.
+      api("/api/economy/config"),
+      api("/api/economy/quests"),
+    ]);
+    const channels = channelsResult.status === "fulfilled" ? channelsResult.value : [];
+    boardCfg = cfgResult.status === "fulfilled" ? cfgResult.value : null;
+    const economyOff = boardCfg != null && !boardCfg.enabled;
+    const prefetched = questsResult.status === "fulfilled" ? questsResult.value.quests : null;
+    render(container, channels, boardCfg, economyOff, prefetched);
   })();
   return null;
 }
@@ -65,35 +75,40 @@ function boardSection(cfg) {
   }
   const fields = BOARD_FIELDS.map(([key, , label]) => `
     <div class="field">
-      <label>${label}</label>
-      <input type="number" name="${key}" value="${cfg[key]}" min="0" max="25"
-             step="1" style="max-width:90px;" />
+      <label for="q-${key}">${label} Quests Shown</label>
+      <input type="number" name="${key}" id="q-${key}" required value="${cfg[key]}"
+             min="0" max="25" step="1" style="max-width:90px;" />
     </div>`).join("");
   return `
     <div class="field-hint" style="margin-bottom:8px;">
-      How many quests of each cadence a member sees at once, drawn from that
-      cadence's active pool. Lower this to make the board less busy without
-      deactivating quests — a bigger pool with a small board also spaces
-      repeats further apart. <strong>0 turns the cadence off entirely</strong>
-      (nothing shows, nothing pays). Like library edits, a size change takes
-      effect at the next roll — current boards aren't resized mid-period.
+      How many quests of each kind one member sees at a time, picked from all the
+      active quests of that kind. Showing fewer keeps the board from feeling like a
+      chore list without your having to deactivate anything, and a large pool paired
+      with a small board means members see the same quest come round far less often.
+      <strong>Setting one to 0 switches that kind off completely</strong> — nothing is
+      shown and nothing pays. Like every other change here, a new size takes effect at
+      the next daily, weekly, or monthly roll; nobody's current board is reshuffled.
     </div>
     <form data-form-board class="form">
       <div class="field-row">${fields}</div>
       <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-        <button type="submit" class="btn btn-primary">Save Board Size</button>
+        <button type="submit" class="btn btn-primary">Save</button>
         <span data-status-board></span>
       </div>
     </form>`;
 }
 
-function render(container, channels, cfg) {
+function render(container, channels, cfg, economyOff, prefetchedQuests) {
   container.innerHTML = `
     <div class="panel">
       <header>
         <h2>Quests</h2>
-        <div class="subtitle">The quest library and authoring — approvals and settlement happen on Operations</div>
+        <div class="subtitle">Write and manage the quests members work through. Approving
+          finished quests and settling community goals happen on Operations.</div>
       </header>
+      ${economyOff ? `<div class="empty" role="status" style="margin-bottom:12px;">
+        The economy is currently off, so nothing below takes effect until it is switched
+        on under <a href="#/economy-config">Economy Settings</a>.</div>` : ""}
 
       <section class="card" data-sec="library">
         <div class="section-label">Quest Library</div>
@@ -123,10 +138,11 @@ function render(container, channels, cfg) {
         <div class="section-label" data-author-label>New Quest</div>
         <form data-form-quest class="form">
           <div class="field-row">
-            <div class="field"><label>Title</label>
-              <input type="text" name="title" maxlength="256" required /></div>
-            <div class="field"><label>Type</label>
-              <select name="qtype">
+            <div class="field"><label for="q-title">Title</label>
+              <input type="text" name="title" id="q-title" maxlength="256" required />
+              <div class="field-hint">What members see at the top of the quest card.</div></div>
+            <div class="field"><label for="q-type">Type</label>
+              <select name="qtype" id="q-type">
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
                 <option value="monthly">Monthly</option>
@@ -135,36 +151,53 @@ function render(container, channels, cfg) {
               </select>
               <div class="field-hint" data-type-hint style="max-width:420px;"></div></div>
           </div>
-          <div class="field"><label>Description</label>
-            <textarea name="description" maxlength="2000" rows="2"></textarea></div>
-          <div class="field"><label>Criteria (shown on the claim card)</label>
-            <textarea name="criteria" maxlength="2000" rows="2"></textarea></div>
+          <div class="field"><label for="q-description">Description</label>
+            <textarea name="description" id="q-description" maxlength="2000" rows="2"></textarea>
+            <div class="field-hint">A sentence or two of flavor, shown under the title.</div></div>
+          <div class="field"><label for="q-criteria">What Counts as Done</label>
+            <textarea name="criteria" id="q-criteria" maxlength="2000" rows="2"></textarea>
+            <div class="field-hint">Spelled out on the card members claim from, so there
+              is no argument later about whether they finished it.</div></div>
           <div class="field-row">
-            <div class="field"><label>Reward (coins)</label>
-              <input type="number" name="reward" min="0" step="1" value="10" style="max-width:120px;" />
+            <div class="field"><label for="q-reward">Reward (coins)</label>
+              <input type="number" name="reward" id="q-reward" required min="0" max="1000000" step="1" value="10" style="max-width:120px;" />
               <div class="field-hint" data-reward-hint style="color:#d9a441;"></div></div>
-            <div class="field"><label>Bonus XP</label>
-              <input type="number" name="reward_xp" min="0" step="1" value="0" style="max-width:120px;" />
-              <div class="field-hint">Levelling XP paid with the coins (no booster multiplier).</div></div>
-            <div class="field" data-community-target style="display:none;"><label>Community target</label>
-              <input type="number" name="community_target" min="0" step="1" style="max-width:120px;" /></div>
-            <div class="field" data-community-auto style="display:none;"><label>Community target</label>
-              <div class="field-hint">Auto-sized when the scheduler kicks the run off — a typical week lands ~75%, a push clears it. No manual override.</div></div>
-            <div class="field" data-rotate-field><label>Rotate tag</label>
-              <input type="text" name="rotate_tag" maxlength="64" style="max-width:160px;" /></div>
-            <div class="field"><label>Pair tag</label>
-              <input type="text" name="pair_tag" maxlength="64" style="max-width:160px;" />
-              <div class="field-hint">Exactly two active quests of the same cadence sharing a tag land on boards together (e.g. host + play).</div></div>
+            <div class="field"><label for="q-reward-xp">Bonus XP</label>
+              <input type="number" name="reward_xp" id="q-reward-xp" required min="0" max="1000000" step="1" value="0" style="max-width:120px;" />
+              <div class="field-hint">Leveling XP paid alongside the coins. The booster
+                multiplier does not apply to XP.</div></div>
+            <div class="field" data-community-target style="display:none;"><label for="q-community-target">Community Target</label>
+              <input type="number" name="community_target" id="q-community-target" min="0" max="100000000" step="1" style="max-width:120px;" />
+              <div class="field-hint">How far the whole server has to get before the goal
+                pays out.</div></div>
+            <div class="field" data-community-auto style="display:none;"><label>Community Target</label>
+              <div class="field-hint">Set automatically when the run starts, based on how
+                busy the server has been lately — a normal week gets roughly three
+                quarters of the way there, and a real push finishes it. There is nothing
+                to enter here.</div></div>
+            <div class="field" data-rotate-field><label for="q-rotate">Rotation Tag</label>
+              <input type="text" name="rotate_tag" id="q-rotate" maxlength="64" style="max-width:160px;" />
+              <div class="field-hint">Optional. Daily quests sharing a tag take turns
+                rather than all appearing at once.</div></div>
+            <div class="field"><label for="q-pair">Pair Tag</label>
+              <input type="text" name="pair_tag" id="q-pair" maxlength="64" style="max-width:160px;" />
+              <div class="field-hint">Optional. When exactly two quests of the same kind
+                share a tag, they land on a member's board together — useful for a pair
+                like "host a game" and "play a game".</div></div>
           </div>
           <div class="field-row">
-            <div class="field"><label>Starts (optional)</label>
-              <input type="datetime-local" name="starts_at" /></div>
-            <div class="field"><label>Ends (optional)</label>
-              <input type="datetime-local" name="ends_at" /></div>
+            <div class="field"><label for="q-starts">Starts (optional)</label>
+              <input type="datetime-local" name="starts_at" id="q-starts" />
+              <div class="field-hint">The quest stays off boards until this moment. Leave
+                empty to start straight away.</div></div>
+            <div class="field"><label for="q-ends">Ends (optional)</label>
+              <input type="datetime-local" name="ends_at" id="q-ends" />
+              <div class="field-hint">The quest drops off boards after this moment. Leave
+                empty to run indefinitely.</div></div>
           </div>
 
           <div class="field" data-completion-block>
-            <label>How it completes</label>
+            <label>How It Completes</label>
             <div style="display:flex; gap:14px; flex-wrap:wrap; margin:4px 0;">
               <label style="display:flex; gap:5px; align-items:center; cursor:pointer;">
                 <input type="radio" name="completion" value="manual" checked /> Member claims it</label>
@@ -175,43 +208,53 @@ function render(container, channels, cfg) {
             </div>
             <div class="field-hint" data-completion-hint></div>
           </div>
-          <div class="field" data-trigger-words style="display:none;"><label>Trigger words</label>
-            <textarea name="trigger_words" maxlength="1000" rows="2" placeholder="e.g. good morning, gm"></textarea>
-            <div class="field-hint">Comma or newline separated; whole-phrase, case-insensitive.</div></div>
-          <div class="field" data-trigger-channel style="display:none;"><label>Trigger channel</label>
+          <div class="field" data-trigger-words style="display:none;"><label for="q-words">Phrases That Count</label>
+            <textarea name="trigger_words" id="q-words" maxlength="1000" rows="2" placeholder="e.g. good morning, gm"></textarea>
+            <div class="field-hint">Separate them with commas or new lines. Capital
+              letters do not matter, but the whole phrase has to appear.</div></div>
+          <div class="field" data-trigger-channel style="display:none;"><label>Only in This Channel</label>
             <span data-picker="trigger-channel"></span>
-            <div class="field-hint">If set, only messages in this channel (or its threads) count.</div></div>
-          <div class="field" data-trigger-kind style="display:none;"><label>Game trigger</label>
-            <select name="trigger_kind">${Object.entries(KIND_LABELS).map(([k, v]) =>
+            <div class="field-hint">Leave it on "(any channel)" to count anywhere. Pick a
+              channel and only messages there, or in its threads, count.</div></div>
+          <div class="field" data-trigger-kind style="display:none;"><label for="q-kind">Which Event</label>
+            <select name="trigger_kind" id="q-kind">${Object.entries(KIND_LABELS).map(([k, v]) =>
               `<option value="${k}">${esc(v)}</option>`).join("")}
             </select>
             <div class="field-hint" data-kind-hint></div></div>
-          <div class="field" data-target-count style="display:none;"><label>How many times</label>
-            <input type="number" name="target_count" min="1" max="10000" step="1" value="1" style="max-width:110px;" />
-            <div class="field-hint">1 = the first occurrence completes it. Higher = a counted quest ("do it N times this period") with a progress bar on /quests.</div></div>
+          <div class="field" data-target-count style="display:none;"><label for="q-target">How Many Times</label>
+            <input type="number" name="target_count" id="q-target" min="1" max="10000" step="1" value="1" style="max-width:110px;" />
+            <div class="field-hint">1 means the first time it happens finishes the quest.
+              Anything higher turns it into a counted quest — "do this many times this
+              period" — with a progress bar on the member's quest card.</div></div>
 
-          <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
-            <input type="checkbox" name="signoff" /> Requires manager sign-off
-            <span class="field-hint" style="margin:0;">(completion files a claim you approve on Operations instead of paying instantly)</span>
-          </label>
+          <div class="field">
+            <label style="display:flex; gap:6px; align-items:center;">
+              <input type="checkbox" name="signoff" /> Have a manager approve it before paying
+            </label>
+            <div class="field-hint">When checked, finishing the quest files a claim for
+              you to approve on the Claims page instead of paying immediately. Use it for
+              anything you cannot verify automatically.</div>
+          </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary" data-submit-quest>Create Quest</button>
-            <button type="button" class="btn" data-cancel-edit style="display:none;">Cancel Edit</button>
+            <button type="button" class="btn" data-cancel-edit style="display:none;">Cancel</button>
             <span data-status-quest></span>
           </div>
         </form>
         <div class="ai-gen" data-quest-ai style="margin-top:14px;">
           <div class="section-label" style="font-size:.85em;">✨ Need ideas?</div>
-          <div class="field-row" style="align-items:flex-end;">
-            <div class="field"><label>AI idea theme (optional)</label>
-              <input type="text" data-ai-theme maxlength="200" placeholder="e.g. summer event, voice chat, art"
+          <div class="field-row" style="align-items:flex-end;flex-wrap:wrap;">
+            <div class="field"><label for="q-ai-theme">Theme (optional)</label>
+              <input type="text" id="q-ai-theme" data-ai-theme maxlength="200" placeholder="e.g. summer event, voice chat, art"
                      style="max-width:260px;" /></div>
-            <div class="field"><label>How many</label>
-              <input type="number" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
+            <div class="field"><label for="q-ai-count">How Many Ideas</label>
+              <input type="number" id="q-ai-count" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
             <div class="field" style="align-self:flex-end;">
               <button type="button" class="btn" data-ai-generate>Generate Ideas</button></div>
           </div>
-          <div class="field-hint" style="opacity:.75;">Ideas use the quest type selected above. Click one to load it into the form — nothing is saved until you create it.</div>
+          <div class="field-hint" style="opacity:.75;">Ideas are written for whichever quest
+            type is selected above. Click one to drop it into the form. Nothing is saved
+            until you press Create Quest, so you can edit freely first.</div>
           <div data-ai-results></div>
         </div>
       </section>
@@ -219,7 +262,11 @@ function render(container, channels, cfg) {
 
   wireAuthoring(container, channels);
   wireBoard(container);
-  refreshQuests(container);
+  if (prefetchedQuests) {
+    renderQuestList(container, prefetchedQuests);
+  } else {
+    refreshQuests(container);
+  }
 }
 
 // ── board size ───────────────────────────────────────────────────────
@@ -227,23 +274,33 @@ function render(container, channels, cfg) {
 function wireBoard(container) {
   const form = container.querySelector("[data-form-board]");
   if (!form) return; // manager-role view: read-only, nothing to wire
+  guardForm(form);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const status = form.querySelector("[data-status-board]");
     const payload = {};
-    for (const [key] of BOARD_FIELDS) {
-      payload[key] = Number(form.querySelector(`[name="${key}"]`).value);
+    for (const [key, , label] of BOARD_FIELDS) {
+      const input = form.querySelector(`[name="${key}"]`);
+      const n = parseInt(input.value, 10);
+      if (!Number.isFinite(n) || n < 0 || n > 25) {
+        showStatus(status, false, `${label} Quests Shown must be a number from 0 to 25`);
+        input.focus();
+        return;
+      }
+      payload[key] = n;
     }
     try {
       await apiPut("/api/economy/config", payload);
     } catch (err) {
-      showStatus(status, err.message, false);
+      // showStatus takes (el, ok, msg) — the arguments used to be reversed
+      // here, so a failed save rendered a blank success line.
+      showStatus(status, false, err.message);
       return;
     }
     // Keep the cached config in step so the library summary's "→ N shown"
     // reflects the save without a reload.
     boardCfg = { ...boardCfg, ...payload };
-    showStatus(status, "Saved", true);
+    showStatus(status, true);
     refreshQuests(container);
   });
 }
@@ -291,12 +348,19 @@ async function refreshQuests(container) {
   try {
     quests = (await api("/api/economy/quests")).quests;
   } catch (err) {
-    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    host.innerHTML = `<div class="error">The quest library failed to load: ${esc(err.message)}</div>`;
     return;
   }
+  renderQuestList(container, quests);
+}
+
+// Split out of refreshQuests so the first paint can use the list fetched in
+// parallel at mount instead of firing a second request.
+function renderQuestList(container, quests) {
+  const host = container.querySelector("[data-quests]");
   renderSlotSummary(container, quests);
   if (!quests.length) {
-    host.innerHTML = `<div class="empty">No quests yet — create one below.</div>`;
+    host.innerHTML = `<div class="empty">No quests yet. Write your first one in the form below.</div>`;
     return;
   }
   const rows = quests.map((q) => {
@@ -309,7 +373,7 @@ async function refreshQuests(container) {
         <td>${questVerification(q)}</td>
         <td>
           <label style="display:inline-flex; gap:4px; align-items:center;">
-            <input type="checkbox" data-active-toggle="${q.id}"${q.active ? " checked" : ""} /> active
+            <input type="checkbox" data-active-toggle="${q.id}"${q.active ? " checked" : ""} /> In rotation
           </label>
           <span id="${status}" class="save-status" style="margin-left:6px;"></span>
         </td>
@@ -322,7 +386,7 @@ async function refreshQuests(container) {
   host.innerHTML = `
     <div style="overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>Title</th><th>Type</th><th>Reward</th><th>How it completes</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Title</th><th>Type</th><th>Reward</th><th>How It Completes</th><th>In Rotation</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -351,7 +415,13 @@ async function refreshQuests(container) {
   host.querySelectorAll("[data-del-quest]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = btn.dataset.delQuest;
-      if (!(await confirmDialog("Delete this quest? Denied/expired claim history goes with it.", { danger: true, confirmLabel: "Delete" }))) return;
+      const ok = await confirmDialog(
+        "The quest is removed for good, along with any turned-down or expired claims "
+        + "against it. This cannot be undone. To retire a quest while keeping its "
+        + "history, clear \"In rotation\" instead.",
+        { title: "Delete this quest?", danger: true, confirmLabel: "Delete" },
+      );
+      if (!ok) return;
       try {
         await apiDelete(`/api/economy/quests/${id}`);
         toast("Quest deleted", "success");
@@ -407,8 +477,9 @@ function wireAuthoring(container, channels) {
   const authorLabel = container.querySelector("[data-author-label]");
   const triggerPicker = mountChannelPicker(
     form.querySelector('[data-picker="trigger-channel"]'), channels, "0",
-    { emptyLabel: "(any channel)" },
+    { emptyLabel: "(any channel)", label: "Only in This Channel" },
   );
+  guardForm(form);
   let editingId = null;
 
   const completion = () =>
@@ -517,13 +588,38 @@ function wireAuthoring(container, channels) {
     e.preventDefault();
     const qtype = qtypeSel.value;
     const mode = completion();
+
+    // Blank or silly numbers used to slip through as 0 or a 422 naming no
+    // field — check them here and say which one is wrong (W-C5).
+    const titleInput = form.querySelector("[name=title]");
+    if (!titleInput.value.trim()) {
+      showStatus(status, false, "Give the quest a Title");
+      titleInput.focus();
+      return;
+    }
+    const NUMS = [
+      ["reward", "Reward", 0, 1000000],
+      ["reward_xp", "Bonus XP", 0, 1000000],
+    ];
+    const nums = {};
+    for (const [name, label, min, max] of NUMS) {
+      const input = form.querySelector(`[name=${name}]`);
+      const n = parseInt(input.value, 10);
+      if (!Number.isFinite(n) || n < min || n > max) {
+        showStatus(status, false, `${label} must be a whole number from ${min} to ${max}`);
+        input.focus();
+        return;
+      }
+      nums[name] = n;
+    }
+
     const body = {
-      title: form.querySelector("[name=title]").value.trim(),
+      title: titleInput.value.trim(),
       description: form.querySelector("[name=description]").value,
       criteria: form.querySelector("[name=criteria]").value,
       qtype,
-      reward: parseInt(rewardInput.value, 10) || 0,
-      reward_xp: parseInt(form.querySelector("[name=reward_xp]").value, 10) || 0,
+      reward: nums.reward,
+      reward_xp: nums.reward_xp,
       signoff: form.querySelector("[name=signoff]").checked,
       rotate_tag: form.querySelector("[name=rotate_tag]").value.trim(),
       pair_tag: form.querySelector("[name=pair_tag]").value.trim(),
@@ -546,8 +642,19 @@ function wireAuthoring(container, channels) {
           body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;
         }
       } else {
-        const t = form.querySelector("[name=community_target]").value;
-        body.community_target = t === "" ? null : parseInt(t, 10);
+        const targetEl = form.querySelector("[name=community_target]");
+        const t = targetEl.value;
+        if (t !== "") {
+          const n = parseInt(t, 10);
+          if (!Number.isFinite(n) || n < 0 || n > 100000000) {
+            showStatus(status, false, "Community Target must be a whole number from 0 to 100000000");
+            targetEl.focus();
+            return;
+          }
+          body.community_target = n;
+        } else {
+          body.community_target = null;
+        }
       }
     } else if (mode === "game") {
       body.trigger_kind = kindSel.value;

@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 function fmtTs(ts) {
   if (!ts) return "—";
@@ -15,9 +16,11 @@ function fmtAge(ts) {
   return Math.floor(s / 86400) + "d";
 }
 
-function renderList(warnings, activeId) {
+function renderList(warnings, activeId, activeOnly) {
   if (!warnings.length) {
-    return '<div class="empty">No warnings found.</div>';
+    return renderEmpty(activeOnly
+      ? "No active warnings. Every warning on record has been revoked — untick Active Only to see them."
+      : "No warnings on record. Warnings a moderator issues from Discord or from a ticket land here.");
   }
   return warnings.map((w) => {
     const badge = w.revoked
@@ -99,7 +102,7 @@ export function mount(container) {
       <div class="mod-stats" data-stats></div>
 
       <div class="controls" style="padding:8px 16px 0">
-        <label><input type="checkbox" data-control="active-only"> Active only</label>
+        <label><input type="checkbox" data-control="active-only"> Active Only</label>
       </div>
 
       <section class="mod-split">
@@ -108,7 +111,7 @@ export function mount(container) {
             <h3>Queue</h3>
           </div>
           <div class="ticket-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading warnings…")}
           </div>
         </div>
 
@@ -139,7 +142,7 @@ export function mount(container) {
     if (!visible.find((w) => w.id === state.activeId)) {
       state.activeId = visible[0]?.id ?? null;
     }
-    listEl.innerHTML = renderList(visible, state.activeId);
+    listEl.innerHTML = renderList(visible, state.activeId, activeOnlyEl.checked);
     const active = state.warnings.find((w) => w.id === state.activeId) || null;
     detailEl.innerHTML = renderDetail(active);
   }
@@ -156,7 +159,7 @@ export function mount(container) {
       state.warnings = data.warnings || [];
       render();
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      listEl.innerHTML = renderError(`Couldn't load warnings — ${err.message}. Reload the page to try again.`);
       detailEl.innerHTML = "";
     }
   }

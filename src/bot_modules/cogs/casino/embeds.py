@@ -1,4 +1,4 @@
-"""Pure embed builders for the Golden Meadow casino.
+"""Pure embed builders for the casino.
 
 Style-guide rules in force: accent color for neutral states, semantic
 green/red only for genuine win/loss (COLOR_GOLD for the jackpot moment),
@@ -16,9 +16,17 @@ import discord
 from bot_modules.services import casino_logic as logic
 from bot_modules.services.casino_service import CasinoSettings
 from bot_modules.services.economy_service import EconSettings
+from bot_modules.services.branding_service import DEFAULT_CASINO_NAME
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED
 
-CASINO_TITLE = "🌻 The Golden Meadow Casino"
+
+def casino_title(casino_name: str = DEFAULT_CASINO_NAME) -> str:
+    """Hub-panel title for a guild's casino ("🌻 The Golden Meadow Casino")."""
+    return f"🌻 The {casino_name} Casino"
+
+
+# Kept for callers with no guild handy; the per-guild name is the norm.
+CASINO_TITLE = casino_title()
 _FOOTER = "The meadow always wins — eventually. Play for fun, not for rent."
 
 _GAME_LINES = {
@@ -65,6 +73,7 @@ def build_hub_embed(
     accent: discord.Color | None,
     *,
     jackpot: int | None = None,
+    casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     open_lines = [
         line
@@ -72,7 +81,7 @@ def build_hub_embed(
         if getattr(settings, f"{game}_enabled")
     ]
     embed = discord.Embed(
-        title=CASINO_TITLE,
+        title=casino_title(casino_name),
         description=(
             "Sunshine, clover, and questionable financial decisions. "
             "Pick a table — every bet comes straight from your wallet.\n​"
@@ -110,9 +119,11 @@ def build_help_embed(
     econ: EconSettings,
     settings: CasinoSettings,
     accent: discord.Color | None,
+    *,
+    casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="How the Golden Meadow pays",
+        title=f"How the {casino_name} pays",
         description=(
             "Payouts below are **total return** on your bet — a 2× win on a "
             "10-bet hands back 20. The house keeps a small edge on every "

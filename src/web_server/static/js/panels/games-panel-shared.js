@@ -1,6 +1,7 @@
 ﻿import { api, apiPost, esc } from "../api.js";
 import { apiPut, apiDelete, showStatus, loadRoles, roleSelect } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { guardForm } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
@@ -26,7 +27,8 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     if (opt.type === "bool") {
       return '<div class="field mb-8"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">' +
         '<input type="checkbox" data-opt="' + esc(opt.key) + '" style="width:16px;height:16px;cursor:pointer;" />' +
-        "<span>" + esc(opt.label) + "</span></label></div>";
+        "<span>" + esc(opt.label) + "</span></label>" +
+        (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
     }
     if (opt.type === "text") {
       return '<div class="field"><label>' + esc(opt.label) +
@@ -47,12 +49,14 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
   const bankHtml = hasBank ? buildBankHtml() : "";
 
   const statusHtml = hasStatus
-    ? "<section>" +
+    ? '<section data-config-form>' +
       '<div class="section-label">Status</div>' +
       '<div style="margin-bottom:' + (optSchema.length ? "16px" : "12px") + ';">' +
       '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">' +
       '<input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />' +
-      "<span>Enabled on this server</span></label></div>" +
+      "<span>Available on This Server</span></label>" +
+      '<div class="field-hint">When off, ' + esc(gameName) + " won't start and its commands stay hidden. " +
+      "Existing rounds finish normally.</div></div>" +
       optFieldsHtml +
       '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
       '<button class="btn btn-primary" data-action="save-config">Save</button>' +
@@ -85,7 +89,12 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         else el.value = val ?? "";
       }
     } catch (err) {
-      console.error("Failed to load game config:", err);
+      // A console-only failure left every field on its HTML default, and a
+      // save would then overwrite the real settings with those defaults.
+      const st = container.querySelector('[data-status="config"]');
+      if (st) showStatus(st, false, "Couldn't load these settings — reload before saving.");
+      const btn = container.querySelector('[data-action="save-config"]');
+      if (btn) btn.disabled = true;
     }
   }
 
@@ -105,10 +114,14 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         await apiPut("/api/games/config/games/" + encodeURIComponent(gameType), { enabled: ctrl("enabled").checked, options });
         showStatus(st, true, "Saved");
       } catch (err) {
-        showStatus(st, false, err.message);
+        showStatus(st, false, "Couldn't save — " + err.message);
       }
     });
     loadConfig();
+    // Warn before a sidebar click throws away unsaved edits. Scoped to the
+    // settings section: the question bank saves each action immediately, so
+    // typing in its search box must not count as an unsaved edit.
+    guardForm(container.querySelector("[data-config-form]"));
   }
   if (hasBank) initBank();
 
@@ -130,7 +143,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     try {
       const data = await api("/api/games/bank/tags?game_type=" + encodeURIComponent(gameType));
       knownTags = data.tags || [];
-    } catch { knownTags = []; }
+    } catch (err) {
+      // Suggestions are a nicety; a failure here must not block the bank.
+      knownTags = [];
+    }
     refreshDatalist();
   }
 
@@ -225,7 +241,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
       '<div class="field" style="margin:0;min-width:180px;"><label>' + tagWord + '<div data-ctrl="filter-tags"></div></label></div>' +
       matchHtml +
-      '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="search" placeholder="Filter…" /></label></div>' +
+      '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="search" placeholder="Search question text…" /></label></div>' +
       '<button class="btn" data-action="search-btn">Search</button>' +
       "</div>" +
       '<div data-region="bank-list">' + renderLoading("Loading…") + "</div>" +
@@ -240,8 +256,8 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       "</section>" +
       '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
       '<div class="section-label mb-10">Bulk Import</div>' +
-      '<div class="field"><label>' + tagWord + ' (applied to all)<div data-ctrl="bulk-tags"></div></label></div>' +
-      '<div class="field"><label>Lines (one per line)<textarea data-ctrl="bulk-text" rows="6" style="width:100%;font-size:12px;"></textarea></label></div>' +
+      '<div class="field"><label>' + tagWord + ' (Applied to Every Line)<div data-ctrl="bulk-tags"></div></label></div>' +
+      '<div class="field"><label>Questions (One Per Line)<textarea data-ctrl="bulk-text" rows="6" style="width:100%;font-size:12px;"></textarea></label></div>' +
       '<div class="row-8"><button class="btn btn-primary" data-action="bulk-import">Import</button><span data-status="bulk" class="save-status"></span></div>' +
       "</section>" +
       '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
@@ -261,7 +277,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div class="section-label mb-10">Global Pool</div>' +
       '<div class="field-hint" style="margin-bottom:10px;">' + importHint + "</div>" +
       '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">' +
-      '<div class="field m-0" style="flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="pool-search" placeholder="Filter…" /></label></div>' +
+      '<div class="field m-0" style="flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="pool-search" placeholder="Search the pool…" /></label></div>' +
       '<button class="btn" data-action="pool-search-btn">Search</button>' +
       (catMode ? '<div class="field m-0"><label>Import as<div data-ctrl="pool-cat"></div></label></div>' : "") +
       '<button class="btn btn-primary" data-action="pool-import">Import Selected</button>' +
@@ -303,7 +319,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const data = await api("/api/games/bank?" + params);
         const qs = data.questions || [];
         if (!qs.length) {
-          el.innerHTML = renderEmpty("No questions found.");
+          el.innerHTML = renderEmpty(
+            currentSearch || currentTags.length
+              ? "No questions match this filter. Clear the search box or the "
+                + (catMode ? "category" : "tags") + " to see the whole bank."
+              : "This bank is empty. Add a question on the right, paste a batch into Bulk "
+                + "Import, or browse the global pool to copy questions in.",
+          );
           region("bank-pagination").innerHTML = "";
           return;
         }
@@ -318,8 +340,8 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
             '<td class="bank-text-cell" style="padding-right:8px;">' + esc(q.question_text) + "</td>" +
             '<td style="width:170px;white-space:nowrap;">' +
             '<button class="btn" style="padding:2px 6px;font-size:12px;margin-right:4px;" data-action="edit-q" data-qid="' + q.question_id + '">Edit</button>' +
-            '<button class="btn" style="padding:2px 6px;font-size:12px;margin-right:4px;" data-action="pool-q" data-qid="' + q.question_id + '" title="Copy to the global pool">Pool</button>' +
-            '<button class="btn" style="padding:2px 6px;font-size:12px;" data-action="del-q" data-qid="' + q.question_id + '">Del</button>' +
+            '<button class="btn" style="padding:2px 6px;font-size:12px;margin-right:4px;" data-action="pool-q" data-qid="' + q.question_id + '" title="Copy this question to the global pool">Pool</button>' +
+            '<button class="btn" style="padding:2px 6px;font-size:12px;" data-action="del-q" data-qid="' + q.question_id + '" title="Delete this question" aria-label="Delete this question">Del</button>' +
             "</td></tr>";
         }
         el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
@@ -342,7 +364,8 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
           b.addEventListener("click", () => { currentPage = parseInt(b.dataset.page, 10); loadBank(); });
         });
       } catch (err) {
-        el.innerHTML = renderError(err);
+        el.innerHTML = renderError("Couldn't load the question bank — try again. (" + err.message + ")");
+        region("bank-pagination").innerHTML = "";
       }
     }
 
@@ -375,21 +398,25 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const newText = row.querySelector("textarea") && row.querySelector("textarea").value.trim();
         const newTags = row._tagWidget ? row._tagWidget.getTags() : [];
         if (!newText) return;
-        if (catMode && !newTags.length) { toast("Choose a category.", "error"); return; }
+        if (catMode && !newTags.length) { toast("Pick a category before saving.", "error"); return; }
         try { await apiPut("/api/games/bank/" + qid, { question_text: newText, tags: newTags }); await loadTags(); loadBank(); }
-        catch (err) { toast("Save failed: " + err.message, "error"); }
+        catch (err) { toast("Couldn't save that question — " + err.message, "error"); }
       } else if (btn.dataset.action === "pool-q") {
         btn.disabled = true;
         try {
           const res = await apiPost("/api/games/bank/" + qid + "/pool", {});
           toast(res.duplicate ? "Already in the global pool." : "Copied to the global pool.", res.duplicate ? "info" : "");
           if (res.sent && poolLoaded) loadPool();
-        } catch (err) { toast("Send failed: " + err.message, "error"); }
+        } catch (err) { toast("Couldn't copy to the global pool — " + err.message, "error"); }
         btn.disabled = false;
       } else if (btn.dataset.action === "del-q") {
-        if (!(await confirmDialog("Delete this question?", { danger: true, confirmLabel: "Delete" }))) return;
+        const ok = await confirmDialog(
+          "Delete this question? It stops being served to players immediately. This can't be undone.",
+          { title: "Delete Question", danger: true, confirmLabel: "Delete" },
+        );
+        if (!ok) return;
         try { await apiDelete("/api/games/bank/" + qid); loadBank(); }
-        catch (err) { toast("Delete failed: " + err.message, "error"); }
+        catch (err) { toast("Couldn't delete that question — " + err.message, "error"); }
       }
     });
 
@@ -405,32 +432,32 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     container.querySelector('[data-action="add-question"]').addEventListener("click", async () => {
       const st = container.querySelector('[data-status="add"]');
       const text = ctrl("add-text").value.trim();
-      if (!text) { showStatus(st, false, "Question text required"); return; }
+      if (!text) { showStatus(st, false, "Type the question first."); return; }
       const addTagList = addTags.getTags();
-      if (catMode && !addTagList.length) { showStatus(st, false, "Choose a category"); return; }
+      if (catMode && !addTagList.length) { showStatus(st, false, "Choose a category first."); return; }
       try {
         await apiPost("/api/games/bank", { game_type: gameType, tags: addTagList, question_text: text });
         ctrl("add-text").value = "";
         addTags.setTags([]);
-        showStatus(st, true, "Added");
+        showStatus(st, true, "Question added.");
         await loadTags();
         loadBank();
-      } catch (err) { showStatus(st, false, err.message); }
+      } catch (err) { showStatus(st, false, "Couldn't add that question — " + err.message); }
     });
     container.querySelector('[data-action="bulk-import"]').addEventListener("click", async () => {
       const st = container.querySelector('[data-status="bulk"]');
       const raw = ctrl("bulk-text").value;
       const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
-      if (!lines.length) { showStatus(st, false, "No lines to import"); return; }
+      if (!lines.length) { showStatus(st, false, "Paste at least one question first."); return; }
       const bulkTagList = bulkTags.getTags();
-      if (catMode && !bulkTagList.length) { showStatus(st, false, "Choose a category"); return; }
+      if (catMode && !bulkTagList.length) { showStatus(st, false, "Choose a category first."); return; }
       try {
         const res = await apiPost("/api/games/bank/bulk", { game_type: gameType, tags: bulkTagList, lines });
         ctrl("bulk-text").value = "";
-        showStatus(st, true, "Imported " + res.added);
+        showStatus(st, true, "Imported " + res.added + " question" + (res.added === 1 ? "" : "s") + ".");
         await loadTags();
         loadBank();
-      } catch (err) { showStatus(st, false, err.message); }
+      } catch (err) { showStatus(st, false, "Couldn't import those questions — " + err.message); }
     });
 
     // ── Global pool browser ────────────────────────────────────────────────
@@ -463,22 +490,22 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         for (const q of qs) {
           const chips = parseTags(q.tags).map(t => '<span class="ll-tag">' + esc(t) + "</span>").join(" ");
           rows += "<tr>" +
-            '<td style="width:28px;"><input type="checkbox" data-pool-check="' + q.question_id + '" /></td>' +
+            '<td style="width:28px;"><input type="checkbox" aria-label="Select this pool question for import" data-pool-check="' + q.question_id + '" /></td>' +
             '<td style="width:160px;"><div class="ll-tags">' + chips + "</div></td>" +
             '<td style="padding-right:8px;">' + esc(q.question_text) + "</td>" +
-            '<td style="width:50px;white-space:nowrap;"><button class="btn" style="padding:2px 6px;font-size:12px;" data-action="pool-del" data-qid="' + q.question_id + '">Del</button></td>' +
+            '<td style="width:50px;white-space:nowrap;"><button class="btn" style="padding:2px 6px;font-size:12px;" data-action="pool-del" data-qid="' + q.question_id + '" title="Remove from the global pool" aria-label="Remove from the global pool">Del</button></td>' +
             "</tr>";
         }
         const note = data.total > qs.length ? " — showing the first " + qs.length + ", refine your search" : "";
         el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
-          '<thead><tr><th style="width:28px;"><input type="checkbox" data-ctrl="pool-select-all" /></th><th style="width:160px;">Tags</th><th>Question</th><th style="width:50px;"></th></tr></thead>' +
+          '<thead><tr><th style="width:28px;"><input type="checkbox" data-ctrl="pool-select-all" aria-label="Select every question on this page" /></th><th style="width:160px;">Tags</th><th>Question</th><th style="width:50px;"></th></tr></thead>' +
           "<tbody>" + rows + "</tbody></table>" +
           '<div style="font-size:12px;color:var(--ink-muted);margin-top:6px;">' + data.total + " question" + (data.total !== 1 ? "s" : "") + " in the pool" + note + "</div>";
         el.querySelector('[data-ctrl="pool-select-all"]').addEventListener("change", (e) => {
           el.querySelectorAll("[data-pool-check]").forEach(c => { c.checked = e.target.checked; });
         });
       } catch (err) {
-        el.innerHTML = renderError(err);
+        el.innerHTML = renderError("Couldn't load the global pool — try again. (" + err.message + ")");
       }
     }
 
@@ -487,9 +514,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     region("pool-browser").addEventListener("click", async (e) => {
       const btn = e.target.closest('[data-action="pool-del"]');
       if (!btn) return;
-      if (!(await confirmDialog("Remove this question from the global pool?", { danger: true, confirmLabel: "Remove" }))) return;
+      const ok = await confirmDialog(
+        "Remove this question from the global pool? Copies already imported into a game's own bank stay put.",
+        { title: "Remove From Global Pool", danger: true, confirmLabel: "Remove" },
+      );
+      if (!ok) return;
       try { await apiDelete("/api/games/bank/" + btn.dataset.qid); loadPool(); }
-      catch (err) { toast("Remove failed: " + err.message, "error"); }
+      catch (err) { toast("Couldn't remove that question — " + err.message, "error"); }
     });
 
     container.querySelector('[data-action="pool-search-btn"]').addEventListener("click", () => loadPool());
@@ -501,11 +532,11 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const st = container.querySelector('[data-status="pool"]');
       const ids = Array.from(region("pool-list").querySelectorAll("[data-pool-check]:checked"))
         .map(c => parseInt(c.dataset.poolCheck, 10));
-      if (!ids.length) { showStatus(st, false, "Select questions first"); return; }
+      if (!ids.length) { showStatus(st, false, "Tick at least one question first."); return; }
       const body = { game_type: gameType, question_ids: ids };
       if (catMode) {
         const cat = poolCat.getTags();
-        if (!cat.length) { showStatus(st, false, "Choose a category"); return; }
+        if (!cat.length) { showStatus(st, false, "Choose a category first."); return; }
         body.tags = cat;
       }
       try {
@@ -514,7 +545,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         region("pool-list").querySelectorAll("[data-pool-check]:checked").forEach(c => { c.checked = false; });
         await loadTags();
         loadBank();
-      } catch (err) { showStatus(st, false, err.message); }
+      } catch (err) { showStatus(st, false, "Couldn't import from the pool — " + err.message); }
     });
 
     loadTags();

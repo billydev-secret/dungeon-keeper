@@ -1,4 +1,8 @@
-"""Billy-bot endpoints — the Help panel's "Ask Billy-bot" box + its config.
+"""AI advisor endpoints — the Help panel's ask box + its config.
+
+The assistant's guild-facing name is branding (default "Billy-bot"), so both
+the ask box and the config panel read it from ``branding_service`` rather than
+printing a baked-in name.
 
 The advisor is grounded, member-facing help (not admin config), so the ask
 endpoint is open to any authenticated dashboard user; the config endpoints are
@@ -26,7 +30,28 @@ from web_server.deps import (
 router = APIRouter()
 
 
-# ── POST /help/advisor — ask Billy-bot ─────────────────────────────────────
+# ── GET /help/advisor/name — what this guild calls its assistant ───────────
+
+
+@router.get("/help/advisor/name")
+async def help_advisor_name(
+    request: Request,
+    guild_id: int = Depends(get_active_guild_id),
+    # Member-facing: the Help panel labels its ask box with this.
+    _: AuthenticatedUser = Depends(require_perms(set())),
+):
+    from bot_modules.services.branding_service import resolve_assistant_name_conn
+
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return resolve_assistant_name_conn(conn, guild_id)
+
+    return {"assistant_name": await run_query(_q)}
+
+
+# ── POST /help/advisor — ask the assistant ─────────────────────────────────
 
 
 class AdvisorBody(BaseModel):
@@ -59,12 +84,17 @@ async def help_advisor(
         get_advisor_tools_enabled,
         resolve_advisor_model,
     )
+    from bot_modules.services.branding_service import (
+        DEFAULT_ASSISTANT_NAME,
+        resolve_assistant_name_conn,
+    )
 
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
 
     model = MODEL
+    assistant_name = DEFAULT_ASSISTANT_NAME
     guild_context = None
     tools = None
     channels: dict[str, str] = {}
@@ -76,6 +106,7 @@ async def help_advisor(
         member = guild.get_member(user.user_id)
         with ctx.open_db() as conn:
             model = resolve_advisor_model(conn, guild_id, staff=is_staff(member))
+            assistant_name = resolve_assistant_name_conn(conn, guild_id)
             context_on = get_advisor_context_enabled(conn, guild_id)
             tools_on = get_advisor_tools_enabled(conn, guild_id)
         if context_on:
@@ -102,13 +133,15 @@ async def help_advisor(
             channels = {str(ch.id): ch.name for ch in visible_text_channels(guild, member)}
 
     result = await answer_advisor(
-        body.question, body.history, model=model, guild_context=guild_context, tools=tools
+        body.question, body.history, model=model, guild_context=guild_context,
+        tools=tools, assistant_name=assistant_name,
     )
     return {
         "ok": result.ok,
         "answer": result.answer,
         "guild_id": str(guild_id),
         "channels": channels,
+        "assistant_name": assistant_name,
     }
 
 
@@ -157,7 +190,7 @@ async def help_suggestions(
     }
 
 
-# ── GET/PUT /config/advisor — the "Billy-bot" config panel ─────────────────
+# ── GET/PUT /config/advisor — the AI assistant config panel ────────────────
 
 
 class AdvisorConfigBody(BaseModel):
@@ -178,6 +211,7 @@ async def get_advisor_config(
         get_advisor_model,
         get_advisor_staff_model,
     )
+    from bot_modules.services.branding_service import resolve_assistant_name_conn
 
     ctx = get_ctx(request)
 
@@ -187,6 +221,8 @@ async def get_advisor_config(
                 "model": get_advisor_model(conn, guild_id),
                 "staff_model": get_advisor_staff_model(conn, guild_id),
                 "server_context": get_advisor_context_enabled(conn, guild_id),
+                # Read-only here — the name is edited on the Branding panel.
+                "assistant_name": resolve_assistant_name_conn(conn, guild_id),
             }
 
     cfg = await run_query(_q)

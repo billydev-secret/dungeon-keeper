@@ -93,6 +93,9 @@ from bot_modules.services.branding_service import (
     ACCENT_MODE_AVATAR,
     ACCENT_MODE_CUSTOM,
     ACCENT_HEX_UNSET,
+    DEFAULT_ASSISTANT_NAME,
+    DEFAULT_CASINO_NAME,
+    MAX_NAME_LEN,
     get_branding_conn,
     upsert_branding,
 )
@@ -382,6 +385,12 @@ def _branding_section(conn, guild_id: int) -> dict:
     return {
         "accent_mode": cfg.normalized_mode(),
         "accent_hex": accent_hex,
+        # Raw stored values ("" = using the default) plus the defaults, so the
+        # panel can show the built-in as a placeholder rather than a value.
+        "casino_name": cfg.casino_name,
+        "assistant_name": cfg.assistant_name,
+        "default_casino_name": DEFAULT_CASINO_NAME,
+        "default_assistant_name": DEFAULT_ASSISTANT_NAME,
     }
 
 
@@ -451,7 +460,7 @@ def _risky_section(conn, guild_id: int) -> dict:
 
 
 def _casino_section(conn, guild_id: int) -> dict:
-    """The Golden Meadow casino settings (docs/casino_spec.md).
+    """Casino settings (docs/casino_spec.md).
 
     panel_* bookkeeping fields are deliberately absent — bot-managed, never
     dashboard-editable. Ids go out as strings (the snowflake rule).
@@ -1509,12 +1518,29 @@ async def import_intake_reference(
     return {"ok": True, "blocks": blocks}
 
 
-@router.get("/config/welcome/preview")
+class WelcomePreviewBody(BaseModel):
+    """Optional on-screen field values to preview instead of the stored config.
+
+    Any field left as None falls back to the saved value, so the endpoint still
+    works with an empty body (previewing the stored config).
+    """
+
+    welcome_message: str | None = None
+    leave_message: str | None = None
+    server_guide_channel_id: str | None = None
+
+
+@router.post("/config/welcome/preview")
 async def welcome_preview(
     request: Request,
+    body: WelcomePreviewBody | None = None,
     user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
-    """Render welcome and leave embeds for the calling admin (used as a sample member)."""
+    """Render welcome and leave embeds for the calling admin (used as a sample member).
+
+    POSTed field values (the form's current, possibly-unsaved edits) take
+    precedence over stored config so the preview shows what the user typed.
+    """
     from bot_modules.services.welcome_service import (
         DEFAULT_LEAVE_MESSAGE,
         DEFAULT_WELCOME_MESSAGE,
@@ -1540,19 +1566,32 @@ async def welcome_preview(
     from bot_modules.bios.trigger import resolve_bio_placeholders
     from bot_modules.services.welcome_service import server_guide_mention_for
 
+    overrides = body or WelcomePreviewBody()
+
     def _q():
         with ctx.open_db() as conn:
-            wm = get_config_value(
-                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
+            wm = (
+                overrides.welcome_message
+                if overrides.welcome_message is not None
+                else get_config_value(
+                    conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
+                )
             )
-            lm = get_config_value(
-                conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+            lm = (
+                overrides.leave_message
+                if overrides.leave_message is not None
+                else get_config_value(
+                    conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+                )
             )
             bl, bcm = resolve_bio_placeholders(conn, guild_id)
+            raw_sgcid = (
+                overrides.server_guide_channel_id
+                if overrides.server_guide_channel_id is not None
+                else get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+            )
             try:
-                sgcid = int(
-                    get_config_value(conn, "server_guide_channel_id", "0", guild_id)
-                )
+                sgcid = int(raw_sgcid)
             except (TypeError, ValueError):
                 sgcid = 0
             return wm, lm, bl, bcm, sgcid
@@ -4100,6 +4139,9 @@ async def update_bot_identity(
 class BrandingConfigUpdate(BaseModel):
     accent_mode: str | None = None
     accent_hex: str | None = None
+    # Blank string = clear the override and fall back to the built-in default.
+    casino_name: str | None = None
+    assistant_name: str | None = None
 
 
 def _parse_hex_color(raw: str) -> int:
@@ -4135,6 +4177,23 @@ async def update_branding(
             except ValueError:
                 raise HTTPException(400, "accent_hex must be a #RRGGBB color")
 
+    def _clean_name(raw: str | None, label: str) -> str:
+        name = (raw or "").strip()
+        if len(name) > MAX_NAME_LEN:
+            raise HTTPException(400, f"{label} must be {MAX_NAME_LEN} characters or fewer")
+        return name
+
+    casino_name = (
+        _clean_name(body.casino_name, "casino_name")
+        if body.casino_name is not None
+        else None
+    )
+    assistant_name = (
+        _clean_name(body.assistant_name, "assistant_name")
+        if body.assistant_name is not None
+        else None
+    )
+
     def _q():
         with ctx.open_db() as conn:
             cfg = get_branding_conn(conn, guild_id)
@@ -4142,15 +4201,26 @@ async def update_branding(
             cfg.accent_mode = new_mode
         if hex_provided:
             cfg.accent_hex = new_hex
+        if casino_name is not None:
+            cfg.casino_name = casino_name
+        if assistant_name is not None:
+            cfg.assistant_name = assistant_name
         upsert_branding(ctx.db_path, cfg)
         return {
             "ok": True,
             "accent_mode": cfg.normalized_mode(),
             "accent_hex": f"#{cfg.accent_hex:06X}" if cfg.has_custom_color() else "",
+            "casino_name": cfg.casino_name,
+            "assistant_name": cfg.assistant_name,
         }
 
     result = await run_query(_q)
     invalidate_accent_cache(guild_id)
+    # The casino hub panel prints the casino's name — refresh it in place so a
+    # rename shows up without waiting for a restart (same seam the Casino panel
+    # uses for its own settings).
+    if casino_name is not None and ctx.bot:
+        ctx.bot.dispatch("casino_config_change", guild_id)
     return result
 
 

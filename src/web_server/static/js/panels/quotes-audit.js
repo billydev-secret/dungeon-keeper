@@ -2,7 +2,7 @@ import { api } from "../api.js";
 import { auditPanel, badge, tsColumn } from "../audit-helpers.js";
 
 const THEME_LABELS = {
-  golden_meadow: "Golden Meadow",
+  golden_meadow: "Golden",
   midnight:      "Midnight",
   rose:          "Rose",
 };
@@ -16,8 +16,8 @@ const THEME_BADGE = {
 export function mount(container) {
   return auditPanel(container, {
     title: "Quotes Audit Log",
-    subtitle: "All quote cards posted to channels",
-    empty: "No quotes posted yet.",
+    subtitle: "Every quote card members have posted, and who posted it",
+    empty: "No quote cards have been posted yet. Members create them with the Quote message command in Discord.",
     filters: [
       {
         name: "theme",

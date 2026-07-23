@@ -11,11 +11,38 @@
  *     data: entries,           // array of objects
  *     defaultSort: "score",    // initial sort key
  *     defaultAsc: false,       // initial sort direction
+ *     emptyMsg: "No members match this filter.",
+ *                              // optional: styled empty state when data is
+ *                              // empty (omit to keep the legacy clear-to-
+ *                              // nothing behavior)
+ *     maxRows: 200,            // optional row cap; adds a "Showing first
+ *                              // N of M rows." footer when data exceeds it
  *   });
  */
+import { renderEmpty } from "./states.js";
 
-export function renderSortableTable(container, { columns, data, defaultSort, defaultAsc }) {
-  if (!data || !data.length) { container.innerHTML = ""; return; }
+// Panels that re-render on a filter change call this repeatedly against the
+// same container. Each call used to add another click listener, and because
+// every closure kept its own sortKey/sortAsc, clicking a header after a couple
+// of re-renders sorted several different ways at once. Track the live handler
+// per container and detach the old one first.
+const _sortHandlers = new WeakMap();
+
+function _detach(container) {
+  const prev = _sortHandlers.get(container);
+  if (prev) {
+    container.removeEventListener("click", prev);
+    _sortHandlers.delete(container);
+  }
+}
+
+export function renderSortableTable(container, { columns, data, defaultSort, defaultAsc, emptyMsg, maxRows }) {
+  _detach(container);
+
+  if (!data || !data.length) {
+    container.innerHTML = emptyMsg ? renderEmpty(emptyMsg) : "";
+    return;
+  }
 
   let sortKey = defaultSort || columns[0].key;
   let sortAsc = defaultAsc ?? false;
@@ -33,7 +60,12 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
   }
 
   function render() {
-    const rows = sorted();
+    let rows = sorted();
+    let capNote = "";
+    if (maxRows && rows.length > maxRows) {
+      capNote = `<div class="field-hint" style="padding:6px 2px;">Showing first ${maxRows} of ${rows.length} rows.</div>`;
+      rows = rows.slice(0, maxRows);
+    }
     const headCells = columns.map((c) => {
       const cls = c.key === sortKey ? (sortAsc ? "sort-asc" : "sort-desc") : "";
       return `<th data-sort="${c.key}" class="${cls}">${c.label}</th>`;
@@ -53,12 +85,12 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
         <thead><tr>${headCells}</tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
-    `;
+    ${capNote}`;
   }
 
   render();
 
-  container.addEventListener("click", (e) => {
+  const onClick = (e) => {
     const th = e.target.closest("th[data-sort]");
     if (!th) return;
     const key = th.dataset.sort;
@@ -71,5 +103,7 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
       sortAsc = sample && typeof sample[key] === "string";
     }
     render();
-  });
+  };
+  container.addEventListener("click", onClick);
+  _sortHandlers.set(container, onClick);
 }

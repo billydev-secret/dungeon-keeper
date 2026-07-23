@@ -1,4 +1,4 @@
-"""The Golden Meadow casino cog — Discord glue around casino_service.
+"""The casino cog — Discord glue around casino_service.
 
 Thin by design: money and exactly-once settlement live in
 ``services/casino_service``, paytables in ``services/casino_logic``, embeds
@@ -41,6 +41,7 @@ from bot_modules.cogs.casino.views import (
 )
 from bot_modules.core.app_context import Bot
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.branding_service import resolve_casino_name_conn
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import casino_service as svc
 from bot_modules.services.economy_service import (
@@ -338,7 +339,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         the bottom of the channel instead of being edited in place.
         """
 
-        def _read() -> tuple[EconSettings, svc.CasinoSettings, int | None]:
+        def _read() -> tuple[EconSettings, svc.CasinoSettings, int | None, str]:
             with self.ctx.open_db() as conn:
                 settings = svc.load_casino_settings(conn, guild.id)
                 pot: int | None = None
@@ -346,10 +347,15 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     pot = svc.get_jackpot(
                         conn, guild.id, seed=settings.jackpot_seed
                     )
-                return load_econ_settings(conn, guild.id), settings, pot
+                return (
+                    load_econ_settings(conn, guild.id),
+                    settings,
+                    pot,
+                    resolve_casino_name_conn(conn, guild.id),
+                )
 
         try:
-            econ, settings, pot = await asyncio.to_thread(_read)
+            econ, settings, pot, casino_name = await asyncio.to_thread(_read)
         except Exception:
             log.exception("casino panel read failed for guild %s", guild.id)
             return
@@ -388,7 +394,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             await _delete_stale()  # moved or buried; drop the old panel
             settings = replace(settings, panel_message_id=0)
         embed = casino_embeds.build_hub_embed(
-            econ, settings, await self._accent(guild), jackpot=pot
+            econ, settings, await self._accent(guild), jackpot=pot,
+            casino_name=casino_name,
         )
         if settings.panel_message_id:
             try:
@@ -649,17 +656,19 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         if guild is None:
             return
 
-        def _read() -> tuple[EconSettings, svc.CasinoSettings]:
+        def _read() -> tuple[EconSettings, svc.CasinoSettings, str]:
             with self.ctx.open_db() as conn:
                 return (
                     load_econ_settings(conn, guild.id),
                     svc.load_casino_settings(conn, guild.id),
+                    resolve_casino_name_conn(conn, guild.id),
                 )
 
-        econ, settings = await asyncio.to_thread(_read)
+        econ, settings, casino_name = await asyncio.to_thread(_read)
         await interaction.response.send_message(
             embed=casino_embeds.build_help_embed(
-                econ, settings, await self._accent(guild)
+                econ, settings, await self._accent(guild),
+                casino_name=casino_name,
             ),
             ephemeral=True,
         )

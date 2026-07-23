@@ -1,4 +1,6 @@
 import { api } from "../api.js";
+import { renderEmpty, renderError, renderLoading } from "../states.js";
+import { rangePicker } from "../report-helpers.js";
 
 /* ── color helpers ──────────────────────────────────────────────────── */
 
@@ -27,7 +29,7 @@ function lerpColor(t) {
 
 export function mount(container, initialParams) {
   container.innerHTML = `
-    <div class="panel">
+    <div class="panel" style="position:relative;">
       <header>
         <h2>Interaction Heatmap</h2>
         <div class="subtitle">Animated adjacency matrix — watch interaction patterns evolve over time</div>
@@ -39,23 +41,21 @@ export function mount(container, initialParams) {
             <option value="day">Day</option>
           </select>
         </label>
-        <label>Lookback (days)
-          <input type="number" data-control="days" min="7" max="365"
-                 value="${initialParams.days || 90}" />
-        </label>
-        <label>Top users
+        <label data-slot="range"></label>
+        <label>Top Members
           <input type="number" data-control="topn" min="5" max="40"
                  value="${initialParams.top_n || 20}" />
         </label>
       </div>
 
-      <div class="ihm-canvas-wrap">
+      <div class="ihm-canvas-wrap" style="position:relative;overflow-x:auto;">
         <canvas data-heatmap></canvas>
+        <div data-ihm-msg hidden></div>
       </div>
 
       <div class="ihm-transport">
         <button data-btn="play" class="btn btn-icon" title="Play / Pause">&#9654;</button>
-        <input type="range" data-scrubber min="0" value="0" step="1" />
+        <input type="range" data-scrubber min="0" value="0" step="1" aria-label="Frame" />
         <span data-frame-label class="ihm-frame-label"></span>
         <label>Speed
           <select data-speed>
@@ -66,12 +66,16 @@ export function mount(container, initialParams) {
         </label>
       </div>
 
-      <div data-tooltip class="ihm-tooltip"></div>
+      <div data-tooltip class="ihm-tooltip" style="position:absolute;display:none;z-index:6;pointer-events:none;background:#18191c;border:1px solid #3f4147;border-radius:4px;padding:4px 8px;font-size:12px;color:#dbdee1;white-space:nowrap;"></div>
     </div>
   `;
 
   const resEl    = container.querySelector('[data-control="resolution"]');
-  const daysEl   = container.querySelector('[data-control="days"]');
+  // Shared day-range picker instead of a bare "Lookback (days)" number box.
+  const rangeCtl = rangePicker({ value: initialParams.days || 90, label: "Range" });
+  const daysEl   = rangeCtl.querySelector("select");
+  daysEl.dataset.control = "days";
+  container.querySelector('[data-slot="range"]').replaceWith(rangeCtl);
   const topnEl   = container.querySelector('[data-control="topn"]');
   const canvas   = container.querySelector("[data-heatmap]");
   const playBtn  = container.querySelector('[data-btn="play"]');
@@ -79,7 +83,25 @@ export function mount(container, initialParams) {
   const frameLbl = container.querySelector("[data-frame-label]");
   const speedSel = container.querySelector("[data-speed]");
   const tooltip  = container.querySelector("[data-tooltip]");
+  const msgEl    = container.querySelector("[data-ihm-msg]");
+  const transport = container.querySelector(".ihm-transport");
   const ctx      = canvas.getContext("2d");
+
+  // Loading/empty/error render into a sibling of the canvas — never over the
+  // canvas-wrap's innerHTML, which would orphan the ctx and mouse listeners
+  // captured above and leave the panel permanently blank.
+  function showMessage(html) {
+    msgEl.innerHTML = html;
+    msgEl.hidden = false;
+    canvas.style.display = "none";
+    transport.style.display = "none";
+  }
+  function clearMessage() {
+    msgEl.innerHTML = "";
+    msgEl.hidden = true;
+    canvas.style.display = "";
+    transport.style.display = "";
+  }
 
   resEl.value = initialParams.resolution || "week";
 
@@ -272,22 +294,25 @@ export function mount(container, initialParams) {
     const qs = new URLSearchParams(params);
     history.replaceState(null, "", `#/interaction-heatmap?${qs}`);
 
+    showMessage(renderLoading("Loading interaction history…"));
     try {
       data = await api("/api/reports/interaction-heatmap", params);
       if (!data.frames.length) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        container.querySelector(".ihm-canvas-wrap").innerHTML =
-          '<div class="empty">No interaction data for this window.</div>';
+        showMessage(renderEmpty(
+          "No interactions recorded in this window. Pick a longer range, or come back once members have been replying to and mentioning each other."
+        ));
         return;
       }
+      clearMessage();
       frameIdx = 0;
       scrubber.max = data.frames.length - 1;
       scrubber.value = 0;
       drawFrame(0);
       frameLbl.textContent = data.frames[0].label;
     } catch (err) {
-      container.querySelector(".ihm-canvas-wrap").innerHTML =
-        `<div class="error">${err.message}</div>`;
+      data = null;
+      showMessage(renderError(`Couldn't load the interaction heatmap — ${err.message}. Change a control to try again.`));
     }
   }
 

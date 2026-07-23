@@ -4,6 +4,16 @@ Run the test suite on a faster machine over SSH, falling back to local
 automatically when that machine is off. Opt-in: unset `REMOTE_TEST_HOST` and
 nothing changes.
 
+> **Where the config is found.** `.env` is gitignored, so it never travels with
+> the code. `env_path()` looks in the current checkout, then at the main
+> checkout via `git rev-parse --git-common-dir` (worktrees), then at a
+> `remote.origin.url` that is a local filesystem path (session checkouts, which
+> are *clones* — for those `--git-common-dir` returns the clone's own `.git`, so
+> the worktree fallback lands back where it started). The clone case was missing
+> until 2026-07-23, and because "no config" legitimately means "run locally",
+> every gate run in a session checkout silently took the slow path instead of
+> reporting anything.
+
 The prod box is a 2-core VM (a Synology VMM guest sharing an embedded Ryzen),
 where the full suite takes ~10 minutes. A spare desktop cuts that to a few.
 
@@ -56,6 +66,32 @@ hides and a remote running the actually-pinned lock file catches.
 
 Remember the signal here is a **fast pre-filter**, not proof: prod is Linux, and
 CI on push remains the authoritative gate. A Linux-only bug can pass here.
+
+## One workspace per checkout
+
+Several session checkouts (each a clone of the main repo) share one test host.
+Each syncs into its own sub-directory of `REMOTE_TEST_DIR`, named
+`ws-<basename>-<hash-of-abs-path>`, so two checkouts never extract over each
+other and a run in one can't corrupt another's tree.
+
+Two properties this fixes, both learned the hard way when a stale `src/`
+produced 22 failures that didn't reproduce locally:
+
+- **The sync is now authoritative.** It ships a `.remote-manifest` listing every
+  file sent, and the remote deletes anything under the synced roots that isn't
+  on it. The tar stream only ever adds and overwrites, so before this a file
+  removed from a branch — or belonging to a different branch tested here earlier
+  — lingered forever and ran as a phantom test. Only the synced roots (`src`,
+  `tests`, `scripts`, …) are pruned; the venv, `.git` and everything else are
+  never touched.
+- **The venv is shared, not per-workspace.** The freshness stamp lives beside
+  the interpreter (`REMOTE_TEST_PYTHON`), not in a workspace, so a multi-GB
+  reinstall doesn't repeat for every checkout — only when the lock files
+  actually change.
+
+`REMOTE_TEST_WORKSPACE` overrides the directory name; set it to `off` to sync
+straight over `REMOTE_TEST_DIR` (the pre-workspace layout), which also disables
+pruning.
 
 ## Setting up the remote (native Windows)
 

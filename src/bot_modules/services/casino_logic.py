@@ -1,4 +1,4 @@
-"""Pure game math for the Golden Meadow casino (docs/plans/casino.md).
+"""Pure game math for the casino (docs/plans/casino.md).
 
 Every RNG call lives at module level (``random.<fn>``) so tests patch
 ``bot_modules.services.casino_logic.random`` — the Risky Rolls rule that

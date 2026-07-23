@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 import { makeLineChart, makeBarChart } from "../charts.js";
 
 
@@ -9,6 +10,13 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/dau-mau");
     const panel = container.querySelector(".panel");
+
+
+    if (!d.mau) {
+      panel.innerHTML = `<header><h2>DAU / MAU Stickiness</h2><div class="subtitle">Engagement depth and daily return rate</div></header>` +
+        renderEmpty("Nobody has been active in the last 30 days, so there's no stickiness to measure. This fills in as members start posting.");
+      return;
+    }
 
     const compParts = [];
     if (d.composition) {
@@ -96,7 +104,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load DAU/MAU stickiness — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

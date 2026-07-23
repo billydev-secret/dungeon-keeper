@@ -1064,7 +1064,11 @@ async def time_to_level_5(
         members = [
             {
                 "user_id": d["user_id"],
-                "display_name": str(d["user_id"]),
+                # Left blank on purpose: _resolve_names only fills a name field
+                # that is falsy, so seeding the id here would defeat both its
+                # known_users lookup and its "User <id>" fallback, and members
+                # who have left the cache would render as raw snowflakes.
+                "display_name": "",
                 "first_at": datetime.fromtimestamp(
                     d["first_at"], tz=timezone.utc
                 ).strftime("%Y-%m-%d %H:%M"),

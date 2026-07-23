@@ -45,7 +45,16 @@ Failures to send the ping or widget (missing channel, HTTP errors) are logged se
 
 ## Configuration
 
-All configuration lives in the web dashboard (`PUT /config/bump-tracker` and `/config/bump-tracker/sites/...`); there are no config slash commands.
+All configuration lives in the web dashboard — **Config → Server → Bump Tracker**
+(`panels/config-bump-tracker.js`, backed by `PUT /config/bump-tracker` and
+`/config/bump-tracker/sites/...`); there are no config slash commands.
+
+The panel shipped 2026-07-23. Before that the endpoints existed but nothing
+called them, so the only way to set the feature up was editing the database by
+hand — which is how the live guilds were configured. The panel covers the full
+API surface: reminder channel and ping role, the master toggle, per-site
+cooldown and detector, adding and removing sites, and recording a bump. It also
+shows each site's live status and counts down to the next one becoming ready.
 
 - **Channel** — where pings and the widget are posted; the feature is inactive until set.
 - **Role** — pinged when a site becomes ready (optional).

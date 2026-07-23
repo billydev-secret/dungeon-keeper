@@ -296,3 +296,14 @@
   0%, 40% { background: var(--gold-soft); }
   100%    { background: transparent; }
 }
+
+/* Numbered step rows are flex containers whose text sits in an anonymous flex
+   item, so it keeps its min-content width and pushes the row past the panel
+   (the phone sweep caught 15px on the Getting Started checklist). Let the text
+   break, and keep the number badge from being squeezed. */
+.dk-help .steps li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dk-help .steps li::before { flex: 0 0 auto; }
+.dk-help .steps li > * { min-width: 0; }

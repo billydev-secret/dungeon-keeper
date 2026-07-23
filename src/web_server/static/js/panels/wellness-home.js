@@ -1,12 +1,15 @@
 import { wGet, wPost, esc, showStatus } from "../wellness-helpers.js";
+import { guardForm } from "../config-helpers.js";
+import { renderLoading, renderError } from "../states.js";
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading wellness…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading your wellness dashboard…")}</div>`;
 
   (async () => {
     let d;
     try { d = await wGet("/api/wellness/me"); } catch (e) {
-      container.querySelector(".panel").innerHTML = `<div class="error">${e.message}</div>`;
+      container.querySelector(".panel").innerHTML =
+        renderError(`Couldn’t load your wellness dashboard — try again. (${e.message})`);
       return;
     }
 
@@ -14,14 +17,15 @@ export function mount(container) {
       container.querySelector(".panel").innerHTML = `
         <header><h2>Wellness</h2></header>
         <div class="w-notice">
-          <p>You haven't opted in to the wellness program yet.</p>
-          <p>Use <code>/wellness setup</code> in Discord to get started.</p>
+          <p>You haven’t joined the wellness program yet. It tracks your own
+          posting habits and nudges you when you ask it to — nobody else sees your data.</p>
+          <p>Run <code>/wellness setup</code> in Discord to get started.</p>
         </div>`;
       return;
     }
 
     const pausedHTML = d.paused_until && d.paused_until > Date.now() / 1000
-      ? `<div class="chip chip-warning" style="margin-top:8px;">Paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
+      ? `<div class="chip chip-warning" style="margin-top:8px;">Nudges paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
       : "";
 
     container.querySelector(".panel").innerHTML = `
@@ -39,7 +43,7 @@ export function mount(container) {
         </div>
 
         <div class="card">
-          <div class="stat-label">Caps</div>
+          <div class="stat-label">Daily Caps</div>
           <div class="stat-value">${d.caps_count}</div>
           <a href="#/wellness-caps" class="w-card-link">Manage</a>
         </div>
@@ -66,27 +70,36 @@ export function mount(container) {
       <div class="section-label">Settings</div>
       <form data-settings-form class="form">
           <div class="field">
-            <label>Timezone</label>
-            <input type="text" name="timezone" value="${esc(d.timezone)}" />
+            <label>Timezone
+              <input type="text" name="timezone" value="${esc(d.timezone)}" placeholder="e.g. America/New_York" />
+            </label>
+            <div class="field-hint">Caps and blackout windows follow this timezone.</div>
           </div>
           <div class="field">
-            <label>Enforcement Level</label>
-            <select name="enforcement_level">
-              ${d.enforcement_levels.map(e => `<option value="${e}"${e === d.enforcement_level ? " selected" : ""}>${e}</option>`).join("")}
-            </select>
+            <label>Enforcement Level
+              <select name="enforcement_level">
+                ${d.enforcement_levels.map(e => `<option value="${e}"${e === d.enforcement_level ? " selected" : ""}>${e}</option>`).join("")}
+              </select>
+            </label>
+            <div class="field-hint">How firmly Dungeon Keeper holds you to your own limits.</div>
           </div>
           <div class="field">
-            <label>Notifications</label>
-            <select name="notifications_pref">
-              ${d.notification_prefs.map(e => `<option value="${e}"${e === d.notifications_pref ? " selected" : ""}>${e}</option>`).join("")}
-            </select>
+            <label>Notifications
+              <select name="notifications_pref">
+                ${d.notification_prefs.map(e => `<option value="${e}"${e === d.notifications_pref ? " selected" : ""}>${e}</option>`).join("")}
+              </select>
+            </label>
+            <div class="field-hint">How much Dungeon Keeper DMs you about your progress.</div>
           </div>
           <div class="field">
-            <label>Daily Reset Hour (0-23)</label>
-            <input type="number" name="daily_reset_hour" min="0" max="23" value="${d.daily_reset_hour}" />
+            <label>Daily Reset Hour (0-23)
+              <input type="number" name="daily_reset_hour" min="0" max="23" value="${d.daily_reset_hour}" />
+            </label>
+            <div class="field-hint">The hour your daily counters start over — pick the hour you usually wake up.</div>
           </div>
           <div class="field">
-            <label><input type="checkbox" name="public_commitment" ${d.public_commitment ? "checked" : ""} /> Public commitment</label>
+            <label><input type="checkbox" name="public_commitment" ${d.public_commitment ? "checked" : ""} /> Share My Streak Publicly</label>
+            <div class="field-hint">When on, your streak can appear on the server’s wellness leaderboard. Off keeps it private.</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
       </form>
@@ -94,18 +107,20 @@ export function mount(container) {
       <div class="section-label">Quick Actions</div>
       <div class="w-actions">
         <form data-pause-form class="w-inline-form">
-          <input type="number" name="minutes" min="1" max="10080" value="60" style="width:80px" />
-          <button type="submit" class="btn">Pause (minutes)</button>
+          <label style="display:inline-flex;align-items:center;gap:6px;">Pause for (minutes)
+            <input type="number" name="minutes" min="1" max="10080" value="60" style="width:80px" />
+          </label>
+          <button type="submit" class="btn">Pause Nudges</button>
           <span data-pause-status></span>
         </form>
-        <button data-resume-btn class="btn">Resume</button>
+        <button data-resume-btn class="btn">Resume Nudges</button>
       </div>
 
       ${d.crisis_resource_url ? `<div class="w-crisis"><a href="${esc(d.crisis_resource_url)}" target="_blank" rel="noopener">Crisis resources</a></div>` : ""}
     `;
 
     // Settings form
-    const sForm = container.querySelector("[data-settings-form]");
+    const sForm = guardForm(container.querySelector("[data-settings-form]"));
     const sStatus = container.querySelector("[data-status]");
     sForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -119,7 +134,7 @@ export function mount(container) {
           public_commitment: sForm.querySelector("[name=public_commitment]").checked,
         });
         showStatus(sStatus, true);
-      } catch (err) { showStatus(sStatus, false, err.message); }
+      } catch (err) { showStatus(sStatus, false, `Couldn’t save — ${err.message}`); }
     });
 
     // Pause
@@ -129,14 +144,14 @@ export function mount(container) {
       e.preventDefault();
       try {
         await wPost("/api/wellness/pause", { minutes: parseInt(new FormData(pForm).get("minutes"), 10) });
-        showStatus(pStatus, true, "Paused");
-      } catch (err) { showStatus(pStatus, false, err.message); }
+        showStatus(pStatus, true, "Nudges paused");
+      } catch (err) { showStatus(pStatus, false, `Couldn’t pause — ${err.message}`); }
     });
 
     // Resume
     container.querySelector("[data-resume-btn]").addEventListener("click", async () => {
-      try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Resumed"); }
-      catch (err) { showStatus(pStatus, false, err.message); }
+      try { await wPost("/api/wellness/resume", {}); showStatus(pStatus, true, "Nudges resumed"); }
+      catch (err) { showStatus(pStatus, false, `Couldn’t resume — ${err.message}`); }
     });
   })();
 }

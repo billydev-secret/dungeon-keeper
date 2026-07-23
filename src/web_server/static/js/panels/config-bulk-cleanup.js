@@ -1,27 +1,58 @@
-import { loadConfig, loadChannels, apiPut, showStatus, buildField } from "../config-helpers.js";
+import {
+  loadConfig,
+  loadChannels,
+  apiPut,
+  showStatus,
+  buildField,
+  mountChannelMultiPicker,
+  guardForm,
+  renderMetaWarning,
+} from "../config-helpers.js";
+import { confirmDialog } from "../ui.js";
 
-function buildBoolSelect(name, value) {
-  const sel = document.createElement("select");
-  sel.name = name;
-  const optTrue = document.createElement("option");
-  optTrue.value = "true";
-  optTrue.textContent = "Enabled";
-  if (value) optTrue.selected = true;
-  const optFalse = document.createElement("option");
-  optFalse.value = "false";
-  optFalse.textContent = "Disabled";
-  if (!value) optFalse.selected = true;
-  sel.appendChild(optTrue);
-  sel.appendChild(optFalse);
-  return sel;
+let _fieldSeq = 0;
+
+// buildField renders a bare <label>; tie it to its control by id so screen
+// readers announce the label and a label tap focuses the field (W-A7).
+function field(labelText, control, hint) {
+  const div = buildField(labelText, control, hint);
+  if (control instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
+    const id = control.id || `bc-field-${++_fieldSeq}`;
+    control.id = id;
+    div.querySelector("label").htmlFor = id;
+  }
+  return div;
+}
+
+// The one toggle idiom: a checkbox row plus a hint that states what changes.
+function toggleField(name, labelText, checked, hint) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const lbl = document.createElement("label");
+  lbl.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
+  const box = document.createElement("input");
+  box.type = "checkbox";
+  box.name = name;
+  box.checked = !!checked;
+  lbl.appendChild(box);
+  lbl.appendChild(document.createTextNode(labelText));
+  wrap.appendChild(lbl);
+  const h = document.createElement("div");
+  h.className = "field-hint";
+  h.textContent = hint;
+  wrap.appendChild(h);
+  return { wrap, box };
 }
 
 function buildNumberInput(name, min, value) {
   const inp = document.createElement("input");
   inp.type = "number";
   inp.name = name;
+  inp.required = true;
   inp.min = String(min);
+  inp.step = "1";
   inp.value = String(value);
+  inp.style.maxWidth = "140px";
   return inp;
 }
 
@@ -34,17 +65,17 @@ function appendLoading(container) {
   panel.className = "panel";
   const empty = document.createElement("div");
   empty.className = "empty";
-  empty.textContent = "Loading config…";
+  empty.textContent = "Loading bulk cleanup settings…";
   panel.appendChild(empty);
   container.appendChild(panel);
 }
 
 function fmtLastRun(ts) {
-  if (!ts) return "never";
+  if (!ts) return "Never";
   try {
     return new Date(ts * 1000).toLocaleString();
   } catch (_) {
-    return "unknown";
+    return "Unknown";
   }
 }
 
@@ -55,7 +86,6 @@ export function mount(container) {
   (async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     const c = config.bulk_cleanup || {};
-    const excludedSet = new Set(c.excluded_channels || []);
 
     clearChildren(container);
     const panel = document.createElement("div");
@@ -68,10 +98,17 @@ export function mount(container) {
     const sub = document.createElement("div");
     sub.className = "subtitle";
     sub.textContent =
-      "Continuously delete old messages server-wide, with channel exceptions.";
+      "Keep deleting old messages across the whole server, apart from the channels you protect";
     header.appendChild(h2);
     header.appendChild(sub);
     panel.appendChild(header);
+
+    const warning = renderMetaWarning();
+    if (warning) {
+      const w = document.createElement("div");
+      w.innerHTML = warning;
+      panel.appendChild(w.firstElementChild);
+    }
 
     // ── Warning ────────────────────────────────────────────────────────
     const warn = document.createElement("div");
@@ -79,64 +116,86 @@ export function mount(container) {
     warn.style.cssText =
       "border:1px solid var(--red,#c00);border-radius:6px;padding:10px;margin-bottom:14px;line-height:1.5;";
     warn.innerHTML =
-      "<strong>This permanently deletes messages and cannot be undone.</strong> " +
-      "Once enabled, a background task deletes every message older than the age " +
-      "below across all text channels and threads (pinned messages and excluded " +
-      "channels are kept). Discord requires deleting old messages one at a time " +
-      "(~1/sec), so the first pass on a busy server can take hours. It re-runs " +
-      "about once a day.";
+      "<strong>This deletes messages permanently and cannot be undone.</strong> " +
+      "Once it is running, a background task deletes every message older than the " +
+      "age you set, in every text channel and thread. Pinned messages and the " +
+      "channels you list below are left alone. Discord makes the bot delete older " +
+      "messages one at a time — about one per second — so the first pass on a busy " +
+      "server can take hours. After that it runs again about once a day.";
     panel.appendChild(warn);
 
     // ── Settings form ──────────────────────────────────────────────────
     const form = document.createElement("form");
-    form.className = "form";
+    form.className = "form form-cards";
     panel.appendChild(form);
 
-    form.appendChild(
-      buildField(
-        "Status",
-        buildBoolSelect("enabled", c.enabled === true),
-        "When disabled, nothing is deleted.",
-      ),
-    );
+    const settingsCard = document.createElement("div");
+    settingsCard.className = "card";
+    const settingsLabel = document.createElement("div");
+    settingsLabel.className = "section-label";
+    settingsLabel.textContent = "Cleanup Schedule";
+    settingsCard.appendChild(settingsLabel);
+    form.appendChild(settingsCard);
 
-    form.appendChild(
-      buildField(
-        "Delete messages older than (days)",
+    const enabled = toggleField(
+      "enabled",
+      "Run Bulk Cleanup",
+      c.enabled === true,
+      "While unchecked nothing is deleted. Checking this and saving starts the first pass within a few minutes.",
+    );
+    settingsCard.appendChild(enabled.wrap);
+
+    settingsCard.appendChild(
+      field(
+        "Delete Messages Older Than (days)",
         buildNumberInput("age_days", 1, c.age_days ?? 30),
-        "Messages older than this are removed. Minimum 1 day; default 30.",
+        "Every message past this age is deleted for good on each pass. Minimum 1 day; 30 is the default.",
       ),
     );
 
     const lastRun = document.createElement("div");
     lastRun.className = "field-hint";
     lastRun.textContent = "Last completed sweep: " + fmtLastRun(c.last_run_ts);
-    form.appendChild(lastRun);
+    settingsCard.appendChild(lastRun);
 
     const saveRow = document.createElement("div");
-    saveRow.style.marginTop = "10px";
+    saveRow.style.cssText = "display:flex; gap:8px; align-items:center;";
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
     saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save Settings";
+    saveBtn.textContent = "Save Schedule";
     const saveStatus = document.createElement("span");
     saveRow.appendChild(saveBtn);
     saveRow.appendChild(saveStatus);
     form.appendChild(saveRow);
 
+    guardForm(form);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
-      const ageDays = parseInt(fd.get("age_days"), 10);
-      if (!Number.isFinite(ageDays) || ageDays < 1) {
-        showStatus(saveStatus, false, "Age must be ≥ 1 day");
+      const rawAge = String(fd.get("age_days") ?? "").trim();
+      const ageDays = parseInt(rawAge, 10);
+      if (rawAge === "" || !Number.isFinite(ageDays) || ageDays < 1) {
+        showStatus(saveStatus, false, "Delete Messages Older Than must be a whole number of 1 day or more.");
+        form.querySelector('[name="age_days"]').focus();
         return;
+      }
+      // Switching the sweep on is irreversible for everything it deletes.
+      if (enabled.box.checked && c.enabled !== true) {
+        const ok = await confirmDialog(
+          `Start deleting every message older than ${ageDays} day${ageDays === 1 ? "" : "s"} across this server? `
+          + "Pinned messages and your protected channels are kept. Everything else is gone for good.",
+          { title: "Start Bulk Cleanup", danger: true, confirmLabel: "Start Cleanup" },
+        );
+        if (!ok) return;
       }
       try {
         await apiPut("/api/config/bulk-cleanup", {
-          enabled: fd.get("enabled") === "true",
+          enabled: enabled.box.checked,
           age_days: ageDays,
         });
+        c.enabled = enabled.box.checked;
         showStatus(saveStatus, true);
       } catch (err) {
         showStatus(saveStatus, false, err.message);
@@ -144,56 +203,47 @@ export function mount(container) {
     });
 
     // ── Excluded channels ──────────────────────────────────────────────
-    const exHeader = document.createElement("div");
-    exHeader.className = "section-label";
-    exHeader.textContent = "Excluded Channels";
-    panel.appendChild(exHeader);
-
     const exForm = document.createElement("form");
-    exForm.className = "form";
+    exForm.className = "form form-cards";
     panel.appendChild(exForm);
 
-    const exHint = document.createElement("div");
-    exHint.className = "field-hint";
-    exHint.style.marginBottom = "10px";
-    exHint.textContent =
-      "Messages in these channels (and their threads) are never deleted.";
-    exForm.appendChild(exHint);
+    const exCard = document.createElement("div");
+    exCard.className = "card";
+    const exLabel = document.createElement("div");
+    exLabel.className = "section-label";
+    exLabel.textContent = "Protected Channels";
+    exCard.appendChild(exLabel);
+    exForm.appendChild(exCard);
 
-    const exBox = document.createElement("div");
-    exBox.className = "checkbox-list";
-    for (const ch of channels) {
-      const lbl = document.createElement("label");
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.name = "excluded";
-      cb.value = ch.id;
-      if (excludedSet.has(ch.id)) cb.checked = true;
-      const txt = document.createTextNode(" #" + ch.name);
-      lbl.appendChild(cb);
-      lbl.appendChild(txt);
-      exBox.appendChild(lbl);
-    }
-    exForm.appendChild(exBox);
+    const exSlot = document.createElement("span");
+    exCard.appendChild(field(
+      "Channels to Leave Alone",
+      exSlot,
+      "Nothing in these channels — or in their threads — is ever deleted by bulk cleanup. Type to search, then click a channel to add it.",
+    ));
+    const exPicker = mountChannelMultiPicker(
+      exSlot, channels, c.excluded_channels || [],
+      { label: "Channels to Leave Alone" },
+    );
 
     const exRow = document.createElement("div");
-    exRow.style.marginTop = "10px";
+    exRow.style.cssText = "display:flex; gap:8px; align-items:center;";
     const exBtn = document.createElement("button");
     exBtn.type = "submit";
     exBtn.className = "btn btn-primary";
-    exBtn.textContent = "Save Excluded Channels";
+    exBtn.textContent = "Save Protected Channels";
     const exStatus = document.createElement("span");
     exRow.appendChild(exBtn);
     exRow.appendChild(exStatus);
     exForm.appendChild(exRow);
 
+    guardForm(exForm);
+
     exForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const checked = [...exForm.querySelectorAll('input[name="excluded"]:checked')].map(
-        (el) => el.value,
-      );
       try {
-        await apiPut("/api/config/bulk-cleanup", { excluded_channels: checked });
+        // Same payload as before: a list of snowflake id strings.
+        await apiPut("/api/config/bulk-cleanup", { excluded_channels: exPicker.getValues() });
         showStatus(exStatus, true);
       } catch (err) {
         showStatus(exStatus, false, err.message);

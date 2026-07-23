@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { renderEmpty, renderError } from "../states.js";
 
 const DIM_COLORS = ["#E6B84C", "#B88A2C", "#7F8F3A", "#B36A92", "#9E3B2E", "#949ba4"];
 
@@ -9,6 +10,13 @@ export function mount(container) {
   async function load() {
     const d = await api("/api/health/composite-score");
     const panel = container.querySelector(".panel");
+
+
+    if (!(d.dimensions || []).length) {
+      panel.innerHTML = `<header><h2>Community Health Score</h2><div class="subtitle">Weighted aggregate of all health dimensions</div></header>` +
+        renderEmpty("Not enough activity to score yet. The health score needs roughly a week of messages, joins, and moderator actions before its dimensions mean anything.");
+      return;
+    }
 
     const dims = d.dimensions || [];
     const dimBars = dims.map((dim, i) => {
@@ -118,7 +126,9 @@ export function mount(container) {
   }
 
   load().catch(err => {
-    container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    container.querySelector(".panel").innerHTML = renderError(
+      `Couldn't load the health score — ${err.message}. Reload the page to try again.`
+    );
   });
 
   return { unmount() { charts.forEach(c => c.destroy()); } };

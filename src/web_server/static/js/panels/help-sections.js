@@ -17,12 +17,17 @@ export const HELP_GROUPS = [
     // onboarding entries to a deliberate reading order (Getting Started first)
     // since it wouldn't otherwise sort ahead of "Ask Billy-bot".
     { page: "help-start",    anchor: "getting-started",   label: "Getting Started",       order: 1 },
-    { page: "help-overview", anchor: "functional-blocks", label: "Overview (Feature Map)", order: 2 },
+    { page: "help-overview", anchor: "functional-blocks", label: "Feature Map",           order: 2 },
     { page: "help-ask",      anchor: "ask-guide",         label: "Ask Billy-bot (AI)",    order: 3 },
   ]},
   // Groups run audience-first — members, then moderators, then admins —
-  // mirroring the manual's section order. (Items alphabetize within a group
-  // in the sidebar, so only group membership/order matters here.)
+  // mirroring the manual's section order.
+  //
+  // Keep each `label` identical to the manual heading its `anchor` points at:
+  // the help panel prints the label as the page title and suppresses the
+  // manual's own heading only when the two match (help.js dropDuplicateHeading),
+  // so drift here means users see two slightly different titles per page.
+  // `page` ids are routed from panel headers — rename labels, never ids.
   { heading: "Games & Social", items: [
     { page: "help-casino",      anchor: "economy-casino",  label: "Casino" },
     { page: "help-games",       anchor: "games",           label: "Games Night" },
@@ -35,7 +40,7 @@ export const HELP_GROUPS = [
   { heading: "Member Tools", items: [
     { page: "help-community", anchor: "community",     label: "Community & XP" },
     { page: "help-economy",   anchor: "economy",       label: "Economy & Perk Shop" },
-    { page: "help-bios",      anchor: "bios",          label: "Bios" },
+    { page: "help-bios",      anchor: "bios",          label: "Member Bios" },
     { page: "help-emoji",     anchor: "emoji-stealer", label: "Emoji Stealer" },
     { page: "help-wellness",  anchor: "wellness",      label: "Wellness" },
     { page: "help-dms",       anchor: "dm-perms",      label: "DM Permissions" },
@@ -43,7 +48,7 @@ export const HELP_GROUPS = [
     { page: "help-privacy",   anchor: "privacy",       label: "Data Erasure" },
   ]},
   { heading: "Voice & Music", items: [
-    { page: "help-voice", anchor: "voice",     label: "Voice Channels" },
+    { page: "help-voice", anchor: "voice",     label: "Voice Master" },
     { page: "help-music", anchor: "music",     label: "Music" },
     { page: "help-247",   anchor: "music-247", label: "24/7 Mode" },
   ]},
@@ -52,8 +57,8 @@ export const HELP_GROUPS = [
     { page: "help-jail",        anchor: "jail",        label: "Jail & Release" },
     { page: "help-tickets",     anchor: "tickets",     label: "Tickets, Policies & Warnings" },
     { page: "help-policies",    anchor: "policies",    label: "Policy Voting" },
-    { page: "help-analytics",   anchor: "analytics",   label: "Analytics & Watch" },
-    { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation" },
+    { page: "help-analytics",   anchor: "analytics",   label: "Analytics & Watch List" },
+    { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation Tools" },
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
   ]},
   { heading: "Server Admin", items: [
@@ -61,7 +66,7 @@ export const HELP_GROUPS = [
     { page: "help-announcements",  anchor: "announcements",     label: "Announcements" },
     { page: "help-role-menus",     anchor: "role-menus",        label: "Role Menus" },
     { page: "help-docs",           anchor: "docs",              label: "Docs" },
-    { page: "help-config",         anchor: "config",            label: "Configuration" },
+    { page: "help-config",         anchor: "config",            label: "Configuration Reference" },
     { page: "help-cleanup",        anchor: "server-ops",        label: "Server Upkeep" },
     { page: "help-chat-revive",    anchor: "chat-revive",       label: "Chat Revive" },
     { page: "help-greeting-watch", anchor: "greeting-watch",    label: "Greeting Watch" },

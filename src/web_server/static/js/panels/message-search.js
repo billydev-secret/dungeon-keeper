@@ -1,6 +1,6 @@
 import { api, esc, fmtTs } from "../api.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
-import { renderEmpty, renderError } from "../states.js";
+import { renderEmpty, renderError, renderLoading } from "../states.js";
 
 /** Format a sentiment score as a short label with emoji. */
 function sentimentBadge(val) {
@@ -28,10 +28,10 @@ export function mount(container) {
         <div class="subtitle">Search and read back stored messages</div>
       </header>
       <div class="controls msg-search-controls">
-        <label>Author<span data-slot="author"></span></label>
-        <label>Mentions<span data-slot="mentions"></span></label>
-        <label>Reply To<span data-slot="reply_to"></span></label>
-        <label>Channel<span data-slot="channel"></span></label>
+        <span class="ctrl-field">Author<span data-slot="author"></span></span>
+        <span class="ctrl-field">Mentions<span data-slot="mentions"></span></span>
+        <span class="ctrl-field">Reply To<span data-slot="reply_to"></span></span>
+        <span class="ctrl-field">Channel<span data-slot="channel"></span></span>
         <label>Regex
           <input type="text" data-field="regex" placeholder="PCRE pattern" />
         </label>
@@ -55,15 +55,15 @@ export function mount(container) {
         <label>Attachments
           <select data-field="has_attachments">
             <option value="">Any</option>
-            <option value="true">Has attachments</option>
-            <option value="false">No attachments</option>
+            <option value="true">Has Attachments</option>
+            <option value="false">No Attachments</option>
           </select>
         </label>
         <label>Reactions
           <select data-field="has_reactions">
             <option value="">Any</option>
-            <option value="true">Has reactions</option>
-            <option value="false">No reactions</option>
+            <option value="true">Has Reactions</option>
+            <option value="false">No Reactions</option>
           </select>
         </label>
         <label>Min Length
@@ -80,12 +80,12 @@ export function mount(container) {
         </label>
         <label>Sort
           <select data-field="sort">
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="most_reacted">Most reacted</option>
-            <option value="longest">Longest first</option>
-            <option value="most_positive">Most positive</option>
-            <option value="most_negative">Most negative</option>
+            <option value="newest">Newest First</option>
+            <option value="oldest">Oldest First</option>
+            <option value="most_reacted">Most Reacted</option>
+            <option value="longest">Longest First</option>
+            <option value="most_positive">Most Positive</option>
+            <option value="most_negative">Most Negative</option>
           </select>
         </label>
         <label>&nbsp;
@@ -117,15 +117,22 @@ export function mount(container) {
   const downloadBtn = container.querySelector("[data-download]");
 
   // Placeholder filter-selects (replaced once members/channels load)
-  let authorFS = multiFilterSelect("Loading…", []);
-  let mentionsFS = filterSelect("Loading…", []);
-  let replyFS = filterSelect("Loading…", []);
-  let channelFS = multiFilterSelect("Loading…", []);
+  const authorFS = multiFilterSelect("Type to filter…", [], { label: "Author" });
+  const mentionsFS = filterSelect("Type to filter…", [], { label: "Mentions", emptyLabel: "(anyone)" });
+  const replyFS = filterSelect("Type to filter…", [], { label: "Reply to", emptyLabel: "(anyone)" });
+  const channelFS = multiFilterSelect("Type to filter…", [], { label: "Channel" });
 
   container.querySelector('[data-slot="author"]').appendChild(authorFS.el);
   container.querySelector('[data-slot="mentions"]').appendChild(mentionsFS.el);
   container.querySelector('[data-slot="reply_to"]').appendChild(replyFS.el);
   container.querySelector('[data-slot="channel"]').appendChild(channelFS.el);
+
+  // Enter anywhere in a picker runs the search.
+  for (const fs of [authorFS, mentionsFS, replyFS, channelFS]) {
+    fs.getInput().addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doSearch(1);
+    });
+  }
 
   // Load members, channels, and AI models in parallel
   (async () => {
@@ -149,72 +156,14 @@ export function mount(container) {
         label: `#${ch.name}`,
       }));
 
-      function replaceMulti(oldFS, opts) {
-        const fs = multiFilterSelect("Type to filter…", opts);
-        oldFS.el.replaceWith(fs.el);
-        return fs;
-      }
-      function replaceSingle(oldFS, opts) {
-        const fs = filterSelect("Type to filter…", opts);
-        oldFS.el.replaceWith(fs.el);
-        return fs;
-      }
-      authorFS = replaceMulti(authorFS, memberOpts);
-      channelFS = replaceMulti(channelFS, channelOpts);
-      mentionsFS = replaceSingle(mentionsFS, memberOpts);
-      replyFS = replaceSingle(replyFS, memberOpts);
-
-      // Wire up Enter key on the new inputs
-      [authorFS, mentionsFS, replyFS, channelFS].forEach((fs) => {
-        fs.getInput().addEventListener("keydown", (e) => {
-          if (e.key === "Enter") doSearch(1);
-        });
-      });
-    } catch (_) {}
+      authorFS.setOptions(memberOpts);
+      channelFS.setOptions(channelOpts);
+      mentionsFS.setOptions(memberOpts);
+      replyFS.setOptions(memberOpts);
+    } catch (_) {
+      // Member/channel lists are optional — the other filters still search.
+    }
   })();
-
-  const toArray = (v) => v == null ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
-
-  function applyFilters(f) {
-    // Reset all controls first
-    regexInput.value = "";
-    sortSel.value = "newest";
-    emotionSel.value = "";
-    sentMinInput.value = "";
-    sentMaxInput.value = "";
-    attachSel.value = "";
-    reactionsSel.value = "";
-    minLenInput.value = "";
-    maxLenInput.value = "";
-    afterDtInput.value = "";
-    beforeDtInput.value = "";
-    authorFS.setValues([]);
-    channelFS.setValues([]);
-    mentionsFS.setValue("");
-    replyFS.setValue("");
-
-    if (f.author) authorFS.setValues(toArray(f.author));
-    if (f.channel) channelFS.setValues(toArray(f.channel));
-    if (f.mentions) mentionsFS.setValue(String(f.mentions));
-    if (f.reply_to) replyFS.setValue(String(f.reply_to));
-    if (f.regex) regexInput.value = f.regex;
-    if (f.sort) sortSel.value = f.sort;
-    if (f.emotion) emotionSel.value = f.emotion;
-    if (f.sentiment_min != null) sentMinInput.value = f.sentiment_min;
-    if (f.sentiment_max != null) sentMaxInput.value = f.sentiment_max;
-    if (f.has_attachments != null) attachSel.value = String(f.has_attachments);
-    if (f.has_reactions != null) reactionsSel.value = String(f.has_reactions);
-    if (f.min_length != null) minLenInput.value = f.min_length;
-    if (f.max_length != null) maxLenInput.value = f.max_length;
-
-    // Convert unix timestamps to datetime-local format
-    if (f.after) {
-      afterDtInput.value = new Date(f.after * 1000).toISOString().slice(0, 16);
-    }
-    if (f.before) {
-      beforeDtInput.value = new Date(f.before * 1000).toISOString().slice(0, 16);
-    }
-  }
 
   function buildFilterParams() {
     const params = new URLSearchParams();
@@ -250,7 +199,7 @@ export function mount(container) {
     params.set("page", String(page));
     params.set("per_page", "50");
 
-    resultsEl.innerHTML = `<div class="empty">Searching…</div>`;
+    resultsEl.innerHTML = renderLoading("Searching messages…");
     pagerEl.innerHTML = "";
 
     downloadBtn.style.display = "none";
@@ -259,13 +208,13 @@ export function mount(container) {
       renderResults(data);
       if (data.total > 0) downloadBtn.style.display = "";
     } catch (err) {
-      resultsEl.innerHTML = renderError(err);
+      resultsEl.innerHTML = renderError(`Couldn't run that search — ${err.message}. Check the regex pattern and try again.`);
     }
   }
 
   function renderResults(data) {
     if (!data.messages.length) {
-      resultsEl.innerHTML = renderEmpty("No messages found");
+      resultsEl.innerHTML = renderEmpty("No messages match these filters. Clear a filter, widen the date range, or check the regex pattern.");
       pagerEl.innerHTML = "";
       return;
     }
@@ -335,4 +284,8 @@ export function mount(container) {
   regexInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") doSearch(1);
   });
+
+  // Nothing to tear down beyond the DOM the router replaces, but every other
+  // panel returns a handle — keep the contract uniform (W-D15).
+  return { unmount() {} };
 }

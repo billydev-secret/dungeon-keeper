@@ -1,8 +1,9 @@
 import { api, esc } from "../api.js";
 import { withLoading } from "../report-helpers.js";
-import { makeBarChart } from "../charts.js";
+import { makeBarChart, CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, ROLE_COLORS } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
+import { filterSelect } from "../filter-select.js";
 
 const RESOLUTIONS = [
   { value: "hour",        label: "Hourly (24h)" },
@@ -27,48 +28,27 @@ const SOURCE_LABELS = {
   voice:       "Voice",
   grant:       "Manual grant",
 };
+// XP-source series colors, drawn from the shared categorical palette so the
+// panel reads as part of the same chart system as every other report.
 const SOURCE_COLORS = {
-  text:        "#5865f2",
-  reply:       "#57f287",
-  image_react: "#fee75c",
-  voice:       "#eb459e",
-  grant:       "#faa61a",
+  text:        ROLE_COLORS[0],
+  reply:       ROLE_COLORS[2],
+  image_react: ROLE_COLORS[4],
+  voice:       ROLE_COLORS[1],
+  grant:       ROLE_COLORS[3],
 };
-const FALLBACK_SOURCE_COLOR = "#949ba4";
+const FALLBACK_SOURCE_COLOR = ROLE_COLORS[5];
 
-function filterSelect(placeholder, options) {
-  const wrap = document.createElement("div");
-  wrap.className = "filter-select";
-  const input = document.createElement("input");
-  input.type = "text"; input.placeholder = placeholder;
-  input.className = "filter-select-input";
-  wrap.appendChild(input);
-  const list = document.createElement("div");
-  list.className = "filter-select-list";
-  wrap.appendChild(list);
-  let selectedId = "";
-
-  function render(filter) {
-    const lc = filter.toLowerCase();
-    const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
-    list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--ink-dim)">(all)</em></div>` +
-      (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`).join("");
-  }
-
-  input.addEventListener("focus", () => { render(input.value); list.style.display = "block"; });
-  input.addEventListener("input", () => { selectedId = ""; render(input.value); list.style.display = "block"; });
-  list.addEventListener("mousedown", (e) => {
-    const item = e.target.closest(".filter-select-item");
-    if (!item) return;
-    selectedId = item.dataset.id;
-    input.value = selectedId ? item.textContent : "";
-    list.style.display = "none";
-    wrap.dispatchEvent(new Event("change"));
+/** Fire `cb` when a shared filterSelect's value changes (it has no change
+ *  event of its own — selection closes the popover, focus leaves after). */
+function onPickerChange(fs, cb) {
+  let last = fs.getValue();
+  fs.el.addEventListener("focusout", () => {
+    setTimeout(() => {
+      const cur = fs.getValue();
+      if (cur !== last) { last = cur; cb(); }
+    }, 200);
   });
-  input.addEventListener("blur", () => { setTimeout(() => { list.style.display = "none"; }, 150); });
-  input.addEventListener("keydown", (e) => { if (e.key === "Escape") { list.style.display = "none"; input.blur(); } });
-
-  return { el: wrap, getValue: () => selectedId };
 }
 
 export function mount(container, initialParams) {
@@ -89,8 +69,8 @@ export function mount(container, initialParams) {
             ${MODES.map((m) => `<option value="${m.value}">${m.label}</option>`).join("")}
           </select>
         </label>
-        <label>User<span data-slot="user"></span></label>
-        <label>Channel<span data-slot="channel"></span></label>
+        <span class="ctrl-field">Member<span data-slot="user"></span></span>
+        <span class="ctrl-field">Channel<span data-slot="channel"></span></span>
         <label>Exclude Channels
           <div class="filter-select" data-exclude-search>
             <input class="filter-select-input" data-exclude-input type="text" placeholder="Add channel…" autocomplete="off" />
@@ -99,7 +79,7 @@ export function mount(container, initialParams) {
         </label>
         <label style="flex-direction:row;align-items:center;gap:6px;">
           <input type="checkbox" data-control="exclude-bots" />
-          Exclude bots
+          Exclude Bots
         </label>
       </div>
       <div data-excluded-channels style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
@@ -124,8 +104,8 @@ export function mount(container, initialParams) {
   let chart = null;
   let slider = null;
   const sliderWrap = container.querySelector("[data-slider-wrap]");
-  let userFS = filterSelect("Loading…", []);
-  let chanFS = filterSelect("Loading…", []);
+  const userFS = filterSelect("Type to filter…", [], { label: "Member", emptyLabel: "(all members)" });
+  const chanFS = filterSelect("Type to filter…", [], { label: "Channel", emptyLabel: "(all channels)" });
   container.querySelector('[data-slot="user"]').appendChild(userFS.el);
   container.querySelector('[data-slot="channel"]').appendChild(chanFS.el);
 
@@ -191,10 +171,8 @@ export function mount(container, initialParams) {
         id: ch.id,
         label: `#${ch.name}`,
       }));
-      const newChanFS = filterSelect("Type to filter…", channelOpts);
-      chanFS.el.replaceWith(newChanFS.el);
-      chanFS = newChanFS;
-      chanFS.el.addEventListener("change", refresh);
+      chanFS.setOptions(channelOpts);
+      if (initialParams.channel_id) chanFS.setValue(initialParams.channel_id);
 
       const memberOpts = members.map((m) => ({
         id: m.id,
@@ -202,10 +180,8 @@ export function mount(container, initialParams) {
         left: !!m.left_server,
       })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
       memberOpts.forEach((o) => { if (o.left) o.label += " (left)"; });
-      const newFS = filterSelect("Type to filter…", memberOpts);
-      userFS.el.replaceWith(newFS.el);
-      userFS = newFS;
-      userFS.el.addEventListener("change", refresh);
+      userFS.setOptions(memberOpts);
+      if (initialParams.user_id) userFS.setValue(initialParams.user_id);
 
       if (initialParams.exclude_channels === undefined) {
         for (const wanted of DEFAULT_EXCLUDED_CHANNEL_NAMES) {
@@ -218,7 +194,14 @@ export function mount(container, initialParams) {
         }
       }
       renderExcludedPills();
-    } catch (_) {}
+    } catch (_) {
+      // Meta lookups are optional garnish here — the chart still renders
+      // unfiltered if the member/channel lists don't load.
+    }
+    // Bound after the initial values are in place so restoring a deep link
+    // doesn't count as a user change.
+    onPickerChange(userFS, refresh);
+    onPickerChange(chanFS, refresh);
   }
 
   async function refresh() {
@@ -247,7 +230,9 @@ export function mount(container, initialParams) {
       if (slider) { slider.destroy(); slider = null; }
 
       if (!data.labels.length || !data.counts.some((c) => c > 0)) {
-        wrap.innerHTML = renderEmpty(`No ${data.mode} activity for this period.`);
+        wrap.innerHTML = renderEmpty(
+          `No ${data.mode} activity in this window. Try a wider resolution, clear the member or channel filter, or un-exclude a channel.`
+        );
         sliderWrap.innerHTML = "";
         return;
       }
@@ -284,7 +269,9 @@ export function mount(container, initialParams) {
         onChange: renderChart,
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = renderError(err);
+      container.querySelector(".chart-wrap").innerHTML = renderError(
+        `Couldn't load activity — ${err.message}. Change a control to try again.`
+      );
       sliderWrap.innerHTML = "";
     }
   }
@@ -318,7 +305,7 @@ function _makeActivityChart(canvas, data, title) {
     datasets.push({
       label: data.y_label,
       data: data.counts,
-      backgroundColor: "#E6B84C",
+      backgroundColor: CHART_BAR,
       borderRadius: 3,
       order: 2,
       yAxisID: "y",
@@ -329,7 +316,7 @@ function _makeActivityChart(canvas, data, title) {
       label: "Unique Members",
       data: data.member_counts,
       type: "line",
-      borderColor: "#B36A92",
+      borderColor: CHART_ACCENT,
       backgroundColor: "transparent",
       borderWidth: 2,
       pointRadius: 2,
@@ -342,23 +329,23 @@ function _makeActivityChart(canvas, data, title) {
   const scales = {
     x: {
       stacked: hasSeries,
-      ticks: { color: "#dbdee1", maxRotation: 45 },
-      grid: { color: "#3f4147" },
+      ticks: { color: CHART_TEXT, maxRotation: 45 },
+      grid: { color: CHART_GRID },
     },
     y: {
       position: "left",
       stacked: hasSeries,
-      title: { display: true, text: data.y_label, color: "#dbdee1" },
-      ticks: { color: "#dbdee1" },
-      grid: { color: "#3f4147" },
+      title: { display: true, text: data.y_label, color: CHART_TEXT },
+      ticks: { color: CHART_TEXT },
+      grid: { color: CHART_GRID },
       beginAtZero: true,
     },
   };
   if (hasMembers) {
     scales.y1 = {
       position: "right",
-      title: { display: true, text: "Unique Members", color: "#B36A92" },
-      ticks: { color: "#B36A92" },
+      title: { display: true, text: "Unique Members", color: CHART_ACCENT },
+      ticks: { color: CHART_ACCENT },
       grid: { drawOnChartArea: false },
       beginAtZero: true,
     };
@@ -372,8 +359,8 @@ function _makeActivityChart(canvas, data, title) {
       maintainAspectRatio: false,
       interaction: hasSeries ? { mode: "index", intersect: false } : undefined,
       plugins: {
-        title: { display: true, text: title, color: "#dbdee1" },
-        legend: { labels: { color: "#dbdee1" } },
+        title: { display: true, text: title, color: CHART_TEXT },
+        legend: { labels: { color: CHART_TEXT } },
         tooltip: hasSeries ? {
           callbacks: {
             footer: (items) => {

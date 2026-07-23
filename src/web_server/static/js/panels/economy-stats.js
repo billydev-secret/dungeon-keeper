@@ -4,6 +4,8 @@
 // Refresh button re-fetches.
 import { api, esc, fmtAge } from "../api.js";
 import { loadMembers } from "../config-helpers.js";
+import { renderEmpty, renderError, renderLoading } from "../states.js";
+import { ROLE_COLORS, CHART_ACCENT, CHART_BAR } from "../charts.js";
 
 const PERK_LABELS = {
   price_role_color: "Role color",
@@ -26,15 +28,15 @@ const FAUCET_LABELS = {
   grants: "Grants",
 };
 
-// Per-source colors for the income-mix stacked bars. All defined dashboard
-// palette vars (distinct hues); grants sits in a muted grey to read as
-// staff-injected rather than player-earned.
+// Per-source colors for the income-mix stacked bars, taken from the shared
+// chart palette (charts.js) so this page matches every other report; grants
+// sits in the muted slot to read as staff-injected rather than player-earned.
 const FAUCET_COLORS = {
-  logins: "var(--blurple, #5865f2)",
-  activity: "var(--plum, #c07aa1)",
-  quests: "var(--gold-solid, #e6b84c)",
-  games: "var(--green, #23a55a)",
-  grants: "var(--ink-mute, #979ba3)",
+  logins: ROLE_COLORS[2],
+  activity: ROLE_COLORS[1],
+  quests: ROLE_COLORS[0],
+  games: ROLE_COLORS[4],
+  grants: ROLE_COLORS[5],
 };
 
 // Member-table columns: [key, label, numeric?]. `name` sorts by resolved name.
@@ -82,15 +84,53 @@ function fmtDur(secs) {
 }
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Statistics…</div></div>`;
+  container.innerHTML = `<div class="panel">${renderLoading("Loading statistics…")}</div>`;
   let liveTimer = null;
   (async () => {
-    const members = await loadMembers().catch(() => []);
+    // The member list, the stats blob, and the live pulse don't depend on each
+    // other — fetch them together rather than in a waterfall (W-D11).
+    const [members, stats] = await Promise.all([
+      loadMembers().catch(() => []),
+      api("/api/economy/stats", { limit: 100 }).then(
+        (d) => ({ ok: true, data: d }),
+        (err) => ({ ok: false, err }),
+      ),
+    ]);
     render(container, members);
+    applyStats(container, members, stats);
     refreshLive(container);
     liveTimer = setInterval(() => refreshLive(container), LIVE_REFRESH_MS);
   })();
   return { unmount() { if (liveTimer) clearInterval(liveTimer); } };
+}
+
+// Every section that the stats fetch fills. Kept in one place so a failure can
+// clear all of them instead of leaving six panels stuck on "Loading…" (W-D7).
+const STATS_SECTIONS = [
+  "[data-distribution]", "[data-income-sources]", "[data-engagement]",
+  "[data-affordability]", "[data-burn]", "[data-transfers]", "[data-members]",
+];
+
+function applyStats(container, members, stats) {
+  if (!stats.ok) {
+    container.querySelector("[data-summary]").innerHTML = renderError(
+      `Couldn't load economy statistics — ${stats.err.message}. Press Refresh to try again.`
+    );
+    for (const sel of STATS_SECTIONS) {
+      const el = container.querySelector(sel);
+      if (el) el.innerHTML = renderEmpty("Not loaded — the statistics request failed.");
+    }
+    return;
+  }
+  const data = stats.data;
+  renderSummary(container, data);
+  renderDistribution(container, data.distribution);
+  renderIncomeSources(container, data.income_sources);
+  renderEngagement(container, data.engagement);
+  renderAffordability(container, data.affordability);
+  renderBurn(container, data.burn_top, members);
+  renderTransfers(container, data.transfers_top, members);
+  renderMembers(container, data.members, members);
 }
 
 function render(container, members) {
@@ -108,7 +148,7 @@ function render(container, members) {
 
       <section class="card">
         <div class="section-label">Balance Distribution</div>
-        <div data-distribution><div class="empty">Loading…</div></div>
+        <div data-distribution>${renderLoading("Loading…")}</div>
       </section>
 
       <section class="card">
@@ -116,45 +156,44 @@ function render(container, members) {
         <div class="field-hint">Coins minted per week by source (grants, quests,
           logins, activity, games) over the last 8 weeks. Transfers move currency
           sideways, so they aren't income and don't appear here.</div>
-        <div data-income-sources><div class="empty">Loading…</div></div>
+        <div data-income-sources>${renderLoading("Loading…")}</div>
       </section>
 
       <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));">
         <section class="card"><div class="section-label">Engagement</div>
-          <div data-engagement><div class="empty">Loading…</div></div></section>
+          <div data-engagement>${renderLoading("Loading…")}</div></section>
         <section class="card"><div class="section-label">Affordability</div>
           <div class="field-hint">Solid color ≈ how many days of median daily income each perk costs.</div>
-          <div data-affordability><div class="empty">Loading…</div></div></section>
+          <div data-affordability>${renderLoading("Loading…")}</div></section>
       </div>
 
       <section class="card">
         <div class="section-label">Biggest Spenders (all time)</div>
         <div class="field-hint">Lifetime currency burned — rentals, consumables and other sinks. Transfers and staff clawbacks don't count: a transfer moves currency sideways rather than removing it.</div>
-        <div data-burn><div class="empty">Loading…</div></div>
+        <div data-burn>${renderLoading("Loading…")}</div>
       </section>
 
       <section class="card">
         <div class="section-label">Top Transfers (30d)</div>
         <div class="field-hint">One-way volume over 500 is flagged — a possible farming/laundering signal worth an audit.</div>
-        <div data-transfers><div class="empty">Loading…</div></div>
+        <div data-transfers>${renderLoading("Loading…")}</div>
       </section>
 
       <section class="card" data-live-card>
         <div class="section-label">Happening Now</div>
         <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
-        <div data-live><div class="empty">Loading…</div></div>
+        <div data-live>${renderLoading("Loading…")}</div>
       </section>
 
       <section class="card">
         <div class="section-label">Members</div>
-        <div data-members><div class="empty">Loading…</div></div>
+        <div data-members>${renderLoading("Loading…")}</div>
       </section>
     </div>`;
 
   container.querySelector("[data-refresh]").addEventListener("click", () => {
     refresh(container, members);
   });
-  refresh(container, members);
 }
 
 async function refreshLive(container) {
@@ -164,7 +203,7 @@ async function refreshLive(container) {
   try {
     live = await api("/api/economy/quests/live");
   } catch (err) {
-    host.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+    host.innerHTML = renderError(`Couldn't load the quest pulse — ${err.message}. It retries automatically every 45 seconds.`);
     return;
   }
   const bits = [];
@@ -183,7 +222,7 @@ async function refreshLive(container) {
           <strong>${esc(c.title)}</strong>
           <span class="field-hint" style="margin-left:8px;">${esc(c.kind_label)}</span>
           <div style="background:var(--border); border-radius:6px; height:14px; margin:6px 0; overflow:hidden; max-width:480px;">
-            <div style="width:${Math.min(100, c.pct)}%; height:100%; background:var(--accent, #7aa2f7);"></div>
+            <div style="width:${Math.min(100, c.pct)}%; height:100%; background:${CHART_BAR};"></div>
           </div>
           <div class="field-hint">
             ${fmtNum(c.current)} / ${fmtNum(c.target)} (${c.pct}%) · ${tiers} ·
@@ -218,13 +257,13 @@ async function refreshLive(container) {
       const flight = q.in_progress ? ` · ${fmtNum(q.in_progress)} in progress` : "";
       return `<div class="field-hint" style="margin:2px 0;">${esc(q.title)} —
         <strong>${fmtNum(q.completed)}</strong> done${flight}</div>`;
-    }).join("") || `<div class="empty">none active</div>`;
+    }).join("") || renderEmpty("None active");
     return `<div><div class="section-label" style="text-transform:capitalize;">${cad} (this period)</div>${rows}</div>`;
   }).join("");
   const eventRows = (live.events || []).map((q) =>
     `<div class="field-hint" style="margin:2px 0;">${esc(q.title)} —
       <strong>${fmtNum(q.paid_7d)}</strong> this week · ${fmtNum(q.paid_total)} ever</div>`,
-  ).join("") || `<div class="empty">none active</div>`;
+  ).join("") || renderEmpty("None active");
   bits.push(`
     <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
       ${cadCols}
@@ -235,22 +274,12 @@ async function refreshLive(container) {
 }
 
 async function refresh(container, members) {
-  let data;
-  try {
-    data = await api("/api/economy/stats", { limit: 100 });
-  } catch (err) {
-    container.querySelector("[data-summary]").innerHTML =
-      `<div class="error">${esc(err.message)}</div>`;
-    return;
-  }
-  renderSummary(container, data);
-  renderDistribution(container, data.distribution);
-  renderIncomeSources(container, data.income_sources);
-  renderEngagement(container, data.engagement);
-  renderAffordability(container, data.affordability);
-  renderBurn(container, data.burn_top, members);
-  renderTransfers(container, data.transfers_top, members);
-  renderMembers(container, data.members, members);
+  container.querySelector("[data-summary]").innerHTML = renderLoading("Refreshing…");
+  const stats = await api("/api/economy/stats", { limit: 100 }).then(
+    (d) => ({ ok: true, data: d }),
+    (err) => ({ ok: false, err }),
+  );
+  applyStats(container, members, stats);
 }
 
 // ── summary ──────────────────────────────────────────────────────────
@@ -286,7 +315,7 @@ function renderDistribution(container, dist) {
   const buckets = dist || [];
   const max = Math.max(1, ...buckets.map((b) => b.count));
   if (!buckets.some((b) => b.count > 0)) {
-    host.innerHTML = `<div class="empty">No holders yet.</div>`;
+    host.innerHTML = renderEmpty("Nobody holds a balance yet. This fills in once members start earning coins.");
     return;
   }
   host.innerHTML = buckets.map((b) => {
@@ -295,7 +324,7 @@ function renderDistribution(container, dist) {
       <div style="display:flex; align-items:center; gap:10px; margin:4px 0;">
         <div style="width:72px; text-align:right; font-variant-numeric:tabular-nums; color:var(--ink-dim);">${esc(bucketLabel(b))}</div>
         <div style="flex:1; background:var(--rule-soft); border-radius:4px; height:16px; overflow:hidden;">
-          <div style="width:${pct}%; height:100%; background:var(--plum,#9b6dd6);"></div>
+          <div style="width:${pct}%; height:100%; background:${CHART_ACCENT};"></div>
         </div>
         <div style="width:44px; text-align:right; font-variant-numeric:tabular-nums;">${fmtNum(b.count)}</div>
       </div>`;
@@ -319,7 +348,7 @@ function renderIncomeSources(container, income) {
   const buckets = income?.buckets || [];
   const max = Math.max(1, ...buckets.map((b) => b.total || 0));
   if (!buckets.some((b) => (b.total || 0) > 0)) {
-    host.innerHTML = `<div class="empty">No income minted in the last 8 weeks.</div>`;
+    host.innerHTML = renderEmpty("No coins minted in the last 8 weeks. Income appears here as members log in, chat, finish quests, and play games.");
     return;
   }
 
@@ -394,7 +423,7 @@ function renderAffordability(container, aff) {
   const host = container.querySelector("[data-affordability]");
   const keys = Object.keys(aff || {});
   if (!keys.length) {
-    host.innerHTML = `<div class="empty">No earners yet — nothing to price against.</div>`;
+    host.innerHTML = renderEmpty("No earners yet, so there is nothing to price perks against. This fills in once members start earning daily income.");
     return;
   }
   const max = Math.max(1, ...keys.map((k) => aff[k]));
@@ -405,7 +434,7 @@ function renderAffordability(container, aff) {
       <div style="display:flex; align-items:center; gap:10px; margin:4px 0;">
         <div style="width:110px; color:var(--ink-dim);">${esc(PERK_LABELS[k] || k)}</div>
         <div style="flex:1; background:var(--rule-soft); border-radius:4px; height:14px; overflow:hidden;">
-          <div style="width:${pct}%; height:100%; background:var(--gold-solid,#d9a441);"></div>
+          <div style="width:${pct}%; height:100%; background:${CHART_BAR};"></div>
         </div>
         <div style="width:64px; text-align:right; font-variant-numeric:tabular-nums;">${days.toFixed(1)}d</div>
       </div>`;
@@ -431,7 +460,7 @@ function renderBurn(container, burn, members) {
   const host = container.querySelector("[data-burn]");
   const list = burn || [];
   if (!list.length) {
-    host.innerHTML = `<div class="empty">Nobody has spent anything yet.</div>`;
+    host.innerHTML = renderEmpty("Nobody has spent anything yet. Rentals, consumables, and other sinks show up here.");
     return;
   }
   const rows = list.map((b, i) => `
@@ -458,7 +487,7 @@ function renderTransfers(container, transfers, members) {
   const host = container.querySelector("[data-transfers]");
   const list = transfers || [];
   if (!list.length) {
-    host.innerHTML = `<div class="empty">No transfers in the last 30 days.</div>`;
+    host.innerHTML = renderEmpty("No transfers in the last 30 days. Member-to-member payments show up here.");
     return;
   }
   const rows = list.map((t) => {
@@ -510,7 +539,7 @@ function renderMembers(container, rows, members) {
   const host = container.querySelector("[data-members]");
   const list = rows || [];
   if (!list.length) {
-    host.innerHTML = `<div class="empty">No holders yet.</div>`;
+    host.innerHTML = renderEmpty("Nobody holds a balance yet. This fills in once members start earning coins.");
     return;
   }
   const sorted = sortMembers(members, list);

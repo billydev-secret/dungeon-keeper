@@ -2,6 +2,7 @@ import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 export function mount(container, initialParams) {
   const html = `
@@ -25,7 +26,7 @@ export function mount(container, initialParams) {
         </label>
       </div>
       <div data-status></div>
-      <div data-chart-wrap></div>
+      <div data-chart-wrap>${renderLoading("Loading level history…")}</div>
       <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
     </div>
   `;
@@ -44,12 +45,17 @@ export function mount(container, initialParams) {
     const params = { level };
     if (daysEl.value) params.days = parseInt(daysEl.value);
     history.replaceState(null, "", `#/xp-level-review?level=${level}${daysEl.value ? `&days=${daysEl.value}` : ""}`);
-    statusEl.textContent = "Loading…";
+    statusEl.className = "";
+    statusEl.textContent = "Loading level history…";
     try {
       const data = await withLoading(chartWrap, api("/api/reports/xp-level-review", params));
       if (!data.count) {
-        statusEl.textContent = `No members have reached level ${level} (${Math.round(data.xp_required)} XP required).`;
-        chartWrap.textContent = ""; tableWrap.textContent = "";
+        statusEl.textContent = "";
+        chartWrap.innerHTML = renderEmpty(
+          `Nobody has reached level ${level} yet — it takes ${Math.round(data.xp_required)} XP. `
+          + "Lower the level, or widen the window, to see who has.",
+        );
+        tableWrap.textContent = "";
         return;
       }
       statusEl.textContent = `Level ${level} • ${data.window_label} • ${data.count} members • mean ${data.mean_days}d, median ${data.median_days}d, mode ${data.mode_days}d`;
@@ -69,9 +75,13 @@ export function mount(container, initialParams) {
         data: data.members,
         defaultSort: "days",
         defaultAsc: true,
+        emptyMsg: `No members reached level ${level} inside this window.`,
+        maxRows: 300,
       });
     } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = "";
+      chartWrap.innerHTML = renderError(`Couldn't load the level review — try again. (${err.message})`);
+      tableWrap.textContent = "";
     }
   }
   levelEl.addEventListener("change", refresh);

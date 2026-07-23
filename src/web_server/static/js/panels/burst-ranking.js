@@ -21,7 +21,7 @@ export function mount(container, initialParams) {
             <option value="90">Last 90 days</option>
           </select>
         </label>
-        <label>Min sessions
+        <label>Minimum Sessions
           <input type="number" data-control="min_sessions" min="1" max="100" value="${initialParams.min_sessions || 3}" />
         </label>
       </div>
@@ -50,7 +50,7 @@ export function mount(container, initialParams) {
 
       const top = data.entries.slice(0, 20);
       if (!top.length) {
-        wrap.innerHTML = `<div class="empty">No burst data (need users with enough sessions).</div>`;
+        wrap.innerHTML = `<div class="empty">No burst data yet. A member needs at least the minimum number of posting sessions above before their burst effect can be measured — lower that number or widen the period.</div>`;
         tableWrap.innerHTML = "";
         return;
       }
@@ -62,24 +62,26 @@ export function mount(container, initialParams) {
       chart = makeHorizontalBarChart(container.querySelector("[data-chart]"), {
         labels: top.map((e) => e.user_name || e.user_id),
         data: top.map((e) => e.increase),
-        title: "Burst Increase (post − pre session avg msg rate)",
-        xLabel: "Msgs/2min increase",
+        title: "Burst Increase — Average Messages After a Session Starts, Minus Before",
+        xLabel: "Messages per 2 minutes",
         colors,
       });
 
       renderSortableTable(tableWrap, {
         columns: [
           { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
-          { key: "pre_avg", label: "Pre Avg" },
-          { key: "post_avg", label: "Post Avg" },
+          { key: "pre_avg", label: "Before (Avg)" },
+          { key: "post_avg", label: "After (Avg)" },
           { key: "increase", label: "Increase", format: (v) => `<span style="color:${v >= 0 ? '#7F8F3A' : '#9E3B2E'}">${v >= 0 ? '+' : ''}${v}</span>` },
           { key: "sessions", label: "Sessions" },
         ],
         data: data.entries,
         defaultSort: "increase",
+        emptyMsg: "No members cleared the minimum-sessions bar for this period.",
+        maxRows: 200,
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">Couldn’t load burst rankings — try again. (${esc(err.message)})</div>`;
       tableWrap.innerHTML = "";
     }
   }
