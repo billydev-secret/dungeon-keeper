@@ -551,7 +551,9 @@ class RushmoreVoteView(discord.ui.View):
         self._done_event: asyncio.Event | None = None
 
         options = []
-        for uid in eligible_players:
+        # A Discord Select allows at most 25 options; slice defensively so
+        # an oversized eligible-player roster can never 400 the vote message.
+        for uid in eligible_players[:25]:
             name = resolve_name(guild, uid)
             options.append(discord.SelectOption(label=name, value=str(uid)))
         self.add_item(RushmoreVoteSelect(options))

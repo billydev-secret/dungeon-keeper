@@ -34,20 +34,36 @@ DEFAULT_LABELS: list[str] = ["Marry", "Fornicate", "Kiss"]
 TARGETS_PER_PLAYER = 3
 MIN_PARTICIPANTS = 4
 
+# Maximum participants allowed in a single lobby. The close-and-assign
+# embed adds one field per participant and a Discord embed hard-caps at
+# 25 fields, so a bigger pool would 400 the results message and leave
+# the game row stuck in "joining". Cap the join so the embed always fits.
+MAX_PARTICIPANTS = 25
 
-def toggle_participant(payload: dict[str, Any], user_id: int) -> str:
+
+def toggle_participant(
+    payload: dict[str, Any],
+    user_id: int,
+    max_participants: int = MAX_PARTICIPANTS,
+) -> str:
     """Toggle ``user_id`` in ``payload``'s participant list.
 
     Mutates ``payload`` in place: ensures ``participants`` exists, then
     adds or removes ``user_id`` depending on current membership.
 
     Returns ``"joined"`` or ``"left"`` so the caller can drop the verb
-    straight into "You've ___ the pool." ephemeral confirmation.
+    straight into "You've ___ the pool." ephemeral confirmation. Returns
+    ``"full"`` (without mutating) when a *new* joiner would push the pool
+    past ``max_participants`` — the results embed can't hold more than 25
+    fields, so an unbounded pool would 400 the assignments message.
+    Leaving is always allowed, even from a full pool.
     """
     participants: list[int] = payload.setdefault("participants", [])
     if user_id in participants:
         participants.remove(user_id)
         return "left"
+    if len(participants) >= max_participants:
+        return "full"
     participants.append(user_id)
     return "joined"
 

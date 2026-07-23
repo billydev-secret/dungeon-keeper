@@ -21,6 +21,7 @@ from bot_modules.games_mfk.embeds import (
 )
 from bot_modules.games_mfk.logic import (
     DEFAULT_LABELS,
+    MAX_PARTICIPANTS,
     MIN_PARTICIPANTS,
     TARGETS_PER_PLAYER,
     assign_targets,
@@ -63,6 +64,45 @@ def test_toggle_participant_appends_to_existing_list():
     payload = {"participants": [1]}
     action = toggle_participant(payload, 2)
     assert action == "joined"
+    assert payload["participants"] == [1, 2]
+
+
+# ── participant cap (MAX_PARTICIPANTS) ───────────────────────────────
+
+
+def test_max_participants_matches_embed_field_limit():
+    """A Discord embed hard-caps at 25 fields — guard against drift."""
+    assert MAX_PARTICIPANTS == 25
+
+
+def test_toggle_participant_rejects_new_joiner_past_cap():
+    """A new joiner past the cap is refused (would 400 the assignments embed)."""
+    payload = {"participants": list(range(MAX_PARTICIPANTS))}
+    action = toggle_participant(payload, user_id=9999)
+    assert action == "full"
+    assert 9999 not in payload["participants"]
+    assert len(payload["participants"]) == MAX_PARTICIPANTS
+
+
+def test_toggle_participant_allows_last_slot():
+    payload = {"participants": list(range(MAX_PARTICIPANTS - 1))}
+    action = toggle_participant(payload, user_id=9999)
+    assert action == "joined"
+    assert len(payload["participants"]) == MAX_PARTICIPANTS
+
+
+def test_toggle_participant_leave_allowed_from_full_pool():
+    """Leaving is never blocked, even at the cap."""
+    payload = {"participants": list(range(MAX_PARTICIPANTS))}
+    action = toggle_participant(payload, user_id=0)
+    assert action == "left"
+    assert len(payload["participants"]) == MAX_PARTICIPANTS - 1
+
+
+def test_toggle_participant_respects_custom_cap():
+    payload = {"participants": [1, 2]}
+    action = toggle_participant(payload, 3, max_participants=2)
+    assert action == "full"
     assert payload["participants"] == [1, 2]
 
 
