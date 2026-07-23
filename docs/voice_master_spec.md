@@ -155,7 +155,7 @@ If the target category has hit Discord's 50-channel cap, the bot creates the cha
 | Trusted/blocked member left the server | Skipped on apply; owner's post-create DM counts them; profile view shows counts only |
 | Category hit Discord's 50-channel cap | Channel silently created outside the category (warning logged; no user message) |
 | Channel creation fails outright | No message — member stays in the Hub; failure logged |
-| Hub or category was deleted by an admin | Feature disables; admins alerted in the mod-log channel; nothing auto-recreates (the alert text names `/voice-admin set-hub` / `set-category`, but reconfiguration actually happens in the web dashboard) |
+| Hub or category was deleted by an admin | Feature disables; admins alerted in the mod-log channel (the alert points them at the Voice Master → Config dashboard panel to reconfigure); nothing auto-recreates |
 | `/voice-admin post-panel` without a control channel | "No control channel set. Configure it in the web dashboard first." |
 
 ## Non-goals

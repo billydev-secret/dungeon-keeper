@@ -133,6 +133,12 @@ async def list_schedules(
         out = []
         for r in rows:
             d = dict(r)
+            # Stringify snowflakes so JS keeps full 64-bit precision (a bare
+            # number > 2^53 rounds, breaking the role-picker match on edit and
+            # silently nulling announce_role_id via the full-column PUT).
+            for k in ("guild_id", "channel_id", "announce_role_id"):
+                if d.get(k) is not None:
+                    d[k] = str(d[k])
             # Skip rows for game types that have left the shared games menu
             # (e.g. 'photo' — now the standalone Photo Challenge feature, which
             # owns its own schedule UI). Their rows still run on the shared loop.

@@ -13,7 +13,7 @@ import discord
 import pytest
 
 from bot_modules.chat_revive import actions
-from bot_modules.chat_revive.actions import send_revive
+from bot_modules.chat_revive.actions import channel_is_busy, send_revive
 from bot_modules.services.quote_renderer import QUOTE_MAX_CHARS
 
 ROLE_ID = 555
@@ -124,3 +124,38 @@ async def test_overlong_question_falls_back_to_text(rendered):
 
     assert not rendered
     assert question in channel.send.await_args.args[0]
+
+
+# --- channel_is_busy: a broken check must never license talking over a room ---
+
+
+async def test_busy_check_exception_reads_as_busy():
+    async def _boom(_channel_id: int) -> bool:
+        raise RuntimeError("risky roll state is gone")
+
+    bot = SimpleNamespace(games_db=None, game_busy_checks={"risky_roll": _boom})
+
+    assert await channel_is_busy(bot, 200) is True  # type: ignore[arg-type]
+
+
+async def test_active_game_lookup_exception_reads_as_busy(monkeypatch):
+    async def _boom(*_a, **_k):
+        raise RuntimeError("db is locked")
+
+    monkeypatch.setattr(actions, "get_active_game", _boom)
+    bot = SimpleNamespace(games_db=object(), game_busy_checks={})
+
+    assert await channel_is_busy(bot, 200) is True  # type: ignore[arg-type]
+
+
+async def test_quiet_channel_is_not_busy(monkeypatch):
+    async def _none(*_a, **_k):
+        return None
+
+    async def _idle(_channel_id: int) -> bool:
+        return False
+
+    monkeypatch.setattr(actions, "get_active_game", _none)
+    bot = SimpleNamespace(games_db=object(), game_busy_checks={"risky_roll": _idle})
+
+    assert await channel_is_busy(bot, 200) is False  # type: ignore[arg-type]

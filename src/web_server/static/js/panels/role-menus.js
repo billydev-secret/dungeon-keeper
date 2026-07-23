@@ -38,7 +38,7 @@ function renderList(menus, activeId) {
     const cls = m.id === activeId ? " active" : "";
     const where = m.published ? "published" : "draft";
     return `
-      <div class="ticket-item med${cls}" data-menu-id="${m.id}">
+      <div class="ticket-item med${cls}" data-menu-id="${m.id}" tabindex="0" role="button">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${m.enabled ? "" : "⏸ "}${esc(m.title || "(untitled menu)")}${m.health.length ? " ⚠️" : ""}</div>
@@ -78,7 +78,7 @@ export function mount(container) {
 
   const state = {
     menus: [], activeId: null, menu: null,
-    channels: [], roles: [], saving: false, previewTimer: null,
+    channels: [], roles: [], rolesFailed: false, saving: false, previewTimer: null,
   };
 
   // Warn before a sidebar click or guild switch throws away unsaved menu edits.
@@ -87,11 +87,13 @@ export function mount(container) {
 
   loadChannels().then((chs) => { state.channels = chs || []; });
   api("/api/role-menus/roles")
-    .then((data) => { state.roles = data.roles || []; })
+    .then((data) => { state.roles = data.roles || []; state.rolesFailed = false; })
     .catch((err) => {
       // Silently empty role dropdowns would look like "this server has no
-      // assignable roles" — say what actually happened instead.
+      // assignable roles" — say what actually happened instead. rolesFailed
+      // also drives the "keep the configured role" fallback in the picker.
       state.roles = [];
+      state.rolesFailed = true;
       toast(`Couldn't load the role list — reload before editing choices (${err.message})`, "error");
     });
 
@@ -353,12 +355,36 @@ export function mount(container) {
     const sel = document.createElement("select");
     sel.className = "rm-role-sel";
     sel.dataset.requiredRole = "1";
+    const current = String(value || "0");
+    let found = false;
     let html = `<option value="0">(none — open to everyone)</option>`;
     for (const r of roles) {
-      html += `<option value="${r.id}"${r.id === value ? " selected" : ""}>@${esc(r.name)}</option>`;
+      const isSel = String(r.id) === current;
+      if (isSel) found = true;
+      html += `<option value="${r.id}"${isSel ? " selected" : ""}>@${esc(r.name)}</option>`;
+    }
+    // If the roles fetch failed (state.roles empty) or the gate role isn't in
+    // the list, keep the configured required-role as a selected fallback so a
+    // later save doesn't silently drop the gate — mirrors roleSelectHtml's
+    // "role N (missing) ⚠" handling for the per-choice picker.
+    if (!found && current !== "0") {
+      html += `<option value="${current}" selected>role ${current} (missing) ⚠</option>`;
     }
     sel.innerHTML = html;
-    slotEl.replaceWith(sel);
+    if (state.rolesFailed) {
+      // Surface the fetch failure rather than swallowing it: the gate is
+      // preserved above, but the mod can't switch to another role until roles load.
+      const wrap = document.createElement("span");
+      wrap.appendChild(sel);
+      const warn = document.createElement("span");
+      warn.className = "field-hint";
+      warn.style.color = "#e6a23c";
+      warn.textContent = " ⚠ Couldn't load roles — current gate kept; reload to change it.";
+      wrap.appendChild(warn);
+      slotEl.replaceWith(wrap);
+    } else {
+      slotEl.replaceWith(sel);
+    }
     return { getValue: () => sel.value };
   }
 
@@ -393,6 +419,15 @@ export function mount(container) {
   listEl.addEventListener("click", (e) => {
     const row = e.target.closest(".ticket-item");
     if (!row) return;
+    selectMenu(parseInt(row.dataset.menuId, 10));
+  });
+
+  // Rows are role="button" tabindex="0" — activate with Enter/Space too.
+  listEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest(".ticket-item");
+    if (!row) return;
+    e.preventDefault();
     selectMenu(parseInt(row.dataset.menuId, 10));
   });
 

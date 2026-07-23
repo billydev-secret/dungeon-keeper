@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import io
+import ipaddress
 import json
 import os
 import re
-from datetime import date
+import socket
+from datetime import date, datetime, timedelta, timezone
+from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -21,6 +24,7 @@ from bot_modules.core.db_utils import (
     get_config_value,
     get_grant_permissions,
     get_grant_roles,
+    get_tz_offset_hours,
     open_db,
     parse_bool,
     remove_grant_permission,
@@ -1663,7 +1667,9 @@ class XpConfigUpdate(BaseModel):
     pair_streak_threshold: int | None = None
     pair_streak_multiplier: float | None = None
     voice_award_xp: float | None = None
-    voice_interval_seconds: int | None = None
+    # Floor at 1: a 0-second interval divides by zero in
+    # completed_voice_intervals and kills voice XP guild-wide.
+    voice_interval_seconds: int | None = Field(default=None, ge=1)
     voice_min_humans: int | None = None
     manual_grant_xp: float | None = None
     level_curve_factor: float | None = None
@@ -3329,7 +3335,10 @@ class ConfessionsConfigUpdate(BaseModel):
 async def update_confessions(
     request: Request,
     body: ConfessionsConfigUpdate,
-    _: AuthenticatedUser = Depends(require_game_host),
+    # Admin-only: this payload carries log_channel_id, and the confessions log
+    # records the author beside their confession. A game-host role holder must
+    # not be able to point the de-anonymisation log at a channel they can read.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -3881,8 +3890,11 @@ async def birthday_calendar(
     guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
-        today = date.today()
         with ctx.open_db() as conn:
+            # "Today" must be the guild's local date, not the host's — otherwise
+            # a birthday flips days_until at host midnight, not the guild's.
+            tz = get_tz_offset_hours(conn, guild_id)
+            today = (datetime.now(timezone.utc) + timedelta(hours=tz)).date()
             rows = conn.execute(
                 "SELECT user_id, birth_month, birth_day, preference FROM member_birthdays"
                 " WHERE guild_id = ? ORDER BY birth_month, birth_day",
@@ -3990,30 +4002,37 @@ async def update_guess_config(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    # Validation failures must be HTTP 400 — the panel treats any 2xx as a
+    # successful save (green "Saved"), so a 200 {"ok": false} would falsely
+    # report success while silently discarding every field.
+    if body.crop_difficulty is not None and body.crop_difficulty not in _GUESS_VALID_DIFFICULTIES:
+        raise HTTPException(
+            400, f"crop_difficulty must be one of {sorted(_GUESS_VALID_DIFFICULTIES)}"
+        )
+
     # Guess only posts in age-gated channels (parity with the retired
-    # /guess setup command). Best-effort: enforced when the bot can resolve
+    # /guess setup command). "0" is the "(disabled)" sentinel and skips the
+    # channel checks. Best-effort otherwise: enforced when the bot can resolve
     # the channel; skipped when the cache can't see it.
-    if body.channel_id:
+    if body.channel_id and body.channel_id != "0":
         try:
             new_channel_id = int(body.channel_id)
         except ValueError:
-            return {"ok": False, "detail": "channel_id must be a numeric channel ID"}
+            raise HTTPException(400, "channel_id must be a numeric channel ID")
         bot = getattr(ctx, "bot", None)
         guild = bot.get_guild(guild_id) if bot else None
         if guild is not None:
             channel = guild.get_channel(new_channel_id)
             if channel is None:
-                return {"ok": False, "detail": "Channel not found in this guild"}
+                raise HTTPException(400, "Channel not found in this guild")
             if not getattr(channel, "is_nsfw", lambda: False)():
-                return {
-                    "ok": False,
-                    "detail": "Guess only posts in age-gated channels — enable the channel's NSFW flag first",
-                }
+                raise HTTPException(
+                    400,
+                    "Guess only posts in age-gated channels — enable the channel's NSFW flag first",
+                )
 
     def _q():
         from bot_modules.services.guess_repo import set_guess_config_value
-        if body.crop_difficulty is not None and body.crop_difficulty not in _GUESS_VALID_DIFFICULTIES:
-            return {"ok": False, "detail": f"crop_difficulty must be one of {sorted(_GUESS_VALID_DIFFICULTIES)}"}
         with ctx.open_db() as conn:
             if body.channel_id is not None:
                 set_guess_config_value(conn, guild_id, "guess_channel_id", body.channel_id)
@@ -4050,7 +4069,9 @@ class WhisperConfigUpdate(BaseModel):
 async def update_whisper_config(
     request: Request,
     body: WhisperConfigUpdate,
-    _: AuthenticatedUser = Depends(require_game_host),
+    # Admin-only for the same reason as confessions: log_channel_id points at
+    # the audit log that records the sender behind an anonymous whisper.
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -4079,6 +4100,71 @@ async def update_whisper_config(
 
 # ── Bot identity (per-guild) ─────────────────────────────────────────
 
+_MAX_AVATAR_BYTES = 8 * 1024 * 1024
+_AVATAR_MAX_REDIRECTS = 5
+
+
+def _reject_unsafe_avatar_url(url: str) -> None:
+    """Guard against SSRF: allow only http(s) to public hosts.
+
+    Rejects non-http schemes (``file://`` etc.) and any host that resolves to a
+    loopback / private / link-local / reserved / multicast / unspecified address
+    (127.0.0.1, 169.254.169.254, 10.x, …). Raises HTTPException(400) on failure.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "avatar_url must be an http(s) URL")
+    host = parsed.hostname or ""
+    if not host:
+        raise HTTPException(400, "avatar_url has no host")
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            addr = ipaddress.ip_address(socket.gethostbyname(host))
+        except socket.gaierror:
+            raise HTTPException(400, "avatar_url host could not be resolved")
+    if (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_multicast
+        or addr.is_unspecified
+    ):
+        raise HTTPException(400, "avatar_url resolves to a disallowed address")
+
+
+async def _download_avatar_bytes(url: str) -> bytes:
+    """Fetch a caller-supplied avatar URL safely.
+
+    Follows redirects manually, re-validating each hop against
+    ``_reject_unsafe_avatar_url`` so a public URL can't 302 to an internal one,
+    and streams the body with a hard 8 MB cap (parity with the file-upload paths).
+    """
+    async with httpx.AsyncClient(follow_redirects=False, timeout=10.0) as client:
+        current = url
+        for _ in range(_AVATAR_MAX_REDIRECTS + 1):
+            _reject_unsafe_avatar_url(current)
+            try:
+                async with client.stream("GET", current) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise HTTPException(400, "avatar_url redirect had no location")
+                        current = str(response.url.join(location))
+                        continue
+                    response.raise_for_status()
+                    buf = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        buf.extend(chunk)
+                        if len(buf) > _MAX_AVATAR_BYTES:
+                            raise HTTPException(400, "avatar_url exceeds the 8 MB limit")
+                    return bytes(buf)
+            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+                raise HTTPException(400, f"Failed to fetch avatar URL: {exc}")
+    raise HTTPException(400, "avatar_url had too many redirects")
+
 
 @router.post("/config/bot-identity")
 async def update_bot_identity(
@@ -4106,13 +4192,7 @@ async def update_bot_identity(
         if content:
             avatar_bytes = content
     elif avatar_url:
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(avatar_url, follow_redirects=True, timeout=10.0)
-                response.raise_for_status()
-                avatar_bytes = response.content
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise HTTPException(400, f"Failed to fetch avatar URL: {exc}")
+        avatar_bytes = await _download_avatar_bytes(avatar_url)
 
     edit_kwargs: dict = {}
     if nick is not None:

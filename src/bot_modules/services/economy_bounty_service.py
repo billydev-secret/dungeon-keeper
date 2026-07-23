@@ -202,6 +202,16 @@ def contribute(
     if str(row["state"]) != "open":
         raise ValueError(f"That bounty is {row['state']} — you can't add to it now.")
     now = time.time() if now is None else now
+    # Re-assert 'open' as this connection's *first* write. The state read above
+    # runs in autocommit, so without this an award or cancel committing in
+    # between would leave the contribution escrowed on a closed bounty: excluded
+    # from the payout snapshot and never refunded, so the coins just vanish.
+    # The write is a no-op on success, so the error path needs no unwinding.
+    if conn.execute(
+        "UPDATE econ_bounties SET state = 'open' WHERE id = ? AND state = 'open'",
+        (bounty_id,),
+    ).rowcount != 1:
+        raise ValueError("That bounty was just closed — nothing was charged.")
     if not _escrow(conn, guild_id, bounty_id, user_id, amount, now):
         have = get_balance(conn, guild_id, user_id)
         unit = settings.currency_plural or "coins"
@@ -240,21 +250,28 @@ def award_bounty(
         raise ValueError("That bounty no longer exists.")
     if str(row["state"]) != "open":
         raise ValueError(f"That bounty is already {row['state']}.")
-    pot = pot_of(conn, bounty_id)
-    if pot <= 0:
+    if pot_of(conn, bounty_id) <= 0:
         raise ValueError("That bounty's pot is empty — nothing to award.")
 
     now = time.time() if now is None else now
-    rake = pot * bounty_rake_pct(settings) // 100
-    payout = pot - rake
+    # Claim the bounty *before* reading the pot it pays out. Closing the state
+    # first is what stops a chip-in landing behind the snapshot and being
+    # escrowed into a bounty that has already paid. Contributions only ever
+    # grow, so the pot re-read below is still non-empty.
     cur = conn.execute(
-        "UPDATE econ_bounties SET state = 'awarded', winner_id = ?, payout = ?, "
-        "rake_amount = ?, resolver_id = ?, resolved_at = ? "
-        "WHERE id = ? AND state = 'open'",
-        (winner_id, payout, rake, resolver_id, now, bounty_id),
+        "UPDATE econ_bounties SET state = 'awarded', winner_id = ?, "
+        "resolver_id = ?, resolved_at = ? WHERE id = ? AND state = 'open'",
+        (winner_id, resolver_id, now, bounty_id),
     )
     if (cur.rowcount or 0) == 0:
         raise ValueError("That bounty was just resolved by someone else.")
+    pot = pot_of(conn, bounty_id)
+    rake = pot * bounty_rake_pct(settings) // 100
+    payout = pot - rake
+    conn.execute(
+        "UPDATE econ_bounties SET payout = ?, rake_amount = ? WHERE id = ?",
+        (payout, rake, bounty_id),
+    )
     if payout > 0:
         apply_credit(
             conn, guild_id, winner_id, payout, PAYOUT_KIND,

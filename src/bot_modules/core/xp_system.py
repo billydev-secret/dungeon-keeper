@@ -116,6 +116,13 @@ def load_xp_settings(conn: sqlite3.Connection, guild_id: int = 0) -> XpSettings:
     for f in defaults.__dataclass_fields__:
         if f not in kwargs:
             kwargs[f] = getattr(defaults, f)
+    # Defensive floor: a stored 0 (or negative) interval would make
+    # completed_voice_intervals divide by zero and kill voice XP guild-wide.
+    # The dashboard validates this, but a legacy/hand-edited row could still
+    # carry a bad value — clamp at read time like level_curve_factor does at use.
+    _vi = kwargs.get("voice_interval_seconds", defaults.voice_interval_seconds)
+    if not isinstance(_vi, int) or _vi < 1:
+        kwargs["voice_interval_seconds"] = defaults.voice_interval_seconds
     return XpSettings(**kwargs)  # type: ignore[arg-type]
 
 

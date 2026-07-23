@@ -38,6 +38,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     notify_member,
 )
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -70,9 +71,9 @@ def render_pin_review_embed(
 ) -> discord.Embed:
     """The bank-channel approval card for a submission in the given state."""
     if state == "live":
-        embed = discord.Embed(title="📌 Pin Approved", color=discord.Color.green())
+        embed = discord.Embed(title="📌 Pin Approved", color=discord.Color(COLOR_GREEN))
     elif state in ("denied", "expired", "superseded"):
-        embed = discord.Embed(title="❌ Pin Declined", color=discord.Color.red())
+        embed = discord.Embed(title="❌ Pin Declined", color=discord.Color(COLOR_RED))
     else:
         embed = discord.Embed(title="📋 Pin Requested", color=accent)
 

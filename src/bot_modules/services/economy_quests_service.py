@@ -50,6 +50,40 @@ _CLAIMABLE_TYPES = ("daily", "weekly", "monthly", "event")
 
 _EXPIRE_SECONDS_PER_DAY = 86400
 
+# Trigger kinds whose occurrence is an ENTITY that recurs within a period (a
+# channel, a day, a voice partner, a message author, a newcomer, a thread), so
+# a counted quest measures DISTINCT entities, not raw fires. Their dynamic
+# target must be sized from a distinct-occurrence count: the undeduped activity
+# stream would pin a member to a mathematically unreachable ceiling (talking to
+# one partner 100× can never satisfy "voice with N different people", yet the
+# raw count would size the band as if it could, while _bump_progress only ever
+# advances on a genuinely new partner). Message-id-keyed kinds (message_sent /
+# reply_sent / reaction_given / …) are 1:1 with their occurrence and correctly
+# sized from raw counts, so they are deliberately absent here. Occurrences for
+# these kinds are logged to econ_kind_activity_occ (in addition to the raw
+# econ_kind_activity count) so the distinct count is available to
+# resolve_member_target's trailing-period sizing.
+_ENTITY_KEYED_KINDS = frozenset(
+    {
+        "conversed",
+        "replied_to",
+        "reacted_to_member",
+        "channel_hop",
+        "active_day",
+        "voice_partner",
+        "welcome",
+        "thread_deep",
+    }
+)
+
+# How many recent period snapshots to retain per (guild, qtype). A board is
+# normally only read for the current period, but a sign-off approved days after
+# it was filed pays that PAST period's clear-the-board set bonus and must read
+# the exact board the member cleared — not a re-freeze of today's (possibly
+# edited) live pool. Retaining a window of recent snapshots keeps the past
+# board reconstructable across the day/week roll; older ones are pruned.
+_SNAPSHOT_RETAIN_PERIODS = 10
+
 # Distinct claim-collision messages (keyed off the state being inserted).
 _PAID_EXISTS_MSG = "You have already completed this quest this period."
 _PENDING_EXISTS_MSG = "You already have a claim awaiting sign-off for this quest."
@@ -540,8 +574,11 @@ def _frozen_board_pool(
     library and size edits only surface at the next roll.
 
     Returns ``(tagged, n)``: the frozen id→pair_tag map and board size. Rows
-    for older periods are pruned on first insert (a board is only ever read for
-    the current period).
+    for older periods are pruned on first insert, but a small retention window
+    (``_SNAPSHOT_RETAIN_PERIODS``) is kept so a past period's board stays
+    reconstructable for a late sign-off's set bonus — pruning all older rows
+    meant a later-period board read deleted the snapshot the set bonus needed,
+    so it silently re-froze today's live pool into a wrong board.
     """
     row = conn.execute(
         "SELECT pool_json, board_size FROM econ_quest_pool_snapshots "
@@ -576,7 +613,7 @@ def _frozen_board_pool(
         conn.execute(
             "DELETE FROM econ_quest_pool_snapshots "
             "WHERE guild_id = ? AND qtype = ? AND period_idx < ?",
-            (guild_id, qtype, idx),
+            (guild_id, qtype, idx - _SNAPSHOT_RETAIN_PERIODS),
         )
         row = conn.execute(
             "SELECT pool_json, board_size FROM econ_quest_pool_snapshots "
@@ -833,12 +870,24 @@ def spotlight_kind(
 ) -> str | None:
     """This ISO week's ⚡ spotlight trigger kind — quest payouts double.
 
-    Deterministic on (guild, week) over the kinds with at least one active
-    quest, so every surface (claim credit, embed, /quests, live tracker)
-    agrees without stored state. None when fewer than 2 kinds are active —
-    a "rotating featured activity" is meaningless with nothing to rotate,
-    and it would otherwise be a permanent silent 2× on a tiny library.
+    Chosen deterministically on (guild, week) over the kinds with at least one
+    active quest, then FROZEN for the week: the choice is persisted the first
+    time it is resolved (normally the week-roll announcement) and every later
+    read returns the stored value. Without that store the underlying kind list
+    drifts mid-week (dashboard toggles, rotate_pool) and both the modulo and the
+    chosen kind move — so the claim-credit path would silently double a kind the
+    once-posted announcement never advertised. None when fewer than 2 kinds are
+    active — a "rotating featured activity" is meaningless with nothing to
+    rotate, and it would otherwise be a permanent silent 2× on a tiny library;
+    that off state is NOT frozen, so a second kind added later can still switch
+    the spotlight on.
     """
+    stored = conn.execute(
+        "SELECT kind FROM econ_spotlight_kind WHERE guild_id = ? AND iso_week = ?",
+        (guild_id, iso_week),
+    ).fetchone()
+    if stored is not None:
+        return str(stored["kind"])
     kinds = sorted(
         str(r["trigger_kind"])
         for r in conn.execute(
@@ -851,7 +900,15 @@ def spotlight_kind(
     if len(kinds) < 2:
         return None
     digest = hashlib.sha256(f"{guild_id}:{iso_week}".encode()).hexdigest()
-    return kinds[int(digest, 16) % len(kinds)]
+    chosen = kinds[int(digest, 16) % len(kinds)]
+    # INSERT OR IGNORE: a concurrent sibling read may win the freeze; either
+    # way the row now pins the week's kind for every later surface.
+    conn.execute(
+        "INSERT OR IGNORE INTO econ_spotlight_kind (guild_id, iso_week, kind) "
+        "VALUES (?, ?, ?)",
+        (guild_id, iso_week, chosen),
+    )
+    return chosen
 
 
 def load_member_quest_board(
@@ -1048,8 +1105,14 @@ def maybe_pay_set_bonus(
 
     Called after any claim pays (instant or approved sign-off). The board is
     resolved for the CLAIM's period — a sign-off approved days later still
-    completes that period's set. Exactly-once via the econ_set_bonus
-    reservation row; flat, no booster multiplier. Returns the amount paid.
+    completes that period's set. That past period's board snapshot survives the
+    intervening day/week rolls because ``_frozen_board_pool`` now prunes only
+    beyond a retention window (``_SNAPSHOT_RETAIN_PERIODS``), wider than the
+    7-day sign-off expiry — so the bonus reads the exact board the member
+    cleared rather than a re-freeze of today's (possibly edited) live pool,
+    which would misjudge the set (silently skip, or overpay if the board size
+    changed). Exactly-once via the econ_set_bonus reservation row; flat, no
+    booster multiplier. Returns the amount paid.
     """
     bonus = {
         "daily": settings.quest_set_bonus_daily,
@@ -1154,14 +1217,30 @@ def _trailing_period_counts(
     """The member's kind-activity totals for the trailing completed periods.
 
     daily → previous 4 days, weekly → previous 4 ISO weeks, monthly →
-    previous 2 calendar months (the 70-day ledger window can't hold 4).
+    previous 2 calendar months (the ledger window can't hold 4).
     Quiet periods count as 0 — the median should reflect real pace.
+
+    ENTITY-keyed kinds (a partner/channel/day id per occurrence) count DISTINCT
+    occurrences from ``econ_kind_activity_occ``, mirroring what counted progress
+    measures — sizing them off the raw ``econ_kind_activity`` count would pin a
+    member to an unreachable ceiling. Message-id-keyed kinds are 1:1 with their
+    occurrence, so the raw count is already their distinct count.
     """
     from datetime import date, timedelta
 
     day = date.fromisoformat(local_day)
+    entity_keyed = kind in _ENTITY_KEYED_KINDS
 
     def _range_sum(start: date, end: date) -> int:
+        if entity_keyed:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT occurrence) AS s "
+                "FROM econ_kind_activity_occ "
+                "WHERE guild_id = ? AND user_id = ? AND kind = ? "
+                "AND local_day >= ? AND local_day < ?",
+                (guild_id, user_id, kind, start.isoformat(), end.isoformat()),
+            ).fetchone()
+            return int(row["s"])
         row = conn.execute(
             "SELECT COALESCE(SUM(count), 0) AS s FROM econ_kind_activity "
             "WHERE guild_id = ? AND user_id = ? AND kind = ? "
@@ -1272,6 +1351,7 @@ def record_kind_activity(
     user_id: int,
     kind: str,
     local_day: str,
+    occurrence: str | None = None,
 ) -> None:
     """Count one occurrence of a trigger kind for a member's guild-local day.
 
@@ -1279,6 +1359,12 @@ def record_kind_activity(
     personal-board filter — because ``econ_kind_activity`` measures what
     members actually do, not what happened to pay. Dynamic target sizing
     (personal trailing-period medians, community guild sums) reads it.
+
+    For ENTITY-keyed kinds (``_ENTITY_KEYED_KINDS`` — voice_partner, channel_hop,
+    …), the ``occurrence`` (the partner/channel/day id) is ALSO logged to
+    ``econ_kind_activity_occ`` so trailing sizing can count DISTINCT entities.
+    Sizing those kinds off the raw count would pin a member to an unreachable
+    ceiling, since counted progress only advances on a distinct occurrence.
     """
     conn.execute(
         """
@@ -1289,21 +1375,38 @@ def record_kind_activity(
         """,
         (guild_id, user_id, kind, local_day),
     )
+    if occurrence is not None and kind in _ENTITY_KEYED_KINDS:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO econ_kind_activity_occ
+                (guild_id, user_id, kind, local_day, occurrence)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (guild_id, user_id, kind, local_day, occurrence),
+        )
 
 
 def prune_kind_activity(
-    conn: sqlite3.Connection, guild_id: int, today: str, *, keep_days: int = 70
+    conn: sqlite3.Connection, guild_id: int, today: str, *, keep_days: int = 95
 ) -> None:
     """Drop activity rows older than the trailing window (day-roll hygiene).
 
-    70 days ≈ 10 ISO weeks — enough for 4-week sizing windows with slack;
-    lexicographic compare works because local_day is zero-padded ISO.
+    95 days must exceed the widest read window: the monthly sizing path
+    (``_trailing_period_counts``) walks back two whole calendar months from the
+    first of the current month, which reaches ~92 days on a late-in-month roll
+    — 70 would prune data that read still wants. Weekly (4 ISO weeks) and daily
+    (4 days) fit comfortably inside. Lexicographic compare works because
+    local_day is zero-padded ISO.
     """
     from datetime import date, timedelta
 
     cutoff = (date.fromisoformat(today) - timedelta(days=keep_days)).isoformat()
     conn.execute(
         "DELETE FROM econ_kind_activity WHERE guild_id = ? AND local_day < ?",
+        (guild_id, cutoff),
+    )
+    conn.execute(
+        "DELETE FROM econ_kind_activity_occ WHERE guild_id = ? AND local_day < ?",
         (guild_id, cutoff),
     )
     # Same hygiene pass: conversation_starter's reply-count rows only need a
@@ -1395,7 +1498,9 @@ def fire_trigger_quests(
     context. Returns nothing when the source is disabled on the Income
     Sources page.
     """
-    record_kind_activity(conn, guild_id, user_id, trigger_kind, local_day)
+    record_kind_activity(
+        conn, guild_id, user_id, trigger_kind, local_day, occurrence
+    )
     if not source_enabled(conn, guild_id, trigger_kind):
         return []
     out: list[tuple[sqlite3.Row, ClaimOutcome]] = []
@@ -2343,23 +2448,32 @@ def rotate_pool(
 ) -> int | None:
     """Advance a rotate-tag pool of the given type by one slot.
 
-    No-op (None) unless an active quest of ``qtype`` carries a rotate_tag
-    whose pool has more than one quest. Otherwise deactivate that active
-    quest and activate the next by ``pick_rotation``, honoring the slot rule.
-    Returns the newly-activated quest id, or None.
+    No-op (None) unless EXACTLY ONE quest of the tag's pool is active: under
+    the all-active board model every pool quest is normally live at once, and
+    the pool is already fully on show — there is nothing to "rotate to", so
+    deactivating one would just shrink the pool a member draws from every day
+    roll (3 active dailies sharing a tag would collapse to 1 after two rolls).
+    Rotation is for the one-active-at-a-time cadence: deactivate that quest and
+    activate the next by ``pick_rotation``, honoring the slot rule. Returns the
+    newly-activated quest id, or None.
     """
-    current = conn.execute(
+    active_rows = conn.execute(
         """
         SELECT id, rotate_tag FROM econ_quests
         WHERE guild_id = ? AND qtype = ? AND active = 1 AND rotate_tag != ''
-        ORDER BY id LIMIT 1
+        ORDER BY id
         """,
         (guild_id, qtype),
-    ).fetchone()
-    if current is None:
+    ).fetchall()
+    if not active_rows:
         return None
+    current = active_rows[0]
     tag = current["rotate_tag"]
     current_id = int(current["id"])
+    # More than one pool member already active ⇒ the pool is on show; rotating
+    # would only drop one. Guard BEFORE any write so no deactivation leaks.
+    if sum(1 for r in active_rows if r["rotate_tag"] == tag) > 1:
+        return None
     pool = conn.execute(
         """
         SELECT id FROM econ_quests
@@ -2373,13 +2487,18 @@ def rotate_pool(
     if next_id is None or next_id == current_id:
         return None
 
+    # Check the slot rule as it would stand after the 1-for-1 swap (current
+    # deactivated, next activated) BEFORE writing, so a failed can_activate
+    # never strands a deactivation. current is an active quest of this qtype
+    # and will step aside, so drop one of its qtype from the live set.
+    existing = _active_qtypes(conn, guild_id, exclude_id=next_id)
+    existing.remove(qtype)
+    if not quests.can_activate(existing, qtype):
+        return None
     conn.execute(
         "UPDATE econ_quests SET active = 0 WHERE id = ? AND guild_id = ?",
         (current_id, guild_id),
     )
-    existing = _active_qtypes(conn, guild_id, exclude_id=next_id)
-    if not quests.can_activate(existing, qtype):
-        return None
     conn.execute(
         "UPDATE econ_quests SET active = 1 WHERE id = ? AND guild_id = ?",
         (next_id, guild_id),

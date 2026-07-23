@@ -13,6 +13,7 @@ from bot_modules.economy.sponsor_views import (
     render_sponsor_card_embed,
 )
 from bot_modules.services.economy_service import EconSettings
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
 _SETTINGS = EconSettings(
     currency_emoji="💎", currency_name="gem", currency_plural="gems"
@@ -50,3 +51,11 @@ def test_paid_field_uses_currency_vocabulary_not_bare_number():
 def test_refund_field_on_denial_is_formatted_too():
     fields = {f.name: (f.value or "") for f in _card("denied").fields}
     assert fields["↩️ Refund"] == "💎 **1,500** gems returned"
+
+
+def test_card_uses_the_canonical_semantic_pair():
+    """Approved/posted are COLOR_GREEN, declined COLOR_RED — no ad-hoc shades."""
+    assert _card("approved").color == discord.Color(COLOR_GREEN)
+    assert _card("posted").color == discord.Color(COLOR_GREEN)
+    assert _card("denied").color == discord.Color(COLOR_RED)
+    assert _card("expired").color == discord.Color(COLOR_RED)

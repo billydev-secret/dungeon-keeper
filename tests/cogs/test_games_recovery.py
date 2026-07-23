@@ -16,6 +16,7 @@ from bot_modules.cogs.games_clapback_cog import ClapbackCog
 from bot_modules.cogs.games_fantasies_cog import FantasiesCog, FantasiesMainView
 from bot_modules.cogs.games_ffa_cog import FFACog
 from bot_modules.cogs.games_hottakes_cog import HotTakeVoteView, HotTakesCog
+from bot_modules.cogs.games_legitlibs import LegitLibsCog
 from bot_modules.cogs.games_price_cog import PriceCog
 from bot_modules.cogs.games_rushmore_cog import RushmoreCog, RushmoreJoinView
 from bot_modules.cogs.games_mfk_cog import MFKCog
@@ -471,6 +472,83 @@ async def test_hottakes_redrives_voting_skipping_done_takes(sync_db_path):
         assert view.take_text == "take B"
     finally:
         _cancel_pending(_baseline)
+
+
+async def _legitlibs_interrupted(sync_db_path, mode):
+    """Seed an in-flight LegitLibs round, restart, and run the sweep."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = LegitLibsCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["legitlibs"] = cog.recover_game
+    channel = _FakeChannel(1500)
+    bot._channels[channel.id] = channel
+    game_id = await create_game(
+        db, channel.id, 5, "legitlibs", state="joining",
+        payload={"mode": mode, "players": [5], "host_id": 5},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+    return bot, channel, game_id
+
+
+async def test_legitlibs_interrupted_ends_and_unblocks(sync_db_path):
+    """A mid-flight LegitLibs round can't resume, so recovery ends it (freeing
+    the channel) and posts a restart notice — no view is re-registered."""
+    bot, channel, game_id = await _legitlibs_interrupted(sync_db_path, "classic")
+
+    assert bot.added_views == []  # nothing to rebind — it's a blocking loop
+    assert game_id not in bot.active_views
+    row = await bot.games_db.fetchone(
+        "SELECT * FROM games_active_games WHERE game_id = ?", (game_id,)
+    )
+    assert row is None  # channel unblocked immediately
+    notices = [a for (a, _kw) in channel.sends if a and "interrupted by a bot restart" in str(a[0])]
+    assert notices, "no restart notice posted"
+    assert "LegitLibs" in str(notices[-1][0])
+
+
+async def test_legitlibs_quiplash_interrupted_labels_quiplash(sync_db_path):
+    """Quiplash shares the legitlibs launcher/type; the notice names the mode."""
+    bot, channel, game_id = await _legitlibs_interrupted(sync_db_path, "quiplash")
+
+    row = await bot.games_db.fetchone(
+        "SELECT * FROM games_active_games WHERE game_id = ?", (game_id,)
+    )
+    assert row is None
+    notices = [a for (a, _kw) in channel.sends if a and "interrupted by a bot restart" in str(a[0])]
+    assert notices and "Quiplash" in str(notices[-1][0])
+
+
+async def test_legitlibs_setup_registers_recoverer(monkeypatch):
+    """setup() wires legitlibs into bot.game_recoverers (the registry the sweep
+    walks); without it a restart mid-round bricks every button."""
+    from discord import app_commands
+
+    from bot_modules.cogs import games_legitlibs
+
+    # Throwaway command group so setup() doesn't mutate the shared `play` group.
+    monkeypatch.setattr(
+        games_legitlibs, "play", app_commands.Group(name="play", description="x")
+    )
+
+    class _Bot:
+        def __init__(self):
+            self.game_launchers: dict = {}
+            self.game_recoverers: dict = {}
+            self.tree = self
+
+        def remove_command(self, _name):
+            return None
+
+        async def add_cog(self, _cog):
+            return None
+
+    bot = _Bot()
+    await games_legitlibs.setup(bot)
+    assert "legitlibs" in bot.game_recoverers
 
 
 async def test_deleted_anchor_message_is_skipped(sync_db_path):

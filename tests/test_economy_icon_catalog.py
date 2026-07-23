@@ -230,3 +230,67 @@ def test_renewal_falls_back_to_flat_when_icon_deleted(db):
         rental = get_live_role_icon_rental(conn, GUILD, USER)
         result = bill_rental(conn, SETTINGS, rental, T0 + WEEK_SECONDS)
         assert result.charged == 75  # flat price_role_icon fallback
+
+
+# ── gifted role_icon is beneficiary-keyed (no double-charge) ─────────────
+
+GIFTER = 7
+RECIPIENT = 8
+
+
+def test_get_live_role_icon_rental_is_beneficiary_keyed(db):
+    """role_icon is giftable: a gifted rental belongs to the RECIPIENT.
+
+    The catalog picker resolves the live rental via this lookup to decide
+    between renting a new icon and switching an existing one. Keying on the
+    payer (the old bug) misses the gift for the recipient and matches it for
+    the payer — so the recipient's picker opens a SECOND live rental and
+    double-charges, while the payer's picker silently re-tags a perk they
+    don't own. The lookup must key on the beneficiary.
+    """
+    _fund(db, 1000, user=GIFTER)
+    with open_db(db) as conn:
+        icon = _add_icon(conn, price=100)
+        rent_perk(
+            conn, SETTINGS, GUILD, GIFTER, "role_icon",
+            beneficiary_id=RECIPIENT, catalog_icon_id=icon, now=T0,
+        )
+        # The recipient owns the gift — the picker keyed on them finds it and
+        # takes the (no-charge) switch path instead of renting again.
+        owned = get_live_role_icon_rental(conn, GUILD, RECIPIENT)
+        assert owned is not None
+        assert int(owned["beneficiary_id"]) == RECIPIENT
+        # The payer is NOT the beneficiary, so their own picker sees no live
+        # rental for them — no free re-tag of the recipient's icon.
+        assert get_live_role_icon_rental(conn, GUILD, GIFTER) is None
+
+
+def test_gifted_role_icon_does_not_open_second_rental(db):
+    """End-to-end: a gifted role_icon then a catalog pick by the recipient must
+    switch the existing rental, not rent a fresh one — so the recipient is not
+    debited a second time and only one live rental exists.
+    """
+    _fund(db, 1000, user=GIFTER)
+    _fund(db, 1000, user=RECIPIENT)
+    with open_db(db) as conn:
+        cheap = _add_icon(conn, name="Cheap", price=100)
+        dear = _add_icon(conn, name="Dear", price=400)
+        rent_perk(
+            conn, SETTINGS, GUILD, GIFTER, "role_icon",
+            beneficiary_id=RECIPIENT, catalog_icon_id=cheap, now=T0,
+        )
+        # The recipient picks another catalog icon. The picker's lookup finds
+        # the gift, so it switches (re-tags, no charge) rather than renting.
+        existing = get_live_role_icon_rental(conn, GUILD, RECIPIENT)
+        assert existing is not None
+        set_rental_catalog_icon(conn, GUILD, int(existing["id"]), dear)
+        # Recipient was never debited; gifter paid the single upfront 100.
+        assert get_balance(conn, GUILD, RECIPIENT) == 1000
+        assert get_balance(conn, GUILD, GIFTER) == 900
+        # Exactly one live role_icon rental for the recipient.
+        live = conn.execute(
+            "SELECT COUNT(*) FROM econ_rentals WHERE guild_id = ? AND perk = "
+            "'role_icon' AND beneficiary_id = ? AND state IN ('active', 'grace')",
+            (GUILD, RECIPIENT),
+        ).fetchone()[0]
+        assert live == 1

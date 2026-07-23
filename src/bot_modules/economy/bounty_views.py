@@ -7,7 +7,7 @@ the cog re-registers the classes:
 
 * 💰 **Chip in** — any member; opens an amount modal and escrows into the pot.
 * 🏆 **Award** — mod only; opens a ``UserSelect`` and pays the winner minus rake.
-* ✖️ **Cancel** — mod only; refunds every contributor.
+* **Cancel** — mod only; refunds every contributor.
 
 Every handler is fail-safe — a service error becomes an ephemeral note, never a
 dead button. Two mods resolving at once is settled in the service (the state
@@ -39,6 +39,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     notify_member,
 )
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -71,12 +72,12 @@ def render_bounty_card(
     title = str(bounty["title"])
     if state == "awarded":
         embed = discord.Embed(
-            title=f"🏆 Bounty Awarded — {title}", color=discord.Color.green()
+            title=f"🏆 Bounty Awarded — {title}", color=discord.Color(COLOR_GREEN)
         )
     elif state in ("cancelled", "expired"):
         verb = "Cancelled" if state == "cancelled" else "Expired"
         embed = discord.Embed(
-            title=f"✖️ Bounty {verb} — {title}", color=discord.Color.red()
+            title=f"✖️ Bounty {verb} — {title}", color=discord.Color(COLOR_RED)
         )
     else:
         embed = discord.Embed(title=f"🎯 Bounty — {title}", color=accent)
@@ -218,7 +219,7 @@ class BountyCancelButton(
     def __init__(self, bounty_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Cancel", emoji="✖️",
+                label="Cancel",
                 style=discord.ButtonStyle.danger,
                 custom_id=f"econ_bounty:cancel:{bounty_id}",
             )

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,6 +37,8 @@ from bot_modules.services.moderation import (
     compute_roles_to_snapshot,
     write_audit,
 )
+
+log = logging.getLogger("dungeonkeeper.inactive")
 
 InactiveErrorKind = Literal[
     "bot_target",         # target is a bot
@@ -157,6 +160,14 @@ async def ensure_inactive_role(
             permissions=discord.Permissions.none(),
         )
     except discord.Forbidden:
+        log.warning("Missing Manage Roles creating @Inactive in guild %s", guild_id)
+        return None
+    except discord.HTTPException:
+        # Transient API failure (5xx / rate limit). Bail out cleanly so the
+        # caller reports a failure instead of the exception escaping mid-flow.
+        log.warning(
+            "Discord error creating @Inactive in guild %s", guild_id, exc_info=True
+        )
         return None
     ctx.set_config_value("inactive_role_id", str(role.id), guild.id)
 
@@ -174,7 +185,9 @@ async def ensure_inactive_role(
                 await channel.set_permissions(
                     role, view_channel=False, send_messages=False
                 )
-        except discord.Forbidden:
+        except discord.HTTPException:
+            # Best-effort per channel: a denied or transiently-failing overwrite
+            # skips that channel rather than aborting the whole setup.
             pass
     return role
 

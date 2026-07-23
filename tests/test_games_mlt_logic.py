@@ -29,8 +29,10 @@ from bot_modules.games_mlt.embeds import (
     build_round_embed,
 )
 from bot_modules.games_mlt.logic import (
+    MAX_PLAYERS,
     MIN_PLAYERS,
     add_player,
+    lobby_is_full,
     apply_vote,
     bump_crowns,
     can_start,
@@ -84,6 +86,48 @@ def test_add_then_remove_round_trip():
     add_player(players, 9)
     remove_player(players, 7)
     assert players == [9]
+
+
+# ── lobby cap (MAX_PLAYERS) ──────────────────────────────────────────
+
+
+def test_max_players_matches_select_option_limit():
+    """A Discord Select hard-caps at 25 options — guard against drift."""
+    assert MAX_PLAYERS == 25
+
+
+def test_add_player_rejects_new_uid_past_cap():
+    """A new joiner is dropped once the lobby is full (would 400 the vote select)."""
+    players: list[int] = list(range(MAX_PLAYERS))
+    assert add_player(players, 9999) is False
+    assert len(players) == MAX_PLAYERS
+    assert 9999 not in players
+
+
+def test_add_player_allows_last_slot_at_cap():
+    players: list[int] = list(range(MAX_PLAYERS - 1))
+    assert add_player(players, 9999) is True
+    assert len(players) == MAX_PLAYERS
+
+
+def test_add_player_existing_uid_at_cap_still_idempotent():
+    players: list[int] = list(range(MAX_PLAYERS))
+    assert add_player(players, 0) is False
+    assert len(players) == MAX_PLAYERS
+
+
+def test_add_player_respects_custom_cap():
+    players: list[int] = [1, 2]
+    assert add_player(players, 3, max_players=2) is False
+    assert players == [1, 2]
+
+
+def test_lobby_is_full_false_below_cap():
+    assert lobby_is_full(list(range(MAX_PLAYERS - 1))) is False
+
+
+def test_lobby_is_full_true_at_cap():
+    assert lobby_is_full(list(range(MAX_PLAYERS))) is True
 
 
 # ── can_start ────────────────────────────────────────────────────────

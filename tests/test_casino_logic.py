@@ -219,3 +219,38 @@ def test_is_big_bet_tiers():
     assert not logic.is_big_bet(69, 100)
     assert logic.is_big_bet(100, 0)        # uncapped: flat 100 floor
     assert not logic.is_big_bet(99, 0)
+
+
+# ── cap_lines (Discord field-limit guard) ──────────────────────────────
+
+
+def test_cap_lines_passthrough_when_all_fit():
+    lines = ["a", "b", "c"]
+    assert logic.cap_lines(lines, limit=1022) == lines
+
+
+def test_cap_lines_empty():
+    assert logic.cap_lines([], limit=1022) == []
+
+
+def test_cap_lines_caps_and_appends_marker():
+    # 200 winner-ish lines of ~50 chars each blow past 1024.
+    lines = [f"<@{i:018d}> — Straight {i % 37} · 10,000 → 360,000" for i in range(200)]
+    capped = logic.cap_lines(lines, limit=1022)
+    body = "\n".join(capped)
+    assert len(body) <= 1022, len(body)
+    # Real result embed appends "\n​" (2 chars) — stays under 1024.
+    assert len(body + "\n​") <= 1024
+    assert capped[-1].startswith("*…and ")
+    assert capped[-1].endswith(" more*")
+    # marker count == number actually dropped
+    dropped = 200 - (len(capped) - 1)
+    assert f"…and {dropped} more*" in capped[-1]
+
+
+def test_cap_lines_marker_only_when_overflow():
+    lines = ["x" * 500, "y" * 500]
+    # Both fit under 1022 (500 + 1 + 500 = 1001) — no marker.
+    capped = logic.cap_lines(lines, limit=1022)
+    assert capped == lines
+    assert not any("…and" in line for line in capped)

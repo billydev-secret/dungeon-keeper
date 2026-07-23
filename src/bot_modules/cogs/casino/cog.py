@@ -1144,7 +1144,12 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     embed=result_embed, view=None
                 )
             except discord.HTTPException:
-                pass
+                log.warning(
+                    "roulette result edit failed for round %s (%d winners) — "
+                    "panel may be stuck on the bounce",
+                    rnd["id"],
+                    sum(1 for b in bets if b[3] > 0),
+                )
         if bets:
             try:
                 await channel.send(
@@ -1153,7 +1158,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.HTTPException:
-                pass
+                log.warning(
+                    "roulette result send failed for round %s (%d winners)",
+                    rnd["id"],
+                    sum(1 for b in bets if b[3] > 0),
+                )
 
     async def _void_round(self, round_id: int) -> None:
         def _void() -> None:

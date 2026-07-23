@@ -407,15 +407,12 @@ HOW_TO_PLAY = {
     'pressure': (
         "♨️ **Pressure Cooker**\n"
         "A high-stakes nickname duel — pump the gauge and hope it doesn't blow.\n\n"
-        "1. Use `/pressure challenge @user` to issue a challenge (optional: add custom stakes text)\n"
+        "1. Use `/games pressure challenge @user` to issue a challenge (optional: add custom stakes text)\n"
         "2. The target has 60 seconds to **Accept** or **Decline**\n"
         "3. Players take turns clicking **Pump** — each pump adds a random amount to the gauge\n"
         "4. First player to push the gauge past 100 **BUSTS** and loses\n"
         "5. The winner sets a nickname for the loser (default: 24 hours)\n\n"
-        "⚙️ **Other commands:**\n"
-        "• `/pressure cancel` — cancel your pending challenge\n"
-        "• `/pressure stats` — view your win/loss record\n"
-        "• `/pressure revert` — request early nickname restoration (if enabled by mods)\n"
-        "• `/pressure config` — configure cooldowns, sentence length, etc. (mods only)"
+        "⚙️ Cooldowns, sentence length, and per-channel rules are managed from the "
+        "Pressure Cooker panel on the web dashboard."
     ),
 }

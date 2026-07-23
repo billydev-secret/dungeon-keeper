@@ -167,11 +167,16 @@ def qa_connect() -> sqlite3.Connection | None:
     return conn
 
 
-def qa_card_channel(conn: sqlite3.Connection | None) -> str:
+def qa_card_channel(conn: sqlite3.Connection | None, guild_id: int) -> str:
     """The channel cards post to: the dashboard's qa_channel_id when set.
 
     The knob lives in the config KV (written by the stage-3 panel) and must
-    be honored here or it's a dead setting. Falls back to the hardcoded
+    be honored here or it's a dead setting. ``config`` is keyed
+    ``(guild_id, key)``, so the lookup is scoped to ``guild_id`` — this
+    script is single-install by design (its channels are hardcoded ids), and
+    that guild is the one owning DEFAULT_QA_CHANNEL. Without the predicate a
+    multi-guild prod DB would hand back an arbitrary server's override and
+    cross-post the commit's checklist there. Falls back to the hardcoded
     #testing-queue id when unset, zero, unreadable, or pre-077 — the same
     degraded installs that fall back to plain text.
     """
@@ -180,8 +185,9 @@ def qa_card_channel(conn: sqlite3.Connection | None) -> str:
         return default
     try:
         row = conn.execute(
-            "SELECT value FROM config WHERE key = 'qa_channel_id' "
-            "AND CAST(value AS INTEGER) > 0 LIMIT 1"
+            "SELECT value FROM config WHERE guild_id = ? AND key = 'qa_channel_id' "
+            "AND CAST(value AS INTEGER) > 0",
+            (guild_id,),
         ).fetchone()
     except sqlite3.OperationalError:
         return default
@@ -516,7 +522,14 @@ def post_commit(sha: str, *, dry_run: bool) -> None:
     try:
         tok = token()
         conn = qa_connect()
-        channel = qa_card_channel(conn)
+        # Read the override from the guild that owns the hardcoded
+        # #testing-queue channel -- never whatever guild happens to sit
+        # first in a multi-guild config table. The per-channel guild cache
+        # makes this free when the override is unset (same channel).
+        home_guild = (
+            channel_guild_id(DEFAULT_QA_CHANNEL, tok) if conn is not None else 0
+        )
+        channel = qa_card_channel(conn, home_guild)
         guild_id = channel_guild_id(channel, tok) if conn is not None else 0
         if conn is not None and not guild_id:
             print(

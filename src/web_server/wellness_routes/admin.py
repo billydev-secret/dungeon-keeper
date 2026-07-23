@@ -72,7 +72,7 @@ async def admin_dashboard_data(
     return {
         "active_count": len(active),
         "exempt_channels": [
-            {"id": cid, "name": _channel_name(cid, lbl)} for cid, lbl in exempt
+            {"id": str(cid), "name": _channel_name(cid, lbl)} for cid, lbl in exempt
         ],
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
@@ -158,7 +158,7 @@ async def admin_users_data(
 
     rows = [
         {
-            "user_id": u.user_id,
+            "user_id": str(u.user_id),
             "name": _name(u.user_id),
             "timezone": u.timezone,
             "enforcement_level": u.enforcement_level,
@@ -188,9 +188,11 @@ async def admin_pause_user(
 
     def _write():
         with ctx.open_db() as conn:
-            pause_user(conn, guild_id, user_id, until)
+            return pause_user(conn, guild_id, user_id, until)
 
-    await run_query(_write)
+    ok = await run_query(_write)
+    if not ok:
+        return _err("user is not opted in", status=404)
     return _ok()
 
 
@@ -203,9 +205,11 @@ async def admin_resume_user(
 ) -> JSONResponse:
     def _write():
         with ctx.open_db() as conn:
-            resume_user(conn, guild_id, user_id)
+            return resume_user(conn, guild_id, user_id)
 
-    await run_query(_write)
+    ok = await run_query(_write)
+    if not ok:
+        return _err("user is not opted in", status=404)
     return _ok()
 
 
@@ -234,12 +238,12 @@ async def admin_exempt_data(
             ch = guild.get_channel(cid)
             if ch is not None:
                 name = getattr(ch, "name", label) or label
-        rows.append({"id": cid, "label": label, "name": name})
+        rows.append({"id": str(cid), "label": label, "name": name})
 
     channel_options = []
     if guild:
         for ch in guild.text_channels:
-            channel_options.append({"id": ch.id, "name": ch.name})
+            channel_options.append({"id": str(ch.id), "name": ch.name})
         channel_options.sort(key=lambda c: c["name"])
 
     return {"exempt": rows, "channel_options": channel_options}

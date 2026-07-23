@@ -106,12 +106,30 @@ async def finish_launch_response(
             pass
 
 
-async def check_allowed_channel(db, channel_id: int | None) -> bool:
+async def check_allowed_channel(
+    db, channel_id: int | None, guild_id: int | None = None
+) -> bool:
+    """True if games may run in *channel_id*.
+
+    ``channel_id`` is a globally-unique Discord snowflake, so matching on it
+    alone is not a cross-guild leak. When *guild_id* is supplied the match is
+    additionally scoped to that guild for defence-in-depth, treating a stored
+    ``guild_id = 0`` as a wildcard so legacy rows (added before migration 122
+    stamped a guild on new rows) keep working until a reconcile assigns them.
+    """
     if channel_id is None:
         return False
-    row = await db.fetchone(
-        "SELECT channel_id FROM games_allowed_channels WHERE channel_id = ?", (channel_id,)
-    )
+    if guild_id is not None:
+        row = await db.fetchone(
+            "SELECT channel_id FROM games_allowed_channels"
+            " WHERE channel_id = ? AND (guild_id = ? OR guild_id = 0)",
+            (channel_id, guild_id),
+        )
+    else:
+        row = await db.fetchone(
+            "SELECT channel_id FROM games_allowed_channels WHERE channel_id = ?",
+            (channel_id,),
+        )
     return row is not None
 
 
@@ -246,12 +264,25 @@ async def end_game(
     if not row:
         return
 
+    # Resolve the guild so history/stats stay per-guild scoped. games_active_games
+    # carries no guild_id, so we resolve from the bot's channel cache when a bot
+    # is available (genuine completions pass one); abort/cleanup paths fall back
+    # to 0, which the dashboard treats as an unassigned legacy row.
+    guild_id = 0
+    if bot is not None:
+        try:
+            channel = bot.get_channel(row["channel_id"])
+            if channel is not None and getattr(channel, "guild", None) is not None:
+                guild_id = channel.guild.id
+        except Exception:
+            guild_id = 0
+
     try:
         await db.execute(
             """
             INSERT INTO games_game_history
-                (game_id, game_type, channel_id, host_id, player_count, round_count, payload, started_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (game_id, game_type, channel_id, host_id, player_count, round_count, payload, started_at, guild_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["game_id"],
@@ -262,6 +293,7 @@ async def end_game(
                 round_count,
                 json.dumps(payload or {}),
                 row["created_at"],
+                guild_id,
             ),
         )
     except Exception as e:

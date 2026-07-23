@@ -30,6 +30,7 @@ from bot_modules.games_mfk.embeds import (
 )
 from bot_modules.games_mfk.logic import (
     DEFAULT_LABELS,
+    MAX_PARTICIPANTS,
     assign_targets,
     parse_labels,
     serialize_assignments,
@@ -68,6 +69,14 @@ class MFKView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _toggle)
         action = action_holder["action"]
         log.info("%s %s game %s in #%s", interaction.user.display_name, action, self.game_id, channel_name(interaction.channel))
+
+        if action == "full":
+            await interaction.response.send_message(
+                f"❌ This pool is full — Marry/Fornicate/Kiss supports up to "
+                f"{MAX_PARTICIPANTS} players.",
+                ephemeral=True,
+            )
+            return
 
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         names = resolve_names(interaction.guild, payload.get("participants", []))
@@ -129,10 +138,26 @@ class MFKView(discord.ui.View):
         await interaction.edit_original_response(view=self)
 
         unique_mentions = list(dict.fromkeys(mentions))
-        await interaction.followup.send(
-            content=" ".join(unique_mentions),
-            embed=embed,
-        )
+        try:
+            await interaction.followup.send(
+                content=" ".join(unique_mentions),
+                embed=embed,
+            )
+        except Exception:
+            # The assignments are already computed and the lobby is closed,
+            # so a send failure (e.g. a 400 from an oversized embed) must
+            # NOT skip end_game — otherwise the row stays "joining" and
+            # recover_game re-registers the dead lobby every restart. Log,
+            # try to tell the host, then fall through to end the game.
+            log.exception("mfk: failed to post assignments for game %s", self.game_id)
+            try:
+                await interaction.followup.send(
+                    "❌ The game finished but I couldn't post the results "
+                    "(the pool may be too large). The game has been ended.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
 
         log.info("Game %s ended — %d players", self.game_id, len(participants))
         await end_game(

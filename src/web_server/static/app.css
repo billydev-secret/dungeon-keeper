@@ -665,12 +665,12 @@ a { text-decoration: none; }
 /* Games panels: inputs/selects/textareas wrapped inside <label> within .field.
    Non-games panels use the sibling pattern (<label> then <input> as siblings of .field),
    so this rule only activates where the label wraps the control. */
-.field > label:has(> input:not([type="checkbox"]):not([type="radio"]), > select, > textarea) {
+.field > label:has(> input:not([type="checkbox"], [type="radio"]), > select, > textarea) {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-.field > label > input:not([type="checkbox"]):not([type="radio"]),
+.field > label > input:not([type="checkbox"], [type="radio"]),
 .field > label > textarea,
 .field > label > select {
   background: var(--bg-input);
@@ -682,7 +682,7 @@ a { text-decoration: none; }
   font-weight: 400;
   font-family: inherit;
 }
-.field > label > input:not([type="checkbox"]):not([type="radio"]):focus,
+.field > label > input:not([type="checkbox"], [type="radio"]):focus,
 .field > label > textarea:focus,
 .field > label > select:focus {
   outline: none;
@@ -3485,7 +3485,7 @@ select option { background: var(--bg-input); color: var(--ink); }
   border-radius: 4px; padding: 4px 8px; white-space: nowrap;
 }
 .doc-ed-accent {
-  width: 84px; padding: 8px 8px; font-size: 13px; text-align: center;
+  width: 84px; padding: 8px; font-size: 13px; text-align: center;
   border: 1px solid var(--rule); border-radius: 4px;
   background: var(--bg-input); color: var(--ink);
 }
@@ -3747,7 +3747,7 @@ select option { background: var(--bg-input); color: var(--ink); }
 .field > input:focus-visible,
 .field > textarea:focus-visible,
 .field > select:focus-visible,
-.field > label > input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+.field > label > input:not([type="checkbox"], [type="radio"]):focus-visible,
 .field > label > textarea:focus-visible,
 .field > label > select:focus-visible,
 .field-input:focus-visible,
@@ -3932,7 +3932,7 @@ select:focus-visible {
 
 /* ── Horizontal-overflow fixes found by the phone sweep (W-M1) ───────── */
 /* The quick-reference tables come from manual.html (which carries its own
-   <style>) and have no wrapper element to make scrollable. Promoting the
+   \3c style>) and have no wrapper element to make scrollable. Promoting the
    table itself to a block box gives it its own scroll container, so the rows
    stay reachable instead of being clipped by .panel's overflow-x:hidden. */
 .qr-table {
@@ -4005,7 +4005,7 @@ select:focus-visible {
   input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; }
 
   /* ── Safe-area insets (W-A9) ──────────────────────────────────────── */
-  #sidebar { padding-left: env(safe-area-inset-left, 0px); }
+  #sidebar { padding-left: env(safe-area-inset-left, 0); }
   .toast-wrap {
     bottom: calc(16px + env(safe-area-inset-bottom, 0px));
     right: calc(16px + env(safe-area-inset-right, 0px));

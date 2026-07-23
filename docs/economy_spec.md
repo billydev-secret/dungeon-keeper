@@ -306,8 +306,11 @@ each of daily/weekly/monthly is a **pool** of active quests (capped at
 `POOL_CAP = 25` each) that the **per-user board** (§4.6) draws from, **plus 1
 active event quest per trigger kind** per guild. (The former "1 active daily +
 rotate-tag pool" rule is retired — `rotate_tag`/`rotate_pool` still exist but
-are inert once every pool quest is active; the per-user board supplies the
-variety rotation used to.) Authoring
+`rotate_pool` is a true **no-op whenever more than one pool member is active**
+— which is the normal all-active state — so a day roll never quietly
+deactivates a live quest; it only advances a pool that keeps a single quest
+active at a time. The per-user board supplies the variety rotation this used
+to.) Authoring
 lives on the **Quests** page (library w/ pool summary + inline edit → **Board
 size** dials (§4.6, admin-only — the section is read-only prose for
 manager-role holders, since `GET/PUT /economy/config` is admin-gated) → quest
@@ -1126,7 +1129,10 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
 - **Manager surface (dashboard):** the **Economy** nav section, gated on
   `economy_manager_role_id` or admin (mirrors `games_editor_role` /
   `require_game_host`). Its pages: **Operations** (community progress +
-  manual Settle, grant, rentals, ledger audit), **Claims** (the pending
+  manual Settle, grant (the panel sends `member_id` as a string to keep
+  snowflake precision, and the endpoint 404s any id not in the guild's
+  member cache so a bad id can't credit a phantom wallet), rentals,
+  ledger audit), **Claims** (the pending
   sign-off queue with Approve/Deny + a state filter over paid/denied/expired
   history), **Quests** (library + authoring + AI ideas), **Income Sources**
   (trigger switches + faucet rates), **Statistics**, and admin-only

@@ -19,6 +19,7 @@ from bot_modules.core.app_context import AppContext
 from bot_modules.inactive.apply import (
     apply_inactive,
     check_inactive_preconditions,
+    ensure_inactive_role,
     reactivate_member,
 )
 from bot_modules.inactive.store import (
@@ -173,6 +174,41 @@ async def test_apply_snapshots_and_strips_roles(tmp_path):
         row = get_active_inactive(conn, 100, 5)
     assert row is not None
     assert json.loads(row["stored_roles"]) == [11, 12, 13]
+
+
+async def test_apply_survives_transient_role_create_error(tmp_path):
+    """A 5xx/rate-limit while creating @Inactive must not escape as an exception.
+
+    ``ensure_inactive_role`` used to catch only ``discord.Forbidden``, so a
+    transient ``HTTPException`` aborted the whole mark unhandled.
+    """
+    ctx = _make_ctx(tmp_path / "g2.db")  # no inactive_role_id configured
+    guild = _guild()
+    guild.get_role = MagicMock(return_value=None)
+    guild.create_role = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "server error")
+    )
+
+    outcome = await apply_inactive(ctx, guild, _member(5, role_ids=(11,)), _member(2))
+    assert not outcome.ok and outcome.error_kind == "no_role_perms"
+
+
+async def test_ensure_role_survives_transient_overwrite_error(tmp_path):
+    """A transient failure writing one channel overwrite is skipped, not fatal."""
+    ctx = _make_ctx(tmp_path / "g3.db")
+    guild = _guild()
+    guild.get_role = MagicMock(return_value=None)
+    new_role = _role(INACTIVE_ROLE_ID)
+    guild.create_role = AsyncMock(return_value=new_role)
+    bad = MagicMock()
+    bad.id = 700
+    bad.set_permissions = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(), "server error")
+    )
+    guild.channels = [bad]
+
+    role = await ensure_inactive_role(ctx, guild)
+    assert role is new_role
 
 
 async def test_apply_is_idempotent(tmp_path):

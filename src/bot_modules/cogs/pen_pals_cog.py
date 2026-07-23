@@ -408,6 +408,32 @@ def _eligible_pool(conn, guild_id: int, now: float, cooldown_seconds: int) -> li
     ]
 
 
+def _force_pair_status(conn, guild_id: int, user1_id: int, user2_id: int) -> str:
+    """Why `/penpals pair` would refuse these two, or ``"ok"``.
+
+    A mod force-pair skips the cooldown and the queue order, but never
+    consent: a pen pal channel is a private two-person conversation, so both
+    members must have opted in themselves (be in the pool, exactly the
+    population `/penpals round` draws from). An active session is reported
+    ahead of the opt-in gate because pairing removes people from the pool —
+    "already has a pen pal" is the accurate reason there.
+    """
+    cfg = _get_config(conn, guild_id)
+    if cfg is None or not cfg["enabled"]:
+        return "disabled"
+    if _is_blocked_pair(conn, guild_id, user1_id, user2_id):
+        return "blocked"
+    if _get_active_session(conn, guild_id, user1_id):
+        return "active_1"
+    if _get_active_session(conn, guild_id, user2_id):
+        return "active_2"
+    if not _in_pool(conn, guild_id, user1_id):
+        return "not_opted_in_1"
+    if not _in_pool(conn, guild_id, user2_id):
+        return "not_opted_in_2"
+    return "ok"
+
+
 def _pick_partner(candidates: list[int], recent: set[int]) -> int | None:
     """Best partner from *candidates* (FIFO): first non-recent, else the oldest.
 
@@ -1036,6 +1062,10 @@ async def _refresh_panel_locked(
 
     channel = bot.get_channel(panel_channel_id)
     if not isinstance(channel, discord.TextChannel):
+        return
+    # panel_channel_id is dashboard-supplied and bot.get_channel spans every
+    # guild, so refuse a channel that isn't this guild's.
+    if channel.guild.id != guild_id:
         return
 
     guild = bot.get_guild(guild_id)
@@ -1762,18 +1792,11 @@ class PenPalsCog(commands.Cog):
         db_path = self.ctx.db_path
         guild_id = interaction.guild.id
 
-        def _check():
+        def _check() -> str:
             with open_db(db_path) as conn:
-                cfg = _get_config(conn, guild_id)
-                if cfg is None or not cfg["enabled"]:
-                    return "disabled", None
-                if _is_blocked_pair(conn, guild_id, user1.id, user2.id):
-                    return "blocked", None
-                s1 = _get_active_session(conn, guild_id, user1.id)
-                s2 = _get_active_session(conn, guild_id, user2.id)
-                return "ok", (s1, s2)
+                return _force_pair_status(conn, guild_id, user1.id, user2.id)
 
-        status, data = await asyncio.to_thread(_check)
+        status = await asyncio.to_thread(_check)
         if status == "disabled":
             await interaction.response.send_message("❌ Pen Pals isn't enabled on this server.", ephemeral=True)
             return
@@ -1784,14 +1807,19 @@ class PenPalsCog(commands.Cog):
                 ephemeral=True,
             )
             return
-
-        assert data is not None
-        s1, s2 = data
-        if s1:
-            await interaction.response.send_message(f"❌ {user1.mention} already has an active pen pal.", ephemeral=True)
+        if status in ("active_1", "active_2"):
+            who = user1 if status == "active_1" else user2
+            await interaction.response.send_message(f"❌ {who.mention} already has an active pen pal.", ephemeral=True)
             return
-        if s2:
-            await interaction.response.send_message(f"❌ {user2.mention} already has an active pen pal.", ephemeral=True)
+        if status in ("not_opted_in_1", "not_opted_in_2"):
+            # Consent isn't a mod override: naming the member (no ping) tells
+            # the mod who still has to run /penpals join.
+            who = user1 if status == "not_opted_in_1" else user2
+            await interaction.response.send_message(
+                f"❌ **{who.display_name}** hasn't opted in to Pen Pals — they need to run "
+                "`/penpals join` first. Force-pairing skips the queue, not consent.",
+                ephemeral=True,
+            )
             return
 
         await interaction.response.defer(ephemeral=True)

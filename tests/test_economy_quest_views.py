@@ -28,6 +28,7 @@ from bot_modules.economy.quest_views import (
     render_signoff_card_embed,
 )
 from bot_modules.economy.quests import quest_period
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     create_quest,
@@ -173,6 +174,44 @@ def test_signoff_card_fields_carry_glyphs():
     assert "🎯 Quest" in names
     assert "💰 Reward" in names
     assert "📋 Criteria" in names
+
+
+def _resolved_card(state: str) -> discord.Embed:
+    return render_signoff_card_embed(
+        discord.Color.blurple(),
+        EconSettings(currency_emoji="💎"),
+        claimant_mention="<@1>",
+        quest_title="Say hi",
+        reward=15,
+        criteria="Post in general",
+        deny_count=2,
+        state=state,
+        resolver_id=99,
+        deny_reason="not enough proof",
+    )
+
+
+def test_signoff_card_every_field_name_is_glyph_led():
+    """A card whose other fields are glyph-led must not mix in bare names."""
+    for state in ("pending", "paid", "denied"):
+        for field in _resolved_card(state).fields:
+            assert not (field.name or "")[0].isascii(), field.name
+
+
+def test_signoff_card_fields_carry_section_spacing():
+    """Every field value but the last ends with the zero-width blank line."""
+    spacer = "\n​"
+    for state in ("pending", "paid", "denied"):
+        fields = _resolved_card(state).fields
+        for field in fields[:-1]:
+            assert (field.value or "").endswith(spacer), (state, field.name)
+        assert not (fields[-1].value or "").endswith(spacer)
+
+
+def test_signoff_card_uses_the_canonical_semantic_pair():
+    assert _resolved_card("paid").color == discord.Color(COLOR_GREEN)
+    assert _resolved_card("denied").color == discord.Color(COLOR_RED)
+    assert _resolved_card("expired").color == discord.Color(COLOR_RED)
 
 
 # ── permission gate ───────────────────────────────────────────────────────────
@@ -449,7 +488,7 @@ async def test_approve_pays_dms_and_edits_card(ctx, db):
     assert state["resolver_id"] == 999
     card.edit.assert_awaited_once()
     edited = card.edit.await_args.kwargs["embed"]
-    assert edited.color == discord.Color.green()
+    assert edited.color == discord.Color(COLOR_GREEN)
     assert card.edit.await_args.kwargs["view"] is None
     notify.assert_awaited_once()
     interaction.response.send_message.assert_awaited()  # ephemeral ack
@@ -504,7 +543,7 @@ async def test_deny_modal_stores_reason_dms_and_allows_reclaim(ctx, db):
     assert row["state"] == "denied"
     assert row["deny_reason"] == "not enough proof"
     card.edit.assert_awaited_once()
-    assert card.edit.await_args.kwargs["embed"].color == discord.Color.red()
+    assert card.edit.await_args.kwargs["embed"].color == discord.Color(COLOR_RED)
     notify.assert_awaited_once()
     assert notify.await_args is not None
     dm_embed = notify.await_args.kwargs["embed"]

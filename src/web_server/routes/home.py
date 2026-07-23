@@ -37,9 +37,22 @@ async def home_data(
         wanted = {f.strip() for f in fields.split(",") if f.strip()}
 
     # Strip privileged groups for users who lack the required perms.
+    # Per-member analytics (who talks to whom, who went quiet, who posts in
+    # NSFW rooms) is moderator+ everywhere else in the dashboard — reports.py
+    # gates the same data at moderator — so the home aggregate matches.
     restricted: set[str] = set()
     if not is_mod:
-        restricted.add("moderation")
+        restricted.update(
+            {
+                "moderation",
+                "nsfw",
+                "top_users",
+                "returned",
+                "starters",
+                "butterflies",
+                "loyalists",
+            }
+        )
     if not is_admin:
         restricted.add("mod_actions")
     if restricted:
@@ -72,8 +85,24 @@ async def home_data(
             if status in presence:
                 presence[status] += 1
 
-        # Voice channel population
+        # Voice channel population. Mods see every room; everyone else sees
+        # only the rooms Discord itself would show them. If the viewer isn't
+        # in the member cache we can't evaluate their perms, so fail closed.
+        viewer = guild.get_member(user.user_id) if not is_mod else None
+
+        def _viewer_can_see(channel) -> bool:
+            if is_mod:
+                return True
+            if viewer is None:
+                return False
+            try:
+                return bool(channel.permissions_for(viewer).view_channel)
+            except Exception:
+                return False
+
         for vc in guild.voice_channels:
+            if not _viewer_can_see(vc):
+                continue
             members_in = [m for m in vc.members if not m.bot]
             if members_in:
                 voice_channels.append(

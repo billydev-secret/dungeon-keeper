@@ -389,6 +389,23 @@ def create_jail(
     return cur.lastrowid  # type: ignore[return-value]
 
 
+def set_jail_channel(
+    conn: sqlite3.Connection,
+    jail_id: int,
+    channel_id: int,
+) -> None:
+    """Record the jail channel id on an already-persisted jail row.
+
+    The row is written first (with ``channel_id`` 0) right after the role
+    strip so a member is never left role-less without a restoration record;
+    this fills in the channel once it has been created.
+    """
+    conn.execute(
+        "UPDATE jails SET channel_id = ? WHERE id = ?",
+        (channel_id, jail_id),
+    )
+
+
 def get_active_jail(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -704,10 +721,19 @@ def get_transcript(
     conn: sqlite3.Connection,
     record_type: str,
     record_id: int,
+    guild_id: int,
 ) -> dict[str, Any] | None:
+    """Fetch a ticket/jail transcript, scoped to its guild.
+
+    ``guild_id`` is required rather than optional: ticket and jail ids come from
+    a global AUTOINCREMENT, so without it a moderator of one guild could read
+    another guild's private transcripts by enumerating record ids.
+    """
     row = conn.execute(
-        "SELECT content FROM transcripts WHERE record_type = ? AND record_id = ? ORDER BY created_at DESC LIMIT 1",
-        (record_type, record_id),
+        "SELECT content FROM transcripts "
+        "WHERE record_type = ? AND record_id = ? AND guild_id = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (record_type, record_id, guild_id),
     ).fetchone()
     return json.loads(row["content"]) if row else None
 

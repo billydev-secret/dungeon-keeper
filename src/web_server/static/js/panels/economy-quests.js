@@ -8,7 +8,7 @@ import { toast, confirmDialog } from "../ui.js";
 import { KIND_LABELS, CHANNEL_SCOPED_KINDS } from "./economy-sources-shared.js";
 
 // Advisory reward bands (client-side hint only — the server saves any value).
-const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [75, 200] };
+const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [50, 90] };
 
 // Plain-language cadence per quest type (shown under the Type select).
 const TYPE_HINTS = {
@@ -449,7 +449,7 @@ function fromEpoch(sec) {
 }
 
 const COMPLETION_HINTS = {
-  manual: "Members claim it themselves from /bank quests (or /quests).",
+  manual: "Members claim it themselves from /bank quests.",
   phrase: "Saying one of the phrases in chat completes it — no manual claim.",
   game: "Completes on its own when the member does this in a game. Daily/weekly: once per period. Event: every single time.",
 };
@@ -739,7 +739,15 @@ function wireQuestAi(container, form, { updateHint, updateCommunity }) {
         `<span class="badge">${idea.reward ?? 0}${esc(target)}</span></div>` +
         (idea.description ? `<div style="opacity:.85;margin-top:2px;">${esc(idea.description)}</div>` : "") +
         (idea.criteria ? `<div style="opacity:.65;font-size:.9em;margin-top:2px;">✓ ${esc(idea.criteria)}</div>` : "");
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
       card.addEventListener("click", () => loadIdea(idea));
+      // Cards are role="button" tabindex="0" — activate with Enter/Space too.
+      card.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        loadIdea(idea);
+      });
       results.appendChild(card);
     });
   };

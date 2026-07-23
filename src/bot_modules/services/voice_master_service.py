@@ -221,14 +221,29 @@ def insert_active_channel(
 
 
 def get_active_channel(
-    conn: sqlite3.Connection, channel_id: int
+    conn: sqlite3.Connection, channel_id: int, guild_id: int | None = None
 ) -> ActiveChannel | None:
-    row = conn.execute(
-        "SELECT channel_id, guild_id, owner_id, created_at, "
-        "last_edit_at_1, last_edit_at_2, owner_left_at "
-        "FROM voice_master_channels WHERE channel_id = ?",
-        (channel_id,),
-    ).fetchone()
+    """Look up a tracked channel by id.
+
+    Pass ``guild_id`` to scope the lookup to a single guild — callers that
+    accept a channel id from an untrusted source (e.g. a web route path
+    param) must do so, otherwise a foreign-guild id can resolve a row that
+    belongs to another guild and be acted on across the tenant boundary.
+    """
+    if guild_id is not None:
+        row = conn.execute(
+            "SELECT channel_id, guild_id, owner_id, created_at, "
+            "last_edit_at_1, last_edit_at_2, owner_left_at "
+            "FROM voice_master_channels WHERE channel_id = ? AND guild_id = ?",
+            (channel_id, guild_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT channel_id, guild_id, owner_id, created_at, "
+            "last_edit_at_1, last_edit_at_2, owner_left_at "
+            "FROM voice_master_channels WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
     if row is None:
         return None
     return ActiveChannel(

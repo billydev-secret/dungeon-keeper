@@ -15,7 +15,7 @@ The command group is guild-only with `default_permissions=Administrator`, and ev
 ## Behavior
 
 ### `/hidden hide`
-Rejects a channel that already has an active hold ("already hidden"). Otherwise it records the channel's parent category id (NULL if top-level), position, and full overwrite map, then finds or creates the **Hidden Channels** category (created with `@everyone` denied View Channel, bot allowed) and edits the channel into it with overwrites replaced by `{@everyone: deny view, bot: allow view}`. The snapshot is persisted only after the Discord edit succeeds. Audit-log reason names the invoking admin.
+Rejects a channel that already has an active hold ("already hidden"). Otherwise it records the channel's parent category id (NULL if top-level), position, and full overwrite map, then finds or creates the **Hidden Channels** category (created with `@everyone` denied View Channel, bot allowed) and edits the channel into it with overwrites replaced by `{@everyone: deny view, bot: allow view}`. The snapshot row is persisted **before** the Discord edit: the edit destroys the original overwrites irreversibly, so a DB failure afterwards would lose them for good. A failed write therefore leaves the channel untouched, and a failed edit rolls the row back out. Audit-log reason names the invoking admin.
 
 "Hidden from everyone" means `@everyone` is denied View Channel. Members with Administrator still see it — Discord always exempts Administrator from channel overwrites.
 
@@ -35,6 +35,7 @@ Lists all active holds in the guild, oldest first, as `channel mention — hidde
 | `restore` on a channel with no hold | "{channel} isn't currently hidden." |
 | Discord forbids the move/edit (role hierarchy) | "I'm not allowed to move or edit that channel — check my role's position and permissions." |
 | Other Discord API failure | "Something went wrong talking to Discord. Please try again." |
+| `hide` can't save the snapshot (DB error) | "I couldn't save this channel's permissions, so I left it alone. Please try again." |
 | `list` with nothing hidden | "No channels are currently hidden." |
 
 ## Non-goals

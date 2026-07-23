@@ -65,14 +65,28 @@ async def build_embed(
     return embed
 
 
-async def _resolve_channel(bot: "Bot", channel_id: int):
+async def _resolve_channel(
+    bot: "Bot", channel_id: int, guild: "discord.Guild | None" = None
+):
+    """Resolve a postable channel, refusing anything outside ``guild``.
+
+    The publish route takes ``channel_id`` from the caller, and bot.get_channel /
+    fetch_channel both search every guild the bot is in — so without this a
+    moderator of one guild could publish a role menu into another guild's
+    channel. ``guild`` is None only when acting on an already-stored message.
+    """
     channel = bot.get_channel(channel_id)
     if channel is None:
         try:
             channel = await bot.fetch_channel(channel_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             channel = None
-    return channel if isinstance(channel, _POSTABLE) else None
+    if not isinstance(channel, _POSTABLE):
+        return None
+    if guild is not None and getattr(channel, "guild", None) is not None:
+        if channel.guild.id != guild.id:
+            return None
+    return channel
 
 
 async def _fetch_message(bot: "Bot", channel_id: int, message_id: int):
@@ -117,7 +131,7 @@ async def publish_menu(
             await _persist_published(ctx, menu, channel_id, msg.id)
             return SyncResult(channel_id, message_id=msg.id)
 
-    channel = await _resolve_channel(bot, channel_id)
+    channel = await _resolve_channel(bot, channel_id, guild)
     if channel is None:
         return SyncResult(channel_id, status="missing_channel",
                           detail="That channel isn't available.")

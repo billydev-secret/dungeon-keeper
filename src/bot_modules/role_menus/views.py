@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, cast
 
 import discord
 
+from bot_modules.core.role_safety import role_block_reason
 from bot_modules.core.utils import get_bot_member
 from bot_modules.role_menus import db as menus_db
 from bot_modules.role_menus.logic import (
@@ -367,6 +368,7 @@ async def _apply_outcome(
 
     add_roles: list[discord.Role] = []
     remove_roles: list[discord.Role] = []
+    elevated_ok = {o["role_id"]: bool(o.get("elevated")) for o in options}
     for rid, bucket in [(r, add_roles) for r in outcome.adds] + [
         (r, remove_roles) for r in outcome.removes
     ]:
@@ -380,7 +382,19 @@ async def _apply_outcome(
                 ctx, guild, menu, f"a configured role (id {rid}) no longer exists"
             )
             return
-        if role >= bot_member.top_role:
+        if bucket is add_roles:
+            # Full re-check on the grant path, not just hierarchy: a role that
+            # was safe when this menu was published can be handed dangerous
+            # permissions later, and a posted menu is never revisited. Shedding
+            # a role stays allowed either way — see role_safety's docstring.
+            blocked = role_block_reason(
+                role, bot_member, allow_elevated=elevated_ok.get(rid, False)
+            )
+            if blocked is not None:
+                await _reply(interaction, MSG_BROKEN)
+                await _alert_mods_once(ctx, guild, menu, blocked)
+                return
+        elif role >= bot_member.top_role:
             await _reply(interaction, MSG_BROKEN)
             await _alert_mods_once(
                 ctx, guild, menu, f"**@{role.name}** is above my highest role"

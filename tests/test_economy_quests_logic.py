@@ -400,6 +400,22 @@ def test_effective_target_never_below_one():
     assert effective_target(0, 0, 0, user_id=1, quest_id=1, period="p") == 1
 
 
+def test_effective_target_cold_start_anchors_below_midpoint():
+    # Regression: the cold-start draw stands in for a member too new/quiet to
+    # size from their own pace — the warm path would clamp them toward the
+    # floor, so centering on the band MIDPOINT made the fallback harder than
+    # what it replaces. The distribution's mean must sit below the midpoint.
+    lo, hi = 5, 20
+    midpoint = (lo + hi) / 2
+    vals = [
+        effective_target(0, lo, hi, user_id=u, quest_id=1, period="2026-W28")
+        for u in range(400)
+    ]
+    assert all(lo <= v <= hi for v in vals)
+    mean = sum(vals) / len(vals)
+    assert mean < midpoint  # anchored low, not centred
+
+
 # ── p25_target: personal p25, band-clamped ────────────────────────────
 
 

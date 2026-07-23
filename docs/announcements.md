@@ -64,7 +64,11 @@ draft ──(set time)──► scheduled ──(loop fires)──► sent
   DST). `post_at IS NULL` = draft — invisible to the loop by construction.
 - Editing a non-sent row always re-derives status: time set → `scheduled`,
   time cleared → `draft`; a stale `error` is wiped either way. Sent rows are
-  immutable (PUT/post-now → 409) — clone instead.
+  immutable (PUT/post-now → 409) — clone instead. That check is a read, so the
+  write carries it too: `update_announcement(..., expected_status=...)` folds
+  the loaded status into the UPDATE's `WHERE` (the mirror of `claim()`), and an
+  edit the send loop claimed mid-request matches no row → 409 rather than
+  reverting a posted announcement to draft with its `sent_*` ids still set.
 - **Post now** arms the row (`status='scheduled', post_at=now`) so it reuses
   the loop's single send path; fires on the next poll (≤ ~60s).
 - Clone copies content columns only (`_CLONE_COLS`) into a fresh draft.
@@ -92,9 +96,9 @@ draft ──(set time)──► scheduled ──(loop fires)──► sent
 |---|---|
 | `GET ""` | `{items, tz_offset_hours, default_accent_hex, max_buttons, guild_id}`; snowflakes stringified; sent rows carry `jump_url`; each item carries its `buttons` |
 | `POST ""` | Create; date+time both-or-neither; past time → 400; time ⇒ `scheduled`, else `draft` |
-| `PUT /{id}` | Full update; 404 missing, 409 sent; re-derives status/post_at |
+| `PUT /{id}` | Full update; 404 missing, 409 sent (or claimed mid-request); re-derives status/post_at |
 | `DELETE /{id}` | Any status |
-| `POST /{id}/post-now` | 409 sent; arms `post_at=now` |
+| `POST /{id}/post-now` | 409 sent (or claimed mid-request); arms `post_at=now` |
 | `POST /{id}/clone` | Content-only copy → new draft |
 
 Validation: numeric channel (+ live `_channel_in_guild` check), title or body
@@ -112,7 +116,10 @@ Queue (draft/scheduled/error rows: edit / post now / delete), inline editor
 with a debounced live preview (mention pill + plain line above a `dp-embed`
 with the accent bar, button pills below it), and a Sent history (guild-local sent time, "Open in
 Discord" jump link, clone, delete). A header line shows the server-local
-clock and offset; date/time inputs are server-local, sent as strings. The
+clock and offset; date/time inputs are server-local, sent as strings. Every
+mutating action (save, post now, delete, clone) runs through one in-flight
+guard in the click delegate — `state.busy` plus a disabled button — so a
+double-click can't fire two writes (two announcements, two posts). The
 button rows (role picker, label, emoji, color) are edited through
 `state.buttons` rather than read back off the DOM — adding or removing a row
 re-mounts every role picker, which would otherwise drop unsaved text.
@@ -133,7 +140,9 @@ guild-scoped parent delete actually matched.
   flags per kind), embed fields, accent override/fallback.
 - `tests/cogs/test_announcements_loop.py` — send + mark-sent bookkeeping,
   late-window miss, 30-min-late fire, unreachable channel, Forbidden →
-  error with no re-send, claim atomicity, `fetch_due` filtering, post-now,
+  error with no re-send, claim atomicity, the `expected_status` write guard
+  (stale status writes nothing, matching status writes, omitted stays
+  unconditional), `fetch_due` filtering, post-now,
   and the button set riding along (order, `view=None` when there are none,
   wholesale replace, cascade delete, guild-scoped delete, clone copy).
 - `tests/unit/test_role_safety.py` — every dangerous permission, hierarchy

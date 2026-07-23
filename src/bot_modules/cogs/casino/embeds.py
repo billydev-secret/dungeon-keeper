@@ -1,7 +1,8 @@
 """Pure embed builders for the casino.
 
 Style-guide rules in force: accent color for neutral states, semantic
-green/red only for genuine win/loss (COLOR_GOLD for the jackpot moment),
+green/red only for genuine win/loss — a big win is green like any other win,
+never a third tier — with COLOR_GOLD reserved for the meadow's own panels,
 currency always rendered through the guild's own emoji/name, section
 spacing via the trailing zero-width space, no custom emoji in footers.
 Builders are pure — color and settings arrive as parameters.
@@ -228,7 +229,6 @@ def build_slots_embed(
     reel_line = f"▶ {reels[0]} │ {reels[1]} │ {reels[2]} ◀"
     title = "🎰 Meadow Slots"
     if payout > 0:
-        big = jackpot_won > 0 or logic.is_big_win(stake, payout)
         desc = (
             f"{reel_line}\n\n{label} <@{user_id}> bet {_coins(econ, stake)} "
             f"and collects {_coins(econ, payout)}."
@@ -236,7 +236,9 @@ def build_slots_embed(
         if jackpot_won:
             title = "💥 🎰 THE HONEYPOT SPILLS"
             desc += "\nThe whole progressive pot. The bees weep."
-        color = COLOR_GOLD if big else COLOR_GREEN
+        # A big win is still a win: the celebration lives in the copy, not in a
+        # third color tier (style guide: green = win, red = loss, full stop).
+        color = COLOR_GREEN
     else:
         desc = (
             f"{reel_line}\n\n<@{user_id}>'s {_coins(econ, stake)} scatters "
@@ -473,14 +475,15 @@ def build_roulette_result_embed(
         color=COLOR_GREEN if winners else COLOR_RED,
     )
     if winners:
+        winner_lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in winners
+        ]
+        # Cap under the 1024 field limit (reserve 2 for the trailing "\n​").
         embed.add_field(
             name="Winners",
-            value="\n".join(
-                f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-                f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-                for uid, d, amount, payout in winners
-            )
-            + "\n​",
+            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
             inline=False,
         )
     if losers_total:

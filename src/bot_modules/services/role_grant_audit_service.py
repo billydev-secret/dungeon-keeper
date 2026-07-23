@@ -482,9 +482,11 @@ def resolve_grant_audit_buckets(
 # Auto-updating Discord card
 # ---------------------------------------------------------------------------
 
-# Waiting can be arbitrarily long; the two stripped buckets are naturally
-# small (recent_inactive is capped at 10 upstream).
+# Waiting and returned can both grow past Discord's 1024-char field limit, so
+# each is capped here with an overflow line. recent_inactive is already capped
+# at 10 upstream (compute_recent_inactive), so it needs no cap of its own.
 _CARD_WAITING_CAP = 15
+_CARD_RETURNED_CAP = 15
 
 _CARD_KEYS = (
     "grant_audit_card_channel_id",
@@ -544,8 +546,11 @@ def build_grant_audit_embed(
         f"**{r['display_name']}**"
         + (f" — level {r['level']}" if r["level"] is not None else "")
         + f" · {_stripped_when(r['pruned_at'])}"
-        for r in snap.returned
+        for r in snap.returned[:_CARD_RETURNED_CAP]
     ]
+    returned_extra = len(snap.returned) - _CARD_RETURNED_CAP
+    if returned_extra > 0:
+        returned_lines.append(f"…and {returned_extra} more on the dashboard.")
     embed.add_field(
         name=f"↩️ Stripped but came back ({len(snap.returned)})",
         value="\n".join(returned_lines) or "Nobody — all clear.",

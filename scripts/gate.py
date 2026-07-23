@@ -113,7 +113,16 @@ def new_paths() -> set[str]:
 # file here means untested logic entering the tree, which the scoped gate
 # blocks (existing-file drift is left to CI/nightly). Cogs/views/embeds are
 # intentionally excluded: they're glue, tested through the logic layer.
+# Most feature dirs name the layer by the *whole* basename (bios/logic.py,
+# inactive/store.py), so a bare-suffix check alone would match none of them.
 REQUIRE_TEST_SUFFIXES = ("_logic.py", "_service.py")
+REQUIRE_TEST_NAMES = ("logic.py", "store.py", "service.py")
+
+
+def requires_test(path: str) -> bool:
+    """True if a *new* file at this path must ship with a mapped test."""
+    name = path.rsplit("/", 1)[-1]
+    return name in REQUIRE_TEST_NAMES or name.endswith(REQUIRE_TEST_SUFFIXES)
 
 
 def _tokens_for(path: str) -> set[str]:
@@ -123,8 +132,10 @@ def _tokens_for(path: str) -> set[str]:
     toks: set[str] = {stem}
     if path.startswith("src/bot_modules/services/"):
         toks.add(stem[:-8] if stem.endswith("_service") else stem)
-    elif path.startswith("src/bot_modules/") and len(parts) > 3:
-        toks.add(parts[2])  # feature directory name, e.g. voice_master, games_ama
+    elif path.startswith("src/bot_modules/"):
+        # Every directory below bot_modules, so a feature nested under a generic
+        # parent (cogs/casino/…) still resolves to 'casino' and not 'cogs'.
+        toks.update(parts[2:-1])
     return {t for t in toks if t and t not in GENERIC_TOKENS}
 
 
@@ -349,7 +360,7 @@ def main() -> None:
         # module exercised only through an existing test under another name).
         new = new_paths()
         missing = sorted(
-            f for f in unmapped if f in new and f.endswith(REQUIRE_TEST_SUFFIXES)
+            f for f in unmapped if f in new and requires_test(f)
         )
         if missing:
             print("── scope: NEW logic/service file(s) with no test " + "─" * 12, file=sys.stderr)

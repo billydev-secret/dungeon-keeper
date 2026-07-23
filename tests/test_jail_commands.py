@@ -167,3 +167,29 @@ def test_get_config_uses_guild_id_arg(tmp_path):
 def test_get_config_returns_default_when_unset(tmp_path):
     ctx = _make_ctx(tmp_path / "jc13.db", guild_id=10)
     assert _get_config(ctx, "warning_threshold", "3", guild_id=10) == 3
+
+
+# ── warning threshold read honors the guild-scoped row ───────────────
+#
+# The dashboard writes ``warning_threshold`` per-guild; the jail cog's
+# threshold-alert read must pass ``guild_id`` or it silently reads the
+# legacy ``guild_id=0`` row and the hard-coded "3" default always wins.
+
+
+def test_read_warning_threshold_uses_guild_scoped_row(tmp_path):
+    from bot_modules.cogs.jail_cog import _read_warning_threshold
+
+    ctx = _make_ctx(tmp_path / "jc14.db", guild_id=10)
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "warning_threshold", "3", guild_id=0)  # legacy
+        _db_set(conn, "warning_threshold", "5", guild_id=10)
+
+    # The configured guild row must win over the legacy default of 3.
+    assert _read_warning_threshold(ctx, 10) == 5
+
+
+def test_read_warning_threshold_defaults_to_three(tmp_path):
+    from bot_modules.cogs.jail_cog import _read_warning_threshold
+
+    ctx = _make_ctx(tmp_path / "jc15.db", guild_id=10)
+    assert _read_warning_threshold(ctx, 10) == 3

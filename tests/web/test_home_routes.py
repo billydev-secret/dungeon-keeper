@@ -141,6 +141,149 @@ def test_home_strips_moderation_and_mod_actions_for_non_mod(fake_ctx):
     client.close()
 
 
+def _non_mod_client(fake_ctx):
+    """TestClient for an authenticated member with zero elevated perms."""
+    from fastapi.testclient import TestClient
+
+    from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
+    from web_server.server import create_app
+
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    client = TestClient(create_app(fake_ctx, auth=auth))
+    cookie = auth.create_session_cookie(
+        user_id=99,
+        username="rando",
+        access_token="t",
+        permission_bits=0,
+        guild_id=fake_ctx.guild_id,
+        guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
+    )
+    client.cookies.set(SESSION_COOKIE, cookie)
+    return client
+
+
+_MEMBER_ANALYTICS_KEYS = (
+    "top_users",
+    "conversation_starters",
+    "social_butterflies",
+    "channel_loyalists",
+    "returned_users",
+    "nsfw_1h",
+    "nsfw_24h",
+    "nsfw_sparkline",
+    "nsfw_unique",
+)
+
+
+def test_home_strips_member_analytics_for_non_mod(fake_ctx):
+    """Per-member social-graph groups are moderator+ only."""
+    client = _non_mod_client(fake_ctx)
+    body = client.get("/api/home").json()
+    for key in _MEMBER_ANALYTICS_KEYS:
+        assert key not in body, f"{key} leaked to a non-mod viewer"
+    # Member-facing basics survive
+    assert "msgs_1h" in body
+    assert "top_channels" in body
+    assert "xp_today" in body
+    assert "presence" in body
+    assert "guild" in body
+    client.close()
+
+
+def test_home_member_analytics_not_reachable_via_fields_for_non_mod(fake_ctx):
+    """Asking for a restricted group explicitly does not bypass the gate."""
+    client = _non_mod_client(fake_ctx)
+    body = client.get("/api/home?fields=top_users,nsfw,returned").json()
+    for key in _MEMBER_ANALYTICS_KEYS:
+        assert key not in body
+    client.close()
+
+
+def test_home_serves_member_analytics_to_mod(authed_client):
+    body = authed_client.get("/api/home").json()
+    for key in _MEMBER_ANALYTICS_KEYS:
+        assert key in body
+
+
+def _voice_fixture(fake_ctx, *, viewer_id, viewer_can_view=True, viewer_perm_bits=0, evict_after=None):
+    """Build a guild with two populated VCs; the viewer can see only one."""
+    def _mk_vc(cid, name, member_id, member_name, visible):
+        member = MagicMock()
+        member.id = member_id
+        member.display_name = member_name
+        member.bot = False
+        vc = MagicMock()
+        vc.id = cid
+        vc.name = name
+        vc.members = [member]
+        perms = MagicMock()
+        perms.view_channel = visible
+        vc.permissions_for = MagicMock(return_value=perms)
+        return vc
+
+    public_vc = _mk_vc(9001, "Hangout", 500, "Alice", True)
+    secret_vc = _mk_vc(9002, "Staff Only", 501, "Bob", viewer_can_view)
+
+    viewer = MagicMock()
+    viewer.id = viewer_id
+    viewer.bot = False
+    viewer.display_name = "viewer"
+    viewer.status = "online"
+    viewer.joined_at = None
+    viewer.guild_permissions = MagicMock(value=viewer_perm_bits)
+    viewer.guild_permissions.administrator = bool(viewer_perm_bits)
+    viewer.guild_permissions.manage_guild = False
+    viewer.roles = []
+
+    guild = MagicMock()
+    guild.id = fake_ctx.guild_id
+    guild.name = "Test Guild"
+    guild.icon = None
+    guild.member_count = 1
+    guild.members = [viewer]
+    guild.voice_channels = [public_vc, secret_vc]
+    guild.channels = []
+    # ``evict_after`` models the member vanishing from the bot's cache between
+    # authentication and rendering (auth resolves perms via the same lookup).
+    calls = {"n": 0}
+
+    def _get_member(uid):
+        calls["n"] += 1
+        if evict_after is not None and calls["n"] > evict_after:
+            return None
+        return viewer if int(uid) == viewer_id else None
+
+    guild.get_member = MagicMock(side_effect=_get_member)
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    fake_ctx.bot = bot
+    return guild
+
+
+def test_home_voice_hides_channels_the_viewer_cannot_see(fake_ctx):
+    """A non-mod only sees occupants of VCs visible to them in Discord."""
+    _voice_fixture(fake_ctx, viewer_id=99, viewer_can_view=False)
+    client = _non_mod_client(fake_ctx)
+    voice = client.get("/api/home").json()["voice_channels"]
+    assert [v["channel_name"] for v in voice] == ["Hangout"]
+    client.close()
+
+
+def test_home_voice_empty_when_non_mod_viewer_not_in_cache(fake_ctx):
+    """Unresolvable viewer → fail closed rather than leak every VC."""
+    _voice_fixture(fake_ctx, viewer_id=99, evict_after=1)
+    client = _non_mod_client(fake_ctx)
+    assert client.get("/api/home").json()["voice_channels"] == []
+    client.close()
+
+
+def test_home_voice_unfiltered_for_mod(authed_client, fake_ctx):
+    """Mods keep the full voice roster even for channels they can't view."""
+    _voice_fixture(fake_ctx, viewer_id=1, viewer_can_view=False, viewer_perm_bits=0x8)
+    voice = authed_client.get("/api/home").json()["voice_channels"]
+    assert sorted(v["channel_name"] for v in voice) == ["Hangout", "Staff Only"]
+
+
 # ── Message aggregations ──────────────────────────────────────────────
 
 

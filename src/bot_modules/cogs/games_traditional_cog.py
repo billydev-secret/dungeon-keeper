@@ -16,6 +16,7 @@ from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
+    check_game_enabled,
     create_game,
     end_game,
     get_game_payload,
@@ -31,9 +32,14 @@ from bot_modules.games_traditional.embeds import (
     build_recap_embed,
     build_tod_embed,
 )
-from bot_modules.games.utils.question_source import get_traditional_question
+from bot_modules.games.utils.question_source import (
+    channel_allows_nsfw,
+    get_traditional_question,
+)
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
+    category_allowed,
+    filter_nsfw_prefs,
     record_asked,
     select_bank_categories_for_all,
     select_next_question_target,
@@ -157,6 +163,15 @@ class TraditionalHostView(discord.ui.View):
         await self._toggle_pref(interaction, "nsfw_dare")
 
     async def _toggle_pref(self, interaction: discord.Interaction, category: str):
+        # NSFW prompts ride Discord's own age gate, never a bot-side toggle.
+        # Gating the preference is what keeps NSFW content out of a SFW
+        # channel: every serve path draws only from opted-in categories.
+        if not category_allowed(category, channel_allows_nsfw(interaction.channel)):
+            await interaction.response.send_message(
+                "❌ NSFW categories are only available in age-restricted channels.",
+                ephemeral=True,
+            )
+            return
         user_id = interaction.user.id
         action_holder: dict[str, str] = {}
 
@@ -237,6 +252,9 @@ class TraditionalHostView(discord.ui.View):
         assert isinstance(channel, discord.abc.Messageable)  # games run in text channels
         used: list[str] = list(payload.get("bank_used", []))
         asked = payload.get("asked", {})
+        # Belt-and-braces: prefs set while the channel was still age-restricted
+        # must not serve here if the flag has since been removed.
+        prefs = filter_nsfw_prefs(prefs, channel_allows_nsfw(channel))
         choices = select_bank_categories_for_all(prefs, asked)  # {uid: category}
         already_asked = sum(1 for cats in prefs.values() if cats) - len(choices)
 
@@ -334,6 +352,12 @@ class TraditionalCog(commands.Cog):
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
+                ephemeral=True,
+            )
+            return
+        if not await check_game_enabled(self.db, "traditional", interaction.guild_id or 0):
+            await interaction.response.send_message(
+                "Traditional Truth or Dare is currently disabled on this server.",
                 ephemeral=True,
             )
             return

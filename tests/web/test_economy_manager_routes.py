@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import types
 
 from fastapi.testclient import TestClient
 
@@ -532,6 +533,69 @@ def test_grant_credits_and_ledgers(authed_client, fake_ctx):
     assert resp.json()["credited"] == 42
     with open_db(fake_ctx.db_path) as conn:
         assert get_balance(conn, fake_ctx.guild_id, 314) == 42
+
+
+def _member_cache_bot(guild_id: int, member_ids: set[int]):
+    """Bot stub whose guild member cache contains exactly ``member_ids``."""
+
+    class _Guild:
+        def get_member(self, uid):
+            if uid in member_ids:
+                # Enough surface for auth re-resolution (admin perms, no
+                # roles) and member_is_booster (premium_since).
+                return types.SimpleNamespace(
+                    guild_permissions=types.SimpleNamespace(value=0x8),
+                    roles=[],
+                    display_name=f"member-{uid}",
+                    premium_since=None,
+                )
+            return None
+
+    class _Bot:
+        def get_guild(self, gid):
+            return _Guild() if gid == guild_id else None
+
+    return _Bot()
+
+
+def test_grant_accepts_string_member_id(authed_client, fake_ctx):
+    # The panel sends member_id as a string — parseInt on a snowflake past
+    # 2^53 silently rounds to a wrong id. Pydantic coerces the string int
+    # losslessly, so a full-precision snowflake credits the right wallet.
+    _enable_economy(fake_ctx)
+    snowflake = 1234567890123456789  # > 2^53: unrepresentable as a JS number
+    # id 1 is authed_client's session user — auth re-checks it via the cache.
+    fake_ctx.bot = _member_cache_bot(fake_ctx.guild_id, {1, snowflake})
+    try:
+        resp = authed_client.post(
+            "/api/economy/grant",
+            json={"member_id": str(snowflake), "amount": 42, "reason": "mvp"},
+        )
+    finally:
+        fake_ctx.bot = None
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["credited"] == 42
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, snowflake) == 42
+
+
+def test_grant_rejects_non_member(authed_client, fake_ctx):
+    # A member_id absent from the guild's member cache must be refused —
+    # otherwise a corrupted snowflake credits a phantom wallet while the
+    # mod sees success.
+    _enable_economy(fake_ctx)
+    fake_ctx.bot = _member_cache_bot(fake_ctx.guild_id, {1, 314})
+    try:
+        resp = authed_client.post(
+            "/api/economy/grant",
+            json={"member_id": 999, "amount": 42, "reason": "mvp"},
+        )
+    finally:
+        fake_ctx.bot = None
+    assert resp.status_code == 404
+    assert "member" in resp.json()["detail"]
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_balance(conn, fake_ctx.guild_id, 999) == 0
 
 
 def test_grant_rejects_zero_amount(authed_client):

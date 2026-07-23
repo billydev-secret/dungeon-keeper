@@ -12,7 +12,7 @@ Members opt in to a pairing pool. Joining pairs immediately when an eligible mem
 | `/penpals block` | Slash | Everyone (server only) | Ephemeral panel to manage your own "never match me with these members" list |
 | `/penpals new-question` | Slash | Session members (active channel only) | Replace the current question with a fresh one from the bank (max 3 per session) |
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
-| `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two specific members, bypassing the pool |
+| `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two members who are both waiting in the pool, bypassing queue order and cooldown |
 | `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the 5-minute tick |
 | Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels; manage never-match separations |
 | Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
@@ -90,7 +90,7 @@ A manual swap does not reset the 24-hour auto-cadence clock. After the configure
 
 ### Match cooldown
 
-A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month, from the `started_at` of their most recent session — active or closed). It applies to both sides of a match and on both paths: instant matching checks the joiner *and* the candidate, and a round skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule.
+A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month, from the `started_at` of their most recent session — active or closed). It applies to both sides of a match and on both paths: instant matching checks the joiner *and* the candidate, and a round skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule, and not consent: both members must already be in the pool (`/penpals join`), the same population a round draws from. There is no bypass flag; if an override is ever wanted it belongs on the dashboard.
 
 ### No-repeat pairing
 
@@ -125,6 +125,7 @@ There is no round schedule to configure — the weekly auto-round (day-of-week +
 | `/penpals new-question` outside an active pen pal channel | "This command only works in an active pen pal channel." |
 | All 3 question swaps used | "You've used all 3 question swaps for this session." |
 | Bot lacks Manage Channels in the category | "I don't have permission to create channels here — ask an admin to fix the bot's permissions." |
+| `/penpals pair` on a member who never joined the pool | "**{name}** hasn't opted in to Pen Pals — they need to run `/penpals join` first. Force-pairing skips the queue, not consent." |
 | `/penpals pair` on a blocked/separated pair | "These two can't be paired — one has blocked the other, or they're on the Pen Pals separations list. Clear the block first if this is intended." |
 | Early-close confirm timed out | "Close cancelled." |
 | Invoker already has DMs closed for early-close DM to the other party | Silent — DM failure doesn't block channel deletion. |

@@ -227,6 +227,31 @@ def roulette_payout(bet_type: str, selection: int, result: int, amount: int) -> 
     raise ValueError(f"unknown roulette bet type: {bet_type}")
 
 
+def cap_lines(lines: list[str], *, limit: int, more_label: str = "more") -> list[str]:
+    """Keep leading lines whose newline-join stays under ``limit``.
+
+    Any dropped tail is summarized with an "…and N more" marker (mirrors the
+    bets-open embed). Guards Discord's 1024-char field limit: a round with
+    dozens of winners would otherwise 400 the result edit and freeze the
+    panel on the fabricated near-miss numbers. The marker reserve uses the
+    full ``len(lines)`` digit count, so the actual (smaller) marker always
+    fits and the joined result stays within ``limit``.
+    """
+    total = len(lines)
+    kept: list[str] = []
+    used = 0
+    for i, line in enumerate(lines):
+        sep = 1 if kept else 0
+        reserve = 0 if i == total - 1 else len(f"\n*…and {total} {more_label}*")
+        if used + sep + len(line) + reserve > limit:
+            break
+        kept.append(line)
+        used += sep + len(line)
+    if len(kept) < total:
+        kept.append(f"*…and {total - len(kept)} {more_label}*")
+    return kept
+
+
 _DOZEN_LABELS = {1: "1–12", 2: "13–24", 3: "25–36"}
 
 

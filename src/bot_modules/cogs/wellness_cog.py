@@ -157,11 +157,10 @@ class _SetupWizardView(discord.ui.View):
                 "Your **Wellness Guardian** role has been assigned — "
                 "check out the new 🌿 Wellness channels in your channel list.\n\n"
                 "**Next steps:**\n"
-                "• `/wellness cap add` — Set your first message limit\n"
-                "• `/wellness blackout add` — Schedule offline hours\n"
-                "• `/wellness partner request` — Find an accountability buddy\n"
-                "• `/wellness away on` — Set a custom away message anytime\n"
-                "• `/wellness settings` — Fine-tune your preferences"
+                "• Set message caps, schedule offline hours, find an "
+                "accountability partner and fine-tune everything from the "
+                "**Wellness panel on the web dashboard**.\n"
+                "• `/wellness away on` — Set a custom away message anytime"
             ),
             color=WELLNESS_PRIMARY,
         )
@@ -225,7 +224,7 @@ class _SetupWizardView(discord.ui.View):
             await interaction.response.edit_message(
                 content=(
                     "⚠️ Wellness Guardian isn't set up on this server yet. "
-                    "An admin must run `/wellness-admin setup` first."
+                    "An admin can configure it from the web dashboard."
                 ),
                 embed=None,
                 view=None,
@@ -246,7 +245,7 @@ class _SetupWizardView(discord.ui.View):
             await interaction.response.edit_message(
                 content=(
                     "⚠️ The wellness role no longer exists. "
-                    "Ask an admin to re-run `/wellness-admin setup`."
+                    "Ask an admin to reconfigure it from the web dashboard."
                 ),
                 embed=None,
                 view=None,

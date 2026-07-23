@@ -269,6 +269,24 @@ def test_cap_applies_voice_scope_returns_false():
     assert _cap_applies_to_channel(_cap("voice"), channel) is False
 
 
+def test_cap_applies_category_with_zero_target_never_matches_uncategorized():
+    # An uncategorized channel yields category id 0; a cap persisted with
+    # scope_target_id 0 must NOT match it (else it applies to EVERY
+    # uncategorized channel).
+    channel = MagicMock()
+    channel.id = 1
+    channel.category = None
+    channel.parent = None
+    assert _cap_applies_to_channel(_cap("category", 0), channel) is False
+
+
+def test_cap_applies_channel_with_zero_target_never_matches():
+    channel = MagicMock()
+    channel.id = 0
+    channel.parent = None
+    assert _cap_applies_to_channel(_cap("channel", 0), channel) is False
+
+
 # ── _select_worst_action ─────────────────────────────────────────────
 
 

@@ -33,6 +33,8 @@ from bot_modules.games_story.logic import (
     build_turn_order,
     chunk_attribution_lines,
     clamp_max_sentences,
+    format_skip_notice,
+    format_story_opening,
     pick_current_player,
     remove_player,
     resolve_starter,
@@ -81,6 +83,33 @@ def test_default_starter_is_nontrivial():
     opening message in the channel."""
     assert isinstance(DEFAULT_STARTER, str)
     assert len(DEFAULT_STARTER) > 10
+
+
+# ── format_story_opening / format_skip_notice (mention safety) ──────
+
+
+def test_format_story_opening_neutralizes_role_mention():
+    """A host-supplied starter carrying a role mention must not survive as a
+    live ping in the announcement line."""
+    out = format_story_opening("beware <@&123456789012345678>!")
+    assert "<@&123456789012345678>" not in out
+    assert "​" in out  # escape_mentions inserted a zero-width break
+
+
+def test_format_story_opening_neutralizes_everyone():
+    out = format_story_opening("hello @everyone")
+    assert "@everyone" not in out
+
+
+def test_format_story_opening_escapes_markdown():
+    out = format_story_opening("look *here*")
+    assert "\\*here\\*" in out
+
+
+def test_format_skip_notice_neutralizes_mention():
+    out = format_skip_notice("<@&123456789012345678>")
+    assert "<@&123456789012345678>" not in out
+    assert "was skipped" in out
 
 
 # ── add_player / remove_player ──────────────────────────────────────

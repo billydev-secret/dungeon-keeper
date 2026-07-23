@@ -201,3 +201,34 @@ def question_pool_size(prefs: dict[str, list[str]], asked: dict[str, str]) -> in
     pool = {f"{uid}:{cat}" for uid, cats in prefs.items() for cat in cats}
     pool |= set(asked.keys())
     return len(pool)
+
+
+# ── NSFW gating ─────────────────────────────────────────────────────
+# NSFW prompts ride Discord's own age gate (``channel.is_nsfw()``), never a
+# bot-side toggle. Both helpers take the already-resolved channel verdict so
+# they stay pure and testable; the cog supplies it via ``channel_allows_nsfw``.
+
+NSFW_PREFIX = "nsfw_"
+
+
+def category_allowed(category: str, allow_nsfw: bool) -> bool:
+    """May this preference category be selected in this channel?"""
+    return allow_nsfw or not category.startswith(NSFW_PREFIX)
+
+
+def filter_nsfw_prefs(
+    prefs: dict[str, list[str]], allow_nsfw: bool
+) -> dict[str, list[str]]:
+    """Drop every NSFW category from every player's prefs in a SFW channel.
+
+    Filtering the *preferences* rather than the drawn questions is what makes
+    the gate hold: every serve path picks from opted-in categories, so a
+    channel that lost its age-restriction mid-game stops serving NSFW at once,
+    and the round's "already asked" accounting stays consistent.
+    """
+    if allow_nsfw:
+        return prefs
+    return {
+        uid: [c for c in cats if category_allowed(c, allow_nsfw)]
+        for uid, cats in prefs.items()
+    }

@@ -188,17 +188,30 @@ def get_announcement(conn: sqlite3.Connection, ann_id: int, guild_id: int) -> sq
 
 
 def update_announcement(
-    conn: sqlite3.Connection, ann_id: int, guild_id: int, fields: dict, now: float
-) -> None:
+    conn: sqlite3.Connection, ann_id: int, guild_id: int, fields: dict, now: float,
+    expected_status: str | None = None,
+) -> bool:
+    """Write ``fields``; returns whether a row actually matched.
+
+    ``expected_status`` folds the caller's read into the UPDATE's WHERE clause,
+    the same trick ``claim()`` uses in the other direction: an edit that raced
+    the send loop finds the row already 'sent' and writes nothing, instead of
+    reverting a posted announcement to draft while its sent_* ids stay set.
+    """
     cols = [c for c in fields if c in _UPDATABLE_COLS]
     if not cols:
-        return
+        return False
     assignments = ", ".join(f"{c} = ?" for c in cols)
     params = [fields[c] for c in cols] + [now, ann_id, guild_id]
-    conn.execute(
-        f"UPDATE announcements SET {assignments}, updated_at = ? WHERE id = ? AND guild_id = ?",
+    where = "id = ? AND guild_id = ?"
+    if expected_status is not None:
+        where += " AND status = ?"
+        params.append(expected_status)
+    cur = conn.execute(
+        f"UPDATE announcements SET {assignments}, updated_at = ? WHERE {where}",
         params,
     )
+    return cur.rowcount == 1
 
 
 def delete_announcement(conn: sqlite3.Connection, ann_id: int, guild_id: int) -> None:

@@ -114,6 +114,12 @@ def _category_id_for_channel(channel) -> int:
 def _cap_applies_to_channel(cap: WellnessCap, channel) -> bool:
     if cap.scope == "global":
         return True
+    # A cap with no target (scope_target_id == 0) can never identify a channel
+    # or category, so it must not match anything — in particular a category cap
+    # with target 0 must not apply to every uncategorized channel (which yields
+    # category id 0 from _category_id_for_channel).
+    if cap.scope_target_id == 0:
+        return False
     if cap.scope == "channel":
         # Match either the channel itself or its parent thread
         if channel.id == cap.scope_target_id:
@@ -355,7 +361,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                         description=(
                             f"Your message was held. You can post again in **{_format_seconds(wait_seconds)}**.\n\n"
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
-                            "*Adjust your settings anytime with `/wellness settings`.*"
+                            "*Adjust your settings anytime from the Wellness panel on the web dashboard.*"
                         ),
                         color=discord.Color(WELLNESS_PRIMARY),
                     ),
@@ -414,7 +420,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                             f"You've gone over your cap a few times — slow mode is on so you can keep posting at a calmer pace.\n\n"
                             f"You can post again in **{_format_seconds(user.slow_mode_rate_seconds)}**.\n\n"
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
-                            "*Adjust your settings anytime with `/wellness settings`.*"
+                            "*Adjust your settings anytime from the Wellness panel on the web dashboard.*"
                         ),
                         color=discord.Color(WELLNESS_PRIMARY),
                     ),

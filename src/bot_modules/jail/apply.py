@@ -26,6 +26,7 @@ from bot_modules.services.moderation import (
     create_jail,
     fmt_duration,
     get_active_jail,
+    set_jail_channel,
     write_audit,
 )
 from bot_modules.services.embeds import MOD_JAIL as _CLR_JAIL
@@ -147,13 +148,19 @@ async def apply_jail(
        denying view+send on every channel.
     3. Snapshot the target's current roles for restoration on release.
     4. Strip those roles and assign only ``@Jailed``.
-    5. Create a private jail channel with overwrites for the target, the
-       bot, and any configured mod roles.
-    6. Insert a ``jails`` row and a ``jail_create`` audit log entry. The
-       audit ``extra`` dict carries ``source`` so dashboard-driven jails
-       can be filtered out of pure-Discord ones later.
+    5. Insert a ``jails`` row (with the role snapshot; ``channel_id`` 0) and a
+       ``jail_create`` audit log entry **immediately**, so a failure before the
+       channel exists can never strand the member role-less with no restoration
+       record. The audit ``extra`` dict carries ``source`` so dashboard-driven
+       jails can be filtered out of pure-Discord ones later.
+    6. Create a private jail channel with overwrites for the target, the
+       bot, and any configured mod roles, then record its id on the row.
     7. Post a welcome embed in the jail channel and DM the target.
     8. Post the audit embed in the configured log channel.
+
+    If channel creation fails (missing **Manage Channels**), steps 6-8 are
+    skipped but the ``jails`` row from step 5 remains, so restoration and the
+    auto-release loop still work — the moderator just grants the permission.
 
     ``source`` is recorded in the audit log only; it does not change behavior.
     Pass ``"dashboard"`` from the web route, ``"command"`` from the slash
@@ -244,7 +251,58 @@ async def apply_jail(
             error_message=f"Missing permission to manage this user's roles.\n{detail}",
         )
 
-    # ── Step 3: create private jail channel ─────────────────────────
+    # ── Step 3: persist the jail row + audit BEFORE the channel ─────
+    # Write the restoration snapshot the instant the roles are stripped, so a
+    # failure or crash before the channel exists can never strand the member
+    # role-less with no jails row. Restoration reads ``stored_roles`` off this
+    # row and the auto-release loop / ``/jail release`` both key off it; if the
+    # row were only written after the channel (as before), a Manage-Channels
+    # failure here left the member at @everyone+@Jailed forever with no record.
+    # ``channel_id`` starts at 0 and is filled in once the channel is created.
+    audit_extra: dict = {
+        "jail_id": None,  # filled in after create_jail returns
+        "reason": reason,
+        "duration": (
+            fmt_duration(duration_seconds) if duration_seconds else "indefinite"
+        ),
+        "source": source,
+    }
+    if source_extra:
+        # Caller-supplied keys (e.g. ticket_id) merge in last but cannot
+        # overwrite the canonical fields.
+        for key, value in source_extra.items():
+            if key not in audit_extra:
+                audit_extra[key] = value
+
+    target_id = target.id
+    moderator_id = moderator.id
+
+    def _persist():
+        with ctx.open_db() as conn:
+            jid = create_jail(
+                conn,
+                guild_id=guild_id,
+                user_id=target_id,
+                moderator_id=moderator_id,
+                reason=reason,
+                stored_roles=stored_roles,
+                channel_id=0,  # filled in once the channel is created
+                duration_seconds=duration_seconds,
+            )
+            audit_extra["jail_id"] = jid
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="jail_create",
+                actor_id=moderator_id,
+                target_id=target_id,
+                extra=audit_extra,
+            )
+        return jid
+
+    jail_id = await asyncio.to_thread(_persist)
+
+    # ── Step 4: create private jail channel ─────────────────────────
     def _get_cat_id():
         with ctx.open_db() as conn:
             return get_config_value(conn, "jail_category_id", "0", guild_id)
@@ -298,65 +356,31 @@ async def apply_jail(
             ch_name, category=category, overwrites=overwrites,  # type: ignore[arg-type]
         )
     except discord.Forbidden:
-        # The role was already applied above. We don't roll that back —
-        # better to leave the user jailed and have a moderator finish the
-        # setup than to silently un-strip their roles and abandon them
-        # in limbo.
+        # The role swap already happened AND the jail row is persisted above
+        # (with channel_id 0), so restoration and the auto-release loop still
+        # work — the member is not stranded. We don't roll anything back:
+        # better to leave the user jailed and have a moderator grant **Manage
+        # Channels** than to silently un-strip their roles and abandon them.
         return JailOutcome(
             ok=False,
+            jail_id=jail_id,
             error_kind="no_channel_perms",
             error_message=(
                 "Roles applied, but I couldn't create the jail channel — "
-                "grant **Manage Channels** and reapply."
+                "grant **Manage Channels** to finish setup."
             ),
         )
 
-    # ── Step 4: persist + audit ──────────────────────────────────────
-    audit_extra: dict = {
-        "jail_id": None,  # filled in after create_jail returns
-        "reason": reason,
-        "duration": (
-            fmt_duration(duration_seconds) if duration_seconds else "indefinite"
-        ),
-        "source": source,
-    }
-    if source_extra:
-        # Caller-supplied keys (e.g. ticket_id) merge in last but cannot
-        # overwrite the canonical fields.
-        for key, value in source_extra.items():
-            if key not in audit_extra:
-                audit_extra[key] = value
-
-    target_id = target.id
-    moderator_id = moderator.id
+    # ── Step 5: record the channel id on the jail row ───────────────
     jail_channel_id = jail_channel.id
 
-    def _persist():
+    def _set_channel():
         with ctx.open_db() as conn:
-            jid = create_jail(
-                conn,
-                guild_id=guild_id,
-                user_id=target_id,
-                moderator_id=moderator_id,
-                reason=reason,
-                stored_roles=stored_roles,
-                channel_id=jail_channel_id,
-                duration_seconds=duration_seconds,
-            )
-            audit_extra["jail_id"] = jid
-            write_audit(
-                conn,
-                guild_id=guild_id,
-                action="jail_create",
-                actor_id=moderator_id,
-                target_id=target_id,
-                extra=audit_extra,
-            )
-        return jid
+            set_jail_channel(conn, jail_id, jail_channel_id)
 
-    jail_id = await asyncio.to_thread(_persist)
+    await asyncio.to_thread(_set_channel)
 
-    # ── Step 5: jail-channel welcome embed ───────────────────────────
+    # ── Step 6: jail-channel welcome embed ───────────────────────────
     duration_text = (
         fmt_duration(duration_seconds) if duration_seconds else "Indefinite"
     )
@@ -386,7 +410,7 @@ async def apply_jail(
         # Channel exists but send failed — non-fatal; mods can still post.
         pass
 
-    # ── Step 6: DM the user ──────────────────────────────────────────
+    # ── Step 7: DM the user ──────────────────────────────────────────
     dm_embed = discord.Embed(
         title="You've been placed in a moderation hold",
         description=(
@@ -410,7 +434,7 @@ async def apply_jail(
         except discord.HTTPException:
             pass
 
-    # ── Step 7: post audit-log embed ─────────────────────────────────
+    # ── Step 8: post audit-log embed ─────────────────────────────────
     def _get_log_ch():
         with ctx.open_db() as conn:
             return get_config_value(conn, "log_channel_id", "0", guild_id)

@@ -7,7 +7,10 @@ exclusions, and the safety cap.
 
 from __future__ import annotations
 
-from bot_modules.inactive.logic import select_sweep_candidates
+from bot_modules.inactive.logic import (
+    select_sweep_candidates,
+    stale_inactive_channel_id,
+)
 
 DAY = 86400.0
 NOW = 1_000_000_000.0
@@ -80,3 +83,24 @@ def test_idle_seconds_is_computed():
 
 def test_empty_input():
     assert _sweep({}) == ([], 0)
+
+
+# ── Stale inactive-channel decision (/inactive panel re-point) ───────
+
+
+def test_stale_channel_returned_when_repointed():
+    assert stale_inactive_channel_id("777", 888) == 777
+
+
+def test_stale_channel_none_when_unchanged():
+    assert stale_inactive_channel_id("888", 888) is None
+
+
+def test_stale_channel_none_when_unset():
+    assert stale_inactive_channel_id(None, 888) is None
+    assert stale_inactive_channel_id("", 888) is None
+    assert stale_inactive_channel_id("0", 888) is None
+
+
+def test_stale_channel_none_when_garbage():
+    assert stale_inactive_channel_id("not-an-id", 888) is None

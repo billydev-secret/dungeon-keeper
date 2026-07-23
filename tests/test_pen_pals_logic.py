@@ -1053,6 +1053,55 @@ async def test_penpals_pair_command_refuses_a_blocked_pair(sync_db_path):
     assert "blocked" in msg.lower()
 
 
+def test_force_pair_status_requires_both_members_opted_in(sync_db_path):
+    """Force-pairing is consent-gated: both sides must be in the pool."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        assert pp._force_pair_status(conn, GUILD_ID, 10, 20) == "not_opted_in_1"
+        pp._add_to_pool(conn, GUILD_ID, 10)
+        assert pp._force_pair_status(conn, GUILD_ID, 10, 20) == "not_opted_in_2"
+        pp._add_to_pool(conn, GUILD_ID, 20)
+        assert pp._force_pair_status(conn, GUILD_ID, 10, 20) == "ok"
+
+
+def test_force_pair_status_reports_disabled_blocked_and_active(sync_db_path):
+    """The other refusal reasons keep their precedence over the opt-in gate."""
+    with open_db(sync_db_path) as conn:
+        assert pp._force_pair_status(conn, GUILD_ID, 10, 20) == "disabled"
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_block(conn, GUILD_ID, 10, 20)
+        assert pp._force_pair_status(conn, GUILD_ID, 10, 20) == "blocked"
+        pp._remove_block(conn, GUILD_ID, 10, 20)
+        pp._add_to_pool(conn, GUILD_ID, 10)
+        pp._add_to_pool(conn, GUILD_ID, 20)
+        pp._create_session(conn, "s-active", GUILD_ID, 9001, 20, 30, time.time())
+        assert pp._force_pair_status(conn, GUILD_ID, 10, 20) == "active_2"
+        assert pp._force_pair_status(conn, GUILD_ID, 20, 10) == "active_1"
+
+
+async def test_penpals_pair_command_refuses_a_member_who_never_opted_in(sync_db_path):
+    """A mod can't drop a member who never joined the pool into a pen pal channel."""
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 10)  # only user1 opted in
+
+    ctx = MagicMock(db_path=sync_db_path)
+    cog = pp.PenPalsCog(MagicMock(), ctx)
+    g = FakeGuild(id=GUILD_ID)
+    u1 = FakeUser(id=10, display_name="Ten")
+    u2 = FakeUser(id=20, display_name="Twenty")
+    interaction = fake_interaction(user=FakeUser(id=1), guild=g)
+
+    await cog.penpals_pair.callback(cog, interaction, u1, u2)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "Twenty" in msg  # named by display name…
+    assert u2.mention not in msg  # …never pinged
+    assert "opted in" in msg.lower()
+    interaction.response.defer.assert_not_awaited()
+
+
 # ── Panel refresh serialization ───────────────────────────────────────
 
 

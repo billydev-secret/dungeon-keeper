@@ -40,6 +40,7 @@ from bot_modules.games_mlt.embeds import (
     build_round_embed,
 )
 from bot_modules.games_mlt.logic import (
+    MAX_PLAYERS,
     MIN_PLAYERS,
     add_player,
     apply_vote,
@@ -48,6 +49,7 @@ from bot_modules.games_mlt.logic import (
     encode_round_votes,
     find_round_winners,
     is_eligible_voter,
+    lobby_is_full,
     pop_next_prompt,
     queue_prompt,
     remove_player,
@@ -86,6 +88,13 @@ class MLTJoinView(discord.ui.View):
         log.info("%s joined game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.setdefault("players", [])
+        if interaction.user.id not in players and lobby_is_full(players):
+            await interaction.response.send_message(
+                f"❌ This lobby is full — Most Likely To supports up to "
+                f"{MAX_PLAYERS} players.",
+                ephemeral=True,
+            )
+            return
         add_player(players, interaction.user.id)
         await update_game_payload(self.db, self.game_id, payload)
 
@@ -238,7 +247,10 @@ class MLTVoteView(discord.ui.View):
         self.queued_prompts: list[str] = []
 
         options = []
-        for uid in players:
+        # A Discord Select allows at most 25 options; the lobby is capped
+        # at MAX_PLAYERS join-side, but slice defensively so a stale/over-
+        # sized roster can never 400 the round message.
+        for uid in players[:25]:
             member = guild.get_member(uid) if guild else None
             name = member.display_name if member else str(uid)
             options.append(discord.SelectOption(label=name, value=str(uid)))
@@ -482,7 +494,7 @@ class MLTCog(commands.Cog):
         if not prompt:
             await channel.send(
                 "❌ The prompt bank is empty! Use **✍️ Pose Prompt** to submit your own, "
-                "or ask an admin to add prompts with `/bank add`."
+                "or ask an admin to add prompts from the Games question bank on the web dashboard."
             )
             await self._emit_final_standings(channel, game_id)
             await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
@@ -522,6 +534,24 @@ class MLTCog(commands.Cog):
                 await interaction.followup.send(
                     "❌ I don't have permission to send messages in that channel. "
                     "Please grant me **Send Messages** and **Embed Links** permissions.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
+            return
+        except Exception:
+            # Any other send failure (e.g. a 400 from an oversized select or
+            # embed) would otherwise leave the view registered and the game
+            # row un-ended, so recover_game re-registers the dead lobby every
+            # restart. Tear the game down cleanly and tell the host.
+            log.exception("mlt: failed to send round message for game %s", game_id)
+            await end_game(self.db, game_id)
+            if game_id in self.bot.active_views:
+                del self.bot.active_views[game_id]
+            try:
+                await interaction.followup.send(
+                    "❌ Something went wrong starting that round, so the game "
+                    "was ended. Please start a new one.",
                     ephemeral=True,
                 )
             except discord.HTTPException:
@@ -682,10 +712,20 @@ class MLTCog(commands.Cog):
 
         def _add(payload):
             players = payload.setdefault("players", [])
+            state["already_in"] = uid in players
+            state["full"] = lobby_is_full(players)
             state["added"] = add_player(players, uid)
 
         await modify_payload(self.db, game_id, _add)
         if not state.get("added"):
+            if state.get("already_in"):
+                return False, f"**{member.display_name}** is already in this game."
+            if state.get("full"):
+                return (
+                    False,
+                    f"This game is full — Most Likely To supports up to "
+                    f"{MAX_PLAYERS} players.",
+                )
             return False, f"**{member.display_name}** is already in this game."
         return True, f"🎲 **{member.display_name}** joined Most Likely To — in from the next round!"
 

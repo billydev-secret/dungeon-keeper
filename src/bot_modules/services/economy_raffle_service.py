@@ -105,23 +105,36 @@ def buy_tickets(
         )
     price = int(settings.price_raffle_ticket) * quantity
     unit = settings.currency_plural or "coins"
-    if not apply_debit(
-        conn, guild_id, user_id, price, SPEND_KIND,
-        actor_id=user_id, meta={"iso_week": iso_week, "quantity": quantity},
-    ):
-        have = get_balance(conn, guild_id, user_id)
-        raise ValueError(
-            f"{quantity} ticket(s) cost {price} {unit} — you have {have}."
-        )
-    conn.execute(
+    # Claim the tickets before charging for them, with the cap enforced *in*
+    # the upsert. The count read above runs in autocommit, so two simultaneous
+    # buys would otherwise both clear the Python check and push the member past
+    # the weekly cap — extra weighted odds in the draw for the rest of the week.
+    if conn.execute(
         """
         INSERT INTO econ_raffle_tickets (guild_id, iso_week, user_id, count)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(guild_id, iso_week, user_id)
         DO UPDATE SET count = count + excluded.count
+        WHERE count + excluded.count <= ?
         """,
-        (guild_id, iso_week, user_id, quantity),
-    )
+        (guild_id, iso_week, user_id, quantity, cap),
+    ).rowcount != 1:
+        raise ValueError(f"You're at the {cap}-ticket weekly cap.")
+    if not apply_debit(
+        conn, guild_id, user_id, price, SPEND_KIND,
+        actor_id=user_id, meta={"iso_week": iso_week, "quantity": quantity},
+    ):
+        # Hand back the claim: callers catch this below their own commit, so a
+        # rollback can't be relied on to unwind free tickets.
+        conn.execute(
+            "UPDATE econ_raffle_tickets SET count = count - ? "
+            "WHERE guild_id = ? AND iso_week = ? AND user_id = ?",
+            (quantity, guild_id, iso_week, user_id),
+        )
+        have = get_balance(conn, guild_id, user_id)
+        raise ValueError(
+            f"{quantity} ticket(s) cost {price} {unit} — you have {have}."
+        )
     # shop_purchase quest trigger (one-time setup kind); deferred import —
     # the quests service imports the wider economy machinery.
     from bot_modules.services.economy_quests_service import (  # noqa: PLC0415

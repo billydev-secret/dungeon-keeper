@@ -51,6 +51,7 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
 )
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -119,6 +120,10 @@ def _reward_text(settings: EconSettings, reward: int) -> str:
 
 # ── sign-off card embed ───────────────────────────────────────────────────────
 
+#: Trailing blank line that gives each embed section breathing room (a newline
+#: plus a zero-width space) — the style guide's section-spacing convention.
+_SPACER = "\n" + chr(0x200B)
+
 
 def render_signoff_card_embed(
     accent: discord.Color,
@@ -140,27 +145,34 @@ def render_signoff_card_embed(
     resolution (green approved, red denied) and accent while pending.
     """
     if state == "paid":
-        embed = discord.Embed(title="✅ Quest Approved", color=discord.Color.green())
+        embed = discord.Embed(title="✅ Quest Approved", color=discord.Color(COLOR_GREEN))
     elif state in ("denied", "expired"):
-        embed = discord.Embed(title="❌ Quest Denied", color=discord.Color.red())
+        embed = discord.Embed(title="❌ Quest Denied", color=discord.Color(COLOR_RED))
     else:
         embed = discord.Embed(title="📋 Quest Sign-Off Requested", color=accent)
 
-    embed.add_field(name="👤 Member", value=claimant_mention, inline=True)
-    embed.add_field(name="🎯 Quest", value=quest_title, inline=True)
-    embed.add_field(name="💰 Reward", value=_reward_text(settings, reward), inline=True)
+    # Every field name is glyph-led and every value but the last carries the
+    # zero-width blank line, so the sections don't crowd each other.
+    fields: list[tuple[str, str, bool]] = [
+        ("👤 Member", claimant_mention, True),
+        ("🎯 Quest", quest_title, True),
+        ("💰 Reward", _reward_text(settings, reward), True),
+    ]
     if criteria:
-        embed.add_field(name="📋 Criteria", value=criteria, inline=False)
+        fields.append(("📋 Criteria", criteria, False))
     if deny_count > 0:
-        embed.add_field(
-            name="Prior Denials/Expirations", value=str(deny_count), inline=True
-        )
+        fields.append(("🚫 Prior Denials", str(deny_count), True))
     if state == "paid" and resolver_id:
-        embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
+        fields.append(("✅ Approved By", f"<@{resolver_id}>", True))
     if state in ("denied", "expired") and resolver_id:
-        embed.add_field(name="Denied by", value=f"<@{resolver_id}>", inline=True)
+        fields.append(("❌ Denied By", f"<@{resolver_id}>", True))
         if deny_reason:
-            embed.add_field(name="Reason", value=deny_reason, inline=False)
+            fields.append(("📝 Reason", deny_reason, False))
+    last = len(fields) - 1
+    for idx, (name, value, inline) in enumerate(fields):
+        embed.add_field(
+            name=name, value=value if idx == last else f"{value}{_SPACER}", inline=inline
+        )
     if state in ("paid", "denied", "expired"):
         embed.timestamp = discord.utils.utcnow()
     return embed
@@ -505,7 +517,7 @@ async def _dm_resolution(
                 f"Your claim for **{title}** was approved — "
                 f"{_reward_text(settings, paid)} added to your wallet."
             ),
-            color=discord.Color.green(),
+            color=discord.Color(COLOR_GREEN),
         )
     else:
         embed = discord.Embed(
@@ -513,7 +525,7 @@ async def _dm_resolution(
             description=(
                 f"Your claim for **{title}** was denied. You can try again."
             ),
-            color=discord.Color.red(),
+            color=discord.Color(COLOR_RED),
         )
         if deny_reason:
             embed.add_field(name="Reason", value=deny_reason, inline=False)
@@ -720,7 +732,7 @@ class QuestClaimSelect(discord.ui.Select):
             await interaction.followup.send("❌ That quest is no longer available.", ephemeral=True)
             return
         qtype = str(meta["qtype"])
-        booster = member.premium_since is not None
+        booster = member_is_booster(bot, self.guild.id, member.id)
         guild_id = self.guild.id
         settings = self.settings
 

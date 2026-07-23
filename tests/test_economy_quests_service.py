@@ -836,6 +836,25 @@ def test_rotate_empty_type_is_none(db):
         assert rotate_pool(conn, GUILD, "weekly") is None
 
 
+def test_rotate_noop_when_multiple_pool_members_active(db):
+    # Regression: under the all-active board model every pool quest is live at
+    # once. Rotating then unconditionally deactivated one, so 3 active dailies
+    # sharing a tag collapsed to 1 after two rolls. With >1 pool member active
+    # rotation must be a true no-op — nothing deactivated.
+    with open_db(db) as conn:
+        ids = [
+            _make(conn, qtype="daily", rotate_tag="pool", active=True)
+            for _ in range(3)
+        ]
+        assert rotate_pool(conn, GUILD, "daily") is None
+        assert rotate_pool(conn, GUILD, "daily") is None
+        # All three stay active — the pool never shrinks.
+        for qid in ids:
+            assert _get(conn, GUILD, qid)["active"] == 1
+        active = list_quests(conn, GUILD, active_only=True)
+        assert len([q for q in active if q["qtype"] == "daily"]) == 3
+
+
 # ── trigger-word quests (spec §4.4) ───────────────────────────────────
 
 
@@ -1399,9 +1418,33 @@ def test_kind_activity_prune_keeps_trailing_window(db):
     with open_db(db) as conn:
         record_kind_activity(conn, GUILD, USER, "whisper", "2026-01-01")
         record_kind_activity(conn, GUILD, USER, "whisper", "2026-07-10")
-        prune_kind_activity(conn, GUILD, "2026-07-14")  # cutoff 2026-05-05
+        prune_kind_activity(conn, GUILD, "2026-07-14")  # cutoff 2026-04-10
         assert _activity_count(conn, "whisper", "2026-01-01") == 0
         assert _activity_count(conn, "whisper", "2026-07-10") == 1
+
+
+def test_kind_activity_retention_covers_the_monthly_read_window(db):
+    # Regression: retention was 70 days, but the monthly sizing path walks back
+    # two whole calendar months from the first of the current month — ~92 days
+    # on a late-in-month roll — so it read rows the prune had already dropped.
+    # Retention must exceed that window.
+    from bot_modules.services.economy_quests_service import (
+        _trailing_period_counts,
+        prune_kind_activity,
+        record_kind_activity,
+    )
+
+    with open_db(db) as conn:
+        # A late-in-month day; the monthly window for it reaches back to May 1.
+        today = "2026-07-31"
+        record_kind_activity(conn, GUILD, USER, "message_sent", "2026-05-02")
+        record_kind_activity(conn, GUILD, USER, "message_sent", "2026-06-15")
+        prune_kind_activity(conn, GUILD, today)
+        # Both months the monthly path reads (May, June) survive the prune.
+        counts = _trailing_period_counts(
+            conn, GUILD, USER, "message_sent", "monthly", today
+        )
+        assert counts == [1, 1]  # [June, May] — neither pruned away
 
 
 @pytest.mark.parametrize("kind", ["confession", "ama_ask", "whisper", "quote"])
@@ -1843,20 +1886,31 @@ def test_reroll_swaps_within_frozen_pool(db):
         assert int(new_row["id"]) in after  # the swap actually took effect
 
 
-def test_pool_snapshot_prunes_old_periods(db):
-    # Only the current period's snapshot is retained per (guild, qtype) — old
-    # rows are pruned on the next period's freeze so the table stays bounded.
+def test_pool_snapshot_prunes_beyond_retention_window(db):
+    # A retention window of recent snapshots per (guild, qtype) is kept — so a
+    # late sign-off's set bonus can still read its past period's board — while
+    # periods older than the window are pruned to bound the table. Three
+    # consecutive days are all inside the window; a day far in the future prunes
+    # everything but itself and its recent neighbours.
     with open_db(db) as conn:
         for _ in range(4):
             _make(conn, qtype="daily", trigger_kind="message_sent")
         for day in ("2026-07-13", "2026-07-14", "2026-07-15"):
             assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
-        rows = conn.execute(
-            "SELECT COUNT(*) c FROM econ_quest_pool_snapshots "
-            "WHERE guild_id = ? AND qtype = 'daily'",
-            (GUILD,),
-        ).fetchone()
-        assert rows["c"] == 1
+        # All three consecutive periods survive — within the retention window.
+        assert _snapshot_count(conn, "daily") == 3
+        # A freeze well past the window drops the stale trio, keeping only the
+        # new one (nothing else is within _SNAPSHOT_RETAIN_PERIODS of it).
+        assigned_board_ids(conn, GUILD, USER, "daily", "2026-09-01", SETTINGS)
+        assert _snapshot_count(conn, "daily") == 1
+
+
+def _snapshot_count(conn, qtype):
+    return conn.execute(
+        "SELECT COUNT(*) c FROM econ_quest_pool_snapshots "
+        "WHERE guild_id = ? AND qtype = ?",
+        (GUILD, qtype),
+    ).fetchone()["c"]
 
 
 def test_board_size_zero_pays_nothing(db):
@@ -2015,6 +2069,48 @@ def test_resolve_target_clamps_to_band(db):
         assert resolve_member_target(
             conn, GUILD, USER_2, quest, period="2026-W29", local_day="2026-07-14"
         ) == 10  # median ~1 × 1.15 floored at band min
+
+
+def test_resolve_target_entity_keyed_sizes_from_distinct_occurrences(db):
+    # Regression: entity-keyed kinds (voice_partner → partner id) must size the
+    # band from DISTINCT occurrences, not the raw activity stream. A member who
+    # shares voice with the SAME partner over and over records a big raw count,
+    # but counted progress only advances on a NEW partner — sizing off the raw
+    # count pins them to target_max on a mathematically unreachable target.
+    from bot_modules.services.economy_quests_service import (
+        record_kind_activity,
+        resolve_member_target,
+    )
+
+    with open_db(db) as conn:
+        quest = _band_quest(conn, kind="voice_partner", lo=2, hi=10)
+        # 30 voice ticks per week for the previous 4 ISO weeks (W25..W28), all
+        # with the SAME partner → raw count 30/week (would resolve target 10),
+        # distinct partners 1/week (the real reachable pace).
+        for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):
+            for _ in range(30):
+                record_kind_activity(
+                    conn, GUILD, USER, "voice_partner", day, occurrence="partner-A"
+                )
+        target = resolve_member_target(
+            conn, GUILD, USER, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        # distinct median is 1 → clamped to the band floor, a target the member
+        # can actually reach — not the raw-count ceiling of 10.
+        assert target == 2
+
+        # A member who genuinely spreads across partners sizes higher: 4
+        # distinct partners each of the previous weeks → median 4 → ×1.15 ≈ 5.
+        for day in ("2026-06-17", "2026-06-24", "2026-07-01", "2026-07-08"):
+            for p in ("A", "B", "C", "D"):
+                record_kind_activity(
+                    conn, GUILD, USER_2, "voice_partner", day,
+                    occurrence=f"partner-{p}",
+                )
+        spread = resolve_member_target(
+            conn, GUILD, USER_2, quest, period="2026-W29", local_day="2026-07-14"
+        )
+        assert spread == 5
 
 
 def _seed_messages(conn, *, channel_id, count, user_id=USER, ts=1783000000.0):
@@ -2269,6 +2365,42 @@ def test_set_bonus_waits_for_signoff_approval(db):
         assert get_balance(conn, GUILD, USER) == 20
 
 
+def test_set_bonus_pays_across_a_later_period_board_read(db):
+    # Regression: the set bonus resolves the board for the CLAIM's (past)
+    # period. Pruning ALL older pool snapshots on a fresh freeze meant a later
+    # period's board read deleted the snapshot the bonus needed, so it silently
+    # re-froze today's (edited) live pool into a WRONG board and never paid.
+    from bot_modules.services.economy_quests_service import (
+        assigned_board_ids,
+        maybe_pay_set_bonus,
+    )
+
+    with open_db(db) as conn:
+        x = _make(conn, qtype="weekly", reward=5, title="X")
+        day_p = "2026-07-06"  # ISO week W28
+        period_p = quest_period("weekly", day_p)
+        # Freeze week P's board ({X}) and pay the quest — no bonus yet, this
+        # settings zeroes it, leaving only the paid claim behind.
+        assigned_board_ids(conn, GUILD, USER, "weekly", day_p, SETTINGS)
+        claim_quest(conn, SETTINGS, GUILD, x, USER, period=period_p, booster=False)
+        assert get_balance(conn, GUILD, USER) == 5
+
+        # A later week rolls and the library is edited: X retired, Y added. The
+        # later board read used to prune P's snapshot out from under the bonus.
+        set_quest_active(conn, GUILD, x, False)
+        _make(conn, qtype="weekly", reward=5, title="Y")
+        assigned_board_ids(conn, GUILD, USER, "weekly", "2026-07-13", SETTINGS)
+
+        # Now pay P's clear-the-board bonus: it must read P's SURVIVING
+        # snapshot ({X}, which the member cleared), not a re-freeze of the live
+        # pool ({Y}, which they never touched).
+        paid = maybe_pay_set_bonus(
+            conn, BONUS_SETTINGS, GUILD, USER, "weekly", period_p
+        )
+        assert paid == 25
+        assert get_balance(conn, GUILD, USER) == 30
+
+
 def test_spotlight_needs_two_kinds_and_doubles_payout(db):
     import time as _t
 
@@ -2306,6 +2438,32 @@ def test_spotlight_needs_two_kinds_and_doubles_payout(db):
             (GUILD, USER),
         ).fetchone()
         assert spotlit is not None and '"spotlight": true' in str(spotlit["meta"])
+
+
+def test_spotlight_kind_is_frozen_for_the_week(db):
+    # Regression: the digest is stable but the active-kind LIST is not — adding
+    # or removing kinds mid-week moved both the modulo and the chosen kind, so
+    # the 2× silently drifted off the announced kind. The choice must persist at
+    # first resolution and stay put for the rest of the week.
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    week = "2026-W30"
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="whisper", reward=10, title="A")
+        _make(conn, qtype="daily", trigger_kind="quote", reward=10, title="B")
+        chosen = spotlight_kind(conn, GUILD, week)
+        assert chosen in ("whisper", "quote")
+        # The library churns mid-week: several more kinds activate (changing the
+        # digest modulo) and the originally-chosen kind is even retired.
+        for k in ("ama_ask", "confession", "media_post"):
+            _make(conn, qtype="daily", trigger_kind=k, reward=10, title=f"X-{k}")
+        for q in list_quests(conn, GUILD, active_only=True):
+            if str(q["trigger_kind"]) == chosen:
+                set_quest_active(conn, GUILD, int(q["id"]), False)
+        # Still the announced kind — frozen, not recomputed over the new list.
+        assert spotlight_kind(conn, GUILD, week) == chosen
+        # A different week is free to choose afresh.
+        assert spotlight_kind(conn, GUILD, "2026-W31") is not None
 
 
 def _reroll_pool(conn, n_kinds=("whisper", "quote", "ama_ask", "confession")):

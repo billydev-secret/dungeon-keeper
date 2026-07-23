@@ -315,7 +315,7 @@ class VoiceMasterCog(commands.Cog):
             await self._notify_admins(
                 channel.guild,
                 "⚠️ Voice Master Hub channel was deleted. "
-                "Run `/voice-admin set-hub` to reconfigure.",
+                "Reconfigure it in the Voice Master → Config dashboard panel.",
             )
         elif channel.id == cfg.category_id:
             log.error(
@@ -325,7 +325,7 @@ class VoiceMasterCog(commands.Cog):
             await self._notify_admins(
                 channel.guild,
                 "⚠️ Voice Master target category was deleted. "
-                "Run `/voice-admin set-category` to reconfigure.",
+                "Reconfigure it in the Voice Master → Config dashboard panel.",
             )
         elif channel.id == cfg.control_channel_id:
             log.warning(

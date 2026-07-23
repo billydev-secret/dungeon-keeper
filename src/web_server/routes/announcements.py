@@ -386,11 +386,15 @@ async def update(
             post_at, status = _compute_schedule(conn, guild_id, fields, now)
             # Editing always re-derives status: time set → scheduled, cleared →
             # draft; either way a stale error is wiped.
-            update_announcement(
+            if not update_announcement(
                 conn, ann_id, guild_id,
                 {**fields, "post_at": post_at, "status": status, "error": None},
-                now,
-            )
+                now, expected_status=row["status"],
+            ):
+                # The send loop claimed the row between our read and our write.
+                raise HTTPException(
+                    status_code=409, detail="Just went out — reload and clone it instead"
+                )
             replace_buttons(conn, ann_id, buttons)
         return {"ok": True, "status": status, "post_at": post_at}
 
@@ -434,11 +438,14 @@ async def post_now(
                 raise HTTPException(status_code=404, detail="Announcement not found")
             if row["status"] == "sent":
                 raise HTTPException(status_code=409, detail="Already sent — clone it instead")
-            update_announcement(
+            if not update_announcement(
                 conn, ann_id, guild_id,
                 {"status": "scheduled", "post_at": now, "error": None},
-                now,
-            )
+                now, expected_status=row["status"],
+            ):
+                raise HTTPException(
+                    status_code=409, detail="Just went out — reload and clone it instead"
+                )
         return {"ok": True}
 
     return await run_query(_q)

@@ -551,7 +551,9 @@ class RushmoreVoteView(discord.ui.View):
         self._done_event: asyncio.Event | None = None
 
         options = []
-        for uid in eligible_players:
+        # A Discord Select allows at most 25 options; slice defensively so
+        # an oversized eligible-player roster can never 400 the vote message.
+        for uid in eligible_players[:25]:
             name = resolve_name(guild, uid)
             options.append(discord.SelectOption(label=name, value=str(uid)))
         self.add_item(RushmoreVoteSelect(options))
@@ -618,7 +620,7 @@ class RushmoreRecapView(discord.ui.View):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
         await interaction.response.send_message(
-            "Type the **/rushmore** command to start a new game as the new host!",
+            "Type **/games play rushmore** to start a new game as the new host!",
             ephemeral=True,
         )
         disable_all_items(self)
@@ -1159,7 +1161,10 @@ class RushmoreCog(commands.Cog):
             if eligible:
                 winner_uid = eligible[0]
                 winner_name = resolve_name(guild, winner_uid)
-                await channel.send(f"\U0001f3c6 **{discord.utils.escape_markdown(winner_name)}** wins by default!")
+                await channel.send(
+                    f"\U0001f3c6 **{discord.utils.escape_markdown(winner_name)}** wins by default!",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             else:
                 winner_uid = None
                 await channel.send("No valid boards — nobody wins!")

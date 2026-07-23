@@ -102,7 +102,10 @@ def build_assignments_embed(
         description=f"Reply with your {title_str} picks!",
         color=color,
     )
-    for player_mention, target_names in player_assignments:
+    # A Discord embed allows at most 25 fields; the lobby is capped at
+    # MAX_PARTICIPANTS join-side, but slice defensively so a stale/over-
+    # sized roster can never 400 the assignments message.
+    for player_mention, target_names in player_assignments[:25]:
         embed.add_field(
             name=player_mention,
             value=format_assignment_value(target_names),

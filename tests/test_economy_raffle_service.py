@@ -220,3 +220,43 @@ def test_buy_tickets_fires_shop_purchase_trigger(db):
             (GUILD, USER),
         ).fetchone()
         assert row is not None
+
+
+def test_concurrent_buys_cannot_exceed_the_weekly_cap(db, monkeypatch):
+    """Two simultaneous buys must not jointly overshoot the per-member cap.
+
+    The held-ticket count is read in autocommit, so without the cap enforced
+    inside the upsert both buys clear the Python check and the member carries
+    extra weighted odds into the draw for the rest of the week.
+    """
+    import bot_modules.services.economy_raffle_service as svc
+
+    real_debit = svc.apply_debit
+    fired: list[bool] = []
+
+    def racing_debit(conn, *args, **kwargs):
+        # A second buy lands while the first is mid-purchase.
+        if not fired:
+            fired.append(True)
+            with pytest.raises(ValueError, match="cap"):
+                svc.buy_tickets(conn, SETTINGS, GUILD, USER, WEEK, 6)
+        return real_debit(conn, *args, **kwargs)
+
+    monkeypatch.setattr(svc, "apply_debit", racing_debit)
+
+    with open_db(db) as conn:
+        _fund(conn, 500)
+        buy_tickets(conn, SETTINGS, GUILD, USER, WEEK, 6)  # cap is 10
+
+        assert fired, "the racing buy never fired — test is not exercising the race"
+        assert member_tickets(conn, GUILD, WEEK, USER) == 6
+        assert get_balance(conn, GUILD, USER) == 440  # charged once, 6 × 10
+
+
+def test_failed_debit_leaves_no_free_tickets(db):
+    with open_db(db) as conn:
+        _fund(conn, 5)  # not enough for even one ticket at 10
+        with pytest.raises(ValueError, match="you have 5"):
+            buy_tickets(conn, SETTINGS, GUILD, USER, WEEK, 1)
+        assert member_tickets(conn, GUILD, WEEK, USER) == 0
+        assert get_balance(conn, GUILD, USER) == 5

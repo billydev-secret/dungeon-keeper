@@ -39,14 +39,35 @@ from __future__ import annotations
 # Minimum players required before the host can start the game.
 MIN_PLAYERS = 3
 
+# Maximum players allowed in a single lobby. The per-round vote uses a
+# Discord ``Select`` which hard-caps at 25 options, so a bigger lobby
+# would 400 the round message. Cap the join so the round always fits.
+MAX_PLAYERS = 25
 
-def add_player(players: list[int], uid: int) -> bool:
-    """Append ``uid`` to ``players`` if not already present.
+
+def lobby_is_full(players: list[int], max_players: int = MAX_PLAYERS) -> bool:
+    """Return ``True`` when the lobby has reached ``max_players``.
+
+    The cog checks this before :func:`add_player` so it can send a
+    friendly "lobby full" ephemeral instead of silently dropping the
+    joiner.
+    """
+    return len(players) >= max_players
+
+
+def add_player(
+    players: list[int], uid: int, max_players: int = MAX_PLAYERS
+) -> bool:
+    """Append ``uid`` to ``players`` if not already present and there's room.
 
     Mutates ``players`` in place. Returns ``True`` when the player was
-    newly added, ``False`` for an idempotent re-press.
+    newly added, ``False`` for an idempotent re-press **or** when the
+    lobby is already at ``max_players`` (the vote select can't hold more
+    than 25 options, so an unbounded lobby would 400 the round message).
     """
     if uid in players:
+        return False
+    if len(players) >= max_players:
         return False
     players.append(uid)
     return True
