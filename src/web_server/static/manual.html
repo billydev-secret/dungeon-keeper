@@ -557,8 +557,8 @@
         <tr><td><code>/games play traditional</code></td><td><strong>Truth or Dare</strong> — on your turn, pick a category button: SFW Truth, SFW Dare, NSFW Truth, or NSFW Dare (NSFW only appears in age-restricted channels). The optional <code>single_choice:</code> flag locks the whole game to one category picked up front</td></tr>
         <tr><td><code>/games play fantasies</code></td><td><strong>Fantasies &amp; Dealbreakers</strong> — anonymous submissions in two categories, then voting rounds</td></tr>
         <tr><td><code>/games play ama</code></td><td><strong>Anonymous AMA</strong> — others submit anonymous questions to whoever's answering. <code>mode:</code> is <em>Unfiltered</em> by default (questions post immediately); pick <em>Screened</em> to route them through an approval queue first. <code>format:</code> is <em>Hot Seat</em> by default (one player answers); <em>Open Panel</em> lets anyone answer</td></tr>
-        <tr><td><code>/games play hottakes</code></td><td><strong>Hot Takes</strong> — submit spicy opinions, then the room votes Agree / Disagree on each</td></tr>
-        <tr><td><code>/games play ffa</code></td><td><strong>Truth or Dare Cards</strong> — drop a Truth/Dare prompt card and open a thread for (optionally anonymous) replies</td></tr>
+        <tr><td><code>/games play hottakes</code></td><td><strong>Hot Takes</strong> — submit spicy opinions, then the room rates each on a 5-step 🧊-to-🔥 scale (strongly disagree → strongly agree); the average heat for every take is revealed at the end</td></tr>
+        <tr><td><code>/games play ffa</code></td><td><strong>Anonymous Truth or Dare</strong> — drop a Truth/Dare prompt card; players reply anonymously right in the channel (the bot posts each reply with no name attached — mods can still see who)</td></tr>
         <tr><td><code>/games play ffa_banner</code></td><td><strong>Truth or Dare Card</strong> — the banner variant: just drops the prompt card in the channel for open chat, no reply buttons</td></tr>
         <tr><td><code>/games play story</code></td><td><strong>Story Builder</strong> — players take turns adding one sentence each to a collaborative story</td></tr>
         <tr><td><code>/games play price</code></td><td><strong>Name Your Price</strong> — secretly bid what you'd charge for a scenario; reveal, then vote Most Reasonable and Most Unhinged</td></tr>
@@ -1002,7 +1002,15 @@
     </div>
 
     <h3 id="economy-shop">The Perk Shop</h3>
-    <p>Perks are <em>weekly rentals</em>, not one-time purchases — each renews automatically on its personal anniversary, billing your wallet at the server's current price. The shop's headline perks are personal-role cosmetics: a custom role <strong>color</strong>, custom role <strong>name</strong> (which also sets your server nickname to match, where the bot has permission), role <strong>icon</strong> (bring your own image or emoji, or pick from a server-curated icon catalog with per-icon prices — where a catalog exists, the icon button opens a picker whose last entry is always <strong>🎨 Custom</strong>, the flat-price upload-your-own option, and switching between a catalog icon and Custom is free mid-week, re-pricing at your next renewal), a <strong>gradient</strong> color, and a <strong>holographic</strong> shimmer (Discord's fixed preset — nothing to pick, renting it is the whole thing) where the server supports enhanced role colors. The listing is a price ladder — <strong>Essentials</strong> (name, color) then <strong>Signature</strong> (gradient, icon, holographic), each row showing what the perk actually does and what it costs, with your balance in the header. Rent a perk and the bot maintains a personal role for you; customize it from the buttons inside <code>/bank shop</code> — or tap <strong>🛍️ Open Shop</strong> on the channel's shop panel, which opens that same private menu.</p>
+    <p>Perks are <em>weekly rentals</em>, not one-time purchases — each renews automatically on its personal anniversary, billing your wallet at the server's current price. The headline perks are all personal-role cosmetics:</p>
+    <ul>
+      <li><strong>Color</strong> — a custom color for your personal role.</li>
+      <li><strong>Name</strong> — a custom role name, which also sets your server nickname to match (where the bot has permission).</li>
+      <li><strong>Icon</strong> — bring your own image or emoji, or pick from a server-curated catalog with per-icon prices. Where a catalog exists, the icon button opens a picker whose last entry is always <strong>🎨 Custom</strong> (the flat-price upload-your-own option); switching between a catalog icon and Custom is free mid-week and re-prices at your next renewal.</li>
+      <li><strong>Gradient</strong> — a gradient role color, where the server supports enhanced role colors.</li>
+      <li><strong>Holographic</strong> — Discord's fixed shimmer preset. Nothing to pick — renting it is the whole thing.</li>
+    </ul>
+    <p>The listing is a price ladder: <strong>Essentials</strong> (name, color) then <strong>Signature</strong> (gradient, icon, holographic), each row showing what the perk does and what it costs, with your balance in the header. Rent one and the bot maintains a personal role for you; customize it from the buttons inside <code>/bank shop</code> — or tap <strong>🛍️ Open Shop</strong> on the channel's shop panel, which opens that same private menu.</p>
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
@@ -1396,6 +1404,11 @@
               <td><strong>Quote</strong></td>
               <td>Generates a styled quote-card image from the message and posts it as a reply — see <a href="#quote-cards">Quote Cards</a> below</td>
             </tr>
+            <tr>
+              <td>Message</td>
+              <td><strong>Report Rule Violation</strong></td>
+              <td>Mod-only: hand-file the message into the <a href="#rules-watch">Rules Watch</a> queue as a confirmed example, even if the AI didn't flag it — useful for teaching the signal what it missed</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -1633,7 +1646,7 @@
          20. RULES WATCH
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="rules-watch" class="section-break"><span class="section-num">20</span> Rules Watch</h2>
-    <p>A passive AI moderation monitor. Once enabled, Rules Watch screens every public message against your server rules and sorts anything suspicious into a tiered queue: <strong>immediate</strong> (an alert embed posted to your alert channel with Confirm / False-positive buttons), <strong>digest</strong> (queued for review in batches), and <strong>logged</strong> (recorded but not alerted). Labeling events as violations or false positives tunes the signal over time — the stats command shows your false-positive rate.</p>
+    <p>A passive AI moderation monitor. Once enabled, Rules Watch screens every public message against your server rules and sorts anything suspicious into a tiered queue: <strong>immediate</strong> (an alert embed posted to your alert channel with Confirm / False-positive buttons), <strong>digest</strong> (queued for review in batches), and <strong>logged</strong> (recorded but not alerted). Labeling events as violations or false positives tunes the signal over time — the stats command shows your false-positive rate. Mods can also right-click any message → <strong>Apps → Report Rule Violation</strong> to hand-file it as a confirmed example the AI missed.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -1999,8 +2012,10 @@
         <tr><td><strong>Games — Duels &amp; Group</strong> (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato (Group), Chicken, Musical Chairs)</td><td>Per-game Config panel: cooldowns, nickname/sentence duration, timers, player counts, channel restrictions</td></tr>
         <tr><td><strong><a href="/#/config-wellness">Wellness</a></strong></td><td>Server defaults, wellness role + private channel, crisis-resource URL</td></tr>
         <tr><td><strong><a href="/#/config-ai">AI (Local LLM)</a></strong></td><td>Local AI model selection and settings (bot-wide, primary server only)</td></tr>
+        <tr><td><strong><a href="/#/config-advisor">Billy-bot</a></strong></td><td>The <a href="#ask-guide"><code>/ask</code> helper</a>: AI model (Haiku by default) and the live-server-context toggle (off by default)</td></tr>
         <tr><td><strong><a href="/#/gender-admin">Gender Tagging</a></strong></td><td>Member gender classification for analytics breakdowns</td></tr>
         <tr><td><strong><a href="/#/economy-config">Economy</a></strong></td><td>Branding, wiring, and rates (Settings) plus Quests, Claims, Operations, Income Sources, Sinks (perk prices + icon catalog), QOTD, Sponsored QOTD, and Statistics pages</td></tr>
+        <tr><td><strong><a href="/#/config-casino">Casino</a></strong></td><td>The <a href="#economy-casino">Golden Meadow Casino</a>: casino channel, min/max bets, per-member daily wager cap, and which tables are open</td></tr>
         <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, enabled toggle; reward set as a photo_post quest in Economy; prompt bank under Prompts &amp; AI</td></tr>
         <tr><td><strong><a href="/#/config-greeting-watch">Greeting Watch</a></strong></td><td>Watched channels, notify member, unanswered-window minutes</td></tr>
         <tr><td><strong><a href="/#/config-intake">Intake Cards</a></strong></td><td>Enable toggle, card channel, completion code, stale-nudge hours, checklist step editor, procedure-reference channel + block editor with import</td></tr>
@@ -2053,7 +2068,7 @@
       <thead><tr><th>Command</th><th>Permission</th><th>Description</th></tr></thead>
       <tbody>
         <tr><td><a href="#jail"><code>/jail</code> / <code>/unjail</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
-        <tr><td><a href="#warnings"><code>/warn user:@u reason:...</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Issue a private warning (member not notified)</td></tr>
+        <tr><td><a href="#warnings"><code>/warn user:@u reason:...</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Log a warning — member isn't DM'd, but the confirmation posts in-channel, so run it in a mod channel</td></tr>
         <tr><td><a href="#warnings"><code>/warnings user:@u</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>List all active and revoked warnings for a member</td></tr>
         <tr><td><a href="#warnings"><code>/revokewarn user:@u warning_id:N</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Revoke a warning by ID — stays in history, stops counting</td></tr>
         <tr><td><a href="#modinfo"><code>/modinfo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>

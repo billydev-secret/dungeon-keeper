@@ -13,11 +13,12 @@
 
 export const HELP_GROUPS = [
   { heading: null, items: [
-    // Nav items are alphabetized within their group; these labels are chosen
-    // so Getting Started sorts first.
-    { page: "help-start",    anchor: "getting-started",   label: "Getting Started" },
-    { page: "help-ask",      anchor: "ask-guide",         label: "Ask Billy-bot (AI)" },
-    { page: "help-overview", anchor: "functional-blocks", label: "Overview (Feature Map)" },
+    // Nav items alphabetize within their group by default; `order` pins these
+    // onboarding entries to a deliberate reading order (Getting Started first)
+    // since it wouldn't otherwise sort ahead of "Ask Billy-bot".
+    { page: "help-start",    anchor: "getting-started",   label: "Getting Started",       order: 1 },
+    { page: "help-overview", anchor: "functional-blocks", label: "Overview (Feature Map)", order: 2 },
+    { page: "help-ask",      anchor: "ask-guide",         label: "Ask Billy-bot (AI)",    order: 3 },
   ]},
   // Groups run audience-first — members, then moderators, then admins —
   // mirroring the manual's section order. (Items alphabetize within a group
