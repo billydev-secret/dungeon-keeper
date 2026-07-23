@@ -58,7 +58,7 @@ That is **17 `/games play` commands** (Anonymous AMA's two axes are one command;
 
 These settings are **live and enforced** but are configured from the web dashboard (`/api/games/*`), **not** slash commands. There are no slash commands to manage them.
 
-- **Channel allowlist** (`games_allowed_channels`). Every game preflights `check_allowed_channel`; a channel that isn't on the allowlist refuses all games. Managed via the dashboard channels panel.
+- **Channel allowlist** (`games_allowed_channels`, `guild_id`-scoped as of migration 115). Every game preflights `check_allowed_channel`; a channel that isn't on the allowlist refuses all games. The dashboard channels panel and the game-history/stats views are filtered to the active guild, so a host of one guild can't see or delete another guild's rows. (Legacy rows predating migration 115 carry `guild_id = 0`, treated as a wildcard by the in-Discord gate but invisible in the guild-scoped dashboard until reconciled.)
 - **Per-guild per-game enable/disable** (`games_game_config`, default enabled). Checked by `check_game_enabled`.
 - **Audit channel** (`games_audit_channel`). When set, anonymous submissions are mirrored there with the original author visible.
 - **Game Host / editor role** (`games_editor_role`). Holders pass the Game-Host check for content authoring on the dashboard and can add/remove other players via `/games join|leave`.

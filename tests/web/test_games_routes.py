@@ -38,13 +38,23 @@ def _clear_bank(db_path):
         conn.execute("DELETE FROM games_question_bank")
 
 
-def _seed_history(db_path, game_type="wyr", player_count=3, round_count=5):
+def _seed_history(db_path, game_type="wyr", player_count=3, round_count=5, guild_id=123):
+    # Default guild_id matches FakeCtx's default (123) so the guild-scoped
+    # stats/history routes see these rows under the active guild.
     with open_db(db_path) as conn:
         conn.execute(
             "INSERT INTO games_game_history"
-            " (game_id, game_type, channel_id, host_id, player_count, round_count, started_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-            (f"game-{game_type}", game_type, 111, 222, player_count, round_count),
+            " (game_id, game_type, channel_id, host_id, player_count, round_count, started_at, guild_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)",
+            (f"game-{game_type}-{guild_id}", game_type, 111, 222, player_count, round_count, guild_id),
+        )
+
+
+def _seed_allowed_channel(db_path, channel_id, guild_id=123):
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)",
+            (channel_id, guild_id),
         )
 
 
@@ -738,9 +748,9 @@ def test_history_pagination(open_client, fake_ctx):
         with open_db(fake_ctx.db_path) as conn:
             conn.execute(
                 "INSERT INTO games_game_history"
-                " (game_id, game_type, channel_id, host_id, started_at)"
-                " VALUES (?, 'wyr', 111, 222, datetime('now'))",
-                (f"game-{i}",),
+                " (game_id, game_type, channel_id, host_id, started_at, guild_id)"
+                " VALUES (?, 'wyr', 111, 222, datetime('now'), ?)",
+                (f"game-{i}", fake_ctx.guild_id),
             )
 
     resp = open_client.get(f"{BASE}/history?per_page=2&page=1")
@@ -971,6 +981,74 @@ def test_channels_add_idempotent(open_client, fake_ctx):
 def test_channels_delete_nonexistent_is_ok(open_client):
     resp = open_client.delete(f"{BASE}/config/channels/99999")
     assert resp.status_code == 200
+
+
+# ── Guild scoping (migration 115) ───────────────────────────────────────────────
+#
+# The active guild for open_client is FakeCtx.guild_id (123); a row stamped with
+# any other guild_id belongs to a *different* guild and must never surface.
+
+
+def test_migration_115_adds_guild_id_columns(fake_ctx):
+    # Schema is built from migrations alone (web_db fixture -> apply_migrations).
+    with open_db(fake_ctx.db_path) as conn:
+        ac_cols = {r[1] for r in conn.execute("PRAGMA table_info(games_allowed_channels)")}
+        gh_cols = {r[1] for r in conn.execute("PRAGMA table_info(games_game_history)")}
+    assert "guild_id" in ac_cols
+    assert "guild_id" in gh_cols
+
+
+def test_channels_list_scoped_to_active_guild(open_client, fake_ctx):
+    _seed_allowed_channel(fake_ctx.db_path, 111, guild_id=fake_ctx.guild_id)
+    _seed_allowed_channel(fake_ctx.db_path, 222, guild_id=999)  # guild B
+
+    channels = open_client.get(f"{BASE}/config/channels").json()["channels"]
+    ids = {str(c["channel_id"]) for c in channels}
+    assert ids == {"111"}
+
+
+def test_channels_add_stamps_active_guild(open_client, fake_ctx):
+    open_client.post(f"{BASE}/config/channels", json={"channel_id": "888"})
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT guild_id FROM games_allowed_channels WHERE channel_id = 888"
+        ).fetchone()
+    assert row[0] == fake_ctx.guild_id
+
+
+def test_channels_delete_cannot_touch_other_guild(open_client, fake_ctx):
+    # A channel owned by guild B must not be deletable from guild A's dashboard.
+    _seed_allowed_channel(fake_ctx.db_path, 333, guild_id=999)
+
+    resp = open_client.delete(f"{BASE}/config/channels/333")
+    assert resp.status_code == 200  # no-op, not an error
+
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT guild_id FROM games_allowed_channels WHERE channel_id = 333"
+        ).fetchone()
+    assert row is not None and row[0] == 999  # still present
+
+
+def test_history_scoped_to_active_guild(open_client, fake_ctx):
+    _seed_history(fake_ctx.db_path, "wyr", guild_id=fake_ctx.guild_id)
+    _seed_history(fake_ctx.db_path, "nhie", guild_id=999)  # guild B
+
+    data = open_client.get(f"{BASE}/history").json()
+    types = {r["game_type"] for r in data["rows"]}
+    assert types == {"wyr"}
+    assert data["total"] == 1
+
+
+def test_stats_scoped_to_active_guild(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
+    _seed_history(fake_ctx.db_path, "wyr", player_count=4, round_count=10, guild_id=fake_ctx.guild_id)
+    _seed_history(fake_ctx.db_path, "nhie", player_count=9, round_count=99, guild_id=999)
+
+    data = open_client.get(f"{BASE}/stats").json()
+    assert data["games_played"] == 1
+    assert data["rounds_played"] == 10
+    assert data["games_by_type"] == {"wyr": 1}
 
 
 # ── Config audit ──────────────────────────────────────────────────────────────

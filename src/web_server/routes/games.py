@@ -230,30 +230,39 @@ async def get_stats(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
+            # games_question_bank is intentionally global/unscoped for now
+            # (shared cross-guild library — see migration 115's open question).
             total_q = conn.execute(
                 "SELECT COUNT(*) FROM games_question_bank"
             ).fetchone()[0]
 
             games_played = conn.execute(
-                "SELECT COUNT(*) FROM games_game_history"
+                "SELECT COUNT(*) FROM games_game_history WHERE guild_id = ?",
+                (guild_id,),
             ).fetchone()[0]
 
             rounds_played_row = conn.execute(
-                "SELECT COALESCE(SUM(round_count), 0) FROM games_game_history"
+                "SELECT COALESCE(SUM(round_count), 0) FROM games_game_history WHERE guild_id = ?",
+                (guild_id,),
             ).fetchone()
             rounds_played = rounds_played_row[0] if rounds_played_row else 0
 
             # Unique players: host_ids + player_ids from payload JSON
             host_rows = conn.execute(
-                "SELECT DISTINCT host_id FROM games_game_history WHERE host_id IS NOT NULL"
+                "SELECT DISTINCT host_id FROM games_game_history"
+                " WHERE guild_id = ? AND host_id IS NOT NULL",
+                (guild_id,),
             ).fetchall()
             player_ids: set[str] = {str(r[0]) for r in host_rows}
 
             payload_rows = conn.execute(
-                "SELECT payload FROM games_game_history WHERE payload IS NOT NULL"
+                "SELECT payload FROM games_game_history"
+                " WHERE guild_id = ? AND payload IS NOT NULL",
+                (guild_id,),
             ).fetchall()
             for row in payload_rows:
                 try:
@@ -281,7 +290,9 @@ async def get_stats(
 
             # Games by type: {game_type: N}
             hist_rows = conn.execute(
-                "SELECT game_type, COUNT(*) FROM games_game_history GROUP BY game_type"
+                "SELECT game_type, COUNT(*) FROM games_game_history"
+                " WHERE guild_id = ? GROUP BY game_type",
+                (guild_id,),
             ).fetchall()
             games_by_type: dict[str, int] = {gt: cnt for gt, cnt in hist_rows}
 
@@ -841,16 +852,17 @@ async def get_history(
     game_type: Optional[str] = Query(None),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            clauses = []
-            params: list[object] = []
+            clauses = ["guild_id = ?"]
+            params: list[object] = [guild_id]
             if game_type:
                 clauses.append("game_type = ?")
                 params.append(game_type)
 
-            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            where = "WHERE " + " AND ".join(clauses)
             total = conn.execute(
                 f"SELECT COUNT(*) FROM games_game_history {where}", params
             ).fetchone()[0]
@@ -1360,6 +1372,7 @@ async def get_allowed_channels(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1368,8 +1381,10 @@ async def get_allowed_channels(
                 SELECT a.channel_id, a.added_by, a.added_at, l.max_tier
                 FROM games_allowed_channels a
                 LEFT JOIN legitlibs_channel_config l ON l.channel_id = a.channel_id
+                WHERE a.guild_id = ?
                 ORDER BY a.added_at DESC
-                """
+                """,
+                (guild_id,),
             ).fetchall()
             return {
                 "channels": [
@@ -1396,12 +1411,14 @@ async def add_allowed_channel(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO games_allowed_channels (channel_id) VALUES (?)",
-                (body.channel_id,),
+                "INSERT OR IGNORE INTO games_allowed_channels (channel_id, guild_id)"
+                " VALUES (?, ?)",
+                (body.channel_id, guild_id),
             )
             conn.commit()
             return {}
@@ -1416,11 +1433,14 @@ async def remove_allowed_channel(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
+            # Scope by guild so a host of guild A can't delete guild B's rows.
             conn.execute(
-                "DELETE FROM games_allowed_channels WHERE channel_id = ?", (channel_id,)
+                "DELETE FROM games_allowed_channels WHERE channel_id = ? AND guild_id = ?",
+                (channel_id, guild_id),
             )
             conn.commit()
             return {}
