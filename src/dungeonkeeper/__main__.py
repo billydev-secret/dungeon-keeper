@@ -699,6 +699,34 @@ def main() -> None:
                                 except Exception:
                                     log.exception("Reports cache warming failed for nsfw-gender")
 
+                            try:
+                                from datetime import datetime, timezone
+
+                                from bot_modules.services.member_quality_score import (
+                                    MemberStandIn,
+                                    build_quality_report,
+                                )
+
+                                qs_members = [
+                                    MemberStandIn(
+                                        s.user_id,
+                                        s.is_bot,
+                                        datetime.fromtimestamp(
+                                            s.joined_at, tz=timezone.utc
+                                        )
+                                        if s.joined_at is not None
+                                        else None,
+                                    )
+                                    for s in member_snapshots
+                                ]
+                                _put(
+                                    "quality-score",
+                                    {"days": None, "min_active_days": None},
+                                    build_quality_report(conn, gid, qs_members),  # type: ignore[arg-type]
+                                )
+                            except Exception:
+                                log.exception("Reports cache warming failed for quality-score")
+
                     await asyncio.to_thread(_warm)
                     log.info("Reports cache warmed for guild %s", format_guild_for_log(guild))
                 except asyncio.CancelledError:

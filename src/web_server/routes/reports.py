@@ -8,7 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import reports_data
-from bot_modules.services.member_quality_score import compute_quality_scores
+from bot_modules.services.member_quality_score import (
+    MemberStandIn,
+    build_quality_report,
+)
 from bot_modules.services.message_store import get_known_channels_bulk
 from bot_modules.services.reports_data import MemberSnapshot
 from web_server.auth import AuthenticatedUser
@@ -860,27 +863,6 @@ async def channel_comparison(
 # ── Quality score ─────────────────────────────────────────────────────
 
 
-class _FakeMember:
-    """Lightweight stand-in for discord.Member used when the bot is offline."""
-
-    __slots__ = ("id", "bot", "joined_at")
-
-    id: int
-    bot: bool
-    joined_at: object
-
-    def __init__(self, user_id: int, joined_at_ts: float | None):
-        self.id = user_id
-        self.bot = False
-        if joined_at_ts is not None:
-            from datetime import datetime as _dt
-            from datetime import timezone as _tz
-
-            self.joined_at = _dt.fromtimestamp(joined_at_ts, tz=_tz.utc)
-        else:
-            self.joined_at = None
-
-
 @router.get("/quality-score", response_model=QualityScoreResponse)
 async def quality_score(
     request: Request,
@@ -894,11 +876,14 @@ async def quality_score(
     guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
+        from datetime import datetime as _dt
+        from datetime import timezone as _tz
+
         with ctx.open_db() as conn:
             if guild is not None:
                 members = guild.members
             else:
-                # Offline: build fake members from DB message authors
+                # Offline: build stand-in members from DB message authors
                 rows = conn.execute(
                     """
                     SELECT DISTINCT author_id, MIN(ts) AS first_seen
@@ -907,49 +892,20 @@ async def quality_score(
                     """,
                     (guild_id,),
                 ).fetchall()
-                members = [_FakeMember(int(r[0]), float(r[1])) for r in rows]
+                members = [
+                    MemberStandIn(
+                        int(r[0]), False, _dt.fromtimestamp(float(r[1]), tz=_tz.utc)
+                    )
+                    for r in rows
+                ]
 
-            scores = compute_quality_scores(
+            return build_quality_report(
                 conn,
                 guild_id,
                 members,  # type: ignore[arg-type]
                 window_days=days,
                 min_active_days=min_active_days,
             )
-
-            genders: dict[int, str] = {}
-            user_ids = [s.user_id for s in scores]
-            batch_size = 800
-            for i in range(0, len(user_ids), batch_size):
-                batch = user_ids[i : i + batch_size]
-                placeholders = ",".join("?" for _ in batch)
-                rows = conn.execute(
-                    f"SELECT user_id, gender FROM member_gender "
-                    f"WHERE guild_id = ? AND user_id IN ({placeholders})",
-                    [guild_id, *batch],
-                ).fetchall()
-                for r in rows:
-                    genders[int(r["user_id"])] = str(r["gender"])
-
-            entries = []
-            for s in scores:
-                entries.append(
-                    {
-                        "user_id": str(s.user_id),
-                        "user_name": "",
-                        "final_score": s.final_score,
-                        "engagement_given": s.engagement_given,
-                        "consistency_recency": s.consistency_recency,
-                        "content_resonance": s.content_resonance,
-                        "posting_activity": s.posting_activity,
-                        "status": s.status,
-                        "active_days": s.active_days,
-                        "active_weeks": s.active_weeks,
-                        "gender": genders.get(s.user_id, "unknown"),
-                    }
-                )
-            scored = sum(1 for e in entries if e["status"] == "Active")
-            return {"total_scored": scored, "entries": entries}
 
     result = await cached_run_query(
         "quality-score",
