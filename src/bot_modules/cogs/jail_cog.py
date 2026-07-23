@@ -107,6 +107,17 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.jail_commands")
 
 
+def _read_warning_threshold(ctx: "AppContext", guild_id: int) -> int:
+    """Read the guild-scoped warning-count threshold (default 3).
+
+    The dashboard writes ``warning_threshold`` per-guild, so the read must pass
+    ``guild_id`` — a bare ``guild_id=0`` read never sees the configured row and
+    the default always wins.
+    """
+    with ctx.open_db() as conn:
+        return int(get_config_value(conn, "warning_threshold", "3", guild_id))
+
+
 class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
     vote_text: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Exact policy text to vote on",
@@ -269,11 +280,9 @@ class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Conte
         )
         await _post_audit(ctx, guild, audit_embed)
 
-        def _get_wfm_threshold():
-            with ctx.open_db() as conn:
-                return int(get_config_value(conn, "warning_threshold", "3"))
-
-        threshold = await asyncio.to_thread(_get_wfm_threshold)
+        threshold = await asyncio.to_thread(
+            _read_warning_threshold, ctx, guild.id
+        )
         if count >= threshold and (count - 1) < threshold:
             alert = build_warning_threshold_embed(
                 target_mention=target.mention,
@@ -1471,11 +1480,9 @@ class JailCog(commands.Cog):
         )
         await _post_audit(ctx, guild, audit_embed)
 
-        def _get_warn_threshold():
-            with ctx.open_db() as conn:
-                return int(get_config_value(conn, "warning_threshold", "3"))
-
-        threshold = await asyncio.to_thread(_get_warn_threshold)
+        threshold = await asyncio.to_thread(
+            _read_warning_threshold, ctx, guild.id
+        )
         # Fire the threshold alert when this warning is the one that crosses
         # the line — i.e. count was below threshold before, and is at or
         # above it now. Equality-only comparison would miss bulk additions.

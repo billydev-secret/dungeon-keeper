@@ -206,3 +206,34 @@ def test_load_xp_settings_reads_reaction_given_coeff(tmp_path):
     # Other fields keep defaults; other guilds keep the default coefficient.
     assert configured.message_word_xp == DEFAULT_XP_SETTINGS.message_word_xp
     assert unconfigured.reaction_given_xp == DEFAULT_XP_SETTINGS.reaction_given_xp
+
+
+def test_load_xp_settings_clamps_zero_voice_interval(tmp_path):
+    """A stored 0 voice interval must be clamped so voice XP never divides by 0."""
+    from bot_modules.core.db_utils import open_db, set_config_value
+    from bot_modules.core.xp_system import completed_voice_intervals, load_xp_settings
+    from migrations import apply_migrations_sync
+
+    db_path = tmp_path / "vi.db"
+    apply_migrations_sync(db_path)
+    with open_db(db_path) as conn:
+        set_config_value(conn, "xp_coeff_voice_interval_seconds", "0", 7)
+    with open_db(db_path) as conn:
+        settings = load_xp_settings(conn, 7)
+
+    # Clamped back to the default rather than the poisonous 0.
+    assert settings.voice_interval_seconds == DEFAULT_XP_SETTINGS.voice_interval_seconds
+    assert settings.voice_interval_seconds >= 1
+
+    # And the downstream division no longer raises ZeroDivisionError.
+    from bot_modules.core.xp_system import VoiceSession
+
+    session = VoiceSession(
+        guild_id=7,
+        user_id=1,
+        channel_id=2,
+        session_started_at=0.0,
+        qualified_since=0.0,
+        awarded_intervals=0,
+    )
+    assert completed_voice_intervals(session, now_ts=600.0, settings=settings) >= 0

@@ -272,6 +272,20 @@ def test_update_xp_coefficient(authed_client, fake_ctx):
     assert float(val) == 0.75
 
 
+def test_update_xp_rejects_zero_voice_interval(authed_client, fake_ctx):
+    # A 0-second interval divides by zero in completed_voice_intervals and
+    # would kill voice XP guild-wide — the model must reject it (422).
+    resp = authed_client.put("/api/config/xp", json={"voice_interval_seconds": 0})
+    assert resp.status_code == 422
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        from bot_modules.core.xp_system import _XP_COEFF_PREFIX
+        # Nothing persisted.
+        assert get_config_value(
+            conn, f"{_XP_COEFF_PREFIX}voice_interval_seconds", "", fake_ctx.guild_id
+        ) == ""
+
+
 def test_reaction_given_xp_coefficient_roundtrips(authed_client):
     # Default surfaces on GET before any write.
     before = authed_client.get("/api/config")
@@ -526,10 +540,8 @@ def test_update_guess_crop_difficulty_hard(authed_client, fake_ctx):
 
 def test_update_guess_invalid_difficulty_returns_error(authed_client):
     resp = authed_client.put("/api/config/guess", json={"crop_difficulty": "insane"})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["ok"] is False
-    assert "crop_difficulty" in data["detail"]
+    assert resp.status_code == 400
+    assert "crop_difficulty" in resp.json()["detail"]
 
 
 def test_update_guess_rate_limit_fields(authed_client, fake_ctx):
@@ -1317,10 +1329,8 @@ def test_update_guess_channel_rejects_non_nsfw_channel(authed_client, fake_ctx):
     _attach_guess_bot(fake_ctx, nsfw=False)
 
     resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["ok"] is False
-    assert "age-gated" in data["detail"]
+    assert resp.status_code == 400
+    assert "age-gated" in resp.json()["detail"]
     with open_db(fake_ctx.db_path) as conn:
         from bot_modules.core.db_utils import get_config_value
         assert get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id) == "0"
@@ -1337,6 +1347,21 @@ def test_update_guess_channel_accepts_nsfw_channel(authed_client, fake_ctx):
         assert get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id) == "555"
 
 
+def test_update_guess_channel_disabled_sentinel_saves_without_nsfw_check(
+    authed_client, fake_ctx
+):
+    # "0" is the "(disabled)" option; it must persist without tripping the
+    # channel-not-found / NSFW gate that a real channel id would.
+    _attach_guess_bot(fake_ctx, nsfw=False)
+
+    resp = authed_client.put("/api/config/guess", json={"channel_id": "0"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "guess_channel_id", "x", fake_ctx.guild_id) == "0"
+
+
 def test_update_guess_channel_rejects_unknown_channel(authed_client, fake_ctx):
     guild = MagicMock()
     guild.get_channel = MagicMock(return_value=None)
@@ -1345,10 +1370,94 @@ def test_update_guess_channel_rejects_unknown_channel(authed_client, fake_ctx):
     fake_ctx.bot = bot
 
     resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
+    assert resp.status_code == 400
+    assert "not found" in resp.json()["detail"].lower()
+
+
+# ── Bot-identity avatar_url SSRF guard ────────────────────────────────
+#
+# POST /config/bot-identity fetches a caller-supplied avatar_url server-side.
+# Without a scheme allowlist + private-range rejection, file://, loopback and
+# link-local (cloud-metadata) URLs all reach the fetch — a classic SSRF.
+
+
+def test_reject_unsafe_avatar_url_blocks_non_http_scheme():
+    import pytest
+    from fastapi import HTTPException
+
+    from web_server.routes.config import _reject_unsafe_avatar_url
+
+    with pytest.raises(HTTPException) as exc:
+        _reject_unsafe_avatar_url("file:///etc/passwd")
+    assert exc.value.status_code == 400
+
+
+def test_reject_unsafe_avatar_url_blocks_loopback_and_link_local():
+    import pytest
+    from fastapi import HTTPException
+
+    from web_server.routes.config import _reject_unsafe_avatar_url
+
+    for bad in (
+        "http://127.0.0.1/x.png",
+        "http://169.254.169.254/latest/meta-data/",  # cloud metadata
+        "http://10.0.0.5/x.png",
+        "http://[::1]/x.png",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            _reject_unsafe_avatar_url(bad)
+        assert exc.value.status_code == 400, bad
+
+
+def test_reject_unsafe_avatar_url_allows_public_ip():
+    # A public literal must pass the guard (no exception raised).
+    from web_server.routes.config import _reject_unsafe_avatar_url
+
+    _reject_unsafe_avatar_url("https://93.184.216.34/avatar.png")
+
+
+async def test_download_avatar_bytes_rejects_loopback():
+    import pytest
+    from fastapi import HTTPException
+
+    from web_server.routes.config import _download_avatar_bytes
+
+    with pytest.raises(HTTPException) as exc:
+        await _download_avatar_bytes("http://127.0.0.1:80/evil.png")
+    assert exc.value.status_code == 400
+
+
+# ── Birthday calendar anchors on the guild-local date ─────────────────
+#
+# The calendar's "today" must come from the guild's tz offset, not the host's
+# clock — otherwise days_until flips at host midnight instead of the guild's.
+
+
+def test_birthday_calendar_uses_guild_local_today(authed_client, fake_ctx):
+    from datetime import date
+
+    from bot_modules.core.db_utils import set_config_value
+
+    # A large offset (>1 full day) shifts guild-local "today" deterministically
+    # ahead of the host date, avoiding any midnight-window flakiness.
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "tz_offset_hours", "50", fake_ctx.guild_id)  # +2d2h
+        host_today = date.today()
+        conn.execute(
+            "INSERT INTO member_birthdays"
+            " (guild_id, user_id, birth_month, birth_day, set_by, set_at, preference)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (fake_ctx.guild_id, 4242, host_today.month, host_today.day, 1, 0.0, "public"),
+        )
+
+    resp = authed_client.get("/api/birthday/calendar", params={"days": 400})
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["ok"] is False
-    assert "not found" in data["detail"].lower()
+    entries = {int(e["user_id"]): e for e in resp.json()}
+    assert 4242 in entries
+    # Guild-local today is ~2 days ahead of the host date, so a birthday on the
+    # host date already passed this year → it rolls to next year (~363 days).
+    # With the buggy host-date anchor this would be 0.
+    assert entries[4242]["days_until"] >= 360
 
 
 
