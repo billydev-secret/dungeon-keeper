@@ -4,18 +4,18 @@
 const WIDGETS = [
   // ── Home tiles ───────────────────────────────────────────────────
   { id: "home-messages",    label: "Messages (24h)",          category: "Home", perms: [], source: "home", wide: false, nav: "activity" },
-  { id: "home-nsfw",        label: "NSFW (24h)",              category: "Home", perms: [], source: "home", wide: false, nav: "nsfw-gender" },
+  { id: "home-nsfw",        label: "NSFW (24h)",              category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "nsfw-gender" },
   { id: "home-presence",    label: "Presence",                category: "Home", perms: [], source: "home", wide: false, nav: "health-dau-mau" },
   { id: "home-xp",          label: "XP Today",                category: "Home", perms: [], source: "home", wide: false, nav: "xp-leaderboard" },
   { id: "home-joins",       label: "Recent Joins",            category: "Home", perms: [], source: "home", wide: false, nav: "join-times" },
   { id: "home-moderation",  label: "Moderation",              category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "mod-jails" },
   { id: "home-voice",       label: "In Voice Now",            category: "Home", perms: [], source: "home", wide: false, nav: "voice-activity" },
   { id: "home-channels",    label: "Hottest Channels (1h)",   category: "Home", perms: [], source: "home", wide: false, nav: "channel-comparison" },
-  { id: "home-users",       label: "Most Active Users (1h)",  category: "Home", perms: [], source: "home", wide: false, nav: "activity" },
-  { id: "home-returned",    label: "Returned After Break",    category: "Home", perms: [], source: "home", wide: false, nav: "retention" },
-  { id: "home-starters",    label: "Conversation Starters",   category: "Home", perms: [], source: "home", wide: false, nav: "interaction-graph" },
-  { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: [], source: "home", wide: false, nav: "connection-graph" },
-  { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: [], source: "home", wide: false, nav: "health-channel-health" },
+  { id: "home-users",       label: "Most Active Users (1h)",  category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "activity" },
+  { id: "home-returned",    label: "Returned After Break",    category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "retention" },
+  { id: "home-starters",    label: "Conversation Starters",   category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "interaction-graph" },
+  { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "connection-graph" },
+  { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "health-channel-health" },
   { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: ["admin"], source: "home", wide: true,  nav: "mod-audit" },
 
   // ── Health tiles ─────────────────────────────────────────────────
@@ -49,7 +49,7 @@ export const ALL_WIDGETS = WIDGETS;
 // Default layout for first-time users
 // Default for regular users — no moderation or admin tiles
 export const DEFAULT_HOME = [
-  "home-messages", "home-nsfw", "home-presence", "home-xp",
+  "home-messages", "home-presence", "home-xp",
   "home-joins", "home-voice", "home-channels",
 ];
 
