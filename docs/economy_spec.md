@@ -891,13 +891,27 @@ takes effect on the next cycle, never retroactively.
 uploads, an admin can stock a per-guild catalog of named role icons, each with its
 own weekly price, from the **Sinks** dashboard page — which also now **owns the flat
 perk prices** (moved off the Settings panel). When a catalog exists, `/bank shop`'s
-role-icon row shows the catalog's price span and how many icons back it
-(`catalog_price_range` returns `(min, max, count)`), and its button becomes a
-picker of curated icons (Discord caps the select at 25) instead
-of a single flat-priced Rent button; choosing one rents or switches to it. It reuses the
+role-icon row shows a price span with the flat `price_role_icon` folded in (the
+floor is `min(catalog min, flat)` — `catalog_price_range` returns `(min, max,
+count)`) and a "N + your own" note, and its button becomes a picker of curated
+icons instead of a single flat-priced Rent button; choosing one rents or switches
+to it. The picker's **last slot is always 🎨 Custom — upload your own** at the
+flat price (so a catalog never takes the classic bring-your-own rental off the
+shelf; catalog entries trim to 24 to keep the total within Discord's 25-option
+select cap). Picking Custom rents the flat perk when unowned, re-tags a live
+catalog rental to `catalog_icon_id = NULL` when owned (free mid-week like an
+icon-to-icon switch — flat price bills from the next renewal — and the projected
+image is **cleared**: the catalog art belongs to the catalog price, so the member
+starts blank and uploads their own), or just re-offers the customise button when
+the rental is already custom. The upload paths (`/bank role icon`, the emoji
+modal) are guarded **per-rental, not per-guild**: only a member whose live rental
+is catalog-tagged is locked to their icon (pointed at the picker's Custom entry
+to unlock); a custom renter uploads freely even in a catalog guild. The
+live-rental lookup matches on `beneficiary_id`, so a *gifted* icon resolves for
+the friend wearing it. It reuses the
 existing `role_icon` rental perk and the personal-role projector — **no new perk kind
 and no `econ_rentals.perk` CHECK change**: the rented catalog icon id is recorded on the
-rental (`catalog_icon_id`; NULL = a legacy/bring-your-own rental at the flat
+rental (`catalog_icon_id`; NULL = a bring-your-own rental at the flat
 `price_role_icon`) and its image is projected as the role's `display_icon`. Billing
 snapshots the icon's price at rent time and re-reads the **current** catalog price at each
 renewal (like the flat perks), with a defensive fallback to the flat price if the row ever

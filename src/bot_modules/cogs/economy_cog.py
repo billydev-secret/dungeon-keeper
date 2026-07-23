@@ -161,6 +161,12 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy")
 
 _DISABLED_MSG = "The economy isn't enabled on this server yet."
+# Shared by both bring-your-own upload paths (emoji modal, /bank role icon)
+# when the member's rental is a curated catalog icon rather than a custom one.
+_CATALOG_LOCKED_MSG = (
+    "❌ You're renting a curated catalog icon — to upload your own instead, "
+    "pick **Custom** from the shop's icon picker first (/bank shop)."
+)
 _QOTD_CARD_FILENAME = "qotd.png"
 
 # Transfers above this need an explicit confirm step (spec §5, "over 100").
@@ -757,13 +763,19 @@ _CUSTOMISE_LABELS = {
 }
 
 
-# Discord caps a select at 25 options; a larger catalog shows its first 25
-# (by sort order) and tells the member the list was trimmed.
-_ICON_SELECT_LIMIT = 25
+# Discord caps a select at 25 options; the last slot is the bring-your-own
+# Custom entry, so a larger catalog shows its first 24 (by sort order) and
+# tells the member the list was trimmed.
+_ICON_SELECT_LIMIT = 24
 
 
 class _IconCatalogSelect(discord.ui.Select):
-    """A picker of curated role icons; choosing one rents or switches to it."""
+    """A picker of curated role icons; choosing one rents or switches to it.
+
+    The final option is always **Custom** — the bring-your-own icon at the
+    flat ``price_role_icon`` — so stocking a catalog never takes the classic
+    upload-your-own rental off the shelf.
+    """
 
     def __init__(
         self,
@@ -782,6 +794,17 @@ class _IconCatalogSelect(discord.ui.Select):
             )
             for icon in icons[:_ICON_SELECT_LIMIT]
         ]
+        options.append(
+            discord.SelectOption(
+                label="Custom — upload your own",
+                value="custom",
+                emoji="🎨",
+                description=(
+                    f"{settings.currency_emoji} "
+                    f"{settings.price_role_icon:,} / week — any image or emoji"
+                )[:100],
+            )
+        )
         super().__init__(
             placeholder="Choose a role icon…",
             min_values=1,
@@ -789,9 +812,13 @@ class _IconCatalogSelect(discord.ui.Select):
             options=options,
         )
         self.cog = cog
+        self.settings = settings
         self.guild = guild
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if self.values[0] == "custom":
+            await self.cog.pick_custom_icon(interaction, self.settings, self.guild)
+            return
         await self.cog.pick_catalog_icon(
             interaction, self.guild, int(self.values[0])
         )
@@ -989,7 +1016,8 @@ class _ShopView(_MemberScopedView):
             if perk == "role_icon" and has_catalog:
                 # A curated catalog replaces the rent/customise buttons with a
                 # single picker — renting and restyling both happen by choosing
-                # an icon (each carries its own price).
+                # an icon (each carries its own price; the bring-your-own
+                # custom icon rides the picker's last slot at the flat price).
                 button = discord.ui.Button(
                     label=(
                         "Change icon" if perk in owned else "🖼️ Browse icons"
@@ -1318,11 +1346,15 @@ def _shop_row_price(
 ) -> tuple[int, str]:
     """(sort key, display string) for a shop row's price.
 
-    A curated icon catalog prices per icon, so the role-icon row shows the
-    catalog's span and sorts on its floor.
+    A curated icon catalog prices per icon, so the role-icon row shows a span
+    and sorts on its floor. The flat ``price_role_icon`` folds into that span —
+    the picker's bring-your-own Custom entry sells at it, so it's a price the
+    row genuinely offers.
     """
     if perk == "role_icon" and icon_catalog is not None:
         lo, hi, _count = icon_catalog
+        lo = min(lo, settings.price_role_icon)
+        hi = max(hi, settings.price_role_icon)
         return lo, f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
     price = _perk_price(settings, perk)
     return price, f"{price:,}"
@@ -1398,7 +1430,7 @@ def _build_shop_embed(
         elif perk in owned:
             note = " · ✅"
         elif perk == "role_icon" and icon_catalog is not None:
-            note = f" · {icon_catalog[2]} to pick from"
+            note = f" · {icon_catalog[2]} + your own"
         return (
             f"`{_pad(_PERK_SHORT[perk], label_width)}  "
             f"{_pad(_PERK_BLURBS[perk], blurb_width)}` "
@@ -2795,6 +2827,75 @@ class EconomyCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def pick_custom_icon(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+    ) -> None:
+        """The picker's Custom entry: rent the flat-price bring-your-own icon,
+        or switch a live catalog rental back to it.
+
+        Switching re-tags the rental (no charge; the flat price bills from the
+        next renewal, mirroring an icon-to-icon switch) and clears the
+        projected image — the catalog art belongs to the catalog price, so the
+        member starts from a blank icon and uploads their own.
+        """
+        user_id = interaction.user.id
+
+        def _load() -> tuple[EconSettings, dict | None]:
+            with self.ctx.open_db() as conn:
+                fresh = load_econ_settings(conn, guild.id)
+                row = get_live_role_icon_rental(conn, guild.id, user_id)
+                existing = (
+                    {
+                        "id": int(row["id"]),
+                        "catalog_icon_id": row["catalog_icon_id"],
+                    }
+                    if row is not None
+                    else None
+                )
+            return fresh, existing
+
+        settings, existing = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
+            await interaction.response.send_message(
+                "❌ This server doesn't support role icons right now.", ephemeral=True
+            )
+            return
+
+        if existing is None:
+            # Fresh rental — the shared rent flow already handles the charge,
+            # the error copy, and the upload note + customise button.
+            await _rent_perk_flow(interaction, self, settings, guild, "role_icon")
+            return
+        if existing["catalog_icon_id"] is None:
+            await interaction.response.send_message(
+                "You already have the custom icon — set an emoji below, or "
+                "upload an image with `/bank role icon`.",
+                view=_PostRentView(self, "role_icon"),
+                ephemeral=True,
+            )
+            return
+
+        def _switch() -> None:
+            with self.ctx.open_db() as conn:
+                set_rental_catalog_icon(conn, guild.id, existing["id"], None)
+                upsert_personal_role(conn, guild.id, user_id, {"icon_path": ""})
+
+        await asyncio.to_thread(_switch)
+        await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        await interaction.response.send_message(
+            f"Switched to a **custom icon** ({settings.currency_emoji} "
+            f"{settings.price_role_icon:,}/week from your next renewal). "
+            "Set an emoji below, or upload an image with `/bank role icon`.",
+            view=_PostRentView(self, "role_icon"),
+            ephemeral=True,
+        )
+
     async def set_role_name(self, interaction: discord.Interaction, text: str) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
@@ -2954,11 +3055,8 @@ class EconomyCog(commands.Cog):
                 "❌ This server doesn't support role icons right now.", ephemeral=True
             )
             return
-        if await asyncio.to_thread(self._has_catalog, guild.id):
-            await interaction.response.send_message(
-                "❌ This server uses a curated icon catalog — pick one from /bank shop.",
-                ephemeral=True,
-            )
+        if await asyncio.to_thread(self._catalog_locked, guild.id, user_id):
+            await interaction.response.send_message(_CATALOG_LOCKED_MSG, ephemeral=True)
             return
         emoji = _resolve_guild_emoji(guild, raw)
         if emoji is None:
@@ -3027,11 +3125,8 @@ class EconomyCog(commands.Cog):
                 "❌ This server doesn't support role icons right now.", ephemeral=True
             )
             return
-        if await asyncio.to_thread(self._has_catalog, guild.id):
-            await interaction.response.send_message(
-                "❌ This server uses a curated icon catalog — pick one from /bank shop.",
-                ephemeral=True,
-            )
+        if await asyncio.to_thread(self._catalog_locked, guild.id, user_id):
+            await interaction.response.send_message(_CATALOG_LOCKED_MSG, ephemeral=True)
             return
         if image.size > _MAX_ICON_BYTES:
             await interaction.response.send_message(
@@ -3203,6 +3298,19 @@ class EconomyCog(commands.Cog):
     def _has_catalog(self, guild_id: int) -> bool:
         """Whether the guild has at least one enabled catalog icon."""
         return self._icon_price_range(guild_id) is not None
+
+    def _catalog_locked(self, guild_id: int, user_id: int) -> bool:
+        """Whether this member's live icon rental is tied to a catalog icon.
+
+        A catalog rental's image IS the icon being paid for, so the
+        bring-your-own upload paths are blocked until the member switches to
+        the flat-price Custom entry in the shop picker. A custom rental (or no
+        rental — the entitlement check upstream handles that) uploads freely,
+        catalog or not.
+        """
+        with self.ctx.open_db() as conn:
+            row = get_live_role_icon_rental(conn, guild_id, user_id)
+        return row is not None and row["catalog_icon_id"] is not None
 
     @bank.command(name="quests", description="View and claim the server's active quests.")
     async def bank_quests(self, interaction: discord.Interaction) -> None:
