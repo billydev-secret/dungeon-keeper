@@ -1606,8 +1606,10 @@ class EconomyCog(commands.Cog):
 
         rental_lines = _rental_lines(settings, rentals, user_id)
         if rental_lines:
+            # A dozen+ gifted perks can overrun the 1024-char field and 400 the
+            # whole embed — trim to what fits (mirrors Recent Activity above).
             embed.add_field(
-                name="Active Rentals", value="\n".join(rental_lines), inline=False
+                name="Active Rentals", value=_fit_lines(rental_lines), inline=False
             )
 
         if casino is not None and int(casino["plays"]) > 0:
@@ -2667,13 +2669,20 @@ class EconomyCog(commands.Cog):
             await self._reply(interaction, text, via_confirm=via_confirm)
             return
 
+        # Defer BEFORE the slow role-apply + notify REST calls (apply_role_perks
+        # makes several requests incl. the rate-limited edit_role_positions) so a
+        # single 429 can't push the first response past the 3s budget and leave
+        # the charged gifter staring at "This interaction failed."
+        await self._defer(interaction, via_confirm=via_confirm)
         if perk in _SELF_PERKS:
             await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
-        note = (
-            " They can upload one with `/bank role icon`."
-            if perk == "role_icon"
-            else ""
-        )
+        # `/bank role icon` (upload) hard-refuses catalog servers, so only hint it
+        # off-catalog; on a catalog server the recipient picks from /bank shop.
+        note = ""
+        if perk == "role_icon" and not await asyncio.to_thread(
+            self._has_catalog, guild.id
+        ):
+            note = " They can upload one with `/bank role icon`."
         if perk == "voice_style":
             gift_hint = "Renaming and sizing your voice channel are unlocked."
         elif perk in _NO_CONFIG_PERKS:
@@ -2686,11 +2695,13 @@ class EconomyCog(commands.Cog):
                 f"{gifter.display_name} gifted you **{label}**! {gift_hint}"
             ),
         )
-        await self._reply(
-            interaction,
-            f"Gifted **{label}** to {member.mention}. They can set it from "
-            f"`/bank shop`.{note}",
-            via_confirm=via_confirm,
+        await interaction.edit_original_response(
+            content=(
+                f"Gifted **{label}** to {member.mention}. They can set it from "
+                f"`/bank shop`.{note}"
+            ),
+            embed=None,
+            view=None,
         )
 
     # ── role studio ──────────────────────────────────────────────────────
@@ -2817,14 +2828,18 @@ class EconomyCog(commands.Cog):
             await asyncio.to_thread(_switch)
             verb = "Switched to"
 
+        # Defer before apply_role_perks — its rate-limited role edits can exceed
+        # the 3s budget, and the rent/switch is already committed.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         ok = await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
         tail = (
             "" if ok else " (I couldn't update your role right now — try again shortly.)"
         )
-        await interaction.response.send_message(
-            f"{verb} the **{icon['name']}** icon "
-            f"({settings.currency_emoji} {icon['price']:,}/week).{tail}",
-            ephemeral=True,
+        await interaction.edit_original_response(
+            content=(
+                f"{verb} the **{icon['name']}** icon "
+                f"({settings.currency_emoji} {icon['price']:,}/week).{tail}"
+            ),
         )
 
     async def pick_custom_icon(
@@ -3209,14 +3224,36 @@ class EconomyCog(commands.Cog):
     async def _apply_and_confirm(
         self, interaction: discord.Interaction, guild_id: int, user_id: int, msg: str
     ) -> None:
+        # Defer first: apply_role_perks makes several REST calls (incl. the
+        # rate-limited edit_role_positions), which a 429 can push past the 3s
+        # interaction budget — leaving the member with "This interaction failed"
+        # even though the perk saved.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         ok = await apply_role_perks(self.bot, self.ctx.db_path, guild_id, user_id)
         if ok:
-            await interaction.response.send_message(msg, ephemeral=True)
+            await interaction.edit_original_response(content=msg)
         else:
-            await interaction.response.send_message(
-                "Saved — but I couldn't update your role right now. Try again shortly.",
-                ephemeral=True,
+            await interaction.edit_original_response(
+                content=(
+                    "Saved — but I couldn't update your role right now. "
+                    "Try again shortly."
+                ),
             )
+
+    async def _defer(
+        self, interaction: discord.Interaction, *, via_confirm: bool
+    ) -> None:
+        """Ack the interaction before slow role-apply REST calls.
+
+        A component press (``via_confirm``) defers as a message update — no
+        loading spinner, so the confirm view's own message is edited in place by
+        the follow-up ``edit_original_response``. A fresh slash/modal submit
+        defers with the thinking indicator.
+        """
+        if via_confirm:
+            await interaction.response.defer()
+        else:
+            await interaction.response.defer(ephemeral=True, thinking=True)
 
     async def _reply(
         self, interaction: discord.Interaction, text: str, *, via_confirm: bool
@@ -3361,14 +3398,22 @@ class EconomyCog(commands.Cog):
             if groups.get(qtype)
         ]
         for i, (heading, batch) in enumerate(sections):
-            lines = [
+            quest_lines = [
                 f"`{_pad(str(q['title']), width)}` {_quest_line_status(q)} · "
                 f"{_quest_line_reward(q, settings)}"
                 for q in batch
             ]
+            # event quests bypass the board's per-cadence sizing, so dozens can
+            # accrue and blow the 1024-char field cap — which 400s the whole
+            # command guild-wide. Fit as many as budget allows (reserving room
+            # for the "+N more" tail + breathing-room line) and summarise the rest.
+            value = _fit_lines(quest_lines, _EMBED_FIELD_LIMIT - 40)
+            shown = value.count("\n") + 1 if value else 0
+            if shown < len(quest_lines):
+                value += f"\n_…and {len(quest_lines) - shown} more_"
             if i < len(sections) - 1:  # breathing room above the next heading
-                lines.append("\u200b")
-            embed.add_field(name=heading, value="\n".join(lines), inline=False)
+                value += "\n\u200b"
+            embed.add_field(name=heading, value=value, inline=False)
 
         claimable = [q for q in quests_state if q["state"] == "claimable"]
         rerollable = board_meta.get("rerollable") or []
@@ -3667,7 +3712,12 @@ class EconomyCog(commands.Cog):
         if not _has_image_attachment(message):
             return
         channel_id = await self._photo_channel(message.guild.id)
-        if channel_id == 0 or message.channel.id != channel_id:
+        if channel_id == 0:
+            return
+        # A photo posted in a thread of the Photo Challenge channel should earn
+        # too — match on the parent like the trigger-quest / games siblings.
+        parent_id = getattr(message.channel, "parent_id", None)
+        if channel_id not in (message.channel.id, parent_id):
             return
 
         guild_id = message.guild.id
@@ -4102,6 +4152,17 @@ class EconomyCog(commands.Cog):
         """
         lock = self._guide_locks.setdefault(guild.id, asyncio.Lock())
         async with lock:
+            # Re-read the stored ids INSIDE the lock: the pre-lock snapshot the
+            # caller passed can be stale (a racing /bank post-guide or sticky
+            # repost may have already moved the panel and rewritten config), so
+            # deleting it would leave the current live panel orphaned. The fresh
+            # read is the panel to delete.
+            def _load_ids() -> tuple[int, int]:
+                with self.ctx.open_db() as conn:
+                    s = load_econ_settings(conn, guild.id)
+                return s.guide_channel_id, s.guide_message_id
+
+            old_channel_id, old_message_id = await asyncio.to_thread(_load_ids)
             if old_message_id and old_channel_id:
                 old_channel = guild.get_channel(old_channel_id)
                 if isinstance(old_channel, discord.TextChannel):
@@ -4264,6 +4325,15 @@ class EconomyCog(commands.Cog):
         """
         lock = self._leaderboard_locks.setdefault(guild.id, asyncio.Lock())
         async with lock:
+            # Re-read the stored ids INSIDE the lock — the caller's pre-lock
+            # snapshot can be stale after a racing post/repost, and deleting it
+            # would orphan the current live panel (see _place_guide_panel).
+            def _load_ids() -> tuple[int, int]:
+                with self.ctx.open_db() as conn:
+                    s = load_econ_settings(conn, guild.id)
+                return s.leaderboard_channel_id, s.leaderboard_message_id
+
+            old_channel_id, old_message_id = await asyncio.to_thread(_load_ids)
             now_ts = time.time()
 
             def _collect():

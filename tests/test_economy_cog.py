@@ -559,6 +559,33 @@ async def test_quests_listing_state_matrix(ctx, db):
 
 
 @pytest.mark.asyncio
+async def test_quests_event_field_stays_under_cap(ctx, db):
+    # event ("Anytime") quests bypass the board's per-cadence sizing — one can
+    # be active per trigger kind, and there are ~50 kinds, so dozens accrue. The
+    # Anytime field must stay within Discord's 1024-char limit (each line ~45
+    # chars, so 40 of them overrun) or the whole /bank quests command 400s
+    # guild-wide. Overflow is summarised with a "+N more" tail.
+    from bot_modules.economy.quests import TRIGGER_KINDS
+
+    _enable(db)
+    for i, kind in enumerate(list(TRIGGER_KINDS)[:40]):
+        _mk_quest(
+            db, qtype="event", trigger_kind=kind, reward=10,
+            title=f"Anytime quest number {i:02d}",
+        )
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await _quests(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    embed = kwargs["embed"]
+    anytime = next(f for f in embed.fields if f.name == "Anytime")
+    assert len(anytime.value) <= 1024
+    assert "more_" in anytime.value  # overflow summarised, not dropped silently
+
+
+@pytest.mark.asyncio
 async def test_cog_load_registers_persistent_buttons(ctx, db):
     from bot_modules.cogs.economy_cog import ShopRentButton
     from bot_modules.economy.bounty_views import (
@@ -1983,6 +2010,25 @@ async def test_wallet_shows_active_rentals(ctx, db):
     assert "gift received" in rentals_field.value
 
 
+@pytest.mark.asyncio
+async def test_wallet_active_rentals_field_stays_under_cap(ctx, db):
+    # A popular member on the receiving end of many gifts can accrue a dozen+
+    # live rentals; each renders ~70 chars, so the joined field would blow past
+    # Discord's 1024-char cap and 400 the whole wallet embed. _fit_lines trims.
+    _enable(db)
+    for payer in range(800, 830):  # 30 distinct gifters -> 30 live rentals
+        _add_rental(db, "role_color", user_id=payer, beneficiary_id=500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await _wallet(cog, interaction)
+
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    rentals_field = next(f for f in embed.fields if f.name == "Active Rentals")
+    assert len(rentals_field.value) <= 1024
+    assert "Custom Role Color" in rentals_field.value
+
+
 # ── on_member_remove cleanup ─────────────────────────────────────────────────
 
 
@@ -2329,6 +2375,7 @@ def _photo_msg(
     author,
     message_id: int = 9100,
     channel_id: int = PHOTO_CHANNEL_ID,
+    parent_id: int | None = None,
     content_type: str | None = "image/png",
     filename: str = "pic.png",
     with_attachment: bool = True,
@@ -2337,7 +2384,7 @@ def _photo_msg(
     msg.id = message_id
     msg.guild = FakeGuild(id=GUILD_ID)
     msg.author = author
-    msg.channel = SimpleNamespace(id=channel_id)
+    msg.channel = SimpleNamespace(id=channel_id, parent_id=parent_id)
     att = SimpleNamespace(content_type=content_type, filename=filename)
     msg.attachments = [att] if with_attachment else []
     msg.add_reaction = AsyncMock()
@@ -2367,6 +2414,39 @@ async def test_photo_post_participation_pays_without_quest(ctx, db):
     # A second photo the same day pays nothing more — once per local day.
     await cog._on_photo_post(_photo_msg(author=member, message_id=9200))
     assert _balance(db, 501) == 5
+
+
+@pytest.mark.asyncio
+async def test_photo_post_pays_in_thread_of_photo_channel(ctx, db):
+    # A photo posted in a THREAD of the Photo Challenge channel earns too:
+    # the listener matches on parent_id, not just the exact channel id (mirrors
+    # the trigger-quest / games siblings). Previously such a post paid nothing.
+    _enable(db)  # reward_photo_post defaults to 5
+    _set_photo_config(db)  # scoped channel is PHOTO_CHANNEL_ID
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    msg = _photo_msg(
+        author=member, channel_id=999_888, parent_id=PHOTO_CHANNEL_ID
+    )
+    await cog._on_photo_post(msg)
+    assert _balance(db, 501) == 5
+    msg.add_reaction.assert_awaited_once_with("✅")
+
+
+@pytest.mark.asyncio
+async def test_photo_post_ignores_unrelated_channel(ctx, db):
+    # A photo in a channel that is neither the scoped channel nor a thread of it
+    # pays nothing — the parent_id widening must not swallow the whole guild.
+    _enable(db)
+    _set_photo_config(db)
+    cog = _make_cog(ctx)
+
+    msg = _photo_msg(
+        author=_member(member_id=501), channel_id=999_888, parent_id=555_444
+    )
+    await cog._on_photo_post(msg)
+    assert _balance(db, 501) == 0
 
 
 @pytest.mark.asyncio
@@ -3106,7 +3186,9 @@ async def test_set_role_name_also_sets_nickname(ctx, db):
 
     actor.edit.assert_awaited_once()
     assert actor.edit.await_args.kwargs.get("nick") == "Sir Fluffy"
-    msg = interaction.response.send_message.await_args.args[0]
+    # _apply_and_confirm defers before the slow role-apply, then edits the
+    # deferred response — the confirmation lands on edit_original_response.
+    msg = interaction.edit_original_response.await_args.kwargs["content"]
     assert "Sir Fluffy" in msg and "nickname" in msg.lower()
 
 
@@ -3136,7 +3218,7 @@ async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
         await cog.set_role_name(interaction, "Sir Fluffy")
 
     upsert.assert_called_once()  # the role rename still persists
-    msg = interaction.response.send_message.await_args.args[0]
+    msg = interaction.edit_original_response.await_args.kwargs["content"]
     assert "Sir Fluffy" in msg
     assert "Manage Nicknames" in msg
 
