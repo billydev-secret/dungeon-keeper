@@ -34,6 +34,7 @@ Tiles group into a few areas:
 - **Invite effectiveness** — per-inviter table of active invitees joined through them.
 - **Quality score** — the Member Quality Score table (described below).
 - **Chilling effect** — members whose arrival in a channel correlates with others going quiet.
+- **One-Sided Attention** (Reports → People, mod-gated) — flags member *pairs* with sustained, unreciprocated attention (replies+mentions, reactions, voice-follows), gated on a volume floor plus an asymmetry cut and presented as evidence chips, never a black-box score. Bots are excluded on either endpoint: `get_one_sided_attention_data` reads the recorded-bot set from `known_users` and passes it as the report's `exclude_ids`, so a member reacting to or following a bot never surfaces as a lopsided pair, and bot targets don't inflate a member's concentration/distinct-target evidence.
 
 ### Message Review
 

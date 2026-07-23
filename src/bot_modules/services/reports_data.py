@@ -1892,8 +1892,20 @@ def get_one_sided_attention_data(
     """
     from bot_modules.services.attention_report import compute_one_sided_attention
 
+    # Bots are false positives here — a member replying to / reacting to a bot,
+    # or "following" one into voice, is not a one-sided relationship. Allowlisted
+    # bots live in known_users with is_bot=1; feed them to the report's own
+    # exclusion so neither endpoint of a flagged pair can be a bot.
+    bot_ids = {
+        int(r[0])
+        for r in conn.execute(
+            "SELECT user_id FROM known_users WHERE guild_id = ? AND is_bot = 1",
+            (guild_id,),
+        )
+    }
+
     candidates = compute_one_sided_attention(
-        conn, guild_id, window_days=window_days, limit=limit
+        conn, guild_id, window_days=window_days, limit=limit, exclude_ids=bot_ids
     )
     rows = [
         {

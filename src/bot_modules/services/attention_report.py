@@ -235,10 +235,15 @@ def compute_one_sided_attention(
 
     edges = _fetch_directed_pairs(conn, guild_id, since_ts)
 
-    # Per-initiator outbound totals for concentration / HHI.
+    # Per-initiator outbound totals for concentration / HHI. Excluded ids (bots)
+    # are dropped from BOTH endpoints here, not just from the candidate gate
+    # below, so a human's concentration/distinct-target evidence reflects only
+    # their attention toward other people.
     out_total: dict[int, float] = {}
     out_targets: dict[int, list[float]] = {}
     for (frm, to), counts in edges.items():
+        if frm in exclude_ids or to in exclude_ids:
+            continue
         w = _weighted(counts)
         if w <= 0:
             continue
