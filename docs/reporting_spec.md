@@ -1,6 +1,6 @@
 # Reporting — Feature Spec
 
-Reporting is the analytics backbone of the dashboard. Four small services — interaction tracking, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is nearly empty: one mod slash group for leave-of-absence management, plus an unrelated `/invite` command that returns the bot's install URL.
+Reporting is the analytics backbone of the dashboard. A handful of small services — interaction tracking, voice-follow capture, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is nearly empty: one mod slash group for leave-of-absence management, plus an unrelated `/invite` command that returns the bot's install URL.
 
 ## Commands
 
@@ -34,7 +34,7 @@ Tiles group into a few areas:
 - **Invite effectiveness** — per-inviter table of active invitees joined through them.
 - **Quality score** — the Member Quality Score table (described below).
 - **Chilling effect** — members whose arrival in a channel correlates with others going quiet.
-- **One-Sided Attention** (Reports → People, mod-gated) — flags member *pairs* with sustained, unreciprocated attention (replies+mentions, reactions, voice-follows), gated on a volume floor plus an asymmetry cut and presented as evidence chips, never a black-box score. Bots are excluded on either endpoint: `get_one_sided_attention_data` reads the recorded-bot set from `known_users` and passes it as the report's `exclude_ids`, so a member reacting to or following a bot never surfaces as a lopsided pair, and bot targets don't inflate a member's concentration/distinct-target evidence.
+- **One-Sided Attention** — lopsided, unreciprocated attention between member pairs, for moderator review (described below).
 
 ### Message Review
 
@@ -77,11 +77,31 @@ Status precedence: `Leave of Absence` (active leave row) → `Onboarding` (under
 
 Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivity threshold, surfaced on each row so reviewers can see why a long-tenured quiet member isn't flagged.
 
+### One-sided (unreciprocated) attention
+
+A moderator-review report (**Reports → People**, mod-gated) that surfaces candidate member **pairs** where one person (the *initiator*) directs sustained, lopsided attention at another (the *target*) who does not reciprocate. It is triage for a human to glance at — explicitly *a tip, not a verdict* — and never drives automated action. The window is configurable (default 30 days, clamped 7–180); rows return at most 100.
+
+Three directed signals are unioned over the window, each weighted by how strongly it reads as pursuit:
+
+- **replies + mentions** — `user_interactions_log`, weight 1.0.
+- **reactions** — `reaction_log`, weight 0.5 (the weakest single cue).
+- **voice-follows** — `voice_follow_log`, weight 2.0 (joining a voice channel the target is *already* in — the strongest "showing up where they are" shape). Capture is direction-aware and noise-guarded in `voice_follow.py`: joining an empty channel records nothing, joining a crowd (> 6 already present) is treated as a party not pursuit, and leave/rejoin flapping into the same channel is debounced within 10 minutes.
+
+Reactions and voice-follows are **live-forward only** (no historical backfill), so early on a report is text-dominated — expected, not a bug.
+
+**Gating.** A pair surfaces only when combined weighted volume in both directions clears a **volume floor** (15) *and* directional **asymmetry** — `w(A→B) / [w(A→B)+w(B→A)]` — reaches the **asymmetry cut** (0.85). Volume alone isn't diagnostic (mutual friends are high-volume too); the separators are direction, fixation, and escalation after the target goes quiet.
+
+**Evidence, not a score.** Rather than collapse everything into one number (which would acquire authority it hasn't earned — the COMPAS anchoring failure), each flagged pair exposes its components as chips: percent one-directional, whether the target *ever* responded in-window, an escalation ratio (initiator's contact rate after vs. before the target's last reciprocal action), attention concentration and distinct-target count (Herfindahl index), voice-follow count, and the biggest burst (most events within a 10-minute span). Benign-reading **cautions** are attached alongside — e.g. a small social circle (few distinct targets may just be a quiet user with one friend), cooling contact (escalation < 1), or mostly-reactions (reads as ordinary support). Ordering is transparent — never-reciprocated pairs first, then escalating ones, then asymmetry, then volume — never a hidden rank.
+
+**Gender-neutral by design** — the report never uses or infers gender; it surfaces the *shape* of lopsided attention and leaves the meaning to the human.
+
+**Bots excluded on either endpoint.** `get_one_sided_attention_data` reads the recorded-bot set from `known_users` (`is_bot = 1`) and passes it as the report's `exclude_ids`, so a member reacting to or following a bot never surfaces as a lopsided pair, and bot targets don't inflate a member's concentration/distinct-target evidence.
+
 ## Permissions
 
 - `/quality_leave *` — Mod role, re-checked inside each handler. The Discord default-perms flag (Manage Server) is a UI hint, not the gate.
 - `/invite` — open to everyone.
-- All dashboard report routes — admin tier. There is no read-only or mod-only tier on report endpoints.
+- All dashboard report routes — admin tier, **except** the One-Sided Attention report, which is mod-tier (`require_perms({"moderator"})`) to match its investigative purpose.
 - Message Review panel + its export — mod tier. Mods who have Discord's Manage Messages permission qualify automatically.
 - Bot-side: no Discord permissions are required to read reports. Invite-cache refresh needs **Manage Server**; a missing perm is a soft degrade, not an error.
 
@@ -106,6 +126,7 @@ Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivit
 - **No historical baseline retention.** The 30-day rolling baseline overwrites older numbers; there is no audit of how baselines drifted.
 - **No incident review UI.** Velocity spikes and raid attempts are stored but only surfaced through health tiles — there is no dedicated dashboard list or slash command.
 - **No automatic expiry of leave-of-absence rows.** They are re-classified as `Active` on the next score run; nothing deletes them.
+- **No verdict from the One-Sided Attention report.** It surfaces evidence for a human to judge — it never emits a single black-box score, ranks pairs behind a hidden number, infers gender, or triggers any automated action.
 
 ## Configuration
 
@@ -120,4 +141,4 @@ The only configuration owned by reporting itself is the leave-of-absence roster 
 
 ## Stored data
 
-Per-guild and per-user: a directed interaction tally between every (from, to) pair plus an append-only interaction log (with the source message id) so day-windowed graphs can be reconstructed; per-join invite-attribution rows (one per invitee, never overwritten); an append-only incident log for velocity spikes and raid attempts; a per-hour-of-day × day-of-week baseline of message velocity, refreshed in the background; and the leave-of-absence roster. No filesystem cache — chart payloads are JSON returned through the per-route memory cache. The velocity tracker and invite cache are per-process in-memory state and rebuild from the database on restart.
+Per-guild and per-user: a directed interaction tally between every (from, to) pair plus an append-only interaction log (with the source message id) so day-windowed graphs can be reconstructed; directed voice-follow capture (an aggregate weight per ordered pair plus a timestamped log, migration 117) feeding the one-sided-attention report; per-join invite-attribution rows (one per invitee, never overwritten); an append-only incident log for velocity spikes and raid attempts; a per-hour-of-day × day-of-week baseline of message velocity, refreshed in the background; and the leave-of-absence roster. No filesystem cache — chart payloads are JSON returned through the per-route memory cache. The velocity tracker and invite cache are per-process in-memory state and rebuild from the database on restart.
