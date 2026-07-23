@@ -205,5 +205,17 @@ export function mount(container) {
 
   refresh();
 
-  return { unmount() {} };
+  // Same reasoning as the Tickets and Jails queues: a moderation queue that
+  // never re-fetches quietly goes stale while mods act on it. Poll while the
+  // tab is visible and leave the current view alone if a poll fails.
+  const poll = setInterval(() => {
+    if (document.hidden) return;
+    refresh().catch(() => {});
+  }, 45000);
+
+  return {
+    unmount() {
+      clearInterval(poll);
+    },
+  };
 }

@@ -21,7 +21,24 @@
  */
 import { renderEmpty } from "./states.js";
 
+// Panels that re-render on a filter change call this repeatedly against the
+// same container. Each call used to add another click listener, and because
+// every closure kept its own sortKey/sortAsc, clicking a header after a couple
+// of re-renders sorted several different ways at once. Track the live handler
+// per container and detach the old one first.
+const _sortHandlers = new WeakMap();
+
+function _detach(container) {
+  const prev = _sortHandlers.get(container);
+  if (prev) {
+    container.removeEventListener("click", prev);
+    _sortHandlers.delete(container);
+  }
+}
+
 export function renderSortableTable(container, { columns, data, defaultSort, defaultAsc, emptyMsg, maxRows }) {
+  _detach(container);
+
   if (!data || !data.length) {
     container.innerHTML = emptyMsg ? renderEmpty(emptyMsg) : "";
     return;
@@ -73,7 +90,7 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
 
   render();
 
-  container.addEventListener("click", (e) => {
+  const onClick = (e) => {
     const th = e.target.closest("th[data-sort]");
     if (!th) return;
     const key = th.dataset.sort;
@@ -86,5 +103,7 @@ export function renderSortableTable(container, { columns, data, defaultSort, def
       sortAsc = sample && typeof sample[key] === "string";
     }
     render();
-  });
+  };
+  container.addEventListener("click", onClick);
+  _sortHandlers.set(container, onClick);
 }

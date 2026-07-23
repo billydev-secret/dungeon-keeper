@@ -1,4 +1,4 @@
-import { apiPost, esc } from "../api.js";
+import { apiPost } from "../api.js";
 import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
