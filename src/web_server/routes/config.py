@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 from datetime import date
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -26,6 +27,8 @@ from bot_modules.core.db_utils import (
     set_config_value,
     upsert_grant_role,
 )
+from bot_modules.services import intake_reference_service as intake_ref
+from bot_modules.services import intake_service as intake_svc
 from bot_modules.services.message_store import (
     SUPPORTED_STORAGE_LEVELS,
     STORAGE_LEVEL_NONE,
@@ -934,6 +937,34 @@ async def get_config(
                         )
                     ),
                 },
+                "intake": {
+                    "enabled": _bool_val(conn, "intake_enabled", guild_id=guild_id),
+                    "channel_id": str(
+                        _int_val(conn, "intake_channel_id", guild_id=guild_id)
+                    ),
+                    "completion_code": _str_val(
+                        conn, "intake_completion_code", guild_id=guild_id
+                    ),
+                    "stale_hours": intake_svc.stale_hours(conn, guild_id),
+                    # Effective step list (config, or defaults when unset) —
+                    # what a card created right now would snapshot.
+                    "steps": [
+                        {
+                            "key": s.key,
+                            "label": s.label,
+                            "auto": s.auto_kind,
+                            "role_id": str(s.auto_role_id),
+                        }
+                        for s in intake_svc.step_config(conn, guild_id)
+                    ],
+                    "reference_channel_id": str(
+                        intake_ref.reference_channel_id(conn, guild_id)
+                    ),
+                    "reference_blocks": [
+                        {"kind": b.kind, "title": b.title, "body": b.body}
+                        for b in intake_ref.blocks_config(conn, guild_id)
+                    ],
+                },
                 "xp": {
                     "level_5_role_id": str(
                         _int_val(conn, "xp_level_5_role_id", guild_id=guild_id)
@@ -1289,6 +1320,188 @@ async def update_welcome(
     # cached snapshot so the next event reloads the edited values.
     ctx.invalidate_guild_config(guild_id)
     return result
+
+
+class IntakeStepIn(BaseModel):
+    key: str = ""
+    label: str
+    auto: str = ""
+    role_id: str = "0"
+
+
+class IntakeConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    channel_id: str | None = None
+    completion_code: str | None = None
+    stale_hours: float | None = None
+    steps: list[IntakeStepIn] | None = None
+
+
+def _canonical_intake_steps(steps: list[IntakeStepIn]) -> str:
+    """Validate the dashboard's step list and serialize it for storage.
+
+    Strict where parse_steps is tolerant: the editor should hear about a bad
+    row instead of silently losing it at snapshot time. Keys are kept when
+    provided (stable across re-saves) and slugged from the label for new
+    rows, deduped with a numeric suffix.
+    """
+    if not steps:
+        raise HTTPException(422, "The step list can't be empty.")
+    if len(steps) > 20:
+        raise HTTPException(422, "At most 20 steps.")
+    out = []
+    seen: set[str] = set()
+    for s in steps:
+        label = s.label.strip()
+        if not label:
+            raise HTTPException(422, "Every step needs a label.")
+        auto = s.auto.strip()
+        if auto not in intake_svc.AUTO_KINDS:
+            raise HTTPException(422, f"Step '{label}': unknown auto kind '{auto}'.")
+        try:
+            role_id = int(s.role_id or "0")
+        except ValueError:
+            raise HTTPException(422, f"Step '{label}': invalid role id.")
+        if auto == intake_svc.AUTO_ROLE_GAINED and role_id <= 0:
+            raise HTTPException(
+                422, f"Step '{label}': a role-gained step needs a role."
+            )
+        # Keys end up inside persistent-button custom_ids and must fullmatch
+        # the dispatch template [\w-]{1,64} — normalize charset and cap at 60
+        # so the dedupe suffix below can never push past 64.
+        key = re.sub(r"[^\w-]+", "_", s.key.strip() or label.lower())
+        key = key.strip("_")[:60].rstrip("_")
+        if not key:
+            key = "step"
+        base, n = key, 2
+        while key in seen:
+            key, n = f"{base}_{n}", n + 1
+        seen.add(key)
+        out.append({"key": key, "label": label, "auto": auto, "role_id": role_id})
+    return json.dumps(out)
+
+
+@router.put("/config/intake")
+async def update_intake(
+    request: Request,
+    body: IntakeConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    steps_json = (
+        _canonical_intake_steps(body.steps) if body.steps is not None else None
+    )
+    if body.stale_hours is not None and not (1 <= body.stale_hours <= 720):
+        raise HTTPException(422, "Stale window must be between 1 and 720 hours.")
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.enabled is not None:
+                set_config_value(
+                    conn, "intake_enabled", "1" if body.enabled else "0", guild_id
+                )
+            if body.channel_id is not None:
+                set_config_value(conn, "intake_channel_id", body.channel_id, guild_id)
+            if body.completion_code is not None:
+                set_config_value(
+                    conn,
+                    "intake_completion_code",
+                    body.completion_code.strip(),
+                    guild_id,
+                )
+            if body.stale_hours is not None:
+                set_config_value(
+                    conn, "intake_stale_hours", str(body.stale_hours), guild_id
+                )
+            if steps_json is not None:
+                set_config_value(conn, "intake_steps", steps_json, guild_id)
+        return {"ok": True}
+
+    # Intake reads config straight from the DB on every event, so no guild-
+    # config cache invalidation is needed — the next join sees the new values.
+    return await run_query(_q)
+
+
+class IntakeReferenceBlockIn(BaseModel):
+    kind: str
+    title: str = ""
+    body: str = ""
+
+
+class IntakeReferenceUpdate(BaseModel):
+    channel_id: str | None = None
+    blocks: list[IntakeReferenceBlockIn] | None = None
+
+
+@router.put("/config/intake/reference")
+async def update_intake_reference(
+    request: Request,
+    body: IntakeReferenceUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Save the procedure-reference blocks and sync the channel in place."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    blocks_json = None
+    if body.blocks is not None:
+        try:
+            blocks_json = intake_ref.validate_blocks(
+                [b.model_dump() for b in body.blocks]
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.channel_id is not None:
+                set_config_value(
+                    conn, intake_ref.CHANNEL_KEY, body.channel_id, guild_id
+                )
+            if blocks_json is not None:
+                set_config_value(conn, intake_ref.BLOCKS_KEY, blocks_json, guild_id)
+
+    await run_query(_q)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        return {"ok": True, "sync": {"synced": False, "reason": "bot offline"}}
+    sync = await intake_ref.sync_channel(ctx, guild)
+    return {"ok": True, "sync": sync}
+
+
+class IntakeReferenceImport(BaseModel):
+    channel_id: str
+
+
+@router.post("/config/intake/reference/import")
+async def import_intake_reference(
+    request: Request,
+    body: IntakeReferenceImport,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """One-time seed: read a channel's existing messages into draft blocks.
+
+    Generic to any guild/channel; refuses to overwrite a non-empty editor.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        raise HTTPException(503, "Bot is not connected to this guild.")
+    try:
+        channel_id = int(body.channel_id)
+    except ValueError:
+        raise HTTPException(422, "Invalid channel id.")
+    try:
+        blocks = await intake_ref.import_channel(ctx, guild, channel_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"ok": True, "blocks": blocks}
 
 
 @router.get("/config/welcome/preview")

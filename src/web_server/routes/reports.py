@@ -33,6 +33,7 @@ from web_server.schemas import (
     DropoffResponse,
     GrantAuditResponse,
     GreeterResponseResponse,
+    IntakeReportResponse,
     InactiveResponse,
     InactiveRoleResponse,
     InteractionGraphResponse,
@@ -321,6 +322,52 @@ async def message_rate(
         {"days": days, "channel_id": channel_id},
         _q,
     )
+
+
+# ── Intake report ───────────────────────────────────────────────────────
+
+
+@router.get("/intake-report", response_model=IntakeReportResponse)
+async def intake_report(
+    request: Request,
+    days: int = 30,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Intake-card analytics: the open queue, outcomes, per-welcomer counts,
+    and which steps get skipped (the procedure's own feedback)."""
+    import time as _time
+
+    from bot_modules.services import intake_service as intake_svc
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    days = max(1, min(365, days))
+    since_ts = _time.time() - days * 86400.0
+
+    def _q():
+        with ctx.open_db() as conn:
+            outcomes = intake_svc.report_outcomes(conn, guild_id, since_ts)
+            return {
+                "enabled": intake_svc.is_enabled(conn, guild_id),
+                "window_label": f"Last {days} days",
+                "open_cards": [
+                    {**c, "user_id": str(c["user_id"])}
+                    for c in intake_svc.report_open_cards(conn, guild_id)
+                ],
+                "resolved": outcomes["resolved"],
+                "counts": outcomes["counts"],
+                "mean_seconds": outcomes["mean_seconds"],
+                "median_seconds": outcomes["median_seconds"],
+                "welcomers": [
+                    {**w, "user_id": str(w["user_id"])}
+                    for w in intake_svc.report_welcomers(conn, guild_id, since_ts)
+                ],
+                "skipped_steps": intake_svc.report_skipped_steps(
+                    conn, guild_id, since_ts
+                ),
+            }
+
+    return await cached_run_query("intake-report", guild_id, {"days": days}, _q)
 
 
 # ── Greeter response ────────────────────────────────────────────────────

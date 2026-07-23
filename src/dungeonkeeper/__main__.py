@@ -21,6 +21,9 @@ from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
+from bot_modules.services.intake_loop import intake_loop
+from bot_modules.services.intake_service import warm as warm_intake
+from bot_modules.services.intake_views import IntakeDismissButton, IntakeStepButton
 from bot_modules.services.promotion_review_service import warm as warm_promo_review
 from bot_modules.services.promotion_review_views import (
     DismissButton as PromoReviewDismissButton,
@@ -286,6 +289,10 @@ def main() -> None:
             warm_promo_review, db_path, [g.id for g in bot.guilds]
         )
 
+        # Seed the intake watch set so open intake cards keep auto-ticking
+        # (greet/code/role events) across a restart.
+        await asyncio.to_thread(warm_intake, db_path, [g.id for g in bot.guilds])
+
         if boot_cfg.is_dev:
             guild = bot.get_guild(boot_cfg.guild_id)
             if guild:
@@ -317,6 +324,10 @@ def main() -> None:
     bot.add_dynamic_items(
         PromoReviewGrantButton, PromoReviewDismissButton, PromoReviewLevel5Button
     )
+
+    # Register persistent intake-card buttons (manual step toggles + Dismiss)
+    # so a card posted before a restart stays actionable after it.
+    bot.add_dynamic_items(IntakeStepButton, IntakeDismissButton)
 
     # Register persistent Rules Watch label buttons for unlabeled events
     from bot_modules.rules_watch.alert import register_persistent_views as _rw_register_views
@@ -361,6 +372,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: announcements_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: intake_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: grant_audit_card_loop(bot, db_path))
 

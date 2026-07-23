@@ -1296,3 +1296,147 @@ def test_update_guess_channel_rejects_unknown_channel(authed_client, fake_ctx):
     assert data["ok"] is False
     assert "not found" in data["detail"].lower()
 
+
+
+# ── /api/config/intake ────────────────────────────────────────────────
+
+
+def test_intake_config_defaults_in_get(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    intake = resp.json()["intake"]
+    assert intake["enabled"] is False
+    assert intake["channel_id"] == "0"
+    assert intake["stale_hours"] == 24
+    # Effective (default) step list is surfaced so the editor never starts blank.
+    keys = [s["key"] for s in intake["steps"]]
+    assert keys == [
+        "greeted", "verified", "member_role",
+        "sfw_questions", "nsfw_role", "nsfw_questions",
+    ]
+    # Snowflake-ish ids come back as strings.
+    assert all(isinstance(s["role_id"], str) for s in intake["steps"])
+
+
+def test_update_intake_roundtrips(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/intake", json={
+        "enabled": True,
+        "channel_id": "5551234",
+        "completion_code": "  DK-7734  ",
+        "stale_hours": 6,
+        "steps": [
+            {"key": "", "label": "Greeted", "auto": "greeted", "role_id": "0"},
+            {"key": "", "label": "Member role", "auto": "role_gained", "role_id": "901"},
+            {"key": "", "label": "SFW questions asked", "auto": "", "role_id": "0"},
+        ],
+    })
+    assert resp.status_code == 200
+    resp = authed_client.get("/api/config")
+    intake = resp.json()["intake"]
+    assert intake["enabled"] is True
+    assert intake["channel_id"] == "5551234"
+    assert intake["completion_code"] == "DK-7734"  # stored stripped
+    assert intake["stale_hours"] == 6
+    assert [s["key"] for s in intake["steps"]] == [
+        "greeted", "member_role", "sfw_questions_asked",
+    ]
+    assert intake["steps"][1]["role_id"] == "901"
+
+    # The bot-side reader sees the same effective steps.
+    from bot_modules.services import intake_service as svc
+    with open_db(fake_ctx.db_path) as conn:
+        assert svc.is_enabled(conn, fake_ctx.guild_id) is True
+        assert [s.key for s in svc.step_config(conn, fake_ctx.guild_id)] == [
+            "greeted", "member_role", "sfw_questions_asked",
+        ]
+
+
+def test_update_intake_rejects_bad_steps(authed_client):
+    base = {"steps": [{"key": "", "label": "", "auto": "", "role_id": "0"}]}
+    assert authed_client.put("/api/config/intake", json=base).status_code == 422
+    # role_gained without a role would be an inert step — rejected, not stored.
+    resp = authed_client.put("/api/config/intake", json={
+        "steps": [{"key": "", "label": "NSFW", "auto": "role_gained", "role_id": "0"}],
+    })
+    assert resp.status_code == 422
+    resp = authed_client.put("/api/config/intake", json={
+        "steps": [{"key": "", "label": "X", "auto": "telepathy", "role_id": "0"}],
+    })
+    assert resp.status_code == 422
+    assert authed_client.put(
+        "/api/config/intake", json={"steps": []}
+    ).status_code == 422
+    assert authed_client.put(
+        "/api/config/intake", json={"stale_hours": 0}
+    ).status_code == 422
+
+
+def test_update_intake_dedupes_generated_keys(authed_client):
+    resp = authed_client.put("/api/config/intake", json={
+        "steps": [
+            {"key": "", "label": "Questions", "auto": "", "role_id": "0"},
+            {"key": "", "label": "Questions", "auto": "", "role_id": "0"},
+        ],
+    })
+    assert resp.status_code == 200
+    intake = authed_client.get("/api/config").json()["intake"]
+    assert [s["key"] for s in intake["steps"]] == ["questions", "questions_2"]
+
+
+# ── /api/config/intake/reference ──────────────────────────────────────
+
+
+def test_intake_reference_roundtrips_without_bot(authed_client):
+    blocks = [
+        {"kind": "text", "title": "How it works", "body": "Greet them."},
+        {"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"},
+    ]
+    resp = authed_client.put("/api/config/intake/reference", json={
+        "channel_id": "424242",
+        "blocks": blocks,
+    })
+    assert resp.status_code == 200
+    # FakeCtx has no bot — config is saved, sync gracefully skipped.
+    assert resp.json()["sync"]["synced"] is False
+
+    intake = authed_client.get("/api/config").json()["intake"]
+    assert intake["reference_channel_id"] == "424242"
+    assert intake["reference_blocks"] == blocks
+
+
+def test_intake_reference_rejects_bad_blocks(authed_client):
+    resp = authed_client.put("/api/config/intake/reference", json={
+        "blocks": [{"kind": "telepathy", "title": "x", "body": "y"}],
+    })
+    assert resp.status_code == 422
+    resp = authed_client.put("/api/config/intake/reference", json={
+        "blocks": [{"kind": "questions", "title": "t", "body": "  \n "}],
+    })
+    assert resp.status_code == 422
+
+
+def test_intake_reference_import_requires_bot(authed_client):
+    resp = authed_client.post("/api/config/intake/reference/import", json={
+        "channel_id": "424242",
+    })
+    assert resp.status_code == 503  # FakeCtx has no connected bot
+
+
+def test_update_intake_normalizes_keys_for_button_dispatch(authed_client):
+    # Keys land in persistent-button custom_ids and must fullmatch the
+    # dispatch template [\w-]{1,64} after a restart — long label slugs are
+    # capped and bad charsets normalized (regression: 80-char labels made
+    # buttons dead after restart).
+    import re as _re
+    long_label = "x" * 80
+    resp = authed_client.put("/api/config/intake", json={
+        "steps": [
+            {"key": "", "label": long_label, "auto": "", "role_id": "0"},
+            {"key": "has:colon and spaces", "label": "Colons", "auto": "", "role_id": "0"},
+            {"key": "", "label": long_label + "b", "auto": "", "role_id": "0"},
+        ],
+    })
+    assert resp.status_code == 200
+    keys = [s["key"] for s in authed_client.get("/api/config").json()["intake"]["steps"]]
+    assert all(_re.fullmatch(r"[\w-]{1,64}", k) for k in keys)
+    assert len(set(keys)) == 3  # dedupe survived the cap

@@ -253,3 +253,56 @@ def test_grant_audit_unknown_grant_404(open_client, fake_ctx):
 def test_grant_audit_no_guild_503(open_client):
     resp = open_client.get("/api/reports/grant-audit")
     assert resp.status_code == 503
+
+
+# ── intake-report ─────────────────────────────────────────────────────
+
+
+def test_intake_report_empty_shape(open_client):
+    resp = open_client.get("/api/reports/intake-report")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["enabled"] is False
+    assert data["open_cards"] == []
+    assert data["welcomers"] == []
+    assert data["skipped_steps"] == []
+
+
+def test_intake_report_with_data(open_client, fake_ctx):
+    from bot_modules.services import intake_service as svc
+    from web_server.deps import invalidate_report_cache
+
+    gid = fake_ctx.guild_id
+    now = time.time()
+    with open_db(fake_ctx.db_path) as conn:
+        open_card = svc.create_card(conn, gid, 7, now - 3600)
+        assert open_card is not None
+        svc.create_card(conn, gid, 8, now - 7200)
+        svc.set_step_state(
+            conn, open_card, "sfw_questions", done=True, actor_id=99, at=now - 1800
+        )
+        svc.complete_card(conn, gid, 8, 99, now - 3600)
+    invalidate_report_cache()
+
+    data = open_client.get("/api/reports/intake-report").json()
+    # Snowflake-precision: ids as strings; open queue excludes the completed card.
+    assert [c["user_id"] for c in data["open_cards"]] == ["7"]
+    assert data["open_cards"][0]["done"] == 1
+    assert data["counts"] == {"completed": 1}
+    assert data["welcomers"][0]["user_id"] == "99"
+    assert data["welcomers"][0]["completions"] == 1
+    # Every default step except none was skipped on the completed card.
+    skipped = {s["key"]: s["skipped"] for s in data["skipped_steps"]}
+    assert skipped["sfw_questions"] == 1
+
+
+def test_intake_report_panel_escapes_member_controlled_columns():
+    """Source-scan guard (no Node in this repo): the intake-report panel must
+    esc() the member-controlled name columns and the step label — they are
+    interpolated into innerHTML by renderSortableTable (stored-XSS shape)."""
+    from pathlib import Path
+
+    src = Path("src/web_server/static/js/panels/intake-report.js").read_text()
+    assert 'format: (v, r) => esc(v || r.user_id)' in src  # both name columns
+    assert src.count("esc(v || r.user_id)") == 2
+    assert '{ key: "label", label: "Step", format: (v) => esc(v) }' in src

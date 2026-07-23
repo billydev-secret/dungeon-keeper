@@ -66,6 +66,7 @@ const SECTIONS = [
         { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
         { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
+        { id: "intake-report",        label: "Intake Queue",         module: "./panels/intake-report.js" },
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "xp-level-review",      label: "XP Level Review",      module: "./panels/xp-level-review.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
@@ -123,6 +124,7 @@ const SECTIONS = [
       ]},
       { heading: "Members", items: [
         { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
+        { id: "config-intake",     label: "Intake Cards",     module: "./panels/config-intake.js", adminOnly: true },
         { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
         { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
