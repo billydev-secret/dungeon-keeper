@@ -1,4 +1,4 @@
-import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, showStatus } from "../config-helpers.js";
+import { esc, loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, apiPost, showStatus } from "../config-helpers.js";
 
 // Auto-kind choices for a step. "" = manual (welcomers tick a button on the
 // card); the rest tick themselves from bot events.
@@ -51,6 +51,27 @@ export function mount(container) {
             <div class="field-hint">Snapshotted onto each card when it posts — editing here never changes cards already in flight. Auto steps tick themselves; “role gained” fires on /grant or a manual role add of the chosen role.</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
+        </form>
+      </div>
+      <div class="panel" style="margin-top:16px;">
+        <header>
+          <h2>Procedure Reference</h2>
+          <div class="subtitle">The #welcome-procedure content, bot-synced — edit here, the channel updates itself. Questions render one message each for one-tap copy-paste.</div>
+        </header>
+        <form class="form" data-ref-form>
+          <div class="field">
+            <label>Reference channel</label>
+            <select name="ref_channel_id">${channelSelect(channels, c.reference_channel_id || "0")}</select>
+            <div class="field-hint">The channel the bot maintains (e.g. #welcome-procedure). The bot only ever touches its own tracked messages — consider locking the channel to bot-posts once adopted.</div>
+          </div>
+          <div class="field">
+            <label>Blocks</label>
+            <div data-blocks></div>
+            <button type="button" class="btn" data-add-block>+ Add block</button>
+            <button type="button" class="btn" data-import>Import from channel</button>
+            <div class="field-hint">Text sections post as one message; question lists post a header plus one message per line. Import reads the channel's current messages into draft text blocks (only while the editor is empty) — then split your question lists out and save.</div>
+          </div>
+          <div><button type="submit" class="btn btn-primary">Save &amp; sync channel</button><span data-ref-status></span></div>
         </form>
       </div>
     `;
@@ -126,6 +147,114 @@ export function mount(container) {
     });
 
     renderSteps();
+
+    // ── Procedure reference blocks ──────────────────────────────────
+    let blocks = (c.reference_blocks || []).map((b) => ({ ...b }));
+    const refForm = container.querySelector("[data-ref-form]");
+    const refStatus = container.querySelector("[data-ref-status]");
+    const blocksHost = container.querySelector("[data-blocks]");
+
+    const renderBlocks = () => {
+      blocksHost.innerHTML = blocks
+        .map(
+          (b, i) => `
+        <div data-block-row style="border:1px solid var(--border, #444); border-radius:6px; padding:8px; margin-bottom:8px;">
+          <div class="row wrap" style="gap:6px; margin-bottom:6px;">
+            <select data-block-kind style="min-width:10rem;">
+              <option value="text" ${b.kind !== "questions" ? "selected" : ""}>Text section</option>
+              <option value="questions" ${b.kind === "questions" ? "selected" : ""}>Question list</option>
+            </select>
+            <input type="text" data-block-title value="${esc(b.title || "")}" maxlength="120" placeholder="Title (optional)" style="flex:2; min-width:10rem;" />
+            <span style="white-space:nowrap;">
+              <button type="button" class="btn" data-block-up ${i === 0 ? "disabled" : ""}>↑</button>
+              <button type="button" class="btn" data-block-down ${i === blocks.length - 1 ? "disabled" : ""}>↓</button>
+              <button type="button" class="btn" data-block-remove>✕</button>
+            </span>
+          </div>
+          <textarea data-block-body rows="${b.kind === "questions" ? 6 : 4}" style="width:100%;" placeholder="${b.kind === "questions" ? "One question per line" : "Section text"}">${esc(b.body || "")}</textarea>
+        </div>`
+        )
+        .join("");
+    };
+
+    const syncBlocks = () => {
+      blocksHost.querySelectorAll("[data-block-row]").forEach((row, i) => {
+        blocks[i].kind = row.querySelector("[data-block-kind]").value;
+        blocks[i].title = row.querySelector("[data-block-title]").value;
+        blocks[i].body = row.querySelector("[data-block-body]").value;
+      });
+    };
+
+    blocksHost.addEventListener("click", (e) => {
+      const row = e.target.closest("[data-block-row]");
+      if (!row) return;
+      const i = Array.from(blocksHost.children).indexOf(row);
+      if (e.target.matches("[data-block-remove]")) {
+        syncBlocks();
+        blocks.splice(i, 1);
+        renderBlocks();
+      } else if (e.target.matches("[data-block-up]") && i > 0) {
+        syncBlocks();
+        [blocks[i - 1], blocks[i]] = [blocks[i], blocks[i - 1]];
+        renderBlocks();
+      } else if (e.target.matches("[data-block-down]") && i < blocks.length - 1) {
+        syncBlocks();
+        [blocks[i], blocks[i + 1]] = [blocks[i + 1], blocks[i]];
+        renderBlocks();
+      }
+    });
+
+    container.querySelector("[data-add-block]").addEventListener("click", () => {
+      syncBlocks();
+      blocks.push({ kind: "text", title: "", body: "" });
+      renderBlocks();
+    });
+
+    container.querySelector("[data-import]").addEventListener("click", async () => {
+      if (blocks.length) {
+        showStatus(refStatus, false, "Import only works while the editor is empty");
+        return;
+      }
+      const channelId = refForm.querySelector('select[name="ref_channel_id"]').value || "0";
+      if (!(parseInt(channelId) > 0)) {
+        showStatus(refStatus, false, "Pick the reference channel first");
+        return;
+      }
+      try {
+        const res = await apiPost("/api/config/intake/reference/import", { channel_id: channelId });
+        blocks = (res.blocks || []).map((b) => ({ ...b }));
+        renderBlocks();
+        showStatus(refStatus, true, `Imported ${blocks.length} blocks — review, split the question lists, then save`);
+      } catch (err) {
+        showStatus(refStatus, false, err.message);
+      }
+    });
+
+    renderBlocks();
+
+    refForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      syncBlocks();
+      try {
+        const res = await apiPut("/api/config/intake/reference", {
+          channel_id: refForm.querySelector('select[name="ref_channel_id"]').value || "0",
+          blocks: blocks.map((b) => ({
+            kind: b.kind || "text",
+            title: (b.title || "").trim(),
+            body: b.body || "",
+          })),
+        });
+        const s = res.sync || {};
+        showStatus(
+          refStatus, true,
+          s.synced
+            ? `Saved — channel synced (${s.posted || 0} posted, ${s.edited || 0} edited, ${s.deleted || 0} deleted)`
+            : `Saved — channel not synced (${s.reason || "unknown"})`
+        );
+      } catch (err) {
+        showStatus(refStatus, false, err.message);
+      }
+    });
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();

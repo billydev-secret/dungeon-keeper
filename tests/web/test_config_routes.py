@@ -1381,3 +1381,42 @@ def test_update_intake_dedupes_generated_keys(authed_client):
     assert resp.status_code == 200
     intake = authed_client.get("/api/config").json()["intake"]
     assert [s["key"] for s in intake["steps"]] == ["questions", "questions_2"]
+
+
+# ── /api/config/intake/reference ──────────────────────────────────────
+
+
+def test_intake_reference_roundtrips_without_bot(authed_client):
+    blocks = [
+        {"kind": "text", "title": "How it works", "body": "Greet them."},
+        {"kind": "questions", "title": "SFW", "body": "Q1?\nQ2?"},
+    ]
+    resp = authed_client.put("/api/config/intake/reference", json={
+        "channel_id": "424242",
+        "blocks": blocks,
+    })
+    assert resp.status_code == 200
+    # FakeCtx has no bot — config is saved, sync gracefully skipped.
+    assert resp.json()["sync"]["synced"] is False
+
+    intake = authed_client.get("/api/config").json()["intake"]
+    assert intake["reference_channel_id"] == "424242"
+    assert intake["reference_blocks"] == blocks
+
+
+def test_intake_reference_rejects_bad_blocks(authed_client):
+    resp = authed_client.put("/api/config/intake/reference", json={
+        "blocks": [{"kind": "telepathy", "title": "x", "body": "y"}],
+    })
+    assert resp.status_code == 422
+    resp = authed_client.put("/api/config/intake/reference", json={
+        "blocks": [{"kind": "questions", "title": "t", "body": "  \n "}],
+    })
+    assert resp.status_code == 422
+
+
+def test_intake_reference_import_requires_bot(authed_client):
+    resp = authed_client.post("/api/config/intake/reference/import", json={
+        "channel_id": "424242",
+    })
+    assert resp.status_code == 503  # FakeCtx has no connected bot

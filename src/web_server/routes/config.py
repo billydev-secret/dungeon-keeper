@@ -27,6 +27,7 @@ from bot_modules.core.db_utils import (
     set_config_value,
     upsert_grant_role,
 )
+from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services.message_store import (
     SUPPORTED_STORAGE_LEVELS,
@@ -956,6 +957,13 @@ async def get_config(
                         }
                         for s in intake_svc.step_config(conn, guild_id)
                     ],
+                    "reference_channel_id": str(
+                        intake_ref.reference_channel_id(conn, guild_id)
+                    ),
+                    "reference_blocks": [
+                        {"kind": b.kind, "title": b.title, "body": b.body}
+                        for b in intake_ref.blocks_config(conn, guild_id)
+                    ],
                 },
                 "xp": {
                     "level_5_role_id": str(
@@ -1410,6 +1418,86 @@ async def update_intake(
     # Intake reads config straight from the DB on every event, so no guild-
     # config cache invalidation is needed — the next join sees the new values.
     return await run_query(_q)
+
+
+class IntakeReferenceBlockIn(BaseModel):
+    kind: str
+    title: str = ""
+    body: str = ""
+
+
+class IntakeReferenceUpdate(BaseModel):
+    channel_id: str | None = None
+    blocks: list[IntakeReferenceBlockIn] | None = None
+
+
+@router.put("/config/intake/reference")
+async def update_intake_reference(
+    request: Request,
+    body: IntakeReferenceUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Save the procedure-reference blocks and sync the channel in place."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    blocks_json = None
+    if body.blocks is not None:
+        try:
+            blocks_json = intake_ref.validate_blocks(
+                [b.model_dump() for b in body.blocks]
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.channel_id is not None:
+                set_config_value(
+                    conn, intake_ref.CHANNEL_KEY, body.channel_id, guild_id
+                )
+            if blocks_json is not None:
+                set_config_value(conn, intake_ref.BLOCKS_KEY, blocks_json, guild_id)
+
+    await run_query(_q)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        return {"ok": True, "sync": {"synced": False, "reason": "bot offline"}}
+    sync = await intake_ref.sync_channel(ctx, guild)
+    return {"ok": True, "sync": sync}
+
+
+class IntakeReferenceImport(BaseModel):
+    channel_id: str
+
+
+@router.post("/config/intake/reference/import")
+async def import_intake_reference(
+    request: Request,
+    body: IntakeReferenceImport,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """One-time seed: read a channel's existing messages into draft blocks.
+
+    Generic to any guild/channel; refuses to overwrite a non-empty editor.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        raise HTTPException(503, "Bot is not connected to this guild.")
+    try:
+        channel_id = int(body.channel_id)
+    except ValueError:
+        raise HTTPException(422, "Invalid channel id.")
+    try:
+        blocks = await intake_ref.import_channel(ctx, guild, channel_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"ok": True, "blocks": blocks}
 
 
 @router.get("/config/welcome/preview")
