@@ -28,10 +28,10 @@ export function mount(container) {
         <div class="subtitle">Search and read back stored messages</div>
       </header>
       <div class="controls msg-search-controls">
-        <label>Author<span data-slot="author"></span></label>
-        <label>Mentions<span data-slot="mentions"></span></label>
-        <label>Reply To<span data-slot="reply_to"></span></label>
-        <label>Channel<span data-slot="channel"></span></label>
+        <span class="ctrl-field">Author<span data-slot="author"></span></span>
+        <span class="ctrl-field">Mentions<span data-slot="mentions"></span></span>
+        <span class="ctrl-field">Reply To<span data-slot="reply_to"></span></span>
+        <span class="ctrl-field">Channel<span data-slot="channel"></span></span>
         <label>Regex
           <input type="text" data-field="regex" placeholder="PCRE pattern" />
         </label>
