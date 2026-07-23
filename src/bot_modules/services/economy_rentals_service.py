@@ -492,15 +492,18 @@ def list_member_rentals(
 def get_live_role_icon_rental(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
-    """The member's live (active|grace) ``role_icon`` rental, or None.
+    """The live (active|grace) ``role_icon`` rental benefiting this member.
 
-    Self-perk, so the renter is the beneficiary — used by the catalog flow to
-    decide between renting a new icon and switching an existing rental's icon.
+    Matches on ``beneficiary_id`` (always stored non-NULL; a self-rent's
+    beneficiary is the renter), so a gifted icon resolves for the member whose
+    role actually wears it. Used by the catalog flow to decide between renting
+    a new icon and switching an existing rental's icon, and by the upload
+    guards to tell a catalog rental from a bring-your-own one.
     """
     return conn.execute(
         f"""
         SELECT {_RENTAL_COLS} FROM econ_rentals
-        WHERE guild_id = ? AND user_id = ? AND perk = 'role_icon'
+        WHERE guild_id = ? AND beneficiary_id = ? AND perk = 'role_icon'
           AND state IN ('active', 'grace')
         LIMIT 1
         """,
@@ -509,14 +512,19 @@ def get_live_role_icon_rental(
 
 
 def set_rental_catalog_icon(
-    conn: sqlite3.Connection, guild_id: int, rental_id: int, catalog_icon_id: int
+    conn: sqlite3.Connection,
+    guild_id: int,
+    rental_id: int,
+    catalog_icon_id: int | None,
 ) -> None:
     """Point a live rental at a different catalog icon (an in-week icon switch).
 
-    Only the icon tag changes here — no charge and no price snapshot update, so
-    the member finishes the week they already paid for and the newly chosen
-    icon's price takes effect at the next renewal (``bill_rental`` re-reads it),
-    matching how a mid-rental price change behaves.
+    ``None`` re-tags the rental as a bring-your-own custom icon, billed at the
+    flat ``price_role_icon``. Only the icon tag changes here — no charge and no
+    price snapshot update, so the member finishes the week they already paid
+    for and the newly chosen icon's price takes effect at the next renewal
+    (``bill_rental`` re-reads it), matching how a mid-rental price change
+    behaves.
     """
     conn.execute(
         "UPDATE econ_rentals SET catalog_icon_id = ? WHERE guild_id = ? AND id = ?",

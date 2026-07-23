@@ -672,7 +672,10 @@ def _settings(db):
         return load_econ_settings(conn, GUILD_ID)
 
 
-def _add_rental(db, perk, *, user_id=500, beneficiary_id=None, state="active") -> None:
+def _add_rental(
+    db, perk, *, user_id=500, beneficiary_id=None, state="active",
+    catalog_icon_id=None,
+) -> None:
     beneficiary_id = user_id if beneficiary_id is None else beneficiary_id
     now = time.time()
     with open_db(db) as conn:
@@ -680,10 +683,14 @@ def _add_rental(db, perk, *, user_id=500, beneficiary_id=None, state="active") -
             """
             INSERT INTO econ_rentals
                 (guild_id, user_id, perk, state, price, started_at, next_bill_at,
-                 cancel_at_period_end, suspended, beneficiary_id, created_at)
-            VALUES (?, ?, ?, ?, 50, ?, ?, 0, 0, ?, ?)
+                 cancel_at_period_end, suspended, beneficiary_id, catalog_icon_id,
+                 created_at)
+            VALUES (?, ?, ?, ?, 50, ?, ?, 0, 0, ?, ?, ?)
             """,
-            (GUILD_ID, user_id, perk, state, now, now + 604800, beneficiary_id, now),
+            (
+                GUILD_ID, user_id, perk, state, now, now + 604800, beneficiary_id,
+                catalog_icon_id, now,
+            ),
         )
 
 
@@ -994,19 +1001,32 @@ def test_shop_table_reorders_when_prices_are_reconfigured(db):
 
 
 def test_shop_icon_row_shows_catalog_span_and_size(db):
-    """A curated catalog prices per icon — show the span and how many there are."""
+    """A curated catalog prices per icon — show the span and how many there are.
+
+    The flat custom price (default 75) folds into the span: the picker's
+    bring-your-own entry sells at it, so the row's floor is min(catalog, flat).
+    """
     _enable(db)
     embed = _build_shop_embed(
         _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
     )
     row = _shop_row(embed, "Icon")
-    assert "**120–400**" in row
-    assert "40 to pick from" in row
+    assert "**75–400**" in row
+    assert "40 + your own" in row
+
+
+def test_shop_icon_row_span_floor_is_catalog_when_below_flat(db):
+    """A catalog cheaper than the flat custom price sets the floor itself."""
+    _enable(db, price_role_icon=500)
+    embed = _build_shop_embed(
+        _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
+    )
+    assert "**120–500**" in _shop_row(embed, "Icon")
 
 
 def test_shop_icon_row_collapses_a_single_priced_catalog(db):
-    """One price across the catalog reads as a price, not a degenerate span."""
-    _enable(db)
+    """One price across catalog AND flat reads as a price, not a degenerate span."""
+    _enable(db, price_role_icon=200)
     embed = _build_shop_embed(
         _settings(db), set(), None, panel=True, icon_catalog=(200, 200, 3)
     )
@@ -1653,6 +1673,138 @@ async def test_role_icon_rejects_animated_emoji(ctx, db):
         await _role_icon_emoji(cog, interaction, ":party:")
     assert "animated" in interaction.response.send_message.await_args.args[0].lower()
     apply_mock.assert_not_awaited()
+
+
+# ── icon catalog picker: the Custom entry ───────────────────────────────────
+
+
+def test_icon_catalog_select_last_slot_is_custom(db):
+    """The picker always ends with the flat-price bring-your-own entry, and a
+    big catalog trims to 24 icons so the total stays within Discord's
+    25-option cap."""
+    from bot_modules.cogs.economy_cog import _IconCatalogSelect
+
+    _enable(db)
+    icons = [{"id": i + 1, "name": f"Icon {i}", "price": 100} for i in range(30)]
+    select = _IconCatalogSelect(MagicMock(), _settings(db), _guild_roles(), icons)
+    assert len(select.options) == 25
+    assert select.options[-1].value == "custom"
+    assert "75" in select.options[-1].description  # the flat price_role_icon
+    assert [o.value for o in select.options[:24]] == [str(i + 1) for i in range(24)]
+
+
+@pytest.mark.asyncio
+async def test_pick_custom_icon_rents_flat_when_unowned(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.pick_custom_icon(interaction, _settings(db), _guild_roles())
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1 and rentals[0]["perk"] == "role_icon"
+    assert rentals[0]["catalog_icon_id"] is None
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500 - 75  # flat upfront week
+    apply_mock.assert_awaited_once()
+    # The confirmation points at the image-upload path.
+    assert "/bank role icon" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_pick_custom_icon_switches_catalog_rental_free_and_clears_art(ctx, db):
+    """Catalog → custom re-tags the paid week (no charge) and blanks the
+    projected image — the catalog art belongs to the catalog price."""
+    from bot_modules.services.economy_icon_catalog_service import add_catalog_icon
+    from bot_modules.services.economy_rentals_service import (
+        rent_perk,
+        upsert_personal_role,
+    )
+
+    _enable(db)
+    _credit(db, 500, 500)
+    settings = _settings(db)
+    with open_db(db) as conn:
+        icon_id = add_catalog_icon(conn, GUILD_ID, name="Crown", price=100)
+        rent_perk(
+            conn, settings, GUILD_ID, 500, "role_icon", catalog_icon_id=icon_id
+        )
+        upsert_personal_role(conn, GUILD_ID, 500, {"icon_path": "/icons/crown.png"})
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await cog.pick_custom_icon(interaction, settings, _guild_roles())
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1 and rentals[0]["catalog_icon_id"] is None
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 400  # only the upfront 100
+        row = conn.execute(
+            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["icon_path"] == ""
+    apply_mock.assert_awaited_once()
+    assert "next renewal" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_pick_custom_icon_already_custom_just_offers_customise(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await cog.pick_custom_icon(interaction, _settings(db), _guild_roles())
+    assert len(_live_rentals(db)) == 1  # no double rent, no charge
+    call = interaction.response.send_message.await_args
+    assert "already" in call.args[0]
+    assert call.kwargs["view"] is not None
+
+
+@pytest.mark.asyncio
+async def test_role_icon_upload_blocked_for_catalog_renters_only(ctx, db):
+    """The upload guard is per-rental, not per-guild: a curated-catalog renter
+    is locked to their icon, while a flat-price custom renter uploads freely
+    even though the guild stocks a catalog."""
+    from bot_modules.services.economy_icon_catalog_service import add_catalog_icon
+
+    _enable(db)
+    with open_db(db) as conn:
+        icon_id = add_catalog_icon(conn, GUILD_ID, name="Crown", price=100)
+    _add_rental(db, "role_icon", user_id=500, catalog_icon_id=icon_id)
+    _add_rental(db, "role_icon", user_id=600)
+    cog = _make_cog(ctx)
+    assert cog._catalog_locked(GUILD_ID, 500) is True
+    assert cog._catalog_locked(GUILD_ID, 600) is False
+    assert cog._catalog_locked(GUILD_ID, 700) is False  # no rental at all
+
+    locked = _role_interaction(_member(member_id=500), emojis=[_fake_emoji()])
+    free = _role_interaction(_member(member_id=600), emojis=[_fake_emoji()])
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await _role_icon_emoji(cog, locked, ":party:")
+        await _role_icon_emoji(cog, free, ":party:")
+    assert "Custom" in locked.response.send_message.await_args.args[0]
+    apply_mock.assert_awaited_once()  # only the custom renter's upload landed
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,8 @@ guard, and the money-critical paths that make catalog icons per-icon priced:
 the upfront charge at the icon's price, renewals re-reading the CURRENT icon
 price (so an admin edit lands at the next anniversary), the flat-price fallback
 for a bring-your-own icon and for a vanished catalog row, and an in-week icon
-switch that re-prices only at the next renewal.
+switch — to another catalog icon or back to the flat-price custom icon — that
+re-prices only at the next renewal.
 """
 
 from __future__ import annotations
@@ -177,6 +178,42 @@ def test_switch_icon_reprices_only_at_next_renewal(db):
         result = bill_rental(conn, SETTINGS, rental, T0 + WEEK_SECONDS)
         assert result.charged == 400
         assert get_balance(conn, GUILD, USER) == 1500
+
+
+def test_switch_to_custom_bills_flat_at_next_renewal(db):
+    """Re-tagging a catalog rental to None (the picker's Custom entry) is free
+    mid-week and reverts billing to the flat price at the next anniversary."""
+    _fund(db, 1000)
+    with open_db(db) as conn:
+        icon_id = _add_icon(conn, price=100)
+        rent_perk(
+            conn, SETTINGS, GUILD, USER, "role_icon",
+            catalog_icon_id=icon_id, now=T0,
+        )
+        rental = get_live_role_icon_rental(conn, GUILD, USER)
+        set_rental_catalog_icon(conn, GUILD, int(rental["id"]), None)
+        assert get_balance(conn, GUILD, USER) == 900  # only the 100 upfront
+        rental = get_live_role_icon_rental(conn, GUILD, USER)
+        assert rental["catalog_icon_id"] is None
+        result = bill_rental(conn, SETTINGS, rental, T0 + WEEK_SECONDS)
+        assert result.charged == 75  # flat price_role_icon
+        assert get_balance(conn, GUILD, USER) == 825
+
+
+def test_live_rental_lookup_matches_beneficiary(db):
+    """A gifted icon rental resolves for the friend wearing it, not the payer —
+    the upload guards and the picker's rent-vs-switch decision key on whose
+    role carries the icon."""
+    friend = 77
+    _fund(db, 1000)
+    with open_db(db) as conn:
+        rent_perk(
+            conn, SETTINGS, GUILD, USER, "role_icon",
+            beneficiary_id=friend, now=T0,
+        )
+        found = get_live_role_icon_rental(conn, GUILD, friend)
+        assert found is not None and int(found["user_id"]) == USER
+        assert get_live_role_icon_rental(conn, GUILD, USER) is None
 
 
 def test_renewal_falls_back_to_flat_when_icon_deleted(db):
