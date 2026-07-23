@@ -216,7 +216,7 @@ export function mount(container) {
         return;
       }
       const channelId = refForm.querySelector('select[name="ref_channel_id"]').value || "0";
-      if (!(parseInt(channelId) > 0)) {
+      if (channelId === "0") {
         showStatus(refStatus, false, "Pick the reference channel first");
         return;
       }
@@ -259,7 +259,8 @@ export function mount(container) {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       syncSteps();
-      const bad = steps.find((s) => s.auto === "role_gained" && !(parseInt(s.role_id) > 0));
+      // String check — snowflakes must never go through parseInt (precision).
+      const bad = steps.find((s) => s.auto === "role_gained" && (!s.role_id || s.role_id === "0"));
       if (bad) {
         showStatus(status, false, `“${bad.label || "unnamed step"}” needs a role`);
         return;
