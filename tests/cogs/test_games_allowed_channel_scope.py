@@ -1,4 +1,4 @@
-"""Guild scoping for check_allowed_channel (migration 115).
+"""Guild scoping for check_allowed_channel (migration 118).
 
 channel_id is a globally-unique snowflake, so the legacy channel-only match is
 not itself a cross-guild leak; these tests lock in the optional guild_id filter
@@ -40,3 +40,55 @@ async def test_legacy_zero_guild_is_wildcard(sync_db_path):
 
     assert await check_allowed_channel(db, 111, guild_id=42) is True
     assert await check_allowed_channel(db, 111, guild_id=7) is True
+
+
+# ── migration 118 single-guild backfill ─────────────────────────────
+# The dashboard reads these tables filtered by the active guild, so legacy
+# rows (guild_id = 0) must be assigned to the sole guild on a single-guild
+# install or they vanish from the panels. On a multi-guild install the
+# backfill must NOT guess.
+
+def _apply_backfill(conn):
+    for table in ("games_allowed_channels", "games_game_history"):
+        conn.execute(
+            f"UPDATE {table} SET guild_id = "
+            "(SELECT guild_id FROM games_game_config LIMIT 1) "
+            "WHERE guild_id = 0 "
+            "AND (SELECT COUNT(DISTINCT guild_id) FROM games_game_config) = 1"
+        )
+
+
+def test_backfill_assigns_the_sole_guild(sync_db_path):
+    from bot_modules.core.db_utils import open_db
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_game_config (guild_id, game_type) VALUES (?, ?)",
+            (500, "ffa"),
+        )
+        conn.execute(
+            "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, 0)",
+            (111,),
+        )
+        _apply_backfill(conn)
+        row = conn.execute(
+            "SELECT guild_id FROM games_allowed_channels WHERE channel_id = 111"
+        ).fetchone()
+        assert row[0] == 500
+
+
+def test_backfill_is_a_noop_with_multiple_guilds(sync_db_path):
+    from bot_modules.core.db_utils import open_db
+    with open_db(sync_db_path) as conn:
+        conn.executemany(
+            "INSERT INTO games_game_config (guild_id, game_type) VALUES (?, ?)",
+            [(500, "ffa"), (600, "ffa")],
+        )
+        conn.execute(
+            "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, 0)",
+            (111,),
+        )
+        _apply_backfill(conn)
+        row = conn.execute(
+            "SELECT guild_id FROM games_allowed_channels WHERE channel_id = 111"
+        ).fetchone()
+        assert row[0] == 0  # left for manual reconcile — never guessed
