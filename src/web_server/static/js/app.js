@@ -132,6 +132,7 @@ const SECTIONS = [
         { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true, help: "help-config" },
         { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
         { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true, help: "help-announcements" },
+        { id: "config-bump-tracker", label: "Bump Tracker",    module: "./panels/config-bump-tracker.js", adminOnly: true, keywords: "bump disboard listing sites reminders" },
       ]},
       { heading: "Roles", items: [
         { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup" },
