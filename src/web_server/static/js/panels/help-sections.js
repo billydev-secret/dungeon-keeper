@@ -63,6 +63,7 @@ export const HELP_GROUPS = [
     { page: "help-cleanup",        anchor: "server-ops",        label: "Server Upkeep" },
     { page: "help-chat-revive",    anchor: "chat-revive",       label: "Chat Revive" },
     { page: "help-greeting-watch", anchor: "greeting-watch",    label: "Greeting Watch" },
+    { page: "help-intake",         anchor: "intake",            label: "Intake Cards" },
     { page: "help-hidden",         anchor: "hidden-channels",   label: "Hidden Channels" },
     { page: "help-network",        anchor: "network-analytics", label: "Network Analytics" },
   ]},

@@ -19,7 +19,7 @@ Discord moderation, community, voice, and analytics bot.
   - *Engagement & retention:* DAU/MAU stickiness, cohort retention curves, newcomer activation funnel, churn-risk early-warning scores.
   - *Activity patterns:* 7×24 message heatmap, message-rate trends, join-time distribution, voice stats, activity timeline.
   - *Community structure:* force-directed interaction graph, animated interaction heatmap, participation Gini/Lorenz, channel-health comparison.
-  - *Growth & onboarding:* invite effectiveness, role growth, time-to-level, greeter response latency.
+  - *Growth & onboarding:* invite effectiveness, role growth, time-to-level, greeter response latency, intake queue (per-newcomer welcome-checklist cards in greeter chat that auto-tick as the procedure happens — dashboard-configured, no commands).
   - *Anomalies & at-risk:* message-rate drops, burst ranking, drop-off, session burst, chilling-effect detection.
   - *Quality & demographics:* per-member quality score, NSFW gender activity, oldest SFW members, reaction analytics.
 - **Reports** — Member, role, and engagement reports live in the dashboard, and `/quality_leave add/remove/list` tracks members on an approved leave of absence so they aren't flagged as inactive.

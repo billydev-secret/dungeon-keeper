@@ -519,6 +519,7 @@
         <tr><td><strong><a href="#setup">Setup &amp; Permissions</a></strong></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
         <tr><td><strong><a href="#server-ops">Server Upkeep</a></strong></td><td>Auto-delete schedules, inactivity pruning, a shared inactive-member holding channel, auto-threading, bump reminders, gender tagging, hidden channels.</td></tr>
         <tr><td><strong><a href="#greeting-watch">Greeting Watch</a></strong></td><td>DMs a greeter when a member's "good morning" in a watched channel goes unanswered. Dashboard-configured, no commands.</td></tr>
+        <tr><td><strong><a href="#intake">Intake Cards</a></strong></td><td>Per-newcomer welcome checklist card in greeter chat that ticks itself as the procedure happens, plus a bot-synced procedure-reference channel. Dashboard-configured, no commands.</td></tr>
         <tr><td><strong><a href="#chat-revive">Chat Revive ("Ember")</a></strong></td><td>Rhythm-aware lull detector that revives a quiet channel with a question card and an opt-in ping role. Dashboard-managed, no commands.</td></tr>
         <tr><td><strong><a href="#network-analytics">Network Analytics</a></strong></td><td>Connection graphs, interaction heatmaps, invite trees — dashboard panels.</td></tr>
         <tr><td><strong><a href="#config">Configuration</a></strong></td><td>Web dashboard panels covering every persistent setting.</td></tr>
@@ -1851,6 +1852,19 @@
       </div>
     </div>
 
+    <h3 id="intake">Intake Cards</h3>
+    <p>Turns your welcome procedure into a live checklist. When someone joins, the bot posts an <strong>intake card</strong> to greeter chat — pinging the greeter role instead of the old bare @here line — showing a progress bar, the member's account age, who invited them, and the procedure as ✅/⬜ steps. The card is a tracker, not a control panel: welcomers keep greeting, asking the question lists, and running <code>/grant</code> exactly as before, and the card ticks itself — a greeter mentioning the newcomer ticks <em>Greeted</em>, the verification role lifting ticks <em>Verified</em>, and gaining a configured role (via <code>/grant</code> or a manual add) ticks the matching role step. The question phases are buttons welcomers tick by hand. Nothing anyone says is ever recorded — only that steps happened, by whom, and when.</p>
+    <p>To finish an intake, the welcomer posts the ending welcome message containing the configured <strong>completion code</strong> and @mentioning the newcomer — any channel works. The card completes, the poster is recorded as the welcomer, and any unticked steps are marked <em>skipped</em> (visible in analytics, never blocking). Cards only ever close on completion, a mod's Dismiss, or the member leaving or being banned — so the open cards <em>are</em> your intake queue. A card with no progress for the configured window gets one greeter-role nudge reply, never more.</p>
+    <p>The panel also manages a <strong>procedure reference</strong> channel (your #welcome-procedure): the text sections and question lists live in a block editor on the dashboard and the bot keeps the channel in sync — question lists post <strong>one message per question</strong>, so a greeter taps Copy Text on exactly the question they need. Rewording a question edits the same message in place (links keep working); a one-time Import button seeds the editor from the channel's existing content. The bot never touches messages humans posted there.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/#/config-intake">web dashboard</a></strong>
+        <p>The Intake Cards panel has the enable toggle, card channel, completion code, stale-nudge window, the step-list editor (steps are snapshotted onto each card when it posts, so edits never disturb in-flight intakes), and the Procedure Reference block editor with its Import button. The <a href="/#/intake-report">Intake Queue</a> report shows the open queue, time-to-complete, per-welcomer counts, and which steps get skipped.</p>
+      </div>
+    </div>
+
     <h3 id="chat-revive">Chat Revive ("Ember")</h3>
     <p>Notices when a channel has gone unusually quiet <em>for that channel, at that time of day</em>, and gently restarts conversation by posting a question card from a curated bank — optionally tagging an opt-in chat-revive role. It's not a timer bot: it learns each channel's rhythm, never talks over an active room, never posts twice in a row, and strict frequency protections (per-channel rest period, guild daily budget, quiet hours, at most one ping per channel per day) keep it rare enough to feel like a treat. Spicier questions only ever surface in age-restricted channels. Members join or leave the ping role through the server's usual self-role flow; there are no slash commands.</p>
 
@@ -1989,6 +2003,7 @@
         <tr><td><strong><a href="/#/economy-config">Economy</a></strong></td><td>Branding, wiring, and rates (Settings) plus Quests, Claims, Operations, Income Sources, Sinks (perk prices + icon catalog), QOTD, Sponsored QOTD, and Statistics pages</td></tr>
         <tr><td><strong><a href="/#/photo-challenge">Photo Challenge</a></strong></td><td>Channel, ping role, recurring schedule, enabled toggle; reward set as a photo_post quest in Economy; prompt bank under Prompts &amp; AI</td></tr>
         <tr><td><strong><a href="/#/config-greeting-watch">Greeting Watch</a></strong></td><td>Watched channels, notify member, unanswered-window minutes</td></tr>
+        <tr><td><strong><a href="/#/config-intake">Intake Cards</a></strong></td><td>Enable toggle, card channel, completion code, stale-nudge hours, checklist step editor, procedure-reference channel + block editor with import</td></tr>
         <tr><td><strong><a href="/#/chat-revive">Chat Revive</a></strong></td><td>Eligible channels, ping role, budgets and quiet hours, question bank, manual fire, scoreboard</td></tr>
         <tr><td><strong><a href="/#/announcements">Announcements</a></strong></td><td>Queue scheduled channel posts: embed + ping line, live preview, drafts, sent history</td></tr>
         <tr><td><strong><a href="/#/qa-tracker">QA Tracker</a></strong></td><td>QA-crew role, channel, reward and daily cap, verdict board with void / archive</td></tr>

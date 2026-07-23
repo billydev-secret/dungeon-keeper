@@ -38,6 +38,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [guess_spec.md](guess_spec.md) | Guess image game (`/guess submit\|round\|delete\|optin\|confess\|leaderboard\|prompt`) |
 | [hidden_channels_spec.md](hidden_channels_spec.md) | Hidden Channels (`/hidden hide\|restore\|list`) |
 | [inactive_spec.md](inactive_spec.md) | Inactive member management (`/inactive mark\|release\|panel\|sweep`); sweep settings configured on the web dashboard |
+| [intake_spec.md](intake_spec.md) | Intake cards: per-newcomer welcome-procedure tracker in greeter chat (auto-ticking checklist, completion code, stale nudges, Intake Queue report) + the bot-synced procedure-reference channel (one message per question). Dashboard-configured, no commands |
 | [mod_spec.md](mod_spec.md) | Mod cog (`/help`, `/purge`) — distinct from tools_spec.md |
 | [needle_spec.md](needle_spec.md) | Needle auto-threading (`/close`, `/title`) |
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |

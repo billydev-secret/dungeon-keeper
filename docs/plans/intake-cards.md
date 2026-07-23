@@ -1,6 +1,8 @@
 # Intake cards — per-newcomer welcome tracker + procedure reference sync
 
-**Status:** Plan (not yet built).
+**Status:** Built (stages 1–6 landed on branch `welcome-tracker`). The
+as-built spec is [../intake_spec.md](../intake_spec.md); this document is
+the design history.
 
 ## Context
 
