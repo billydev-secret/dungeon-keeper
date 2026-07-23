@@ -400,7 +400,7 @@ async def force_delete(
 
     def _row_q() -> Any:
         with ctx.open_db() as conn:
-            return get_active_channel(conn, channel_id)
+            return get_active_channel(conn, channel_id, guild_id)
 
     row = await run_query(_row_q)
     if row is None:
@@ -473,7 +473,7 @@ async def force_transfer(
 
     def _row_q() -> Any:
         with ctx.open_db() as conn:
-            return get_active_channel(conn, channel_id)
+            return get_active_channel(conn, channel_id, guild_id)
 
     row = await run_query(_row_q)
     if row is None:

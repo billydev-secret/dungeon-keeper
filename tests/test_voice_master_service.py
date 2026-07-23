@@ -93,6 +93,24 @@ def test_get_active_channel_missing(db):
         assert get_active_channel(conn, 9999) is None
 
 
+def test_get_active_channel_guild_scoped(db):
+    """A channel id from another guild must not resolve when guild-scoped.
+
+    Regression: the web force-delete/force-transfer routes look the row up by
+    channel id alone, so a foreign-guild id could resolve (and delete) a row
+    belonging to a different tenant. Passing guild_id must refuse it.
+    """
+    other_guild = GUILD + 1
+    with open_db(db) as conn:
+        insert_active_channel(
+            conn, channel_id=CH1, guild_id=GUILD, owner_id=OWNER_A, now=100.0
+        )
+        # Same guild: found.
+        assert get_active_channel(conn, CH1, GUILD) is not None
+        # Foreign guild: refused, even though the channel id exists.
+        assert get_active_channel(conn, CH1, other_guild) is None
+
+
 def test_get_owned_channel(db):
     with open_db(db) as conn:
         insert_active_channel(
