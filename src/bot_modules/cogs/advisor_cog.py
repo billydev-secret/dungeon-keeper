@@ -34,6 +34,7 @@ from bot_modules.services.advisor_context import (
     fetch_feature_settings,
     is_staff,
 )
+from bot_modules.services.advisor_gaps import fetch_setup_gaps
 from bot_modules.services.advisor_service import (
     MODEL,
     AdvisorTools,
@@ -66,6 +67,9 @@ def _make_tools(
     def _fetch(feature: str) -> str:
         return fetch_feature_settings(guild, member, db_path, feature)
 
+    def _gaps() -> str:
+        return fetch_setup_gaps(db_path, guild.id, member)
+
     def _propose(key: str, value: str) -> str:
         if not can_see_config(member):  # defense in depth; wiring already gates
             return "Rejected: only server admins can change settings."
@@ -84,7 +88,10 @@ def _make_tools(
         )
 
     return AdvisorTools(
-        feature_keys=FEATURE_KEYS, fetch_settings=_fetch, propose_change=_propose
+        feature_keys=FEATURE_KEYS,
+        fetch_settings=_fetch,
+        fetch_gaps=_gaps,
+        propose_change=_propose,
     )
 
 

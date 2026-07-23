@@ -104,6 +104,7 @@ feature and also appear in the Design table above.
 | Plan | What it covers | Status |
 |---|---|---|
 | [plans/ai-advisor.md](plans/ai-advisor.md) | Billy-bot: grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
+| [plans/help_bot_knowledge.md](plans/help_bot_knowledge.md) | Billy-bot as a setup guide: model tiering, settings registry, gap detection, proactive suggestions | Stages 1–3 built 2026-07-23; stage 4 in progress |
 | [plans/chat-revive.md](plans/chat-revive.md) | Chat Revive ("Ember") v1: rhythm-aware lull questions | Built 2026-07-14 |
 | [plans/chat-revive-session-model.md](plans/chat-revive-session-model.md) | Session-gap lull model (replaces v1's rhythm fire threshold) | Built 2026-07-18 |
 | [plans/config-model-unification.md](plans/config-model-unification.md) | `guild_config` becomes the single source of truth (kills flat AppContext fields) | Implemented 2026-07-02 |

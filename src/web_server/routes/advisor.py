@@ -83,10 +83,15 @@ async def help_advisor(
             # Read-only here: the dashboard edits settings in its own panels,
             # and the confirm-button flow only exists on the Discord surface.
             if tools_on and member is not None and can_see_config(member):
+                from bot_modules.services.advisor_gaps import fetch_setup_gaps
+
                 tools = AdvisorTools(
                     feature_keys=FEATURE_KEYS,
                     fetch_settings=lambda f, _m=member: fetch_feature_settings(
                         guild, _m, ctx.db_path, f
+                    ),
+                    fetch_gaps=lambda _m=member: fetch_setup_gaps(
+                        ctx.db_path, guild_id, _m
                     ),
                 )
             guild_context = build_asker_context(

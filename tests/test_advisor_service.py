@@ -348,6 +348,62 @@ def test_build_tools_read_only_vs_write():
     ]
 
 
+def test_build_tools_includes_gap_finder_only_when_wired():
+    base = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "")
+    assert "find_setup_gaps" not in [t["name"] for t in adv.build_tools(base)]
+    with_gaps = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "", fetch_gaps=lambda: ""
+    )
+    defs = adv.build_tools(with_gaps)
+    assert [t["name"] for t in defs] == ["get_server_settings", "find_setup_gaps"]
+    # No arguments — the model shouldn't be inventing a filter.
+    assert defs[1]["input_schema"]["properties"] == {}
+
+
+def test_propose_tool_enum_is_the_registry_writable_set():
+    """The model can't name a key that isn't vetted for writing."""
+    from bot_modules.services.settings_registry import writable_keys
+
+    rw = adv.AdvisorTools(
+        feature_keys=["general"], fetch_settings=lambda f: "", propose_change=lambda k, v: ""
+    )
+    propose = next(t for t in adv.build_tools(rw) if t["name"] == "propose_config_change")
+    enum = propose["input_schema"]["properties"]["key"]["enum"]
+    assert set(enum) == set(writable_keys())
+    assert "admin_role_ids" not in enum
+    assert "jailed_role_id" not in enum
+
+
+async def test_tool_loop_runs_the_gap_finder(monkeypatch):
+    client = _mock_client_seq(monkeypatch, [
+        _resp(_tool_block("find_setup_gaps", {}), stop_reason="tool_use"),
+        _resp(TextBlock(type="text", text="Try turning on Q&A rewards.")),
+    ])
+    calls = []
+
+    tools = adv.AdvisorTools(
+        feature_keys=["general"],
+        fetch_settings=lambda f: "",
+        fetch_gaps=lambda: (calls.append(1), "- Q&A rewards — not set up at all")[1],
+    )
+    res = await adv.answer_advisor("what am I missing?", tools=tools)
+    assert res.ok is True
+    assert res.answer == "Try turning on Q&A rewards."
+    assert len(calls) == 1
+    assert client.messages.create.call_count == 2
+
+
+async def test_gap_tool_call_is_ignored_when_not_wired(monkeypatch):
+    """A model that hallucinates the tool gets a readable refusal, not a crash."""
+    _mock_client_seq(monkeypatch, [
+        _resp(_tool_block("find_setup_gaps", {}), stop_reason="tool_use"),
+        _resp(TextBlock(type="text", text="Sorry, can't check that.")),
+    ])
+    tools = adv.AdvisorTools(feature_keys=["general"], fetch_settings=lambda f: "")
+    res = await adv.answer_advisor("what am I missing?", tools=tools)
+    assert res.ok is True
+
+
 async def test_answer_without_tools_never_passes_tools(monkeypatch):
     client = _mock_client(monkeypatch, content=[TextBlock(type="text", text="hi")])
     await adv.answer_advisor("q")
