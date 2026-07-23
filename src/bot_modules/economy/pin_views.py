@@ -26,6 +26,7 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.economy.quest_views import can_manage_economy
+from bot_modules.economy.view_helpers import coins as _reward_text
 from bot_modules.services.economy_pin_service import (
     deny,
     get_submission,
@@ -46,16 +47,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy")
 
 MANAGE_DENIED_MSG = "❌ You don't have permission to review pinned messages."
-
-
-def _reward_text(settings: EconSettings, amount: int) -> str:
-    """``🪙 **300** coins`` — the currency vocabulary every economy card uses."""
-    unit = (
-        settings.currency_name
-        if abs(amount) == 1
-        else (settings.currency_plural or "coins")
-    )
-    return f"{settings.currency_emoji} **{amount:,}** {unit}"
 
 
 def render_pin_review_embed(

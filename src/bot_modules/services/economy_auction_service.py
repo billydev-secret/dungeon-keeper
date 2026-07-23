@@ -116,6 +116,21 @@ def get_open_auction(
     ).fetchone()
 
 
+def open_auction_guild_ids(conn: sqlite3.Connection) -> set[int]:
+    """Every guild id with a live auction — one indexed read for the settle loop.
+
+    Lets the periodic sweep skip guilds that have no auction (almost all of
+    them, since auctions are rare and dark by default) instead of opening a
+    connection per guild each tick.
+    """
+    return {
+        int(r["guild_id"])
+        for r in conn.execute(
+            "SELECT DISTINCT guild_id FROM econ_auctions WHERE state = 'open'"
+        )
+    }
+
+
 def get_auction(
     conn: sqlite3.Connection, auction_id: int
 ) -> sqlite3.Row | None:
@@ -360,16 +375,17 @@ def place_bid_now(
 
     The entry point the cog uses. BEGIN IMMEDIATE takes the write lock before
     the read, so concurrent bidders serialize instead of racing on a stale
-    snapshot. A transient ``OperationalError`` (couldn't get the lock in time,
-    or a snapshot conflict on some other path) is retried a few times; if it
-    persists, it surfaces as a friendly ValueError rather than a raw sqlite
-    error. A ValueError from ``place_bid`` (bad bid, outbid, insufficient) is a
-    real rejection and propagates unretried.
+    snapshot. Each attempt uses a *short* busy_timeout so a contended lock fails
+    fast and retries rather than blocking the worker for the full 30s — the
+    retry budget (retries × ~2s) caps the worst-case wait at ~10s, not ~150s. A
+    persisting ``OperationalError`` surfaces as a friendly ValueError, not a raw
+    sqlite error. A ValueError from ``place_bid`` (bad bid, outbid, insufficient)
+    is a real rejection and propagates unretried.
     """
     last: sqlite3.OperationalError | None = None
     for _ in range(max(1, retries)):
         try:
-            with open_db_immediate(db_path) as conn:
+            with open_db_immediate(db_path, busy_timeout_ms=2000) as conn:
                 return place_bid(
                     conn, settings, guild_id, auction_id, user_id, amount, now=now
                 )

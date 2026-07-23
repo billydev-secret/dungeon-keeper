@@ -25,6 +25,8 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.economy.quest_views import can_manage_economy
+from bot_modules.economy.view_helpers import coins as _coins
+from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
 from bot_modules.services.economy_auction_service import (
     SettledAuction,
     attach_card,
@@ -58,16 +60,6 @@ __all__ = [
     "end_open_auction",
     "settle_and_announce",
 ]
-
-
-def _coins(settings: EconSettings, amount: int) -> str:
-    """``🪙 **250** coins`` — the shared currency vocabulary."""
-    unit = (
-        settings.currency_name
-        if abs(amount) == 1
-        else (settings.currency_plural or "coins")
-    )
-    return f"{settings.currency_emoji} **{amount:,}** {unit}"
 
 
 def render_auction_card(
@@ -227,16 +219,6 @@ class AuctionBidView(discord.ui.View):
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-async def _safe_ephemeral(interaction: discord.Interaction, text: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("econ auction: failed to send ephemeral", exc_info=True)
-
-
 async def _load_settings(bot: Bot, guild_id: int) -> EconSettings:
     def _read() -> EconSettings:
         with bot.ctx.open_db() as conn:
@@ -246,9 +228,18 @@ async def _load_settings(bot: Bot, guild_id: int) -> EconSettings:
 
 
 async def _render(
-    bot: Bot, guild: discord.Guild, auction_id: int
-) -> tuple[discord.Embed, discord.ui.View | None] | None:
-    settings = await _load_settings(bot, guild.id)
+    bot: Bot,
+    guild: discord.Guild,
+    auction_id: int,
+    *,
+    settings: EconSettings | None = None,
+) -> tuple[discord.Embed, discord.ui.View | None, str] | None:
+    """Build the card embed + view for an auction, plus its title (for reuse).
+
+    Pass ``settings`` to skip the settings read when the caller already has it.
+    Returns None if the auction row is gone."""
+    if settings is None:
+        settings = await _load_settings(bot, guild.id)
     accent = await resolve_accent_color(bot.ctx.db_path, guild)
 
     def _read():
@@ -264,22 +255,31 @@ async def _render(
     row, bids = data
     embed = render_auction_card(accent, settings, row, bids=bids)
     view = AuctionBidView(auction_id) if str(row["state"]) == "open" else None
-    return embed, view
+    return embed, view, str(row["title"])
 
 
 async def _refresh_card(
-    bot: Bot, card: discord.Message | None, guild: discord.Guild, auction_id: int
-) -> None:
-    if card is None:
-        return
-    rendered = await _render(bot, guild, auction_id)
+    bot: Bot,
+    card: discord.Message | None,
+    guild: discord.Guild,
+    auction_id: int,
+    *,
+    settings: EconSettings | None = None,
+) -> str | None:
+    """Re-render the card from the current row; returns the auction title (or None).
+
+    The title lets the caller (e.g. the outbid DM) reuse this read instead of a
+    second one."""
+    rendered = await _render(bot, guild, auction_id, settings=settings)
     if rendered is None:
-        return
-    embed, view = rendered
-    try:
-        await card.edit(embed=embed, view=view)
-    except discord.HTTPException:
-        log.debug("econ auction: failed to edit card", exc_info=True)
+        return None
+    embed, view, title = rendered
+    if card is not None:
+        try:
+            await card.edit(embed=embed, view=view)
+        except discord.HTTPException:
+            log.debug("econ auction: failed to edit card", exc_info=True)
+    return title
 
 
 async def _card_message(
@@ -342,14 +342,16 @@ async def _handle_bid(
         await _safe_ephemeral(interaction, "❌ Couldn't place that bid — try again.")
         return
 
-    await _refresh_card(bot, card, guild, auction_id)
+    # One refresh, reusing the settings we already loaded; its returned title
+    # feeds the outbid DM so we don't read the row a second time.
+    title = await _refresh_card(bot, card, guild, auction_id, settings=settings)
     # Tell the member we just displaced that they're out — and refunded.
     if result.outbid_user_id is not None and result.outbid_user_id != member.id:
         try:
             await notify_member(
                 bot, bot.ctx.db_path, guild.id, result.outbid_user_id,
                 content=(
-                    f"You were outbid on **{await _auction_title(bot, auction_id)}** "
+                    f"You were outbid on **{title or 'an auction'}** "
                     f"— your {result.outbid_amount:,} coins are back. Bid again to reclaim it!"
                 ),
             )
@@ -360,15 +362,6 @@ async def _handle_bid(
         interaction,
         f"🔨 You're the high bidder at {result.amount:,}.{tail}",
     )
-
-
-async def _auction_title(bot: Bot, auction_id: int) -> str:
-    def _read():
-        with bot.ctx.open_db() as conn:
-            row = get_auction(conn, auction_id)
-            return str(row["title"]) if row else "an auction"
-
-    return await asyncio.to_thread(_read)
 
 
 # ── command-backed flows (start / cancel / end) ──────────────────────────────
@@ -420,16 +413,29 @@ async def start_auction(
         await _safe_ephemeral(interaction, "❌ Couldn't start the auction — try again.")
         return
 
-    rendered = await _render(bot, guild, auction_id)
+    # If we can't get a card in front of members, roll the auction back — a
+    # committed-but-cardless auction blocks the single-live-auction slot and
+    # can't be bid on. Cancelling is a clean no-op here (no bids yet).
+    def _rollback() -> None:
+        with bot.ctx.open_db() as conn:
+            cancel_auction(conn, guild.id, auction_id, resolver_id=member.id)
+
+    rendered = await _render(bot, guild, auction_id, settings=settings)
     if rendered is None:
+        await asyncio.to_thread(_rollback)
         await _safe_ephemeral(interaction, "❌ Couldn't render the auction card.")
         return
-    embed, _ = rendered
+    embed, _view, _title = rendered
     # A freshly-opened auction is always live, so it always gets a Bid button.
     try:
         message = await channel.send(embed=embed, view=AuctionBidView(auction_id))
     except discord.HTTPException:
-        await _safe_ephemeral(interaction, "❌ I couldn't post the auction card here.")
+        await asyncio.to_thread(_rollback)
+        await _safe_ephemeral(
+            interaction,
+            "❌ I couldn't post the auction card here — check I can send "
+            "messages and embeds in this channel, then try again.",
+        )
         return
 
     def _attach() -> None:

@@ -66,6 +66,7 @@ from bot_modules.economy.auction_views import (
     settle_and_announce,
     start_auction,
 )
+from bot_modules.services.economy_auction_service import open_auction_guild_ids
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
@@ -1578,14 +1579,26 @@ class EconomyCog(commands.Cog):
     async def _auction_settle_loop(self) -> None:
         """Close auctions past their end and announce each — the timed-close path.
 
-        Cheap: settle_due_auctions is a single indexed claim per guild that
-        no-ops when nothing is due, and the whole sweep is best-effort (a per-
-        guild failure is logged, never fatal to the loop)."""
-        for guild in list(self.bot.guilds):
+        One indexed read finds the (usually zero) guilds with a live auction, so
+        idle guilds cost nothing; only those are then swept. Best-effort — a
+        per-guild failure is logged, never fatal to the loop."""
+        def _live() -> set[int]:
+            with self.ctx.open_db() as conn:
+                return open_auction_guild_ids(conn)
+
+        try:
+            live = await asyncio.to_thread(_live)
+        except Exception:
+            log.exception("auction settle loop: failed to list live auctions")
+            return
+        for guild_id in live:
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
             try:
                 await settle_and_announce(self.bot, guild)
             except Exception:
-                log.exception("auction settle loop failed for guild %s", guild.id)
+                log.exception("auction settle loop failed for guild %s", guild_id)
 
     @_auction_settle_loop.before_loop
     async def _before_auction_settle(self) -> None:
