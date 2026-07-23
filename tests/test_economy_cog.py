@@ -2607,13 +2607,31 @@ async def test_shop_view_shows_refund_button_only_when_something_refundable(ctx,
 
 
 @pytest.mark.asyncio
+async def test_refund_picker_view_scoped_to_its_own_member(ctx, db):
+    # _RefundPickerView shares its ownership guard with _ShopView/
+    # _IconCatalogView via _MemberScopedView — confirm the shared base still
+    # rejects a different member's click.
+    from bot_modules.cogs.economy_cog import _RefundPickerView
+
+    cog = _make_cog(ctx)
+    view = _RefundPickerView(cog, _settings(db), _guild_roles(), 500, [], 30)
+    stranger = _interaction(_member(member_id=999))
+    assert await view.interaction_check(stranger) is False
+    assert "Open your own shop" in stranger.response.send_message.await_args.args[0]
+    owner = _interaction(_member(member_id=500))
+    assert await view.interaction_check(owner) is True
+
+
+@pytest.mark.asyncio
 async def test_refund_picker_previews_prorated_amount(ctx, db):
     _enable(db)
     _credit(db, 500, 200)
     _add_rental(db, "role_color", user_id=500)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
-    refundable, shield_price = cog._refundables(GUILD_ID, 500)
+    refundable, _shields_held, shield_price = cog._refundables(
+        GUILD_ID, 500, _settings(db)
+    )
 
     await cog.open_refund_picker(
         interaction, _settings(db), _guild_roles(), refundable, shield_price
@@ -2661,6 +2679,37 @@ async def test_refund_confirm_credits_prorated_amount_and_ends_rental_now(ctx, d
             "SELECT state FROM econ_rentals WHERE id = ?", (rid,)
         ).fetchone()
         assert row["state"] == "cancelled"  # ends now, not at period end
+
+
+@pytest.mark.asyncio
+async def test_refund_confirm_survives_a_failed_perk_revoke(ctx, db):
+    # The refund (money + rental state) already committed by the time
+    # revoke_perk_effect runs — a Discord-side failure there must not blow
+    # up the interaction and strand the member with no confirmation.
+    _enable(db)
+    _credit(db, 500, 200)
+    _add_rental(db, "role_color", user_id=500)
+    with open_db(db) as conn:
+        rid = conn.execute(
+            "SELECT id FROM econ_rentals WHERE user_id = 500"
+        ).fetchone()["id"]
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.revoke_perk_effect",
+        new=AsyncMock(side_effect=RuntimeError("discord blew up")),
+    ):
+        await cog.finalize_refund(
+            interaction, _settings(db), _guild_roles(), f"rental:{rid}"
+        )
+    text = interaction.response.edit_message.await_args.kwargs["content"]
+    assert "credited back" in text  # still shows success, doesn't raise
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT state FROM econ_rentals WHERE id = ?", (rid,)
+        ).fetchone()
+        assert row["state"] == "cancelled"  # the refund itself is unaffected
 
 
 @pytest.mark.asyncio

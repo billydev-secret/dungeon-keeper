@@ -688,15 +688,59 @@ def purchase_streak_shield(
     return price
 
 
-def refund_streak_shield(conn: sqlite3.Connection, guild_id: int, user_id: int) -> int:
+def _shield_refund_price(row: sqlite3.Row, settings: EconSettings) -> int:
+    """The amount to refund for a held shield row.
+
+    A shield bought before migration 114 (``shield_price`` didn't exist yet)
+    snapshots as the column default 0 — indistinguishable from "nothing
+    held" otherwise. The true historical price is genuinely unrecoverable for
+    those, so a stored 0 on a row that IS held (``shields = 1``) falls back
+    to the guild's current price rather than silently hiding the refund
+    option or zero-crediting it.
+    """
+    stored = int(row["shield_price"])
+    return stored if stored > 0 else int(settings.price_streak_shield)
+
+
+def get_streak_shield_price(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, settings: EconSettings
+) -> int:
+    """The price to refund for the member's held shield, or 0 if none is held."""
+    row = conn.execute(
+        "SELECT shield_price FROM econ_streaks "
+        "WHERE guild_id = ? AND user_id = ? AND shields = 1",
+        (guild_id, user_id),
+    ).fetchone()
+    return _shield_refund_price(row, settings) if row is not None else 0
+
+
+def get_streak_shield_status(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, settings: EconSettings
+) -> tuple[int, int]:
+    """(shields held, refund price) in one query — see ``get_streak_shield_price``."""
+    row = conn.execute(
+        "SELECT shields, shield_price FROM econ_streaks "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        return 0, 0
+    shields = int(row["shields"])
+    return shields, (_shield_refund_price(row, settings) if shields == 1 else 0)
+
+
+def refund_streak_shield(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, settings: EconSettings
+) -> int:
     """Refund a held, unconsumed streak shield in full. Returns the amount refunded.
 
     Refunds the price actually PAID (``shield_price``, snapshotted at
-    purchase), not the guild's current price, which may have moved since.
-    Exactly-once via the guarded ``shields = 1`` UPDATE — the same claim-style
-    anchor ``purchase_streak_shield`` uses to grab the slot. Raises
-    ValueError("no shield held") if nothing is held (already consumed or
-    never bought).
+    purchase), not the guild's current price, which may have moved since —
+    except for a legacy pre-migration-114 shield, which falls back to the
+    current price (see ``_shield_refund_price``). Exactly-once via the
+    guarded ``shields = 1`` UPDATE — the same claim-style anchor
+    ``purchase_streak_shield`` uses to grab the slot. Raises ValueError("no
+    shield held") if nothing is held (already consumed or never bought).
     """
     row = conn.execute(
         "SELECT shield_price FROM econ_streaks WHERE guild_id = ? AND user_id = ? "
@@ -705,7 +749,7 @@ def refund_streak_shield(conn: sqlite3.Connection, guild_id: int, user_id: int) 
     ).fetchone()
     if row is None:
         raise ValueError("no shield held")
-    price = int(row["shield_price"])
+    price = _shield_refund_price(row, settings)
     cur = conn.execute(
         "UPDATE econ_streaks SET shields = 0, shield_price = 0 "
         "WHERE guild_id = ? AND user_id = ? AND shields = 1",
@@ -730,18 +774,6 @@ def get_streak_shields(
         (guild_id, user_id),
     ).fetchone()
     return int(row["shields"]) if row else 0
-
-
-def get_streak_shield_price(
-    conn: sqlite3.Connection, guild_id: int, user_id: int
-) -> int:
-    """The price paid for the member's held shield, or 0 if none is held."""
-    row = conn.execute(
-        "SELECT shield_price FROM econ_streaks "
-        "WHERE guild_id = ? AND user_id = ? AND shields = 1",
-        (guild_id, user_id),
-    ).fetchone()
-    return int(row["shield_price"]) if row is not None else 0
 
 
 def process_conversion(

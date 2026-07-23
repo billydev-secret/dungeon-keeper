@@ -23,6 +23,7 @@ from bot_modules.services.economy_rentals_service import (
     delete_personal_role,
     entitlements,
     get_personal_role,
+    get_refundable_rental,
     list_member_rentals,
     list_refundable_rentals,
     list_rentals,
@@ -340,6 +341,63 @@ def test_list_refundable_rentals_excludes_gift_beneficiary(db):
         # USER paid for it — it's refundable by them, not by OTHER who wears it.
         assert len(list_refundable_rentals(conn, GUILD, USER)) == 1
         assert list_refundable_rentals(conn, GUILD, OTHER) == []
+
+
+def test_refund_rejects_admin_force_cancelled_rental(db):
+    # cancel_rental(force=True) marks cancel_at_period_end=1 but leaves
+    # state='active' (no refund intended) — self-refund must not reverse it.
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    with open_db(db) as conn:
+        cancel_rental(conn, GUILD, r["id"], requester_id=9999, force=True)
+        assert list_refundable_rentals(conn, GUILD, USER) == []
+        with pytest.raises(ValueError, match="already cancelled"):
+            refund_rental(conn, GUILD, r["id"], requester_id=USER)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 200 - 50  # no refund credited
+
+
+def test_list_refundable_rentals_excludes_emoji_perk(db):
+    _fund(db, USER, 300)
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO econ_rentals "
+            "(guild_id, user_id, perk, state, price, started_at, next_bill_at, "
+            " cancel_at_period_end, suspended, beneficiary_id, created_at) "
+            "VALUES (?, ?, 'emoji', 'active', 60, ?, ?, 0, 0, ?, ?)",
+            (GUILD, USER, T0, T0 + WEEK_SECONDS, USER, T0),
+        )
+        assert list_refundable_rentals(conn, GUILD, USER) == []
+
+
+def test_refund_rental_rejects_emoji_perk_directly(db):
+    # Defense in depth: even a direct call (bypassing the picker's filtering)
+    # must not refund a sponsored-emoji rental through this generic path.
+    _fund(db, USER, 300)
+    with open_db(db) as conn:
+        cur = conn.execute(
+            "INSERT INTO econ_rentals "
+            "(guild_id, user_id, perk, state, price, started_at, next_bill_at, "
+            " cancel_at_period_end, suspended, beneficiary_id, created_at) "
+            "VALUES (?, ?, 'emoji', 'active', 60, ?, ?, 0, 0, ?, ?)",
+            (GUILD, USER, T0, T0 + WEEK_SECONDS, USER, T0),
+        )
+        rental_id = cur.lastrowid
+        with pytest.raises(ValueError, match="not refundable here"):
+            refund_rental(conn, GUILD, rental_id, requester_id=USER)
+
+
+def test_get_refundable_rental_matches_list_refundable_rentals(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    with open_db(db) as conn:
+        row = get_refundable_rental(conn, GUILD, USER, r["id"])
+        assert row is not None
+        assert int(row["id"]) == r["id"]
+        # Not the payer -> None, mirroring list_refundable_rentals's exclusion.
+        assert get_refundable_rental(conn, GUILD, OTHER, r["id"]) is None
+        # Missing id -> None.
+        assert get_refundable_rental(conn, GUILD, USER, 424242) is None
 
 
 # ── cancel_all_for_member ──────────────────────────────────────────────

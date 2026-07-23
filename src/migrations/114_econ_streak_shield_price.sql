@@ -3,4 +3,11 @@
 -- record what was paid for it — and the guild's price may have moved since
 -- purchase. Snapshot the price paid, mirroring how a rental's `price` column
 -- already anchors its own refund math.
+--
+-- A shield already held when this migration lands has no recorded price
+-- (the true historical price is unrecoverable), so it backfills as the
+-- column default 0 — economy_service.get_streak_shield_price/
+-- refund_streak_shield treat a stored 0 on a held shield (shields = 1) as
+-- "unknown" and fall back to the guild's current price rather than hiding
+-- or zero-crediting a real refund.
 ALTER TABLE econ_streaks ADD COLUMN shield_price INTEGER NOT NULL DEFAULT 0;

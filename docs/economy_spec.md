@@ -945,14 +945,25 @@ refunds 0 (the last debit already failed) but still cancels now rather than wait
 for `force`-cancel. Either way the perk is stripped right away — a shared
 `revoke_perk_effect` dispatcher (`economy_loop.py`, also used by the billing loop's
 own lapse/period-end handling) reverts the voice-style channel or re-projects/deletes
-the personal role. Exactly-once via the terminal `state` transition itself, no
-separate "refunded" flag needed. Ledger kind: `rental_refund`. A held, unconsumed
-**streak shield** refunds in full (the price actually paid, snapshotted in
-`econ_streaks.shield_price` at purchase — not the guild's current price) via
-`refund_streak_shield`, ledger kind `streak_shield_refund`. **Raffle tickets are
-excluded** — they're entries in a shared weighted drawing, so refunding one would
-need to un-enter the member and reshuffle everyone else's odds; `buy_tickets` keeps
-its documented no-refund policy.
+the personal role; a failure there is logged and swallowed (`finalize_refund`), same
+as the billing loop's own guard, since the refund itself already committed and must
+not fail the interaction. Exactly-once via the terminal `state` transition itself, no
+separate "refunded" flag needed. Ledger kind: `rental_refund`. Two rentals are
+**excluded from self-refund** at the `list_refundable_rentals`/`refund_rental` level
+(`economy_rentals_service._refund_ineligible_reason`, shared with the single-row
+`get_refundable_rental` the confirm step uses): one an admin already
+**force-cancelled** (`cancel_at_period_end` set with no refund intended — a
+self-refund would silently reverse that decision) and a **sponsored emoji** rental
+(its own lifecycle/refund bookkeeping lives in `economy_emoji_service`, never this
+generic path). A held, unconsumed **streak shield** refunds in full (the price
+actually paid, snapshotted in `econ_streaks.shield_price` at purchase — not the
+guild's current price) via `refund_streak_shield`, ledger kind
+`streak_shield_refund`; a shield already held when `shield_price` shipped (migration
+114) backfills as 0 and falls back to the guild's *current* price rather than hiding
+the refund option or crediting nothing (the true historical price is unrecoverable
+for those). **Raffle tickets are excluded** — they're entries in a shared weighted
+drawing, so refunding one would need to un-enter the member and reshuffle everyone
+else's odds; `buy_tickets` keeps its documented no-refund policy.
 
 ## 7. Member Surface
 

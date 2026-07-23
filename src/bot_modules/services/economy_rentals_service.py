@@ -298,6 +298,27 @@ def cancel_rental(
     return updated
 
 
+def _refund_ineligible_reason(row: sqlite3.Row) -> str | None:
+    """Why a fetched rental (already matched on guild/owner) can't self-refund.
+
+    None means eligible. Shared by ``refund_rental``'s validation and
+    ``get_refundable_rental``'s single-row lookup so the eligibility rule
+    can't drift between the two: live (active/grace); not already
+    force-cancelled by an admin's no-refund ``cancel_at_period_end`` (the
+    dashboard's ``cancel_rental``) — self-refunding would silently reverse
+    that decision; and not a sponsored-emoji rental, which has its own
+    dedicated lifecycle/refund bookkeeping in ``economy_emoji_service`` and
+    is never meant to end through this generic path.
+    """
+    if row["state"] not in ("active", "grace"):
+        return "rental is not live"
+    if bool(row["cancel_at_period_end"]):
+        return "already cancelled — no refund"
+    if str(row["perk"]) == "emoji":
+        return "not refundable here"
+    return None
+
+
 def refund_rental(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -317,8 +338,9 @@ def refund_rental(
     rental refunds 0 (the last debit already failed). Exactly-once via the
     guarded state transition itself — no separate "refunded" flag needed,
     since a second call on an already-terminal row simply matches zero rows.
-    Raises ValueError: rental missing, not the requester's, or already
-    terminal.
+    Raises ValueError: rental missing, not the requester's, already terminal,
+    already force-cancelled by an admin (no-refund), or a sponsored-emoji
+    rental (see ``_refund_ineligible_reason``).
     """
     now = time.time() if now is None else now
     row = _get_rental(conn, rental_id)
@@ -326,9 +348,10 @@ def refund_rental(
         raise ValueError("rental not found")
     if int(row["user_id"]) != requester_id:
         raise ValueError("not your rental")
+    reason = _refund_ineligible_reason(row)
+    if reason is not None:
+        raise ValueError(reason)
     state = row["state"]
-    if state not in ("active", "grace"):
-        raise ValueError("rental is not live")
 
     refund = 0
     if state == "active":
@@ -364,16 +387,42 @@ def list_refundable_rentals(
     """The member's live rentals they PAID for (payer, not just beneficiary).
 
     A gift a member merely wears never shows up here — only the payer can
-    refund it, same rule as ``cancel_rental``/``refund_rental``.
+    refund it, same rule as ``cancel_rental``/``refund_rental``. Excludes a
+    rental an admin already force-cancelled (``cancel_at_period_end`` — no
+    refund intended) and sponsored-emoji rentals (their own surface, see
+    ``_refund_ineligible_reason``).
     """
     return conn.execute(
         f"""
         SELECT {_RENTAL_COLS} FROM econ_rentals
         WHERE guild_id = ? AND user_id = ? AND state IN ('active', 'grace')
+          AND cancel_at_period_end = 0 AND perk != 'emoji'
         ORDER BY next_bill_at ASC, id ASC
         """,
         (guild_id, user_id),
     ).fetchall()
+
+
+def get_refundable_rental(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, rental_id: int
+) -> sqlite3.Row | None:
+    """Single-row lookup mirroring ``list_refundable_rentals``'s eligibility.
+
+    For the refund confirm step: fetches and validates just the one rental the
+    member picked, instead of fetching their whole refundable list and
+    scanning it for one id. Returns None if missing, not the requester's, or
+    not currently eligible (mirrors ``_refund_ineligible_reason``, so this
+    can't drift from what ``refund_rental`` itself will accept).
+    """
+    row = _get_rental(conn, rental_id)
+    if (
+        row is None
+        or int(row["guild_id"]) != guild_id
+        or int(row["user_id"]) != user_id
+        or _refund_ineligible_reason(row) is not None
+    ):
+        return None
+    return row
 
 
 def cancel_all_for_member(
