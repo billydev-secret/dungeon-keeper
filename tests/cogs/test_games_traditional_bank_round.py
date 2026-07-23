@@ -56,12 +56,16 @@ class FakeMessage:
 
 # Subclass the real Messageable so the cog's `isinstance` narrowing holds.
 class FakeChannel(discord.abc.Messageable):
-    def __init__(self, guild):
+    def __init__(self, guild, nsfw: bool = False):
         self.id = 4242
         self.name = "games"
         self.guild = guild
         self.sends: list[FakeMessage] = []
         self._next_id = 9000
+        self._nsfw = nsfw
+
+    def is_nsfw(self) -> bool:
+        return self._nsfw
 
     async def _get_channel(self):
         return self
@@ -264,7 +268,9 @@ async def test_bank_round_reports_players_with_no_matching_question(sync_db_path
 
     host = FakeMember(1, "Host")
     guild = FakeGuild([host])
-    channel = FakeChannel(guild)
+    # Age-restricted, so the NSFW preference is legitimately selectable here
+    # and the round fails for the reason under test: an empty bank.
+    channel = FakeChannel(guild, nsfw=True)
 
     # A player who wants nsfw_dare, but the bank only has sfw_truth.
     _seed_bank(sync_db_path, [("A clean truth", "sfw_truth")])
@@ -309,3 +315,32 @@ async def test_bank_round_rejects_non_host(sync_db_path):
     assert not inter.response.deferred
     assert inter.response.messages
     assert inter.response.messages[-1][1].get("ephemeral") is True
+
+
+async def test_bank_round_never_serves_nsfw_in_a_sfw_channel(sync_db_path):
+    """The age gate holds even if prefs were set while the channel was NSFW.
+
+    A channel can lose its age-restriction after players opt in, so the round
+    filters preferences at serve time rather than trusting the stored payload.
+    """
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db, str(sync_db_path))
+    cog = TraditionalCog(bot)  # type: ignore[arg-type]
+    host = FakeMember(1, "Host")
+    guild = FakeGuild([host])
+    channel = FakeChannel(guild, nsfw=False)
+
+    # The bank has an NSFW question and the player is opted into it.
+    _seed_bank(sync_db_path, [("A spicy dare", "nsfw_dare")])
+    game_id = await _launch_with_prefs(
+        cog, bot, channel, guild, host, prefs={"1": ["nsfw_dare"]},
+    )
+    view = bot.active_views[game_id]
+
+    inter = FakeInteraction(host, channel, guild, bot)
+    await view.bank_round.callback(inter)
+
+    # Nothing served: only the launch message, and no question recorded.
+    assert len(channel.sends) == 1
+    payload = await get_game_payload(db, game_id)
+    assert payload.get("bank_asked", 0) == 0

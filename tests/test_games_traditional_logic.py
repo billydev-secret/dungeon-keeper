@@ -27,6 +27,8 @@ from bot_modules.games_traditional.logic import (
     CATEGORIES,
     asked_counts_by_user,
     available_targets,
+    category_allowed,
+    filter_nsfw_prefs,
     question_pool_size,
     record_asked,
     select_bank_categories_for_all,
@@ -600,3 +602,41 @@ async def test_get_traditional_question_marks_the_served_row():
     got = await get_traditional_question(db, "sfw_truth")
     assert got == "only one"
     assert db.served == [qid]
+
+
+# ── NSFW gating ─────────────────────────────────────────────────────
+# NSFW Truth/Dare shipped with no age gate at all: the four NSFW buttons were
+# selectable in any channel and the bank round served from them. The gate is
+# on the *preference*, so every serve path inherits it.
+
+def test_nsfw_category_refused_in_sfw_channel():
+    assert category_allowed("nsfw_truth", False) is False
+    assert category_allowed("nsfw_dare", False) is False
+
+
+def test_sfw_categories_always_allowed():
+    for cat in ("sfw_truth", "sfw_dare"):
+        assert category_allowed(cat, False) is True
+        assert category_allowed(cat, True) is True
+
+
+def test_nsfw_category_allowed_in_age_restricted_channel():
+    assert category_allowed("nsfw_truth", True) is True
+    assert category_allowed("nsfw_dare", True) is True
+
+
+def test_filter_drops_nsfw_prefs_in_sfw_channel():
+    prefs = {"1": ["sfw_truth", "nsfw_dare"], "2": ["nsfw_truth"]}
+    assert filter_nsfw_prefs(prefs, False) == {"1": ["sfw_truth"], "2": []}
+
+
+def test_filter_is_a_no_op_in_age_restricted_channel():
+    prefs = {"1": ["sfw_truth", "nsfw_dare"]}
+    assert filter_nsfw_prefs(prefs, True) == prefs
+
+
+def test_filtered_prefs_never_serve_an_nsfw_bank_question():
+    # The gate holding end-to-end: a player opted into NSFW only, in a channel
+    # that is not age-restricted, is served nothing rather than NSFW content.
+    prefs = filter_nsfw_prefs({"1": ["nsfw_truth", "nsfw_dare"]}, False)
+    assert select_bank_categories_for_all(prefs, {}) == {}
