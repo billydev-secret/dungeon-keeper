@@ -15,14 +15,20 @@ from typing import NamedTuple
 
 # Matched against the start of a stripped message. A greeting is a short message
 # that OPENS with a hello-ish token — "good morning everyone", "gm", "hey all",
-# "hiya 👋". The trailing ``\b`` stops prefixes like "history" / "gaming" /
-# "morningstar" from matching. This is a heuristic dial, not a classifier: widen
-# the vocabulary as real misses surface rather than treating it as exhaustive.
+# "hiya 👋" — or a check-in phrase standing in for one, like "how's everyone's
+# evening" or "good timezone". The trailing ``\b`` stops prefixes like
+# "history" / "gaming" / "morningstar" from matching. This is a heuristic
+# dial, not a classifier: widen the vocabulary as real misses surface rather
+# than treating it as exhaustive.
 _GREETING_RE = re.compile(
     r"^\W*(?:"
     r"g(?:ood)?\s*mornin[g']?"
     r"|g(?:ood)?\s*afternoon"
     r"|g(?:ood)?\s*evening"
+    # "good timezone" — a jokey stand-in for "good morning/afternoon/evening"
+    # in servers spread across timezones, so nobody's greeting reads as wrong
+    # for the reader's local time.
+    r"|g(?:ood)?\s*time\s*zone"
     r"|mornin[g']?"
     r"|gm"
     r"|hey+"
@@ -38,6 +44,12 @@ _GREETING_RE = re.compile(
     r"|what'?s\s*up"
     r"|wass?up"
     r"|sup"
+    # "how's everyone's evening" / "how's your day going" — a check-in framed
+    # as a question rather than a bare salutation. Anchored to a plural/2nd-
+    # person subject + a time-of-day-or-doing word right after, so generic
+    # "how's this bug" questions don't match.
+    r"|(?:how'?s|how\s+is)\s+(?:everyone|everybody|every1|y'?all|your)'?s?\s+"
+    r"(?:mornin[g']?|afternoon|evening|day|night|weekend|doing|going)"
     r")\b",
     re.IGNORECASE,
 )

@@ -26,13 +26,22 @@ web" rule.
    `is_greeting` is a heuristic, not a classifier: it matches a short message
    (≤ 8 words) that *starts* with a hello-ish token — "good morning", "gm",
    "morning", "hello", "hey", "hi", "hiya", "howdy", "good afternoon/evening",
-   "yo", "sup", "what's up", "greetings", "hola". A word boundary keeps
-   "history" / "gaming" / "morningstar" from matching. Tune the vocabulary in
-   `greeting_watch_service.py` as real misses surface.
+   "yo", "sup", "what's up", "greetings", "hola" — or a check-in phrase
+   standing in for one: "good timezone" (a jokey stand-in for "good
+   morning/afternoon/evening" in servers spread across timezones) and "how's
+   everyone's/your morning/afternoon/evening/day/night/weekend (going)". A
+   word boundary keeps "history" / "gaming" / "morningstar" from matching, and
+   the check-in phrase requires a plural/2nd-person subject right after
+   "how's" so generic questions ("how's this bug possible") don't match. Tune
+   the vocabulary in `greeting_watch_service.py` as real misses surface.
 
    One open watch per (channel, author): a second greeting from the same person
    while the first is still pending is a no-op, so a "gm 🙂 … hey all" double
    post can't queue two alerts.
+
+   **Replies never count**, even when the text opens with a hello-ish token —
+   a Discord reply is addressed to whoever it replies to, not the room (e.g.
+   "hey, no worries" as a reply shouldn't queue an unanswered-greeting alert).
 
 2. **Verdict (background loop).** `greeting_watch_loop` ticks every 60s. For each
    guild with pending rows, it reads config fresh from the DB (so dashboard

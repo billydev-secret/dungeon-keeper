@@ -153,6 +153,52 @@ async def test_normal_message_records_activity(mock_spoiler, mock_award, mock_ru
     mock_activity.assert_called_once()
 
 
+def _greeting_watch_cog() -> EventsCog:
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            greeting_watch_enabled=True, greeting_watch_channel_ids={10}
+        )
+    )
+    return EventsCog(_make_bot(), ctx)
+
+
+@patch("bot_modules.cogs.events_cog.record_greeting")
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_greeting_watch_records_room_greeting(
+    mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, mock_record_greeting
+):
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    msg = _make_message(channel_id=10, message_id=2001)
+    msg.content = "hey all"
+    msg.reference = None
+    await _greeting_watch_cog().on_message(msg)
+    mock_record_greeting.assert_called_once()
+
+
+@patch("bot_modules.cogs.events_cog.record_greeting")
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_greeting_watch_skips_reply_that_opens_with_hello_token(
+    mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, mock_record_greeting
+):
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    msg = _make_message(channel_id=10, message_id=2002)
+    msg.content = "hey, no worries!"
+    msg.reference = SimpleNamespace(message_id=1999, resolved=None)
+    await _greeting_watch_cog().on_message(msg)
+    mock_record_greeting.assert_not_called()
+
+
 @patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
 @patch("bot_modules.cogs.events_cog.track_auto_delete_message")
 @patch("bot_modules.cogs.events_cog.record_member_activity")
