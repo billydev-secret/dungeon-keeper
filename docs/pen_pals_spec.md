@@ -39,8 +39,9 @@ The bot posts two messages in sequence and pins the first:
 Title:  🖊️ Pen Pals
 Fields: Matched with  |  @user1  @user2
         Session ends  |  <t:{unix_expiry}:F> (<t:{unix_expiry}:R>)
+        Commands      |  /penpals new-question — swap the prompt (3 max)
+                         /penpals end — leave this chat early
 Footer: Admins can see this channel.
-        Use /penpals new-question to swap the prompt (3 times max).
 ```
 
 **Message 2 — first question**

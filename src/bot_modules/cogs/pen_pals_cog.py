@@ -581,10 +581,15 @@ async def _post_intro(
         value=f"<t:{int(expiry_at)}:F> (<t:{int(expiry_at)}:R>)",
         inline=False,
     )
-    embed.set_footer(
-        text="Admins can see this channel. "
-             "Use /penpals new-question to swap the prompt (3 times max)."
+    embed.add_field(
+        name="Commands",
+        value=(
+            "`/penpals new-question` — swap the prompt (3 max)\n"
+            "`/penpals end` — leave this chat early"
+        ),
+        inline=False,
     )
+    embed.set_footer(text="Admins can see this channel.")
     intro_msg = await channel.send(embed=embed)
     await intro_msg.pin()
 
