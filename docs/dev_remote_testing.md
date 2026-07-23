@@ -67,6 +67,32 @@ hides and a remote running the actually-pinned lock file catches.
 Remember the signal here is a **fast pre-filter**, not proof: prod is Linux, and
 CI on push remains the authoritative gate. A Linux-only bug can pass here.
 
+## One workspace per checkout
+
+Several session checkouts (each a clone of the main repo) share one test host.
+Each syncs into its own sub-directory of `REMOTE_TEST_DIR`, named
+`ws-<basename>-<hash-of-abs-path>`, so two checkouts never extract over each
+other and a run in one can't corrupt another's tree.
+
+Two properties this fixes, both learned the hard way when a stale `src/`
+produced 22 failures that didn't reproduce locally:
+
+- **The sync is now authoritative.** It ships a `.remote-manifest` listing every
+  file sent, and the remote deletes anything under the synced roots that isn't
+  on it. The tar stream only ever adds and overwrites, so before this a file
+  removed from a branch — or belonging to a different branch tested here earlier
+  — lingered forever and ran as a phantom test. Only the synced roots (`src`,
+  `tests`, `scripts`, …) are pruned; the venv, `.git` and everything else are
+  never touched.
+- **The venv is shared, not per-workspace.** The freshness stamp lives beside
+  the interpreter (`REMOTE_TEST_PYTHON`), not in a workspace, so a multi-GB
+  reinstall doesn't repeat for every checkout — only when the lock files
+  actually change.
+
+`REMOTE_TEST_WORKSPACE` overrides the directory name; set it to `off` to sync
+straight over `REMOTE_TEST_DIR` (the pre-workspace layout), which also disables
+pruning.
+
 ## Setting up the remote (native Windows)
 
 The fastest route is to run a Claude Code session *on the Windows box* and let
