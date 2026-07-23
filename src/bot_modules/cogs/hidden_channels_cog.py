@@ -24,6 +24,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.reports import chunk_text
 from bot_modules.hidden_channels.overwrites import (
     rebuild_overwrites,
     serialize_overwrites,
@@ -42,6 +43,17 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.hidden_channels")
 
 HIDDEN_CATEGORY_NAME = "Hidden Channels"
+
+
+def format_hidden_list(entries: list[str]) -> list[str]:
+    """Build the ``/hidden list`` body, chunked under Discord's 2000-char cap.
+
+    One category holds up to 50 channels (Discord's own limit), which easily
+    overruns a single 2000-char message — so we join the pre-rendered lines
+    under a header and split into as many messages as needed.
+    """
+    body = "**Hidden channels:**\n" + "\n".join(entries)
+    return chunk_text(body)
 
 # Channel kinds a member can pick that carry their own overwrites. Categories
 # are excluded — hiding a category would orphan its children.
@@ -295,9 +307,13 @@ class HiddenChannelsCog(commands.Cog):
             ch = guild.get_channel(row["channel_id"])
             label = ch.mention if ch else f"(deleted channel {row['channel_id']})"
             lines.append(f"• {label} — hidden by <@{row['hidden_by']}>")
-        await interaction.response.send_message(
-            "**Hidden channels:**\n" + "\n".join(lines), ephemeral=True
-        )
+        chunks = format_hidden_list(lines)
+        try:
+            await interaction.response.send_message(chunks[0], ephemeral=True)
+            for chunk in chunks[1:]:
+                await interaction.followup.send(chunk, ephemeral=True)
+        except discord.HTTPException:
+            log.warning("Failed to send /hidden list for guild %s", guild.id)
 
 
 async def setup(bot: Bot) -> None:

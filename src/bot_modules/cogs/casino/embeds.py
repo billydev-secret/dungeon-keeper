@@ -475,14 +475,15 @@ def build_roulette_result_embed(
         color=COLOR_GREEN if winners else COLOR_RED,
     )
     if winners:
+        winner_lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in winners
+        ]
+        # Cap under the 1024 field limit (reserve 2 for the trailing "\n​").
         embed.add_field(
             name="Winners",
-            value="\n".join(
-                f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-                f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-                for uid, d, amount, payout in winners
-            )
-            + "\n​",
+            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
             inline=False,
         )
     if losers_total:
