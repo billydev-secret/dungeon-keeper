@@ -30,6 +30,15 @@ class Role:
     position: int
     id: int = field(compare=False)
     name: str = field(default="Role", compare=False)
+    managed: bool = field(default=False, compare=False)
+    # role_safety reads permission bits by name; an empty namespace answers
+    # False for every one, so a plain Role is safe to self-serve.
+    permissions: SimpleNamespace = field(
+        default_factory=SimpleNamespace, compare=False
+    )
+
+    def is_default(self) -> bool:
+        return False
 
     @property
     def mention(self) -> str:
@@ -85,7 +94,7 @@ def db_path(tmp_path):
 
 
 def seed_menu(db_path, *, mode="toggle", enabled=True, required_role_id=0,
-              role_ids=(11, 22)) -> int:
+              role_ids=(11, 22), elevated_role_ids=()) -> int:
     with open_db(db_path) as conn:
         mid = menus_db.create_menu(conn, GUILD_ID, "Colors", 1, time.time())
         menus_db.update_menu(
@@ -96,7 +105,14 @@ def seed_menu(db_path, *, mode="toggle", enabled=True, required_role_id=0,
         )
         menus_db.replace_options(
             conn, mid,
-            [{"role_id": rid, "label": f"r{rid}"} for rid in role_ids],
+            [
+                {
+                    "role_id": rid,
+                    "label": f"r{rid}",
+                    "elevated": rid in elevated_role_ids,
+                }
+                for rid in role_ids
+            ],
             time.time(),
         )
         if not enabled:
@@ -217,3 +233,60 @@ async def test_selection_updates_roles_to_match(db_path):
     assert member.remove_roles.await_args.args == (red,)
     text = _sent_text(interaction)
     assert "+Blue" in text and "−Red" in text
+
+
+# ── dangerous-role re-check on the click path ───────────────────────
+# A menu is published once and clicked for months. The write path refuses a
+# dangerous role at save time, but nothing stops an admin granting that role
+# `administrator` afterwards — so the grant path re-checks on every click.
+
+def _admin_role(**kw) -> Role:
+    return Role(permissions=SimpleNamespace(administrator=True), **kw)
+
+
+async def test_role_that_turned_dangerous_is_refused_at_click(db_path):
+    mod_channel = MagicMock(spec=discord.TextChannel)
+    mod_channel.send = AsyncMock()
+    ctx = Ctx(db_path, mod_channel_id=800)
+    # Configured harmless; has since been handed administrator.
+    guild = Guild([_admin_role(position=5, id=11, name="Red")], mod_channel=mod_channel)
+    member = make_member()
+    mid = seed_menu(db_path)
+
+    await handle_menu_interaction(
+        make_interaction(ctx, guild, member), mid, clicked_role_id=11
+    )
+
+    member.add_roles.assert_not_awaited()
+    assert mod_channel.send.await_count == 1
+    assert "elevated permissions" in mod_channel.send.await_args.args[0]
+
+
+async def test_elevated_override_still_grants_a_dangerous_role(db_path):
+    ctx = Ctx(db_path)
+    red = _admin_role(position=5, id=11, name="Red")
+    guild = Guild([red])
+    member = make_member()
+    # The admin ticked the elevated-role override for this option on purpose.
+    mid = seed_menu(db_path, elevated_role_ids=(11,))
+
+    await handle_menu_interaction(
+        make_interaction(ctx, guild, member), mid, clicked_role_id=11
+    )
+
+    assert member.add_roles.await_args.args == (red,)
+
+
+async def test_dangerous_role_can_still_be_shed(db_path):
+    ctx = Ctx(db_path)
+    red = _admin_role(position=5, id=11, name="Red")
+    guild = Guild([red])
+    member = make_member(red)  # already holds it; clicking toggles it off
+    mid = seed_menu(db_path)
+
+    await handle_menu_interaction(
+        make_interaction(ctx, guild, member), mid, clicked_role_id=11
+    )
+
+    assert member.remove_roles.await_args.args == (red,)
+    member.add_roles.assert_not_awaited()
