@@ -66,6 +66,7 @@ PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2, "monthly": 2}
 TRIGGER_KINDS: dict[str, str] = {
     "photo_post": "Post a photo in the Photo Challenge channel",
     "party_game": "Finish a party game",
+    "game_host": "Host a party game that someone joins",
     "duel": "Finish a duel / PvP challenge",
     "risky_roll": "Take a Risky Roll dare",
     "guess": "Play a Guess Who round",
@@ -124,6 +125,7 @@ TRIGGER_KINDS: dict[str, str] = {
 TRIGGER_KIND_INFO: dict[str, str] = {
     "photo_post": "Posting an image in the configured Photo Challenge channel — the post itself pays, no reactions needed. Event cadence: once per guild-local day.",
     "party_game": "Any party game completing with the member in the roster. Event cadence: once per game.",
+    "game_host": "Running a party game that at least one other member joins (host of an empty game earns nothing — the anti-farm gate). Drives the host bounty faucet too. Event cadence: once per game hosted.",
     "duel": "A duel/PvP game resolving (chicken, hot potato, musical chairs, pressure cooker, quickdraw). Event cadence: once per match.",
     "risky_roll": "Pressing Roll in a Risky Rolls round. Event cadence: once per round.",
     "guess": "Submitting a scored guess in a Guess Who round. Event cadence: once per round.",

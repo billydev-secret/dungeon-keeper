@@ -14,6 +14,7 @@ from migrations import apply_migrations_sync
 from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
     ECON_PREFIX,
+    award_host_bounty,
     top_up_voice_login,
     EconSettings,
     apply_credit,
@@ -424,6 +425,55 @@ def test_voice_top_up_applies_the_guild_booster_multiplier(db):
         )
         delta = boosted.login_voice_base - boosted.login_text_base
         assert paid == math.ceil(delta * 3.0)
+
+
+# ── host bounty ───────────────────────────────────────────────────────────
+
+
+def test_host_bounty_pays_per_joiner_and_ledgers_the_count(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with open_db(db) as conn:
+        paid = award_host_bounty(
+            conn, s, GUILD, USER, joiners=3, booster=False
+        )
+        assert paid == 12
+        assert get_balance(conn, GUILD, USER) == 12
+        row = get_ledger(conn, GUILD, USER)[-1]
+        assert row["kind"] == "game_host"
+
+
+def test_host_bounty_is_dark_by_default(db):
+    # Default settings ship the rate at 0 — the whole feature is off.
+    with open_db(db) as conn:
+        assert award_host_bounty(
+            conn, S, GUILD, USER, joiners=4, booster=False
+        ) == 0
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_host_bounty_pays_nothing_without_joiners(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with open_db(db) as conn:
+        assert award_host_bounty(
+            conn, s, GUILD, USER, joiners=0, booster=False
+        ) == 0
+
+
+def test_host_bounty_applies_the_booster_multiplier(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5, booster_multiplier=2.0)
+    with open_db(db) as conn:
+        paid = award_host_bounty(
+            conn, s, GUILD, USER, joiners=3, booster=True
+        )
+        assert paid == math.ceil(12 * 2.0)
+
+
+def test_host_bounty_ignores_an_unusable_host_id(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with open_db(db) as conn:
+        assert award_host_bounty(
+            conn, s, GUILD, 0, joiners=3, booster=False
+        ) == 0
 
 
 def test_process_login_same_day_returns_none(db):

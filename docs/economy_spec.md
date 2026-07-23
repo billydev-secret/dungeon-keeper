@@ -269,6 +269,30 @@ to currency.
   played`, using the guild's configured amounts and currency emoji; winner line only
   for game types with a resolver; suppressed entirely when the economy is disabled.
   WYR has no recap embed, so it stays footer-less.
+- **Host bounty (2026-07-23, dark by default):** the member who *ran* a party
+  game earns `host_bounty_per_joiner` per attendee who joined, capped at
+  `host_bounty_cap` attendees (defaults 0 / 5 — the 0 rate ships it dark).
+  `pay_game_rewards` takes an optional `host_id` and pays only when at least
+  one member *other than the host* joined — attendees exclude the host, so a
+  host talking to themselves earns nothing and there is no farm in starting an
+  empty game (74 of 122 historical games ended with zero recorded players, so
+  this gate is load-bearing). **Party games only:** `host_id` is threaded from
+  `game_manager` (`games_active_games.host_id`); the duel games pass none (they
+  are peer challenges) and the external CAH path passes none (Gamebot is the
+  host, not a member). The point is recruiting hosts two-through-five, and the
+  research is explicit that recognition recruits volunteers better than a fee,
+  so the coin is deliberately small next to the visible role/quest. Amount
+  logic is `logic.host_bounty_amount`; the credit is `award_host_bounty`
+  (ledger kind `game_host`, `meta.joiners`). Gated by the `game_host`
+  income-source toggle.
+- **Host-a-game quest (`game_host` trigger):** the same host-with-a-joiner
+  event fires the `game_host` trigger kind, which is a first-class quest hook —
+  usable as a **personal daily** ("host a game today") and, because community
+  goals count any trigger kind guild-wide, as a **community counted weekly**.
+  Fires once per hosted game (keyed to the game id), for the host only, and
+  only when a joiner was present (same gate as the bounty). This is the
+  recruitment lever the games programme needed: hosting is currently ~77%
+  one person (§ live review), and the quest makes it a rewarded, visible task.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger.
 
@@ -517,6 +541,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 |---|---|---|---|
 | `photo_post` | a member posts an image in the configured Photo Challenge channel (the post itself pays — no reactions needed) | `EconomyCog._on_photo_post` (on_message listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_post:<local_day>` (once/day by construction) |
 | `party_game` | party game completes with the member in the roster — **including external games** (a Gamebot Cards Against Humanity game parsed from `/games track`, `game_type="cah"`) | `pay_game_rewards` via `game_manager.end_game`, or `games_external_cog._pay_cah_game` for CAH | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`) |
+| `game_host` | a party game the member hosted completes with **at least one other member** in the roster (empty games pay nothing — the anti-farm gate); party games only, since only `game_manager` passes `host_id` | `pay_game_rewards` via `game_manager.end_game`, host bounty through `award_host_bounty` | `game_host:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
 | `guess` | member submits a scored guess in a Guess Who round | `GuessSelectView._on_select` → `fire_member_trigger` | `guess:<round_id>` |

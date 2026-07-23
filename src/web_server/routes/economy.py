@@ -78,6 +78,10 @@ class EconomyConfigUpdate(BaseModel):
     reward_game_participation: int | None = Field(default=None, ge=0)
     reward_photo_post: int | None = Field(default=None, ge=0)
     reward_game_win: int | None = Field(default=None, ge=0)
+    # Host bounty: per-attendee payout to a party game's host, capped at
+    # host_bounty_cap attendees. 0 rate ships it dark.
+    host_bounty_per_joiner: int | None = Field(default=None, ge=0)
+    host_bounty_cap: int | None = Field(default=None, ge=1)
     # Coin Drops. The channel picker is the toggle (0 = off). Cadence is an
     # average — the loop jitters each gap; 48/day (one per ~30 min) is
     # already spammy, so the cap is a guard-rail, not a target.

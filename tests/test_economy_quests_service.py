@@ -1065,6 +1065,14 @@ def test_new_engagement_kinds_registered(db):
         assert list_income_sources_has(db, kind)
 
 
+def test_game_host_kind_registered(db):
+    # game_host must be authorable (dropdown + validation), documented, and a
+    # toggleable income source — or its fire site in pay_game_rewards is dead.
+    assert "game_host" in TRIGGER_KINDS
+    assert "game_host" in TRIGGER_KIND_INFO
+    assert list_income_sources_has(db, "game_host")
+
+
 def list_income_sources_has(db, kind):
     with open_db(db) as conn:
         return kind in list_income_sources(conn, GUILD)

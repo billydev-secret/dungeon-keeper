@@ -13,6 +13,7 @@ from bot_modules.economy.logic import (
     LoginEval,
     convert_xp,
     evaluate_login,
+    host_bounty_amount,
     is_economy_manager,
     local_day_bounds,
     local_day_for,
@@ -225,6 +226,26 @@ def test_sequence_reset_then_rebuild():
 )
 def test_login_amount(streak, base, cap, expected):
     assert login_amount(streak, base, cap) == expected
+
+
+# ── host_bounty_amount ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "joiners, per, cap, expected",
+    [
+        (0, 5, 5, 0),      # nobody joined -> nothing (the anti-farm gate)
+        (1, 5, 5, 5),
+        (3, 5, 5, 15),
+        (5, 5, 5, 25),     # exactly at the cap
+        (9, 5, 5, 25),     # cap holds; a huge game can't dwarf other faucets
+        (3, 0, 5, 0),      # zero rate -> dark
+        (3, 5, 0, 0),      # zero cap -> nothing
+        (-2, 5, 5, 0),     # defensive: negative joiners never credit
+    ],
+)
+def test_host_bounty_amount(joiners, per, cap, expected):
+    assert host_bounty_amount(joiners, per, cap) == expected
 
 
 # ── milestone_amount ──────────────────────────────────────────────────

@@ -31,6 +31,7 @@ from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
     award_game_reward,
+    award_host_bounty,
     load_econ_settings,
     member_is_booster,
 )
@@ -56,6 +57,7 @@ async def pay_game_rewards(
     game_type: str,
     *,
     occurrence: str | None = None,
+    host_id: int | None = None,
 ) -> None:
     """Credit participation to every participant and a win bonus to winners.
 
@@ -68,6 +70,14 @@ async def pay_game_rewards(
     "party_game" otherwise) for every participant. ``occurrence`` is the
     stable per-game id event quests dedupe on; without one, only
     daily/weekly trigger quests fire.
+
+    ``host_id`` marks the member who ran the game (party games only — duels are
+    peer challenges and external games have no local host). When set and at
+    least one *other* member joined, the host earns the scaled host bounty and
+    fires the ``game_host`` trigger, which drives both the personal "host a
+    game" daily and the guild-wide community counted quest. A host with no
+    joiners earns nothing and fires nothing — that is the anti-farm gate, so an
+    empty game started to game the quest pays out zero.
     """
     try:
         guild = bot.get_guild(guild_id)
@@ -125,6 +135,35 @@ async def pay_game_rewards(
                         )
 
         await asyncio.to_thread(_credit)
+
+        # Host bounty: party games only, and only when someone other than the
+        # host turned up. joiners excludes the host so a solo game pays nothing
+        # (the anti-farm gate); the host itself need not be a participant.
+        host = int(host_id) if host_id else 0
+        joiners = len([uid for uid in participants if uid != host])
+        host_valid = host > 0 and _valid(host)
+        if host_valid and joiners > 0:
+            host_booster = boosters.get(host, member_is_booster(bot, guild_id, host))
+
+            def _host_bounty() -> None:
+                with open_db(db_path) as conn:
+                    try:
+                        award_host_bounty(
+                            conn, settings, guild_id, host,
+                            joiners=joiners, booster=host_booster,
+                        )
+                    except Exception:
+                        log.exception(
+                            "host bounty failed for %s (%s)", host, game_type
+                        )
+
+            await asyncio.to_thread(_host_bounty)
+            # The game_host trigger drives the personal daily and the guild-wide
+            # community counted quest. Keyed to the game id so it fires once.
+            await fire_member_trigger(
+                bot, guild_id, host, "game_host",
+                occurrence=str(occurrence) if occurrence is not None else None,
+            )
 
         is_duel = game_type in _DUEL_GAME_TYPES
         kind = "duel" if is_duel else "party_game"

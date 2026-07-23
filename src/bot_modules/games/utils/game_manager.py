@@ -347,6 +347,7 @@ async def _pay_party_rewards(bot, row, payload: dict | None, player_ids: Sequenc
         await pay_game_rewards(
             bot, guild.id, list(player_ids), winners, game_type,
             occurrence=str(row["game_id"]),
+            host_id=int(row["host_id"]) if row["host_id"] else None,
         )
     except Exception:
         log.exception("party game payout failed for %s", row["game_id"])

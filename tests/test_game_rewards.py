@@ -230,6 +230,64 @@ async def test_pay_noop_unknown_guild(db_path):
     assert _bal(db_path, 1) == 0
 
 
+# ── host bounty ───────────────────────────────────────────────────────────────
+
+
+async def test_host_bounty_pays_the_host_per_joiner(db_path):
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(9), _member(1), _member(2)])
+    # Host 9 ran the game; 1 and 2 joined. joiners excludes the host → 2.
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 8  # 4 per joiner × 2
+    assert _bal(db_path, 1) == 25  # participation + win, unaffected
+    assert _bal(db_path, 2) == 5
+
+
+async def test_host_bounty_counts_a_host_who_also_played(db_path):
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(9), _member(1)])
+    # Host is also on the roster; joiners still excludes them → 1 joiner.
+    await pay_game_rewards(
+        bot, GUILD, [9, 1], [1], "ttl", occurrence="7", host_id=9
+    )
+    # 5 participation + 4 host bounty (1 joiner)
+    assert _bal(db_path, 9) == 9
+
+
+async def test_host_bounty_is_the_anti_farm_gate(db_path):
+    # A host who started a game nobody joined earns nothing — the whole point.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(9)])
+    await pay_game_rewards(
+        bot, GUILD, [9], [], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 5  # participation only, no host bounty
+
+
+async def test_host_bounty_absent_without_a_host_id(db_path):
+    # Duels and external games pass no host_id — no bounty, no game_host quest.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    _add_active_quest(db_path, trigger_kind="game_host", reward=50)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    await pay_game_rewards(bot, GUILD, [1, 2], [1], "chicken", occurrence="7")
+    assert _bal(db_path, 1) == 25  # no game_host quest reward leaked in
+    assert _bal(db_path, 2) == 5
+
+
+async def test_host_bounty_fires_the_game_host_quest(db_path):
+    # The host quest fires only for the host, and only with a joiner present.
+    _enable(db_path)  # bounty dark; the quest still fires
+    _add_active_quest(db_path, trigger_kind="game_host", reward=50)
+    bot: Any = _Bot(db_path, [_member(9), _member(1)])
+    await pay_game_rewards(
+        bot, GUILD, [1], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 50  # host quest paid, no participation (not a player)
+    assert _bal(db_path, 1) == 25  # player got participation + win, no host quest
+
+
 # ── end_game payout hook ──────────────────────────────────────────────────────
 
 class _EndBot(_Bot):

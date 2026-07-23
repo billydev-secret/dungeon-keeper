@@ -70,6 +70,14 @@ class EconSettings:
     reward_qotd: int = 10
     reward_game_participation: int = 5
     reward_game_win: int = 20
+    # Host bounty: the member who *ran* a game earns per attendee who joined
+    # (excluding themselves), capped at ``host_bounty_cap`` attendees so one
+    # busy game can't dwarf other faucets. The point is recruiting hosts, so
+    # it only fires for a game that someone actually joined — a host talking to
+    # themselves earns nothing, which also closes the empty-game farm. 0 rate
+    # (default) ships it dark; gated by the game_host income-source toggle.
+    host_bounty_per_joiner: int = 0
+    host_bounty_cap: int = 5
     # Flat participation award for posting an image in the Photo Challenge
     # channel — paid on the post itself, once per guild-local day, on top of
     # any active photo_post quest (which stacks). 0 turns the flat award off
@@ -1000,6 +1008,40 @@ def award_game_reward(
         user_id,
         amount,
         kind,
+        booster=booster,
+        multiplier=settings.booster_multiplier,
+    )
+
+
+def award_host_bounty(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    host_id: int,
+    *,
+    joiners: int,
+    booster: bool,
+) -> int:
+    """Credit the host of a finished game, scaled by who turned up.
+
+    ``joiners`` excludes the host. Returns 0 — crediting nothing — when the
+    rate is unset (the dark default), when nobody joined, or when the host id
+    is unusable. Ledger kind ``game_host``.
+    """
+    if host_id <= 0:
+        return 0
+    amount = logic.host_bounty_amount(
+        joiners, settings.host_bounty_per_joiner, settings.host_bounty_cap
+    )
+    if amount <= 0:
+        return 0
+    return apply_credit(
+        conn,
+        guild_id,
+        host_id,
+        amount,
+        "game_host",
+        meta={"joiners": joiners},
         booster=booster,
         multiplier=settings.booster_multiplier,
     )
