@@ -20,6 +20,14 @@ mechanical instead of per-route vigilance. Public routes (login, OAuth, static,
 Swagger) are allowlisted. Perm-*level* checks (admin vs moderator) stay in each
 route's own test — this sweep only proves anonymous callers get nothing.
 
+**`/static/` is public with one carve-out:** `static/manual.html` is the staff
+and moderator guide, so it is served by an explicit authed route registered
+*before* the `StaticFiles` mount (which would otherwise serve it to anyone).
+Every other asset — css, js, images — stays public because the login page needs
+them. The gating is pinned by tests in this file: anonymous gets a redirect to
+`/login`, an authenticated session gets 200. If you ever add a second sensitive
+static file, it needs the same treatment; the mount does not gate anything.
+
 ### Snowflake precision — `test_snowflake_precision.py`
 Discord ids are ~2^60; a bare JSON number loses precision above 2^53 and the
 dashboard rounds it into a different, non-existent id (see the "Snowflake JS
