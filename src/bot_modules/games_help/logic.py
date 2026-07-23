@@ -17,8 +17,8 @@ from __future__ import annotations
 SUPPORT_INVITE_URL = "https://discord.gg/7gfbYYkH"
 
 # Slash command name for each game. The party games launch under the
-# ``/games play`` group; the duel/standalone games (pressure, risky_roll)
-# have their own entry points.
+# ``/games play`` group; the duel/lobby/standalone games (pressure, quickdraw,
+# chicken, hot potato, musical chairs, risky_roll) have their own entry points.
 GAME_COMMANDS: dict[str, str] = {
     "ffa": "/games play ffa",
     "ffa_banner": "/games play ffa_banner",
@@ -38,6 +38,11 @@ GAME_COMMANDS: dict[str, str] = {
     "clapback": "/games play clapback",
     "legitlibs": "/games play legitlibs",
     "pressure": "/games pressure challenge",
+    "quickdraw": "/games quickdraw challenge",
+    "chicken": "/games chicken start",
+    "hot_potato": "/games hotpotato challenge",
+    "hot_potato_group": "/games hotpotatogroup start",
+    "musical_chairs": "/games musicalchairs start",
     "risky_roll": "/risky start",
 }
 
@@ -64,6 +69,11 @@ GAME_DESCRIPTIONS: dict[str, str] = {
         "own unhinged version."
     ),
     "pressure": "1v1 pressure duel — pump the gauge, don't be the one who pops it.",
+    "quickdraw": "1v1 fastest-finger duel — draw on the signal, but fire early and you lose.",
+    "chicken": "Duel or group — a meter climbs to a crash; bail before it blows.",
+    "hot_potato": "1v1 — pass the bomb back and forth; whoever's holding it at zero loses.",
+    "hot_potato_group": "Group lobby — the bomb hops the circle until it detonates on someone.",
+    "musical_chairs": "3+ players — when the music stops, hit Sit fast; slowest out each round.",
     "risky_roll": "Roll the dice — the highest and lowest rolls face off with a question.",
 }
 

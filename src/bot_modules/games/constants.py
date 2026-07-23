@@ -33,9 +33,27 @@ GAME_ICONS = {
     'rushmore': '🗿',
     'clapback': '⚔️',
     'legitlibs': '📝',
+
+    # Duel / lobby games (real-time challenge or elimination). Keyed by each
+    # game's GAME_KEY so audit- and session-log icon lookups resolve too. They
+    # show in /games help alongside the party games but are NOT party games —
+    # DUEL_GAME_KEYS below keeps them out of the advertised party-game count.
     'pressure': '♨️',
+    'quickdraw': '🤠',
+    'chicken': '🐔',
+    'hot_potato': '💣',
+    'hot_potato_group': '🧨',
+    'musical_chairs': '🪑',
     'risky_roll': '🎰',
 }
+
+# Games in GAME_ICONS that are duels/lobby/standalone rather than party games.
+# The README and web manual advertise a party-game *count* in prose; these keys
+# are excluded from it (see the tripwires in tests/test_games_help_logic.py).
+DUEL_GAME_KEYS = frozenset({
+    'pressure', 'quickdraw', 'chicken', 'hot_potato', 'hot_potato_group',
+    'musical_chairs', 'risky_roll',
+})
 
 GAME_NAMES = {
     'ffa': 'Anonymous Truth or Dare',
@@ -58,6 +76,11 @@ GAME_NAMES = {
     'clapback': 'Clapback',
     'legitlibs': 'LegitLibs',
     'pressure': 'Pressure Cooker',
+    'quickdraw': 'Quickdraw',
+    'chicken': 'Chicken',
+    'hot_potato': 'Hot Potato',
+    'hot_potato_group': 'Hot Potato (Group)',
+    'musical_chairs': 'Musical Chairs',
     'risky_roll': 'Risky Rolls',
 }
 

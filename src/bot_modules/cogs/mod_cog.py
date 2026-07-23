@@ -65,6 +65,7 @@ def _build_cog_pages(
 
 _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "General": ("🌿", discord.Color.from_str("#5865F2")),
+    "Economy": ("🪙", discord.Color.from_str("#DAA520")),
     "Role Grants": ("🎭", discord.Color.from_str("#57F287")),
     "XP Grant": ("⭐", discord.Color.from_str("#FEE75C")),
     "Moderation": ("🛡️", discord.Color.from_str("#ED4245")),
@@ -123,10 +124,35 @@ def _build_help_pages(
                     ("/penpals status", "Check your current Pen Pals status."),
                     ("/penpals new-question", "Swap in a fresh conversation-starter question."),
                     ("/penpals end", "End your current pen pal chat early."),
+                    ("/bio", "Create or update your member profile bio (guided wizard)."),
+                    ("/recap", "Recap the current game-night session in this channel."),
                     ("/todo task:...", "Add a task to the server's shared todo list."),
                     ("/support", "Get a link to the support Discord server."),
                     ("/invite", "Get a bot invite link to add DungeonKeeper to another server."),
                     ("/delete_me", "Delete your messages from Discord — your XP and profile stay."),
+                ]
+            ),
+        )
+    )
+
+    pages.append(
+        _page(
+            "Economy",
+            "Earn server coins from activity — daily logins, chatting, voice, games, "
+            "reactions, and QOTD — and spend them on weekly-renewing perks.\n\n"
+            + _fmt(
+                [
+                    ("/bank wallet", "Your balance, recent ledger activity, and active rentals."),
+                    ("/bank quests", "Your personal quest board — view progress and claim rewards."),
+                    ("/bank shop", "Browse and rent perks (role color, name, icon, gradient, and more); cancel & refund from here too."),
+                    ("/bank pay member:@user amount:...", "Send coins to another member."),
+                    ("/bank gift member:@user perk:...", "Pay to rent a friend any shop perk."),
+                    ("/bank role icon image:...", "Upload an image for your rented role icon."),
+                    ("/bank emoji image:... name:...", "Sponsor a custom emoji (weekly rent, mod-reviewed)."),
+                    ("/bank sponsor question:...", "Pay to put your question forward as a QOTD (mod-approved)."),
+                    ("/bank pin", "Pay to pin a short message for a day (mod-approved)."),
+                    ("/bounty", "Post a community bounty others can chip coins into; a mod awards it."),
+                    ("/bank mute", "Toggle the economy's DM notifications for yourself."),
                 ]
             ),
         )
@@ -178,15 +204,17 @@ def _build_help_pages(
             "**Channel Owner**\n"
             + _fmt(
                 [
-                    ("/voice lock / /voice unlock", "Restrict or re-open your channel."),
-                    ("/voice hide / /voice unhide", "Make your channel invisible or visible."),
+                    ("/voice access state:...", "One dial for who gets in: Open / NSFW / NSFW locked / Spectator (all but Open are age-gated)."),
                     ("/voice rename name:...", "Set a custom channel name."),
                     ("/voice limit n:...", "Set user capacity (0 = unlimited)."),
                     ("/voice invite @user", "Add a member to your allow-list and invite them."),
-                    ("/voice kick @user", "Remove a member and add them to your block-list."),
+                    ("/voice kick @user", "Remove a member (remember:true also blocks them)."),
+                    ("/voice knock channel:...", "Ask the owner of a locked channel to let you in."),
+                    ("/voice sleepkick hours:...", "Self-disconnect timer — drop yourself after N hours (0 cancels)."),
                     ("/voice transfer @user", "Give ownership to another member in your channel."),
                     ("/voice claim", "Claim an abandoned channel (original owner left)."),
                     ("/voice owner", "Show who owns the channel you're in."),
+                    ("/voice reset", "Clear all channel permissions (optionally reset your saved profile)."),
                     ("/voice trusted add/remove/list", "Manage your auto-invite list."),
                     ("/voice blocked add/remove/list", "Manage your block list."),
                     ("/voice profile show/reset", "View or delete your saved channel preferences."),
@@ -210,6 +238,7 @@ def _build_help_pages(
                     ("/queue page:1", "View the current queue (10 tracks per page)."),
                     ("/nowplaying", "Repost the now-playing embed with control buttons."),
                     ("/disconnect", "Force-disconnect the bot from voice."),
+                    ("/247 enabled:... [autoplay_playlist:...]", "(Mod) Keep the bot in your voice channel 24/7, with optional Spotify autoplay."),
                     ("/247_status", "List all 24/7-enabled channels in this server."),
                 ]
             ),
@@ -252,7 +281,8 @@ def _build_help_pages(
     pages.append(
         _page(
             "Games Night",
-            "Group games for hangouts. Anyone can start one in an allowed channel; only one game per channel at a time.\n\n"
+            "Group games for hangouts. Anyone can start one in an allowed channel; only one game per channel at a time. "
+            "`/games help` is the always-current browser for every mode.\n\n"
             "**Vote / react games**\n"
             + _fmt(
                 [
@@ -269,8 +299,10 @@ def _build_help_pages(
                 [
                     ("/games play fantasies", "Fantasies & Dealbreakers — anonymous matching."),
                     ("/games play ama", "Anonymous Ask Me Anything."),
-                    ("/games play hottakes", "Hot Takes / Unpopular Opinions debate."),
+                    ("/games play hottakes", "Hot Takes / Unpopular Opinions — rate 🧊 to 🔥."),
                     ("/games play compliment", "Spin the Compliment — random anonymous pairing."),
+                    ("/games play ffa", "Anonymous Truth or Dare — reply anonymously in-channel."),
+                    ("/games play ffa_banner", "Truth or Dare Card — drops a prompt card, no reply buttons."),
                 ]
             )
             + "\n\n**Creative & strategy**\n"
@@ -280,12 +312,26 @@ def _build_help_pages(
                     ("/games play price", "Name Your Price — bidding game."),
                     ("/games play rushmore", "Mt. Rushmore Draft — pick your top 4."),
                     ("/games play clapback", "Clapback comedy head-to-head."),
+                    ("/games play legitlibs", "LegitLibs — fill-in-the-blank mad-libs."),
                     ("/risky start", "Open a Risky Rolls round — dice-based dare ladder."),
+                ]
+            )
+            + "\n\n**Duels & lobby games** (nickname or coin stakes)\n"
+            + _fmt(
+                [
+                    ("/games pressure challenge @user", "Pressure Cooker — 1v1 pump-the-gauge duel."),
+                    ("/games quickdraw challenge @user", "Quickdraw — 1v1 fastest-finger duel."),
+                    ("/games hotpotato challenge @user", "Hot Potato — 1v1 pass-the-bomb."),
+                    ("/games hotpotatogroup start", "Hot Potato — group lobby version."),
+                    ("/games chicken start", "Chicken — duel or group; bail before the crash."),
+                    ("/games musicalchairs start", "Musical Chairs — 3+ players, one fewer seat each round."),
                 ]
             )
             + "\n\n**Settings & help**\n"
             + _fmt(
                 [
+                    ("/games join / /games leave", "Hop into or out of the game running in this channel."),
+                    ("/games end", "End the game running in this channel (host or mod)."),
                     ("/games help", "Full game-mode browser."),
                     ("/games support", "Link to the support server."),
                 ]

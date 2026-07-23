@@ -5,7 +5,7 @@ import { HELP_GROUPS } from "./panels/help-sections.js?v=24";
 
 // The Help nav is generated from help-sections.js (single source shared with
 // the help panel) so nav entries can't drift from the manual's sections.
-const _helpNavItem = ({ page, label }) => ({ id: page, label, module: "./panels/help.js" });
+const _helpNavItem = ({ page, label, order }) => ({ id: page, label, order, module: "./panels/help.js" });
 const HELP_NAV_SECTION = {
   id: "help", label: "Help", perms: [],
   items: HELP_GROUPS.filter((g) => !g.heading).flatMap((g) => g.items.map(_helpNavItem)),
@@ -287,6 +287,10 @@ const SECTIONS = [
       { id: "live-log",      label: "Live Log",        module: "./panels/live-log.js" },
       { id: "system-stats",  label: "System Stats",    module: "./panels/system-stats.js" },
       { id: "qa-tracker",    label: "QA Tracker",      module: "./panels/qa-tracker.js" },
+      // Routes the QA Tracker manual section (HELP_EXTRA_PAGES → help-qa). Without
+      // a SECTIONS entry the id is absent from ALL_PAGES, so #/help-qa cannot mount
+      // and in-manual links to the qa-tracker anchor fall back to the Dashboard.
+      { id: "help-qa",       label: "QA Tracker Guide", module: "./panels/help.js" },
     ],
   },
 ];
@@ -509,11 +513,17 @@ function parseHash() {
 // ── Render nav ──────────────────────────────────────────────────────
 
 // Return a copy of the items, sorted alphabetically by label (case-insensitive).
+// An optional numeric `order` overrides alphabetical order (used for the
+// onboarding Help items where "Getting Started" must lead despite sorting after
+// "Ask Billy-bot"); items without `order` sort after ordered ones, alphabetically.
 // Copies rather than mutating so the source SECTIONS order is preserved.
 function byLabel(items) {
-  return [...(items || [])].sort((a, b) =>
-    (a.label || "").localeCompare(b.label || "", undefined, { sensitivity: "base" })
-  );
+  return [...(items || [])].sort((a, b) => {
+    const ao = a.order ?? Infinity;
+    const bo = b.order ?? Infinity;
+    if (ao !== bo) return ao - bo;
+    return (a.label || "").localeCompare(b.label || "", undefined, { sensitivity: "base" });
+  });
 }
 
 function makeNavItem(item, activeId, { isSubitem = false } = {}) {

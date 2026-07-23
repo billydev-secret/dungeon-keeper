@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from bot_modules.games.constants import GAME_ICONS, GAME_NAMES
+from bot_modules.games.constants import DUEL_GAME_KEYS, GAME_ICONS, GAME_NAMES
 from bot_modules.games_help.embeds import build_help_embed, build_support_embed
 from bot_modules.games_help.logic import (
     GAME_COMMANDS,
@@ -72,7 +72,7 @@ def test_other_commands_value_references_recap():
 # numbers have drifted twice (16 → 17 → 18); fail loudly when a game is
 # added to GAME_ICONS without updating the docs.
 
-_PARTY_GAME_KEYS = [k for k in GAME_ICONS if k not in ("pressure", "risky_roll")]
+_PARTY_GAME_KEYS = [k for k in GAME_ICONS if k not in DUEL_GAME_KEYS]
 _DOCS_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
 
 

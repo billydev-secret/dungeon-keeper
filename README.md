@@ -31,8 +31,8 @@ Discord moderation, community, voice, and analytics bot.
 ### Party games
 A 17-game social suite that shares session windows, anonymous audit logging, per-guild
 enable/disable, channel allowlists, and an AI question-bank fallback.
-- **Free For All** — A host poses a question and everyone answers, in chat or through a name-hiding popup modal. Lurk anonymously or jump in as yourself.
-- **Truth or Dare Card** — The banner variant of Free For All: just drops the prompt card in the channel for open chat, no reply buttons.
+- **Anonymous Truth or Dare** — A Truth or Dare prompt drops and everyone replies anonymously right in the channel. Lurk or jump in — replies are posted by the bot with no name attached (mods can still see who, for safety).
+- **Truth or Dare Card** — The banner variant: just drops the prompt card in the channel for open chat, no reply buttons.
 - **Would You Rather** — Multi-round voting where each prompt splits the room between two options. Queue your own scenarios or let the bot generate them, then reveal who picked what.
 - **Never Have I Ever** — Confess or claim innocence as each statement is read aloud. Play with lives for elimination stakes or set lives to zero for casual voting.
 - **Most Likely To** — The room votes on who best fits each prompt and the winner takes a crown. Most crowns after all rounds wins — and yes, you can vote for yourself.
@@ -61,7 +61,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 ### Economy & perk shop
 - **Coins & wallet** — Earn server currency from daily logins, chatting, voice, games, reactions, and QOTD answers, all recorded in a full ledger. `/bank wallet` shows your balance and recent activity.
 - **Quests & daily boards** — A personal quest board (daily/weekly/monthly) draws each member their own random slice of the guild's quest pool, plus tiered community weeklies the whole server works toward with a live tracker.
-- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, name, gradient and holographic role colors, role icons, emoji slots, voice styling, mute tokens, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week; a **Cancel & Refund** button lets you end a rental (or a held streak shield) early for an immediate, pro-rated refund.
+- **Perk Shop & rentals** — Spend coins in `/bank shop` on rentable perks: custom role color, name, gradient and holographic role colors, role icons, emoji slots, voice styling, gifts for other members, and QOTD sponsorship. Rentals auto-bill each week; a **Cancel & Refund** button lets you end a rental (or a held streak shield) early for an immediate, pro-rated refund.
 - **Sinks & stakes** — Coin wagers on duel and group games, paid quest rerolls, raffles, and other sinks keep the currency circulating. Mods post the guide/shop/leaderboard panels and can grant coins directly. `docs/economy_spec.md` is the deep doc.
 - **The Golden Meadow Casino** — House gambling in one admin-configured channel, entirely button-driven (no commands): coinflip, meadow-reel slots, blackjack with double-down, and channel-wide roulette rounds. Fixed, RTP-tested paytables give the house a small edge; per-member daily wager caps and min/max bets are set on the dashboard's Casino page. A loss-fed **progressive jackpot** rides the slots, big bets get animated reveals, and streaks/biggest-wins feed `/bank wallet` stats plus a weekly leaderboard block. `docs/casino_spec.md` covers it.
 
@@ -87,6 +87,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 - **Role grants** — `/grant role:<key> member:<@user>` hands out community roles through a per-role permission allowlist (e.g. greeters can grant Denizen, mods can grant NSFW/Veteran). Self-serve role-giving without handing out Manage Roles.
 - **Role menus** — Self-assign roles via persistent button or dropdown menus. Admins build, preview, publish, and maintain menus entirely from the dashboard's Oracle builder; members toggle roles with private ephemeral feedback.
 - **Announcements** — Dashboard-queued one-shot channel posts: embed + ping line, live preview, guild-local scheduling, sent history, and up to five optional self-assign role buttons per announcement.
+- **Docs** — Author documents on the dashboard (rules pages, guides, FAQs) and post them into channels as bot-maintained messages with `/docs post`; edit on the dashboard and `/docs sync` re-renders every posted copy in place.
 - **Welcome / leave** — Configurable join and leave messages, edited and previewed live from the dashboard. Make a strong first impression without redeploying.
 - **Booster role buttons** — Persistent click-to-claim buttons for booster perks that survive restarts. Set them up once and they keep working.
 - **Birthday** — Members record their birthday with `/birthday set`, and the bot posts a daily celebration in a configured channel. The message template is customizable and the dashboard previews the next 90 days.
@@ -184,7 +185,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/support` — Get a link to the support Discord
 - `/xp_leaderboards [timescale]` — Top XP earners by source and your standing
 - `/todo <task>` — Add a task to the shared server todo list (moderators only)
-- `/birthday set` — Record your birthday
+- `/birthday set` / `/birthday remove` — Record your birthday, or remove it
 - `/confess` — Post an anonymous confession (modal)
 - `/delete_me` — Permanently delete all your messages and data
 
@@ -200,10 +201,13 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Party Games**
 - `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `ffa_banner`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`
+- `/games join` / `/games leave` — Hop into or out of the game running in this channel
+- `/games end` — End the game running in this channel (host or mod)
 - `/recap` — Recap of the current game-night session
 - `/games help` / `/games support` — Game list and support link
 - *Spicier (NSFW) prompts appear only in channels an admin has marked age-restricted in Discord.*
 - `/games config game-status` / `game-end` — Inspect or force-close the active game (mod)
+- `/games track watch` / `status` / `enable` / `disable` / `sample` — (mod) Track another game bot's results (e.g. CAH, Cat Bot) and pay economy rewards for wins
 - *The games channel allowlist and audit-log channel are managed from the web dashboard's Games Config panel.*
 
 **Head-to-Head & Group Games**
@@ -219,10 +223,12 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/whisper send @user <message>` — Send an anonymous whisper (recipient gets three guesses); also `optin`, `optout`, `sent`, `forget-me`
 - `/penpals join` / `/penpals leave` — Get a pen pal (matched on the spot if someone's waiting) or exit the pool; also `status`, `block` (never-match list), `new-question`, `end`, plus mod `pair <user1> <user2>` and `round`
 - `/bio` — Create or update your profile bio (wizard)
-- `/risky start` — Open a Risky Rolls round in this channel
+- `/risky start` — Open a Risky Rolls round in this channel; also `start_no_ping`, and `reset_state` (admin) to clear stuck rounds
 - `/guess submit` — Submit an image to start a Guess round; also `optin`, `confess`, `leaderboard`, `prompt`, `round` (mod), `delete`
 - `/steal_emoji <url> <name>` — Add a custom emoji from an image URL; also a **Steal Emoji** message context-menu
 - **Quote** — message context-menu that renders a styled quote card over the author's avatar
+- `/banner <text>` — (mod) Render text as a banner-style quote card; `/quote-role` — (mod) create the reply-to-quote **MakeItAQuote** role
+- `/docs post` / `sync` / `unpost` / `list` — (mod) Post dashboard-authored documents into channels and keep them synced
 - `/bump status` / `/bump log` — Check bump cooldowns or record a manual bump (mod)
 - `/close` / `/title <name>` — Close or rename the current auto-thread (Needle)
 - *Auto-thread channels and bump-tracker sites are managed from the web dashboard.*
@@ -233,8 +239,8 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/bank quests` — Your personal quest board
 - `/bank pay` — Send coins to another member
 - `/bank gift` — Buy a perk for someone else
-- `/bank role` — Customize your rented role perk
-- `/bank mute` — Spend a mute token
+- `/bank role icon` — Upload an image for your rented role icon (other role perks are customized inside `/bank shop`)
+- `/bank mute` — Toggle the economy's DM notifications for yourself
 - `/bank sponsor` — Sponsor a QOTD (mod-approved)
 - `/bank pin` — Pay to pin a short message for a day (mod-approved)
 - `/bounty` — Post a community bounty others can chip into; a mod awards it
@@ -287,7 +293,8 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/ai channel` — AI scan of the current channel
 - `/ai scan` — Run an AI moderation sweep
 - `/ai query <question>` — Ask a free-form moderation question
-- *Rules Watch (passive monitoring), prompt testing, and model management live in the web dashboard.*
+- `/rules-watch digest` / `label` / `stats` / `status` — (mod) Review the passive-monitor queue, label events, and check firing rates
+- *Rules Watch on/off and its alert channel, plus prompt testing and model management, live in the web dashboard.*
 
 **Jail & Tickets** (mod)
 - `/setup` — First-time jail/ticket/mod setup
