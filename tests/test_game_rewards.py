@@ -333,6 +333,53 @@ async def test_end_game_pays_once_with_resolved_winner(db_path):
     assert _bal(db_path, 2) == 25
 
 
+class _RaceDb(GamesDb):
+    """Simulates losing the end_game claim race: the active-game row is deleted
+    by a 'concurrent' call in the window between end_game's SELECT and its own
+    DELETE. Exercises the exactly-once claim without real threads."""
+
+    def __init__(self, db_path, steal_gid):
+        super().__init__(db_path)
+        self._steal_gid = steal_gid
+        self._stolen = False
+
+    async def fetchone(self, query, params=()):
+        row = await super().fetchone(query, params)
+        if (
+            not self._stolen
+            and "SELECT * FROM games_active_games" in query
+            and row is not None
+            and self._steal_gid in params
+        ):
+            self._stolen = True  # a concurrent end_game wins the claim first
+            await super().execute(
+                "DELETE FROM games_active_games WHERE game_id = ?",
+                (self._steal_gid,),
+            )
+        return row
+
+
+async def test_end_game_does_not_pay_when_it_loses_the_claim_race(db_path):
+    # Bug-fix-first: two concurrent end_game calls both pass `if not row`; only
+    # the one that actually deletes the active row may pay. The loser (its
+    # DELETE claims 0 rows) must credit nothing — participation, host bounty,
+    # and the game_host community bump alike.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    setup_db = GamesDb(db_path)
+    payload = {"guilt_scores": {"1": 1, "2": 3, "3": 0}}
+    gid = await create_game(setup_db, CH, 9, "nhie", payload=payload)  # host 9
+    bot: Any = _EndBot(db_path, [_member(9), _member(1), _member(2), _member(3)])
+
+    race_db = _RaceDb(db_path, gid)
+    await end_game(race_db, gid, payload=payload, bot=bot, player_ids=[1, 2, 3])
+
+    # This call lost the race, so it paid nobody.
+    assert _bal(db_path, 1) == 0
+    assert _bal(db_path, 2) == 0
+    assert _bal(db_path, 3) == 0
+    assert _bal(db_path, 9) == 0  # no host bounty either
+
+
 async def test_end_game_no_payout_without_bot(db_path):
     _enable(db_path)
     db = GamesDb(db_path)
