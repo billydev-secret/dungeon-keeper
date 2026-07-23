@@ -113,6 +113,7 @@ feature and also appear in the Design table above.
 | [plans/copy-style-conformance.md](plans/copy-style-conformance.md) | Round 2: full user-facing copy sweep (Title Case, ❌/✅ prefixes, guild→server, separators, ellipsis, progress bars, dashboard JS) | Done — bulk via `0d3c12c4`, mop-up gaps closed 2026-07-21 |
 | [plans/economy-sinks-round-2.md](plans/economy-sinks-round-2.md) | Sinks: rerolls, QOTD sponsor, burn list, PvP wagers | All stages built (4b 2026-07-20) |
 | [plans/economy-sinks-round-3.md](plans/economy-sinks-round-3.md) | Sinks: gifts, shield, voice lease, emoji, raffle | All five stages built 2026-07-19 (lease + raffle ship dark) |
+| [plans/economy-engagement-review.md](plans/economy-engagement-review.md) | Sources/sinks audit on 10 days of live data + engagement research: 9.3% absorption, 13 lifetime spenders, cold multiplayer. Cohort test shows tenure doesn't explain the spend gap; setup-quest reach does, partly | Proposal — nothing built; re-measure at 4/8 weeks |
 | [plans/external-game-economy.md](plans/external-game-economy.md) | External-bot payouts (Gamebot CAH + Cat Bot) via multi-watch collector | Stages 1–3 shipped |
 | [plans/frontend-consolidation.md](plans/frontend-consolidation.md) | Dashboard JS: one fetch core, one `esc`, shared tab strips/states | Implemented 2026-07-02 |
 | [plans/game-config-knobs.md](plans/game-config-knobs.md) | Hardcoded game cooldowns/caps → per-guild dashboard settings | Done |
