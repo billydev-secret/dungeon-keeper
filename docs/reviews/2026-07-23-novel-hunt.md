@@ -43,8 +43,22 @@ fails against the old code:
   of `get_transcript`, not an optional filter, so a future call site cannot omit
   the scoping.
 
-**Still open:** #3 (cross-guild channel resolution in docs/role-menus/pen-pals
-placement) and #4 (`/config/channels` snowflake precision), plus every S2 below.
+**#3 cross-guild channel resolution** (docs / role-menus / Pen Pals placement)
+— **fixed** in `87a5430e`. `_resolve_channel` in both sync modules now takes the
+acting guild and refuses a channel owned by another guild; `post_doc` validates
+ownership before writing the placement row so a foreign id can't leave a stored
+placement behind, and Pen Pals' panel refresh gets the same check. The guild is
+threaded through to every publish call site and passed as None only on
+stored-placement paths that are already guild-bound.
+
+**#4 `/config/channels` snowflake precision** — **fixed** in `e759747e`.
+`channel_id` and `added_by` now serialise as strings, so the LegitLibs
+per-channel tier no longer writes to a rounded, nonexistent id and fail open at
+tier 4. The existing snowflake sweep missed this because it runs against an
+empty DB and the route only echoes ids when a row exists; the new test seeds a
+real row.
+
+**All four S1s are now fixed.** Every S2/S3 below remains open.
 
 ---
 
