@@ -249,18 +249,22 @@ export function mount(container, params = {}) {
         }
       });
       if (!toAdd.length) { showStatus(st, false, "Tick at least one line first."); return; }
-      let added = 0, failed = 0;
+      // The bank stores NSFW-ness as the reserved "nsfw" tag (BankCreateBody
+      // has no "category" field), matching the manual add flow in
+      // games-panel-shared.js and the pool importer's legacy mapping.
+      const tags = cat === "nsfw" ? ["nsfw"] : [];
+      let added = 0, failed = 0, firstError = "";
       for (const text of toAdd) {
         try {
-          await apiPost("/api/games/bank", { game_type: gt, category: cat, question_text: text });
+          await apiPost("/api/games/bank", { game_type: gt, tags, question_text: text });
           added++;
-        } catch (_) { failed++; }
+        } catch (err) { failed++; if (!firstError) firstError = err.message; }
       }
       showStatus(
         st,
         failed === 0,
         failed
-          ? `Added ${added}, but ${failed} couldn’t be saved — try those again.`
+          ? `Added ${added}, but ${failed} couldn’t be saved${firstError ? ` — ${firstError}` : " — try those again."}`
           : `Added ${added} question${added === 1 ? "" : "s"} to the bank.`,
       );
     }
