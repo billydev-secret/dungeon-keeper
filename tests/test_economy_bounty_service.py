@@ -301,3 +301,61 @@ def test_expire_days_zero_disables(db):
         # expires_at is NULL, so nothing is ever due.
         assert get_bounty(conn, bid)["expires_at"] is None
         assert expire_bounties(conn, _s(bounty_expire_days=0), GUILD, now=NOW + 999 * DAY) == []
+
+
+# ── award / chip-in races ──────────────────────────────────────────────
+# Both directions of the race lose real coins: the state read in contribute()
+# and the pot read in award_bounty() both ran outside the transaction their
+# writes start, so a chip-in could land on a bounty that had already paid.
+
+
+def test_chip_in_racing_an_award_is_refused_not_swallowed(db, monkeypatch):
+    """An award committing mid-chip-in must refuse the chip-in, not eat it."""
+    import bot_modules.services.economy_bounty_service as svc
+
+    real_get = svc.get_bounty
+    fired: list[bool] = []
+
+    def racing_get_bounty(conn, bounty_id):
+        row = real_get(conn, bounty_id)
+        # The mod's award commits right after contribute() reads the state —
+        # the window the open-check used to sit outside of.
+        if not fired:
+            fired.append(True)
+            award_bounty(
+                conn, SETTINGS, GUILD, bounty_id,
+                winner_id=W, resolver_id=MOD, now=NOW,
+            )
+        return row
+
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        bid = _open(conn, poster=A, stake=50)
+
+        monkeypatch.setattr(svc, "get_bounty", racing_get_bounty)
+        with pytest.raises(ValueError, match="just closed"):
+            contribute(conn, SETTINGS, GUILD, bid, B, 30, now=NOW)
+
+        assert fired, "the racing award never fired — test is not exercising the race"
+        # B keeps every coin: nothing escrowed into an already-awarded bounty.
+        assert get_balance(conn, GUILD, B) == 100
+        assert contributor_count(conn, bid) == 1
+
+
+def test_award_pays_out_a_chip_in_that_lands_just_before_it(db):
+    """The pot is read after the claim, so a contribution can't slip behind it."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        bid = _open(conn, poster=A, stake=50)
+        contribute(conn, SETTINGS, GUILD, bid, B, 30, now=NOW)
+
+        res = award_bounty(
+            conn, SETTINGS, GUILD, bid, winner_id=W, resolver_id=MOD, now=NOW,
+        )
+
+        # Whole pot reaches the winner; nothing is stranded in escrow.
+        assert res.payout == 80
+        assert get_balance(conn, GUILD, W) == 80
+        assert int(get_bounty(conn, bid)["payout"]) == 80
