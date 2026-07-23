@@ -38,7 +38,7 @@ function renderList(menus, activeId) {
     const cls = m.id === activeId ? " active" : "";
     const where = m.published ? "published" : "draft";
     return `
-      <div class="ticket-item med${cls}" data-menu-id="${m.id}">
+      <div class="ticket-item med${cls}" data-menu-id="${m.id}" tabindex="0" role="button">
         <div class="pri"></div>
         <div class="body">
           <div class="subj">${m.enabled ? "" : "⏸ "}${esc(m.title || "(untitled menu)")}${m.health.length ? " ⚠️" : ""}</div>
@@ -393,6 +393,15 @@ export function mount(container) {
   listEl.addEventListener("click", (e) => {
     const row = e.target.closest(".ticket-item");
     if (!row) return;
+    selectMenu(parseInt(row.dataset.menuId, 10));
+  });
+
+  // Rows are role="button" tabindex="0" — activate with Enter/Space too.
+  listEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest(".ticket-item");
+    if (!row) return;
+    e.preventDefault();
     selectMenu(parseInt(row.dataset.menuId, 10));
   });
 

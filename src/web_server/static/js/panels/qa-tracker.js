@@ -168,7 +168,8 @@ export function mount(container, initialParams = {}) {
     const rows = tests.map((t) => {
       const sha = t.commit_sha ? String(t.commit_sha).slice(0, 7) : "—";
       const main = `
-        <tr class="qa-row" data-test-id="${t.id}" style="cursor:pointer;">
+        <tr class="qa-row" data-test-id="${t.id}" style="cursor:pointer;"
+            tabindex="0" role="button" aria-expanded="${t.id === state.expandedId}">
           <td>${esc(t.title)}</td>
           <td>${statusChip(t.status)}</td>
           <td style="font-family:var(--mono);font-size:12px;">${esc(sha)}</td>
@@ -232,10 +233,26 @@ export function mount(container, initialParams = {}) {
     if (e.target.closest("a")) return; // let the Discord link through
     const row = e.target.closest(".qa-row");
     if (!row) return;
+    toggleRow(row);
+  });
+
+  // Rows are role="button" tabindex="0" — activate with Enter/Space too.
+  boardEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest(".qa-row");
+    if (!row) return;
+    e.preventDefault();
+    toggleRow(row, { keepFocus: true });
+  });
+
+  function toggleRow(row, { keepFocus = false } = {}) {
     const id = Number(row.dataset.testId);
     state.expandedId = state.expandedId === id ? null : id;
     renderBoard();
-  });
+    // renderBoard() rebuilds the table, so a keyboard user's focus would be
+    // dropped onto <body>; put it back on the row they just activated.
+    if (keepFocus) boardEl.querySelector(`.qa-row[data-test-id="${id}"]`)?.focus();
+  }
 
   makeFilterStrip(filterGroup, (value) => {
     state.filter = value;

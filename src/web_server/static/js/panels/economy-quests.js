@@ -739,7 +739,15 @@ function wireQuestAi(container, form, { updateHint, updateCommunity }) {
         `<span class="badge">${idea.reward ?? 0}${esc(target)}</span></div>` +
         (idea.description ? `<div style="opacity:.85;margin-top:2px;">${esc(idea.description)}</div>` : "") +
         (idea.criteria ? `<div style="opacity:.65;font-size:.9em;margin-top:2px;">✓ ${esc(idea.criteria)}</div>` : "");
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
       card.addEventListener("click", () => loadIdea(idea));
+      // Cards are role="button" tabindex="0" — activate with Enter/Space too.
+      card.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        loadIdea(idea);
+      });
       results.appendChild(card);
     });
   };
