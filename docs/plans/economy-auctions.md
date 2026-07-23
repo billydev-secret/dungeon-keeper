@@ -117,6 +117,15 @@ kill-switch flag — the feature is off by absence, like bounties.
   **Bid** button → modal for the amount (persistent view, `custom_id` keyed by
   auction id). The card repaints live on each bid: current bid, bidder, time
   left, bid history count. Ping allow-listing per the embed style guide.
+  **Concurrency requirement (from the Stage 0 code review):** the bid handler
+  MUST run `place_bid` under a `BEGIN IMMEDIATE` transaction (not the default
+  DEFERRED `open_db`), so concurrent bidders serialize on the write lock up
+  front instead of colliding on `SQLITE_BUSY_SNAPSHOT`. Also wrap the bid in a
+  `sqlite3.OperationalError` catch that maps to the same graceful "someone just
+  outbid you — try again" retry the service's CAS branch intends. Money is
+  already safe without this (the transaction rolls back), but without it a
+  genuinely concurrent second bidder sees a raw error instead of the retry. See
+  the concurrency caveat in `economy_auction_service.py`'s module docstring.
 - **Close:** a background settle pass (the drops-loop / economy-loop pattern)
   finds auctions past `ends_at` and settles them exactly once — freeze
   `winner_id`/`winning_bid`, flip the winning bid row to `won`, repaint the card

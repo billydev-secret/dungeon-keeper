@@ -18,13 +18,24 @@ is already charged before close — settlement moves no money, it just freezes t
 result and leaves the escrow destroyed. A mod-curated prize is granted out of
 band, so nothing flows back in.
 
-The standing high bid lives on the auction row. The two-bids race is handled by
-**compare-and-swap**: the claim UPDATE only wins the slot if the row's high bid
-is still exactly what the bidder's validation read (``high_bid IS :old``), so a
-bid that slipped in between read and write makes the CAS miss and the later
-bidder is told to try again — before any money moves. This is the house
-``UPDATE … WHERE … RETURNING`` claim idiom (see casino settle), applied to the
-high-bid slot rather than a status flag.
+The standing high bid lives on the auction row, guarded by **compare-and-swap**:
+the claim UPDATE wins the slot only if the row's high bid is still exactly what
+the bidder validated against (``high_bid IS :old``). This is the house
+``UPDATE … WHERE … RETURNING`` idiom (see casino settle), applied to the high-bid
+slot. **Money is safe under any concurrency** — no bid can win on a stale read.
+
+Concurrency caveat (the caller must handle it): the CAS's graceful "someone just
+outbid you" branch is only reachable *within a single connection*. Across two
+live connections under the default ``open_db`` transaction (DEFERRED + WAL), a
+bid that pre-reads the row and then writes on a snapshot another bidder has
+already committed past gets ``sqlite3.OperationalError`` (BUSY_SNAPSHOT / "database
+is locked") on its escrow debit — before it ever reaches the CAS. The
+transaction rolls back cleanly (escrow conserved), but the loser sees a raw
+error, not the friendly retry. **Stage 1 (the cog) MUST run each bid under
+``BEGIN IMMEDIATE``** so bidders serialize on the write lock up front (no stale
+snapshot, no BUSY_SNAPSHOT — concurrent bids queue and re-read), **and/or catch
+``OperationalError`` and retry the bid in a fresh transaction.** Until then, the
+CAS is a correctness backstop, not a UX guarantee.
 
 Pure DB, no Discord — the caller owns the card and the DMs, matching the bounty
 and pin services. Every function rides the caller's transaction (``open_db``),
@@ -297,6 +308,9 @@ def place_bid(
     # validated against. A racer that committed a higher bid in between changes
     # high_bid/high_bidder, the WHERE misses, and this bid is rejected clean —
     # raising rolls back the escrow just taken.
+    # Reachable only for a same-connection stale claim; a cross-connection race
+    # conflicts on the debit above with OperationalError first (see module
+    # docstring's concurrency caveat — Stage 1 must run bids BEGIN IMMEDIATE).
     if not _claim_high_slot(
         conn, auction_id, old_high, old_bidder,
         new_amount=amount, new_bidder=user_id, new_end=new_end,

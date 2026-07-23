@@ -24,8 +24,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SCANNED_DIRS = ("src", "scripts")
 
-# Credit helpers that take both keywords. Keep in sync with economy_service.
-CREDIT_CALLS = frozenset({"apply_credit", "transfer_currency"})
+# The credit helper that takes both keywords. (transfer_currency deliberately
+# excluded: it accepts neither booster= nor multiplier=, so guarding it would be
+# vacuous — a booster= on it is a TypeError at runtime, not a silent 1.5.)
+CREDIT_CALLS = frozenset({"apply_credit"})
 
 
 def _python_files() -> list[Path]:
@@ -44,7 +46,14 @@ def _keywords(node: ast.Call) -> set[str]:
 
 
 def _offenders(tree: ast.AST) -> list[tuple[int, str]]:
-    """Calls that pass ``booster=`` but no ``multiplier=``.
+    """Boosted credits that don't thread the guild's multiplier through.
+
+    Two ways to get the bug this guards against — a payout that ignores
+    ``econ_booster_multiplier`` and silently uses apply_credit's hardcoded 1.5:
+    omitting ``multiplier=`` entirely, OR passing a hardcoded literal (e.g.
+    ``multiplier=1.5``). Both are flagged. The correct form passes a non-literal
+    (``multiplier=settings.booster_multiplier``), so only a literal constant is
+    an offender; an attribute/name reference is fine.
 
     ``booster=False`` is exempt: an explicitly unboosted credit never reads the
     multiplier, and demanding one there would be noise (the quest set bonus is
@@ -65,12 +74,18 @@ def _offenders(tree: ast.AST) -> list[tuple[int, str]]:
         if name not in CREDIT_CALLS:
             continue
         kwargs = _keywords(node)
-        if "booster" not in kwargs or "multiplier" in kwargs:
+        if "booster" not in kwargs:
             continue
         booster = next(kw.value for kw in node.keywords if kw.arg == "booster")
         if isinstance(booster, ast.Constant) and booster.value is False:
             continue  # never boosts, so the multiplier is irrelevant
-        hits.append((node.lineno, ast.unparse(node)))
+        mult = next(
+            (kw.value for kw in node.keywords if kw.arg == "multiplier"), None
+        )
+        # Offender if the multiplier is missing OR a hardcoded literal — both
+        # ignore the guild setting. A reference (Attribute/Name) is correct.
+        if mult is None or isinstance(mult, ast.Constant):
+            hits.append((node.lineno, ast.unparse(node)))
     return hits
 
 
@@ -102,6 +117,13 @@ def test_guard_accepts_an_explicit_multiplier():
         "apply_credit(conn, g, u, 5, 'k', booster=b, multiplier=s.booster_multiplier)"
     )
     assert not _offenders(tree)
+
+
+def test_guard_flags_a_hardcoded_literal_multiplier():
+    # The precise bug the guard exists for: a payout pinned to 1.5, ignoring the
+    # guild's econ_booster_multiplier. Passing the keyword isn't enough.
+    tree = ast.parse("apply_credit(conn, g, u, 5, 'k', booster=b, multiplier=1.5)")
+    assert _offenders(tree)
 
 
 def test_guard_ignores_explicitly_unboosted_credits():
