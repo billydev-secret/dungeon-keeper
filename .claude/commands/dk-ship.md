@@ -14,7 +14,14 @@ into MAINREPO, which then pushes to GitHub.
 Steps:
 
 1. `BRANCH=$(git rev-parse --abbrev-ref HEAD)`. If BRANCH is `main`, stop — nothing to ship.
-2. `git status --porcelain` — if anything is uncommitted, STOP and ask the user to commit first.
+2. **Commit any uncommitted work** so the ship starts from a clean tree:
+   `git status --porcelain`. If it's non-empty, stage everything (`git add -A`)
+   and commit it following the repo's commit conventions (CLAUDE.md → Commits:
+   `Scope: summary` subject, prose body of why/edge-cases, a `Testing:` section
+   of `- [ ]` lines **only** if the change alters live bot/dashboard behavior,
+   no `Co-Authored-By`/`Claude-Session` trailers). The pre-commit hook runs the
+   scoped gate — if that commit fails the hook, STOP and report; do not
+   `--no-verify` past it. If the working tree is already clean, skip this step.
 3. **Rebase onto latest main:** `git fetch origin` then `git rebase origin/main`.
    If there are conflicts, help the user resolve them and `git rebase --continue`.
    Do NOT proceed until the rebase completes cleanly.
