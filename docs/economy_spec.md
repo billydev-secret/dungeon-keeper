@@ -1126,7 +1126,10 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
 - **Manager surface (dashboard):** the **Economy** nav section, gated on
   `economy_manager_role_id` or admin (mirrors `games_editor_role` /
   `require_game_host`). Its pages: **Operations** (community progress +
-  manual Settle, grant, rentals, ledger audit), **Claims** (the pending
+  manual Settle, grant (the panel sends `member_id` as a string to keep
+  snowflake precision, and the endpoint 404s any id not in the guild's
+  member cache so a bad id can't credit a phantom wallet), rentals,
+  ledger audit), **Claims** (the pending
   sign-off queue with Approve/Deny + a state filter over paid/denied/expired
   history), **Quests** (library + authoring + AI ideas), **Income Sources**
   (trigger switches + faucet rates), **Statistics**, and admin-only

@@ -260,11 +260,13 @@ function wireGrant(container, members) {
     e.preventDefault();
     const picked = memberPicker.getValue();
     const body = {
-      member_id: parseInt(picked || "0", 10),
+      // Sent as a string: parseInt corrupts snowflakes past 2^53 (doubles are
+      // spaced 256 apart there). The server coerces it to an int losslessly.
+      member_id: picked || "0",
       amount: parseInt(form.querySelector("[name=amount]").value, 10) || 0,
       reason: form.querySelector("[name=reason]").value,
     };
-    if (!Number.isFinite(body.member_id) || body.member_id <= 0) {
+    if (body.member_id === "0" || !/^[1-9]\d*$/.test(body.member_id)) {
       showStatus(status, false, "Pick a member first");
       return;
     }

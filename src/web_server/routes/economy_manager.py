@@ -1232,6 +1232,13 @@ async def grant(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
+    # Guard against phantom wallets: a mistyped or precision-mangled snowflake
+    # must not silently write ledger rows for a nonexistent member. Fail open
+    # only when the member cache is unavailable (no bot / guild not cached),
+    # mirroring member_is_booster's fail-open shape.
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is not None and guild.get_member(body.member_id) is None:
+        raise HTTPException(404, "member not found in this server")
     # Same booster rule as /bank grant: the TARGET member's boost multiplies.
     booster = bool(bot) and member_is_booster(bot, guild_id, body.member_id)
 
