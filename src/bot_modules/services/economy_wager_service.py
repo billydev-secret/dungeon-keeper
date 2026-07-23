@@ -105,26 +105,52 @@ def hold_stake(
     if existing is not None and str(existing["state"]) not in _LIVE_STATES:
         raise ValueError("That wager is already settled.")
 
+    # Claim the row BEFORE debiting. The unique index on
+    # (game_type, game_id, user_id) is the documented race anchor for
+    # double-accept clicks (migration 094), but it only serializes concurrent
+    # handlers if the row write is this connection's *first* write: the reads
+    # above run in autocommit, so two clicks otherwise both see 'pending',
+    # both debit, and the ante is charged twice against one escrow row.
+    if existing is None:
+        try:
+            claimed_id = conn.execute(
+                "INSERT INTO econ_game_wagers "
+                "(guild_id, game_type, game_id, user_id, amount, state, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'held', ?)",
+                (guild_id, game_type, game_id, user_id, amount, time.time()),
+            ).lastrowid
+        except sqlite3.IntegrityError:
+            return  # a concurrent click got there first — same no-op as a replay
+        prior_amount = None
+    else:
+        claimed_id = int(existing["id"])
+        prior_amount = int(existing["amount"])
+        if conn.execute(
+            "UPDATE econ_game_wagers SET state = 'held', amount = ? "
+            "WHERE id = ? AND state = 'pending'",
+            (amount, claimed_id),
+        ).rowcount != 1:
+            return  # concurrent click promoted it first
+
     if not apply_debit(
         conn, guild_id, user_id, amount, STAKE_KIND,
         actor_id=user_id, meta={"game_type": game_type, "game_id": game_id},
     ):
+        # Undo the claim by hand: callers catch this ValueError *inside* their
+        # own `with conn:` block, so the transaction commits — a rollback can't
+        # be relied on to unwind the escrow row.
+        if prior_amount is None:
+            conn.execute("DELETE FROM econ_game_wagers WHERE id = ?", (claimed_id,))
+        else:
+            conn.execute(
+                "UPDATE econ_game_wagers SET state = 'pending', amount = ? "
+                "WHERE id = ?",
+                (prior_amount, claimed_id),
+            )
         have = get_balance(conn, guild_id, user_id)
         raise ValueError(
             f"You need {amount} {currency_plural} to stake this game — "
             f"you have {have}."
-        )
-    if existing is None:
-        conn.execute(
-            "INSERT INTO econ_game_wagers "
-            "(guild_id, game_type, game_id, user_id, amount, state, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'held', ?)",
-            (guild_id, game_type, game_id, user_id, amount, time.time()),
-        )
-    else:
-        conn.execute(
-            "UPDATE econ_game_wagers SET state = 'held', amount = ? WHERE id = ?",
-            (amount, int(existing["id"])),
         )
 
 

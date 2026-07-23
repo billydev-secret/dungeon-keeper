@@ -324,3 +324,59 @@ def test_rake_floor_division_rounds_tiny_cuts_to_nothing(db):
             _fund(conn, uid, 100)
             hold_stake(conn, GUILD, GAME, GID, uid, 4)  # pot 8 → 10% = 0.8 → 0
         assert settle(conn, GAME, GID, A) == (8, 0)
+
+
+def test_concurrent_accept_cannot_double_charge(db, monkeypatch):
+    """Two Accept clicks interleaving inside the debit window.
+
+    The unique index on (game_type, game_id, user_id) is the documented race
+    anchor for double-accept, but it only serializes the clicks if the escrow
+    row is written *before* the debit. With the debit first, both handlers see
+    no row, both charge, and one ante is burned against a single escrow row.
+    """
+    import bot_modules.services.economy_wager_service as svc
+
+    real_debit = svc.apply_debit
+    reentered: list[bool] = []
+
+    def racing_debit(conn, *args, **kwargs):
+        # A second Accept lands while the first is still mid-debit.
+        if not reentered:
+            reentered.append(True)
+            svc.hold_stake(conn, GUILD, GAME, GID, A, 50)
+        return real_debit(conn, *args, **kwargs)
+
+    monkeypatch.setattr(svc, "apply_debit", racing_debit)
+
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        hold_stake(conn, GUILD, GAME, GID, A, 50)
+
+        assert reentered, "the racing click never fired — test is not exercising the race"
+        assert get_balance(conn, GUILD, A) == 50, "the ante was charged twice"
+        assert pot_total(conn, GAME, GID) == 50
+        assert _kinds(conn, A).count(("wager_stake", -50)) == 1
+
+
+def test_failed_debit_leaves_a_declared_stake_pending(db):
+    """A short challenger must not end up escrowed for free.
+
+    hold_stake's ValueError is caught by callers *inside* their own
+    `with conn:` block, so the transaction commits — the claim has to be
+    unwound explicitly rather than relying on a rollback.
+    """
+    with open_db(db) as conn:
+        _fund(conn, A, 10)
+        declare_stake(conn, GUILD, GAME, GID, A, 40)
+
+        with pytest.raises(ValueError, match="you have 10"):
+            hold_stake(conn, GUILD, GAME, GID, A, 40)
+
+        # Still merely declared: nothing escrowed, nothing charged.
+        assert pot_total(conn, GAME, GID) == 0
+        assert get_balance(conn, GUILD, A) == 10
+        assert game_ante(conn, GAME, GID) == 40
+        row = conn.execute(
+            "SELECT state, amount FROM econ_game_wagers WHERE game_id = ?", (GID,)
+        ).fetchone()
+        assert (row["state"], row["amount"]) == ("pending", 40)
