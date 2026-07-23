@@ -155,6 +155,45 @@ class GreeterResponseResponse(BaseModel):
     entries: list[GreeterResponseEntry] = []
 
 
+# ── Intake report ─────────────────────────────────────────────────────
+
+
+class IntakeOpenCardSchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    created_at: float
+    nudged: bool = False
+    done: int
+    total: int
+    pending: list[str] = []
+
+
+class IntakeWelcomerSchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    completions: int = 0
+    ticks: int = 0
+
+
+class IntakeSkippedStepSchema(BaseModel):
+    key: str
+    label: str
+    appeared: int
+    skipped: int
+
+
+class IntakeReportResponse(BaseModel):
+    enabled: bool
+    window_label: str
+    open_cards: list[IntakeOpenCardSchema] = []
+    resolved: int = 0
+    counts: dict[str, int] = {}
+    mean_seconds: float = 0.0
+    median_seconds: float = 0.0
+    welcomers: list[IntakeWelcomerSchema] = []
+    skipped_steps: list[IntakeSkippedStepSchema] = []
+
+
 # ── Time to level 5 ───────────────────────────────────────────────────
 
 

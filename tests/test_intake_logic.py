@@ -432,6 +432,83 @@ def test_stale_respects_configured_hours(db_path):
         assert len(svc.stale_cards(conn, GUILD, 3 * hour)) == 1
 
 
+# ── reports ───────────────────────────────────────────────────────────
+
+
+def test_report_open_cards_progress_and_order(db_path):
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        second = svc.create_card(conn, GUILD, 8, 50.0)
+        first = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        assert first is not None and second is not None
+        svc.auto_tick(conn, GUILD, NEWCOMER, svc.AUTO_GREETED, 200.0, actor_id=GREETER)
+        svc.mark_nudged(conn, second, 300.0)
+        report = svc.report_open_cards(conn, GUILD)
+        # Oldest first; progress and pending labels per card.
+        assert [r["user_id"] for r in report] == [8, NEWCOMER]
+        assert report[0]["nudged"] is True
+        assert report[1] == {
+            "user_id": NEWCOMER,
+            "user_name": str(NEWCOMER),  # no known_users row → id as name
+            "created_at": 100.0,
+            "nudged": False,
+            "done": 1,
+            "total": 4,
+            "pending": ["Member role", "SFW questions asked", "NSFW access"],
+        }
+
+
+def test_report_outcomes_stats(db_path):
+    with open_db(db_path) as conn:
+        for uid, created, resolved in [(1, 0.0, 100.0), (2, 0.0, 300.0)]:
+            svc.create_card(conn, GUILD, uid, created)
+            svc.complete_card(conn, GUILD, uid, GREETER, resolved)
+        cid = svc.create_card(conn, GUILD, 3, 0.0)
+        svc.resolve_card(conn, cid, GREETER, 50.0, svc.RESOLUTION_DISMISSED)
+        svc.create_card(conn, GUILD, 4, 0.0)  # still open — not in outcomes
+        out = svc.report_outcomes(conn, GUILD, 0.0)
+        assert out["resolved"] == 3
+        assert out["counts"] == {"completed": 2, "dismissed": 1}
+        assert out["mean_seconds"] == 200.0
+        assert out["median_seconds"] == 200.0
+        # Window: nothing created since ts 10 → empty.
+        assert svc.report_outcomes(conn, GUILD, 10.0)["resolved"] == 0
+
+
+def test_report_welcomers_counts_ticks_not_auto(db_path):
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 0.0)
+        # A human tick, an auto tick (done_by 0 — never credited), a completion.
+        svc.set_step_state(conn, cid, "sfw_questions", done=True, actor_id=GREETER, at=10.0)
+        svc.auto_tick(conn, GUILD, NEWCOMER, svc.AUTO_VERIFIED, 20.0)
+        svc.complete_card(conn, GUILD, NEWCOMER, GREETER, 30.0)
+        report = svc.report_welcomers(conn, GUILD, 0.0)
+        assert report == [
+            {
+                "user_id": GREETER,
+                "user_name": str(GREETER),
+                "completions": 1,
+                "ticks": 1,
+            }
+        ]
+
+
+def test_report_skipped_steps(db_path):
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        svc.create_card(conn, GUILD, NEWCOMER, 0.0)
+        svc.auto_tick(conn, GUILD, NEWCOMER, svc.AUTO_GREETED, 10.0, actor_id=GREETER)
+        svc.complete_card(conn, GUILD, NEWCOMER, GREETER, 20.0)
+        rows = svc.report_skipped_steps(conn, GUILD, 0.0)
+        assert [(r["key"], r["appeared"], r["skipped"]) for r in rows] == [
+            ("greeted", 1, 0),
+            ("member_role", 1, 1),
+            ("sfw_questions", 1, 1),
+            ("nsfw_role", 1, 1),
+        ]
+
+
 # ── watch registry ────────────────────────────────────────────────────
 
 

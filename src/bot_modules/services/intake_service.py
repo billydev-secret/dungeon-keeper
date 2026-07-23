@@ -34,7 +34,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 
-from bot_modules.core.db_utils import get_config_value, open_db
+from bot_modules.core.db_utils import get_config_value, open_db, parse_bool
 
 ENABLED_KEY = "intake_enabled"
 CHANNEL_KEY = "intake_channel_id"
@@ -145,7 +145,7 @@ def intake_channel_id(conn: sqlite3.Connection, guild_id: int) -> int:
 
 def is_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
     """True once intake is switched on **and** a card channel resolves."""
-    if get_config_value(conn, ENABLED_KEY, "0", guild_id) not in ("1", "true"):
+    if not parse_bool(get_config_value(conn, ENABLED_KEY, "0", guild_id)):
         return False
     return intake_channel_id(conn, guild_id) > 0
 
@@ -487,6 +487,143 @@ def mark_nudged(conn: sqlite3.Connection, card_id: int, at: float) -> None:
     conn.execute(
         "UPDATE intake_cards SET nudged_at = ? WHERE id = ?", (at, card_id)
     )
+
+
+# ---------------------------------------------------------------------------
+# Reports (dashboard analytics)
+# ---------------------------------------------------------------------------
+
+
+def _display_name(conn: sqlite3.Connection, guild_id: int, user_id: int) -> str:
+    row = conn.execute(
+        "SELECT display_name, username FROM known_users "
+        "WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    if row is None:
+        return str(user_id)
+    return str(row["display_name"] or row["username"] or user_id)
+
+
+def report_open_cards(conn: sqlite3.Connection, guild_id: int) -> list[dict]:
+    """The live queue: every open card with its progress, oldest first."""
+    cards = conn.execute(
+        "SELECT * FROM intake_cards "
+        "WHERE guild_id = ? AND resolved_at IS NULL ORDER BY created_at",
+        (guild_id,),
+    ).fetchall()
+    out = []
+    for c in cards:
+        steps = steps_for(conn, int(c["id"]))
+        done, total = count_progress(steps)
+        out.append(
+            {
+                "user_id": int(c["user_id"]),
+                "user_name": _display_name(conn, guild_id, int(c["user_id"])),
+                "created_at": float(c["created_at"]),
+                "nudged": c["nudged_at"] is not None,
+                "done": done,
+                "total": total,
+                "pending": [
+                    str(s["label"]) for s in steps if s["done_at"] is None
+                ],
+            }
+        )
+    return out
+
+
+def report_outcomes(
+    conn: sqlite3.Connection, guild_id: int, since_ts: float
+) -> dict:
+    """Resolution counts + completion-time stats for cards created since."""
+    rows = conn.execute(
+        "SELECT resolution, resolved_at, created_at FROM intake_cards "
+        "WHERE guild_id = ? AND resolved_at IS NOT NULL AND created_at >= ?",
+        (guild_id, since_ts),
+    ).fetchall()
+    counts: dict[str, int] = {}
+    durations: list[float] = []
+    for r in rows:
+        resolution = str(r["resolution"] or "")
+        counts[resolution] = counts.get(resolution, 0) + 1
+        if resolution == RESOLUTION_COMPLETED:
+            durations.append(float(r["resolved_at"]) - float(r["created_at"]))
+    durations.sort()
+    n = len(durations)
+    median = (
+        (durations[n // 2] if n % 2 else (durations[n // 2 - 1] + durations[n // 2]) / 2)
+        if n
+        else 0.0
+    )
+    return {
+        "resolved": len(rows),
+        "counts": counts,
+        "mean_seconds": (sum(durations) / n) if n else 0.0,
+        "median_seconds": median,
+    }
+
+
+def report_welcomers(
+    conn: sqlite3.Connection, guild_id: int, since_ts: float
+) -> list[dict]:
+    """Per-welcomer activity: completions owned + manual steps ticked."""
+    stats: dict[int, dict] = {}
+
+    def _bucket(uid: int) -> dict:
+        return stats.setdefault(
+            uid,
+            {
+                "user_id": uid,
+                "user_name": _display_name(conn, guild_id, uid),
+                "completions": 0,
+                "ticks": 0,
+            },
+        )
+
+    for r in conn.execute(
+        "SELECT resolved_by, COUNT(*) AS n FROM intake_cards "
+        "WHERE guild_id = ? AND resolution = ? AND created_at >= ? "
+        "GROUP BY resolved_by",
+        (guild_id, RESOLUTION_COMPLETED, since_ts),
+    ).fetchall():
+        if r["resolved_by"]:
+            _bucket(int(r["resolved_by"]))["completions"] = int(r["n"])
+    for r in conn.execute(
+        "SELECT s.done_by, COUNT(*) AS n FROM intake_card_steps s "
+        "JOIN intake_cards c ON c.id = s.card_id "
+        "WHERE c.guild_id = ? AND c.created_at >= ? "
+        "AND s.done_by IS NOT NULL AND s.done_by > 0 "
+        "GROUP BY s.done_by",
+        (guild_id, since_ts),
+    ).fetchall():
+        _bucket(int(r["done_by"]))["ticks"] = int(r["n"])
+    return sorted(
+        stats.values(), key=lambda w: (-w["completions"], -w["ticks"], w["user_id"])
+    )
+
+
+def report_skipped_steps(
+    conn: sqlite3.Connection, guild_id: int, since_ts: float
+) -> list[dict]:
+    """How often each step was skipped on completed cards — the procedure's
+    own feedback about which parts the team doesn't actually run."""
+    rows = conn.execute(
+        "SELECT s.step_key, s.label, COUNT(*) AS appeared, "
+        "SUM(s.skipped) AS skipped FROM intake_card_steps s "
+        "JOIN intake_cards c ON c.id = s.card_id "
+        "WHERE c.guild_id = ? AND c.resolution = ? AND c.created_at >= ? "
+        "GROUP BY s.step_key, s.label ORDER BY MIN(s.position)",
+        (guild_id, RESOLUTION_COMPLETED, since_ts),
+    ).fetchall()
+    return [
+        {
+            "key": str(r["step_key"]),
+            "label": str(r["label"]),
+            "appeared": int(r["appeared"]),
+            "skipped": int(r["skipped"] or 0),
+        }
+        for r in rows
+    ]
 
 
 # ---------------------------------------------------------------------------
