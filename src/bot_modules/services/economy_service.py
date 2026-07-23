@@ -1024,6 +1024,13 @@ async def notify_member(
         return False
     mention = f"<@{user_id}>"
     fallback_kwargs: dict = {"content": f"{mention} {content}" if content else mention}
+    # This posts into the public bank channel and some callers pass raw
+    # member-authored bodies (pin message, sponsor question). Restrict pings to
+    # the target member only so an embedded @everyone / role / other-user
+    # mention in that body can't fire. Sinks every caller at once.
+    fallback_kwargs["allowed_mentions"] = discord.AllowedMentions(
+        users=[discord.Object(id=user_id)], everyone=False, roles=False
+    )
     if embed:
         fallback_kwargs["embed"] = embed
     try:

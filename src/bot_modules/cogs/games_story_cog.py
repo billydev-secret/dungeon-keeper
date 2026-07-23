@@ -42,6 +42,8 @@ from bot_modules.games_story.logic import (
     build_turn_order,
     chunk_attribution_lines,
     clamp_max_sentences,
+    format_skip_notice,
+    format_story_opening,
     pick_current_player,
     remove_player,
     resolve_starter,
@@ -347,7 +349,10 @@ class StoryCog(commands.Cog):
         payload["sentences"] = sentences
         await update_game_payload(self.db, game_id, payload)
 
-        await channel.send(f"📖 **The story begins:**\n> *{starter}*")
+        await channel.send(
+            format_story_opening(starter),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
         turn_order = build_turn_order(players)
 
@@ -412,7 +417,11 @@ class StoryCog(commands.Cog):
                 break
 
             if turn_view._skipped and not turn_view._submitted_text:
-                await channel.send(f"⏩ {player_name} was skipped.", delete_after=15)
+                await channel.send(
+                    format_skip_notice(player_name),
+                    delete_after=15,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
                 consecutive_skips += 1
                 turn_index += 1
                 # If every player in the rotation was skipped, end the story

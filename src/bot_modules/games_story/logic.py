@@ -76,6 +76,28 @@ def resolve_starter(starter: str | None) -> str:
     return starter
 
 
+def format_story_opening(starter: str) -> str:
+    """Announcement line for the opening sentence.
+
+    The starter is host-supplied free text; it is escaped against both
+    mention injection (``escape_mentions`` — so a nickname/role/``@everyone``
+    can't ping) and markdown (``escape_markdown``) before being wrapped in
+    the italic block. The cog still passes ``AllowedMentions.none()`` at the
+    send as defense in depth.
+    """
+    safe = discord.utils.escape_markdown(discord.utils.escape_mentions(starter))
+    return f"📖 **The story begins:**\n> *{safe}*"
+
+
+def format_skip_notice(player_name: str) -> str:
+    """Transient "player was skipped" line, with the display name neutralized.
+
+    ``player_name`` is a member display name; escape mentions so it can't
+    ping on the bot's behalf even though the send also restricts mentions.
+    """
+    return f"⏩ {discord.utils.escape_mentions(player_name)} was skipped."
+
+
 def add_player(payload: dict[str, Any], user_id: int) -> None:
     """Append ``user_id`` to the payload's ``players`` list if absent.
 

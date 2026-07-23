@@ -454,7 +454,10 @@ class NHIECog(commands.Cog):
             for uid in newly_eliminated:
                 name = resolve_name(guild, uid)
                 try:
-                    await channel.send(f"💀 **{discord.utils.escape_markdown(name)}** has been eliminated!")
+                    await channel.send(
+                        f"💀 **{discord.utils.escape_markdown(name)}** has been eliminated!",
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
                 except discord.HTTPException:
                     pass
 

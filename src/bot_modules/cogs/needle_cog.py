@@ -201,9 +201,14 @@ def _apply_variables(
     thread: discord.Thread,
 ) -> str:
     display = getattr(message.author, "display_name", None) or message.author.name
+    # A member-controlled nickname (or username) is interpolated into the
+    # welcome message the bot then sends and *pins*. Neutralize any mention
+    # syntax so a nickname like "<@&roleId>" or "@everyone" can't ping on the
+    # bot's behalf. The send also passes AllowedMentions.none() as defense.
+    safe_display = discord.utils.escape_mentions(display)
     return (
         template
-        .replace("$USER", display)
+        .replace("$USER", safe_display)
         .replace("$CHANNEL", f"<#{message.channel.id}>")
         .replace("$THREAD", thread.mention)
     )
@@ -400,7 +405,11 @@ class NeedleCog(commands.Cog):
 
         content = _apply_variables(template, message=message, thread=thread)
         try:
-            msg = await thread.send(content, view=NeedleThreadView())
+            msg = await thread.send(
+                content,
+                view=NeedleThreadView(),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             # Pin if we have permission; delete the "pinned a message" system message
             if thread.guild.me and thread.permissions_for(thread.guild.me).manage_messages:
                 await msg.pin()

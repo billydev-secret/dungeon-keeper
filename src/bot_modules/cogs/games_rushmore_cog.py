@@ -1159,7 +1159,10 @@ class RushmoreCog(commands.Cog):
             if eligible:
                 winner_uid = eligible[0]
                 winner_name = resolve_name(guild, winner_uid)
-                await channel.send(f"\U0001f3c6 **{discord.utils.escape_markdown(winner_name)}** wins by default!")
+                await channel.send(
+                    f"\U0001f3c6 **{discord.utils.escape_markdown(winner_name)}** wins by default!",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             else:
                 winner_uid = None
                 await channel.send("No valid boards — nobody wins!")

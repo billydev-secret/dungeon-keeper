@@ -696,6 +696,13 @@ async def test_notify_member_dm_forbidden_falls_back_to_bank_channel(db):
     kwargs = channel.send.await_args.kwargs
     assert f"<@{USER}>" in kwargs["content"]
     assert "hi" in kwargs["content"]
+    # The bank channel is public and some callers pass raw member-authored
+    # bodies; the fallback must restrict pings to the target member so an
+    # embedded @everyone / role / other-user mention can't fire.
+    am = kwargs["allowed_mentions"]
+    assert am.everyone is False
+    assert am.roles is False
+    assert [u.id for u in am.users] == [USER]
 
 
 async def test_notify_member_no_fallback_configured_returns_false(db):
