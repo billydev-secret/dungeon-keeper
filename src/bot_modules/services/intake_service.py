@@ -75,12 +75,17 @@ class StepDef:
     auto_role_id: int = 0
 
 
+# The two role steps default to MANUAL: a role_gained step with no
+# configured role id can never auto-tick and gets no button either (auto
+# steps are filtered from the view) — an untickable dead step. They become
+# role_gained the moment the admin saves the step editor with real roles
+# (the dashboard requires a role for role_gained steps).
 DEFAULT_STEPS: tuple[StepDef, ...] = (
     StepDef("greeted", "Greeted", AUTO_GREETED),
     StepDef("verified", "Verified", AUTO_VERIFIED),
-    StepDef("member_role", "Member role granted", AUTO_ROLE_GAINED),
+    StepDef("member_role", "Member role granted"),
     StepDef("sfw_questions", "SFW questions asked"),
-    StepDef("nsfw_role", "NSFW access granted", AUTO_ROLE_GAINED),
+    StepDef("nsfw_role", "NSFW access granted"),
     StepDef("nsfw_questions", "NSFW questions asked"),
 )
 

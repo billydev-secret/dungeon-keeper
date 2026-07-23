@@ -294,3 +294,15 @@ def test_intake_report_with_data(open_client, fake_ctx):
     # Every default step except none was skipped on the completed card.
     skipped = {s["key"]: s["skipped"] for s in data["skipped_steps"]}
     assert skipped["sfw_questions"] == 1
+
+
+def test_intake_report_panel_escapes_member_controlled_columns():
+    """Source-scan guard (no Node in this repo): the intake-report panel must
+    esc() the member-controlled name columns and the step label — they are
+    interpolated into innerHTML by renderSortableTable (stored-XSS shape)."""
+    from pathlib import Path
+
+    src = Path("src/web_server/static/js/panels/intake-report.js").read_text()
+    assert 'format: (v, r) => esc(v || r.user_id)' in src  # both name columns
+    assert src.count("esc(v || r.user_id)") == 2
+    assert '{ key: "label", label: "Step", format: (v) => esc(v) }' in src

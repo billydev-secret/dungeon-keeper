@@ -1366,7 +1366,11 @@ def _canonical_intake_steps(steps: list[IntakeStepIn]) -> str:
             raise HTTPException(
                 422, f"Step '{label}': a role-gained step needs a role."
             )
-        key = s.key.strip() or re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+        # Keys end up inside persistent-button custom_ids and must fullmatch
+        # the dispatch template [\w-]{1,64} — normalize charset and cap at 60
+        # so the dedupe suffix below can never push past 64.
+        key = re.sub(r"[^\w-]+", "_", s.key.strip() or label.lower())
+        key = key.strip("_")[:60].rstrip("_")
         if not key:
             key = "step"
         base, n = key, 2

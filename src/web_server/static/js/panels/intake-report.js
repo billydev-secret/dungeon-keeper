@@ -62,7 +62,7 @@ export function mount(container, initialParams) {
       } else {
         renderSortableTable(openWrap, {
           columns: [
-            { key: "user_name", label: "Newcomer", format: (v, r) => v || r.user_id },
+            { key: "user_name", label: "Newcomer", format: (v, r) => esc(v || r.user_id) },
             { key: "created_at", label: "Waiting", format: (v) => fmtAge(Date.now() / 1000 - v) },
             { key: "done", label: "Progress", format: (v, r) => bar(r.done, r.total) },
             { key: "pending", label: "Still to do", format: (v) => esc((v || []).join(", ")) || "—" },
@@ -78,7 +78,7 @@ export function mount(container, initialParams) {
       if (data.welcomers.length) {
         renderSortableTable(welcomersWrap, {
           columns: [
-            { key: "user_name", label: "Welcomer", format: (v, r) => v || r.user_id },
+            { key: "user_name", label: "Welcomer", format: (v, r) => esc(v || r.user_id) },
             { key: "completions", label: "Intakes completed" },
             { key: "ticks", label: "Steps ticked" },
           ],
@@ -94,7 +94,7 @@ export function mount(container, initialParams) {
       if (skipped.length) {
         renderSortableTable(skippedWrap, {
           columns: [
-            { key: "label", label: "Step" },
+            { key: "label", label: "Step", format: (v) => esc(v) },
             { key: "appeared", label: "On completed cards" },
             { key: "skipped", label: "Skipped" },
             {

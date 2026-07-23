@@ -1420,3 +1420,23 @@ def test_intake_reference_import_requires_bot(authed_client):
         "channel_id": "424242",
     })
     assert resp.status_code == 503  # FakeCtx has no connected bot
+
+
+def test_update_intake_normalizes_keys_for_button_dispatch(authed_client):
+    # Keys land in persistent-button custom_ids and must fullmatch the
+    # dispatch template [\w-]{1,64} after a restart — long label slugs are
+    # capped and bad charsets normalized (regression: 80-char labels made
+    # buttons dead after restart).
+    import re as _re
+    long_label = "x" * 80
+    resp = authed_client.put("/api/config/intake", json={
+        "steps": [
+            {"key": "", "label": long_label, "auto": "", "role_id": "0"},
+            {"key": "has:colon and spaces", "label": "Colons", "auto": "", "role_id": "0"},
+            {"key": "", "label": long_label + "b", "auto": "", "role_id": "0"},
+        ],
+    })
+    assert resp.status_code == 200
+    keys = [s["key"] for s in authed_client.get("/api/config").json()["intake"]["steps"]]
+    assert all(_re.fullmatch(r"[\w-]{1,64}", k) for k in keys)
+    assert len(set(keys)) == 3  # dedupe survived the cap

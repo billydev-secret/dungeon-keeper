@@ -27,13 +27,16 @@ slash commands:
   open card), not per-guild. While dark, join behavior is unchanged.
 - **Steps** are snapshotted onto the card at creation from `intake_steps`
   (JSON; invalid entries drop, empty/invalid falls back to the default
-  six-step list) — config edits never mutate in-flight cards. Kinds:
-  manual (persistent toggle button, greeters + mods, first ticker
-  preserved on races), `greeted` (greeter-role member @mentions the
-  newcomer in the intake channel), `verified` (unverified role removed),
-  `role_gained` (member gains the step's configured role — `/grant` or a
-  manual add; `role_id 0` never ticks, and the dashboard refuses to store
-  it).
+  six-step list — whose two role steps are **manual** until real roles are
+  configured, since an unconfigured `role_gained` step could never tick) —
+  config edits never mutate in-flight cards. Kinds: manual (persistent
+  toggle button, greeters + mods, first ticker preserved on races),
+  `greeted` (greeter-role member @mentions the newcomer in the intake
+  channel), `verified` (unverified role removed), `role_gained` (member
+  gains the step's configured role — `/grant` or a manual add; `role_id 0`
+  never ticks, and the dashboard refuses to store it). Step keys are
+  normalized to `[\w-]` and capped at 64 chars on save so persistent-button
+  custom_ids always fullmatch the dispatch template after a restart.
 - **Completion:** a greeter/mod message in **any channel** containing
   `intake_completion_code` and @mentioning the newcomer. Unticked steps
   are stamped **skipped** (code always wins), the poster becomes the

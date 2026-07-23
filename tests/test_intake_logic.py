@@ -237,15 +237,30 @@ def test_auto_tick_role_matches_configured_role_only(db_path):
         assert step["done_by"] == svc.AUTO_ACTOR
 
 
-def test_auto_tick_role_never_matches_unconfigured_step(db_path):
+def test_auto_tick_role_never_matches_role_id_zero(db_path):
     with open_db(db_path) as conn:
-        # DEFAULT_STEPS role steps carry role_id 0 until the dashboard sets
-        # them — gaining any role (even "role 0") must not tick those.
+        # Tolerantly-parsed stored config can still carry a role_gained step
+        # with role_id 0 — gaining any role (even "role 0") must not tick it.
+        set_config_value(
+            conn,
+            svc.STEPS_KEY,
+            json.dumps([{"key": "r", "label": "Role", "auto": "role_gained"}]),
+            GUILD,
+        )
         svc.create_card(conn, GUILD, NEWCOMER, 100.0)
         _, ticked = svc.auto_tick(
             conn, GUILD, NEWCOMER, svc.AUTO_ROLE_GAINED, 200.0, role_id=0
         )
         assert ticked == []
+
+
+def test_default_steps_are_all_tickable():
+    # Regression: the default role steps shipped as role_gained with
+    # role_id 0 — auto-untickable AND button-less. Every default step must
+    # be either manual (gets a button) or an auto kind that needs no role.
+    for step in svc.DEFAULT_STEPS:
+        if step.auto_kind == svc.AUTO_ROLE_GAINED:
+            assert step.auto_role_id > 0, f"{step.key} can never tick"
 
 
 def test_auto_tick_without_open_card(db_path):
