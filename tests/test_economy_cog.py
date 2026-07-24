@@ -567,11 +567,12 @@ async def test_quests_listing_state_matrix(ctx, db):
     assert "`Weekly grind" in personal and "✅ done" in personal
     assert "`Sign me off" in personal and "⏳ sign-off" in personal
     # Community section: the monthly goal folds in beside the weekly community
-    # goal, each under its cadence sub-label, with the ▰▱ bar (not a bare
-    # fraction).
+    # goal, each under its cadence sub-label, with the ▰▱ bar — fill only, no
+    # n/target counts (the shared five-figure totals live in the details popup).
     assert "**Monthly**" in community and "`Monthly Marathon" in community
     assert "**Weekly**" in community and "`Team goal" in community
-    assert "40/100" in community and "▰" in community and "▱" in community
+    assert "▰" in community and "▱" in community
+    assert "40/100" not in community and "200/500" not in community
     # The descriptions/explainers moved behind the details select — the
     # list never carries them.
     assert all("Do the thing" not in v for v in fields.values())
@@ -583,16 +584,18 @@ async def test_quests_listing_state_matrix(ctx, db):
 def test_quest_line_status_draws_bar_for_counted_and_community():
     """Counted daily/weekly and community/monthly goals render a ▰▱ bar;
     one-shot and claim-state quests keep their glyph phrase."""
-    # Counted quest (daily or weekly): tracked progress → bar + fraction.
+    # Counted quest (daily or weekly): tracked progress → bar + fraction; the
+    # small personal counts are the point.
     counted = _quest_line_status(
         {"state": "message_sent", "progress_current": 3, "progress_target": 6}
     )
     assert "▰" in counted and "▱" in counted and "3/6" in counted
-    # Guild-wide community/monthly goal → bar off the shared counter.
+    # Guild-wide community/monthly goal → bar fill only, no n/target (the
+    # shared totals run to five figures and read as noise on the board).
     community = _quest_line_status(
         {"state": "community", "current": 40, "target": 100}
     )
-    assert "▰" in community and "▱" in community and "40/100" in community
+    assert "▰" in community and "▱" in community and "/" not in community
     # One-shot quest with no counted target → no bar, just the to-do glyph.
     one_shot = _quest_line_status({"state": "photo_post"})
     assert one_shot == "☐ to do"

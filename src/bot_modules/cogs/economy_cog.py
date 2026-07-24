@@ -31,6 +31,7 @@ from bot_modules.economy.guide import (
 )
 from bot_modules.economy.leaderboard import (
     _pad,
+    bar_fill,
     build_leaderboard_embed,
     collect_leaderboard_data,
     progress_bar,
@@ -374,9 +375,13 @@ _QUEST_SECTIONS = (
 
 
 # The ``/bank quests`` list draws the same ``▰▱`` meter the details popup and
-# login digest use (via ``progress_bar``), just narrower so a bar + counts +
-# reward still fit one line on mobile. Counted daily/weekly and the guild-wide
-# community/monthly goals get a bar; one-shot quests keep a glyph phrase.
+# login digest use, just narrower so a bar + reward still fit one line on
+# mobile. Counted daily/weekly show ``{bar} n/target`` — the small personal
+# counts are the point ("7/10 messages"). The guild-wide community/monthly
+# goals show the **bar alone**: their shared totals run into five or six
+# figures (``7,875/68,935``), which bloated the column and read as noise next
+# to the fill — the exact numbers live in the details popup and login digest.
+# One-shot quests keep a glyph phrase.
 _QUEST_BAR_WIDTH = 8
 
 
@@ -385,7 +390,7 @@ def _quest_line_status(q: dict) -> str:
     one short glyph phrase."""
     state = str(q.get("state") or "")
     if state == "community":
-        return progress_bar(int(q["current"]), int(q["target"]), _QUEST_BAR_WIDTH)
+        return bar_fill(int(q["current"]), int(q["target"]), _QUEST_BAR_WIDTH)
     if state == "done":
         return "✅ done"
     if state == "pending":
