@@ -215,7 +215,9 @@ async def test_refuses_when_guild_disabled(db):
     assert not await consider_channel(_bot(channel), db, cfg, NOW)
 
 
-async def test_refuses_when_game_busy(db):
+async def test_fires_even_when_game_busy(db):
+    """The active-game busy check is disabled for now (silently blocked a
+    genuine lull with no diagnostic trace) — decide from silence history alone."""
     with open_db(db) as conn:
         cfg = _enable(conn)
         last_human = _seed_lively_history(conn)
@@ -226,7 +228,7 @@ async def test_refuses_when_game_busy(db):
         return channel_id == CID
 
     bot.game_busy_checks = {"risky_roll": busy_check}
-    assert not await consider_channel(bot, db, cfg, NOW)
+    assert await consider_channel(bot, db, cfg, NOW)
 
 
 async def test_run_tick_measures_follow_up(db):

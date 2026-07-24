@@ -54,7 +54,7 @@ Details of the moment:
 | Quiet hours | Nothing fires overnight (midnight–8am server time by default) |
 | Ping scarcity | Role tagged at most once per channel per day |
 | Mods slowed the room | If a channel is in slowmode, the bot assumes that's intentional and stays out |
-| Something's happening | No revives in a channel with an active event or ongoing game night (the busy check fails closed — if it errors, the channel counts as busy) |
+| Something's happening | *Temporarily disabled* (see implementation notes below) — this protection is off for now; the decision runs on channel silence history alone |
 | Not invited | Revive only operates in channels an admin explicitly enabled |
 
 **New channels / new installs:** for the first couple of weeks, before the bot has learned a channel's rhythm, it runs in a conservative fallback mode — only firing after a long fixed silence, and only during daytime/evening hours. It quietly graduates to rhythm-aware behavior once it knows the room.
@@ -133,3 +133,12 @@ Details of the moment:
   would-it-fire "Check" explainer, manual "Fire", and posting the opt-in
   button. The only in-Discord surfaces are the monitor loop's posts and the
   persistent opt-in button.
+- **Busy-check disabled (2026-07-24):** the active-game/round busy check
+  (`channel_is_busy()` in `chat_revive/actions.py`) silently blocked a
+  qualifying revive with no log trace — a genuine channel lull went unfired
+  for 90+ minutes with zero diagnostic signal. The loop and the dashboard
+  "Check" preview now always pass `busy=False`, so the decision runs purely
+  on channel silence history; `channel_is_busy()` itself is untouched and
+  still used by Economy Drops. Re-enabling this gate for Chat Revive should
+  come with an INFO log line on every busy-blocked fire so this failure mode
+  is diagnosable next time.
