@@ -25,6 +25,7 @@ from bot_modules.cogs.economy_cog import (
     _custom_name_confirmation,
     _quest_line_status,
     _quest_section_lines,
+    _status_disp_width,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -629,6 +630,28 @@ def test_quest_section_lines_labels_only_when_multi_cadence():
     )
     assert not any(ln.startswith("**") for ln in one_cadence)
     assert any("Buzz" in ln for ln in one_cadence)
+
+
+def test_quest_section_lines_align_the_reward_column():
+    """Every row's title+status code cell is padded to one width, so the
+    reward payload after the closing backtick starts at the same column —
+    a counted (bar) row and a claim-state (glyph) row included."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    lines = _quest_section_lines(
+        ("daily", "weekly", "event"),
+        {"daily": [
+            {"state": "message_sent", "progress_current": 2,
+             "progress_target": 5, "title": "Chatty", "reward": 10},
+            {"state": "claimable", "title": "Say hi", "reward": 25},
+            {"state": "done", "title": "All done", "reward": 40},
+        ]},
+        settings, 12,
+    )
+    cells = [ln.split("`")[1] for ln in lines if ln.startswith("`")]
+    assert len(cells) == 3
+    # All cells share one display width → the trailing backtick (and the
+    # reward after it) lands in the same column on every row.
+    assert len({_status_disp_width(c) for c in cells}) == 1
 
 
 @pytest.mark.asyncio

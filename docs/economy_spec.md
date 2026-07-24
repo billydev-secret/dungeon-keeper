@@ -402,7 +402,10 @@ parity with the Games Studio is a parking-lot item).
   weekly community goals, no self-claim). Within a section a bold cadence
   sub-label (Daily/Weekly/Anytime, or Monthly/Weekly) separates the groups
   when more than one is present; a single-cadence section is unlabelled
-  (`_QUEST_SECTIONS` / `_quest_section_lines`). Descriptions and
+  (`_QUEST_SECTIONS` / `_quest_section_lines`). Title and status share one
+  monospace code cell padded to the section's widest status (`_status_disp_width`
+  counts emoji as 2 columns), so the reward — which stays outside the backticks
+  — lines up on every row. Descriptions and
   the how-it-completes explainers (`quest_views.QUEST_STATE_LABEL`) moved
   behind an ℹ️ details select (`QuestDetailSelect`, always attached when
   quests exist) that answers with a one-quest ephemeral embed.

@@ -409,6 +409,17 @@ def _quest_line_reward(q: dict, settings: EconSettings) -> str:
     return reward
 
 
+# Emoji-presentation glyphs that appear in a status cell render ~2 monospace
+# columns wide (unlike ☐/▰▱, which sit at ~1). Counting them as 2 when sizing
+# the status column keeps the reward column that follows the code cell aligned.
+_WIDE_STATUS_GLYPHS = ("✅", "⏳", "🔶")
+
+
+def _status_disp_width(text: str) -> int:
+    """Approximate monospace column width of a status cell for padding."""
+    return len(text) + sum(text.count(g) for g in _WIDE_STATUS_GLYPHS)
+
+
 def _quest_section_lines(
     cadences: tuple[str, ...],
     groups: dict[str, list[dict]],
@@ -418,18 +429,26 @@ def _quest_section_lines(
     """Display lines for one board section — each present cadence's quests,
     one line apiece, with a bold cadence sub-label above them when the section
     spans more than one cadence (a single-cadence section needs no sub-label,
-    the field heading already names it)."""
+    the field heading already names it).
+
+    Title and status share one monospace code cell (per the embed style
+    guide's one-cell-per-row rule) so their columns line up; the status column
+    is padded to the section's widest status so the reward — which stays
+    *outside* the backticks, emoji and all — starts at the same column on every
+    row."""
     present = [c for c in cadences if groups.get(c)]
     show_labels = len(present) > 1
+    rows = [(c, q, _quest_line_status(q)) for c in present for q in groups[c]]
+    status_w = max((_status_disp_width(s) for _, _, s in rows), default=0)
     lines: list[str] = []
-    for cadence in present:
-        if show_labels:
+    seen: set[str] = set()
+    for cadence, q, status in rows:
+        if show_labels and cadence not in seen:
             lines.append(f"**{_CADENCE_LABEL[cadence]}**")
-        lines.extend(
-            f"`{_pad(str(q['title']), width)}` {_quest_line_status(q)} · "
-            f"{_quest_line_reward(q, settings)}"
-            for q in groups[cadence]
-        )
+            seen.add(cadence)
+        pad = " " * max(0, status_w - _status_disp_width(status))
+        cell = f"{_pad(str(q['title']), width)}  {status}{pad}"
+        lines.append(f"`{cell}` {_quest_line_reward(q, settings)}")
     return lines
 
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
