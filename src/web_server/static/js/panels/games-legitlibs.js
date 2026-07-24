@@ -418,6 +418,7 @@ export function mount(container) {
             <div style="display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0;align-items:flex-start;">
               <span class="chip ${tierCls}" style="font-size:11px;">${tierEmoji} ${esc(tierLabel)}</span>
               <span class="chip ${statusCls}" style="font-size:11px;">${esc(t.status)}</span>
+              <span class="chip chip-neutral" style="font-size:11px;" title="${t.is_global ? "Shared with every server" : "Only this server draws it"}">${t.is_global ? "🌐 Global" : "🏠 This server"}</span>
             </div>
           </div>
           <div class="ll-stats">
@@ -429,6 +430,7 @@ export function mount(container) {
         <div class="ll-actions">
           <button class="btn btn-sm" data-action="edit-template" data-tid="${t.template_id}">Edit</button>
           ${publishBtn}
+          <button class="btn btn-sm" data-action="scope-template" data-tid="${t.template_id}" data-global="${t.is_global ? 1 : 0}">${t.is_global ? "Make server-only" : "Make global"}</button>
           <button class="btn btn-sm" data-action="del-template" data-tid="${t.template_id}">Delete</button>
         </div>
       </div>`;
@@ -465,6 +467,18 @@ export function mount(container) {
           await apiPut(`/api/games/legitlibs/templates/${btn.dataset.tid}`, { status: "draft" });
           loadList();
         } catch (err) { toast(`Couldn’t unpublish that template — ${err.message}`, "error"); }
+      });
+    });
+
+    listEl.querySelectorAll('[data-action="scope-template"]').forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        // data-global reflects the CURRENT scope; the click flips it.
+        const makeGlobal = btn.dataset.global !== "1";
+        try {
+          await apiPut(`/api/games/legitlibs/templates/${btn.dataset.tid}/scope`, { is_global: makeGlobal });
+          toast(makeGlobal ? "Shared to the global pool." : "Now server-only.", "success");
+          loadList();
+        } catch (err) { toast(`Couldn’t change that template’s scope — ${err.message}`, "error"); }
       });
     });
 

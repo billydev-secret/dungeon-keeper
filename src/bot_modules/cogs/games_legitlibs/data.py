@@ -128,10 +128,12 @@ async def pick_template(
     )
     recent_ids = {r["template_id"] for r in recent_rows}
 
-    # Query published templates at this tier or below
+    # Query published templates at this tier or below, scoped to this guild's
+    # own templates plus the shared global pool (guild_id = 0).
     rows = await db.fetchall(
-        "SELECT * FROM legitlibs_templates WHERE status = 'published' AND tier <= ?",
-        (tier,),
+        "SELECT * FROM legitlibs_templates "
+        "WHERE status = 'published' AND tier <= ? AND (guild_id = ? OR guild_id = 0)",
+        (tier, guild_id),
     )
     if not rows:
         return None
