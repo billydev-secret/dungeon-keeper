@@ -395,8 +395,14 @@ parity with the Games Studio is a parking-lot item).
   sign-off, 🔶 claim below, ☐ to do) or, for a counted daily/weekly and the
   guild-wide community/monthly goals, an inline `▰▱` progress bar with its
   n/target counts (`progress_bar` at `_QUEST_BAR_WIDTH`, the same meter the
-  details popup and login digest draw) | payment — grouped by
-  cadence (Daily/Weekly/Monthly/Anytime/Community goals). Descriptions and
+  details popup and login digest draw) | payment. Lines are split into two
+  top-level sections — **🧍 Your quests** (the member's board: daily/weekly
+  draws + any-channel Anytime quests they complete and claim) and **🌐
+  Community goals** (the guild-wide shared counters: the monthly goal + the
+  weekly community goals, no self-claim). Within a section a bold cadence
+  sub-label (Daily/Weekly/Anytime, or Monthly/Weekly) separates the groups
+  when more than one is present; a single-cadence section is unlabelled
+  (`_QUEST_SECTIONS` / `_quest_section_lines`). Descriptions and
   the how-it-completes explainers (`quest_views.QUEST_STATE_LABEL`) moved
   behind an ℹ️ details select (`QuestDetailSelect`, always attached when
   quests exist) that answers with a one-quest ephemeral embed.

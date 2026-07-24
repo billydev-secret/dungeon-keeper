@@ -352,15 +352,24 @@ def _unit(settings: EconSettings, amount: int) -> str:
     return settings.currency_name if abs(amount) == 1 else settings.currency_plural
 
 
-# Group order + headings for the /bank quests table. The long per-state
-# explainer text lives in quest_views.QUEST_STATE_LABEL, shown by the
-# details select — the list itself stays one line per quest.
-_QUEST_GROUPS = (
-    ("daily", "Daily"),
-    ("weekly", "Weekly"),
-    ("monthly", "Monthly"),
-    ("event", "Anytime"),
-    ("community", "Community goals"),
+# The /bank quests board is two sections: the member's own board (daily/weekly
+# board draws + any-channel "Anytime" quests they complete and claim) and the
+# guild-wide goals everyone moves together (the monthly goal + the weekly
+# community goals — both shared counters, no self-claim). Each section is one
+# embed field; within it, a cadence sub-label separates the groups when more
+# than one is present. The long per-state explainer text lives in
+# quest_views.QUEST_STATE_LABEL, shown by the details select — the list itself
+# stays one line per quest.
+_CADENCE_LABEL = {
+    "daily": "Daily",
+    "weekly": "Weekly",
+    "event": "Anytime",
+    "monthly": "Monthly",
+    "community": "Weekly",
+}
+_QUEST_SECTIONS = (
+    ("🧍 Your quests", ("daily", "weekly", "event")),
+    ("🌐 Community goals", ("monthly", "community")),
 )
 
 
@@ -398,6 +407,30 @@ def _quest_line_reward(q: dict, settings: EconSettings) -> str:
     if q.get("spotlight"):
         reward += " ⚡"
     return reward
+
+
+def _quest_section_lines(
+    cadences: tuple[str, ...],
+    groups: dict[str, list[dict]],
+    settings: EconSettings,
+    width: int,
+) -> list[str]:
+    """Display lines for one board section — each present cadence's quests,
+    one line apiece, with a bold cadence sub-label above them when the section
+    spans more than one cadence (a single-cadence section needs no sub-label,
+    the field heading already names it)."""
+    present = [c for c in cadences if groups.get(c)]
+    show_labels = len(present) > 1
+    lines: list[str] = []
+    for cadence in present:
+        if show_labels:
+            lines.append(f"**{_CADENCE_LABEL[cadence]}**")
+        lines.extend(
+            f"`{_pad(str(q['title']), width)}` {_quest_line_status(q)} · "
+            f"{_quest_line_reward(q, settings)}"
+            for q in groups[cadence]
+        )
+    return lines
 
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
@@ -3455,9 +3488,10 @@ class EconomyCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        # One line per quest — title | status | payment, grouped by cadence.
-        # Descriptions and the how-it-completes explainers live behind the
-        # details select, so the list stays scannable.
+        # One line per quest — title | status | payment — split into two
+        # sections (your board vs the guild-wide goals), cadence sub-labelled
+        # within each. Descriptions and the how-it-completes explainers live
+        # behind the details select, so the list stays scannable.
         desc_bits = []
         if any(q.get("spotlight") for q in quests_state):
             desc_bits.append("⚡ Spotlight quests pay **double** this week!")
@@ -3471,20 +3505,17 @@ class EconomyCog(commands.Cog):
             groups.setdefault(str(q["qtype"]), []).append(q)
         width = min(max(len(str(q["title"])) for q in quests_state), 22)
         sections = [
-            (heading, groups[qtype])
-            for qtype, heading in _QUEST_GROUPS
-            if groups.get(qtype)
+            (heading, _quest_section_lines(cadences, groups, settings, width))
+            for heading, cadences in _QUEST_SECTIONS
         ]
-        for i, (heading, batch) in enumerate(sections):
-            quest_lines = [
-                f"`{_pad(str(q['title']), width)}` {_quest_line_status(q)} · "
-                f"{_quest_line_reward(q, settings)}"
-                for q in batch
-            ]
-            # event quests bypass the board's per-cadence sizing, so dozens can
-            # accrue and blow the 1024-char field cap — which 400s the whole
-            # command guild-wide. Fit as many as budget allows (reserving room
-            # for the "+N more" tail + breathing-room line) and summarise the rest.
+        sections = [(heading, lines) for heading, lines in sections if lines]
+        for i, (heading, quest_lines) in enumerate(sections):
+            # Anytime (event) quests bypass the board's per-cadence sizing, so
+            # dozens can accrue and blow the 1024-char field cap — which 400s
+            # the whole command guild-wide. They sort last within Your quests,
+            # so fitting from the top keeps the counted daily/weekly bars and
+            # summarises the event tail. (Reserve room for the "+N more" tail +
+            # breathing-room line.)
             value = _fit_lines(quest_lines, _EMBED_FIELD_LIMIT - 40)
             shown = value.count("\n") + 1 if value else 0
             if shown < len(quest_lines):
