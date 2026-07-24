@@ -364,11 +364,19 @@ _QUEST_GROUPS = (
 )
 
 
+# The ``/bank quests`` list draws the same ``▰▱`` meter the details popup and
+# login digest use (via ``progress_bar``), just narrower so a bar + counts +
+# reward still fit one line on mobile. Counted daily/weekly and the guild-wide
+# community/monthly goals get a bar; one-shot quests keep a glyph phrase.
+_QUEST_BAR_WIDTH = 8
+
+
 def _quest_line_status(q: dict) -> str:
-    """The status column: one short glyph phrase, or n/target progress."""
+    """The status column: a progress bar for counted/community quests, else
+    one short glyph phrase."""
     state = str(q.get("state") or "")
     if state == "community":
-        return f"▸ {int(q['current']):,}/{int(q['target']):,}"
+        return progress_bar(int(q["current"]), int(q["target"]), _QUEST_BAR_WIDTH)
     if state == "done":
         return "✅ done"
     if state == "pending":
@@ -376,7 +384,9 @@ def _quest_line_status(q: dict) -> str:
     if state == "claimable":
         return "🔶 claim below"
     if q.get("progress_target"):
-        return f"▸ {int(q['progress_current']):,}/{int(q['progress_target']):,}"
+        return progress_bar(
+            int(q["progress_current"]), int(q["progress_target"]), _QUEST_BAR_WIDTH
+        )
     return "☐ to do"
 
 

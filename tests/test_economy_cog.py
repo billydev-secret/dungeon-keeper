@@ -20,7 +20,11 @@ from bot_modules.services.economy_quests_service import (
     set_income_source,
     set_quest_active,
 )
-from bot_modules.cogs.economy_cog import _NICK_FORBIDDEN, _custom_name_confirmation
+from bot_modules.cogs.economy_cog import (
+    _NICK_FORBIDDEN,
+    _custom_name_confirmation,
+    _quest_line_status,
+)
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -549,13 +553,37 @@ async def test_quests_listing_state_matrix(ctx, db):
     assert "`Weekly grind" in weekly_lines and "✅ done" in weekly_lines
     assert "`Sign me off" in weekly_lines and "⏳ sign-off" in weekly_lines
     community = groups["Community goals"]
-    assert "`Team goal" in community and "▸ 40/100" in community
+    # Community goals draw the ▰▱ progress bar inline, not a bare fraction.
+    assert "`Team goal" in community and "40/100" in community
+    assert "▰" in community and "▱" in community
     # The descriptions/explainers moved behind the details select — the
     # list never carries them.
     assert all("Do the thing" not in v for v in groups.values())
     # View always attaches when quests exist (details select at minimum).
     assert "view" in kwargs
     assert daily  # referenced
+
+
+def test_quest_line_status_draws_bar_for_counted_and_community():
+    """Counted daily/weekly and community/monthly goals render a ▰▱ bar;
+    one-shot and claim-state quests keep their glyph phrase."""
+    # Counted quest (daily or weekly): tracked progress → bar + fraction.
+    counted = _quest_line_status(
+        {"state": "message_sent", "progress_current": 3, "progress_target": 6}
+    )
+    assert "▰" in counted and "▱" in counted and "3/6" in counted
+    # Guild-wide community/monthly goal → bar off the shared counter.
+    community = _quest_line_status(
+        {"state": "community", "current": 40, "target": 100}
+    )
+    assert "▰" in community and "▱" in community and "40/100" in community
+    # One-shot quest with no counted target → no bar, just the to-do glyph.
+    one_shot = _quest_line_status({"state": "photo_post"})
+    assert one_shot == "☐ to do"
+    # Claim states are unchanged phrases (no bar).
+    assert _quest_line_status({"state": "done"}) == "✅ done"
+    assert _quest_line_status({"state": "pending"}) == "⏳ sign-off"
+    assert _quest_line_status({"state": "claimable"}) == "🔶 claim below"
 
 
 @pytest.mark.asyncio

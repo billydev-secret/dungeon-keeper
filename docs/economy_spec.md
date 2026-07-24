@@ -392,7 +392,10 @@ parity with the Games Studio is a parking-lot item).
 ### 4.2 Member Flow
 - `/bank quests` + wallet page: active quests, progress, claim state. The
   embed is one line per quest — title cell | status glyph (✅ done, ⏳
-  sign-off, 🔶 claim below, ▸ n/target, ☐ to do) | payment — grouped by
+  sign-off, 🔶 claim below, ☐ to do) or, for a counted daily/weekly and the
+  guild-wide community/monthly goals, an inline `▰▱` progress bar with its
+  n/target counts (`progress_bar` at `_QUEST_BAR_WIDTH`, the same meter the
+  details popup and login digest draw) | payment — grouped by
   cadence (Daily/Weekly/Monthly/Anytime/Community goals). Descriptions and
   the how-it-completes explainers (`quest_views.QUEST_STATE_LABEL`) moved
   behind an ℹ️ details select (`QuestDetailSelect`, always attached when
