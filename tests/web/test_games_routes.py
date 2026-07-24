@@ -1106,3 +1106,64 @@ def test_channels_list_keeps_snowflake_precision(open_client):
     ).status_code == 200
     row = open_client.get(f"{BASE}/config/channels").json()["channels"][0]
     assert row["legitlibs_max_tier"] == 2
+
+
+# ── LegitLibs template scope (migration 124) ─────────────────────────────────
+
+
+def test_ll_template_create_is_owned_by_active_guild(open_client):
+    """A new template belongs to the creating guild, not the global pool."""
+    tid = _create_template(open_client, title="Owned").json()["template_id"]
+    row = next(
+        t for t in open_client.get(f"{BASE}/legitlibs/templates").json()["templates"]
+        if t["template_id"] == tid
+    )
+    assert row["is_global"] is False
+
+
+def test_ll_template_scope_toggle_promotes_and_demotes(open_client):
+    tid = _create_template(open_client, title="Toggle me").json()["template_id"]
+
+    resp = open_client.put(
+        f"{BASE}/legitlibs/templates/{tid}/scope", json={"is_global": True}
+    )
+    assert resp.status_code == 200 and resp.json()["is_global"] is True
+    row = next(
+        t for t in open_client.get(f"{BASE}/legitlibs/templates").json()["templates"]
+        if t["template_id"] == tid
+    )
+    assert row["is_global"] is True
+
+    # Claim it back to server-only.
+    resp = open_client.put(
+        f"{BASE}/legitlibs/templates/{tid}/scope", json={"is_global": False}
+    )
+    assert resp.status_code == 200 and resp.json()["is_global"] is False
+
+
+def test_ll_template_scope_unknown_is_404(open_client):
+    resp = open_client.put(
+        f"{BASE}/legitlibs/templates/99999/scope", json={"is_global": True}
+    )
+    assert resp.status_code == 404
+
+
+def test_ll_template_from_another_guild_is_invisible_and_unowned(open_client, fake_ctx):
+    """A template owned by a different guild doesn't list and can't be edited."""
+    from bot_modules.core.db_utils import open_db
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO legitlibs_templates "
+            "(template_id, title, body, tier, tags, status, blanks, guild_id) "
+            "VALUES (4242, 'Foreign', 'a {1} b', 1, '[]', 'published', '[]', ?)",
+            (fake_ctx.guild_id + 999,),
+        )
+    listed = open_client.get(f"{BASE}/legitlibs/templates").json()["templates"]
+    assert all(t["template_id"] != 4242 for t in listed)
+    # Editing and re-scoping another guild's template are refused.
+    assert open_client.put(
+        f"{BASE}/legitlibs/templates/4242", json={"title": "hijack"}
+    ).status_code == 404
+    assert open_client.put(
+        f"{BASE}/legitlibs/templates/4242/scope", json={"is_global": True}
+    ).status_code == 404

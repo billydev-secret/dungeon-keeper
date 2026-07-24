@@ -158,3 +158,54 @@ def test_legitlibs_templates_autoincrement_id(sync_db_path):
         ).fetchone()
     assert row is not None
     assert row["title"] == "T"
+
+
+# ── migration 124: legitlibs_templates guild scope + single-guild backfill ──
+
+def _seed_template(conn, template_id, guild_id):
+    conn.execute(
+        "INSERT INTO legitlibs_templates "
+        "(template_id, title, body, tier, tags, status, blanks, guild_id) "
+        "VALUES (?, 'T', 'a {1} b', 1, '[]', 'published', '[]', ?)",
+        (template_id, guild_id),
+    )
+
+
+def _backfill(conn):
+    conn.execute(
+        "UPDATE legitlibs_templates SET guild_id = "
+        "(SELECT guild_id FROM games_game_config LIMIT 1) "
+        "WHERE guild_id = 0 "
+        "AND (SELECT COUNT(DISTINCT guild_id) FROM games_game_config) = 1"
+    )
+
+
+def test_legitlibs_templates_has_guild_id(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(legitlibs_templates)")}
+        assert "guild_id" in cols
+
+
+def test_single_guild_backfill_assigns_existing_templates(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_game_config (guild_id, game_type) VALUES (500, 'legitlibs')"
+        )
+        _seed_template(conn, 1, 0)  # legacy global row
+        _backfill(conn)
+        assert conn.execute(
+            "SELECT guild_id FROM legitlibs_templates WHERE template_id = 1"
+        ).fetchone()[0] == 500
+
+
+def test_multi_guild_backfill_leaves_templates_global(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        conn.executemany(
+            "INSERT INTO games_game_config (guild_id, game_type) VALUES (?, 'legitlibs')",
+            [(500,), (600,)],
+        )
+        _seed_template(conn, 1, 0)
+        _backfill(conn)
+        assert conn.execute(
+            "SELECT guild_id FROM legitlibs_templates WHERE template_id = 1"
+        ).fetchone()[0] == 0  # never guessed

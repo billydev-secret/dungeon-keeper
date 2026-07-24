@@ -909,11 +909,13 @@ async def list_ll_templates(
     status: Optional[str] = Query(None),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            clauses = []
-            params: list[object] = []
+            # This guild's own templates plus the shared global pool (guild_id 0).
+            clauses = ["(guild_id = ? OR guild_id = 0)"]
+            params: list[object] = [guild_id]
             if tier is not None:
                 clauses.append("tier = ?")
                 params.append(tier)
@@ -921,11 +923,10 @@ async def list_ll_templates(
                 clauses.append("status = ?")
                 params.append(status)
 
-            where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+            where = "WHERE " + " AND ".join(clauses)
             rows = conn.execute(
                 f"""SELECT template_id, title, tier, status, tags,
-                           player_min, player_max, use_count,
-                           (SELECT COUNT(*) FROM legitlibs_blank_axes WHERE 1=0) AS blanks_count
+                           player_min, player_max, use_count, guild_id
                     FROM legitlibs_templates {where}
                     ORDER BY template_id DESC""",
                 params,
@@ -956,6 +957,8 @@ async def list_ll_templates(
                     "player_max": r[6],
                     "use_count": r[7],
                     "blanks_count": blanks_count,
+                    # 0 = shared global pool; otherwise this guild owns it.
+                    "is_global": r[8] == 0,
                 })
             return {"templates": templates}
 
@@ -1021,14 +1024,17 @@ async def create_ll_template(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         player_min, player_max = _players_from_blanks(body.blanks)
         with ctx.open_db() as conn:
+            # New templates belong to the creating guild; promoting to the shared
+            # global pool (guild_id = 0) is a deliberate later action.
             cur = conn.execute(
                 """INSERT INTO legitlibs_templates
-                   (title, body, tier, tags, status, player_min, player_max, blanks, notes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (title, body, tier, tags, status, player_min, player_max, blanks, notes, guild_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     body.title,
                     body.body,
@@ -1039,6 +1045,7 @@ async def create_ll_template(
                     player_max,
                     body.blanks,
                     body.notes,
+                    guild_id,
                 ),
             )
             conn.commit()
@@ -1055,12 +1062,16 @@ async def update_ll_template(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
+            # Only the owning guild (or anyone, for a shared global template) may
+            # edit — a guild can't reach into another guild's templates.
             existing = conn.execute(
-                "SELECT template_id FROM legitlibs_templates WHERE template_id = ?",
-                (template_id,),
+                "SELECT template_id FROM legitlibs_templates "
+                "WHERE template_id = ? AND (guild_id = ? OR guild_id = 0)",
+                (template_id, guild_id),
             ).fetchone()
             if not existing:
                 return None
@@ -1098,20 +1109,68 @@ async def delete_ll_template(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
             existing = conn.execute(
-                "SELECT template_id FROM legitlibs_templates WHERE template_id = ?",
-                (template_id,),
+                "SELECT template_id FROM legitlibs_templates "
+                "WHERE template_id = ? AND (guild_id = ? OR guild_id = 0)",
+                (template_id, guild_id),
             ).fetchone()
             if not existing:
                 return None
             conn.execute(
-                "DELETE FROM legitlibs_templates WHERE template_id = ?", (template_id,)
+                "DELETE FROM legitlibs_templates WHERE template_id = ? "
+                "AND (guild_id = ? OR guild_id = 0)",
+                (template_id, guild_id),
             )
             conn.commit()
             return {}
+
+    result = await run_query(_q)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return result
+
+
+class LegitLibsScopeBody(BaseModel):
+    is_global: bool
+
+
+@router.put("/legitlibs/templates/{template_id}/scope")
+async def set_ll_template_scope(
+    request: Request,
+    template_id: int,
+    body: LegitLibsScopeBody,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    """Promote a template to the shared global pool, or claim it back to this guild.
+
+    ``is_global`` true sets ``guild_id = 0`` (every guild draws it); false sets it
+    to the active guild (server-only). A guild may only re-scope a template it
+    already owns or a global one — never another guild's.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    new_owner = 0 if body.is_global else guild_id
+
+    def _q():
+        with ctx.open_db() as conn:
+            existing = conn.execute(
+                "SELECT template_id FROM legitlibs_templates "
+                "WHERE template_id = ? AND (guild_id = ? OR guild_id = 0)",
+                (template_id, guild_id),
+            ).fetchone()
+            if not existing:
+                return None
+            conn.execute(
+                "UPDATE legitlibs_templates "
+                "SET guild_id = ?, updated_at = CURRENT_TIMESTAMP WHERE template_id = ?",
+                (new_owner, template_id),
+            )
+            conn.commit()
+            return {"is_global": new_owner == 0}
 
     result = await run_query(_q)
     if result is None:
