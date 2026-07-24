@@ -20,7 +20,13 @@ from bot_modules.services.economy_quests_service import (
     set_income_source,
     set_quest_active,
 )
-from bot_modules.cogs.economy_cog import _NICK_FORBIDDEN, _custom_name_confirmation
+from bot_modules.cogs.economy_cog import (
+    _NICK_FORBIDDEN,
+    _custom_name_confirmation,
+    _quest_line_status,
+    _quest_section_lines,
+    _status_disp_width,
+)
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -518,6 +524,10 @@ async def test_quests_listing_state_matrix(ctx, db):
     _mk_quest(
         db, qtype="community", reward=10, community_target=100, title="Team goal"
     )
+    _mk_quest(
+        db, qtype="monthly", reward=60, community_target=500,
+        trigger_kind="message_sent", title="Monthly Marathon",
+    )
 
     with open_db(db) as conn:
         settings = load_econ_settings(conn, GUILD_ID)
@@ -534,6 +544,10 @@ async def test_quests_listing_state_matrix(ctx, db):
             "INSERT INTO econ_community_progress (quest_id, current) "
             "SELECT id, 40 FROM econ_quests WHERE title = 'Team goal'"
         )
+        conn.execute(
+            "INSERT INTO econ_community_progress (quest_id, current) "
+            "SELECT id, 200 FROM econ_quests WHERE title = 'Monthly Marathon'"
+        )
 
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=user_id))
@@ -541,30 +555,116 @@ async def test_quests_listing_state_matrix(ctx, db):
 
     kwargs = interaction.response.send_message.await_args.kwargs
     embed = kwargs["embed"]
-    groups = {f.name: f.value or "" for f in embed.fields}
-    # One line per quest, grouped by cadence: title cell | status | payment.
-    daily_lines = groups["Daily"]
-    assert "`Say hi" in daily_lines and "🔶 claim below" in daily_lines
-    weekly_lines = groups["Weekly"]
-    assert "`Weekly grind" in weekly_lines and "✅ done" in weekly_lines
-    assert "`Sign me off" in weekly_lines and "⏳ sign-off" in weekly_lines
-    community = groups["Community goals"]
-    assert "`Team goal" in community and "▸ 40/100" in community
+    fields = {f.name: f.value or "" for f in embed.fields}
+    # Two top-level sections now — the member's own board and the guild-wide
+    # goals — not one field per cadence.
+    assert [f.name for f in embed.fields] == ["🧍 Your quests", "🌐 Community goals"]
+    personal = fields["🧍 Your quests"]
+    community = fields["🌐 Community goals"]
+    # Personal section: cadence sub-labels + one line per quest.
+    assert "**Daily**" in personal and "**Weekly**" in personal
+    assert "`Say hi" in personal and "🔶 claim below" in personal
+    assert "`Weekly grind" in personal and "✅ done" in personal
+    assert "`Sign me off" in personal and "⏳ sign-off" in personal
+    # Community section: the monthly goal folds in beside the weekly community
+    # goal, each under its cadence sub-label, with the ▰▱ bar — fill only, no
+    # n/target counts (the shared five-figure totals live in the details popup).
+    assert "**Monthly**" in community and "`Monthly Marathon" in community
+    assert "**Weekly**" in community and "`Team goal" in community
+    assert "▰" in community and "▱" in community
+    assert "40/100" not in community and "200/500" not in community
     # The descriptions/explainers moved behind the details select — the
     # list never carries them.
-    assert all("Do the thing" not in v for v in groups.values())
+    assert all("Do the thing" not in v for v in fields.values())
     # View always attaches when quests exist (details select at minimum).
     assert "view" in kwargs
     assert daily  # referenced
 
 
+def test_quest_line_status_draws_bar_for_counted_and_community():
+    """Counted daily/weekly and community/monthly goals render a ▰▱ bar;
+    one-shot and claim-state quests keep their glyph phrase."""
+    # Counted quest (daily or weekly): tracked progress → bar + fraction; the
+    # small personal counts are the point.
+    counted = _quest_line_status(
+        {"state": "message_sent", "progress_current": 3, "progress_target": 6}
+    )
+    assert "▰" in counted and "▱" in counted and "3/6" in counted
+    # Guild-wide community/monthly goal → bar fill only, no n/target (the
+    # shared totals run to five figures and read as noise on the board).
+    community = _quest_line_status(
+        {"state": "community", "current": 40, "target": 100}
+    )
+    assert "▰" in community and "▱" in community and "/" not in community
+    # One-shot quest with no counted target → no bar, just the to-do glyph.
+    one_shot = _quest_line_status({"state": "photo_post"})
+    assert one_shot == "☐ to do"
+    # Claim states are unchanged phrases (no bar).
+    assert _quest_line_status({"state": "done"}) == "✅ done"
+    assert _quest_line_status({"state": "pending"}) == "⏳ sign-off"
+    assert _quest_line_status({"state": "claimable"}) == "🔶 claim below"
+
+
+def test_quest_section_lines_labels_only_when_multi_cadence():
+    """A section spanning >1 cadence gets a bold sub-label per group; a
+    single-cadence section is unlabelled (the field heading already names it)."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    two_cadence = _quest_section_lines(
+        ("daily", "weekly", "event"),
+        {
+            "daily": [{
+                "state": "message_sent", "progress_current": 2,
+                "progress_target": 5, "title": "Chatty", "reward": 10,
+            }],
+            "weekly": [{"state": "done", "title": "Grind", "reward": 40}],
+        },
+        settings, 12,
+    )
+    assert "**Daily**" in two_cadence and "**Weekly**" in two_cadence
+    assert any("Chatty" in ln for ln in two_cadence)
+    # Only the community goal present → no sub-label line at all.
+    one_cadence = _quest_section_lines(
+        ("monthly", "community"),
+        {"community": [{
+            "state": "community", "current": 3, "target": 9,
+            "title": "Buzz", "reward": 5,
+        }]},
+        settings, 12,
+    )
+    assert not any(ln.startswith("**") for ln in one_cadence)
+    assert any("Buzz" in ln for ln in one_cadence)
+
+
+def test_quest_section_lines_align_the_reward_column():
+    """Every row's title+status code cell is padded to one width, so the
+    reward payload after the closing backtick starts at the same column —
+    a counted (bar) row and a claim-state (glyph) row included."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    lines = _quest_section_lines(
+        ("daily", "weekly", "event"),
+        {"daily": [
+            {"state": "message_sent", "progress_current": 2,
+             "progress_target": 5, "title": "Chatty", "reward": 10},
+            {"state": "claimable", "title": "Say hi", "reward": 25},
+            {"state": "done", "title": "All done", "reward": 40},
+        ]},
+        settings, 12,
+    )
+    cells = [ln.split("`")[1] for ln in lines if ln.startswith("`")]
+    assert len(cells) == 3
+    # All cells share one display width → the trailing backtick (and the
+    # reward after it) lands in the same column on every row.
+    assert len({_status_disp_width(c) for c in cells}) == 1
+
+
 @pytest.mark.asyncio
 async def test_quests_event_field_stays_under_cap(ctx, db):
     # event ("Anytime") quests bypass the board's per-cadence sizing — one can
-    # be active per trigger kind, and there are ~50 kinds, so dozens accrue. The
-    # Anytime field must stay within Discord's 1024-char limit (each line ~45
-    # chars, so 40 of them overrun) or the whole /bank quests command 400s
-    # guild-wide. Overflow is summarised with a "+N more" tail.
+    # be active per trigger kind, and there are ~50 kinds, so dozens accrue.
+    # They render inside the "Your quests" section, which must stay within
+    # Discord's 1024-char limit (each line ~45 chars, so 40 of them overrun) or
+    # the whole /bank quests command 400s guild-wide. Overflow is summarised
+    # with a "+N more" tail.
     from bot_modules.economy.quests import TRIGGER_KINDS
 
     _enable(db)
@@ -580,7 +680,7 @@ async def test_quests_event_field_stays_under_cap(ctx, db):
 
     kwargs = interaction.response.send_message.await_args.kwargs
     embed = kwargs["embed"]
-    anytime = next(f for f in embed.fields if f.name == "Anytime")
+    anytime = next(f for f in embed.fields if f.name == "🧍 Your quests")
     assert len(anytime.value) <= 1024
     assert "more_" in anytime.value  # overflow summarised, not dropped silently
 
