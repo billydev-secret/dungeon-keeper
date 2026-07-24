@@ -235,7 +235,7 @@ to currency.
   (default 14) and re-renders the card. Guards: `bounty_min_stake` floor,
   `bounty_max_open` per member. Enabled only when `bounty_channel_id` is set —
   dark by default.
-- **Live Auction (built, sink — migration 117, plan
+- **Live Auction (built, sink — migration 123, plan
   `docs/plans/economy-auctions.md`):** a mod runs `/bank auction start` (title,
   freeform prize, hours); the bot posts a sticky card with a 🔨 **Bid** button
   (persistent `AuctionBidButton`, custom_id carries the auction id). Bidding is

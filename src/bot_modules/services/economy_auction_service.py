@@ -1,4 +1,4 @@
-"""Live auctions — mod-run, ascending, the winning bid burned (migration 117).
+"""Live auctions — mod-run, ascending, the winning bid burned (migration 123).
 
 A mod opens a freeform auction; members bid up in the open; the winning bid is
 destroyed (the sink). The bounty's sibling — escrow via ``apply_debit``, refunds

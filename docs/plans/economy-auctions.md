@@ -137,7 +137,7 @@ kill-switch flag — the feature is off by absence, like bounties.
 
 ## Stages (each ships with tests in the same commit)
 
-0. **Schema + service core — BUILT 2026-07-23.** Migration 117;
+0. **Schema + service core — BUILT 2026-07-23.** Migration 123;
    `economy_auction_service.py` with `open_auction`, `place_bid`/`place_bid_now`,
    `cancel_auction`, `end_auction_now`, `settle_due_auctions`. Pure-DB. 29 tests
    hammer the money model: escrow, outbid refund, the CAS guard, insufficient-
