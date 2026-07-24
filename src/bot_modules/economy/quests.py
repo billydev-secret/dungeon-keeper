@@ -14,25 +14,27 @@ import re
 import statistics
 from datetime import date, timedelta
 
-# Library slot limits per guild. Daily/weekly/monthly active quests form a
-# per-cadence *pool*: each member is shown/paid a personal subset of N drawn
-# from that pool per period (see assigned_quest_ids), so the caps are a
-# sanity ceiling on pool size, not a hard "one active" rule. Community goals
-# are uncapped. Event quests are capped at 1 active PER TRIGGER KIND — the
-# listener pays every active quest matching its trigger, so two same-kind
-# actives would double-pay one occurrence.
+# Library slot limits per guild. Daily/weekly active quests form a per-cadence
+# *pool*: each member is shown/paid a personal subset of N drawn from that pool
+# per period (see assigned_quest_ids), so the caps are a sanity ceiling on pool
+# size, not a hard "one active" rule. Community goals and monthly goals are
+# guild-wide and uncapped (their rotation owns how many run at once — monthly is
+# a single lane per calendar month). Event quests are capped at 1 active PER
+# TRIGGER KIND — the listener pays every active quest matching its trigger, so
+# two same-kind actives would double-pay one occurrence.
 POOL_CAP = 25
 MAX_ACTIVE_DAILY = POOL_CAP
 MAX_ACTIVE_WEEKLY = POOL_CAP
-MAX_ACTIVE_MONTHLY = POOL_CAP
 MAX_ACTIVE_EVENT_PER_KIND = 1
 
 # Cadences that draw a *personal board* — a per-member subset of the pool.
 # Membership here is the has-a-board predicate, kept separate from the board
 # size: a size of 0 means "this guild shows none of this cadence", which is
-# the opposite of community/event's "no board concept, every active quest
-# counts". Conflating the two would make a disabled cadence pay everything.
-BOARD_CADENCES = frozenset({"daily", "weekly", "monthly"})
+# the opposite of community/monthly/event's "no board concept, guild-wide or
+# every-occurrence". Conflating the two would make a disabled cadence pay
+# everything. Monthly left this set when it became a guild-wide community-
+# measured goal (migration 125) — it now settles in tiers, not per-member.
+BOARD_CADENCES = frozenset({"daily", "weekly"})
 
 # One-time member-setup trigger kinds. These fire once in a member's lifetime
 # (setting a bio, saving a birthday) but we still want them to *appear* in the
@@ -55,7 +57,7 @@ SETUP_QUEST_KINDS = frozenset(
 # a guild hasn't tuned its own (EconSettings.quest_board_*). The repeat gap
 # for a member is ~floor(poolsize / N) periods, so a bigger pool (or a
 # smaller N) spaces repeats further apart.
-PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2, "monthly": 2}
+PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2}
 
 # Game/module triggers a quest can be auto-completed by (label = how the
 # dashboard describes it). On an *event* quest the trigger pays per
@@ -220,15 +222,18 @@ def community_tiers_crossed(current: int, target: int) -> int:
     return sum(1 for t in COMMUNITY_TIERS if frac >= t)
 
 
-def community_auto_target(four_week_total: int) -> int:
-    """Size a community weekly from the guild's trailing 4-week kind total.
+def community_auto_target(trailing_total: int, *, periods_in_window: float = 4.0) -> int:
+    """Size a community goal from the guild's trailing-window kind total.
 
-    target ≈ typical week ÷ 0.75, so an average week lands at ~75% (tier 2)
-    and a visible push closes tier 3. Floor of 10 keeps a cold kind from
-    producing a degenerate one-action goal.
+    ``trailing_total`` is the kind's activity over the sizing window (28 full
+    days in practice); ``periods_in_window`` is how many *goal periods* that
+    window spans — 4 for a weekly goal (28d ≈ 4 weeks, the default), 1 for a
+    monthly goal (28d ≈ one month). target ≈ typical period ÷ 0.75, so an
+    average period lands at ~75% (tier 2) and a visible push closes tier 3.
+    Floor of 10 keeps a cold kind from producing a degenerate one-action goal.
     """
-    weekly_typical = four_week_total / 4
-    return max(10, round(weekly_typical / 0.75))
+    typical = trailing_total / periods_in_window
+    return max(10, round(typical / 0.75))
 
 
 # thread_deep fires for posts in threads at or past this message count —
@@ -429,15 +434,14 @@ def can_activate(existing_active: list[str], qtype: str) -> bool:
     """True if activating one more ``qtype`` quest respects the slot rule.
 
     ``existing_active`` is the list of qtypes of the guild's currently-active
-    quests (excluding the one under consideration). Community is uncapped.
+    quests (excluding the one under consideration). Community and monthly are
+    guild-wide goals whose rotation owns concurrency, so they're uncapped here.
     """
     if qtype == "daily":
         return existing_active.count("daily") < MAX_ACTIVE_DAILY
     if qtype == "weekly":
         return existing_active.count("weekly") < MAX_ACTIVE_WEEKLY
-    if qtype == "monthly":
-        return existing_active.count("monthly") < MAX_ACTIVE_MONTHLY
-    if qtype == "community":
+    if qtype in ("community", "monthly"):
         return True
     if qtype == "event":
         # Callers gate event quests per trigger kind via can_activate_event;

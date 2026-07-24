@@ -13,17 +13,18 @@ const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [50, 90] };
 // Plain-language cadence per quest type (shown under the Type select).
 const TYPE_HINTS = {
   daily: "Members can complete it once per day (guild-local midnight). Active dailies form a pool; each member is shown a few of them per day — set how many under Board size.",
-  weekly: "Members can complete it once per ISO week. Active weeklies form a pool drawn from per member — see Board size.",
-  monthly: "Members can complete it once per calendar month (starts on the 1st, guild-local). Active monthlies form a pool drawn from per member — see Board size.",
+  weekly: "A push across the ISO week. Active weeklies form a pool drawn from per member — see Board size. On a game trigger it must count progress (“How Many Times” above 1), not finish on the first action — only dailies are one-shot.",
+  monthly: "A guild-wide goal for the calendar month — everyone contributes to one shared counter, like a community goal but monthly. Auto-tracked only (pick a game trigger); the scheduler runs one monthly goal at a time, auto-sizes it, and pays 40/70/100% tiers to everyone at month end. Not member-claimable, no personal board.",
   community: "One shared goal for the whole server. Manual completion: you track progress and settle from Operations. Game trigger: every member's action counts automatically, the target auto-sizes from recent activity, and the biweekly scheduler runs it with tiered payouts (40/70/100%).",
   event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
 };
 
 // The per-member board dials. Each entry: [settings key, cadence, label].
+// Personal-board size dials. Monthly left this set when it became a guild-wide
+// community-measured goal (no personal board) — only daily/weekly draw one.
 const BOARD_FIELDS = [
   ["quest_board_daily", "daily", "Daily"],
   ["quest_board_weekly", "weekly", "Weekly"],
-  ["quest_board_monthly", "monthly", "Monthly"],
 ];
 
 // Econ config for the board dials, or null for manager-role holders (the
@@ -172,9 +173,9 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
                 pays out.</div></div>
             <div class="field" data-community-auto style="display:none;"><label>Community Target</label>
               <div class="field-hint">Set automatically when the run starts, based on how
-                busy the server has been lately — a normal week gets roughly three
-                quarters of the way there, and a real push finishes it. There is nothing
-                to enter here.</div></div>
+                busy the server has been lately — a normal period (a week for community
+                goals, a month for monthly ones) gets roughly three quarters of the way
+                there, and a real push finishes it. There is nothing to enter here.</div></div>
             <div class="field" data-rotate-field><label for="q-rotate">Rotation Tag</label>
               <input type="text" name="rotate_tag" id="q-rotate" maxlength="64" style="max-width:160px;" />
               <div class="field-hint">Optional. Daily quests sharing a tag take turns
@@ -223,9 +224,12 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
             <div class="field-hint" data-kind-hint></div></div>
           <div class="field" data-target-count style="display:none;"><label for="q-target">How Many Times</label>
             <input type="number" name="target_count" id="q-target" min="1" max="10000" step="1" value="1" style="max-width:110px;" />
-            <div class="field-hint">1 means the first time it happens finishes the quest.
-              Anything higher turns it into a counted quest — "do this many times this
-              period" — with a progress bar on the member's quest card.</div></div>
+            <div class="field-hint">On a <strong>daily</strong>, 1 means the first time it
+              happens finishes the quest. Anything higher turns it into a counted quest —
+              "do this many times this period" — with a progress bar on the member's quest
+              card. <strong>Weekly and monthly quests must be counted</strong> (2 or more):
+              they show progress across the period, only dailies are one-shot.</div>
+            <div class="field-hint" data-target-hint style="color:var(--warn,#b9770e);"></div></div>
 
           <div class="field">
             <label style="display:flex; gap:6px; align-items:center;">
@@ -472,6 +476,7 @@ function wireAuthoring(container, channels) {
   const kindSel = form.querySelector("[name=trigger_kind]");
   const targetField = form.querySelector("[data-target-count]");
   const targetInput = form.querySelector("[name=target_count]");
+  const targetHint = form.querySelector("[data-target-hint]");
   const submitBtn = form.querySelector("[data-submit-quest]");
   const cancelBtn = form.querySelector("[data-cancel-edit]");
   const authorLabel = container.querySelector("[data-author-label]");
@@ -496,47 +501,65 @@ function wireAuthoring(container, channels) {
     kindHint.textContent = qtype === "event"
       ? "Pays every time it happens — one payout per member per game/card/round."
       : qtype === "community"
-        ? "Every member's action counts toward the shared goal — the biweekly scheduler activates it, sizes the target, and pays the 40/70/100% tiers."
-        : "Auto-completes the quest the first time it happens each period.";
+        ? "Every member's action counts toward the shared goal — the weekly scheduler activates it, sizes the target, and pays the 40/70/100% tiers."
+        : qtype === "monthly"
+          ? "Every member's action counts toward one guild-wide goal for the month — the scheduler activates one monthly goal at a time, sizes it, and pays the 40/70/100% tiers at month end."
+          : "Auto-completes the quest the first time it happens each period.";
   };
   const updateCommunity = () => {
     const qtype = qtypeSel.value;
     const isCommunity = qtype === "community";
+    const isMonthly = qtype === "monthly";
     const isEvent = qtype === "event";
     typeHint.textContent = TYPE_HINTS[qtype] || "";
     rotateField.style.display = qtype === "daily" ? "" : "none";
     // An event quest IS its game trigger; community may be manual (the old
-    // Operations-driven goal) or game-triggered (the auto-tracking weekly)
-    // but never phrase-completed.
-    if (isEvent) setCompletion("game");
+    // Operations-driven goal) or game-triggered (the auto-tracking weekly);
+    // monthly is a guild-wide goal that is ALWAYS game-triggered (auto-tracked
+    // only). None of these three are ever phrase-completed.
+    if (isEvent || isMonthly) setCompletion("game");
     if (isCommunity && completion() === "phrase") setCompletion("manual");
     form.querySelectorAll("[name=completion]").forEach((r) => {
       r.disabled =
         (isEvent && r.value !== "game") ||
+        (isMonthly && r.value !== "game") ||
         (isCommunity && r.value === "phrase");
     });
     const mode = completion();
     completionHint.textContent = COMPLETION_HINTS[mode] || "";
-    // Manual community goals take a hand-set target; auto-tracking ones are
-    // sized by the scheduler at kickoff.
+    // Manual community goals take a hand-set target; auto-tracking community
+    // goals AND all monthly goals are sized by the scheduler at kickoff.
     communityField.style.display = isCommunity && mode !== "game" ? "" : "none";
-    communityAuto.style.display = isCommunity && mode === "game" ? "" : "none";
+    communityAuto.style.display =
+      (isCommunity && mode === "game") || isMonthly ? "" : "none";
     const channelScoped =
       mode === "phrase" ||
       (mode === "game" && CHANNEL_SCOPED_KINDS.has(kindSel.value));
     wordsField.style.display = mode === "phrase" ? "" : "none";
     channelField.style.display = channelScoped ? "" : "none";
     kindField.style.display = mode === "game" ? "" : "none";
-    // Counted quests need a trigger to count and a calendar cadence to
-    // count within — events pay every occurrence, no target; a community
-    // counter has the guild-wide target instead.
-    const countable = mode === "game" && ["daily", "weekly", "monthly"].includes(qtype);
+    // The per-member "How Many Times" count only applies to daily/weekly board
+    // quests — events pay every occurrence, and community/monthly are measured
+    // by the guild-wide auto-sized target instead.
+    const countable = mode === "game" && ["daily", "weekly"].includes(qtype);
     targetField.style.display = countable ? "" : "none";
     updateKindHint();
+    updateTargetHint();
+  };
+  // A weekly triggered quest can't be one-shot — the server rejects a target of
+  // 1, so warn before the save round-trips (matches _check_target_count).
+  const updateTargetHint = () => {
+    const oneShot = completion() === "game"
+      && qtypeSel.value === "weekly"
+      && Number(targetInput.value) <= 1;
+    targetHint.textContent = oneShot
+      ? "A weekly game quest must count 2 or more — bump this up so it shows progress (only dailies can be one-shot)."
+      : "";
   };
   rewardInput.addEventListener("input", updateHint);
   qtypeSel.addEventListener("change", () => { updateHint(); updateCommunity(); });
   kindSel.addEventListener("change", updateCommunity);
+  targetInput.addEventListener("input", updateTargetHint);
   form.querySelectorAll("[name=completion]").forEach((r) =>
     r.addEventListener("change", updateCommunity));
   updateHint();
@@ -632,7 +655,16 @@ function wireAuthoring(container, channels) {
       trigger_kind: "",
       target_count: 1,
     };
-    if (qtype === "community") {
+    if (qtype === "monthly") {
+      // Guild-wide monthly goal: always kind-tracked, the scheduler sizes the
+      // target at kickoff — no manual target, no per-user count.
+      body.trigger_kind = kindSel.value;
+      body.community_target = null;
+      if (CHANNEL_SCOPED_KINDS.has(kindSel.value)) {
+        const trigCh = triggerPicker.getValue();
+        body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;
+      }
+    } else if (qtype === "community") {
       if (mode === "game") {
         // Auto-tracking weekly: the scheduler sizes the target at kickoff.
         body.trigger_kind = kindSel.value;
@@ -658,7 +690,7 @@ function wireAuthoring(container, channels) {
       }
     } else if (mode === "game") {
       body.trigger_kind = kindSel.value;
-      if (["daily", "weekly", "monthly"].includes(qtype)) {
+      if (["daily", "weekly"].includes(qtype)) {
         body.target_count = Math.max(1, parseInt(targetInput.value, 10) || 1);
       }
       if (CHANNEL_SCOPED_KINDS.has(kindSel.value)) {

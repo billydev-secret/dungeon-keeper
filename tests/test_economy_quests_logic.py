@@ -16,6 +16,7 @@ from bot_modules.economy.quests import (
     board_size,
     can_activate,
     can_activate_event,
+    community_auto_target,
     compile_trigger_pattern,
     effective_target,
     has_board,
@@ -125,8 +126,8 @@ def test_occurrence_period_is_keyed_to_the_occurrence():
 @pytest.mark.parametrize(
     "existing,qtype,expected",
     [
-        # daily/weekly/monthly each form a pool capped at POOL_CAP; the
-        # per-user board draws N of them, so many can be active at once.
+        # daily/weekly each form a pool capped at POOL_CAP; the per-user board
+        # draws N of them, so many can be active at once.
         ([], "daily", True),
         (["weekly", "weekly"], "daily", True),
         (["daily"] * 2, "daily", True),
@@ -138,11 +139,10 @@ def test_occurrence_period_is_keyed_to_the_occurrence():
         (["weekly"] * POOL_CAP + ["daily"], "weekly", False),
         # a daily active does not eat a weekly slot
         (["daily"], "weekly", True),
-        # monthly: own pool, capped at POOL_CAP
+        # monthly: guild-wide community goal now — uncapped (its rotation owns
+        # the single active lane), like community.
         ([], "monthly", True),
-        (["monthly"] * (POOL_CAP - 1), "monthly", True),
-        (["monthly"] * POOL_CAP, "monthly", False),
-        (["weekly"] * POOL_CAP, "monthly", True),
+        (["monthly"] * POOL_CAP, "monthly", True),
         # community: uncapped
         (["community"] * 20, "community", True),
         ([], "community", True),
@@ -219,6 +219,28 @@ def test_pick_rotation_full_cycle():
 )
 def test_reward_band(qtype, expected):
     assert reward_band(qtype) == expected
+
+
+# ── community goal sizing: cadence-aware divisor ──────────────────────
+
+
+def test_community_auto_target_weekly_default_unchanged():
+    # 4 trailing weeks × 75/week = 300 → typical 75 → 75/0.75 = 100.
+    assert community_auto_target(300) == 100
+    assert community_auto_target(300, periods_in_window=4.0) == 100
+
+
+def test_community_auto_target_monthly_divisor_is_a_full_window():
+    # A monthly goal spans the whole 28-day window (periods_in_window=1), so
+    # the same total sizes ~4× higher than the weekly reading.
+    assert community_auto_target(300, periods_in_window=1.0) == 400
+    assert community_auto_target(300, periods_in_window=1.0) == 4 * community_auto_target(300)
+
+
+def test_community_auto_target_floor_holds_for_both_cadences():
+    assert community_auto_target(0) == 10
+    assert community_auto_target(0, periods_in_window=1.0) == 10
+    assert community_auto_target(3, periods_in_window=1.0) == 10  # 4/0.75≈5 < floor
 
 
 # ── trigger phrases: parse ────────────────────────────────────────────
@@ -362,16 +384,21 @@ def test_board_size_override_wins():
     # 0 is a real value, not "unset" — it must not fall back to the default.
     assert board_size("weekly", sizes) == 0
     # A cadence absent from the override keeps its default.
-    assert board_size("monthly", sizes) == PERSONAL_BOARD_SIZE["monthly"]
+    assert board_size("weekly", {"daily": 5}) == PERSONAL_BOARD_SIZE["weekly"]
+    # Monthly is a guild-wide goal now, not a board cadence → no board draw.
+    assert board_size("monthly", sizes) == 0
 
 
 def test_has_board_is_independent_of_size():
     # The predicate that keeps "sized to 0" from being read as "no board, so
-    # every active quest counts" — the three board cadences always have one.
-    for qtype in ("daily", "weekly", "monthly"):
+    # every active quest counts" — the two board cadences always have one.
+    for qtype in ("daily", "weekly"):
         # Still has a board when the guild sized it to 0 — it's just empty.
         assert has_board(qtype)
         assert board_size(qtype, {qtype: 0}) == 0
+    # Monthly and community are guild-wide, no personal board.
+    assert not has_board("monthly")
+    assert not has_board("community")
     assert not has_board("community")
     assert not has_board("event")
 

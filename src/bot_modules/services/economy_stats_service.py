@@ -546,15 +546,24 @@ def compute_live(
     next_monday = day_obj + timedelta(days=7 - day_obj.weekday())
     week_end, _ = local_day_bounds(next_monday.isoformat(), offset)
 
-    # Community hero: the running auto weekly (or none = gap week).
+    # Community hero: the running auto weekly + the running monthly goal (or
+    # none = gap week / no monthly in the library).
+    days_in_month = (
+        date(
+            day_obj.year + (1 if day_obj.month == 12 else 0),
+            1 if day_obj.month == 12 else day_obj.month + 1,
+            1,
+        )
+        - date(day_obj.year, day_obj.month, 1)
+    ).days
     community = []
     for q in conn.execute(
         """
-        SELECT q.id, q.title, q.trigger_kind, q.reward, q.community_target,
+        SELECT q.id, q.title, q.qtype, q.trigger_kind, q.reward, q.community_target,
                p.current, p.completed_at
         FROM econ_quests q
         LEFT JOIN econ_community_progress p ON p.quest_id = q.id
-        WHERE q.guild_id = ? AND q.qtype = 'community' AND q.active = 1
+        WHERE q.guild_id = ? AND q.qtype IN ('community', 'monthly') AND q.active = 1
           AND q.trigger_kind != ''
         """,
         (guild_id,),
@@ -566,12 +575,16 @@ def compute_live(
             "WHERE quest_id = ? AND count > 0",
             (int(q["id"]),),
         ).fetchone()["n"]
-        # Pace on daily buckets: expected = target × elapsed fraction of the
-        # ISO week; "push" under 90% of that. Sub-day noise is deliberate —
-        # a small server has dead hours.
-        week_start_day = day_obj - timedelta(days=day_obj.weekday())
-        elapsed_days = max(1, (day_obj - week_start_day).days + 1)
-        expected = target * elapsed_days / 7 if target else 0
+        # Pace: expected = target × elapsed fraction of the goal's period
+        # (ISO week for community, calendar month for monthly); "push" under
+        # 90% of that. Sub-day noise is deliberate — a small server has dead
+        # hours.
+        if str(q["qtype"]) == "monthly":
+            expected = target * day_obj.day / days_in_month if target else 0
+        else:
+            week_start_day = day_obj - timedelta(days=day_obj.weekday())
+            elapsed_days = max(1, (day_obj - week_start_day).days + 1)
+            expected = target * elapsed_days / 7 if target else 0
         community.append({
             "title": q["title"],
             "kind": q["trigger_kind"],
@@ -589,13 +602,14 @@ def compute_live(
         })
 
     # Per-cadence pulse: paid completions + counted quests in flight for the
-    # CURRENT period of each active board quest.
-    cadences: dict[str, list[dict]] = {"daily": [], "weekly": [], "monthly": []}
+    # CURRENT period of each active board quest. Only daily/weekly draw a
+    # personal board now — community and monthly are the guild-wide heroes above.
+    cadences: dict[str, list[dict]] = {"daily": [], "weekly": []}
     events: list[dict] = []
     for q in conn.execute(
         "SELECT id, title, qtype, trigger_kind, target_count, target_min, "
         "target_max FROM econ_quests "
-        "WHERE guild_id = ? AND active = 1 AND qtype != 'community' "
+        "WHERE guild_id = ? AND active = 1 AND qtype NOT IN ('community', 'monthly') "
         "ORDER BY qtype, id",
         (guild_id,),
     ):

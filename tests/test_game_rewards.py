@@ -142,8 +142,11 @@ async def test_pay_splits_participation_and_win(db_path):
 
 def _add_active_quest(db_path, *, trigger_kind: str, reward: int) -> None:
     with open_db(db_path) as conn:
+        # Daily: these tests assert a single game completion pays once, which
+        # is one-shot behaviour — the only cadence that stays one-shot on a
+        # game trigger (weekly/monthly triggered quests must count progress).
         qid = create_quest(
-            conn, GUILD, title=trigger_kind, description="", qtype="weekly",
+            conn, GUILD, title=trigger_kind, description="", qtype="daily",
             reward=reward, signoff=0, criteria="", starts_at=None, ends_at=None,
             rotate_tag="", community_target=None, created_by=None,
             trigger_kind=trigger_kind,

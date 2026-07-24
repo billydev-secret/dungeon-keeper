@@ -224,6 +224,14 @@ def collect_leaderboard_data(
     day_obj = date.fromisoformat(today)
     next_monday = day_obj + timedelta(days=7 - day_obj.weekday())
     week_end, _ = local_day_bounds(next_monday.isoformat(), offset)
+    # Month clock for monthly guild-wide goals (1st of next month, guild-local).
+    first_next_month = date(
+        day_obj.year + (1 if day_obj.month == 12 else 0),
+        1 if day_obj.month == 12 else day_obj.month + 1,
+        1,
+    )
+    month_end, _ = local_day_bounds(first_next_month.isoformat(), offset)
+    days_in_month = (first_next_month - date(day_obj.year, day_obj.month, 1)).days
 
     settings = load_econ_settings(conn, guild_id)
     this_week = quest_rules.iso_week_for(today)
@@ -341,7 +349,10 @@ def collect_leaderboard_data(
     community: list[CommunityGoal] = []
     quests: list[QuestLine] = []
     for row in list_quests(conn, guild_id, active_only=True):
-        if row["qtype"] == "community":
+        if row["qtype"] in ("community", "monthly"):
+            # Both are guild-wide, tier-settled goals. Monthly runs on the
+            # calendar-month clock; community on the ISO-week clock.
+            is_monthly = row["qtype"] == "monthly"
             qid = int(row["id"])
             prog = conn.execute(
                 "SELECT current, completed_at, settled_at "
@@ -373,7 +384,10 @@ def collect_leaderboard_data(
                             (guild_id, str(row["trigger_kind"]), today),
                         ).fetchone()["s"]
                     )
-                expected = (target or 0) * elapsed_days / 7
+                if is_monthly:
+                    expected = (target or 0) * day_obj.day / days_in_month
+                else:
+                    expected = (target or 0) * elapsed_days / 7
                 on_track = expected == 0 or current >= _PACE_OK * expected
             community.append(
                 CommunityGoal(
@@ -389,7 +403,7 @@ def collect_leaderboard_data(
                     contributors=contributors,
                     today_delta=today_delta,
                     on_track=on_track,
-                    ends_ts=week_end if auto else None,
+                    ends_ts=(month_end if is_monthly else week_end) if auto else None,
                     kind_label=(
                         quest_rules.TRIGGER_KINDS.get(
                             str(row["trigger_kind"]), ""

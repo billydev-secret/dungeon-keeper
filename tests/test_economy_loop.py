@@ -1191,6 +1191,18 @@ def _mk_community_kind(db_path, *, title, kind, reward=30, guild_id=GUILD) -> in
         )
 
 
+def _mk_monthly_kind(db_path, *, title, kind, reward=30, guild_id=GUILD) -> int:
+    """A monthly guild-wide goal (auto-tracked, community-measured)."""
+    with open_db(db_path) as conn:
+        return create_quest(
+            conn, guild_id,
+            title=title, description="d", qtype="monthly", reward=reward,
+            signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind=kind,
+        )
+
+
 def _fire(db_path, kind, user_id, occ, day, guild_id=GUILD) -> None:
     from bot_modules.services.economy_quests_service import fire_trigger_quests
 
@@ -1323,6 +1335,113 @@ def test_repair_orphaned_community_quests_self_heals(db):
             "SELECT id, active FROM econ_quests WHERE id IN (?, ?, ?, ?)", ids,
         ).fetchall()
     assert {r["id"] for r in rows2 if r["active"]} == {r["id"] for r in active_rows}
+
+
+def test_month_roll_settles_and_rotates_monthly(db):
+    """Monthly goals are guild-wide, single-lane, no gap month: a month close
+    settles the outgoing goal (tier payouts to 30d-actives) and activates the
+    next pool member for the new month."""
+    _enable(db)
+    bot = _Bot([_Guild(GUILD, {USER: _Member()})])
+    qa = _mk_monthly_kind(db, title="July msgs", kind="message_sent")
+    qb = _mk_monthly_kind(db, title="Aug replies", kind="reply_sent")
+    _add_activity(db, USER, when=_ts("2026-07-28"))
+
+    _roll(bot, db, _ts("2026-07-10"))  # first sight: marks only, no month roll
+
+    # A July day roll bootstraps the single monthly lane (lowest-id never-run
+    # pick qa), auto-sized to the floor (10, no kind activity seeded).
+    beats = _roll_beats(bot, db, _ts("2026-07-11"))
+    assert len([b for b in beats if "kicked off" in b.text]) == 1
+    q, _ = _community_state(db, qa)
+    assert int(q["active"]) == 1 and int(q["community_target"]) == 10
+    assert q["last_run_week"] == "2026-07" and int(q["community_slot"]) == 1
+    assert int(_community_state(db, qb)[0]["active"]) == 0  # not yet its turn
+
+    # Members hit qa's kind during July: 7/10 crosses tiers 1 and 2.
+    for i in range(7):
+        _fire(db, "message_sent", USER, f"m{i}", "2026-07-15")
+
+    # July → August roll: qa settles, qb activates for August. No gap month.
+    beats = _roll_beats(bot, db, _ts("2026-08-01"))
+    assert len([b for b in beats if "resolved" in b.text]) == 1
+    assert len([b for b in beats if "kicked off" in b.text]) == 1
+    q, p = _community_state(db, qa)
+    assert int(q["active"]) == 0 and p["settled_at"] is not None
+    # 2 tiers × 30 flat + 15 top-contributor bonus.
+    assert _balance(db, USER) == 75
+    q, _ = _community_state(db, qb)
+    assert int(q["active"]) == 1 and q["last_run_week"] == "2026-08"
+    assert int(q["community_slot"]) == 1
+
+
+def test_same_month_day_roll_does_not_settle_monthly(db):
+    """A day roll that stays inside the calendar month never settles or
+    rotates the monthly goal — only a month boundary does."""
+    _enable(db)
+    bot = _Bot([_Guild(GUILD, {USER: _Member()})])
+    qa = _mk_monthly_kind(db, title="July msgs", kind="message_sent")
+    _add_activity(db, USER, when=_ts("2026-07-28"))
+
+    _roll(bot, db, _ts("2026-07-10"))
+    _roll_beats(bot, db, _ts("2026-07-11"))  # bootstrap July goal
+    for i in range(7):
+        _fire(db, "message_sent", USER, f"m{i}", "2026-07-14")
+
+    # Another July day roll (and week roll W28→W29): no month change.
+    beats = _roll_beats(bot, db, _ts("2026-07-16"))
+    assert not any("resolved" in b.text for b in beats)
+    q, p = _community_state(db, qa)
+    assert int(q["active"]) == 1 and p["settled_at"] is None
+    assert _balance(db, USER) == 0  # nothing paid mid-month
+
+
+def test_month_roll_settlement_exactly_once_on_crash_replay(db):
+    """Replaying the month-roll tick (crash before the mark advanced) must not
+    pay the monthly settlement twice — reservation rows + the mark guard it."""
+    _enable(db)
+    bot = _Bot([_Guild(GUILD, {USER: _Member()})])
+    _mk_monthly_kind(db, title="July msgs", kind="message_sent")
+    _add_activity(db, USER, when=_ts("2026-07-28"))
+    _roll(bot, db, _ts("2026-07-10"))
+    _roll_beats(bot, db, _ts("2026-07-11"))
+    for i in range(7):
+        _fire(db, "message_sent", USER, f"m{i}", "2026-07-15")
+
+    _roll_beats(bot, db, _ts("2026-08-01"))
+    assert _balance(db, USER) == 75
+    # Simulate a replay of the SAME closed month by rewinding the mark and
+    # reactivating qa as August's live goal, then rolling the same day again:
+    # the tier-payout reservation rows already exist, so nothing re-pays.
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE econ_day_marks SET last_community_month = '2026-07' "
+            "WHERE guild_id = ?", (GUILD,),
+        )
+    _roll_beats(bot, db, _ts("2026-08-01", hour=13))
+    assert _balance(db, USER) == 75  # unchanged
+
+
+def test_monthly_hourly_beats_final24_uses_month_end(db):
+    """The monthly goal's final-24h nudge keys off the calendar month end, not
+    the ISO week end."""
+    from bot_modules.services.economy_loop import community_hourly_beats
+
+    _enable(db)
+    _mk_monthly_kind(db, title="July msgs", kind="message_sent")
+    bot = _Bot([_Guild(GUILD, {USER: _Member()})])
+    _roll(bot, db, _ts("2026-07-10"))
+    _roll_beats(bot, db, _ts("2026-07-11"))  # bootstrap July goal (target 10)
+    # Mid-month: no final-24h beat (a week may be ending, but the month isn't).
+    with open_db(db) as conn:
+        assert not any(
+            "Final 24h" in b.text
+            for b in community_hourly_beats(conn, GUILD, _ts("2026-07-15"))
+        )
+    # Last day of July, <24h to Aug 1: the final-24h nudge fires.
+    with open_db(db) as conn:
+        beats = community_hourly_beats(conn, GUILD, _ts("2026-07-31", hour=6))
+    assert any("Final 24h" in b.text for b in beats)
 
 
 def test_community_hourly_beats_fire_once(db):

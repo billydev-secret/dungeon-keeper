@@ -121,6 +121,7 @@ from bot_modules.services.economy_quests_service import (
     list_active_pool_ids,
     spotlight_kind,
     list_settleable_community_quests,
+    next_community_monthly,
     next_community_weekly,
     prune_kind_activity,
     rotate_pool,
@@ -259,9 +260,11 @@ def run_guild_day_roll(
     offset = get_tz_offset_hours(conn, guild_id)
     today = logic.local_day_for(now_ts, offset)
     this_week = quests.iso_week_for(today)
+    this_month = quests.month_for(today)
 
     row = conn.execute(
-        "SELECT last_local_day, last_iso_week, last_community_week "
+        "SELECT last_local_day, last_iso_week, last_community_week, "
+        "last_community_month "
         "FROM econ_day_marks WHERE guild_id = ?",
         (guild_id,),
     ).fetchone()
@@ -363,12 +366,26 @@ def run_guild_day_roll(
                 conn, settings, guild_id, last_week, now=now_ts
             )
 
-    # Marks advance LAST (both columns together) so any crash above replays the
+    # ── month roll: settle + rotate the single monthly guild-wide goal ──
+    # Independent of the week roll — fires on any day roll where the calendar
+    # month changed (``last_community_month`` NULL on the first post-upgrade
+    # roll = first sight, which adopts/bootstraps without settling).
+    community_month = row["last_community_month"]
+    if community_month is None or community_month != this_month:
+        beats.extend(_roll_community_monthly(
+            bot, conn, settings, guild_id,
+            closed_month=community_month,
+            new_month=this_month,
+            local_day=today,
+        ))
+    community_month = this_month
+
+    # Marks advance LAST (all columns together) so any crash above replays the
     # whole roll on the next tick.
     conn.execute(
         "UPDATE econ_day_marks SET last_local_day = ?, last_iso_week = ?, "
-        "last_community_week = ? WHERE guild_id = ?",
-        (today, this_week, community_week, guild_id),
+        "last_community_week = ?, last_community_month = ? WHERE guild_id = ?",
+        (today, this_week, community_week, community_month, guild_id),
     )
     return DayRollResult(
         beats=tuple(beats), week_rolled=week_rolled, raffle=raffle_result
@@ -504,6 +521,87 @@ def _roll_community_weekly_slot2(
     return beats
 
 
+def _activate_next_monthly(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    month: str,
+    local_day: str,
+) -> CommunityBeat | None:
+    """Activate the next monthly community goal for ``month``, or None if the
+    library has no free monthly quest. Single lane (slot 1), month-sized target."""
+    nxt = next_community_monthly(conn, guild_id)
+    if nxt is None:
+        return None
+    kind = str(nxt["trigger_kind"])
+    scope = nxt["trigger_channel_id"]
+    target = auto_size_community_target(
+        conn, guild_id, kind, local_day,
+        channel_id=int(scope) if scope is not None else None,
+        cadence="monthly",
+    )
+    activate_community_weekly(
+        conn, guild_id, int(nxt["id"]), target=target, week=month, slot=1
+    )
+    return CommunityBeat(
+        guild_id,
+        quests.beat_kickoff(
+            str(nxt["title"]), quests.TRIGGER_KINDS.get(kind, kind), target, month
+        ),
+    )
+
+
+def _roll_community_monthly(
+    bot: discord.Client,
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    *,
+    closed_month: str | None,
+    new_month: str,
+    local_day: str,
+) -> list[CommunityBeat]:
+    """The monthly guild-wide goal rotation: single lane, no gap month.
+
+    Every calendar month carries exactly one goal. On a genuine month close
+    (``closed_month`` is not None) the outgoing goal is settled — flat per-tier
+    reward to every 30-day-active member — then the next pool member activates
+    for the new month (settle-then-refill, like weekly lane 2 but monthly). On
+    first sight (``closed_month`` is None) nothing is settled: an already-active
+    goal (e.g. seeded by the migration) is adopted as this month's, and only an
+    empty lane bootstraps one.
+    """
+    beats: list[CommunityBeat] = []
+    active = list_active_community_kind_quests(conn, guild_id, qtype="monthly")
+    quest = active[0] if active else None
+
+    if quest is not None and str(quest["last_run_week"]) == new_month:
+        return beats  # already this month's goal — nothing to roll
+
+    if quest is not None:
+        if closed_month is None:
+            # First sight with a goal already running: adopt it, don't settle
+            # or rotate. Stamp it to the new month so next month's roll closes it.
+            conn.execute(
+                "UPDATE econ_quests SET last_run_week = ? WHERE id = ?",
+                (new_month, int(quest["id"])),
+            )
+            return beats
+        member_ids = active_member_ids(conn, guild_id, days=30)
+        boosters = {
+            uid: member_is_booster(bot, guild_id, uid) for uid in member_ids
+        }
+        summary = settle_community_weekly(conn, settings, guild_id, quest, boosters)
+        beats.append(CommunityBeat(guild_id, quests.beat_resolution(summary)))
+
+    beat = _activate_next_monthly(
+        conn, guild_id, month=new_month, local_day=local_day
+    )
+    if beat is not None:
+        beats.append(beat)
+    return beats
+
+
 def _repair_orphaned_community_quests(
     conn: sqlite3.Connection, guild_id: int, this_week: str, local_day: str
 ) -> list[CommunityBeat]:
@@ -516,48 +614,72 @@ def _repair_orphaned_community_quests(
     a bad seed self-heals within the hour rather than waiting on the next
     week roll, and immediately fills whichever lanes it just freed up — but
     only in the same tick it actually found orphans, so it never overrides a
-    legitimate, intentional gap week.
+    legitimate, intentional gap week. Covers both the weekly ``community``
+    lanes and the single monthly lane (migration 125).
     """
+    beats: list[CommunityBeat] = []
+    # ── weekly community lanes ──
     orphans = conn.execute(
         "SELECT id FROM econ_quests WHERE guild_id = ? AND qtype = 'community' "
         "AND trigger_kind != '' AND active = 1 AND community_target IS NULL",
         (guild_id,),
     ).fetchall()
-    if not orphans:
-        return []
-    conn.execute(
-        "UPDATE econ_quests SET active = 0 "
-        "WHERE guild_id = ? AND qtype = 'community' AND trigger_kind != '' "
-        "AND active = 1 AND community_target IS NULL",
-        (guild_id,),
-    )
-    beats: list[CommunityBeat] = []
-    for slot in (1, 2):
-        if list_active_community_kind_quests(conn, guild_id, slot=slot):
-            continue
-        nxt = next_community_weekly(conn, guild_id)
-        if nxt is None:
-            return beats
-        kind = str(nxt["trigger_kind"])
-        scope = nxt["trigger_channel_id"]
-        target = auto_size_community_target(
-            conn, guild_id, kind, local_day,
-            channel_id=int(scope) if scope is not None else None,
+    if orphans:
+        conn.execute(
+            "UPDATE econ_quests SET active = 0 "
+            "WHERE guild_id = ? AND qtype = 'community' AND trigger_kind != '' "
+            "AND active = 1 AND community_target IS NULL",
+            (guild_id,),
         )
-        activate_community_weekly(
-            conn, guild_id, int(nxt["id"]), target=target, week=this_week, slot=slot
-        )
-        beats.append(
-            CommunityBeat(
-                guild_id,
-                quests.beat_kickoff(
-                    str(nxt["title"]),
-                    quests.TRIGGER_KINDS.get(kind, kind),
-                    target,
-                    this_week,
-                ),
+        for slot in (1, 2):
+            if list_active_community_kind_quests(conn, guild_id, slot=slot):
+                continue
+            nxt = next_community_weekly(conn, guild_id)
+            if nxt is None:
+                break
+            kind = str(nxt["trigger_kind"])
+            scope = nxt["trigger_channel_id"]
+            target = auto_size_community_target(
+                conn, guild_id, kind, local_day,
+                channel_id=int(scope) if scope is not None else None,
             )
+            activate_community_weekly(
+                conn, guild_id, int(nxt["id"]), target=target,
+                week=this_week, slot=slot,
+            )
+            beats.append(
+                CommunityBeat(
+                    guild_id,
+                    quests.beat_kickoff(
+                        str(nxt["title"]),
+                        quests.TRIGGER_KINDS.get(kind, kind),
+                        target,
+                        this_week,
+                    ),
+                )
+            )
+    # ── monthly single lane ── same "only act on a found orphan" rule: normal
+    # activation is the month roll's job, but a targetless active monthly (a
+    # stray manual activation) is cleared and the lane refilled so the month
+    # isn't left goal-less.
+    monthly_orphans = conn.execute(
+        "SELECT id FROM econ_quests WHERE guild_id = ? AND qtype = 'monthly' "
+        "AND trigger_kind != '' AND active = 1 AND community_target IS NULL",
+        (guild_id,),
+    ).fetchall()
+    if monthly_orphans:
+        conn.execute(
+            "UPDATE econ_quests SET active = 0 "
+            "WHERE guild_id = ? AND qtype = 'monthly' AND trigger_kind != '' "
+            "AND active = 1 AND community_target IS NULL",
+            (guild_id,),
         )
+        if not list_active_community_kind_quests(conn, guild_id, qtype="monthly"):
+            beat = _activate_next_monthly(
+                conn, guild_id, month=quests.month_for(local_day), local_day=local_day
+            )
+            if beat is not None:
+                beats.append(beat)
     return beats
 
 
@@ -566,12 +688,13 @@ def community_hourly_beats(
     guild_id: int,
     now_ts: float,
 ) -> list[CommunityBeat]:
-    """Every-tick beat detection for the running community weekly.
+    """Every-tick beat detection for the running guild-wide goals.
 
-    Tier crossings compare the live counter against ``notified_tier`` (which
-    advances here, same transaction, so a beat DMs once); the final-24h
-    nudge fires when the guild-local ISO week has under a day left and the
-    top tier is still open.
+    Covers the weekly community lanes and the monthly lane. Tier crossings
+    compare the live counter against ``notified_tier`` (which advances here,
+    same transaction, so a beat DMs once); the final-24h nudge fires when the
+    goal's period (ISO week for community, calendar month for monthly) has
+    under a day left and the top tier is still open.
     """
     settings = load_econ_settings(conn, guild_id)
     if not settings.enabled:
@@ -579,7 +702,11 @@ def community_hourly_beats(
     beats: list[CommunityBeat] = []
     offset = get_tz_offset_hours(conn, guild_id)
     today = logic.local_day_for(now_ts, offset)
-    for quest in list_active_community_kind_quests(conn, guild_id):
+    active = [
+        *list_active_community_kind_quests(conn, guild_id, qtype="community"),
+        *list_active_community_kind_quests(conn, guild_id, qtype="monthly"),
+    ]
+    for quest in active:
         qid = int(quest["id"])
         target = int(quest["community_target"] or 0)
         current = int(quest["current"] or 0)
@@ -601,10 +728,14 @@ def community_hourly_beats(
                     ),
                 )
             )
+        if str(quest["qtype"]) == "monthly":
+            secs_left = _seconds_to_next_month_start(today, offset, now_ts)
+        else:
+            secs_left = _seconds_to_next_week_start(today, offset, now_ts)
         if (
             not quest["final_notice_sent"]
             and crossed < len(quests.COMMUNITY_TIERS)
-            and _seconds_to_next_week_start(today, offset, now_ts) < 86400
+            and secs_left < 86400
         ):
             conn.execute(
                 "UPDATE econ_community_progress SET final_notice_sent = 1 "
@@ -629,6 +760,21 @@ def _seconds_to_next_week_start(
     day = date.fromisoformat(local_day)
     next_monday = day + timedelta(days=7 - day.weekday())
     start_ts, _end = logic.local_day_bounds(next_monday.isoformat(), offset)
+    return max(0.0, start_ts - now_ts)
+
+
+def _seconds_to_next_month_start(
+    local_day: str, offset: float, now_ts: float
+) -> float:
+    """Seconds until the next guild-local calendar month (1st, 00:00) begins."""
+    from datetime import date
+
+    day = date.fromisoformat(local_day)
+    if day.month == 12:
+        first_next = date(day.year + 1, 1, 1)
+    else:
+        first_next = date(day.year, day.month + 1, 1)
+    start_ts, _end = logic.local_day_bounds(first_next.isoformat(), offset)
     return max(0.0, start_ts - now_ts)
 
 

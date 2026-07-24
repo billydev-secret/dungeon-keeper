@@ -103,6 +103,101 @@ def _names(uid: int) -> str:
     return f"User{uid}"
 
 
+# ── migration 125: monthly → guild-wide community reconciliation ────────
+
+
+def _mk_old_monthly(conn, *, kind, community_target=None, active=True):
+    """An old-style monthly quest (pre-125: a per-user board quest). A kindless
+    one is built by mutating a daily, since create_quest now forbids it."""
+    if kind:
+        qid = quests_svc.create_quest(
+            conn, GUILD_ID, title="m", description="", qtype="monthly",
+            reward=50, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=community_target, created_by=None,
+            trigger_kind=kind,
+        )
+    else:
+        qid = quests_svc.create_quest(
+            conn, GUILD_ID, title="m", description="", qtype="daily",
+            reward=50, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+        )
+        conn.execute(
+            "UPDATE econ_quests SET qtype = 'monthly', trigger_kind = '' WHERE id = ?",
+            (qid,),
+        )
+    if active:
+        quests_svc.set_quest_active(conn, GUILD_ID, qid, True)
+    return qid
+
+
+def _reconcile_125(conn):
+    """Re-run migration 125's reconciliation DML (everything after the ALTER)."""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "migrations" / "125_econ_monthly_community.sql"
+    )
+    sql = path.read_text()
+    marker = "ALTER TABLE econ_day_marks ADD COLUMN last_community_month TEXT;"
+    conn.executescript(sql.split(marker, 1)[1])
+
+
+def test_migration_125_reconciles_existing_monthly_quests(db):
+    import datetime
+
+    this_month = datetime.date.today().strftime("%Y-%m")
+    with open_db(db) as conn:
+        auto_a = _mk_old_monthly(conn, kind="message_sent")  # lowest id, kept
+        auto_b = _mk_old_monthly(conn, kind="reply_sent")    # collapsed off
+        kindless = _mk_old_monthly(conn, kind="")            # deactivated
+
+        # In-flight per-user progress this month for the surviving auto quest.
+        for uid, cur in ((1, 4), (2, 3)):
+            conn.execute(
+                "INSERT INTO econ_quest_progress "
+                "(quest_id, user_id, period, current, target) VALUES (?, ?, ?, ?, 5)",
+                (auto_a, uid, this_month, cur),
+            )
+        # A per-user claim already PAID this month — must NOT be clawed back.
+        conn.execute(
+            "INSERT INTO econ_quest_claims "
+            "(quest_id, guild_id, user_id, period, state, created_at) "
+            "VALUES (?, ?, 1, ?, 'paid', 0)",
+            (auto_a, GUILD_ID, this_month),
+        )
+
+        _reconcile_125(conn)
+
+        rows = {
+            int(r["id"]): r for r in conn.execute(
+                "SELECT id, active, community_target, last_run_week, community_slot "
+                "FROM econ_quests WHERE guild_id = ?", (GUILD_ID,),
+            )
+        }
+        # Kindless deactivated; lowest-id auto kept, its sibling collapsed off.
+        assert int(rows[kindless]["active"]) == 0
+        assert int(rows[auto_a]["active"]) == 1
+        assert int(rows[auto_b]["active"]) == 0
+        # Guild-wide counter seeded from this month's summed progress (4 + 3).
+        prog = conn.execute(
+            "SELECT current FROM econ_community_progress WHERE quest_id = ?",
+            (auto_a,),
+        ).fetchone()
+        assert int(prog["current"]) == 7
+        # Target sized (>= floor), cursor stamped to this month, single lane.
+        assert int(rows[auto_a]["community_target"]) >= 10
+        assert rows[auto_a]["last_run_week"] == this_month
+        assert int(rows[auto_a]["community_slot"]) == 1
+        # No clawback: the already-paid per-user claim is untouched.
+        claim = conn.execute(
+            "SELECT state FROM econ_quest_claims WHERE quest_id = ? AND state = 'paid'",
+            (auto_a,),
+        ).fetchone()
+        assert claim is not None and claim["state"] == "paid"
+
+
 # ── collector ──────────────────────────────────────────────────────────
 
 

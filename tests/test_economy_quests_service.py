@@ -1202,6 +1202,73 @@ def test_community_counter_bumps_guild_wide(db):
         assert get_balance(conn, GUILD, USER) == 0
 
 
+def _monthly_kind(conn, *, kind="quoted", target=100, reward=30, **kw):
+    return _make(
+        conn, qtype="monthly", trigger_kind=kind,
+        community_target=target, reward=reward, **kw,
+    )
+
+
+def test_monthly_kind_quest_bumps_guild_wide(db):
+    # Monthly is guild-wide like community: NOT board-filtered, every member's
+    # action counts, contributions are recorded, nobody is paid by the counter.
+    with open_db(db) as conn:
+        qid = _monthly_kind(conn, kind="message_sent", target=3, reward=40)
+        for occ in ("a", "b"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "message_sent", USER,
+                local_day="2026-07-14", occurrence=occ, booster=False,
+            )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER_2,
+            local_day="2026-07-14", occurrence="c", booster=False,
+        )
+        prog = conn.execute(
+            "SELECT current, completed_at FROM econ_community_progress "
+            "WHERE quest_id = ?", (qid,),
+        ).fetchone()
+        assert int(prog["current"]) == 3
+        assert prog["completed_at"] is not None  # stamped on the crossing
+        n, top = community_contrib_summary(conn, qid)
+        assert n == 2 and top[0] == (USER, 2)
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_next_community_monthly_rotation_order(db):
+    from bot_modules.services.economy_quests_service import next_community_monthly
+
+    with open_db(db) as conn:
+        a = _monthly_kind(conn, kind="quoted", title="A", active=False)
+        b = _monthly_kind(conn, kind="reply_sent", title="B", active=False)
+        # Both never-run ('' last_run) → lowest id leads.
+        assert int(next_community_monthly(conn, GUILD)["id"]) == a
+        # Mark a as run this month → b (still '') now leads.
+        conn.execute(
+            "UPDATE econ_quests SET last_run_week = '2026-07' WHERE id = ?", (a,)
+        )
+        assert int(next_community_monthly(conn, GUILD)["id"]) == b
+        # A community weekly is never picked by the monthly cursor.
+        _community_kind(conn, title="weekly-goal", active=False)
+        assert int(next_community_monthly(conn, GUILD)["id"]) == b
+
+
+def test_monthly_board_renders_guild_wide_bar(db):
+    # A member's quest board shows monthly as a shared bar (current/target),
+    # independent of any personal board, with no per-member claim state.
+    with open_db(db) as conn:
+        qid = _monthly_kind(conn, kind="message_sent", target=5)
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        )
+        # USER_2 (who did nothing) still sees the shared progress.
+        board = load_member_quest_board(conn, SETTINGS, GUILD, USER_2, "2026-07-14")
+        entry = next(e for e in board if e["id"] == qid)
+        assert entry["qtype"] == "monthly"
+        assert entry["state"] == "community"  # guild-wide bar, not claimable
+        assert entry["current"] == 1 and entry["target"] == 5
+
+
 def test_community_auto_sizing_from_ledger(db):
     from bot_modules.services.economy_quests_service import (
         auto_size_community_target,
@@ -1219,8 +1286,22 @@ def test_community_auto_sizing_from_ledger(db):
             auto_size_community_target(conn, GUILD, "message_sent", "2026-06-29")
             == 100
         )
-        # Cold kind → floor.
+        # Same 28-day total, sized for a MONTHLY goal, spans one period not four
+        # → ~4× the weekly target (300/0.75 = 400).
+        assert (
+            auto_size_community_target(
+                conn, GUILD, "message_sent", "2026-06-29", cadence="monthly"
+            )
+            == 400
+        )
+        # Cold kind → floor, either cadence.
         assert auto_size_community_target(conn, GUILD, "whisper", "2026-06-29") == 10
+        assert (
+            auto_size_community_target(
+                conn, GUILD, "whisper", "2026-06-29", cadence="monthly"
+            )
+            == 10
+        )
 
 
 def test_community_weekly_settlement_tiers_and_bonus(db):
@@ -1560,6 +1641,63 @@ def test_target_count_validation(db):
             update_quest(conn, GUILD, qid, {"trigger_kind": ""})
 
 
+def test_only_daily_triggered_quests_may_be_one_shot(db):
+    # A triggered weekly quest must accumulate progress — target 1 with no band
+    # is one-shot, which only daily quests may be. Manual and trigger-word
+    # weeklies have nothing to count, so they stay one-shot. (Monthly is a
+    # guild-wide community goal now; its rules live in the monthly test below.)
+    with open_db(db) as conn:
+        with pytest.raises(ValueError):  # triggered weekly one-shot
+            _make(conn, qtype="weekly", trigger_kind="guess_win", target_count=1)
+
+        # Daily triggered one-shot is exactly what daily is for.
+        assert _make(conn, qtype="daily", trigger_kind="guess_win", target_count=1)
+        # Weekly stays valid the moment it carries progress — a fixed count or a
+        # band both satisfy the rule.
+        assert _make(conn, qtype="weekly", trigger_kind="guess_win", target_count=2)
+        assert _make(
+            conn, qtype="weekly", trigger_kind="conversed", target_min=2, target_max=6
+        )
+        # Manual and trigger-word weeklies can't count, so one-shot is fine.
+        assert _make(conn, qtype="weekly", reward=40)
+        assert _make(conn, qtype="weekly", trigger_words="gm, good morning")
+
+        # The rule also guards the update path: demoting a counted weekly back
+        # to a one-shot target is rejected.
+        counted = _make(conn, qtype="weekly", trigger_kind="active_day", target_count=3)
+        with pytest.raises(ValueError):
+            update_quest(conn, GUILD, counted, {"target_count": 1})
+
+
+def test_monthly_is_a_guild_wide_community_goal(db):
+    # Monthly is auto-tracked-only and measured guild-wide: it REQUIRES a
+    # trigger kind, forbids sign-off / trigger words / a per-user target/band,
+    # and is not member-claimable.
+    with open_db(db) as conn:
+        with pytest.raises(ValueError):  # needs a trigger kind
+            _make(conn, qtype="monthly", reward=80)
+        with pytest.raises(ValueError):  # no sign-off (auto tier settlement)
+            _make(conn, qtype="monthly", trigger_kind="quoted", signoff=1)
+        with pytest.raises(ValueError):  # no trigger words
+            _make(conn, qtype="monthly", trigger_words="gm")
+        with pytest.raises(ValueError):  # no per-user target count
+            _make(conn, qtype="monthly", trigger_kind="quoted", target_count=3)
+        with pytest.raises(ValueError):  # no per-user band
+            _make(
+                conn, qtype="monthly", trigger_kind="quoted",
+                target_min=2, target_max=6,
+            )
+
+        # A plain auto-tracked monthly is valid (target defaults to 1/no band —
+        # the per-user field is inert; sizing is the guild-wide community_target).
+        qid = _make(conn, qtype="monthly", trigger_kind="quoted", reward=80)
+        assert _get(conn, GUILD, qid)["qtype"] == "monthly"
+        # Not member-claimable — the tier settlement pays it.
+        from bot_modules.services.economy_quests_service import claim_quest
+        with pytest.raises(ValueError):
+            claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-07", booster=False)
+
+
 def test_counted_quest_pays_at_target_with_occurrence_dedup(db):
     with open_db(db) as conn:
         qid = _make(
@@ -1594,21 +1732,6 @@ def test_counted_quest_needs_occurrence(db):
             local_day="2026-07-13", occurrence=None, booster=False,
         ) == []
         assert get_balance(conn, GUILD, USER) == 0
-
-
-def test_monthly_quest_claims_once_per_month(db):
-    with open_db(db) as conn:
-        qid = _make(conn, qtype="monthly", reward=100)
-        out = claim_quest(
-            conn, SETTINGS, GUILD, qid, USER, period="2026-07", booster=False
-        )
-        assert out.state == "paid" and out.paid == 100
-        with pytest.raises(ValueError):
-            claim_quest(
-                conn, SETTINGS, GUILD, qid, USER, period="2026-07", booster=False
-            )
-        claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-08", booster=False)
-        assert get_balance(conn, GUILD, USER) == 200
 
 
 def test_quest_xp_reward_pays_alongside_coins(db):
@@ -1944,7 +2067,9 @@ def test_board_size_zero_is_per_cadence(db):
         for _ in range(4):
             _make(conn, qtype="daily", trigger_kind="message_sent")
         for _ in range(4):
-            _make(conn, qtype="weekly", trigger_kind="message_sent")
+            # Weekly triggered quests must count progress now, so target 2 —
+            # they pay on the second occurrence, not the first.
+            _make(conn, qtype="weekly", trigger_kind="message_sent", target_count=2)
         day = "2026-07-13"
         cfg = EconSettings(
             enabled=True, booster_multiplier=1.5,
@@ -1953,9 +2078,14 @@ def test_board_size_zero_is_per_cadence(db):
         assert assigned_board_ids(conn, GUILD, USER, "daily", day, cfg) == set()
         weekly = assigned_board_ids(conn, GUILD, USER, "weekly", day, cfg)
         assert len(weekly) == 2
-        results = fire_trigger_quests(
+        # First occurrence only advances progress (1/2) — nothing pays yet.
+        assert fire_trigger_quests(
             conn, cfg, GUILD, "message_sent", USER,
             local_day=day, occurrence="m1", booster=False,
+        ) == []
+        results = fire_trigger_quests(
+            conn, cfg, GUILD, "message_sent", USER,
+            local_day=day, occurrence="m2", booster=False,
         )
         # Only the weekly board paid — no daily leaked through.
         assert {int(q["id"]) for q, _ in results} == weekly
@@ -3085,7 +3215,7 @@ def test_setup_quests_are_not_pinned_onto_other_cadences(db):
     # is a daily-board onboarding beat, not a global override.
     with open_db(db) as conn:
         for _ in range(20):
-            _make(conn, qtype="weekly", trigger_kind="message_sent")
+            _make(conn, qtype="weekly", trigger_kind="message_sent", target_count=2)
         setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
         weekly = assigned_board_ids(conn, GUILD, USER, "weekly", "2026-07-12", SETTINGS)
         assert setup not in weekly
