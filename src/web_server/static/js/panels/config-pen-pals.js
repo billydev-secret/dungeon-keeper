@@ -69,6 +69,16 @@ export function mount(container) {
             </div>
 
             <div class="field">
+              <label for="pp-room-visibility">Who Can See Each Chat</label>
+              <select name="room_visibility" id="pp-room-visibility">
+                <option value="admin" ${pp.room_visibility === "admin" ? "selected" : ""}>Admins only</option>
+                <option value="mods" ${(pp.room_visibility || "mods") === "mods" ? "selected" : ""}>Admins and mods</option>
+                <option value="everyone" ${pp.room_visibility === "everyone" ? "selected" : ""}>Everyone (read-only)</option>
+              </select>
+              <div class="field-hint">Pen pal chats are private to the two members. This picks who else can look in for moderation: your configured admin roles only, admins plus mod roles, or everyone (who can read but not post). Takes effect on chats created after you save; already-open chats are unchanged.</div>
+            </div>
+
+            <div class="field">
               <label>Log Channel</label>
               <span data-picker="log_channel_id"></span>
               <div class="field-hint">Posts a line here each time two members are paired, so moderators can keep an eye on it. "(disabled)" logs nothing.</div>
@@ -204,6 +214,7 @@ export function mount(container) {
           category_id:        categoryPicker.getValue() || null,
           opt_in_role_id:     optInPicker.getValue() || null,
           question_category:  fd.get("question_category"),
+          room_visibility:    fd.get("room_visibility"),
           log_channel_id:     logPicker.getValue() || null,
           panel_channel_id:   panelPicker.getValue() || null,
         });

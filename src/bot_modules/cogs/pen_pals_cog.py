@@ -33,6 +33,52 @@ _RECENT_LIMIT = 10               # past pairings to check for repeats
 _MATCH_COOLDOWN_SECS = 30 * 86400  # only re-match a member once they've had no pen pal for a month
 _GAME_TYPE = "pen_pals"
 
+# ── Room visibility ───────────────────────────────────────────────────────────
+# How much staff oversight a pairing's otherwise-private room gets. Stored as a
+# single TEXT enum on pen_pals_config.room_visibility (migration 126); the
+# overwrites are built from the guild's admin_role_ids / mod_role_ids.
+ROOM_VIS_ADMIN = "admin"        # configured admins (+ Discord admins) only
+ROOM_VIS_MODS = "mods"          # admins + configured mod roles
+ROOM_VIS_EVERYONE = "everyone"  # world-readable, watch-only (members/staff post)
+ROOM_VISIBILITIES = (ROOM_VIS_ADMIN, ROOM_VIS_MODS, ROOM_VIS_EVERYONE)
+DEFAULT_ROOM_VISIBILITY = ROOM_VIS_MODS
+
+
+def _normalize_room_visibility(value: object) -> str:
+    """Coerce a stored/incoming value to a known state, defaulting to mods."""
+    return value if value in ROOM_VISIBILITIES else DEFAULT_ROOM_VISIBILITY
+
+
+def _room_everyone_can_view(visibility: str) -> bool:
+    """True when @everyone should see (read-only) the room."""
+    return _normalize_room_visibility(visibility) == ROOM_VIS_EVERYONE
+
+
+def _room_staff_role_ids(
+    visibility: str,
+    admin_role_ids: "frozenset[int] | set[int]",
+    mod_role_ids: "frozenset[int] | set[int]",
+) -> set[int]:
+    """Role ids that get an explicit view overwrite for this visibility.
+
+    Admin roles are always granted (so configured admins keep access even under
+    the world-readable 'everyone' state, where @everyone is view-only and can't
+    post). Mod roles are added only for the 'mods' state.
+    """
+    staff = set(admin_role_ids)
+    if _normalize_room_visibility(visibility) == ROOM_VIS_MODS:
+        staff |= set(mod_role_ids)
+    return staff
+
+
+def _room_footer_text(visibility: str) -> str:
+    """The intro embed's footer line describing who can see the room."""
+    return {
+        ROOM_VIS_ADMIN: "Admins can see this channel.",
+        ROOM_VIS_MODS: "Admins and mods can see this channel.",
+        ROOM_VIS_EVERYONE: "This channel is visible to everyone (they can read, not post).",
+    }[_normalize_room_visibility(visibility)]
+
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
@@ -53,15 +99,17 @@ def _set_config(
     question_category: str,
     log_channel_id: int,
     panel_channel_id: int,
+    room_visibility: str = DEFAULT_ROOM_VISIBILITY,
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET enabled=?, category_id=?, opt_in_role_id=?, question_category=?,
-               log_channel_id=?, panel_channel_id=?
+               log_channel_id=?, panel_channel_id=?, room_visibility=?
            WHERE guild_id=?""",
         (int(enabled), category_id, opt_in_role_id, question_category,
-         log_channel_id, panel_channel_id, guild_id),
+         log_channel_id, panel_channel_id,
+         _normalize_room_visibility(room_visibility), guild_id),
     )
 
 
@@ -554,6 +602,50 @@ def _channel_name(name1: str, name2: str) -> str:
     return f"penpals-{_slug(name1)}-{_slug(name2)}"[:100]
 
 
+def _room_overwrites(
+    guild: discord.Guild,
+    user1: discord.Member,
+    user2: discord.Member,
+    *,
+    visibility: str,
+    staff_role_ids: "set[int] | frozenset[int]",
+) -> dict:
+    """Channel overwrites for a pairing's room under the given visibility.
+
+    The two members always get full read/write and the bot gets management.
+    Under 'everyone', @everyone reads (watch-only, no posting); otherwise the
+    room is hidden from @everyone and each resolvable ``staff_role_ids`` role
+    gets read/write so staff can oversee it. Unresolvable role ids are skipped.
+    """
+    visibility = _normalize_room_visibility(visibility)
+    member_ow = discord.PermissionOverwrite(
+        view_channel=True, send_messages=True, read_message_history=True
+    )
+    overwrites: dict[discord.Role | discord.Member | discord.Object, discord.PermissionOverwrite] = {
+        guild.default_role: (
+            discord.PermissionOverwrite(
+                view_channel=True, send_messages=False, read_message_history=True
+            )
+            if _room_everyone_can_view(visibility)
+            else discord.PermissionOverwrite(view_channel=False)
+        ),
+        user1: member_ow,
+        user2: member_ow,
+        guild.me: discord.PermissionOverwrite(
+            view_channel=True, send_messages=True,
+            manage_messages=True, manage_channels=True,
+        ),
+    }
+    for rid in staff_role_ids:
+        role = guild.get_role(rid)
+        if role is not None:
+            overwrites[role] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True,
+                read_message_history=True, manage_messages=True,
+            )
+    return overwrites
+
+
 async def _create_channel(
     guild: discord.Guild,
     category: discord.CategoryChannel,
@@ -561,20 +653,12 @@ async def _create_channel(
     user2: discord.Member,
     *,
     nsfw: bool = False,
+    visibility: str = DEFAULT_ROOM_VISIBILITY,
+    staff_role_ids: "set[int] | frozenset[int]" = frozenset(),
 ) -> discord.TextChannel:
-    overwrites: dict[discord.Role | discord.Member | discord.Object, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        user1: discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True
-        ),
-        user2: discord.PermissionOverwrite(
-            view_channel=True, send_messages=True, read_message_history=True
-        ),
-        guild.me: discord.PermissionOverwrite(
-            view_channel=True, send_messages=True,
-            manage_messages=True, manage_channels=True,
-        ),
-    }
+    overwrites = _room_overwrites(
+        guild, user1, user2, visibility=visibility, staff_role_ids=staff_role_ids
+    )
     # NSFW-flagged when the guild's question pool includes NSFW prompts, so the
     # channel age-gate matches the content that can appear in it.
     return await guild.create_text_channel(
@@ -593,6 +677,7 @@ async def _post_intro(
     expiry_at: float,
     question: str,
     color: "discord.Color | None" = None,
+    visibility: str = DEFAULT_ROOM_VISIBILITY,
 ) -> None:
     if color is None:
         color = discord.Color.blurple()
@@ -615,7 +700,7 @@ async def _post_intro(
         ),
         inline=False,
     )
-    embed.set_footer(text="Admins can see this channel.")
+    embed.set_footer(text=_room_footer_text(visibility))
     intro_msg = await channel.send(embed=embed)
     await intro_msg.pin()
 
@@ -669,12 +754,25 @@ async def _do_pair(
     session_id = str(uuid.uuid4())
     now = time.time()
 
+    # Room visibility: resolve the staff roles that get to see this pairing's
+    # otherwise-private room from the guild's configured admin/mod roles.
+    visibility = _normalize_room_visibility(
+        cfg["room_visibility"] if "room_visibility" in cfg.keys() else None
+    )
+    gcfg = await asyncio.to_thread(cast("Bot", bot).ctx.guild_config, guild_id)
+    staff_role_ids = _room_staff_role_ids(
+        visibility, gcfg.admin_role_ids, gcfg.mod_role_ids
+    )
+
     # Draw question before the channel exists so we can post it immediately
     # (the session has no shown-question history yet).
     question = await _draw_question(db_path, session_id, allow_nsfw)
 
     try:
-        channel = await _create_channel(guild, category, user1, user2, nsfw=allow_nsfw)
+        channel = await _create_channel(
+            guild, category, user1, user2, nsfw=allow_nsfw,
+            visibility=visibility, staff_role_ids=staff_role_ids,
+        )
     except discord.Forbidden:
         log.warning("pen_pals: missing permission to create channel in guild %d", guild_id)
         return False
@@ -727,7 +825,10 @@ async def _do_pair(
     expiry_at = now + session_seconds
     accent = await resolve_accent_color(db_path, guild)
     try:
-        await _post_intro(channel, user1, user2, expiry_at, question, color=accent)
+        await _post_intro(
+            channel, user1, user2, expiry_at, question,
+            color=accent, visibility=visibility,
+        )
     except discord.HTTPException as exc:
         log.error("pen_pals: failed to post intro in channel %d: %s", channel.id, exc)
 

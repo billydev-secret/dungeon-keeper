@@ -1,0 +1,15 @@
+-- Pen Pals: who can see a pairing's private room, beyond the two members.
+--
+-- 'admin'    → only the guild's configured admin roles (plus Discord admins,
+--              who bypass overwrites) can see the room.
+-- 'mods'     → admins AND the configured mod roles can see it. This is the
+--              default: staff oversight of otherwise-private rooms is the
+--              expected posture, matching how jail tickets are staff-visible.
+-- 'everyone' → the room is world-readable (view + history) but only the two
+--              members (and staff) can post — a watch-only public room.
+--
+-- Default 'mods' is a deliberate behavior change from the old admin-only rooms:
+-- existing guilds gain mod visibility on their *next* pairing (open rooms are
+-- untouched). The applied overwrites are built in pen_pals_cog._create_channel
+-- from the guild's admin_role_ids / mod_role_ids.
+ALTER TABLE pen_pals_config ADD COLUMN room_visibility TEXT NOT NULL DEFAULT 'mods';
