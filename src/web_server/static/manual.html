@@ -439,53 +439,24 @@
          1. GETTING STARTED
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="getting-started"><span class="section-num">1</span> Getting Started</h2>
-    <p>Dungeon Keeper is an all-in-one Discord server companion: moderation, support tickets, XP, personal voice channels, music, anonymous games, wellness tools — plus a web dashboard for settings and reports. You don't need to learn all of it at once. Start with the track that matches you.</p>
+    <p>Dungeon Keeper is a Discord companion — moderation, XP, voice, music, games, wellness — plus a <a href="/">web dashboard</a> for settings and reports. <strong>Commands</strong> do things; the <strong>dashboard</strong> holds every setting. Permissions are tagged <span class="perm perm-all">Everyone</span> <span class="perm perm-mod">Mod</span> <span class="perm perm-admin">Admin</span> <span class="perm perm-owner">Bot Owner</span> — see <a href="#permissions">Permission Levels</a>. Search above, or browse the <a href="#quickref">Quick Reference</a>.</p>
 
-    <h3 id="start-organized">Discord vs. the dashboard</h3>
-    <p>The bot has two halves, and knowing which is which saves a lot of hunting:</p>
+    <h3 id="start-member">I'm a member</h3>
     <ul>
-      <li><strong>Discord slash commands</strong> are for <em>doing things</em> — jail a member, open a ticket, play a song, start a game.</li>
-      <li><strong>The <a href="/">web dashboard</a></strong> is for <em>settings and reports</em> — every persistent option lives in a dashboard panel, and so do all the analytics. Sign in with your Discord account; what you can see depends on your server roles.</li>
-    </ul>
-    <p>Throughout this guide, command permissions are shown as badges:
-      <span class="perm perm-all">Everyone</span> any member,
-      <span class="perm perm-mod">Mod</span> configured mod role,
-      <span class="perm perm-admin">Admin</span> configured admin role,
-      <span class="perm perm-owner">Bot Owner</span> the bot's operator.
-      Details in <a href="#permissions">Permission Levels</a>.</p>
-
-    <h3 id="start-member">I'm a member — quick tour</h3>
-    <ul>
-      <li><strong>Find any command:</strong> type <code>/help</code> in Discord for a browsable list of everything available to you.</li>
-      <li><strong>Hang out:</strong> join the voice hub channel to get your own <a href="#voice">personal voice channel</a>, or queue music with <code>/play</code> (<a href="#music">Music</a>).</li>
-      <li><strong>Play:</strong> <code>/games help</code> lists every game mode (party games and duels) — see <a href="#games">Games Night</a>, <a href="#guess">Guess Who</a>, and <a href="#whisper">Whisper</a>.</li>
-      <li><strong>Express yourself:</strong> post an anonymous <a href="#confessions">confession</a> with <code>/confess</code>, set a <code>/bio</code>, register your <code>/birthday set</code>.</li>
-      <li><strong>Set boundaries:</strong> control who can DM you (<a href="#dm-perms">DM Permissions</a>) and opt into healthy-usage nudges (<a href="#wellness">Wellness</a>).</li>
-      <li><strong>Own your data:</strong> <code>/delete_me</code> erases your data — see <a href="#privacy">Data Erasure</a>.</li>
+      <li><code>/help</code> lists your commands; <code>/games help</code> to play.</li>
+      <li>Set <a href="#dm-perms">DM permissions</a>, <code>/bio</code>, <code>/birthday set</code>.</li>
+      <li><code>/delete_me</code> erases your data — see <a href="#privacy">Data Erasure</a>.</li>
     </ul>
 
-    <h3 id="start-admin">I'm setting up the server — quick start</h3>
+    <h3 id="start-admin">I'm setting up the server</h3>
     <ol class="steps">
-      <li>Run <code>/setup</code> in Discord — it creates the bot's channels and walks you through mod/admin roles.</li>
-      <li>Open the <a href="/">web dashboard</a>, sign in with Discord, and work through the panels in the <a href="#first-steps">First-Time Setup checklist</a>.</li>
-      <li>Skim the <a href="#functional-blocks">Feature Map</a> below and enable only what your community needs — every feature is independent and most are off until configured.</li>
+      <li>Run <code>/setup</code> in Discord for channels and mod/admin roles.</li>
+      <li>Sign in to the <a href="/">dashboard</a> and work through <a href="#first-steps">First-Time Setup</a>.</li>
+      <li>Skim the <a href="#functional-blocks">Feature Map</a> below and enable what you need.</li>
     </ol>
 
-    <h3 id="start-finding">Finding things in this guide</h3>
-    <ul>
-      <li><strong>Search</strong> — use the search box in the sidebar (or in the dashboard's Help panels) to search the entire guide by command or keyword.</li>
-      <li><strong><a href="#functional-blocks">Feature Map</a></strong> — one-line summary of every feature, linked to its section.</li>
-      <li><strong><a href="#quickref">Quick Reference</a></strong> — every command in one table, most-used first.</li>
-    </ul>
-
     <h3 id="ask-guide">Ask Billy-bot (AI)</h3>
-    <p>If you'd rather just ask, <strong>Billy-bot</strong> is an AI helper that answers "how do I…" questions in plain language, grounded in this guide:</p>
-    <ul>
-      <li><strong>In Discord</strong> — run <code>/ask</code> with your question (e.g. <code>/ask how do I start a game?</code>). The reply is private (only you see it).</li>
-      <li><strong>On the dashboard</strong> — use the <strong>Ask Billy-bot</strong> box at the top of any Help page.</li>
-    </ul>
-    <p>Billy-bot only answers from what it's been given, so it won't invent commands — if it's not sure, it'll say so and point you here or to a moderator.</p>
-    <p><strong>Admins</strong> get more from the <em>Config → Billy-bot</em> panel: it picks the model — separately for regular members (Haiku by default) and for mods/admins (Sonnet by default, since staff questions are the ones that look up and change settings) — and can turn on <strong>live server context</strong> (off by default) so Billy-bot answers from this server's channel topics, pins, announcements, dashboard docs, and saved settings — always scoped to what the asker can see, never NSFW. Admins can also ask it <em>"what am I missing?"</em> — it reviews which features this server hasn't set up (or has set up but left switched off) and suggests the cheapest wins first. And an admin can ask it to <em>change</em> a setting or <em>set a feature up from scratch</em>; it never applies anything itself, but returns permission-checked <strong>Apply buttons</strong> to confirm, one per setting. That includes your <strong>role grants</strong> (NSFW, Denizen, Veteran and any custom ones) — you can ask it to point a grant at a different role, change where grants are logged, or reword the grant message, though creating a brand-new grant stays a dashboard job. Settings that hand out access or moderation authority — role grants, the jailed role, who can mark Q&amp;A answers, who can whisper, the unverified role — need a <strong>full server administrator</strong>, not just Manage Server, and that's re-checked when the button is pressed. A short list is off-limits entirely, whoever asks: your admin and mod role IDs, and the message-storage privacy level. Richer feature settings (economy prices, quests, and the like) stay on the dashboard. Full details in <a href="#config">Configuration</a>.</p>
+    <p>Run <code>/ask</code>, or use the <strong>Ask Billy-bot</strong> box above — a guide-grounded AI that won't invent commands. Admins get more from <em>Config → Billy-bot</em>: model per audience, live server context, a setup review, and Apply buttons for settings changes. Details in <a href="#config">Configuration</a>.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          2. FEATURE MAP
