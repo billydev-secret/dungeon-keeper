@@ -36,5 +36,9 @@ Steps:
    c. `git -C "$MAINREPO" merge --no-ff "$BRANCH"` — merge commit so the QA/Testing card hook fires.
    d. `git -C "$MAINREPO" branch -d "$BRANCH"` — drop the integrated branch from the main repo.
    e. Unless `--no-push`: `git -C "$MAINREPO" push`.
-6. Report what merged and whether main was pushed. This session stays on BRANCH (now merged
-   into main); start the next feature with `/dk-feature`.
+6. Report what merged and whether main was pushed.
+7. **Clean up this session's branch:** `git status --porcelain` — if clean (no uncommitted
+   files), `git checkout main && git pull && git branch -d "$BRANCH"` to drop the now-merged
+   branch from this session's checkout too. If anything is uncommitted, skip this step and
+   leave BRANCH checked out so the user doesn't lose it. Start the next feature with
+   `/dk-feature`.
