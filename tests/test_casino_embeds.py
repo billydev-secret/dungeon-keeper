@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import discord
 
-from bot_modules.cogs.casino.embeds import build_slots_embed
+from bot_modules.cogs.casino.embeds import (
+    build_derby_race_embed,
+    build_derby_result_embed,
+    build_slots_embed,
+)
+from bot_modules.services import casino_logic as logic
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
@@ -36,3 +41,33 @@ def test_jackpot_win_is_green_but_keeps_its_copy():
 
 def test_loss_is_red():
     assert _slots(10, 0).color == discord.Color(COLOR_RED)
+
+
+# ── derby ──────────────────────────────────────────────────────────────
+
+_FINAL = [logic.DERBY_TRACK_LEN, 8, 6, 9, 4, 3]
+
+
+def test_derby_result_with_winners_is_green_and_names_the_winner():
+    embed = build_derby_result_embed(
+        _ECON, 0, _FINAL, [(42, "🐇 Hazel the Hare", 10, 25)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    assert "Hazel the Hare" in embed.description
+
+
+def test_derby_result_all_losses_is_red():
+    embed = build_derby_result_embed(
+        _ECON, 0, _FINAL, [(42, "🐌 Turbo the Snail", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
+def test_derby_race_frame_draws_every_runner():
+    embed = build_derby_race_embed(_ECON, [0] * len(logic.DERBY_FIELD), None)
+    assert embed.description is not None
+    lines = embed.description.splitlines()
+    assert len(lines) == len(logic.DERBY_FIELD)
+    for line, runner in zip(lines, logic.DERBY_FIELD):
+        assert line.startswith("🏁") and line.endswith(runner.emoji)

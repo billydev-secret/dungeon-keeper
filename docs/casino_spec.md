@@ -2,8 +2,9 @@
 
 House gambling games staking the guild currency, played publicly in one
 admin-configured **casino channel**. Built 2026-07-22 (plan:
-[plans/casino.md](plans/casino.md)). Sunny-meadow theming over an
-unmistakably Vegas core.
+[plans/casino.md](plans/casino.md)); the Meadow Derby joined 2026-07-24
+(plan: [plans/casino-derby.md](plans/casino-derby.md)). Sunny-meadow
+theming over an unmistakably Vegas core.
 
 **The casino's name is per-guild branding**, not a constant: it comes from
 `branding_config.casino_name` (`branding_service.resolve_casino_name*`,
@@ -16,7 +17,7 @@ dispatches `casino_config_change` so a rename repaints the hub panel.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
-❓ How It Works); every flow is buttons + amount modals. Results post
+🏇 Derby · ❓ How It Works); every flow is buttons + amount modals. Results post
 publicly (mentions live in embeds, so nothing pings). The panel is
 **bottom-sticky** (the economy sticky-panel pattern): channel traffic
 debounces a 20s restick that deletes and reposts it, since it is the
@@ -51,10 +52,12 @@ All movement goes through `services/casino_service.py`:
 - A departing member's live stakes ride the wager-escrow rule:
   `refund_member_live_stakes` (called from the cog's `on_member_remove`)
   refunds an open blackjack hand and deletes+refunds their bets on open
-  roulette rounds, so nothing settles into a ghost wallet.
+  roulette rounds and derby races, so nothing settles into a ghost wallet.
 - House edge is **fixed paytables in `services/casino_logic.py`, not
   settings** — enforced by exact-EV tests (see Testing). RTPs: coinflip
-  95%, slots ≈93.3%, roulette ≈97.3%, blackjack rules-derived.
+  95%, slots ≈93.3%, roulette ≈97.3%, blackjack rules-derived, derby
+  0.90–0.97 per runner (weights × multipliers, pinned per runner so no
+  pick strictly dominates).
 - The register feed **skips** `casino_stake`/`casino_payout` (results are
   already public in the casino channel, and bet-per-play volume would
   outrun the feed's drain budget and starve other kinds); `casino_refund`
@@ -73,11 +76,12 @@ All movement goes through `services/casino_service.py`:
 | `channel_id` | 0 | **Master switch** — 0 = casino closed (ships dark) |
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
-| `{game}_enabled` ×4 | true | closed tables refuse bets + drop off the panel |
+| `{game}_enabled` ×5 | true | closed tables refuse bets + drop off the panel |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
+| `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
 | `blackjack_idle_seconds` | 180 | idle hand auto-stands (bounds 30–3600) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
@@ -112,23 +116,33 @@ guild's casino name, which is edited on **Config → Branding**
   (`status='open'` claim → exactly-once), edits the round message and posts
   a recap. Boot re-arms timers (elapsed windows resolve immediately);
   a round whose guild is gone is **voided** (all bets refunded).
+- **Derby** (plan: [plans/casino-derby.md](plans/casino-derby.md)) — the
+  roulette round machinery re-raced: six fixed runners
+  (`casino_logic.DERBY_FIELD`, weights /100 × total-return ratios:
+  🐇 38·2.5×, 🦔 19·5×, 🐝 13·7×, 🦋 12·8×, 🐢 10·9.5×, 🐌 8·12×), win
+  bets only. One open race per channel; runner buttons
+  (`casino_dy:{runner}:{round_id}`) + amount modal debit at placement; at
+  `closes_at` the timer draws the winner (weighted), settles exactly-once,
+  then plays `derby_frames` on the race message (money **before** the
+  first frame) and posts a recap with 🏇 Next Race. Same boot re-arm,
+  maintenance backstop, and void rules as roulette.
 
 Every terminal path settles or refunds, exactly-once via
 `settled_at IS NULL` / `status='open'` claims — a stake can never evaporate
 or double-pay, including replayed timers and double-clicks. Because the
 pre-checks run in autocommit (legacy DEFERRED isolation), every money-moving
 path **re-claims its row inside the write transaction** with a guarded
-no-op UPDATE before the debit: `place_roulette_bet` (a buzzer-beater bet
-racing the spin misses the claim instead of stranding a stake),
-`double_blackjack_stake`, and `resolve_blackjack_action` (which also bumps
+no-op UPDATE before the debit: `place_roulette_bet` and `place_race_bet`
+(a buzzer-beater bet racing the resolution misses the claim instead of
+stranding a stake), `double_blackjack_stake`, and `resolve_blackjack_action` (which also bumps
 `last_action_at`, resetting the idle clock per press, and reports
 "already finished" instead of rendering an outcome the settle didn't pay).
 
 Recovery is layered: roulette close timers arm **before** the round
 message sends (a failed send voids the round instead of stranding it);
 the 60s maintenance sweep auto-stands idle blackjack hands **and resolves
-any open round past `closes_at`** (self-healing after a crashed timer);
-boot re-arms/refunds as before. Blackjack game rules (double only on two
+any open round or race past `closes_at`** (self-healing after a crashed
+timer); boot re-arms/refunds as before. Blackjack game rules (double only on two
 cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 `stand_idle_blackjack_hand` in the service — tested, not cog glue — and
 the double's second stake is derived from the hand row, never
@@ -180,13 +194,15 @@ caller-supplied.
   carries a jump link to the live round message. Blackjack hides Double
   Down when the clicker can't afford the second stake.
 
-## Storage (migrations 113 + 114)
+## Storage (migrations 113 + 114 + 127)
 
 `casino_daily`, `casino_blackjack_hands` (state_json = deck/player/dealer,
 `settled_at` guard, partial unique live index), `casino_roulette_rounds`
 (open|settled|void, partial unique open-per-channel), `casino_roulette_bets`;
 114 adds `casino_jackpot` (one row per guild), `casino_member_stats` and
-`casino_weekly` (bounded upserts, no per-play log).
+`casino_weekly` (bounded upserts, no per-play log); 127 adds
+`casino_race_rounds` + `casino_race_bets` (the roulette pair's shape, with
+`winner`/`runner` in place of `result`/bet type).
 
 ## Files
 
@@ -198,12 +214,15 @@ caller-supplied.
 ## Testing
 
 `tests/test_casino_logic.py` — exact-EV enumeration pins each paytable's
-RTP band (slots 0.90–0.96, coinflip 0.95, roulette single-zero), blackjack
-settle matrix, wheel/dozen/straight payouts.
+RTP band (slots 0.90–0.96, coinflip 0.95, roulette single-zero, derby
+per-runner 0.90–0.97 with weights summing to 100), blackjack settle
+matrix, wheel/dozen/straight payouts, derby race-frame invariants (winner
+finishes first and alone, positions only advance).
 `tests/test_casino_service.py` — the full `take_stake` guard cascade, cap
 accounting across local days, no-boost payouts, blackjack lifecycle
 (exactly-once settle, boot sweep, idle sweep, double), roulette rounds
-(one-per-channel, window close, exactly-once settle/void, conservation).
+and derby races (one-per-channel, window close, exactly-once settle/void,
+conservation, jackpot feeding, the buzzer-beater claim, leaver refunds).
 `tests/web/test_casino_routes.py` — section shape (string ids), PUT
 persistence + guards; authz/snowflake/browser sweeps cover the panel
 automatically.

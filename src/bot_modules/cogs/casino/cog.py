@@ -30,11 +30,15 @@ from bot_modules.cogs.casino.views import (
     BetModal,
     BlackjackActionButton,
     CasinoHubView,
+    DerbyBetButton,
+    DerbyBetModal,
+    DerbyNextView,
     PlayAgainButton,
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
     build_blackjack_view,
+    build_derby_view,
     build_roulette_view,
     play_again_view,
     safe_ephemeral,
@@ -92,9 +96,12 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.ctx = bot.ctx
         self._bj_locks: dict[int, asyncio.Lock] = {}
         self._roulette_timers: dict[int, asyncio.Task] = {}
-        # Debounced round-embed repaints (one per open round) and panel
-        # resticks (one per guild) — burst coalescers, not state.
+        self._race_timers: dict[int, asyncio.Task] = {}
+        # Debounced round-embed repaints (one per open round/race, keyed by
+        # each table's own row id) and panel resticks (one per guild) —
+        # burst coalescers, not state.
         self._repaint_tasks: dict[int, asyncio.Task] = {}
+        self._race_repaint_tasks: dict[int, asyncio.Task] = {}
         self._restick_tasks: dict[int, asyncio.Task] = {}
         # guild_id → configured casino channel, kept warm by ensure_panel so
         # the on_message restick gate never touches the DB.
@@ -112,8 +119,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
     async def cog_load(self) -> None:
         self.bot.add_view(CasinoHubView())
         self.bot.add_view(RouletteNextView())
+        self.bot.add_view(DerbyNextView())
         self.bot.add_dynamic_items(
-            BlackjackActionButton, RouletteBetButton, PlayAgainButton
+            BlackjackActionButton, RouletteBetButton, DerbyBetButton,
+            PlayAgainButton,
         )
         self._boot_task = asyncio.create_task(self._boot())
         self.maintenance.start()
@@ -123,7 +132,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         if self._boot_task is not None:
             self._boot_task.cancel()
         for task_map in (
-            self._roulette_timers, self._repaint_tasks, self._restick_tasks
+            self._roulette_timers, self._race_timers, self._repaint_tasks,
+            self._race_repaint_tasks, self._restick_tasks,
         ):
             for task in task_map.values():
                 task.cancel()
@@ -134,15 +144,18 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         make sure every configured guild has its hub panel."""
         await self.bot.wait_until_ready()
 
-        def _sweep() -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+        def _sweep() -> tuple[
+            list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row]
+        ]:
             with self.ctx.open_db() as conn:
                 return (
                     svc.refund_live_blackjack_hands(conn),
                     svc.open_roulette_rounds(conn),
+                    svc.open_race_rounds(conn),
                 )
 
         try:
-            swept, rounds = await asyncio.to_thread(_sweep)
+            swept, rounds, races = await asyncio.to_thread(_sweep)
         except Exception:
             log.exception("casino boot sweep failed")
             return
@@ -153,6 +166,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 await self._void_round(int(rnd["id"]))
             else:
                 self._arm_roulette_timer(int(rnd["id"]), float(rnd["closes_at"]))
+        for race in races:
+            if self.bot.get_guild(int(race["guild_id"])) is None:
+                await self._void_race(int(race["id"]))
+            else:
+                self._arm_race_timer(int(race["id"]), float(race["closes_at"]))
         for guild in self.bot.guilds:
             await self.ensure_panel(guild)
 
@@ -173,16 +191,18 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
     @tasks.loop(seconds=60)
     async def maintenance(self) -> None:
-        """Auto-stand idle blackjack hands AND resolve overdue roulette rounds.
+        """Auto-stand idle blackjack hands AND resolve overdue roulette
+        rounds and derby races.
 
-        The roulette leg is the self-healing backstop the timer tasks need:
-        a resolution that failed transiently, or a round whose send crashed
-        before its timer armed, would otherwise hold members' stakes and
-        block the channel until the next restart. The exactly-once
-        ``status='open'`` claim makes replaying resolution here free.
+        The round/race legs are the self-healing backstop the timer tasks
+        need: a resolution that failed transiently, or a round whose send
+        crashed before its timer armed, would otherwise hold members'
+        stakes and block the channel until the next restart. The
+        exactly-once ``status='open'`` claim makes replaying resolution
+        here free.
         """
 
-        def _scan() -> tuple[list[int], list[int], dict[int, int]]:
+        def _scan() -> tuple[list[int], list[int], list[int], dict[int, int]]:
             with self.ctx.open_db() as conn:
                 stale: list[int] = []
                 thresholds: dict[int, int] = {}
@@ -200,6 +220,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     for r in svc.open_roulette_rounds(conn)
                     if float(r["closes_at"]) <= now - 5  # grace for a live timer
                 ]
+                overdue_races = [
+                    int(r["id"])
+                    for r in svc.open_race_rounds(conn)
+                    if float(r["closes_at"]) <= now - 5
+                ]
                 # Pots for guilds whose panel we're maintaining — repainted
                 # below when the value drifted from the rendered one. Same
                 # seed semantics as ensure_panel's read, or an unfed pot
@@ -211,10 +236,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     cs = svc.load_casino_settings(conn, gid)
                     if cs.jackpot_enabled and cs.slots_enabled:
                         pots[gid] = svc.get_jackpot(conn, gid, seed=cs.jackpot_seed)
-                return stale, overdue, pots
+                return stale, overdue, overdue_races, pots
 
         try:
-            stale, overdue, pots = await asyncio.to_thread(_scan)
+            stale, overdue, overdue_races, pots = await asyncio.to_thread(_scan)
         except Exception:
             log.exception("casino maintenance sweep failed")
             return
@@ -236,6 +261,13 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 await self._resolve_roulette(round_id)
             except Exception:
                 log.exception("casino overdue-round resolve failed for %s", round_id)
+        for race_id in overdue_races:
+            if race_id in self._race_timers:
+                continue  # a healthy timer owns it
+            try:
+                await self._resolve_race(race_id)
+            except Exception:
+                log.exception("casino overdue-race resolve failed for %s", race_id)
 
     @maintenance.before_loop
     async def _wait_ready(self) -> None:
@@ -1173,6 +1205,307 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             await asyncio.to_thread(_void)
         except Exception:
             log.exception("roulette void failed for round %s", round_id)
+
+    # ── derby (docs/plans/casino-derby.md) — the roulette flow, re-raced ─
+
+    async def open_derby(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        channel_id = interaction.channel_id
+        if guild is None or channel_id is None:
+            return
+
+        def _open() -> _RoundOpen:
+            with self.ctx.open_db() as conn:
+                econ = load_econ_settings(conn, guild.id)
+                settings = svc.load_casino_settings(conn, guild.id)
+                if not econ.enabled or not settings.channel_id:
+                    return _RoundOpen(err="The casino is closed.")
+                if channel_id != settings.channel_id:
+                    return _RoundOpen(
+                        err="The casino has moved — find it in "
+                        f"<#{settings.channel_id}>."
+                    )
+                if not settings.derby_enabled:
+                    return _RoundOpen(err="That table is closed right now.")
+                existing = svc.live_race_round(conn, channel_id)
+                if existing is not None:
+                    mid = int(existing["message_id"])
+                    return _RoundOpen(
+                        running_at=float(existing["closes_at"]),
+                        running_url=(
+                            f"https://discord.com/channels/{guild.id}"
+                            f"/{channel_id}/{mid}"
+                            if mid
+                            else None
+                        ),
+                    )
+                round_id = svc.open_race_round(
+                    conn, guild.id, channel_id, settings.derby_window_seconds
+                )
+                if round_id is None:
+                    return _RoundOpen(running_at=time.time())
+                race = svc.get_race_round(conn, round_id)
+                assert race is not None
+                return _RoundOpen(
+                    econ=econ, round_id=round_id,
+                    closes_at=float(race["closes_at"]),
+                )
+
+        try:
+            result = await asyncio.to_thread(_open)
+        except sqlite3.IntegrityError:
+            # Two simultaneous presses both passed the pre-check; the
+            # partial unique index caught the second.
+            await safe_ephemeral(
+                interaction, casino_embeds.build_race_running_note(time.time())
+            )
+            return
+        if result.err is not None:
+            await safe_ephemeral(interaction, f"❌ {result.err}")
+            return
+        if result.running_at is not None or result.econ is None:
+            await safe_ephemeral(
+                interaction,
+                casino_embeds.build_race_running_note(
+                    result.running_at or 0.0, result.running_url
+                ),
+            )
+            return
+        round_id = result.round_id
+        # Arm BEFORE the send: if the send fails the timer still resolves
+        # (refunds) the race instead of stranding it headless until boot.
+        self._arm_race_timer(round_id, result.closes_at)
+        embed = casino_embeds.build_derby_round_embed(
+            result.econ, result.closes_at, [], await self._accent(guild)
+        )
+        try:
+            await interaction.response.send_message(
+                embed=embed,
+                view=build_derby_view(round_id),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            message = await interaction.original_response()
+        except discord.HTTPException:
+            # No message means nobody can bet — kill the race now rather
+            # than leave a headless betting window blocking the channel.
+            timer = self._race_timers.pop(round_id, None)
+            if timer is not None:
+                timer.cancel()
+            await self._void_race(round_id)
+            await safe_ephemeral(
+                interaction, "❌ Couldn't open the race — try again."
+            )
+            return
+
+        def _bind() -> None:
+            with self.ctx.open_db() as conn:
+                svc.set_race_message(conn, round_id, message.id)
+
+        await asyncio.to_thread(_bind)
+
+    async def open_derby_bet_modal(
+        self, interaction: discord.Interaction, round_id: int, runner: int
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        label, last = await self._modal_context(
+            guild.id, interaction.user.id, "derby"
+        )
+        await interaction.response.send_modal(
+            DerbyBetModal(
+                round_id, runner, logic.describe_runner(runner),
+                limits_label=label, default_amount=last,
+            )
+        )
+
+    async def place_derby_bet(
+        self,
+        interaction: discord.Interaction,
+        round_id: int,
+        runner: int,
+        amount: int,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        uid = interaction.user.id
+
+        def _bet() -> str | None:
+            with self.ctx.open_db() as conn:
+                return svc.place_race_bet(conn, round_id, uid, runner, amount)
+
+        err = await asyncio.to_thread(_bet)
+        if err is not None:
+            await safe_ephemeral(interaction, f"❌ {err}")
+            return
+        self._last_bets[(guild.id, uid, "derby")] = amount
+        desc = logic.describe_runner(runner)
+        await safe_ephemeral(interaction, f"✅ Bet placed: {desc} for {amount:,}.")
+        self._schedule_race_repaint(guild, round_id)
+
+    def _schedule_race_repaint(self, guild: discord.Guild, round_id: int) -> None:
+        if round_id in self._race_repaint_tasks:
+            return
+        self._race_repaint_tasks[round_id] = asyncio.create_task(
+            self._repaint_race(guild, round_id)
+        )
+
+    async def _repaint_race(self, guild: discord.Guild, round_id: int) -> None:
+        try:
+            await asyncio.sleep(2.0)
+
+            def _read() -> _RoundBet:
+                with self.ctx.open_db() as conn:
+                    race = svc.get_race_round(conn, round_id)
+                    if race is None or str(race["status"]) != "open":
+                        return _RoundBet()
+                    bets = [
+                        (
+                            int(b["user_id"]),
+                            logic.describe_runner(int(b["runner"])),
+                            int(b["amount"]),
+                        )
+                        for b in svc.race_bets(conn, round_id)
+                    ]
+                    return _RoundBet(
+                        econ=load_econ_settings(conn, guild.id), rnd=race,
+                        bets=bets,
+                    )
+
+            result = await asyncio.to_thread(_read)
+            race = result.rnd
+            if result.econ is None or race is None:
+                return  # settled while we slept — the result edit owns it now
+            channel = self.bot.get_channel(int(race["channel_id"]))
+            if isinstance(channel, discord.TextChannel) and int(race["message_id"]):
+                embed = casino_embeds.build_derby_round_embed(
+                    result.econ, float(race["closes_at"]), result.bets or [],
+                    await self._accent(guild),
+                )
+                try:
+                    await channel.get_partial_message(int(race["message_id"])).edit(
+                        embed=embed
+                    )
+                except discord.HTTPException:
+                    pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("derby repaint failed for race %s", round_id)
+        finally:
+            self._race_repaint_tasks.pop(round_id, None)
+
+    def _arm_race_timer(self, round_id: int, closes_at: float) -> None:
+        if round_id in self._race_timers:
+            return
+        delay = max(0.0, closes_at - time.time())
+        self._race_timers[round_id] = asyncio.create_task(
+            self._race_timer(round_id, delay)
+        )
+
+    async def _race_timer(self, round_id: int, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+            await self._resolve_race(round_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("derby resolution failed for race %s", round_id)
+        finally:
+            self._race_timers.pop(round_id, None)
+
+    async def _resolve_race(self, round_id: int) -> None:
+        # No lock needed: the status='open' claim inside settle_race_round
+        # is the mutual exclusion (timer, maintenance sweep and void can
+        # all reach a race; only the first claim pays).
+        repaint = self._race_repaint_tasks.pop(round_id, None)
+        if repaint is not None:
+            repaint.cancel()  # a stale "at the gate" edit must not land post-race
+
+        def _settle():
+            with self.ctx.open_db() as conn:
+                race = svc.get_race_round(conn, round_id)
+                if race is None or str(race["status"]) != "open":
+                    return None
+                winner = logic.run_derby()
+                bets = svc.settle_race_round(conn, round_id, winner)
+                if bets is None:
+                    return None
+                gid = int(race["guild_id"])
+                econ = load_econ_settings(conn, gid)
+                pot_after = 0
+                if any(int(b["payout"]) == 0 for b in bets):
+                    cs = svc.load_casino_settings(conn, gid)
+                    if cs.jackpot_enabled:
+                        pot_after = svc.get_jackpot(conn, gid)
+                return race, winner, bets, econ, pot_after
+
+        settled = await asyncio.to_thread(_settle)
+        if settled is None:
+            return
+        race, winner, bet_rows, econ, pot_after = settled
+        bets = [
+            (
+                int(b["user_id"]),
+                logic.describe_runner(int(b["runner"])),
+                int(b["amount"]),
+                int(b["payout"]),
+            )
+            for b in bet_rows
+        ]
+        channel = self.bot.get_channel(int(race["channel_id"]))
+        if not isinstance(channel, discord.TextChannel):
+            return
+        frames = logic.derby_frames(winner)
+        result_embed = casino_embeds.build_derby_result_embed(
+            econ, winner, frames[-1], bets, pot_after=pot_after
+        )
+        if int(race["message_id"]):
+            try:
+                # The race is always worth showing — one per window, like
+                # roulette's ball bounce. Money already settled above.
+                msg = channel.get_partial_message(int(race["message_id"]))
+                accent = await self._accent(channel.guild)
+                for frame in frames[:-1]:
+                    await msg.edit(
+                        embed=casino_embeds.build_derby_race_embed(
+                            econ, frame, accent
+                        ),
+                        view=None,
+                    )
+                    await asyncio.sleep(1.3)
+                await msg.edit(embed=result_embed, view=None)
+            except discord.HTTPException:
+                log.warning(
+                    "derby result edit failed for race %s (%d winners) — "
+                    "panel may be stuck mid-race",
+                    race["id"],
+                    sum(1 for b in bets if b[3] > 0),
+                )
+        if bets:
+            try:
+                await channel.send(
+                    embed=result_embed,
+                    view=DerbyNextView(),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                log.warning(
+                    "derby result send failed for race %s (%d winners)",
+                    race["id"],
+                    sum(1 for b in bets if b[3] > 0),
+                )
+
+    async def _void_race(self, round_id: int) -> None:
+        def _void() -> None:
+            with self.ctx.open_db() as conn:
+                svc.void_race_round(conn, round_id)
+
+        try:
+            await asyncio.to_thread(_void)
+        except Exception:
+            log.exception("derby void failed for race %s", round_id)
 
 
 async def setup(bot: Bot) -> None:

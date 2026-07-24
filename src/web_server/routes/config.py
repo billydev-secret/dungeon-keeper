@@ -483,7 +483,9 @@ def _casino_section(conn, guild_id: int) -> dict:
         "slots_enabled": s.slots_enabled,
         "blackjack_enabled": s.blackjack_enabled,
         "roulette_enabled": s.roulette_enabled,
+        "derby_enabled": s.derby_enabled,
         "roulette_window_seconds": s.roulette_window_seconds,
+        "derby_window_seconds": s.derby_window_seconds,
         "blackjack_idle_seconds": s.blackjack_idle_seconds,
         "jackpot_enabled": s.jackpot_enabled,
         "jackpot_cut_pct": s.jackpot_cut_pct,
@@ -3805,7 +3807,9 @@ class CasinoConfigUpdate(BaseModel):
     slots_enabled: bool | None = None
     blackjack_enabled: bool | None = None
     roulette_enabled: bool | None = None
+    derby_enabled: bool | None = None
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
+    derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
     blackjack_idle_seconds: int | None = Field(default=None, ge=30, le=3600)
     jackpot_enabled: bool | None = None
     jackpot_cut_pct: int | None = Field(default=None, ge=0, le=100)

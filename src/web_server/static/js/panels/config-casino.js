@@ -144,6 +144,7 @@ export function mount(container) {
       checkbox("slots_enabled", c.slots_enabled !== false, "Slots"),
       checkbox("blackjack_enabled", c.blackjack_enabled !== false, "Blackjack"),
       checkbox("roulette_enabled", c.roulette_enabled !== false, "Roulette"),
+      checkbox("derby_enabled", c.derby_enabled !== false, "Derby"),
     );
     cardTables.appendChild(field(
       "Open Tables", tables,
@@ -182,6 +183,12 @@ export function mount(container) {
       "How long bets stay open after someone starts a round. Between 15 and 600 seconds.",
     ));
     cardTiming.appendChild(field(
+      "Derby Betting Window (seconds)",
+      numInput("derby_window_seconds", c.derby_window_seconds ?? 60, 15, "1", 600),
+      "How long members can back a runner after someone opens a race. " +
+        "Between 15 and 600 seconds.",
+    ));
+    cardTiming.appendChild(field(
       "Blackjack Idle Timeout (seconds)",
       numInput("blackjack_idle_seconds", c.blackjack_idle_seconds ?? 180, 30, "1", 3600),
       "A hand nobody touches for this long stands automatically so the table " +
@@ -211,6 +218,7 @@ export function mount(container) {
         ["jackpot_cut_pct", "Share of Each Losing Bet", 0, 100],
         ["jackpot_seed", "Starting Pot After a Win", 0, null],
         ["roulette_window_seconds", "Roulette Betting Window", 15, 600],
+        ["derby_window_seconds", "Derby Betting Window", 15, 600],
         ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 3600],
       ]) {
         const raw = String(fd.get(name) ?? "").trim();
@@ -236,6 +244,7 @@ export function mount(container) {
           slots_enabled: fd.has("slots_enabled"),
           blackjack_enabled: fd.has("blackjack_enabled"),
           roulette_enabled: fd.has("roulette_enabled"),
+          derby_enabled: fd.has("derby_enabled"),
           jackpot_enabled: fd.has("jackpot_enabled"),
         });
         showStatus(statusEl, true);

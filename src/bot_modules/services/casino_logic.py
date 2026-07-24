@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import random
 
+from typing import NamedTuple
+
 # ── Coinflip ───────────────────────────────────────────────────────────
 
 COINFLIP_SIDES = ("heads", "tails")
@@ -225,6 +227,82 @@ def roulette_payout(bet_type: str, selection: int, result: int, amount: int) -> 
     if bet_type == "number":
         return amount * 36 if result == selection else 0
     raise ValueError(f"unknown roulette bet type: {bet_type}")
+
+
+# ── Meadow Derby (fixed-odds critter race) ─────────────────────────────
+
+class DerbyRunner(NamedTuple):
+    emoji: str
+    name: str
+    weight: int  # win probability out of DERBY_TOTAL_WEIGHT
+    mult_num: int  # total-return multiplier as a ratio (integer math)
+    mult_den: int
+
+
+# Favorite pays least, the snail is the moonshot. Weights sum to exactly
+# 100 and every runner's RTP sits in the slots band (0.90–0.97) — pinned
+# by the exact-EV test, so no runner is a strictly better pick.
+DERBY_FIELD: tuple[DerbyRunner, ...] = (
+    DerbyRunner("🐇", "Hazel the Hare", 38, 5, 2),
+    DerbyRunner("🦔", "Bramble the Hedgehog", 19, 5, 1),
+    DerbyRunner("🐝", "Buzz the Bee", 13, 7, 1),
+    DerbyRunner("🦋", "Flutter the Butterfly", 12, 8, 1),
+    DerbyRunner("🐢", "Sheldon the Tortoise", 10, 19, 2),
+    DerbyRunner("🐌", "Turbo the Snail", 8, 12, 1),
+)
+DERBY_TOTAL_WEIGHT = 100
+
+DERBY_TRACK_LEN = 12
+DERBY_FRAMES = 3  # intermediate frames before the finish frame
+
+
+def run_derby() -> int:
+    """Draw the winning runner's index, weighted by the field."""
+    return random.choices(
+        range(len(DERBY_FIELD)), weights=[r.weight for r in DERBY_FIELD]
+    )[0]
+
+
+def derby_payout(runner: int, winner: int, amount: int) -> int:
+    """Total return for one bet on ``runner`` (0 = lost)."""
+    if runner != winner:
+        return 0
+    r = DERBY_FIELD[winner]
+    return amount * r.mult_num // r.mult_den
+
+
+def derby_frames(winner: int) -> list[list[int]]:
+    """Per-frame track positions for the race show, winner decided first.
+
+    DERBY_FRAMES mid-race frames then the finish: positions only ever
+    advance, nobody reaches the line early, and the final frame has the
+    winner at DERBY_TRACK_LEN alone in front. Pure cosmetics over an
+    already-settled draw — the "money before the first frame" rule.
+    """
+    n = len(DERBY_FIELD)
+    pos = [0] * n
+    frames: list[list[int]] = []
+    for _ in range(DERBY_FRAMES):
+        for i in range(n):
+            pos[i] = min(pos[i] + random.randint(1, 3), DERBY_TRACK_LEN - 2)
+        frames.append(list(pos))
+    final = [min(p + random.randint(1, 3), DERBY_TRACK_LEN - 1) for p in pos]
+    final[winner] = DERBY_TRACK_LEN
+    frames.append(final)
+    return frames
+
+
+def describe_runner(runner: int) -> str:
+    r = DERBY_FIELD[runner]
+    return f"{r.emoji} {r.name}"
+
+
+def derby_odds_label(runner: int) -> str:
+    """"2.5×" / "5×" — the odds board's payout column."""
+    r = DERBY_FIELD[runner]
+    if r.mult_num % r.mult_den == 0:
+        return f"{r.mult_num // r.mult_den}×"
+    return f"{r.mult_num / r.mult_den:g}×"
 
 
 def cap_lines(lines: list[str], *, limit: int, more_label: str = "more") -> list[str]:

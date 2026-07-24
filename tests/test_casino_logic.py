@@ -194,6 +194,66 @@ def test_describe_bet_labels():
     assert logic.describe_bet("number", 17) == "Straight 17"
 
 
+# ── derby ──────────────────────────────────────────────────────────────
+
+
+def test_derby_weights_sum_to_total():
+    assert sum(r.weight for r in logic.DERBY_FIELD) == logic.DERBY_TOTAL_WEIGHT
+
+
+def test_derby_every_runner_rtp_in_design_band():
+    """Exact EV per runner: weight/100 × multiplier must sit in the slots
+    band, so no runner is a strictly better (or house-robbing) pick."""
+    stake = 100  # multiple of every mult_den — floors nothing
+    for i, r in enumerate(logic.DERBY_FIELD):
+        rtp = (r.weight / logic.DERBY_TOTAL_WEIGHT) * (
+            logic.derby_payout(i, i, stake) / stake
+        )
+        assert 0.90 <= rtp <= 0.97, f"runner {r.name} RTP drifted to {rtp:.4f}"
+
+
+def test_derby_payout_wins_and_losses():
+    assert logic.derby_payout(0, 0, 10) == 25   # the hare's 2.5×
+    assert logic.derby_payout(4, 4, 5) == 47    # 9.5× floored
+    assert logic.derby_payout(0, 1, 10) == 0    # wrong runner
+
+
+def test_run_derby_uses_module_random(monkeypatch):
+    monkeypatch.setattr(
+        logic.random, "choices", lambda seq, weights: [list(seq)[2]]
+    )
+    assert logic.run_derby() == 2
+
+
+def test_derby_frames_invariants():
+    """For every possible winner: positions only advance, nobody finishes
+    early, and the final frame has the winner at the line alone."""
+    for winner in range(len(logic.DERBY_FIELD)):
+        for _ in range(20):
+            frames = logic.derby_frames(winner)
+            assert len(frames) == logic.DERBY_FRAMES + 1
+            prev = [0] * len(logic.DERBY_FIELD)
+            for frame in frames[:-1]:
+                assert all(p >= q for p, q in zip(frame, prev))
+                assert all(p < logic.DERBY_TRACK_LEN - 1 for p in frame)
+                prev = frame
+            final = frames[-1]
+            assert all(p >= q for p, q in zip(final, prev))
+            assert final[winner] == logic.DERBY_TRACK_LEN
+            assert all(
+                p < logic.DERBY_TRACK_LEN
+                for i, p in enumerate(final)
+                if i != winner
+            )
+
+
+def test_derby_labels():
+    assert logic.describe_runner(0) == "🐇 Hazel the Hare"
+    assert logic.derby_odds_label(0) == "2.5×"
+    assert logic.derby_odds_label(1) == "5×"
+    assert logic.derby_odds_label(4) == "9.5×"
+
+
 # ── fancy round: streaks & thresholds ──────────────────────────────────
 
 
