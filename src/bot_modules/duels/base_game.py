@@ -327,21 +327,47 @@ class BaseGame(commands.Cog):
 
     # ── Permission preflight ──────────────────────────────────────────────────
 
-    async def _check_bot_can_nick(
+    async def _check_bot_can_nick(self, guild: discord.Guild) -> str | None:
+        """Hard gate: without **Manage Nicknames** the bot can rename no one, so
+        a nickname-stake game is pointless — abort. Role hierarchy (a specific
+        player outranking the bot) is *not* fatal; it's handled non-fatally by
+        :meth:`_unrenameable_members` so a staff member in the roster only means
+        *they* can't be renamed, not that the game can't run."""
+        if not guild.me.guild_permissions.manage_nicknames:
+            return "I need the **Manage Nicknames** permission to enforce this game."
+        return None
+
+    def _unrenameable_members(
         self,
         guild: discord.Guild,
         members: list[discord.Member],
-    ) -> str | None:
+    ) -> list[discord.Member]:
+        """Members the bot can't rename because their top role sits at or above
+        the bot's own. The game still runs — if one of them loses, the win
+        stands and the rename is skipped. The guild owner is excluded: Discord
+        blocks renaming them too, but that path has the owner self-apply the
+        sentence (see the owner branch in the nick-submit handler)."""
         me = guild.me
-        if not me.guild_permissions.manage_nicknames:
-            return "I need the **Manage Nicknames** permission to enforce this game."
-        for member in members:
-            if member.id != guild.owner_id and me.top_role <= member.top_role:
-                return (
-                    "My highest role must be above all players' roles to rename the loser. "
-                    "Ask an admin to fix my role position."
-                )
-        return None
+        return [
+            m
+            for m in members
+            if m.id != guild.owner_id and me.top_role <= m.top_role
+        ]
+
+    def _unrenameable_notice(self, members: list[discord.Member]) -> str | None:
+        """A non-fatal heads-up naming the players the bot can't rename, or
+        ``None`` when everyone is renameable. Shown as a warning so the game
+        proceeds instead of stopping when a staff member outranks the bot."""
+        if not members:
+            return None
+        names = ", ".join(f"**{m.display_name}**" for m in members)
+        who = "this player" if len(members) == 1 else "these players"
+        loses = "they lose" if len(members) == 1 else "one of them loses"
+        return (
+            f"⚠️ I can't rename {who} — their role is above mine: {names}. "
+            f"The game runs anyway; if {loses}, the win stands but no nickname "
+            f"is applied. Ask an admin to move my role higher to enable it."
+        )
 
     async def _check_no_active_nick(
         self,
@@ -434,10 +460,22 @@ class BaseGame(commands.Cog):
             await self._db_set_state(game_id, "NO_NICK_SET")
             return
 
-        challenger_member = guild.get_member(game.challenger_id)  # type: ignore[arg-type]
-        perm_error = await self._check_bot_can_nick(guild, [challenger_member or loser, loser])  # type: ignore[list-item]
+        perm_error = await self._check_bot_can_nick(guild)
         if perm_error:
             await interaction.response.send_message(perm_error, ephemeral=True)
+            return
+
+        # The loser outranks the bot (e.g. a staff member): Discord won't let me
+        # rename them. The win still stands — conclude with no nickname rather
+        # than erroring out, mirroring the owner / left-server / active-sentence
+        # paths above and below.
+        if self._unrenameable_members(guild, [loser]):
+            await interaction.response.send_message(
+                f"**{loser.display_name}**'s role is above mine, so I can't "
+                f"rename them — but your win stands.",
+                ephemeral=True,
+            )
+            await self._db_set_state(game_id, "NO_NICK_SET")
             return
 
         # Guard against overlapping sentences: if the loser is already serving a
@@ -670,8 +708,9 @@ class BaseGame(commands.Cog):
 
         # Nickname-mode preflight only applies when nicknames are the stake —
         # no custom stakes text AND no wager (a wager becomes the stake below).
+        nick_notice: str | None = None
         if stakes_text is None and wager is None:
-            err = await self._check_bot_can_nick(guild, [host])  # type: ignore[list-item]
+            err = await self._check_bot_can_nick(guild)
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
@@ -679,6 +718,10 @@ class BaseGame(commands.Cog):
             if err:
                 await interaction.response.send_message(err, ephemeral=True)
                 return
+            # The host outranking the bot doesn't block the lobby — warn later.
+            nick_notice = self._unrenameable_notice(
+                self._unrenameable_members(guild, [host])  # type: ignore[list-item]
+            )
             cd = await duels_db.check_group_cooldown(
                 self.db, guild.id, self.GAME_KEY, host.id, cfg["cooldown_hours"]
             )
@@ -740,6 +783,8 @@ class BaseGame(commands.Cog):
         msg = await interaction.original_response()
         self.bot.add_view(view, message_id=msg.id)
         await self._db_set_state(game_id, "LOBBY", message_id=msg.id, last_action_at=time.time())
+        if nick_notice:
+            await interaction.followup.send(nick_notice, ephemeral=True)
 
     async def _handle_lobby_join(self, interaction: discord.Interaction, game_id: int) -> None:
         async with self._get_lock(game_id):
@@ -762,12 +807,17 @@ class BaseGame(commands.Cog):
                 return
 
             member = guild.get_member(uid)
+            nick_notice: str | None = None
             if game.stakes_text is None and member is not None:
-                err = await self._check_bot_can_nick(guild, [member]) or \
+                err = await self._check_bot_can_nick(guild) or \
                     await self._check_no_active_nick(guild, [member])
                 if err:
                     await interaction.response.send_message(err, ephemeral=True)
                     return
+                # Joining while outranking the bot is allowed — warn, don't block.
+                nick_notice = self._unrenameable_notice(
+                    self._unrenameable_members(guild, [member])
+                )
                 cfg = await duels_db.get_config(self.db, game.guild_id, self.GAME_KEY)
                 cd = await duels_db.check_group_cooldown(
                     self.db, game.guild_id, self.GAME_KEY, uid, cfg["cooldown_hours"]
@@ -798,6 +848,8 @@ class BaseGame(commands.Cog):
             await interaction.response.edit_message(
                 embed=embed, view=self._build_lobby_view(game_id, game.host_id)
             )
+            if nick_notice:
+                await interaction.followup.send(nick_notice, ephemeral=True)
 
     async def _handle_lobby_leave(self, interaction: discord.Interaction, game_id: int) -> None:
         async with self._get_lock(game_id):
@@ -883,13 +935,19 @@ class BaseGame(commands.Cog):
                 return
 
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+            nick_notice: str | None = None
             if game.stakes_text is None:
                 members = [m for m in (guild.get_member(u) for u in game.roster) if m]
-                err = await self._check_bot_can_nick(guild, members) or \
+                err = await self._check_bot_can_nick(guild) or \
                     await self._check_no_active_nick(guild, members)
                 if err:
                     await interaction.response.send_message(err, ephemeral=True)
                     return
+                # Players outranking the bot don't block the start — warn, and
+                # skip their rename if one of them loses.
+                nick_notice = self._unrenameable_notice(
+                    self._unrenameable_members(guild, members)
+                )
 
             await self._db_set_state(
                 game_id, "ACTIVE",
@@ -907,6 +965,8 @@ class BaseGame(commands.Cog):
             embed = self.render_game_state(game, guild)
             self.bot.add_view(view, message_id=game.message_id)
             await interaction.response.edit_message(embed=embed, view=view)
+            if nick_notice:
+                await interaction.followup.send(nick_notice, ephemeral=True)
 
     # ── Group resolution (timer-driven, posts to channel like duel _explode) ──
 

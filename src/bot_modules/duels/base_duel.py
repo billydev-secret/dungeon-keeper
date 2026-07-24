@@ -93,8 +93,9 @@ class BaseDuel(BaseGame):
         # no custom stakes text AND no wager (a wager becomes the stake below).
         # Non-nickname games never rename anyone, so they don't need the
         # Manage Nicknames permission or a clear nickname slate.
+        nick_notice: str | None = None
         if stakes_text is None and wager is None:
-            perm_error = await self._check_bot_can_nick(guild, [challenger, target])  # type: ignore[list-item]
+            perm_error = await self._check_bot_can_nick(guild)
             if perm_error:
                 await interaction.response.send_message(perm_error, ephemeral=True)
                 return
@@ -103,6 +104,12 @@ class BaseDuel(BaseGame):
             if nick_error:
                 await interaction.response.send_message(nick_error, ephemeral=True)
                 return
+
+            # A player outranking the bot doesn't block the challenge — warn,
+            # then continue; the rename is skipped if that player loses.
+            nick_notice = self._unrenameable_notice(
+                self._unrenameable_members(guild, [challenger, target])  # type: ignore[list-item]
+            )
 
         existing = await self._db_get_active_game_for_pair(guild.id, challenger.id, target.id)
         if existing:
@@ -162,6 +169,8 @@ class BaseDuel(BaseGame):
         )
         msg = await interaction.original_response()
         await self._db_set_state(game_id, "PENDING", message_id=msg.id)
+        if nick_notice:
+            await interaction.followup.send(nick_notice, ephemeral=True)
 
     def _build_challenge_embed(
         self,

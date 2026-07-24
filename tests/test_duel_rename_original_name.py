@@ -187,6 +187,7 @@ async def test_base_handler_captures_name_before_the_edit(monkeypatch):
     cog._db_get_game = _async_return(game)
     cog._check_bot_can_nick = _async_return(None)
     cog._check_no_active_nick = _async_return([])
+    cog._unrenameable_members = MagicMock(return_value=[])  # loser is renameable
     cog._db_set_state = _async_noop()
     cog._disabled_result_view = MagicMock(return_value=None)
 
