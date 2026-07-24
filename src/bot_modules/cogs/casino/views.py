@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.services import casino_logic as logic
+from bot_modules.services import casino_service as svc
+
 if TYPE_CHECKING:
     from bot_modules.cogs.casino.cog import CasinoCog
 
@@ -156,6 +159,40 @@ class RouletteBetModal(discord.ui.Modal):
         )
 
 
+class DerbyBetModal(discord.ui.Modal):
+    """One amount box; the runner was chosen by the button that opened it."""
+
+    def __init__(
+        self,
+        round_id: int,
+        runner: int,
+        runner_label: str,
+        *,
+        limits_label: str = "Your bet",
+        default_amount: int | None = None,
+    ) -> None:
+        super().__init__(title=f"Back {runner_label}"[:45])
+        self.round_id = round_id
+        self.runner = runner
+        self.amount: discord.ui.TextInput = discord.ui.TextInput(
+            label=limits_label[:45],
+            placeholder="A whole number of coins",
+            default=str(default_amount) if default_amount else None,
+            max_length=10,
+        )
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is None:
+            return
+        amount = parse_amount(str(self.amount.value))
+        if amount is None:
+            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
+            return
+        await cog.place_derby_bet(interaction, self.round_id, self.runner, amount)
+
+
 # ── the hub panel ──────────────────────────────────────────────────────
 
 
@@ -233,6 +270,17 @@ class CasinoHubView(discord.ui.View):
             await cog.open_roulette(interaction)
 
     @discord.ui.button(
+        label="Derby", emoji="🏇",
+        style=discord.ButtonStyle.primary, custom_id="casino:derby", row=0,
+    )
+    async def derby(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_derby(interaction)
+
+    @discord.ui.button(
         label="My Stats", emoji="📊",
         style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=1,
     )
@@ -253,6 +301,23 @@ class CasinoHubView(discord.ui.View):
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
             await cog.send_help(interaction)
+
+
+def build_hub_view(settings: svc.CasinoSettings) -> CasinoHubView:
+    """The hub panel's view for ONE guild: disabled tables drop off.
+
+    The full CasinoHubView stays registered at cog_load so buttons on a
+    stale panel still route after a restart or re-enable; this pared copy
+    is what actually gets sent — making "closed tables disappear from the
+    panel" true for the buttons, not just the embed's Tables text.
+    """
+    view = CasinoHubView()
+    for item in list(view.children):
+        custom_id = getattr(item, "custom_id", "") or ""
+        game = custom_id.removeprefix("casino:")
+        if game in svc.GAMES and not svc.game_enabled(settings, game):
+            view.remove_item(item)
+    return view
 
 
 # ── blackjack table buttons ────────────────────────────────────────────
@@ -352,6 +417,75 @@ def build_roulette_view(round_id: int) -> discord.ui.View:
     for kind in ("red", "black", "num", "d1", "d2", "d3"):
         view.add_item(RouletteBetButton(kind, round_id))
     return view
+
+
+# ── derby race buttons ─────────────────────────────────────────────────
+
+
+class DerbyBetButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    # The runner range is anchored in the template itself (the roulette
+    # buttons' enumerated-alternation rule): a stale button minted for a
+    # runner the field no longer has must fail the match, not IndexError
+    # inside dispatch.
+    template=re.compile(
+        rf"casino_dy:(?P<runner>[0-{len(logic.DERBY_FIELD) - 1}]):(?P<rid>\d+)"
+    ),
+):
+    def __init__(self, runner: int, round_id: int) -> None:
+        r = logic.DERBY_FIELD[runner]
+        super().__init__(
+            discord.ui.Button(
+                label=f"{r.name.split()[0]} {logic.derby_odds_label(runner)}",
+                emoji=r.emoji,
+                style=discord.ButtonStyle.secondary,
+                row=runner // 3,
+                custom_id=f"casino_dy:{runner}:{round_id}",
+            )
+        )
+        self.runner = runner
+        self.round_id = round_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> DerbyBetButton:
+        return cls(int(match["runner"]), int(match["rid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_derby_bet_modal(
+                interaction, self.round_id, self.runner
+            )
+
+
+def build_derby_view(round_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    for runner in range(len(logic.DERBY_FIELD)):
+        view.add_item(DerbyBetButton(runner, round_id))
+    return view
+
+
+class DerbyNextView(discord.ui.View):
+    """One persistent button on race recaps — the next race is a click."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Next Race", emoji="🏇",
+        style=discord.ButtonStyle.secondary, custom_id="casino:derby_next",
+    )
+    async def next_race(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_derby(interaction)
 
 
 # ── the loop-closers: Play Again / Next Round ──────────────────────────

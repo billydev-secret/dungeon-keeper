@@ -35,6 +35,7 @@ _GAME_LINES = {
     "slots": "🎰 **Slots** — three meadow reels; pairs pay back, sevens pay big",
     "blackjack": "🃏 **Blackjack** — beat the dealer to 21; naturals pay 3:2",
     "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
+    "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
 }
 
 
@@ -123,6 +124,7 @@ def build_help_embed(
     *,
     casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
+    """One field per OPEN table — a closed table's odds are not on offer."""
     embed = discord.Embed(
         title=f"How the {casino_name} pays",
         description=(
@@ -132,43 +134,62 @@ def build_help_embed(
         ),
         color=_accent(accent),
     )
-    embed.add_field(
-        name="🪙 Coinflip",
-        value="Call heads or tails. Win: **1.9×** (95% return).\n​",
-        inline=False,
-    )
-    triples = " · ".join(
-        f"{sym}{sym}{sym} **{mult}×**"
-        for sym, mult in logic.SLOT_TRIPLE_PAYOUT.items()
-    )
-    embed.add_field(
-        name="🎰 Slots",
-        value=(
-            f"{triples}\n"
-            f"Two 7️⃣ **{logic.SLOT_TWO_SEVENS_MULT}×** · any pair **1.5×** "
-            "(~93% return)\n​"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🃏 Blackjack",
-        value=(
-            "Dealer stands on all 17s. Blackjack pays **3:2**, wins pay "
-            "**2×**, pushes return your bet. Double down on your first two "
-            "cards. Idle hands stand automatically.\n​"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🎡 Roulette",
-        value=(
-            "European wheel, one zero. Red/black **2×** · dozens **3×** · "
-            "straight numbers **36×** (~97% return). A betting window opens "
-            f"for {settings.roulette_window_seconds}s, then the wheel decides "
-            "for everyone at once."
-        ),
-        inline=False,
-    )
+    if settings.coinflip_enabled:
+        embed.add_field(
+            name="🪙 Coinflip",
+            value="Call heads or tails. Win: **1.9×** (95% return).\n​",
+            inline=False,
+        )
+    if settings.slots_enabled:
+        triples = " · ".join(
+            f"{sym}{sym}{sym} **{mult}×**"
+            for sym, mult in logic.SLOT_TRIPLE_PAYOUT.items()
+        )
+        embed.add_field(
+            name="🎰 Slots",
+            value=(
+                f"{triples}\n"
+                f"Two 7️⃣ **{logic.SLOT_TWO_SEVENS_MULT}×** · any pair **1.5×** "
+                "(~93% return)\n​"
+            ),
+            inline=False,
+        )
+    if settings.blackjack_enabled:
+        embed.add_field(
+            name="🃏 Blackjack",
+            value=(
+                "Dealer stands on all 17s. Blackjack pays **3:2**, wins pay "
+                "**2×**, pushes return your bet. Double down on your first two "
+                "cards. Idle hands stand automatically.\n​"
+            ),
+            inline=False,
+        )
+    if settings.roulette_enabled:
+        embed.add_field(
+            name="🎡 Roulette",
+            value=(
+                "European wheel, one zero. Red/black **2×** · dozens **3×** · "
+                "straight numbers **36×** (~97% return). A betting window opens "
+                f"for {settings.roulette_window_seconds}s, then the wheel decides "
+                "for everyone at once.\n​"
+            ),
+            inline=False,
+        )
+    if settings.derby_enabled:
+        odds = " · ".join(
+            f"{r.emoji} **{logic.derby_odds_label(i)}**"
+            for i, r in enumerate(logic.DERBY_FIELD)
+        )
+        embed.add_field(
+            name="🏇 Derby",
+            value=(
+                f"{odds}\n"
+                "Back a critter to win — the favorite pays least, the snail "
+                "pays big (91–96% return by runner). Betting stays open for "
+                f"{settings.derby_window_seconds}s, then they're off.\n​"
+            ),
+            inline=False,
+        )
     if settings.daily_wager_cap:
         embed.add_field(
             name="Daily limit",
@@ -418,6 +439,28 @@ def build_blackjack_embed(
     return embed
 
 
+def _add_bets_field(
+    embed: discord.Embed, econ: EconSettings, bets: list[tuple[int, str, int]]
+) -> None:
+    """The live bets board, newest first, char-capped under the 1024 field
+    limit — a long currency name or big stakes must never 400 the repaint
+    and silently freeze the board (the result embed's cap_lines rule)."""
+    if not bets:
+        embed.add_field(name="Bets", value="*No bets yet — be first.*", inline=False)
+        return
+    lines = [
+        f"<@{uid}> — {desc} · {_coins(econ, amount)}"
+        for uid, desc, amount in reversed(bets)
+    ]
+    embed.add_field(
+        name=f"Bets ({len(bets)})",
+        value="\n".join(
+            logic.cap_lines(lines, limit=1022, more_label="earlier bet(s)")
+        ),
+        inline=False,
+    )
+
+
 def build_roulette_round_embed(
     econ: EconSettings,
     closes_at: float,
@@ -433,16 +476,7 @@ def build_roulette_round_embed(
         ),
         color=_accent(accent),
     )
-    if bets:
-        lines = [
-            f"<@{uid}> — {desc} · {_coins(econ, amount)}"
-            for uid, desc, amount in bets[-15:]
-        ]
-        if len(bets) > 15:
-            lines.insert(0, f"*…and {len(bets) - 15} earlier bet(s)*")
-        embed.add_field(name=f"Bets ({len(bets)})", value="\n".join(lines), inline=False)
-    else:
-        embed.add_field(name="Bets", value="*No bets yet — be first.*", inline=False)
+    _add_bets_field(embed, econ, bets)
     embed.set_footer(text=_FOOTER)
     return embed
 
@@ -504,6 +538,111 @@ def build_round_running_note(closes_at: float, url: str | None = None) -> str:
     if url:
         return f"{note} Jump to it and place your bet: {url}"
     return f"{note} Place your bet on the round message above."
+
+
+# ── derby (docs/plans/casino-derby.md) ─────────────────────────────────
+
+
+def _odds_board() -> str:
+    return "\n".join(
+        f"{logic.describe_runner(i)} — pays **{logic.derby_odds_label(i)}**"
+        for i in range(len(logic.DERBY_FIELD))
+    )
+
+
+def build_derby_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, runner description, amount), placement order."""
+    embed = discord.Embed(
+        title="🏇 Meadow Derby — they're at the gate!",
+        description=(
+            f"The race starts <t:{int(closes_at)}:R>. "
+            "Back a critter — payouts are total return on your bet.\n​"
+        ),
+        color=_accent(accent),
+    )
+    embed.add_field(name="The field", value=_odds_board() + "\n​", inline=False)
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def _track_lines(positions: list[int]) -> str:
+    """One line per runner, racing right-to-left toward the flag: the flag
+    stays left-aligned and the shrinking gap IS the distance left, which
+    reads cleanly in a proportional font (no column math to break)."""
+    return "\n".join(
+        f"🏁{'┄' * (logic.DERBY_TRACK_LEN - pos)}{runner.emoji}"
+        for runner, pos in zip(logic.DERBY_FIELD, positions)
+    )
+
+
+def build_derby_race_embed(
+    econ: EconSettings, positions: list[int], accent: discord.Color | None
+) -> discord.Embed:
+    embed = discord.Embed(
+        title="🏇 Meadow Derby — and they're off!",
+        description=_track_lines(positions),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_derby_result_embed(
+    econ: EconSettings,
+    winner: int,
+    final_positions: list[int],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, runner description, amount, payout)."""
+    winners = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    description = (
+        f"{_track_lines(final_positions)}\n​\n"
+        f"**{logic.describe_runner(winner)}** takes it!"
+    )
+    if not bets:
+        description += " Nobody bet — the critters race for the glory alone."
+    embed = discord.Embed(
+        title="🏇 Meadow Derby — photo finish!",
+        description=description + "\n​",
+        color=COLOR_GREEN if winners else COLOR_RED,
+    )
+    if winners:
+        winner_lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in winners
+        ]
+        embed.add_field(
+            name="Winners",
+            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
+            inline=False,
+        )
+    if losers_total:
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name="The meadow keeps", value=kept, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_race_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens the derby mid-race."""
+    note = (
+        f"🏇 A race is already forming — they're off <t:{int(closes_at)}:R>."
+    )
+    if url:
+        return f"{note} Jump in and back a critter: {url}"
+    return f"{note} Back a critter on the race message above."
 
 
 def build_my_stats_embed(

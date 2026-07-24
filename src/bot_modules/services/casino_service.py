@@ -13,7 +13,7 @@ defaults, partial-dict save that raises ``KeyError`` on unknown fields.
 ``channel_id`` is the master switch — 0 (the default) means the whole
 casino is off, so the feature ships dark like every sink.
 
-Blackjack hands and roulette rounds persist here too, because their
+Blackjack hands, roulette rounds and derby races persist here too, because their
 settlement IS money movement: both predicate on ``settled_at IS NULL``
 (exactly-once under replayed timers, boot sweeps and double-clicks), and
 every terminal path settles or refunds — a stake can never evaporate.
@@ -43,7 +43,7 @@ STAKE_KIND = "casino_stake"
 PAYOUT_KIND = "casino_payout"
 REFUND_KIND = "casino_refund"
 
-GAMES = ("coinflip", "slots", "blackjack", "roulette")
+GAMES = ("coinflip", "slots", "blackjack", "roulette", "derby")
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,10 @@ class CasinoSettings:
     slots_enabled: bool = True
     blackjack_enabled: bool = True
     roulette_enabled: bool = True
+    derby_enabled: bool = True
     roulette_window_seconds: int = 45
+    # Derby races want a touch more hype time than a roulette spin.
+    derby_window_seconds: int = 60
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
     # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
@@ -79,6 +82,7 @@ _BOOL_KEYS = [
     "slots_enabled",
     "blackjack_enabled",
     "roulette_enabled",
+    "derby_enabled",
     "jackpot_enabled",
 ]
 # Everything else on the dataclass is a plain int.
@@ -338,7 +342,7 @@ def get_jackpot(conn: sqlite3.Connection, guild_id: int, *, seed: int = 0) -> in
 
 def feed_jackpot(
     conn: sqlite3.Connection, guild_id: int, lost_amount: int,
-    *, now: float | None = None,
+    *, now: float | None = None, settings: CasinoSettings | None = None,
 ) -> int:
     """Skim the configured cut of a fully-lost stake into the pot.
 
@@ -346,10 +350,13 @@ def feed_jackpot(
     nothing, or the amount is nonpositive). The pot is pure bookkeeping —
     the lost coins were already burned by their ``casino_stake`` debit;
     winning the pot later re-mints this recorded slice of them.
+    ``settings`` lets a settlement loop feeding many losses pass one
+    preloaded read instead of reloading per bet.
     """
     if lost_amount < 1:
         return 0
-    settings = load_casino_settings(conn, guild_id)
+    if settings is None:
+        settings = load_casino_settings(conn, guild_id)
     if not settings.jackpot_enabled:
         return 0
     cut = lost_amount * max(0, min(100, settings.jackpot_cut_pct)) // 100
@@ -868,33 +875,35 @@ def refund_member_live_stakes(
     seam the PvP wager escrow already has, extended to the casino.
 
     The blackjack hand settles as refunded; the member's bets on any open
-    roulette round are deleted (so the spin can't pay a ghost) and refunded
-    as one credit. Returns {"blackjack": amount, "roulette": amount}.
+    roulette round or derby race are deleted (so the resolution can't pay
+    a ghost) and refunded as one credit per game. Returns
+    {"blackjack": amount, "roulette": amount, "derby": amount}.
     """
-    out = {"blackjack": 0, "roulette": 0}
+    out = {"blackjack": 0, "roulette": 0, "derby": 0}
     hand = live_blackjack_hand(conn, guild_id, user_id)
     if hand is not None and settle_blackjack_hand(
         conn, int(hand["id"]), int(hand["stake"]), "refunded",
         kind=REFUND_KIND, now=now,
     ):
         out["blackjack"] = int(hand["stake"])
-    bets = conn.execute(
-        "SELECT b.id, b.amount FROM casino_roulette_bets b "
-        "JOIN casino_roulette_rounds r ON r.id = b.round_id "
-        "WHERE b.guild_id = ? AND b.user_id = ? AND r.status = 'open'",
-        (guild_id, user_id),
-    ).fetchall()
-    total = sum(int(b["amount"]) for b in bets)
-    if total:
-        conn.executemany(
-            "DELETE FROM casino_roulette_bets WHERE id = ?",
-            [(int(b["id"]),) for b in bets],
-        )
-        refund(
-            conn, guild_id, user_id, total, "roulette",
-            meta={"left_guild": True}, now=now,
-        )
-        out["roulette"] = total
+    for t in (ROULETTE_TABLES, DERBY_TABLES):
+        bets = conn.execute(
+            f"SELECT b.id, b.amount FROM {t.bets} b "
+            f"JOIN {t.rounds} r ON r.id = b.round_id "
+            "WHERE b.guild_id = ? AND b.user_id = ? AND r.status = 'open'",
+            (guild_id, user_id),
+        ).fetchall()
+        total = sum(int(b["amount"]) for b in bets)
+        if total:
+            conn.executemany(
+                f"DELETE FROM {t.bets} WHERE id = ?",
+                [(int(b["id"]),) for b in bets],
+            )
+            refund(
+                conn, guild_id, user_id, total, t.game,
+                meta={"left_guild": True}, now=now,
+            )
+            out[t.game] = total
     return out
 
 
@@ -930,23 +939,238 @@ def idle_live_blackjack_hands(
     ).fetchall()
 
 
-# ── roulette rounds ────────────────────────────────────────────────────
+# ── windowed rounds (roulette + derby: ONE implementation) ─────────────
+# Both games are the same machine — a communal betting window per channel,
+# bets debited at placement, exactly-once resolution via the status='open'
+# claim — differing only in table pair, bet columns and payout math. The
+# money-safety logic lives once, parameterized by this descriptor, so a
+# hardening fix can never land in one game and silently miss the other.
+# Table/column names below are trusted module constants, never user input.
+
+
+class RoundTables(NamedTuple):
+    game: str          # take_stake / ledger / settings key
+    rounds: str        # rounds table
+    bets: str          # bets table
+    result_col: str    # "result" (roulette) / "winner" (derby)
+    closed_error: str  # member-facing window-closed message
+
+
+ROULETTE_TABLES = RoundTables(
+    "roulette", "casino_roulette_rounds", "casino_roulette_bets",
+    "result", "Betting on that round has closed.",
+)
+DERBY_TABLES = RoundTables(
+    "derby", "casino_race_rounds", "casino_race_bets",
+    "winner", "Betting on that race has closed.",
+)
+
+
+def _live_round(
+    conn: sqlite3.Connection, t: RoundTables, channel_id: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        f"SELECT * FROM {t.rounds} WHERE channel_id = ? AND status = 'open'",
+        (channel_id,),
+    ).fetchone()
+
+
+def _get_round(
+    conn: sqlite3.Connection, t: RoundTables, round_id: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        f"SELECT * FROM {t.rounds} WHERE id = ?", (round_id,)
+    ).fetchone()
+
+
+def _open_round(
+    conn: sqlite3.Connection,
+    t: RoundTables,
+    guild_id: int,
+    channel_id: int,
+    window_seconds: int,
+    *,
+    now: float | None = None,
+) -> int | None:
+    """Open a betting window; None if the channel already has one live.
+
+    The partial unique index makes the one-open-per-channel rule
+    race-proof; the pre-check keeps the common path exception-free.
+    """
+    if _live_round(conn, t, channel_id) is not None:
+        return None
+    ts = time.time() if now is None else now
+    cur = conn.execute(
+        f"INSERT INTO {t.rounds} "
+        "(guild_id, channel_id, opened_at, closes_at) VALUES (?, ?, ?, ?)",
+        (guild_id, channel_id, ts, ts + window_seconds),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def _set_round_message(
+    conn: sqlite3.Connection, t: RoundTables, round_id: int, message_id: int
+) -> None:
+    conn.execute(
+        f"UPDATE {t.rounds} SET message_id = ? WHERE id = ?",
+        (message_id, round_id),
+    )
+
+
+def _place_bet(
+    conn: sqlite3.Connection,
+    t: RoundTables,
+    rnd: sqlite3.Row | None,
+    round_id: int,
+    user_id: int,
+    columns: dict[str, int | str],
+    amount: int,
+    *,
+    now: float | None = None,
+) -> str | None:
+    """Debit and record one bet. Returns member-facing error or None.
+
+    ``rnd`` is the caller's pre-check read (via its game's public getter,
+    so tests can stub it). That read ran in autocommit — a buzzer-beater
+    bet can race the settle timer, whose claim + bet-read commit between
+    the check and our debit, leaving a stake nothing ever pays or refunds.
+    The guarded no-op UPDATE is the first write of OUR transaction: it
+    serializes against the settler, and a round it already claimed makes
+    us miss here, before any money moves.
+    """
+    ts = time.time() if now is None else now
+    if rnd is None or str(rnd["status"]) != "open" or ts >= float(rnd["closes_at"]):
+        return t.closed_error
+    claimed = conn.execute(
+        f"UPDATE {t.rounds} SET message_id = message_id "
+        "WHERE id = ? AND status = 'open' AND closes_at > ? RETURNING id",
+        (round_id, ts),
+    ).fetchone()
+    if claimed is None:
+        return t.closed_error
+    err = take_stake(conn, int(rnd["guild_id"]), user_id, amount, t.game, now=now)
+    if err is not None:
+        return err
+    names = ", ".join(columns)
+    marks = ", ".join("?" for _ in columns)
+    conn.execute(
+        f"INSERT INTO {t.bets} "
+        f"(round_id, guild_id, user_id, {names}, amount, created_at) "
+        f"VALUES (?, ?, ?, {marks}, ?, ?)",
+        (round_id, int(rnd["guild_id"]), user_id, *columns.values(), amount, ts),
+    )
+    return None
+
+
+def _round_bets(
+    conn: sqlite3.Connection, t: RoundTables, round_id: int
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        f"SELECT * FROM {t.bets} WHERE round_id = ? ORDER BY id", (round_id,)
+    ).fetchall()
+
+
+def _settle_round(
+    conn: sqlite3.Connection,
+    t: RoundTables,
+    round_id: int,
+    result: int,
+    payout_fn,
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    """Resolution: claim the round, pay every winning bet.
+
+    None = someone else already settled (or voided) it — exactly-once via
+    the status='open' claim, taken BEFORE any credit moves (the raffle-draw
+    rule). Returns the bets as dicts with ``payout`` filled in for the
+    recap — the rows are read once, settings once (not per losing bet),
+    and the winner updates land as one executemany.
+    """
+    claimed = conn.execute(
+        f"UPDATE {t.rounds} "
+        f"SET status = 'settled', {t.result_col} = ?, settled_at = ? "
+        "WHERE id = ? AND status = 'open' RETURNING guild_id",
+        (result, time.time() if now is None else now, round_id),
+    ).fetchone()
+    if claimed is None:
+        return None
+    settings = load_casino_settings(conn, int(claimed["guild_id"]))
+    bets = [dict(b) for b in _round_bets(conn, t, round_id)]
+    winner_updates: list[tuple[int, int]] = []
+    for bet in bets:
+        amount = int(bet["amount"])
+        payout = int(payout_fn(bet, result))
+        bet["payout"] = payout
+        if payout:
+            winner_updates.append((payout, int(bet["id"])))
+            pay_out(
+                conn, int(bet["guild_id"]), int(bet["user_id"]), payout,
+                t.game, meta={"round_id": round_id, t.result_col: result},
+            )
+        else:
+            feed_jackpot(
+                conn, int(bet["guild_id"]), amount, now=now, settings=settings
+            )
+        record_play(
+            conn, int(bet["guild_id"]), int(bet["user_id"]), t.game,
+            amount, payout, now=now,
+        )
+    if winner_updates:
+        conn.executemany(
+            f"UPDATE {t.bets} SET payout = ? WHERE id = ?", winner_updates
+        )
+    return bets
+
+
+def _void_round(
+    conn: sqlite3.Connection, t: RoundTables, round_id: int,
+    *, now: float | None = None,
+) -> dict[int, int]:
+    """Refund every bet on a dead round (channel gone, casino closed).
+
+    Exactly-once via the same status='open' claim. Returns {user_id: total
+    refunded}.
+    """
+    ts = time.time() if now is None else now
+    claimed = conn.execute(
+        f"UPDATE {t.rounds} SET status = 'void', settled_at = ? "
+        "WHERE id = ? AND status = 'open' RETURNING guild_id",
+        (ts, round_id),
+    ).fetchone()
+    if claimed is None:
+        return {}
+    guild_id = int(claimed["guild_id"])
+    totals: dict[int, int] = {}
+    for bet in _round_bets(conn, t, round_id):
+        uid = int(bet["user_id"])
+        totals[uid] = totals.get(uid, 0) + int(bet["amount"])
+    for uid, amount in totals.items():
+        refund(
+            conn, guild_id, uid, amount, t.game,
+            meta={"round_id": round_id}, now=ts,
+        )
+    return totals
+
+
+def _open_rounds(conn: sqlite3.Connection, t: RoundTables) -> list[sqlite3.Row]:
+    """Every open round — the boot re-arm sweep."""
+    return conn.execute(
+        f"SELECT * FROM {t.rounds} WHERE status = 'open'"
+    ).fetchall()
+
+
+# ── roulette rounds (thin wrappers over the shared machine) ────────────
 
 
 def live_roulette_round(
     conn: sqlite3.Connection, channel_id: int
 ) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM casino_roulette_rounds "
-        "WHERE channel_id = ? AND status = 'open'",
-        (channel_id,),
-    ).fetchone()
+    return _live_round(conn, ROULETTE_TABLES, channel_id)
 
 
 def get_roulette_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM casino_roulette_rounds WHERE id = ?", (round_id,)
-    ).fetchone()
+    return _get_round(conn, ROULETTE_TABLES, round_id)
 
 
 def open_roulette_round(
@@ -957,29 +1181,15 @@ def open_roulette_round(
     *,
     now: float | None = None,
 ) -> int | None:
-    """Open a betting round; None if the channel already has one live.
-
-    The partial unique index makes the one-open-round rule race-proof; the
-    pre-check keeps the common path exception-free.
-    """
-    if live_roulette_round(conn, channel_id) is not None:
-        return None
-    ts = time.time() if now is None else now
-    cur = conn.execute(
-        "INSERT INTO casino_roulette_rounds "
-        "(guild_id, channel_id, opened_at, closes_at) VALUES (?, ?, ?, ?)",
-        (guild_id, channel_id, ts, ts + window_seconds),
+    return _open_round(
+        conn, ROULETTE_TABLES, guild_id, channel_id, window_seconds, now=now
     )
-    return int(cur.lastrowid or 0)
 
 
 def set_roulette_message(
     conn: sqlite3.Connection, round_id: int, message_id: int
 ) -> None:
-    conn.execute(
-        "UPDATE casino_roulette_rounds SET message_id = ? WHERE id = ?",
-        (message_id, round_id),
-    )
+    _set_round_message(conn, ROULETTE_TABLES, round_id, message_id)
 
 
 def place_roulette_bet(
@@ -992,43 +1202,22 @@ def place_roulette_bet(
     *,
     now: float | None = None,
 ) -> str | None:
-    """Debit and record one bet. Returns member-facing error or None."""
     if bet_type not in casino_logic.ROULETTE_BET_TYPES:
         raise ValueError(f"unknown roulette bet type: {bet_type}")
-    rnd = get_roulette_round(conn, round_id)
-    ts = time.time() if now is None else now
-    if rnd is None or str(rnd["status"]) != "open" or ts >= float(rnd["closes_at"]):
-        return "Betting on that round has closed."
-    # That pre-check ran in autocommit — a buzzer-beater bet can race the
-    # settle timer, whose claim + bet-read commit between our check and our
-    # debit, leaving a stake nothing ever pays or refunds. This guarded
-    # no-op UPDATE is the first write of OUR transaction: it serializes
-    # against the settler, and a round it already claimed makes us miss
-    # here, before any money moves.
-    claimed = conn.execute(
-        "UPDATE casino_roulette_rounds SET message_id = message_id "
-        "WHERE id = ? AND status = 'open' AND closes_at > ? RETURNING id",
-        (round_id, ts),
-    ).fetchone()
-    if claimed is None:
-        return "Betting on that round has closed."
-    err = take_stake(conn, int(rnd["guild_id"]), user_id, amount, "roulette", now=now)
-    if err is not None:
-        return err
-    conn.execute(
-        "INSERT INTO casino_roulette_bets "
-        "(round_id, guild_id, user_id, bet_type, selection, amount, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (round_id, int(rnd["guild_id"]), user_id, bet_type, selection, amount, ts),
+    return _place_bet(
+        conn, ROULETTE_TABLES, get_roulette_round(conn, round_id), round_id,
+        user_id, {"bet_type": bet_type, "selection": selection}, amount, now=now,
     )
-    return None
 
 
 def roulette_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
-    return conn.execute(
-        "SELECT * FROM casino_roulette_bets WHERE round_id = ? ORDER BY id",
-        (round_id,),
-    ).fetchall()
+    return _round_bets(conn, ROULETTE_TABLES, round_id)
+
+
+def _roulette_payout_for(bet: dict, result: int) -> int:
+    return casino_logic.roulette_payout(
+        str(bet["bet_type"]), int(bet["selection"]), result, int(bet["amount"])
+    )
 
 
 def settle_roulette_round(
@@ -1037,75 +1226,98 @@ def settle_roulette_round(
     result: int,
     *,
     now: float | None = None,
-) -> list[sqlite3.Row] | None:
-    """Spin resolution: claim the round, pay every winning bet.
-
-    None = someone else already settled (or voided) it — exactly-once via
-    the status='open' claim, taken BEFORE any credit moves (the raffle-draw
-    rule). Returns the bet rows with ``payout`` filled in for the recap.
-    """
-    claimed = conn.execute(
-        "UPDATE casino_roulette_rounds "
-        "SET status = 'settled', result = ?, settled_at = ? "
-        "WHERE id = ? AND status = 'open' RETURNING id",
-        (result, time.time() if now is None else now, round_id),
-    ).fetchone()
-    if claimed is None:
-        return None
-    for bet in roulette_bets(conn, round_id):
-        amount = int(bet["amount"])
-        payout = casino_logic.roulette_payout(
-            str(bet["bet_type"]), int(bet["selection"]), result, amount
-        )
-        if payout:
-            conn.execute(
-                "UPDATE casino_roulette_bets SET payout = ? WHERE id = ?",
-                (payout, int(bet["id"])),
-            )
-            pay_out(
-                conn, int(bet["guild_id"]), int(bet["user_id"]), payout,
-                "roulette", meta={"round_id": round_id, "result": result},
-            )
-        else:
-            feed_jackpot(conn, int(bet["guild_id"]), amount, now=now)
-        record_play(
-            conn, int(bet["guild_id"]), int(bet["user_id"]), "roulette",
-            amount, payout, now=now,
-        )
-    return roulette_bets(conn, round_id)
+) -> list[dict] | None:
+    return _settle_round(
+        conn, ROULETTE_TABLES, round_id, result, _roulette_payout_for, now=now
+    )
 
 
 def void_roulette_round(
     conn: sqlite3.Connection, round_id: int, *, now: float | None = None
 ) -> dict[int, int]:
-    """Refund every bet on a dead round (channel gone, casino closed).
-
-    Exactly-once via the same status='open' claim. Returns {user_id: total
-    refunded}.
-    """
-    ts = time.time() if now is None else now
-    claimed = conn.execute(
-        "UPDATE casino_roulette_rounds SET status = 'void', settled_at = ? "
-        "WHERE id = ? AND status = 'open' RETURNING guild_id",
-        (ts, round_id),
-    ).fetchone()
-    if claimed is None:
-        return {}
-    guild_id = int(claimed["guild_id"])
-    totals: dict[int, int] = {}
-    for bet in roulette_bets(conn, round_id):
-        uid = int(bet["user_id"])
-        totals[uid] = totals.get(uid, 0) + int(bet["amount"])
-    for uid, amount in totals.items():
-        refund(
-            conn, guild_id, uid, amount, "roulette",
-            meta={"round_id": round_id}, now=ts,
-        )
-    return totals
+    return _void_round(conn, ROULETTE_TABLES, round_id, now=now)
 
 
 def open_roulette_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every open round — the boot re-arm sweep."""
-    return conn.execute(
-        "SELECT * FROM casino_roulette_rounds WHERE status = 'open'"
-    ).fetchall()
+    return _open_rounds(conn, ROULETTE_TABLES)
+
+
+# ── derby races (docs/plans/casino-derby.md — same wrappers) ───────────
+
+
+def live_race_round(
+    conn: sqlite3.Connection, channel_id: int
+) -> sqlite3.Row | None:
+    return _live_round(conn, DERBY_TABLES, channel_id)
+
+
+def get_race_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
+    return _get_round(conn, DERBY_TABLES, round_id)
+
+
+def open_race_round(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    window_seconds: int,
+    *,
+    now: float | None = None,
+) -> int | None:
+    return _open_round(
+        conn, DERBY_TABLES, guild_id, channel_id, window_seconds, now=now
+    )
+
+
+def set_race_message(
+    conn: sqlite3.Connection, round_id: int, message_id: int
+) -> None:
+    _set_round_message(conn, DERBY_TABLES, round_id, message_id)
+
+
+def place_race_bet(
+    conn: sqlite3.Connection,
+    round_id: int,
+    user_id: int,
+    runner: int,
+    amount: int,
+    *,
+    now: float | None = None,
+) -> str | None:
+    if not 0 <= runner < len(casino_logic.DERBY_FIELD):
+        raise ValueError(f"unknown derby runner: {runner}")
+    return _place_bet(
+        conn, DERBY_TABLES, get_race_round(conn, round_id), round_id,
+        user_id, {"runner": runner}, amount, now=now,
+    )
+
+
+def race_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
+    return _round_bets(conn, DERBY_TABLES, round_id)
+
+
+def _derby_payout_for(bet: dict, winner: int) -> int:
+    return casino_logic.derby_payout(
+        int(bet["runner"]), winner, int(bet["amount"])
+    )
+
+
+def settle_race_round(
+    conn: sqlite3.Connection,
+    round_id: int,
+    winner: int,
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    return _settle_round(
+        conn, DERBY_TABLES, round_id, winner, _derby_payout_for, now=now
+    )
+
+
+def void_race_round(
+    conn: sqlite3.Connection, round_id: int, *, now: float | None = None
+) -> dict[int, int]:
+    return _void_round(conn, DERBY_TABLES, round_id, now=now)
+
+
+def open_race_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return _open_rounds(conn, DERBY_TABLES)

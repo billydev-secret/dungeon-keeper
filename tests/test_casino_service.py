@@ -393,6 +393,120 @@ def test_boot_sweep_lists_open_rounds(db):
         assert [int(r["id"]) for r in svc.open_roulette_rounds(conn)] == [r1]
 
 
+# ── derby races (docs/plans/casino-derby.md) ───────────────────────────
+
+
+def _open_race(conn, channel=CHAN, now=NOW):
+    round_id = svc.open_race_round(conn, GUILD, channel, 60, now=now)
+    assert round_id is not None
+    return round_id
+
+
+def test_one_open_race_per_channel(db):
+    with open_db(db) as conn:
+        _open_race(conn)
+        assert svc.open_race_round(conn, GUILD, CHAN, 60, now=NOW) is None
+        assert svc.open_race_round(conn, GUILD, CHAN + 1, 60, now=NOW) is not None
+
+
+def test_race_bets_debit_and_close_with_the_window(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_race(conn)
+        assert svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 1) is None
+        assert get_balance(conn, GUILD, A) == 90
+        err = svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 61)
+        assert err == "Betting on that race has closed."
+        with pytest.raises(ValueError):
+            svc.place_race_bet(conn, round_id, A, 99, 10, now=NOW + 2)
+
+
+def test_race_bet_refused_when_table_closed(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"derby_enabled": False})
+        _fund(conn, A, 100)
+        round_id = _open_race(conn)
+        err = svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 1)
+        assert err == "That table is closed right now."
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_settle_race_pays_winners_exactly_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        round_id = _open_race(conn)
+        svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 1)  # hare 2.5×
+        svc.place_race_bet(conn, round_id, A, 5, 10, now=NOW + 2)  # snail 12×
+        svc.place_race_bet(conn, round_id, B, 1, 20, now=NOW + 3)  # hedgehog
+
+        bets = svc.settle_race_round(conn, round_id, 0, now=NOW + 60)
+        assert bets is not None
+        assert [int(b["payout"]) for b in bets] == [25, 0, 0]
+        assert get_balance(conn, GUILD, A) == 100 - 20 + 25
+        assert get_balance(conn, GUILD, B) == 80
+        # losing stakes recorded in the stats books
+        stats = svc.member_casino_stats(conn, GUILD, B)
+        assert stats is not None and int(stats["plays"]) == 1
+        # replay pays nothing again
+        assert svc.settle_race_round(conn, round_id, 0, now=NOW + 61) is None
+        assert get_balance(conn, GUILD, A) == 105
+        # a settled race takes no more bets
+        err = svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 2)
+        assert err == "Betting on that race has closed."
+
+
+def test_void_race_refunds_totals_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_race(conn)
+        svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 1)
+        svc.place_race_bet(conn, round_id, A, 5, 15, now=NOW + 2)
+        assert svc.void_race_round(conn, round_id, now=NOW + 5) == {A: 25}
+        assert get_balance(conn, GUILD, A) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 25)
+        assert svc.void_race_round(conn, round_id, now=NOW + 6) == {}
+
+
+def test_boot_sweep_lists_open_races(db):
+    with open_db(db) as conn:
+        r1 = _open_race(conn)
+        r2 = _open_race(conn, channel=CHAN + 1)
+        svc.settle_race_round(conn, r2, 0, now=NOW + 60)
+        assert [int(r["id"]) for r in svc.open_race_rounds(conn)] == [r1]
+
+
+def test_stale_precheck_cannot_strand_a_race_stake(db, monkeypatch):
+    """The roulette buzzer-beater race, on the derby: the settler claimed
+    the race between our pre-check and our debit — the in-transaction
+    claim must refuse the bet before any money moves."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_race(conn)
+        assert svc.settle_race_round(conn, round_id, 0, now=NOW + 60) is not None
+        stale = {
+            "id": round_id, "status": "open",
+            "closes_at": NOW + 60, "guild_id": GUILD,
+        }
+        monkeypatch.setattr(svc, "get_race_round", lambda *_: stale)
+        err = svc.place_race_bet(conn, round_id, A, 0, 10, now=NOW + 2)
+        assert err == "Betting on that race has closed."
+        assert get_balance(conn, GUILD, A) == 100  # nothing debited
+        monkeypatch.undo()
+        assert all(int(b["user_id"]) != A for b in svc.race_bets(conn, round_id))
+
+
+def test_losing_race_stakes_feed_the_jackpot(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
+        _fund(conn, A, 100)
+        round_id = _open_race(conn)
+        svc.place_race_bet(conn, round_id, A, 5, 40, now=NOW + 1)
+        assert svc.settle_race_round(conn, round_id, 0, now=NOW + 60) is not None
+        # seed (100) + 25% of the lost 40-coin stake
+        assert svc.get_jackpot(conn, GUILD) == 110
+
+
 # ── review-fix regressions (docs/reviews round, 2026-07-22) ────────────
 
 
@@ -454,19 +568,23 @@ def test_member_leave_refunds_live_stakes_and_spares_the_round(db):
         svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
         svc.place_roulette_bet(conn, round_id, A, "number", 7, 15, now=NOW + 2)
         svc.place_roulette_bet(conn, round_id, B, "black", 0, 20, now=NOW + 3)
+        race_id = _open_race(conn)
+        svc.place_race_bet(conn, race_id, A, 0, 12, now=NOW + 3)
+        svc.place_race_bet(conn, race_id, B, 1, 8, now=NOW + 4)
 
         out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 4)
-        assert out == {"blackjack": 20, "roulette": 25}
+        assert out == {"blackjack": 20, "roulette": 25, "derby": 12}
         assert get_balance(conn, GUILD, A) == 200  # made whole
         assert svc.live_blackjack_hand(conn, GUILD, A) is None
-        # A's bets are gone so the spin can't pay a ghost; B's bet survives
+        # A's bets are gone so the spin can't pay a ghost; B's bets survive
         remaining = svc.roulette_bets(conn, round_id)
         assert [int(b["user_id"]) for b in remaining] == [B]
+        assert [int(b["user_id"]) for b in svc.race_bets(conn, race_id)] == [B]
         bets = svc.settle_roulette_round(conn, round_id, 2, now=NOW + 45)  # 2 = black
         assert bets is not None and [int(b["payout"]) for b in bets] == [40]
         # a second leave call finds nothing live
         assert svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 5) == {
-            "blackjack": 0, "roulette": 0,
+            "blackjack": 0, "roulette": 0, "derby": 0,
         }
 
 
