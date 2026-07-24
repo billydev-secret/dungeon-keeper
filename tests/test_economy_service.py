@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 import discord
@@ -12,6 +14,8 @@ from migrations import apply_migrations_sync
 from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
     ECON_PREFIX,
+    award_host_bounty,
+    top_up_voice_login,
     EconSettings,
     apply_credit,
     apply_debit,
@@ -329,6 +333,147 @@ def test_process_login_first_ever(db):
         ).fetchone()
         assert login["source"] == "text"
         assert login["paid"] == S.login_text_base
+
+
+# ── voice login top-up ────────────────────────────────────────────────────
+# The daily login pays whichever source fires first and text nearly always
+# wins (live 2026-07-23: 688 text vs 30 voice), so the advertised voice rate
+# was paid on 4% of days. Voice presence now tops up the base difference.
+
+
+def test_voice_top_up_pays_the_base_difference_after_a_text_login(db):
+    with open_db(db) as conn:
+        process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        paid = top_up_voice_login(
+            conn, S, GUILD, USER, local_day=DAY, booster=False
+        )
+        assert paid == S.login_voice_base - S.login_text_base
+        assert get_balance(conn, GUILD, USER) == S.login_voice_base
+        login = conn.execute(
+            "SELECT * FROM econ_logins WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert login["source"] == "voice"  # flipped, so it can't pay twice
+        assert login["paid"] == S.login_voice_base
+
+
+def test_voice_top_up_is_exactly_once(db):
+    with open_db(db) as conn:
+        process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert top_up_voice_login(
+            conn, S, GUILD, USER, local_day=DAY, booster=False
+        ) > 0
+        # Every later voice tick that day is a no-op.
+        for _ in range(3):
+            assert top_up_voice_login(
+                conn, S, GUILD, USER, local_day=DAY, booster=False
+            ) == 0
+        assert get_balance(conn, GUILD, USER) == S.login_voice_base
+
+
+def test_voice_top_up_does_nothing_when_voice_already_won_the_day(db):
+    with open_db(db) as conn:
+        process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="voice", booster=False
+        )
+        assert top_up_voice_login(
+            conn, S, GUILD, USER, local_day=DAY, booster=False
+        ) == 0
+        assert get_balance(conn, GUILD, USER) == S.login_voice_base
+
+
+def test_voice_top_up_does_nothing_without_a_login_that_day(db):
+    with open_db(db) as conn:
+        assert top_up_voice_login(
+            conn, S, GUILD, USER, local_day=DAY, booster=False
+        ) == 0
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_voice_top_up_never_pays_when_voice_is_worth_no_more(db):
+    # Guard the subtraction: a guild that sets voice at or below text must not
+    # produce a zero or negative credit (apply_credit raises below 1).
+    flat = replace(S, login_voice_base=S.login_text_base)
+    cheap = replace(S, login_voice_base=S.login_text_base - 1)
+    for settings in (flat, cheap):
+        with open_db(db) as conn:
+            conn.execute("DELETE FROM econ_logins")
+            conn.execute("DELETE FROM econ_wallets")
+            process_login(
+                conn, settings, GUILD, USER,
+                local_day=DAY, source="text", booster=False,
+            )
+            before = get_balance(conn, GUILD, USER)
+            assert top_up_voice_login(
+                conn, settings, GUILD, USER, local_day=DAY, booster=False
+            ) == 0
+            assert get_balance(conn, GUILD, USER) == before
+
+
+def test_voice_top_up_applies_the_guild_booster_multiplier(db):
+    boosted = replace(S, booster_multiplier=3.0)
+    with open_db(db) as conn:
+        process_login(
+            conn, boosted, GUILD, USER, local_day=DAY, source="text", booster=True
+        )
+        paid = top_up_voice_login(
+            conn, boosted, GUILD, USER, local_day=DAY, booster=True
+        )
+        delta = boosted.login_voice_base - boosted.login_text_base
+        assert paid == math.ceil(delta * 3.0)
+
+
+# ── host bounty ───────────────────────────────────────────────────────────
+
+
+def test_host_bounty_pays_per_joiner_and_ledgers_the_count(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with open_db(db) as conn:
+        paid = award_host_bounty(
+            conn, s, GUILD, USER, joiners=3, booster=False
+        )
+        assert paid == 12
+        assert get_balance(conn, GUILD, USER) == 12
+        row = get_ledger(conn, GUILD, USER)[-1]
+        assert row["kind"] == "game_host"
+
+
+def test_host_bounty_is_dark_by_default(db):
+    # Default settings ship the rate at 0 — the whole feature is off.
+    with open_db(db) as conn:
+        assert award_host_bounty(
+            conn, S, GUILD, USER, joiners=4, booster=False
+        ) == 0
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_host_bounty_pays_nothing_without_joiners(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with open_db(db) as conn:
+        assert award_host_bounty(
+            conn, s, GUILD, USER, joiners=0, booster=False
+        ) == 0
+
+
+def test_host_bounty_applies_the_booster_multiplier(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5, booster_multiplier=2.0)
+    with open_db(db) as conn:
+        paid = award_host_bounty(
+            conn, s, GUILD, USER, joiners=3, booster=True
+        )
+        assert paid == math.ceil(12 * 2.0)
+
+
+def test_host_bounty_ignores_an_unusable_host_id(db):
+    s = replace(S, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with open_db(db) as conn:
+        assert award_host_bounty(
+            conn, s, GUILD, 0, joiners=3, booster=False
+        ) == 0
 
 
 def test_process_login_same_day_returns_none(db):

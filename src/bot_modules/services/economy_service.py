@@ -70,6 +70,14 @@ class EconSettings:
     reward_qotd: int = 10
     reward_game_participation: int = 5
     reward_game_win: int = 20
+    # Host bounty: the member who *ran* a game earns per attendee who joined
+    # (excluding themselves), capped at ``host_bounty_cap`` attendees so one
+    # busy game can't dwarf other faucets. The point is recruiting hosts, so
+    # it only fires for a game that someone actually joined — a host talking to
+    # themselves earns nothing, which also closes the empty-game farm. 0 rate
+    # (default) ships it dark; gated by the game_host income-source toggle.
+    host_bounty_per_joiner: int = 0
+    host_bounty_cap: int = 5
     # Flat participation award for posting an image in the Photo Challenge
     # channel — paid on the post itself, once per guild-local day, on top of
     # any active photo_post quest (which stacks). 0 turns the flat award off
@@ -143,6 +151,18 @@ class EconSettings:
     bounty_max_open: int = 3
     bounty_expire_days: int = 14
     bounty_rake_pct: int = 0
+    # Live auctions (plan: docs/plans/economy-auctions.md): a mod opens a
+    # freeform, mod-fulfilled auction with `/bank auction start`; members bid up
+    # in the open, the outbid bidder is refunded instantly, and the winning bid
+    # is burned (the sink). `min_bid` is the opening floor; each new bid must
+    # beat the standing high by `min_increment`. `soft_close_seconds` is the
+    # anti-snipe window — a bid landing that close to the end pushes the end out
+    # by the same amount. `max_duration_hours` guard-rails what a mod can set.
+    # Naturally dark: no auction exists until a mod opens one, so no kill switch.
+    auction_min_bid: int = 10
+    auction_min_increment: int = 5
+    auction_soft_close_seconds: int = 300
+    auction_max_duration_hours: int = 168
     # Prepaid streak shield (sinks round 3, stage 2): a one-shot consumable
     # held (max 1) until a login gap would reset the streak, then auto-burned
     # to save it — covers what the free grace day can't. 0 hides the shop row
@@ -644,6 +664,66 @@ def process_login(
     )
 
 
+def top_up_voice_login(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    *,
+    local_day: str,
+    booster: bool = False,
+) -> int:
+    """Pay the text→voice difference when voice presence follows a text login.
+
+    The daily login pays whichever source fires first, and text almost always
+    wins — a member types before they join a call. Live data (2026-07-23): 688
+    text logins against 30 voice ones, so ``login_voice_base`` (15) was paid on
+    4% of days while the guide advertised it as the voice rate. Voice presence
+    is the signal we most want to reward — it reaches members who never trigger
+    command-based faucets — and it was quietly worth a third of list price.
+
+    So a qualifying voice session on a day already claimed by text tops the
+    member up by the difference. The streak bonus is deliberately *not*
+    recomputed: it was already paid by the text login and rides on whichever
+    base won, so the delta is the flat base gap and nothing else.
+
+    Returns the credited amount (0 when there is nothing to do). Exactly-once
+    via the UPDATE's ``source = 'text'`` guard: the row flips to 'voice', so a
+    replay — or a second voice tick the same day — matches no row and pays
+    nothing. Never downgrades voice→text.
+    """
+    delta = int(settings.login_voice_base) - int(settings.login_text_base)
+    if delta <= 0:
+        return 0
+    cur = conn.execute(
+        """
+        UPDATE econ_logins SET source = 'voice'
+        WHERE guild_id = ? AND user_id = ? AND local_day = ? AND source = 'text'
+        """,
+        (guild_id, user_id, local_day),
+    )
+    if (cur.rowcount or 0) == 0:
+        return 0
+    paid = apply_credit(
+        conn,
+        guild_id,
+        user_id,
+        delta,
+        "login",
+        meta={"local_day": local_day, "source": "voice", "upgrade": True},
+        booster=booster,
+        multiplier=settings.booster_multiplier,
+    )
+    conn.execute(
+        """
+        UPDATE econ_logins SET paid = paid + ?
+        WHERE guild_id = ? AND user_id = ? AND local_day = ?
+        """,
+        (paid, guild_id, user_id, local_day),
+    )
+    return paid
+
+
 def purchase_streak_shield(
     conn: sqlite3.Connection,
     settings: EconSettings,
@@ -940,6 +1020,40 @@ def award_game_reward(
         user_id,
         amount,
         kind,
+        booster=booster,
+        multiplier=settings.booster_multiplier,
+    )
+
+
+def award_host_bounty(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    host_id: int,
+    *,
+    joiners: int,
+    booster: bool,
+) -> int:
+    """Credit the host of a finished game, scaled by who turned up.
+
+    ``joiners`` excludes the host. Returns 0 — crediting nothing — when the
+    rate is unset (the dark default), when nobody joined, or when the host id
+    is unusable. Ledger kind ``game_host``.
+    """
+    if host_id <= 0:
+        return 0
+    amount = logic.host_bounty_amount(
+        joiners, settings.host_bounty_per_joiner, settings.host_bounty_cap
+    )
+    if amount <= 0:
+        return 0
+    return apply_credit(
+        conn,
+        guild_id,
+        host_id,
+        amount,
+        "game_host",
+        meta={"joiners": joiners},
         booster=booster,
         multiplier=settings.booster_multiplier,
     )

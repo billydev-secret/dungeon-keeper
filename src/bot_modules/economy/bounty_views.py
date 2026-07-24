@@ -25,6 +25,8 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.economy.quest_views import can_manage_economy
+from bot_modules.economy.view_helpers import coins as _coins
+from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
 from bot_modules.services.economy_bounty_service import (
     award_bounty,
     cancel_bounty,
@@ -47,16 +49,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy")
 
 MANAGE_DENIED_MSG = "❌ You don't have permission to award or cancel bounties."
-
-
-def _coins(settings: EconSettings, amount: int) -> str:
-    """``🪙 **250** coins`` — the shared currency vocabulary."""
-    unit = (
-        settings.currency_name
-        if abs(amount) == 1
-        else (settings.currency_plural or "coins")
-    )
-    return f"{settings.currency_emoji} **{amount:,}** {unit}"
 
 
 def render_bounty_card(
@@ -247,16 +239,6 @@ class BountyBoardView(discord.ui.View):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-
-async def _safe_ephemeral(interaction: discord.Interaction, text: str) -> None:
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        log.debug("econ bounty: failed to send ephemeral", exc_info=True)
 
 
 async def _gate_manage(interaction: discord.Interaction) -> bool:

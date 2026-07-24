@@ -30,6 +30,7 @@ from bot_modules.services.economy_service import (
     EconSettings,
     load_econ_settings,
     process_login,
+    top_up_voice_login,
 )
 
 if TYPE_CHECKING:
@@ -61,10 +62,29 @@ def _try_voice_login(
     """
     today = local_day_for(now_ts, offset_hours)
     already = conn.execute(
-        "SELECT 1 FROM econ_logins WHERE guild_id = ? AND user_id = ? AND local_day = ? LIMIT 1",
+        "SELECT source FROM econ_logins "
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ? LIMIT 1",
         (guild_id, member.id, today),
     ).fetchone()
     if already is not None:
+        # A text login already claimed the day at the lower base. Voice presence
+        # still earns its rate, so top up the difference rather than paying
+        # nothing (top_up_voice_login is a no-op once the row reads 'voice').
+        if str(already["source"]) == "text":
+            try:
+                top_up_voice_login(
+                    conn,
+                    settings,
+                    guild_id,
+                    member.id,
+                    local_day=today,
+                    booster=member.premium_since is not None,
+                )
+            except Exception:
+                log.exception(
+                    "voice login top-up failed for member %s in guild %s",
+                    member.id, guild_id,
+                )
         return
     try:
         process_login(

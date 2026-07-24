@@ -1065,6 +1065,14 @@ def test_new_engagement_kinds_registered(db):
         assert list_income_sources_has(db, kind)
 
 
+def test_game_host_kind_registered(db):
+    # game_host must be authorable (dropdown + validation), documented, and a
+    # toggleable income source — or its fire site in pay_game_rewards is dead.
+    assert "game_host" in TRIGGER_KINDS
+    assert "game_host" in TRIGGER_KIND_INFO
+    assert list_income_sources_has(db, "game_host")
+
+
 def list_income_sources_has(db, kind):
     with open_db(db) as conn:
         return kind in list_income_sources(conn, GUILD)
@@ -2963,6 +2971,124 @@ def test_shop_purchase_setup_drops_off_board_after_purchase(db):
         assert setup not in assigned_board_ids(
             conn, GUILD, USER, "daily", "2026-07-12", SETTINGS
         )
+
+
+# ── pending setup quests are pinned onto the board ────────────────────────
+# Onboarding can't be a dice roll: a pending setup quest takes a slot ahead
+# of ordinary draws, so every member meets it instead of only the lucky ones.
+
+
+def _fill_daily_pool(conn, n=20, kind="message_sent"):
+    """A pool big enough that a 2-slot draw reliably misses any one quest."""
+    return [_make(conn, qtype="daily", trigger_kind=kind) for _ in range(n)]
+
+
+def test_pending_setup_quest_is_pinned_when_the_draw_misses_it(db):
+    # Bug-fix-first: with a 20-quest pool and a 2-slot board, the shop_purchase
+    # setup quest is drawn ~1 day in 10 — live data showed it reaching 9 members
+    # in ten days. It must now appear regardless of the draw.
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        # Every day of a fortnight, not just the lucky ones.
+        for day in (f"2026-07-{d:02d}" for d in range(12, 26)):
+            assert setup in assigned_board_ids(
+                conn, GUILD, USER, "daily", day, SETTINGS
+            )
+
+
+def test_a_single_pin_evicts_a_draw_rather_than_growing_the_board(db):
+    # While pins still fit, the board size holds: a pin costs an ordinary slot.
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", SETTINGS)
+        assert len(board) == SETTINGS.quest_board_daily
+        assert setup in board
+
+
+def test_pin_eviction_never_splits_a_locked_pair(db):
+    # A pin must not evict half of a producer/consumer pair that
+    # apply_pair_bundles kept together. With a paired bundle on the board and a
+    # pending setup pin, the pair is kept whole (or dropped whole), never split.
+    with open_db(db) as conn:
+        # A pool of paired quests only, so the draw yields a bundle. Board size 3
+        # (SETTINGS.quest_board_daily) leaves 2 slots after one pin — exactly a
+        # pair's width, so a pair-blind eviction would split it.
+        pairs = []
+        for i in range(4):
+            a = _make(conn, qtype="daily", trigger_kind="guess_post",
+                      pair_tag=f"p{i}", title=f"host{i}")
+            b = _make(conn, qtype="daily", trigger_kind="guess",
+                      pair_tag=f"p{i}", title=f"play{i}")
+            pairs.append((a, b))
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", SETTINGS)
+        assert setup in board
+        # Every non-setup quest on the board has its partner on the board too.
+        by_id = {a: b for a, b in pairs} | {b: a for a, b in pairs}
+        for q in board:
+            if q == setup:
+                continue
+            assert by_id[q] in board, f"pair split: {q} without its partner"
+
+
+def test_every_pending_setup_quest_is_pinned_even_past_the_board_size(db):
+    # Regression on the live shape: 4 setup quests against a smaller board. A
+    # cap would rank them against each other and the last one — First Purchase,
+    # the whole reason pinning exists — would reach nobody, because on live
+    # data every member pending a purchase was also pending an earlier setup.
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setups = {
+            kind: _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+            for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase")
+        }
+        assert len(setups) > SETTINGS.quest_board_daily  # the interesting case
+        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", SETTINGS)
+        assert board == set(setups.values())  # all pinned, no ordinary draws
+        assert setups["shop_purchase"] in board
+
+
+def test_pinned_setup_quest_stops_being_pinned_once_done(db):
+    # The pin must not resurrect a quest the member has already completed.
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setup = _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        day = "2026-07-12"
+        assert setup in assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        _give_bio(conn)
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", day, SETTINGS
+        )
+
+
+def test_rerolling_away_from_a_setup_quest_is_not_undone_by_the_pin(db):
+    # Honouring an explicit reroll beats the nudge — otherwise the member pays
+    # for a reroll and the quest lands straight back on the board.
+    from bot_modules.services.economy_quests_service import reroll_board_slot
+
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        apply_credit(conn, GUILD, USER, 500, "grant")
+        day = "2026-07-12"
+        assert setup in assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        reroll_board_slot(conn, SETTINGS, GUILD, USER, setup, day)
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", day, SETTINGS
+        )
+
+
+def test_setup_quests_are_not_pinned_onto_other_cadences(db):
+    # A setup quest filed as weekly stays subject to the ordinary draw; pinning
+    # is a daily-board onboarding beat, not a global override.
+    with open_db(db) as conn:
+        for _ in range(20):
+            _make(conn, qtype="weekly", trigger_kind="message_sent")
+        setup = _make(conn, qtype="daily", trigger_kind="shop_purchase", reward=10)
+        weekly = assigned_board_ids(conn, GUILD, USER, "weekly", "2026-07-12", SETTINGS)
+        assert setup not in weekly
 
 
 def test_shop_purchase_setup_claims_once_ever(db):

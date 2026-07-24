@@ -4,6 +4,7 @@
 export const KIND_LABELS = {
   photo_post: "📸 Post a photo in the challenge channel",
   party_game: "🎲 Finish a party game",
+  game_host: "🎪 Host a party game that someone joins",
   duel: "⚔️ Finish a duel / PvP challenge",
   risky_roll: "🎰 Take a Risky Roll dare",
   guess: "🕵️ Play a Guess Who round",

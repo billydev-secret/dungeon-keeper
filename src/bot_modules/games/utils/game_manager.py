@@ -264,6 +264,19 @@ async def end_game(
     if not row:
         return
 
+    # Claim the game by deleting its active row FIRST — the DELETE is the
+    # exactly-once gate. Each GamesDb.execute is its own transaction, so two
+    # concurrent end_game calls (a natural completion racing /games end)
+    # serialize here and only the one that actually removes the row goes on to
+    # archive and pay. Without this claim both pass the `if not row` guard and
+    # both pay, double-crediting participation, the host bounty, and the
+    # game_host community bump.
+    claimed = await db.execute(
+        "DELETE FROM games_active_games WHERE game_id = ?", (game_id,)
+    )
+    if (claimed.rowcount or 0) == 0:
+        return  # another call already ended this game
+
     # Resolve the guild so history/stats stay per-guild scoped. games_active_games
     # carries no guild_id, so we resolve from the bot's channel cache when a bot
     # is available (genuine completions pass one); abort/cleanup paths fall back
@@ -298,7 +311,6 @@ async def end_game(
         )
     except Exception as e:
         log.error("Failed to archive game %s to history: %s", game_id, e)
-    await db.execute("DELETE FROM games_active_games WHERE game_id = ?", (game_id,))
     _payload_locks.pop(game_id, None)
     log.info("Game %s ended and removed.", game_id)
 
@@ -347,6 +359,7 @@ async def _pay_party_rewards(bot, row, payload: dict | None, player_ids: Sequenc
         await pay_game_rewards(
             bot, guild.id, list(player_ids), winners, game_type,
             occurrence=str(row["game_id"]),
+            host_id=int(row["host_id"]) if row["host_id"] else None,
         )
     except Exception:
         log.exception("party game payout failed for %s", row["game_id"])

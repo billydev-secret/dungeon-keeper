@@ -20,6 +20,8 @@ const FAUCET_FIELDS = [
   ["reward_qotd", "Answering the question of the day", 1000000],
   ["reward_game_participation", "Playing a game", 1000000],
   ["reward_game_win", "Winning a game (on top of playing)", 1000000],
+  ["host_bounty_per_joiner", "Hosting a game, per attendee (0 = off)", 1000000],
+  ["host_bounty_cap", "Host bounty attendee cap", 1000],
   ["reward_photo_post", "Entering the photo challenge", 1000000],
   ["xp_per_coin", "XP needed to earn one coin", 100000],
 ];

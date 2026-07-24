@@ -189,6 +189,25 @@ def milestone_amount(streak: int, s: EconSettings) -> int:
     return 0
 
 
+def host_bounty_amount(joiners: int, per_joiner: int, cap: int) -> int:
+    """Host payout for a finished game: ``per_joiner`` per attendee, capped.
+
+    Scales with attendance so hosting a game people actually turn up to is
+    worth more than starting one — the whole point is recruiting hosts two
+    through five, not rewarding the act of typing the command. ``joiners``
+    counts attendees *excluding* the host, so a host talking to themselves
+    earns nothing and there is no farm in starting empty games.
+
+    The cap keeps a single busy game from dwarfing every other faucet (and
+    keeps the coin small relative to the recognition, which is what the
+    prosocial research says actually recruits volunteers). A non-positive
+    rate or cap pays nothing, which is how the feature ships dark.
+    """
+    if per_joiner <= 0 or cap <= 0 or joiners <= 0:
+        return 0
+    return per_joiner * min(joiners, cap)
+
+
 def convert_xp(xp: float, carry: float, xp_per_coin: float) -> tuple[int, float]:
     """Convert a day's XP (plus carried remainder) to whole coins.
 

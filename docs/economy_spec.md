@@ -71,6 +71,17 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   The main guild needs an explicit tz row set at rollout (it currently inherits global −7).
 - **Reward:** text login 5 base; **voice login 15 base** (voice deliberately richer —
   decided). +1 per consecutive day, streak bonus capped at +10.
+- **Voice top-up (2026-07-23).** The login pays whichever source fires *first*,
+  and text nearly always wins — a member types before they join a call. Live
+  data showed **688 text logins against 30 voice ones**, so the richer voice
+  base was paid on 4% of days while the guide advertised it as the voice rate.
+  A qualifying voice session on a day already claimed by text now tops the
+  member up by the base difference (`top_up_voice_login`, ledger kind `login`
+  with `meta.upgrade`). The streak bonus is **not** recomputed — it was already
+  paid on the text base, so the delta is the flat base gap only. Exactly-once
+  via the `source = 'text'` UPDATE guard: the row flips to `'voice'`, so a
+  replay or a second voice tick the same day matches nothing. Never downgrades
+  voice→text, and a guild that prices voice at or below text pays nothing.
 - **Grace:** one free missed day per rolling 7, automatic and silent; second miss resets.
 - **Streak shield (sinks round 3, stage 2):** a prepaid one-shot bought in `/bank shop`
   (`price_streak_shield`, default 30; 0 hides the row), held at most ONE, auto-burned
@@ -224,6 +235,27 @@ to currency.
   (default 14) and re-renders the card. Guards: `bounty_min_stake` floor,
   `bounty_max_open` per member. Enabled only when `bounty_channel_id` is set —
   dark by default.
+- **Live Auction (built, sink — migration 123, plan
+  `docs/plans/economy-auctions.md`):** a mod runs `/bank auction start` (title,
+  freeform prize, hours); the bot posts a sticky card with a 🔨 **Bid** button
+  (persistent `AuctionBidButton`, custom_id carries the auction id). Bidding is
+  **ascending and open**: each bid must beat the standing high by
+  `auction_min_increment` (opening floor `auction_min_bid`), and the outbid
+  member is refunded *instantly* (`auction_refund`). Escrow-at-bid (`auction_bid`
+  via `apply_debit`) means the winner is already charged at close; the winning
+  escrow is simply never refunded → **burned** (the sink; the mod hands over the
+  freeform prize out of band). A bid inside `auction_soft_close_seconds` of the
+  end pushes the end out (anti-snipe). The two-bids race is handled by
+  compare-and-swap on the high-bid slot; bids run under `place_bid_now` /
+  `open_db_immediate` (**BEGIN IMMEDIATE**, retry + friendly error) so concurrent
+  bidders serialize instead of hitting `SQLITE_BUSY_SNAPSHOT`. Close is timed:
+  `EconomyCog._auction_settle_loop` (30s) calls `settle_due_auctions` (exactly-once
+  via the `state='open'` claim) and announces the result — pinging winner + host,
+  DMing both. `/bank auction cancel` refunds the standing bid; `/bank auction end`
+  closes now. One live auction per guild (v1). **Dark by default**: no auction
+  exists until a mod opens one; `auction_*` knobs aren't on the dashboard yet
+  (Stage 3). Card renderer in `economy/auction_views.py`, money in
+  `economy_auction_service.py`.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state
@@ -258,6 +290,30 @@ to currency.
   played`, using the guild's configured amounts and currency emoji; winner line only
   for game types with a resolver; suppressed entirely when the economy is disabled.
   WYR has no recap embed, so it stays footer-less.
+- **Host bounty (2026-07-23, dark by default):** the member who *ran* a party
+  game earns `host_bounty_per_joiner` per attendee who joined, capped at
+  `host_bounty_cap` attendees (defaults 0 / 5 — the 0 rate ships it dark).
+  `pay_game_rewards` takes an optional `host_id` and pays only when at least
+  one member *other than the host* joined — attendees exclude the host, so a
+  host talking to themselves earns nothing and there is no farm in starting an
+  empty game (74 of 122 historical games ended with zero recorded players, so
+  this gate is load-bearing). **Party games only:** `host_id` is threaded from
+  `game_manager` (`games_active_games.host_id`); the duel games pass none (they
+  are peer challenges) and the external CAH path passes none (Gamebot is the
+  host, not a member). The point is recruiting hosts two-through-five, and the
+  research is explicit that recognition recruits volunteers better than a fee,
+  so the coin is deliberately small next to the visible role/quest. Amount
+  logic is `logic.host_bounty_amount`; the credit is `award_host_bounty`
+  (ledger kind `game_host`, `meta.joiners`). Gated by the `game_host`
+  income-source toggle.
+- **Host-a-game quest (`game_host` trigger):** the same host-with-a-joiner
+  event fires the `game_host` trigger kind, which is a first-class quest hook —
+  usable as a **personal daily** ("host a game today") and, because community
+  goals count any trigger kind guild-wide, as a **community counted weekly**.
+  Fires once per hosted game (keyed to the game id), for the host only, and
+  only when a joiner was present (same gate as the bounty). This is the
+  recruitment lever the games programme needed: hosting is currently ~77%
+  one person (§ live review), and the quest makes it a rewarded, visible task.
 - **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
   page button; manager-role or admin gated; audit-tagged in the ledger.
 
@@ -506,6 +562,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 |---|---|---|---|
 | `photo_post` | a member posts an image in the configured Photo Challenge channel (the post itself pays — no reactions needed) | `EconomyCog._on_photo_post` (on_message listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_post:<local_day>` (once/day by construction) |
 | `party_game` | party game completes with the member in the roster — **including external games** (a Gamebot Cards Against Humanity game parsed from `/games track`, `game_type="cah"`) | `pay_game_rewards` via `game_manager.end_game`, or `games_external_cog._pay_cah_game` for CAH | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`) |
+| `game_host` | a party game the member hosted completes with **at least one other member** in the roster (empty games pay nothing — the anti-farm gate); party games only, since only `game_manager` passes `host_id` | `pay_game_rewards` via `game_manager.end_game`, host bounty through `award_host_bounty` | `game_host:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
 | `guess` | member submits a scored guess in a Guess Who round | `GuessSelectView._on_select` → `fire_member_trigger` | `guess:<round_id>` |
@@ -610,7 +667,8 @@ economy DM without a real opt-in signal.
 
 **One-time setup quests (the welcome guide, 2026-07-18):** the sanctioned,
 pull-not-push successor to the onboarding path. The setup trigger kinds
-(`quests.SETUP_QUEST_KINDS` = `bio_set`, `birthday_set`) can be run as ordinary
+(`quests.SETUP_QUEST_KINDS` = `bio_set`, `birthday_set`, `role_pick`,
+`shop_purchase`) can be run as ordinary
 **daily** quests, so they're drawn into a member's random daily board like any
 other — a subtle "fill out your bio / set your birthday" nudge that a newcomer
 happens on while browsing `/quests`, never a DM. Two service-layer
@@ -634,6 +692,26 @@ special-cases make a once-in-a-lifetime action fit a daily cadence:
   won't swap a member into a setup quest they've completed, and setup quests
   are excluded from the clear-the-board set-bonus requirement (a member
   shouldn't have to do their once-ever bio to earn today's daily set bonus).
+- **Pinned until done (2026-07-23).** A *pending* setup quest no longer waits
+  for a lucky draw: `_pin_pending_setup` forces every not-yet-done setup quest
+  in the frozen pool onto the board, evicting ordinary draws (highest quest id
+  first) to hold the configured board size. The nudge was previously a lottery
+  — with a 20-quest daily pool and a 3-slot board the shop-purchase quest
+  reached **9 members in ten days** — and onboarding shouldn't depend on the
+  dice. Deliberately **unbounded**: the board size is a floor for ordinary
+  content, not a ceiling on pins, so a member with four pending setup quests
+  and a 3-slot board sees four setup quests and no ordinary ones. Swamping a
+  newcomer's first boards is the intended trade, since each clears in one
+  action and then never returns, so the board converts to normal within days.
+  Capping pins at the board size was tried and rejected: it forces the pins to
+  be ranked against each other, and on live data (2026-07-23) *all 101* members
+  who had never made a purchase were also pending an earlier setup quest — a
+  capped board would have shown the First Purchase nudge to nobody.
+
+  Ordering matters: pins resolve **before** reroll overrides, so a member can
+  still pay to push a pinned quest off their board — honouring an explicit
+  reroll beats the nudge. (Applying pins after rerolls would let a paid reroll
+  land the quest straight back.)
 
 Enabling it is pure data: create a daily quest on each kind (normal daily
 reward). The fire hooks (`bios/wizard`, `birthday_cog`) already exist.

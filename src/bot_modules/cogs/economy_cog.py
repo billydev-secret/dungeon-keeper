@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
@@ -59,6 +59,14 @@ from bot_modules.economy.bounty_views import (
     BountyChipInButton,
     post_bounty_card,
 )
+from bot_modules.economy.auction_views import (
+    AuctionBidButton,
+    cancel_open_auction,
+    end_open_auction,
+    settle_and_announce,
+    start_auction,
+)
+from bot_modules.services.economy_auction_service import open_auction_guild_ids
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
@@ -1501,6 +1509,36 @@ class EconomyCog(commands.Cog):
         description="Personal role extras (customize your perks in /bank shop).",
         parent=bank,
     )
+    auction = app_commands.Group(
+        name="auction",
+        description="Run a live auction (staff only).",
+        parent=bank,
+    )
+
+    @auction.command(name="start", description="Start a live auction (staff only).")
+    @app_commands.describe(
+        title="What's being auctioned (short name)",
+        prize="What the winner gets — you hand it over yourself",
+        hours="How long the auction runs, in hours",
+    )
+    async def auction_start(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        prize: str,
+        hours: app_commands.Range[float, 1, 168],
+    ) -> None:
+        await start_auction(
+            interaction, title=title, prize=prize, duration_hours=float(hours)
+        )
+
+    @auction.command(name="cancel", description="Cancel the live auction and refund (staff only).")
+    async def auction_cancel(self, interaction: discord.Interaction) -> None:
+        await cancel_open_auction(interaction)
+
+    @auction.command(name="end", description="Close the live auction now (staff only).")
+    async def auction_end(self, interaction: discord.Interaction) -> None:
+        await end_open_auction(interaction)
 
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
@@ -1531,10 +1569,40 @@ class EconomyCog(commands.Cog):
         super().__init__()
 
     async def cog_unload(self) -> None:
+        self._auction_settle_loop.cancel()
         for task in (*self._restick_tasks.values(), *self._lb_restick_tasks.values()):
             task.cancel()
         self._restick_tasks.clear()
         self._lb_restick_tasks.clear()
+
+    @tasks.loop(seconds=30)
+    async def _auction_settle_loop(self) -> None:
+        """Close auctions past their end and announce each — the timed-close path.
+
+        One indexed read finds the (usually zero) guilds with a live auction, so
+        idle guilds cost nothing; only those are then swept. Best-effort — a
+        per-guild failure is logged, never fatal to the loop."""
+        def _live() -> set[int]:
+            with self.ctx.open_db() as conn:
+                return open_auction_guild_ids(conn)
+
+        try:
+            live = await asyncio.to_thread(_live)
+        except Exception:
+            log.exception("auction settle loop: failed to list live auctions")
+            return
+        for guild_id in live:
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                continue
+            try:
+                await settle_and_announce(self.bot, guild)
+            except Exception:
+                log.exception("auction settle loop failed for guild %s", guild_id)
+
+    @_auction_settle_loop.before_loop
+    async def _before_auction_settle(self) -> None:
+        await self.bot.wait_until_ready()
 
     @bank.command(name="wallet", description="Check your balance and recent activity.")
     async def bank_wallet(self, interaction: discord.Interaction) -> None:
@@ -3761,6 +3829,7 @@ class EconomyCog(commands.Cog):
                             "photo_post",
                             meta={"day": day},
                             booster=booster,
+                            multiplier=settings.booster_multiplier,
                         )
                 # The photo_post quest bonus stacks on top (once/day by
                 # occurrence; fire_trigger_quests re-checks the source toggle).
@@ -4688,6 +4757,7 @@ class EconomyCog(commands.Cog):
             BountyChipInButton,
             BountyAwardButton,
             BountyCancelButton,
+            AuctionBidButton,
         )
         # The guide panel's 🔔 toggle, the quest board's "Show my quests"
         # button, and the shop panel's Open Shop button carry no per-message
@@ -4695,6 +4765,7 @@ class EconomyCog(commands.Cog):
         self.bot.add_view(GuideView())
         self.bot.add_view(QuestBoardView())
         self.bot.add_view(ShopPanelView())
+        self._auction_settle_loop.start()
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:

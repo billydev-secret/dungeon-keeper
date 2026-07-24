@@ -230,6 +230,105 @@ async def test_pay_noop_unknown_guild(db_path):
     assert _bal(db_path, 1) == 0
 
 
+# ── host bounty ───────────────────────────────────────────────────────────────
+
+
+async def test_host_bounty_pays_the_host_per_joiner(db_path):
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(9), _member(1), _member(2)])
+    # Host 9 ran the game; 1 and 2 joined. joiners excludes the host → 2.
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 8  # 4 per joiner × 2
+    assert _bal(db_path, 1) == 25  # participation + win, unaffected
+    assert _bal(db_path, 2) == 5
+
+
+async def test_host_bounty_stops_when_the_income_source_is_disabled(db_path):
+    # The game_host income-source toggle must gate the coin faucet, not just the
+    # quest — flipping it off is the documented off-switch for the payout.
+    from bot_modules.core.db_utils import open_db as _open_db
+    from bot_modules.services.economy_quests_service import set_income_source
+
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    with _open_db(db_path) as conn:
+        set_income_source(conn, GUILD, "game_host", False)
+    bot: Any = _Bot(db_path, [_member(9), _member(1), _member(2)])
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 0  # bounty suppressed with the source off
+    assert _bal(db_path, 1) == 25  # participation/win still pay (own faucet)
+
+
+async def test_host_bounty_counts_a_host_who_also_played(db_path):
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(9), _member(1)])
+    # Host is also on the roster; joiners still excludes them → 1 joiner.
+    await pay_game_rewards(
+        bot, GUILD, [9, 1], [1], "ttl", occurrence="7", host_id=9
+    )
+    # 5 participation + 4 host bounty (1 joiner)
+    assert _bal(db_path, 9) == 9
+
+
+async def test_host_bounty_is_the_anti_farm_gate(db_path):
+    # A host who started a game nobody joined earns nothing — the whole point.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(9)])
+    await pay_game_rewards(
+        bot, GUILD, [9], [], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 5  # participation only, no host bounty
+
+
+async def test_host_bounty_absent_without_a_host_id(db_path):
+    # Duels and external games pass no host_id — no bounty, no game_host quest.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    _add_active_quest(db_path, trigger_kind="game_host", reward=50)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    await pay_game_rewards(bot, GUILD, [1, 2], [1], "chicken", occurrence="7")
+    assert _bal(db_path, 1) == 25  # no game_host quest reward leaked in
+    assert _bal(db_path, 2) == 5
+
+
+async def test_host_bounty_denied_to_a_bot_host(db_path):
+    # The _valid(host) gate must reject a bot (or a departed/unresolvable) host
+    # so a bounty can't be minted to a bot that "hosted" a game.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    _add_active_quest(db_path, trigger_kind="game_host", reward=50)
+    bot: Any = _Bot(db_path, [_member(9, bot=True), _member(1), _member(2)])
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 0  # bot host: no bounty, no game_host quest
+    assert _bal(db_path, 1) == 25  # players unaffected
+
+
+async def test_host_bounty_denied_to_a_host_who_left_the_guild(db_path):
+    # host_id 404 isn't a member of the guild → _valid fails → no bounty.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])  # no member 404
+    await pay_game_rewards(
+        bot, GUILD, [1, 2], [1], "ttl", occurrence="7", host_id=404
+    )
+    assert _bal(db_path, 404) == 0
+    assert _bal(db_path, 1) == 25
+
+
+async def test_host_bounty_fires_the_game_host_quest(db_path):
+    # The host quest fires only for the host, and only with a joiner present.
+    _enable(db_path)  # bounty dark; the quest still fires
+    _add_active_quest(db_path, trigger_kind="game_host", reward=50)
+    bot: Any = _Bot(db_path, [_member(9), _member(1)])
+    await pay_game_rewards(
+        bot, GUILD, [1], [1], "ttl", occurrence="7", host_id=9
+    )
+    assert _bal(db_path, 9) == 50  # host quest paid, no participation (not a player)
+    assert _bal(db_path, 1) == 25  # player got participation + win, no host quest
+
+
 # ── end_game payout hook ──────────────────────────────────────────────────────
 
 class _EndBot(_Bot):
@@ -256,6 +355,53 @@ async def test_end_game_pays_once_with_resolved_winner(db_path):
     # Second call finds no row → no double payout.
     await end_game(db, gid, payload=payload, bot=bot, player_ids=[1, 2, 3])
     assert _bal(db_path, 2) == 25
+
+
+class _RaceDb(GamesDb):
+    """Simulates losing the end_game claim race: the active-game row is deleted
+    by a 'concurrent' call in the window between end_game's SELECT and its own
+    DELETE. Exercises the exactly-once claim without real threads."""
+
+    def __init__(self, db_path, steal_gid):
+        super().__init__(db_path)
+        self._steal_gid = steal_gid
+        self._stolen = False
+
+    async def fetchone(self, query, params=()):
+        row = await super().fetchone(query, params)
+        if (
+            not self._stolen
+            and "SELECT * FROM games_active_games" in query
+            and row is not None
+            and self._steal_gid in params
+        ):
+            self._stolen = True  # a concurrent end_game wins the claim first
+            await super().execute(
+                "DELETE FROM games_active_games WHERE game_id = ?",
+                (self._steal_gid,),
+            )
+        return row
+
+
+async def test_end_game_does_not_pay_when_it_loses_the_claim_race(db_path):
+    # Bug-fix-first: two concurrent end_game calls both pass `if not row`; only
+    # the one that actually deletes the active row may pay. The loser (its
+    # DELETE claims 0 rows) must credit nothing — participation, host bounty,
+    # and the game_host community bump alike.
+    _enable(db_path, host_bounty_per_joiner=4, host_bounty_cap=5)
+    setup_db = GamesDb(db_path)
+    payload = {"guilt_scores": {"1": 1, "2": 3, "3": 0}}
+    gid = await create_game(setup_db, CH, 9, "nhie", payload=payload)  # host 9
+    bot: Any = _EndBot(db_path, [_member(9), _member(1), _member(2), _member(3)])
+
+    race_db = _RaceDb(db_path, gid)
+    await end_game(race_db, gid, payload=payload, bot=bot, player_ids=[1, 2, 3])
+
+    # This call lost the race, so it paid nobody.
+    assert _bal(db_path, 1) == 0
+    assert _bal(db_path, 2) == 0
+    assert _bal(db_path, 3) == 0
+    assert _bal(db_path, 9) == 0  # no host bounty either
 
 
 async def test_end_game_no_payout_without_bot(db_path):
