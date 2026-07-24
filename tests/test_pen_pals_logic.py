@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -54,6 +55,7 @@ def _configure(
     category_id: int = 777,
     opt_in_role_id: int = 0,
     question_category: str = "sfw",
+    room_visibility: str = pp.DEFAULT_ROOM_VISIBILITY,
     guild_id: int = GUILD_ID,
 ) -> None:
     with open_db(db_path) as conn:
@@ -66,6 +68,7 @@ def _configure(
             question_category=question_category,
             log_channel_id=0,
             panel_channel_id=0,
+            room_visibility=room_visibility,
         )
 
 
@@ -101,9 +104,21 @@ def _make_guild_mock(*member_ids: int) -> MagicMock:
     return guild
 
 
-def _make_bot_mock(guild: MagicMock) -> MagicMock:
+def _make_bot_mock(
+    guild: MagicMock,
+    *,
+    admin_role_ids: "frozenset[int] | set[int]" = frozenset(),
+    mod_role_ids: "frozenset[int] | set[int]" = frozenset(),
+) -> MagicMock:
     bot = MagicMock(spec=discord.Client)
     bot.get_guild.return_value = guild
+    # _do_pair reads the guild's configured admin/mod roles via bot.ctx to size
+    # room visibility overwrites.
+    bot.ctx = MagicMock()
+    bot.ctx.guild_config.return_value = SimpleNamespace(
+        admin_role_ids=frozenset(admin_role_ids),
+        mod_role_ids=frozenset(mod_role_ids),
+    )
     return bot
 
 
@@ -124,8 +139,17 @@ def pair_env(sync_db_path, monkeypatch):
     channel.delete = AsyncMock()
     created: list[dict] = []
 
-    async def fake_create_channel(guild_, category_, user1_, user2_, *, nsfw=False):
-        created.append({"nsfw": nsfw})
+    async def fake_create_channel(
+        guild_, category_, user1_, user2_, *,
+        nsfw=False,
+        visibility=pp.DEFAULT_ROOM_VISIBILITY,
+        staff_role_ids=frozenset(),
+    ):
+        created.append({
+            "nsfw": nsfw,
+            "visibility": visibility,
+            "staff_role_ids": set(staff_role_ids),
+        })
         return channel
 
     monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
@@ -409,7 +433,7 @@ async def test_do_pair_creates_session_and_clears_pool(sync_db_path, pair_env):
     assert _pool_ids(sync_db_path) == []
     with open_db(sync_db_path) as conn:
         assert pp._get_shown_questions(conn, session["session_id"]) != []
-    assert created == [{"nsfw": False}]
+    assert len(created) == 1 and created[0]["nsfw"] is False
 
 
 async def test_do_pair_uses_configured_session_seconds_not_hardcoded_default(sync_db_path, pair_env):
@@ -437,7 +461,7 @@ async def test_do_pair_nsfw_channel_when_category_all(sync_db_path, pair_env):
     bot, _channel, created = pair_env
     _configure(sync_db_path, question_category="all")
     assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is True
-    assert created == [{"nsfw": True}]
+    assert len(created) == 1 and created[0]["nsfw"] is True
 
 
 async def test_do_pair_guard_aborts_duplicate_session(sync_db_path, pair_env):
@@ -461,6 +485,148 @@ async def test_do_pair_refuses_missing_member(sync_db_path, pair_env):
     bot, _channel, created = pair_env
     assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 999) is False
     assert created == []
+
+
+# ── Room visibility ───────────────────────────────────────────────────
+
+
+def test_normalize_room_visibility_defaults_unknown_to_mods():
+    assert pp.DEFAULT_ROOM_VISIBILITY == "mods"
+    assert pp._normalize_room_visibility("admin") == "admin"
+    assert pp._normalize_room_visibility("mods") == "mods"
+    assert pp._normalize_room_visibility("everyone") == "everyone"
+    assert pp._normalize_room_visibility(None) == "mods"
+    assert pp._normalize_room_visibility("bogus") == "mods"
+
+
+def test_room_staff_role_ids_scales_with_visibility():
+    admins, mods = {10, 11}, {20, 21}
+    # Admin-only: just the admin roles.
+    assert pp._room_staff_role_ids("admin", admins, mods) == {10, 11}
+    # +mods: admin roles and mod roles.
+    assert pp._room_staff_role_ids("mods", admins, mods) == {10, 11, 20, 21}
+    # everyone: admins still listed so they keep post/manage when @everyone is
+    # view-only; mods fold into @everyone.
+    assert pp._room_staff_role_ids("everyone", admins, mods) == {10, 11}
+    # Unknown value takes the default (mods) behavior.
+    assert pp._room_staff_role_ids("bogus", admins, mods) == {10, 11, 20, 21}
+
+
+def test_room_everyone_can_view_only_for_everyone():
+    assert pp._room_everyone_can_view("everyone") is True
+    assert pp._room_everyone_can_view("mods") is False
+    assert pp._room_everyone_can_view("admin") is False
+
+
+def test_room_footer_text_names_the_audience():
+    assert pp._room_footer_text("admin") == "Admins can see this channel."
+    assert "mods" in pp._room_footer_text("mods").lower()
+    assert "everyone" in pp._room_footer_text("everyone").lower()
+
+
+def _overwrite_guild(role_ids: set[int]):
+    """A guild whose get_role resolves the given ids to distinct role mocks."""
+    guild = MagicMock(spec=discord.Guild)
+    guild.default_role = MagicMock(spec=discord.Role, id=0)
+    guild.me = MagicMock(spec=discord.Member, id=999)
+    roles = {rid: MagicMock(spec=discord.Role, id=rid) for rid in role_ids}
+    guild.get_role.side_effect = roles.get
+    u1 = MagicMock(spec=discord.Member, id=1)
+    u2 = MagicMock(spec=discord.Member, id=2)
+    return guild, roles, u1, u2
+
+
+def test_room_overwrites_admin_hides_room_and_grants_admin_roles():
+    guild, roles, u1, u2 = _overwrite_guild({10})
+    ow = pp._room_overwrites(guild, u1, u2, visibility="admin", staff_role_ids={10})
+    assert ow[guild.default_role].view_channel is False   # @everyone can't see
+    assert ow[roles[10]].view_channel is True             # admin role can
+    assert ow[u1].send_messages is True and ow[u2].send_messages is True
+
+
+def test_room_overwrites_mods_grants_the_mod_role_view_and_history():
+    guild, roles, u1, u2 = _overwrite_guild({10, 20})
+    ow = pp._room_overwrites(guild, u1, u2, visibility="mods", staff_role_ids={10, 20})
+    assert ow[guild.default_role].view_channel is False
+    assert ow[roles[20]].view_channel is True
+    assert ow[roles[20]].read_message_history is True
+
+
+def test_room_overwrites_everyone_is_readonly_public():
+    guild, _roles, u1, u2 = _overwrite_guild(set())
+    ow = pp._room_overwrites(guild, u1, u2, visibility="everyone", staff_role_ids=set())
+    everyone = ow[guild.default_role]
+    assert everyone.view_channel is True          # world-readable
+    assert everyone.send_messages is False        # but watch-only
+    assert everyone.read_message_history is True
+    assert ow[u1].send_messages is True           # the pair can still post
+
+
+def test_room_overwrites_skips_unresolvable_role_ids():
+    guild, roles, u1, u2 = _overwrite_guild({10})  # 10 resolves; 99 does not
+    ow = pp._room_overwrites(guild, u1, u2, visibility="mods", staff_role_ids={10, 99})
+    assert roles[10] in ow
+    assert all(getattr(k, "id", None) != 99 for k in ow)  # skipped, no crash
+
+
+async def _capture_do_pair(
+    sync_db_path, monkeypatch, *, room_visibility, admin_role_ids, mod_role_ids
+) -> dict:
+    """Run _do_pair with the given config/roles; return the _create_channel kwargs."""
+    _configure(sync_db_path, room_visibility=room_visibility)
+    guild = _make_guild_mock(1, 2)
+    bot = _make_bot_mock(guild, admin_role_ids=admin_role_ids, mod_role_ids=mod_role_ids)
+    captured: dict = {}
+
+    async def fake_create_channel(
+        g, c, u1, u2, *, nsfw=False,
+        visibility=pp.DEFAULT_ROOM_VISIBILITY, staff_role_ids=frozenset(),
+    ):
+        captured["visibility"] = visibility
+        captured["staff_role_ids"] = set(staff_role_ids)
+        ch = MagicMock(spec=discord.TextChannel, id=55, mention="#x")
+        ch.delete = AsyncMock()
+        return ch
+
+    monkeypatch.setattr(pp, "_create_channel", fake_create_channel)
+    monkeypatch.setattr(pp, "_post_intro", AsyncMock())
+    monkeypatch.setattr(pp, "resolve_accent_color", AsyncMock(return_value=None))
+    monkeypatch.setattr(pp, "generate_text", AsyncMock(return_value="AI question?"))
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1)
+        pp._add_to_pool(conn, GUILD_ID, 2)
+    assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is True
+    return captured
+
+
+async def test_do_pair_mods_visibility_grants_admin_and_mod_roles(sync_db_path, monkeypatch):
+    captured = await _capture_do_pair(
+        sync_db_path, monkeypatch,
+        room_visibility="mods", admin_role_ids={10}, mod_role_ids={20},
+    )
+    assert captured["visibility"] == "mods"
+    assert captured["staff_role_ids"] == {10, 20}
+
+
+async def test_do_pair_admin_visibility_excludes_mod_roles(sync_db_path, monkeypatch):
+    captured = await _capture_do_pair(
+        sync_db_path, monkeypatch,
+        room_visibility="admin", admin_role_ids={10}, mod_role_ids={20},
+    )
+    assert captured["visibility"] == "admin"
+    assert captured["staff_role_ids"] == {10}  # mod role NOT granted
+
+
+def test_set_config_round_trips_room_visibility(sync_db_path):
+    _configure(sync_db_path, room_visibility="everyone")
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["room_visibility"] == "everyone"
+
+
+def test_set_config_normalizes_bad_room_visibility_to_default(sync_db_path):
+    _configure(sync_db_path, room_visibility="nonsense")
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["room_visibility"] == "mods"
 
 
 # ── _handle_join ──────────────────────────────────────────────────────

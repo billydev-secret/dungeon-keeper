@@ -128,9 +128,11 @@ from bot_modules.cogs.bump_tracker_cog import (
 )
 from bot_modules.starboard.filters import validate_emoji as _starboard_validate_emoji
 from bot_modules.cogs.pen_pals_cog import (
+    DEFAULT_ROOM_VISIBILITY as _PP_DEFAULT_ROOM_VISIBILITY,
     _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
     _get_pool as _pp_get_pool,
+    _normalize_room_visibility as _pp_normalize_room_visibility,
     _set_admin_separations as _pp_set_admin_separations,
     _set_config as _pp_set_config,
     _set_timers as _pp_set_timers,
@@ -719,6 +721,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "question_category": "sfw",
             "log_channel_id": None,
             "panel_channel_id": None,
+            "room_visibility": _PP_DEFAULT_ROOM_VISIBILITY,
             "pool_size": pool_size,
             "session_seconds": 86400,
             "match_cooldown_seconds": 2592000,
@@ -734,6 +737,9 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "question_category": cfg["question_category"] or "sfw",
         "log_channel_id": str(cfg["log_channel_id"]) if cfg["log_channel_id"] else None,
         "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
+        "room_visibility": _pp_normalize_room_visibility(
+            cfg["room_visibility"] if "room_visibility" in cfg.keys() else None
+        ),
         "pool_size": pool_size,
         "session_seconds": int(cfg["session_seconds"]),
         "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
@@ -3139,6 +3145,7 @@ class PenPalsConfigUpdate(BaseModel):
     question_category: str = "sfw"
     log_channel_id: str | None = None
     panel_channel_id: str | None = None
+    room_visibility: str = _PP_DEFAULT_ROOM_VISIBILITY
 
 
 @router.put("/config/pen-pals")
@@ -3165,6 +3172,7 @@ async def update_pen_pals_config(
                 question_category=body.question_category,
                 log_channel_id=int(body.log_channel_id) if body.log_channel_id else 0,
                 panel_channel_id=new_channel_id,
+                room_visibility=_pp_normalize_room_visibility(body.room_visibility),
             )
             return old_channel_id, old_message_id
 

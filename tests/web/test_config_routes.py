@@ -734,6 +734,32 @@ def test_update_pen_pals_timers_persists(authed_client, fake_ctx):
     assert pp["question_suppress_seconds"] == 600
 
 
+def test_get_config_pen_pals_room_visibility_defaults_to_mods(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["pen_pals"]["room_visibility"] == "mods"
+
+
+def test_update_pen_pals_config_persists_room_visibility(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "room_visibility": "everyone"},
+    )
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["room_visibility"] == "everyone"
+
+
+def test_update_pen_pals_config_normalizes_bad_room_visibility(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "room_visibility": "nonsense"},
+    )
+    assert resp.status_code == 200
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["room_visibility"] == "mods"
+
+
 def test_update_pen_pals_timers_rejects_invalid_session_seconds(authed_client):
     resp = authed_client.put(
         "/api/config/pen-pals/timers",

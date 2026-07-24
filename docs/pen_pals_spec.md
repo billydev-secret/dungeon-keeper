@@ -41,8 +41,25 @@ Fields: Matched with  |  @user1  @user2
         Session ends  |  <t:{unix_expiry}:F> (<t:{unix_expiry}:R>)
         Commands      |  /penpals new-question — swap the prompt (3 max)
                          /penpals end — leave this chat early
-Footer: Admins can see this channel.
+Footer: Admins can see this channel.   (footer varies with room visibility —
+        "Admins and mods can see this channel." or
+        "This channel is visible to everyone (they can read, not post).")
 ```
+
+**Room visibility** (`pen_pals_config.room_visibility`, dashboard select, default
+`mods`). Each pairing's channel is private to the two members; this controls who
+else gets a view overwrite, built in `_create_channel` from the guild's
+`admin_role_ids` / `mod_role_ids`:
+
+| Value | Who else can see |
+|---|---|
+| `admin` | configured admin roles only (Discord admins bypass overwrites regardless) |
+| `mods` *(default)* | admin roles **and** mod roles |
+| `everyone` | `@everyone` can view + read history, but only the two members and staff can post (watch-only public room) |
+
+Default `mods` is a change from the old admin-only rooms; it applies to rooms
+created **after** the setting is saved — open rooms keep the overwrites they were
+made with. Unresolvable configured role ids are skipped.
 
 **Message 2 — first question**
 
