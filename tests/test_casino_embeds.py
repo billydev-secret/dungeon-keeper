@@ -9,9 +9,13 @@ import discord
 from bot_modules.cogs.casino.embeds import (
     build_derby_race_embed,
     build_derby_result_embed,
+    build_derby_round_embed,
+    build_help_embed,
+    build_roulette_round_embed,
     build_slots_embed,
 )
 from bot_modules.services import casino_logic as logic
+from bot_modules.services.casino_service import CasinoSettings
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
@@ -71,3 +75,49 @@ def test_derby_race_frame_draws_every_runner():
     assert len(lines) == len(logic.DERBY_FIELD)
     for line, runner in zip(lines, logic.DERBY_FIELD):
         assert line.startswith("🏁") and line.endswith(runner.emoji)
+
+
+# ── the live bets board must never outgrow the 1024 field limit ────────
+
+_LONG_ECON = EconSettings(
+    currency_emoji="💎",
+    currency_name="sunflower doubloon",
+    currency_plural="sunflower doubloons of the golden meadow",
+)
+
+
+def _bets_value(embed: discord.Embed) -> str:
+    field = next(f for f in embed.fields if (f.name or "").startswith("Bets"))
+    assert field.value is not None
+    return field.value
+
+
+def test_round_embed_bets_fields_stay_under_the_field_limit():
+    """Dozens of bets with a long currency name and 6-digit stakes — the
+    exact shape that 400'd the repaint before the cap — must fit."""
+    bets = [
+        (10_000 + i, "🦋 Flutter the Butterfly", 250_000) for i in range(40)
+    ]
+    for embed in (
+        build_derby_round_embed(_LONG_ECON, 1_800_000_000.0, bets, None),
+        build_roulette_round_embed(_LONG_ECON, 1_800_000_000.0, bets, None),
+    ):
+        value = _bets_value(embed)
+        assert len(value) <= 1024
+        assert "earlier bet(s)" in value  # the tail is summarized, not lost
+
+
+def test_round_embed_bets_show_newest_first():
+    bets = [(1, "🔴 Red", 10), (2, "⚫ Black", 20)]
+    value = _bets_value(build_roulette_round_embed(_ECON, 0.0, bets, None))
+    assert value.index("<@2>") < value.index("<@1>")
+
+
+# ── How It Works lists only the open tables ────────────────────────────
+
+
+def test_help_embed_hides_closed_tables():
+    settings = CasinoSettings(derby_enabled=False, slots_enabled=False)
+    names = [f.name for f in build_help_embed(_ECON, settings, None).fields]
+    assert "🏇 Derby" not in names and "🎰 Slots" not in names
+    assert "🪙 Coinflip" in names and "🎡 Roulette" in names

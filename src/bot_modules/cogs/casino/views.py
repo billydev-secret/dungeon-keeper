@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.services import casino_logic as logic
+from bot_modules.services import casino_service as svc
 
 if TYPE_CHECKING:
     from bot_modules.cogs.casino.cog import CasinoCog
@@ -302,6 +303,23 @@ class CasinoHubView(discord.ui.View):
             await cog.send_help(interaction)
 
 
+def build_hub_view(settings: svc.CasinoSettings) -> CasinoHubView:
+    """The hub panel's view for ONE guild: disabled tables drop off.
+
+    The full CasinoHubView stays registered at cog_load so buttons on a
+    stale panel still route after a restart or re-enable; this pared copy
+    is what actually gets sent — making "closed tables disappear from the
+    panel" true for the buttons, not just the embed's Tables text.
+    """
+    view = CasinoHubView()
+    for item in list(view.children):
+        custom_id = getattr(item, "custom_id", "") or ""
+        game = custom_id.removeprefix("casino:")
+        if game in svc.GAMES and not svc.game_enabled(settings, game):
+            view.remove_item(item)
+    return view
+
+
 # ── blackjack table buttons ────────────────────────────────────────────
 
 _BJ_STYLES = {
@@ -406,7 +424,13 @@ def build_roulette_view(round_id: int) -> discord.ui.View:
 
 class DerbyBetButton(
     discord.ui.DynamicItem[discord.ui.Button],
-    template=re.compile(r"casino_dy:(?P<runner>\d+):(?P<rid>\d+)"),
+    # The runner range is anchored in the template itself (the roulette
+    # buttons' enumerated-alternation rule): a stale button minted for a
+    # runner the field no longer has must fail the match, not IndexError
+    # inside dispatch.
+    template=re.compile(
+        rf"casino_dy:(?P<runner>[0-{len(logic.DERBY_FIELD) - 1}]):(?P<rid>\d+)"
+    ),
 ):
     def __init__(self, runner: int, round_id: int) -> None:
         r = logic.DERBY_FIELD[runner]

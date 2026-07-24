@@ -253,7 +253,10 @@ DERBY_FIELD: tuple[DerbyRunner, ...] = (
 DERBY_TOTAL_WEIGHT = 100
 
 DERBY_TRACK_LEN = 12
-DERBY_FRAMES = 3  # intermediate frames before the finish frame
+# Two intermediate frames before the finish: with the result edit that is
+# three edits per race, staying clear of the shared casino channel's
+# ~5-edits/5s bucket even when another game's reveal overlaps.
+DERBY_FRAMES = 2
 
 
 def run_derby() -> int:

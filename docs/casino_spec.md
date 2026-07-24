@@ -76,7 +76,7 @@ All movement goes through `services/casino_service.py`:
 | `channel_id` | 0 | **Master switch** — 0 = casino closed (ships dark) |
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
-| `{game}_enabled` ×5 | true | closed tables refuse bets + drop off the panel |
+| `{game}_enabled` ×5 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
@@ -116,8 +116,15 @@ guild's casino name, which is edited on **Config → Branding**
   (`status='open'` claim → exactly-once), edits the round message and posts
   a recap. Boot re-arms timers (elapsed windows resolve immediately);
   a round whose guild is gone is **voided** (all bets refunded).
+- **Roulette and the derby are ONE machine** — the windowed-round family
+  (`RoundTables` descriptor in `casino_service.py`: open/place/settle/void
+  with the exactly-once claims, and the `_WindowUI` descriptor driving the
+  cog's open/repaint/timer/resolve flow) is implemented once and
+  parameterized per game, so a money-safety fix can never land in one game
+  and miss the other. Per-game code is the paytable, the bet columns/
+  validation, the embeds and the show frames.
 - **Derby** (plan: [plans/casino-derby.md](plans/casino-derby.md)) — the
-  roulette round machinery re-raced: six fixed runners
+  shared windowed machinery re-raced: six fixed runners
   (`casino_logic.DERBY_FIELD`, weights /100 × total-return ratios:
   🐇 38·2.5×, 🦔 19·5×, 🐝 13·7×, 🦋 12·8×, 🐢 10·9.5×, 🐌 8·12×), win
   bets only. One open race per channel; runner buttons
@@ -142,7 +149,8 @@ Recovery is layered: roulette close timers arm **before** the round
 message sends (a failed send voids the round instead of stranding it);
 the 60s maintenance sweep auto-stands idle blackjack hands **and resolves
 any open round or race past `closes_at`** (self-healing after a crashed
-timer); boot re-arms/refunds as before. Blackjack game rules (double only on two
+timer; the backstop path skips the cosmetic frames so a pile-up can't
+stall the sweep); boot re-arms/refunds as before. Blackjack game rules (double only on two
 cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 `stand_idle_blackjack_hand` in the service — tested, not cog glue — and
 the double's second stake is derived from the hand row, never
