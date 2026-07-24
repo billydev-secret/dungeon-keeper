@@ -77,7 +77,10 @@ def _credit(conn, user_id, amount, *, kind="quest", age_days=0.0):
     )
 
 
-def _quest(conn, *, qtype, title, reward=10, reward_xp=0, target=None, active=True):
+def _quest(
+    conn, *, qtype, title, reward=10, reward_xp=0, target=None, active=True,
+    trigger_kind="",
+):
     qid = quests_svc.create_quest(
         conn,
         GUILD_ID,
@@ -92,6 +95,7 @@ def _quest(conn, *, qtype, title, reward=10, reward_xp=0, target=None, active=Tr
         rotate_tag="",
         community_target=target,
         created_by=None,
+        trigger_kind=trigger_kind,
         reward_xp=reward_xp,
     )
     if active:
@@ -121,7 +125,9 @@ def test_collect_quests_and_community_goals(db):
     with open_db(db) as conn:
         _quest(conn, qtype="weekly", title="Weekly one", reward=30, reward_xp=15)
         _quest(conn, qtype="daily", title="Daily one")
-        _quest(conn, qtype="monthly", title="Benched", active=False)
+        _quest(
+            conn, qtype="monthly", title="Benched", active=False, trigger_kind="quoted"
+        )
         cq = _quest(conn, qtype="community", title="Group goal", target=100)
         quests_svc.set_community_progress(conn, cq, 40, target=100)
         data = collect_leaderboard_data(conn, GUILD_ID, NOW)

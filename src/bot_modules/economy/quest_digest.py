@@ -47,7 +47,7 @@ GROUP_ORDER: list[tuple[str, str]] = [
 _FALLBACK_BLURB: dict[str, str] = {
     "daily": "A daily quest — resets tomorrow.",
     "weekly": "A weekly quest — resets next week.",
-    "monthly": "A monthly quest — resets next month.",
+    "monthly": "A shared server goal for the month — everyone chips in.",
     "community": "A shared server goal — everyone chips in.",
 }
 

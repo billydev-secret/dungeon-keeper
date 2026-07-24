@@ -41,12 +41,13 @@ from bot_modules.services.economy_service import (
 
 log = logging.getLogger(__name__)
 
-# Quests whose reward the member cannot self-claim (community goals pay via
-# the settlement sweep, not the claim path). Event quests DO go through
-# claim_quest, but only the trigger listener calls it for them — the member
-# views never offer a claim button, and quest_period() has no calendar key
-# for 'event' so a stray self-claim path can't even build a period.
-_CLAIMABLE_TYPES = ("daily", "weekly", "monthly", "event")
+# Quests whose reward the member cannot self-claim (community AND monthly goals
+# are guild-wide and pay via the tier-settlement sweep, not the claim path).
+# Event quests DO go through claim_quest, but only the trigger listener calls it
+# for them — the member views never offer a claim button, and quest_period() has
+# no calendar key for 'event' so a stray self-claim path can't even build a
+# period.
+_CLAIMABLE_TYPES = ("daily", "weekly", "event")
 
 _EXPIRE_SECONDS_PER_DAY = 86400
 
@@ -221,6 +222,10 @@ def _check_trigger_config(
     can't be sign-off (settlement is tiered and automatic; a human gate
     belongs on manual community quests) and never takes trigger words.
 
+    Monthly quests are guild-wide, community-measured goals (migration 125) and
+    are **auto-tracked only**: they REQUIRE a trigger kind, cannot be sign-off
+    (month-end tier settlement is automatic), and never take trigger words.
+
     The ``confession`` kind additionally forbids sign-off: a sign-off claim
     posts a bank-channel card naming the claimant, which is timing-correlatable
     against the anonymous confessions feed — exactly the deanonymization we
@@ -237,6 +242,17 @@ def _check_trigger_config(
                 "auto-tracking community quests cannot require sign-off "
                 "(tier settlement is automatic)"
             )
+    elif qtype == "monthly":
+        if not trigger_kind:
+            raise ValueError(
+                "monthly quests are measured guild-wide and need a trigger "
+                "kind (auto-tracked)"
+            )
+        if signoff:
+            raise ValueError(
+                "monthly quests cannot require sign-off "
+                "(month-end tier settlement is automatic)"
+            )
     if trigger_kind and trigger_words.strip():
         raise ValueError("a quest takes trigger words or a trigger kind, not both")
     if trigger_kind == "confession" and signoff:
@@ -250,25 +266,49 @@ def _check_target_count(
     target_min: int = 0,
     target_max: int = 0,
 ) -> None:
-    """A target above 1 (or a target band) only fits counted trigger quests.
+    """A per-member target above 1 (or a target band) only fits counted
+    daily/weekly trigger quests.
 
     Manual claims are one-shot per period (nothing increments a count), and
     an event quest pays *every* occurrence, so neither can carry a target. A
     band (``0 < target_min < target_max``) draws the per-member target from a
     Gaussian instead of a fixed count; it lives under the same rules and, like
-    a fixed count > 1, must sit on a counted daily/weekly/monthly quest.
+    a fixed count > 1, must sit on a counted daily/weekly quest.
+
+    Monthly quests are guild-wide community goals (migration 125): they are
+    measured by a single shared counter, not a per-member count, so they take
+    NO ``target_count`` and NO band — their size is the auto-sized
+    ``community_target``. A monthly quest with a per-member target is rejected.
+
+    The one-shot cadence rule (spec §4): only *daily* quests complete on a
+    single action. A weekly is a per-user push, so a weekly quest that CAN
+    count — i.e. one built on a game trigger — must accumulate progress (count
+    > 1 or a band), never fire-and-done on the first occurrence. A manual or
+    trigger-word weekly has nothing to increment, so it stays a legitimate
+    one-shot; the rule only bites the triggered case that could show a bar.
     """
     if target_count < 1:
         raise ValueError("target count must be at least 1")
     has_band = target_min != 0 or target_max != 0
     if has_band and not (0 < target_min < target_max):
         raise ValueError("target band needs 0 < target_min < target_max")
+    if qtype == "monthly" and (target_count != 1 or has_band):
+        raise ValueError(
+            "monthly quests are measured guild-wide and take no per-user "
+            "target count or band"
+        )
     if target_count == 1 and not has_band:
+        if trigger_kind and qtype == "weekly":
+            raise ValueError(
+                "a weekly quest with a game trigger needs a target count above "
+                "1 or a target band so it shows progress across the week; only "
+                "daily quests are one-shot"
+            )
         return
     if not trigger_kind:
         raise ValueError("a target count needs a game trigger to count")
-    if qtype not in ("daily", "weekly", "monthly"):
-        raise ValueError("a target count needs a daily/weekly/monthly cadence")
+    if qtype not in ("daily", "weekly"):
+        raise ValueError("a target count needs a daily/weekly cadence")
 
 
 def update_quest(
@@ -378,15 +418,16 @@ def list_trigger_quests(
 ) -> list[sqlite3.Row]:
     """Active daily/weekly quests with trigger phrases set (spec §4.4).
 
-    These are the quests the on-message listener watches for. Community
-    quests never appear — they are not member-claimable, so a trigger phrase
-    on one has nothing to claim.
+    These are the quests the on-message listener watches for. Community and
+    monthly quests never appear — they are guild-wide (not member-claimable)
+    and auto-tracked by a trigger *kind*, so a trigger *phrase* on one has
+    nothing to claim.
     """
     return conn.execute(
         """
         SELECT * FROM econ_quests
         WHERE guild_id = ? AND active = 1
-          AND qtype IN ('daily', 'weekly', 'monthly') AND trigger_words != ''
+          AND qtype IN ('daily', 'weekly') AND trigger_words != ''
         ORDER BY id
         """,
         (guild_id,),
@@ -426,11 +467,14 @@ def list_active_pool_ids(
 
 
 def board_sizes(settings: EconSettings) -> dict[str, int]:
-    """The guild's configured personal-board size per cadence."""
+    """The guild's configured personal-board size per board cadence.
+
+    Only daily/weekly draw a personal board; monthly is a guild-wide goal now
+    (its ``quest_board_monthly`` setting is inert and no longer read here).
+    """
     return {
         "daily": settings.quest_board_daily,
         "weekly": settings.quest_board_weekly,
-        "monthly": settings.quest_board_monthly,
     }
 
 
@@ -719,8 +763,9 @@ def assigned_board_ids(
     stay ~a week apart. The pool and size are frozen per period (see
     ``_frozen_board_pool``): an admin editing the library or a board size
     mid-period doesn't move anyone's current board, only next period's. Only
-    daily/weekly/monthly have a board; other cadences return an empty set, as
-    does a cadence sized to 0. One-time setup quests the member has already
+    daily/weekly have a board; other cadences (community/monthly guild-wide,
+    event per-occurrence) return an empty set, as does a cadence sized to 0.
+    One-time setup quests the member has already
     completed are dropped (see ``_drop_completed_setup``), so only members who
     haven't done them see them — and the ones they *haven't* done are pinned
     onto the board ahead of ordinary draws (see ``_pin_pending_setup``), so
@@ -982,7 +1027,7 @@ def spotlight_kind(
         for r in conn.execute(
             "SELECT DISTINCT trigger_kind FROM econ_quests "
             "WHERE guild_id = ? AND active = 1 AND trigger_kind != '' "
-            "AND qtype != 'community'",
+            "AND qtype NOT IN ('community', 'monthly')",
             (guild_id,),
         )
     )
@@ -1053,7 +1098,9 @@ def load_member_quest_board(
                 spot and str(row["trigger_kind"] or "") == spot
             ),
         }
-        if qtype == "community":
+        if qtype in ("community", "monthly"):
+            # Guild-wide goals (weekly community + monthly): a shared counter
+            # and a bar, not a per-member claim state.
             prog = conn.execute(
                 "SELECT current FROM econ_community_progress WHERE quest_id = ?",
                 (quest_id,),
@@ -1593,8 +1640,8 @@ def fire_trigger_quests(
     if not source_enabled(conn, guild_id, trigger_kind):
         return []
     out: list[tuple[sqlite3.Row, ClaimOutcome]] = []
-    # A member only earns a daily/weekly/monthly quest when it's on *their*
-    # personal board this period — compute each cadence's board once.
+    # A member only earns a daily/weekly quest when it's on *their* personal
+    # board this period — compute each cadence's board once.
     boards: dict[str, set[int]] = {}
     for quest in list_kind_triggered_quests(conn, guild_id, trigger_kind):
         scope = quest["trigger_channel_id"]
@@ -1603,6 +1650,10 @@ def fire_trigger_quests(
         ):
             continue
         qtype = str(quest["qtype"])
+        if qtype in ("community", "monthly"):
+            # Guild-wide goals: not member-claimed here — the shared counter is
+            # bumped once, below, by _bump_community_kind.
+            continue
         if trigger_kind in quests.SETUP_QUEST_KINDS and qtype in quests.BOARD_CADENCES:
             # One-time setup quest living in a board pool (bio/birthday): claim
             # once ever, keyed to a constant period, and independent of the
@@ -1661,18 +1712,22 @@ def _bump_community_kind(
     user_id: int,
     channel_ids: tuple[int, ...] | None,
 ) -> None:
-    """Advance any active auto-tracking community quest of this kind.
+    """Advance any active auto-tracking guild-wide quest of this kind.
 
-    Guild-wide by design — deliberately NOT filtered by personal boards, so
-    every member's action counts toward the shared goal even when the kind
-    isn't on their board this period. Per-member contribution rows feed the
-    top-contributor bonus and the "N members contributed" line.
+    Covers both the weekly ``community`` cadence and the monthly one — both
+    accrue a shared counter that settles in tiers. Guild-wide by design —
+    deliberately NOT filtered by personal boards, so every member's action
+    counts toward the shared goal even when the kind isn't on their board this
+    period. Per-member contribution rows feed the top-contributor bonus and the
+    "N members contributed" line. A single occurrence can bump both a running
+    weekly community goal and a running monthly goal on the same kind — they are
+    independent counters keyed by quest_id.
     """
     rows = conn.execute(
         """
         SELECT id, trigger_channel_id, community_target
         FROM econ_quests
-        WHERE guild_id = ? AND qtype = 'community' AND active = 1
+        WHERE guild_id = ? AND qtype IN ('community', 'monthly') AND active = 1
           AND trigger_kind = ?
         """,
         (guild_id, trigger_kind),
@@ -2219,15 +2274,21 @@ def list_settleable_community_quests(
 
 
 def list_active_community_kind_quests(
-    conn: sqlite3.Connection, guild_id: int, *, slot: int | None = None
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    slot: int | None = None,
+    qtype: str = "community",
 ) -> list[sqlite3.Row]:
-    """Active auto-tracking (kind-carrying) community quests for a guild.
+    """Active auto-tracking (kind-carrying) guild-wide quests for a guild.
 
+    ``qtype`` selects the cadence: ``"community"`` (weekly, the default) or
+    ``"monthly"`` — both accrue a shared counter and settle in tiers.
     ``slot`` narrows to one concurrency lane (1 or 2, see
     ``activate_community_weekly``); omitted, returns both lanes.
     """
     clause = ""
-    params: list[object] = [guild_id]
+    params: list[object] = [guild_id, qtype]
     if slot is not None:
         clause = "AND q.community_slot = ?"
         params.append(slot)
@@ -2237,7 +2298,7 @@ def list_active_community_kind_quests(
                p.notified_tier, p.final_notice_sent
         FROM econ_quests q
         LEFT JOIN econ_community_progress p ON p.quest_id = q.id
-        WHERE q.guild_id = ? AND q.qtype = 'community' AND q.active = 1
+        WHERE q.guild_id = ? AND q.qtype = ? AND q.active = 1
           AND q.trigger_kind != '' {clause}
         ORDER BY q.id
         """,
@@ -2245,21 +2306,37 @@ def list_active_community_kind_quests(
     ).fetchall()
 
 
-def next_community_weekly(
-    conn: sqlite3.Connection, guild_id: int
+def _next_community_run(
+    conn: sqlite3.Connection, guild_id: int, qtype: str
 ) -> sqlite3.Row | None:
-    """The library's next community weekly: inactive, kind-carrying, least
-    recently run ('' sorts first, so never-run quests lead the rotation)."""
+    """The library's next guild-wide goal of ``qtype`` to activate: inactive,
+    kind-carrying, least recently run ('' sorts first, so never-run quests lead
+    the rotation). ``last_run_week`` holds an ISO-week token for community and a
+    'YYYY-MM' token for monthly; selection is qtype-scoped, so they never mix."""
     return conn.execute(
         """
         SELECT * FROM econ_quests
-        WHERE guild_id = ? AND qtype = 'community' AND active = 0
+        WHERE guild_id = ? AND qtype = ? AND active = 0
           AND trigger_kind != ''
         ORDER BY last_run_week ASC, id ASC
         LIMIT 1
         """,
-        (guild_id,),
+        (guild_id, qtype),
     ).fetchone()
+
+
+def next_community_weekly(
+    conn: sqlite3.Connection, guild_id: int
+) -> sqlite3.Row | None:
+    """The library's next community weekly (see :func:`_next_community_run`)."""
+    return _next_community_run(conn, guild_id, "community")
+
+
+def next_community_monthly(
+    conn: sqlite3.Connection, guild_id: int
+) -> sqlite3.Row | None:
+    """The library's next monthly community goal (see :func:`_next_community_run`)."""
+    return _next_community_run(conn, guild_id, "monthly")
 
 
 def channel_message_share(
@@ -2312,13 +2389,16 @@ def auto_size_community_target(
     local_day: str,
     *,
     channel_id: int | None = None,
+    cadence: str = "weekly",
 ) -> int:
     """Target from the guild's trailing 28 full days of this kind's activity.
 
     Fully automatic by design decision (2026-07-18 Q&A) — no manual override.
-    Cold kinds fall to the floor target (quests.community_auto_target), which
-    keeps a first-week goal achievable rather than impossible. A
-    channel-scoped quest on a message-shaped kind
+    ``cadence`` sizes the goal for its period: ``"weekly"`` (the default, 28d ≈
+    4 weeks) or ``"monthly"`` (28d ≈ one month → a target reflecting a full
+    month of activity). Cold kinds fall to the floor target
+    (quests.community_auto_target), which keeps a first-period goal achievable
+    rather than impossible. A channel-scoped quest on a message-shaped kind
     (quests.CHANNEL_SHARE_KINDS) scales the guild total by the channel's
     message share first — kind activity has no channel dimension, and an
     unscaled target would make the top tiers mathematically unreachable
@@ -2340,7 +2420,8 @@ def auto_size_community_target(
         total = round(
             total * channel_message_share(conn, guild_id, channel_id, local_day)
         )
-    return quests.community_auto_target(total)
+    periods = 1.0 if cadence == "monthly" else 4.0
+    return quests.community_auto_target(total, periods_in_window=periods)
 
 
 def activate_community_weekly(

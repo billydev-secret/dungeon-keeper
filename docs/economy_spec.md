@@ -358,9 +358,10 @@ tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, and a
 (§4.5) — phrase and game trigger being mutually exclusive. Rewards free-entry with
 an amber out-of-band warning; out-of-band saves fine, audit-tagged. Counted
 trigger quests take a **target count** ("how many times", §4.5). Library model:
-each of daily/weekly/monthly is a **pool** of active quests (capped at
-`POOL_CAP = 25` each) that the **per-user board** (§4.6) draws from, **plus 1
-active event quest per trigger kind** per guild. (The former "1 active daily +
+each of daily/weekly is a **pool** of active quests (capped at `POOL_CAP = 25`
+each) that the **per-user board** (§4.6) draws from, **plus** guild-wide goals
+(weekly `community` + the single monthly lane, §4.5) and **1 active event quest
+per trigger kind** per guild. (The former "1 active daily +
 rotate-tag pool" rule is retired — `rotate_tag`/`rotate_pool` still exist but
 `rotate_pool` is a true **no-op whenever more than one pool member is active**
 — which is the normal all-active state — so a day roll never quietly
@@ -543,9 +544,18 @@ it automatically (`quests.TRIGGER_KINDS`; mutually exclusive with trigger words)
 The kind decides *what* completes the quest; the qtype decides *how often it can
 pay*:
 
-- **daily/weekly + kind:** "do it once today / this week" — the trigger
-  auto-claims the ordinary calendar period. Never in the manual claim select
-  (wallet state = the kind's how-to line).
+- **daily + kind:** "do it once today" — the trigger auto-claims on the first
+  occurrence in the calendar day. Daily is the **only** one-shot triggered
+  cadence.
+- **weekly + kind:** must **count progress**, never fire-and-done — a triggered
+  weekly quest requires `target_count > 1` or a target band (`_check_target_count`
+  rejects a one-shot; see §4.5 Counted quests). A per-user push across the ISO
+  week; auto-claims silently — never in the manual claim select (wallet state =
+  the kind's how-to line / progress meter).
+- **monthly + kind:** a **guild-wide** goal (see the Monthly cadence note
+  below), NOT a per-user claim — the kind bumps one shared counter and the
+  month-end tier settlement pays it. Monthly is auto-tracked only (kind
+  required, no sign-off, no words, no per-user target).
 - **event + kind** (`qtype='event'`, kind required): pays **every occurrence**,
   period `"<kind>:<occurrence>"` — once per member per game/card/round, forever,
   no time gate. `quest_period('event', …)` deliberately raises; only listeners
@@ -639,12 +649,28 @@ the xp_events-mirrored kinds is a stage-2 script job, not a migration
 `confession` quests reject `signoff=1` at creation/update: a sign-off claim
 posts a bank-channel card naming the claimant, timing-correlatable against the
 anonymous feed. (Community quests already forbid any trigger kind, so the only
-paths left for confession are the silent daily/weekly/monthly/event auto-claims.)
+paths left for confession are the silent daily/weekly/event auto-claims.)
 
-**Monthly cadence:** `qtype='monthly'` claims once per guild-local calendar
-month (period `"YYYY-MM"`, so the window opens on the 1st); up to 5 active, own
-slot pool, suggested band 75–200, no rotation, and — like all cadences — needs
-no loop work: the period key itself resets claimability.
+**Monthly cadence (guild-wide, migration 125):** `qtype='monthly'` is a
+**community-measured** goal — the monthly sibling of the weekly `community`
+cadence, not a per-user board quest. It reuses the community machinery
+end-to-end: a single guild-wide counter (`econ_community_progress`, keyed by
+`quest_id`), `_bump_community_kind` (which selects `qtype IN
+('community','monthly')`), the 40/70/100% tiers, the top-contributor bonus, and
+`settle_community_weekly`. **Auto-tracked only** — a monthly quest requires a
+trigger kind and forbids sign-off / trigger words / a per-user target
+(`_check_trigger_config`/`_check_target_count`); it is not in `_CLAIMABLE_TYPES`
+(no self-claim) and not a `BOARD_CADENCE` (no personal board draw).
+**Rotation:** a single lane, **one active monthly goal per calendar month, no
+gap month** — `_roll_community_monthly` (loop) settles the outgoing goal on the
+month roll and activates `next_community_monthly` for the new month, sized by
+`auto_size_community_target(..., cadence="monthly")` (28-day activity ÷ 0.75, a
+full month's worth). The month roll fires off `econ_day_marks.last_community_month`
+(added in 125), independent of the ISO-week roll; `community_hourly_beats`
+emits the tier/final-24h beats on the calendar-month clock. Existing per-user
+monthly quests are converted by migration 125 (seed the counter from this
+month's summed per-user progress, size the target, single-lane collapse,
+deactivate kindless monthlies; already-paid claims are never clawed back).
 
 **XP rewards:** `reward_xp` pays levelling XP alongside the coins on every
 quest payout — instant and approved sign-off both flow through
@@ -716,28 +742,39 @@ special-cases make a once-in-a-lifetime action fit a daily cadence:
 Enabling it is pure data: create a daily quest on each kind (normal daily
 reward). The fire hooks (`bios/wizard`, `birthday_cog`) already exist.
 
-**Counted quests:** a trigger-kind quest on a daily/weekly/monthly cadence may
-set `target_count` > 1 ("send 20 messages this week"). Each distinct occurrence
+**Counted quests:** a trigger-kind quest on a daily/weekly cadence may set
+`target_count` > 1 ("send 20 messages this week"). Each distinct occurrence
 inserts an `econ_quest_progress_marks` row (the dedup — replays never
 double-count) and bumps `econ_quest_progress`; the ordinary claim fires when
 the count reaches the target (see §4.6 for the per-member Gaussian target
 band), and `/quests` shows a progress meter. Targets are
-invalid on manual quests (nothing counts) and event quests (every occurrence
-already pays). Progress is per (quest, member, period) — a new period starts a
-fresh count with no reset sweep.
+invalid on manual quests (nothing counts), event quests (every occurrence
+already pays), and monthly quests (guild-wide, no per-user count). Progress is
+per (quest, member, period) — a new period starts a fresh count with no reset
+sweep.
+
+**One-shot rule:** a target > 1 (or a band) is **required**, not optional, on a
+triggered **weekly** quest — only *daily* triggered quests may be one-shot
+(`target_count == 1`, no band). The intent is that weekly quests always show a
+filling progress bar rather than completing on the first action;
+`_check_target_count` rejects a triggered weekly one-shot at create/update (the
+web route surfaces it as a 422). Manual and trigger-word weeklies have nothing
+to count, so they remain legitimate one-shots. (Monthly is guild-wide, not
+per-user counted — see the Monthly cadence note in §4.5.)
 
 ### 4.6 Per-user quest board (`quests.assigned_quest_ids`)
-Daily/weekly/monthly quests are **personal**: each cadence's active quests form
-a **pool**, and every member is shown/paid their own subset drawn from it per
-period. How many is **per-guild configurable** — `EconSettings.quest_board_daily`
-/ `_weekly` / `_monthly` (default **2** each, matching `PERSONAL_BOARD_SIZE`),
-edited on the dashboard Quests page under *Board size* and capped at `POOL_CAP`.
-Lowering a dial is how a guild makes the board feel less busy without
-deactivating library quests; **0 turns that cadence off entirely** — nothing
-shows and nothing pays.
+Daily/weekly quests are **personal**: each cadence's active quests form a
+**pool**, and every member is shown/paid their own subset drawn from it per
+period. (Monthly left the board model in migration 125 — it's a guild-wide
+goal now.) How many is **per-guild configurable** —
+`EconSettings.quest_board_daily` / `_weekly` (default **2** each, matching
+`PERSONAL_BOARD_SIZE`), edited on the dashboard Quests page under *Board size*
+and capped at `POOL_CAP`. Lowering a dial is how a guild makes the board feel
+less busy without deactivating library quests; **0 turns that cadence off
+entirely** — nothing shows and nothing pays.
 
 Because 0 is a real setting, "has a board" and "board size" are deliberately
-separate: `quests.has_board(qtype)` (true for daily/weekly/monthly, always) is
+separate: `quests.has_board(qtype)` (true for daily/weekly, always) is
 what gates the board filter, never `board_size(...) > 0`. Gating on the size
 would make a cadence sized to 0 read as *unfiltered* — community/event's
 "no board concept, every active quest counts" — and pay out the whole pool,

@@ -64,42 +64,50 @@ SEEDS: list[tuple[str, str, str, int, int, int, str]] = [
         "Post a voice message in chat. The bot even transcribes it for you.",
     ),
     (
-        "Ember Answerer", "weekly", "chat_revive", 35, 15, 1,
-        "When the ember glows 🔥, answer it — talk in a revived channel "
-        "within the half hour.",
+        "Ember Answerer", "weekly", "chat_revive", 35, 15, 3,
+        "When the ember glows 🔥, answer it — jump into 3 revived channels "
+        "this week, each within the half hour.",
     ),
     (
-        "Bump the Beacon", "weekly", "bump", 40, 20, 1,
-        "Bump the server on a listing site. Cooldowns are the rate limit — "
-        "one hero per bump.",
+        "Bump the Beacon", "weekly", "bump", 40, 20, 2,
+        "Bump the server on a listing site twice this week — cooldowns are "
+        "the rate limit, so pace yourself.",
     ),
     (
-        "Open House", "weekly", "voice_room_host", 50, 25, 1,
-        "Spin up a voice room and host a real hangout — pays when 2+ members "
-        "join you.",
+        "Open House", "weekly", "voice_room_host", 50, 25, 2,
+        "Host a real hangout twice this week — a voice room pays each time "
+        "2+ members join you.",
     ),
     (
-        "Game Night Regular", "weekly", "session_join", 35, 15, 1,
-        "Show up for a game night — play in any party game session this week.",
+        "Game Night Regular", "weekly", "session_join", 35, 15, 2,
+        "Show up for game night — play in 2 party game sessions this week.",
     ),
     (
-        "Whisper Sleuth", "weekly", "whisper_guess", 40, 20, 1,
-        "Someone whispered you anonymously? Figure out who. Correct guesses "
-        "only.",
+        "Whisper Sleuth", "weekly", "whisper_guess", 40, 20, 3,
+        "Someone whispered you anonymously? Figure out who. Land 3 correct "
+        "guesses this week.",
     ),
     (
-        "Face Detective", "weekly", "guess_win", 40, 20, 1,
-        "Win a Guess Who round — first correct guess takes it.",
+        "Face Detective", "weekly", "guess_win", 40, 20, 3,
+        "Win 3 Guess Who rounds this week — first correct guess takes each one.",
     ),
     (
-        "Pen Pal Devotee", "monthly", "pen_pal_complete", 100, 50, 1,
-        "See a Pen Pals match through to the very end — the full session, "
-        "no early exit.",
+        # Monthly is a guild-wide goal now: the reward is the flat per-tier
+        # payout to everyone, and the target auto-sizes from recent activity.
+        "Pen Pal Devotee", "monthly", "pen_pal_complete", 50, 20, 1,
+        "A server-wide push: see Pen Pals matches through to the very end this "
+        "month. Every completed session moves the bar — hit the tiers together "
+        "and everyone gets paid.",
     ),
     (
-        "Certified Quotable", "monthly", "quoted", 80, 40, 1,
-        "Say something worth framing — pays when someone else turns your "
-        "message into a quote card.",
+        "Certified Quotable", "monthly", "quoted", 50, 20, 1,
+        "A server-wide push: rack up quote cards this month. Every message "
+        "someone turns into a quote moves the shared bar toward the tiers.",
+    ),
+    (
+        "Welcome Wagon", "monthly", "welcome", 50, 20, 1,
+        "A server-wide push: welcome brand-new members (joined within a week) "
+        "this month — make them stay. Every welcome moves the shared bar.",
     ),
     (
         "Cake Day on File", "event", "birthday_set", 25, 10, 1,
@@ -149,10 +157,6 @@ SOCIAL_SEEDS: list[tuple[str, str, str, int, int, int, int, str]] = [
     (
         "Deep Diver", "weekly", "thread_deep", 35, 15, 1, 3,
         "Be part of threads that hit 20+ messages.",
-    ),
-    (
-        "Welcome Wagon", "monthly", "welcome", 90, 45, 1, 5,
-        "Reply to brand-new members (joined within a week) — make them stay.",
     ),
     (
         "Spark", "weekly", "conversation_starter", 50, 25, 1, 3,
