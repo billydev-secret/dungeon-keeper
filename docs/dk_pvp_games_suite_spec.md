@@ -237,9 +237,14 @@ chosen nick and to custom stakes)
 **Bot permission preflight** (nickname mode, checked at challenge/lobby/join time so failures
 surface before play, not after)
 
-- `Manage Nicknames`.
-- DK's top role must be **above** every participant's top role (except the guild owner, who is
-  handled specially at rename time).
+- `Manage Nicknames` — **hard gate**: missing it aborts (the bot can rename no one, so a
+  nickname-stake game is pointless).
+- Role hierarchy is **non-fatal**: a participant whose top role sits at or above DK's own
+  (a staff member, say) no longer blocks the game. The challenge/lobby proceeds with a
+  `⚠️`-warning naming who can't be renamed, and if one of them loses the win stands with **no
+  nickname applied** (`_unrenameable_members` / `_unrenameable_notice` in `base_game.py`,
+  skipped at rename time like the guild-owner and left-server paths). The guild owner is
+  excluded from the warning — they self-apply the sentence at rename time.
 
 ---
 
