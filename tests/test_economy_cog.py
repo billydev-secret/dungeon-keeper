@@ -658,13 +658,13 @@ def test_quest_section_lines_align_the_reward_column():
 
 
 @pytest.mark.asyncio
-async def test_quests_event_field_stays_under_cap(ctx, db):
-    # event ("Anytime") quests bypass the board's per-cadence sizing — one can
-    # be active per trigger kind, and there are ~50 kinds, so dozens accrue.
-    # They render inside the "Your quests" section, which must stay within
-    # Discord's 1024-char limit (each line ~45 chars, so 40 of them overrun) or
-    # the whole /bank quests command 400s guild-wide. Overflow is summarised
-    # with a "+N more" tail.
+async def test_quests_event_quests_have_no_display_section(ctx, db):
+    # event ("Anytime") quests aren't board-drawn and don't get a section in
+    # the personal panel — they stay a surprise payout rather than a
+    # proactively-listed menu, even when dozens are active at once. With no
+    # daily/weekly/community quests to fill the other sections, the embed
+    # ends up with no fields at all — the 40 events are still reachable via
+    # the details/claim select, just never proactively listed.
     from bot_modules.economy.quests import TRIGGER_KINDS
 
     _enable(db)
@@ -680,9 +680,9 @@ async def test_quests_event_field_stays_under_cap(ctx, db):
 
     kwargs = interaction.response.send_message.await_args.kwargs
     embed = kwargs["embed"]
-    anytime = next(f for f in embed.fields if f.name == "🧍 Your quests")
-    assert len(anytime.value) <= 1024
-    assert "more_" in anytime.value  # overflow summarised, not dropped silently
+    assert not any(f.name in ("🧍 Your quests", "Anytime") for f in embed.fields)
+    assert all("Anytime quest number" not in (f.value or "") for f in embed.fields)
+    assert "view" in kwargs  # still claimable/detailable via the select
 
 
 @pytest.mark.asyncio

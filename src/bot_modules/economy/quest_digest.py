@@ -33,13 +33,14 @@ _BLURB_MAX = 160
 MOVERS_HEADING = "📈 Biggest Movers Yesterday"
 
 # Cadence → field heading, in the order they appear in the digest. "quest" is
-# kept in each heading so the field reads as part of the checklist.
+# kept in each heading so the field reads as part of the checklist. Event
+# ("Anytime") quests aren't board-drawn and don't get a section here — they
+# stay a surprise payout rather than a proactively-listed menu.
 GROUP_ORDER: list[tuple[str, str]] = [
     ("daily", "🎯 Daily Quests"),
     ("weekly", "📅 Weekly Quests"),
     ("monthly", "🗓️ Monthly Quests"),
     ("community", "🌍 Community Goals"),
-    ("event", "✨ Anytime Quests"),
 ]
 
 # Light context for a quest that carries no description of its own, so every

@@ -354,22 +354,23 @@ def _unit(settings: EconSettings, amount: int) -> str:
 
 
 # The /bank quests board is two sections: the member's own board (daily/weekly
-# board draws + any-channel "Anytime" quests they complete and claim) and the
-# guild-wide goals everyone moves together (the monthly goal + the weekly
-# community goals — both shared counters, no self-claim). Each section is one
-# embed field; within it, a cadence sub-label separates the groups when more
-# than one is present. The long per-state explainer text lives in
-# quest_views.QUEST_STATE_LABEL, shown by the details select — the list itself
-# stays one line per quest.
+# board draws) and the guild-wide goals everyone moves together (the monthly
+# goal + the weekly community goals — both shared counters, no self-claim).
+# Event ("Anytime") quests aren't board-drawn and don't get a section here —
+# they stay a surprise payout rather than a proactively-listed menu; they're
+# still claimable via the details select if one lands in a claimable state.
+# Each section is one embed field; within it, a cadence sub-label separates
+# the groups when more than one is present. The long per-state explainer text
+# lives in quest_views.QUEST_STATE_LABEL, shown by the details select — the
+# list itself stays one line per quest.
 _CADENCE_LABEL = {
     "daily": "Daily",
     "weekly": "Weekly",
-    "event": "Anytime",
     "monthly": "Monthly",
     "community": "Weekly",
 }
 _QUEST_SECTIONS = (
-    ("🧍 Your quests", ("daily", "weekly", "event")),
+    ("🧍 Your quests", ("daily", "weekly")),
     ("🌐 Community goals", ("monthly", "community")),
 )
 
@@ -3534,12 +3535,9 @@ class EconomyCog(commands.Cog):
         ]
         sections = [(heading, lines) for heading, lines in sections if lines]
         for i, (heading, quest_lines) in enumerate(sections):
-            # Anytime (event) quests bypass the board's per-cadence sizing, so
-            # dozens can accrue and blow the 1024-char field cap — which 400s
-            # the whole command guild-wide. They sort last within Your quests,
-            # so fitting from the top keeps the counted daily/weekly bars and
-            # summarises the event tail. (Reserve room for the "+N more" tail +
-            # breathing-room line.)
+            # Defensive cap: a large quest_board_* size could still blow the
+            # 1024-char field cap and 400 the whole command guild-wide.
+            # (Reserve room for the "+N more" tail + breathing-room line.)
             value = _fit_lines(quest_lines, _EMBED_FIELD_LIMIT - 40)
             shown = value.count("\n") + 1 if value else 0
             if shown < len(quest_lines):

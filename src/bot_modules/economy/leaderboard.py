@@ -53,17 +53,14 @@ FEED_LINES = 5
 
 _MEDALS = ("🥇", "🥈", "🥉", "🏅", "🏅")
 
-# Quest-board display order and per-cadence labels.
+# Quest-board display order and per-cadence labels. Event ("Anytime") quests
+# aren't board-drawn and don't get a section here — they stay a surprise
+# payout rather than a proactively-listed menu.
 _QTYPE_LABELS = {
     "daily": "Daily",
     "weekly": "Weekly",
     "monthly": "Monthly",
-    "event": "Anytime",
 }
-
-# Cap listed "Anytime" (event) quest lines so the field stays inside
-# Discord's 1024-char limit; board cadences summarize to one line each.
-_MAX_QUEST_LINES = 12
 
 # Pace rule shared with the Statistics page's "Happening now" card: expected
 # progress is linear across the ISO week; under 90% of that reads "behind".
@@ -591,8 +588,7 @@ def build_leaderboard_embed(
             )
         # Members never face the whole pool: each draws a personal board of
         # board_size quests per cadence. Summarize the draw instead of
-        # listing a menu nobody actually has; only board-less "Anytime"
-        # (event) quests are named, because those really are open to all.
+        # listing a menu nobody actually has.
         sizes = {
             "daily": settings.quest_board_daily,
             "weekly": settings.quest_board_weekly,
@@ -602,19 +598,9 @@ def build_leaderboard_embed(
         # cadence | description | payment rows; the first two columns are
         # fixed-width code cells so payments line up down the field.
         rows: list[tuple[str, str, str]] = []
-        overflow = 0
         for qtype, qtype_label in _QTYPE_LABELS.items():
             pool = [q for q in data.quests if q.qtype == qtype]
             if not pool:
-                continue
-            if qtype == "event":
-                for q in pool[:_MAX_QUEST_LINES]:
-                    xp = f" +⭐{q.reward_xp}xp" if q.reward_xp > 0 else ""
-                    spot_tag = " ⚡" if q.spotlight else ""
-                    rows.append(
-                        (qtype_label, q.title, f"{emoji} {q.reward:,}{xp}{spot_tag}")
-                    )
-                overflow = max(0, len(pool) - _MAX_QUEST_LINES)
                 continue
             n = min(sizes.get(qtype, 0), len(pool))
             if n <= 0:
@@ -637,8 +623,6 @@ def build_leaderboard_embed(
                 f"`{_pad(label, label_width)}  {_pad(desc, desc_width)}` {pay}"
                 for label, desc, pay in rows
             ]
-        if overflow:
-            body.append(f"…and {overflow} more on `/bank quests`.")
         if body:
             quest_lines.extend(body)
             quest_lines.append(

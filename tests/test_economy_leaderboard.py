@@ -375,8 +375,9 @@ def test_embed_quest_board_summarizes_per_cadence():
     assert "reshuffle each reset" in board and "/bank quests" in board
 
 
-def test_embed_quest_board_lists_event_quests():
-    # "Anytime" (event) quests aren't board-drawn — those stay named.
+def test_embed_quest_board_omits_event_quests():
+    # "Anytime" (event) quests are a surprise payout, not a proactively-listed
+    # menu — the board summary never gets an "Anytime" section for them.
     quests = [
         QuestLine("daily", "Chatter", reward=5, reward_xp=0),
         QuestLine("event", "Secret Santa", reward=25, reward_xp=10),
@@ -386,8 +387,8 @@ def test_embed_quest_board_lists_event_quests():
     )
     board = next(f.value for f in embed.fields if f.name == "📋 Quest board")
     assert board is not None
-    assert "`Anytime  Secret Santa    ` 🪙 25 +⭐10xp" in board
-    assert "Chatter" not in board
+    assert "Anytime" not in board
+    assert "Secret Santa" not in board
 
 
 def test_embed_empty_states_and_personal_blurb():

@@ -99,7 +99,8 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   (grace and shield burning together collapse into one "streak saved" field), an
   optional **"biggest movers yesterday"** field (the community goals that advanced the
   most on the previous guild-local day), and the member's **full** open-quest checklist.
-  Quests group by cadence (Daily / Weekly / Monthly / 🌍 Community / ✨ Anytime); each
+  Quests group by cadence (Daily / Weekly / Monthly / 🌍 Community — event/"Anytime"
+  quests get no section, staying a surprise payout rather than a listed menu); each
   renders as a block — title, a monospace meter (bar in a code span so bars/counts line
   up), and a blurb from the quest's `description` (with a per-cadence fallback), plus a
   `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`). The
@@ -399,10 +400,12 @@ parity with the Games Studio is a parking-lot item).
   fill alone** (`bar_fill`, no counts), since their shared totals run to five
   or six figures and only the details popup / login digest spell them out. Lines are split into two
   top-level sections — **🧍 Your quests** (the member's board: daily/weekly
-  draws + any-channel Anytime quests they complete and claim) and **🌐
-  Community goals** (the guild-wide shared counters: the monthly goal + the
-  weekly community goals, no self-claim). Within a section a bold cadence
-  sub-label (Daily/Weekly/Anytime, or Monthly/Weekly) separates the groups
+  draws) and **🌐 Community goals** (the guild-wide shared counters: the
+  monthly goal + the weekly community goals, no self-claim). Event
+  ("Anytime") quests aren't board-drawn and don't get a section at all — a
+  surprise payout rather than a listed menu; they're still claimable via the
+  details select if one lands in a claimable state. Within a section a bold
+  cadence sub-label (Daily/Weekly, or Monthly/Weekly) separates the groups
   when more than one is present; a single-cadence section is unlabelled
   (`_QUEST_SECTIONS` / `_quest_section_lines`). Title and status share one
   monospace code cell padded to the section's widest status (`_status_disp_width`
@@ -1218,8 +1221,8 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   line per board cadence ("**N** on your board, drawn from M" + reward
   range; a cadence sized 0 or with an empty pool is omitted) rather than the
   full pool, since members only ever face their personal draw; board-less
-  "Anytime" (event) quests stay individually listed (capped at 12 lines),
-  and the ⚡ spotlight line keeps its "until" clock; an **anonymous live
+  "Anytime" (event) quests get no section — a surprise payout rather than a
+  listed menu — and the ⚡ spotlight line keeps its "until" clock; an **anonymous live
   feed** — today's paid completions
   aggregated per quest (title × count + latest relative timestamp, max 5
   lines, plus a full-board-bonus count; titles and counts only, never member
