@@ -1210,11 +1210,11 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   between edits); top 5 earners over a rolling 7 days (income = positive
   ledger sums excluding `transfer_in`, matching the Statistics page) each
   annotated **(+N today)**; community-goal progress bars — auto weeklies add
-  tier state with the next tier's threshold, a daily-bucket pace verdict
-  ("on pace"/"needs a push", same 90%-of-linear rule as `compute_live`),
-  contributor count, today's contribution delta (from `econ_kind_activity`;
-  omitted for channel-scoped goals the scope-blind activity ledger can't
-  measure), and a week-end deadline clock; a **quest-board summary** — one
+  a tier-secured marker once the first tier is banked (no marker before
+  that, to keep the panel from reading as a numeric checklist), contributor
+  count, today's contribution delta (from `econ_kind_activity`; omitted for
+  channel-scoped goals the scope-blind activity ledger can't measure), and a
+  week-end deadline clock; a **quest-board summary** — one
   line per board cadence ("**N** on your board, drawn from M" + reward
   range; a cadence sized 0 or with an empty pool is omitted) rather than the
   full pool, since members only ever face their personal draw; board-less

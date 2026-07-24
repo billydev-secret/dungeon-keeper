@@ -21,7 +21,6 @@ as Discord relative timestamps, which tick client-side between edits.
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -485,32 +484,17 @@ def _community_block(g: CommunityGoal) -> str:
     lines = [title, f"{bar}{state}"]
     target = int(g.target or 0)
     if g.auto and target > 0 and not g.settled:
-        if not g.completed:
-            # round() before ceil(): 70×0.7 is 49.000…003 in floats, and a
-            # naive ceil would print the 49-action tier as "next at 50".
-            thresholds = [
-                math.ceil(round(target * frac, 6))
-                for frac in quest_rules.COMMUNITY_TIERS
-            ]
-            if g.tiers > 0:
-                tier_bit = f"🏁 tier {g.tiers}/3 secured"
-                nxt = (
-                    f" · next at {thresholds[g.tiers]:,}"
-                    if g.tiers < len(thresholds)
-                    else ""
-                )
-            else:
-                tier_bit = f"🎯 first tier at {thresholds[0]:,}"
-                nxt = ""
-            lines.append(f"{tier_bit}{nxt}")
-        detail = ["📈 on pace" if g.on_track else "🐢 needs a push"]
+        if not g.completed and g.tiers > 0:
+            lines.append(f"🏁 tier {g.tiers}/3 secured")
+        detail = []
         if g.contributors > 0:
             detail.append(f"👥 {g.contributors} contributing")
         if g.today_delta:
             detail.append(f"+{g.today_delta:,} today")
         if g.ends_ts and not g.completed:
             detail.append(f"ends {_rel(g.ends_ts)}")
-        lines.append(" · ".join(detail))
+        if detail:
+            lines.append(" · ".join(detail))
     return "\n".join(lines)
 
 
@@ -687,7 +671,7 @@ def build_leaderboard_embed(
         _add_section("🎰 Night at the Tables", "\n".join(table_lines))
 
     embed.add_field(
-        name="👤 Your Progress",
+        name="​",
         value=(
             "`/bank quests` shows your own quest progress and claims, and "
             f"`/bank wallet` your {plural} balance and recent earnings — "

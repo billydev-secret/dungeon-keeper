@@ -338,7 +338,7 @@ def test_embed_sections_stack_full_width():
         ("🎯 Community goals — everyone gets paid when we hit them", False),
         ("📋 Quest board", False),
         ("📰 Live feed — today", False),
-        ("👤 Your Progress", False),
+        ("​", False),
     ]
     # (glyph-led section headings; see build_leaderboard_embed)
     # Breathing room: the description and every field but the last end in a
@@ -398,7 +398,7 @@ def test_embed_empty_states_and_personal_blurb():
     assert "be the first" in fields[f"🏆 Top earners (last {ROLLING_DAYS} days)"]
     assert "No quests running" in fields["📋 Quest board"]
     assert not any("Community goals" in (n or "") for n in fields)
-    personal = fields["👤 Your Progress"]
+    personal = fields["​"]
     assert "/bank quests" in personal and "/bank wallet" in personal
     assert "only you" in personal
 
@@ -639,7 +639,7 @@ def test_embed_auto_goal_tier_marker():
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
     goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
     assert goals is not None
-    assert "🏁 tier 2/3 secured · next at 100" in goals
+    assert "🏁 tier 2/3 secured" in goals
 
 
 # ── live content: pulse, feed, clocks ───────────────────────────────────────
@@ -713,9 +713,7 @@ def test_embed_community_pace_crowd_and_deadline():
         now_ts=NOW,
     )
     goals = _fields(embed)["🎯 Community goals — everyone gets paid when we hit them"]
-    # ceil(70×0.7) = 49 — float noise must not round the threshold to 50.
-    assert "🏁 tier 1/3 secured · next at 49" in goals
-    assert "🐢 needs a push" in goals
+    assert "🏁 tier 1/3 secured" in goals
     assert "👥 4 contributing" in goals and "+12 today" in goals
     assert f"ends <t:{int(NOW + 5000)}:R>" in goals
 
