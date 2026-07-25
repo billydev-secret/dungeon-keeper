@@ -295,15 +295,10 @@ def test_keno_result_all_losses_is_red():
 # ── war result cards ───────────────────────────────────────────────────
 
 
-def _war(**kw) -> discord.Embed:
+def _war(player="K♠", dealer="5♦", stake=10, **kw) -> discord.Embed:
     from bot_modules.cogs.casino.embeds import build_war_embed
 
-    args = dict(player="K♠", dealer="5♦", stake=10)
-    args.update(kw)
-    return build_war_embed(
-        _ECON, 42, args["player"], args["dealer"], args["stake"], None,
-        **{k: v for k, v in args.items() if k not in ("player", "dealer", "stake")},
-    )
+    return build_war_embed(_ECON, 42, player, dealer, stake, None, **kw)
 
 
 def test_war_win_is_green_and_loss_is_red():

@@ -56,26 +56,23 @@ def parse_amount(raw: str) -> int | None:
 # ── bet modals ─────────────────────────────────────────────────────────
 
 
-class BetModal(discord.ui.Modal):
-    """One amount box; ``game`` (+ coinflip's ``side``) decides the table.
+class _AmountBetModal(discord.ui.Modal):
+    """One amount box + the shared parse/apologize flow.
 
     The label carries the live limits ("Your bet (5–100 · 340 left today)")
     and the box pre-fills the member's last bet on this game — nobody
-    should learn about a limit from the error after submitting.
+    should learn about a limit from the error after submitting. Subclasses
+    set the title, stash their routing fields, and implement ``_place``.
     """
 
     def __init__(
         self,
         *,
         title: str,
-        game: str,
-        side: str | None = None,
         limits_label: str = "Your bet",
         default_amount: int | None = None,
     ) -> None:
-        super().__init__(title=title)
-        self.game = game
-        self.side = side
+        super().__init__(title=title[:45])
         self.amount: discord.ui.TextInput = discord.ui.TextInput(
             label=limits_label[:45],
             placeholder="A whole number of coins",
@@ -92,6 +89,35 @@ class BetModal(discord.ui.Modal):
         if amount is None:
             await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
             return
+        await self._place(cog, interaction, amount)
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        raise NotImplementedError
+
+
+class BetModal(_AmountBetModal):
+    """``game`` (+ coinflip's ``side``) decides the instant table."""
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        game: str,
+        side: str | None = None,
+        limits_label: str = "Your bet",
+        default_amount: int | None = None,
+    ) -> None:
+        super().__init__(
+            title=title, limits_label=limits_label, default_amount=default_amount
+        )
+        self.game = game
+        self.side = side
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         if self.game == "coinflip" and self.side is not None:
             await cog.play_coinflip(interaction, self.side, amount)
         elif self.game == "slots":
@@ -111,7 +137,9 @@ _ROULETTE_KINDS = {
 }
 
 
-class RouletteBetModal(discord.ui.Modal):
+class RouletteBetModal(_AmountBetModal):
+    """Amount box, plus the straight-number box when the bet needs one."""
+
     def __init__(
         self,
         round_id: int,
@@ -120,16 +148,12 @@ class RouletteBetModal(discord.ui.Modal):
         limits_label: str = "Your bet",
         default_amount: int | None = None,
     ) -> None:
-        super().__init__(title="Roulette bet")
+        super().__init__(
+            title="Roulette bet",
+            limits_label=limits_label, default_amount=default_amount,
+        )
         self.round_id = round_id
         self.kind = kind
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
         self.number: discord.ui.TextInput | None = None
         if kind == "num":
             self.number = discord.ui.TextInput(
@@ -139,14 +163,9 @@ class RouletteBetModal(discord.ui.Modal):
             )
             self.add_item(self.number)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         if self.kind == "num":
             assert self.number is not None
             raw = str(self.number.value).strip()
@@ -161,7 +180,7 @@ class RouletteBetModal(discord.ui.Modal):
         )
 
 
-class DerbyBetModal(discord.ui.Modal):
+class DerbyBetModal(_AmountBetModal):
     """One amount box; the runner was chosen by the button that opened it."""
 
     def __init__(
@@ -169,33 +188,19 @@ class DerbyBetModal(discord.ui.Modal):
         round_id: int,
         runner: int,
         runner_label: str,
-        *,
-        limits_label: str = "Your bet",
-        default_amount: int | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(title=f"Back {runner_label}"[:45])
+        super().__init__(title=f"Back {runner_label}", **kwargs)
         self.round_id = round_id
         self.runner = runner
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         await cog.place_derby_bet(interaction, self.round_id, self.runner, amount)
 
 
-class BaccaratBetModal(discord.ui.Modal):
+class BaccaratBetModal(_AmountBetModal):
     """One amount box; the side was chosen by the button that opened it."""
 
     def __init__(
@@ -203,35 +208,21 @@ class BaccaratBetModal(discord.ui.Modal):
         round_id: int,
         side: str,
         side_label: str,
-        *,
-        limits_label: str = "Your bet",
-        default_amount: int | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(title=f"Back {side_label}"[:45])
+        super().__init__(title=f"Back {side_label}", **kwargs)
         self.round_id = round_id
         self.side = side
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         await cog.place_baccarat_bet(
             interaction, self.round_id, self.side, amount
         )
 
 
-class DiceBetModal(discord.ui.Modal):
+class DiceBetModal(_AmountBetModal):
     """One amount box; the call was chosen by the button that opened it."""
 
     def __init__(
@@ -239,29 +230,15 @@ class DiceBetModal(discord.ui.Modal):
         round_id: int,
         bet_type: str,
         call_label: str,
-        *,
-        limits_label: str = "Your bet",
-        default_amount: int | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(title=f"Call {call_label}"[:45])
+        super().__init__(title=f"Call {call_label}", **kwargs)
         self.round_id = round_id
         self.bet_type = bet_type
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         await cog.place_dice_bet(
             interaction, self.round_id, self.bet_type, amount
         )
@@ -742,36 +719,17 @@ class DiceNextView(discord.ui.View):
 # ── keno ticket buttons ────────────────────────────────────────────────
 
 
-class KenoTicketModal(discord.ui.Modal):
+class KenoTicketModal(_AmountBetModal):
     """One amount box; the tier was chosen by the button that opened it."""
 
-    def __init__(
-        self,
-        round_id: int,
-        spots: int,
-        *,
-        limits_label: str = "Your bet",
-        default_amount: int | None = None,
-    ) -> None:
-        super().__init__(title=f"Keno — Pick {spots}")
+    def __init__(self, round_id: int, spots: int, **kwargs) -> None:
+        super().__init__(title=f"Keno — Pick {spots}", **kwargs)
         self.round_id = round_id
         self.spots = spots
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         await cog.place_keno_ticket(
             interaction, self.round_id, self.spots, amount
         )

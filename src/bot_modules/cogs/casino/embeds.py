@@ -79,6 +79,48 @@ def _pot_line(pot_after: int) -> str:
     return f"💰 The loss feeds the jackpot — now **{pot_after:,}**."
 
 
+def _add_result_fields(
+    embed: discord.Embed,
+    econ: EconSettings,
+    paid: list[tuple[int, str, int, int]],
+    losers_total: int,
+    pot_after: int,
+    *,
+    paid_name: str = "Winners",
+    keep_name: str = "The house keeps",
+) -> None:
+    """Every result card's shared tail: the paid board (💥 big-win prefix,
+    char-capped under the 1024 field limit) and the house-keeps line with
+    its pot ad. One implementation so a field-limit fix can never land in
+    one game's recap and miss another's."""
+    if paid:
+        lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in paid
+        ]
+        embed.add_field(
+            name=paid_name,
+            value="\n".join(logic.cap_lines(lines, limit=1022)) + "\n​",
+            inline=False,
+        )
+    if losers_total:
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name=keep_name, value=kept, inline=False)
+
+
+def _running_note(
+    lead: str, closes_at: float, url: str | None, jump: str, above: str
+) -> str:
+    """The already-running ephemeral pointer every windowed game shares."""
+    note = f"{lead} <t:{int(closes_at)}:R>."
+    if url:
+        return f"{note} {jump}: {url}"
+    return f"{note} {above}."
+
+
 _TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏", "war": "⚔️"}
 
 
@@ -633,36 +675,19 @@ def build_roulette_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    if winners:
-        winner_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in winners
-        ]
-        # Cap under the 1024 field limit (reserve 2 for the trailing "\n​").
-        embed.add_field(
-            name="Winners",
-            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The house keeps", value=kept, inline=False)
+    _add_result_fields(embed, econ, winners, losers_total, pot_after)
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_round_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens roulette mid-round."""
-    note = (
-        f"🎡 A roulette round is already running — the wheel spins "
-        f"<t:{int(closes_at)}:R>."
+    return _running_note(
+        "🎡 A roulette round is already running — the wheel spins",
+        closes_at, url,
+        "Jump to it and place your bet",
+        "Place your bet on the round message above",
     )
-    if url:
-        return f"{note} Jump to it and place your bet: {url}"
-    return f"{note} Place your bet on the round message above."
 
 
 # ── derby (docs/plans/casino-derby.md) ─────────────────────────────────
@@ -740,34 +765,22 @@ def build_derby_result_embed(
         description=description + "\n​",
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    if winners:
-        winner_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in winners
-        ]
-        embed.add_field(
-            name="Winners",
-            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The meadow keeps", value=kept, inline=False)
+    _add_result_fields(
+        embed, econ, winners, losers_total, pot_after,
+        keep_name="The meadow keeps",
+    )
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_race_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens the derby mid-race."""
-    note = (
-        f"🏇 A race is already forming — they're off <t:{int(closes_at)}:R>."
+    return _running_note(
+        "🏇 A race is already forming — they're off",
+        closes_at, url,
+        "Jump in and back a critter",
+        "Back a critter on the race message above",
     )
-    if url:
-        return f"{note} Jump in and back a critter: {url}"
-    return f"{note} Back a critter on the race message above."
 
 
 # ── baccarat (casino-classics Stage 1a) ────────────────────────────────
@@ -867,35 +880,22 @@ def build_baccarat_result_embed(
         description=description,
         color=COLOR_GREEN if won else COLOR_RED,
     )
-    if paid:
-        paid_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in paid
-        ]
-        embed.add_field(
-            name="Winners" if won else "Pushed",
-            value="\n".join(logic.cap_lines(paid_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The house keeps", value=kept, inline=False)
+    _add_result_fields(
+        embed, econ, paid, losers_total, pot_after,
+        paid_name="Winners" if won else "Pushed",
+    )
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_coup_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens baccarat mid-hand."""
-    note = (
-        f"🎴 A baccarat hand is already forming — cards down "
-        f"<t:{int(closes_at)}:R>."
+    return _running_note(
+        "🎴 A baccarat hand is already forming — cards down",
+        closes_at, url,
+        "Jump in and pick a side",
+        "Pick a side on the hand message above",
     )
-    if url:
-        return f"{note} Jump in and pick a side: {url}"
-    return f"{note} Pick a side on the hand message above."
 
 
 # ── dice / sic bo (casino-classics Stage 1b) ───────────────────────────
@@ -964,35 +964,19 @@ def build_dice_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    if winners:
-        winner_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in winners
-        ]
-        embed.add_field(
-            name="Winners",
-            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The house keeps", value=kept, inline=False)
+    _add_result_fields(embed, econ, winners, losers_total, pot_after)
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_roll_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens dice mid-roll."""
-    note = (
-        f"🎲 A dice roll is already forming — they fly "
-        f"<t:{int(closes_at)}:R>."
+    return _running_note(
+        "🎲 A dice roll is already forming — they fly",
+        closes_at, url,
+        "Jump in and call it",
+        "Call it on the roll message above",
     )
-    if url:
-        return f"{note} Jump in and call it: {url}"
-    return f"{note} Call it on the roll message above."
 
 
 # ── keno (casino-classics Stage 1d) ────────────────────────────────────
@@ -1062,35 +1046,19 @@ def build_keno_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    if winners:
-        winner_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in winners
-        ]
-        embed.add_field(
-            name="Winners",
-            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The house keeps", value=kept, inline=False)
+    _add_result_fields(embed, econ, winners, losers_total, pot_after)
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_draw_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens keno mid-draw."""
-    note = (
-        f"🔢 A keno draw is already forming — numbers drop "
-        f"<t:{int(closes_at)}:R>."
+    return _running_note(
+        "🔢 A keno draw is already forming — numbers drop",
+        closes_at, url,
+        "Jump in and grab a ticket",
+        "Grab a ticket on the draw message above",
     )
-    if url:
-        return f"{note} Jump in and grab a ticket: {url}"
-    return f"{note} Grab a ticket on the draw message above."
 
 
 # ── war (casino-classics Stage 1c) ─────────────────────────────────────

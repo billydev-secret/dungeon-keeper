@@ -534,26 +534,13 @@ def test_keno_catches_counts_the_overlap():
     assert logic.keno_catches([1, 2, 3, 4], [3, 4, 5, 6]) == 2
 
 
-@pytest.mark.parametrize("tier", logic.KENO_TIERS)
-def test_keno_exact_rtp_in_design_band(tier):
-    """Exact hypergeometric EV per tier — the bespoke paytables must sit
-    in ~94–96%, nothing like real casino keno's 65–75%."""
-    from fractions import Fraction
-    from math import comb
-
-    total = comb(80, 20)
-    rtp = sum(
-        Fraction(comb(tier, k) * comb(80 - tier, 20 - k), total) * mult
-        for k, mult in logic.KENO_PAYTABLE[tier].items()
-    )
-    assert 0.94 <= float(rtp) <= 0.96, f"Pick-{tier} RTP drifted to {float(rtp):.4f}"
-
-
 @pytest.mark.parametrize(
     ("tier", "pinned"),
     [(4, 0.955058), (6, 0.953625), (8, 0.946554), (10, 0.952529)],
 )
-def test_keno_rtp_pinned_per_tier(tier, pinned):
+def test_keno_exact_rtp_pinned_and_in_band(tier, pinned):
+    """Exact hypergeometric EV per tier — the bespoke paytables sit in
+    ~94–96% (nothing like real casino keno's 65–75%), pinned exactly."""
     from fractions import Fraction
     from math import comb
 
@@ -563,6 +550,7 @@ def test_keno_rtp_pinned_per_tier(tier, pinned):
         for k, mult in logic.KENO_PAYTABLE[tier].items()
     )
     assert float(rtp) == pytest.approx(pinned, abs=1e-6)
+    assert 0.94 <= float(rtp) <= 0.96, f"Pick-{tier} RTP drifted to {float(rtp):.4f}"
 
 
 def test_keno_quick_pick_and_draw_shapes(monkeypatch):

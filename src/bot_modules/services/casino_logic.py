@@ -409,38 +409,24 @@ def _banker_draws(banker_total: int, player_third: int) -> bool:
 def deal_baccarat() -> tuple[list[str], list[str]]:
     """Deal one coup from the infinite shoe; returns (player, banker) cards
     after the fixed draws. No decisions — the drawing tree is deterministic
-    given the cards."""
-    cards: list[str] = []
+    given the cards. Draw order: p1 p2 b1 b2 [p3] [b3]."""
+    player: list[str] = []
+    banker: list[str] = []
 
-    def draw() -> int:
+    def draw(hand: list[str]) -> int:
         card = _draw_shoe_card()
-        cards.append(card)
+        hand.append(card)
         return baccarat_card_value(card)
 
     # Two to each side, then the fixed third-card rules.
-    p = [draw(), draw()]
-    b = [draw(), draw()]
-    pt = sum(p) % 10
-    bt = sum(b) % 10
+    pt = (draw(player) + draw(player)) % 10
+    bt = (draw(banker) + draw(banker)) % 10
     if pt < 8 and bt < 8:  # neither a natural → drawing rules apply
-        player_third: int | None = None
         if pt <= 5:
-            player_third = draw()
-            p.append(player_third)
-        if player_third is None:
-            if bt <= 5:  # Player stood → Banker draws on 0–5
-                b.append(draw())
-        elif _banker_draws(bt, player_third):
-            b.append(draw())
-    # Rebuild card strings in deal order: p1 p2 b1 b2 [p3] [b3].
-    player = cards[0:2]
-    banker = cards[2:4]
-    idx = 4
-    if len(p) == 3:
-        player = player + [cards[idx]]
-        idx += 1
-    if len(b) == 3:
-        banker = banker + [cards[idx]]
+            if _banker_draws(bt, draw(player)):
+                draw(banker)
+        elif bt <= 5:  # Player stood → Banker draws on 0–5
+            draw(banker)
     return player, banker
 
 

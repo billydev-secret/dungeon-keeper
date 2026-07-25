@@ -9,6 +9,7 @@ or refunds, never both, never twice.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -574,8 +575,6 @@ def test_settle_coup_pays_winners_exactly_once(db):
         stats = svc.member_casino_stats(conn, GUILD, B)
         assert stats is not None and int(stats["plays"]) == 1
         # the dealt coup persists as JSON for recaps
-        import json
-
         rnd = svc.get_baccarat_round(conn, round_id)
         assert rnd is not None
         assert json.loads(str(rnd["result"])) == {
@@ -738,8 +737,6 @@ def test_settle_roll_pays_winners_exactly_once(db):
         assert get_balance(conn, GUILD, A) == 100 - 20 + 40
         assert get_balance(conn, GUILD, B) == 80
         # the roll persists as JSON for recaps
-        import json
-
         rnd = svc.get_dice_round(conn, round_id)
         assert rnd is not None and json.loads(str(rnd["result"])) == [6, 5, 4]
         # replay pays nothing again
@@ -892,8 +889,6 @@ def test_settle_draw_pays_by_catches_exactly_once(db, monkeypatch):
         assert get_balance(conn, GUILD, A) == 100 - 10 + 600
         assert get_balance(conn, GUILD, B) == 80
         # the draw persists as JSON for recaps
-        import json
-
         rnd = svc.get_keno_round(conn, round_id)
         assert rnd is not None and json.loads(str(rnd["result"])) == drawn
         # replay pays nothing again
@@ -1224,7 +1219,7 @@ def test_member_leave_refunds_live_stakes_and_spares_the_round(db):
         svc.place_race_bet(conn, race_id, B, 1, 8, now=NOW + 4)
 
         out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 4)
-        assert out == {"blackjack": 20, "war": 0, "roulette": 25, "derby": 12}
+        assert out == {"blackjack": 20, "roulette": 25, "derby": 12}
         assert get_balance(conn, GUILD, A) == 200  # made whole
         assert svc.live_blackjack_hand(conn, GUILD, A) is None
         # A's bets are gone so the spin can't pay a ghost; B's bets survive
@@ -1234,9 +1229,7 @@ def test_member_leave_refunds_live_stakes_and_spares_the_round(db):
         bets = svc.settle_roulette_round(conn, round_id, 2, now=NOW + 45)  # 2 = black
         assert bets is not None and [int(b["payout"]) for b in bets] == [40]
         # a second leave call finds nothing live
-        assert svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 5) == {
-            "blackjack": 0, "war": 0, "roulette": 0, "derby": 0,
-        }
+        assert svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 5) == {}
 
 
 def _deal_state(conn, user_id, stake, deck, player, dealer):

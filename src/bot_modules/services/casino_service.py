@@ -818,8 +818,25 @@ def double_blackjack_stake(
     return None
 
 
-def settle_blackjack_hand(
+# The live-hand family (blackjack + war): one settle/idle/boot-sweep
+# implementation parameterized by this descriptor, the RoundTables rule
+# applied to per-member hands — a hardening fix to the exactly-once
+# settle can never land in one game and silently miss the other. Table
+# names are trusted module constants, never user input.
+
+
+class HandTables(NamedTuple):
+    game: str   # take_stake / ledger / stats key
+    table: str  # live-hand table
+
+
+BLACKJACK_HANDS = HandTables("blackjack", "casino_blackjack_hands")
+WAR_HANDS = HandTables("war", "casino_war_hands")
+
+
+def _settle_hand(
     conn: sqlite3.Connection,
+    t: HandTables,
     hand_id: int,
     payout: int,
     outcome: str,
@@ -827,14 +844,17 @@ def settle_blackjack_hand(
     kind: str = PAYOUT_KIND,
     now: float | None = None,
 ) -> bool:
-    """Finalize a hand and credit its return. False = already settled.
+    """Finalize a live hand and credit its return. False = already settled.
 
-    Exactly-once via the ``settled_at IS NULL`` predicate — the idle
-    auto-stand timer, a boot sweep and a button resolution can all reach a
-    terminal hand, and only the first one pays.
+    Exactly-once via the ``settled_at IS NULL`` predicate — an idle
+    auto-resolve, a boot sweep and a button resolution can all reach a
+    terminal hand, and only the first one pays. The jackpot feeds on the
+    LOST PORTION of the stake (war's retreat keeps half; for blackjack,
+    whose only sub-stake return is a total loss, this is the same as the
+    old payout == 0 rule).
     """
     row = conn.execute(
-        "UPDATE casino_blackjack_hands SET settled_at = ?, outcome = ? "
+        f"UPDATE {t.table} SET settled_at = ?, outcome = ? "
         "WHERE id = ? AND settled_at IS NULL RETURNING guild_id, user_id, stake",
         (time.time() if now is None else now, outcome, hand_id),
     ).fetchone()
@@ -844,16 +864,61 @@ def settle_blackjack_hand(
     if payout >= 1:
         meta: dict[str, object] = {"hand_id": hand_id, "outcome": outcome}
         if kind == PAYOUT_KIND:
-            pay_out(conn, gid, uid, payout, "blackjack", meta=meta)
+            pay_out(conn, gid, uid, payout, t.game, meta=meta)
         else:
-            refund(conn, gid, uid, payout, "blackjack", meta=meta, now=now)
+            refund(conn, gid, uid, payout, t.game, meta=meta, now=now)
     if kind == PAYOUT_KIND:
-        # A real resolution (not a make-whole refund): a total loss feeds
-        # the jackpot, and the play lands in the stats either way.
-        if payout == 0:
-            feed_jackpot(conn, gid, stake, now=now)
-        record_play(conn, gid, uid, "blackjack", stake, payout, now=now)
+        # A real resolution (not a make-whole refund): the lost slice
+        # feeds the jackpot, and the play lands in the stats either way.
+        if payout < stake:
+            feed_jackpot(conn, gid, stake - payout, now=now)
+        record_play(conn, gid, uid, t.game, stake, payout, now=now)
     return True
+
+
+def _idle_live_hands(
+    conn: sqlite3.Connection, t: HandTables, older_than: float
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        f"SELECT * FROM {t.table} "
+        "WHERE settled_at IS NULL AND last_action_at < ?",
+        (older_than,),
+    ).fetchall()
+
+
+def _refund_live_hands(
+    conn: sqlite3.Connection, t: HandTables, *, now: float | None = None
+) -> list[sqlite3.Row]:
+    """Boot sweep: refund every live hand's full stake (honest reset).
+
+    Returns the swept rows (pre-settlement copies). Exactly-once per hand
+    via the settle predicate.
+    """
+    rows = conn.execute(
+        f"SELECT * FROM {t.table} WHERE settled_at IS NULL"
+    ).fetchall()
+    swept = []
+    for row in rows:
+        if _settle_hand(
+            conn, t, int(row["id"]), int(row["stake"]), "refunded",
+            kind=REFUND_KIND, now=now,
+        ):
+            swept.append(row)
+    return swept
+
+
+def settle_blackjack_hand(
+    conn: sqlite3.Connection,
+    hand_id: int,
+    payout: int,
+    outcome: str,
+    *,
+    kind: str = PAYOUT_KIND,
+    now: float | None = None,
+) -> bool:
+    return _settle_hand(
+        conn, BLACKJACK_HANDS, hand_id, payout, outcome, kind=kind, now=now
+    )
 
 
 class BlackjackStep(NamedTuple):
@@ -1004,9 +1069,10 @@ def refund_member_live_stakes(
     The blackjack hand (and any pending war decision) settles as refunded;
     the member's bets on any open windowed round are deleted (so the
     resolution can't pay a ghost) and refunded as one credit per game.
-    Returns {game: amount} for each game something came back from.
+    Returns {game: amount} for each game something actually came back from
+    (sparse — a game with nothing live has no key).
     """
-    out = {"blackjack": 0, "war": 0, "roulette": 0, "derby": 0}
+    out: dict[str, int] = {}
     hand = live_blackjack_hand(conn, guild_id, user_id)
     if hand is not None and settle_blackjack_hand(
         conn, int(hand["id"]), int(hand["stake"]), "refunded",
@@ -1019,10 +1085,7 @@ def refund_member_live_stakes(
         kind=REFUND_KIND, now=now,
     ):
         out["war"] = int(war_hand["stake"])
-    for t in (
-        ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES,
-        KENO_TABLES,
-    ):
+    for t in ALL_ROUND_TABLES:
         bets = conn.execute(
             f"SELECT b.id, b.amount FROM {t.bets} b "
             f"JOIN {t.rounds} r ON r.id = b.round_id "
@@ -1046,33 +1109,14 @@ def refund_member_live_stakes(
 def refund_live_blackjack_hands(
     conn: sqlite3.Connection, *, now: float | None = None
 ) -> list[sqlite3.Row]:
-    """Boot sweep: refund every live hand's full stake (honest reset).
-
-    Returns the swept rows (pre-settlement copies) so the cog can best-effort
-    edit their messages. Exactly-once per hand via settle's predicate.
-    """
-    rows = conn.execute(
-        "SELECT * FROM casino_blackjack_hands WHERE settled_at IS NULL"
-    ).fetchall()
-    swept = []
-    for row in rows:
-        if settle_blackjack_hand(
-            conn, int(row["id"]), int(row["stake"]), "refunded",
-            kind=REFUND_KIND, now=now,
-        ):
-            swept.append(row)
-    return swept
+    return _refund_live_hands(conn, BLACKJACK_HANDS, now=now)
 
 
 def idle_live_blackjack_hands(
     conn: sqlite3.Connection, older_than: float
 ) -> list[sqlite3.Row]:
     """Live hands untouched since ``older_than`` — the auto-stand sweep."""
-    return conn.execute(
-        "SELECT * FROM casino_blackjack_hands "
-        "WHERE settled_at IS NULL AND last_action_at < ?",
-        (older_than,),
-    ).fetchall()
+    return _idle_live_hands(conn, BLACKJACK_HANDS, older_than)
 
 
 # ── windowed rounds (roulette + derby: ONE implementation) ─────────────
@@ -1111,6 +1155,12 @@ DICE_TABLES = RoundTables(
 KENO_TABLES = RoundTables(
     "keno", "casino_keno_rounds", "casino_keno_bets",
     "result", "Tickets for that draw have closed.",
+)
+# Every windowed game, for cross-game sweeps (leaver refunds). A new game
+# added here is automatically covered — never enumerate the tables by hand
+# at a call site.
+ALL_ROUND_TABLES = (
+    ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES, KENO_TABLES,
 )
 
 
@@ -1749,6 +1799,7 @@ class WarStep(NamedTuple):
     war_player: str | None = None
     war_dealer: str | None = None
     stake: int = 0  # total staked (doubles when war is declared)
+    original: int = 0  # the opening bet — what a Play Again should re-stake
     hand_id: int = 0
     outcome: str | None = None  # None = a tie is waiting on the member
     payout: int = 0
@@ -1801,31 +1852,9 @@ def _settle_war_hand(
     kind: str = PAYOUT_KIND,
     now: float | None = None,
 ) -> bool:
-    """Finalize a decision row and credit its return. False = already
-    settled (exactly-once via the ``settled_at IS NULL`` predicate).
-
-    Unlike blackjack, a partial return exists (retreat keeps half), so the
-    jackpot feeds on the LOST PORTION of the stake, not only a total loss.
-    """
-    row = conn.execute(
-        "UPDATE casino_war_hands SET settled_at = ?, outcome = ? "
-        "WHERE id = ? AND settled_at IS NULL RETURNING guild_id, user_id, stake",
-        (time.time() if now is None else now, outcome, hand_id),
-    ).fetchone()
-    if row is None:
-        return False
-    gid, uid, stake = int(row["guild_id"]), int(row["user_id"]), int(row["stake"])
-    if payout >= 1:
-        meta: dict[str, object] = {"hand_id": hand_id, "outcome": outcome}
-        if kind == PAYOUT_KIND:
-            pay_out(conn, gid, uid, payout, "war", meta=meta)
-        else:
-            refund(conn, gid, uid, payout, "war", meta=meta, now=now)
-    if kind == PAYOUT_KIND:
-        if payout < stake:
-            feed_jackpot(conn, gid, stake - payout, now=now)
-        record_play(conn, gid, uid, "war", stake, payout, now=now)
-    return True
+    return _settle_hand(
+        conn, WAR_HANDS, hand_id, payout, outcome, kind=kind, now=now
+    )
 
 
 def play_war(
@@ -1865,7 +1894,7 @@ def play_war(
             ),
         )
         return WarStep(
-            player=player, dealer=dealer, stake=amount,
+            player=player, dealer=dealer, stake=amount, original=amount,
             hand_id=int(cur.lastrowid or 0),
         )
     fed = pot_after = 0
@@ -1879,7 +1908,7 @@ def play_war(
         pot_after = get_jackpot(conn, guild_id) if fed else 0
     streak = record_play(conn, guild_id, user_id, "war", amount, payout, now=now)
     return WarStep(
-        player=player, dealer=dealer, stake=amount,
+        player=player, dealer=dealer, stake=amount, original=amount,
         outcome="win" if payout else "lose", payout=payout,
         streak=streak, pot_after=pot_after,
     )
@@ -1930,11 +1959,11 @@ def _resolve_war_decision(
     """Shared tail of the member press and the idle auto-resolve — the
     caller has already claimed the live row."""
     gid, uid = int(row["guild_id"]), int(row["user_id"])
-    hand_id, stake = int(row["id"]), int(row["stake"])
+    hand_id, original = int(row["id"]), int(row["stake"])
     state = json.loads(str(row["state_json"]))
     player, dealer = str(state["player"]), str(state["dealer"])
 
-    def _finish(payout: int, outcome: str, **cards: str) -> WarStep:
+    def _finish(stake: int, payout: int, outcome: str, **cards: str) -> WarStep:
         if not _settle_war_hand(conn, hand_id, payout, outcome, now=now):
             return WarStep(err="That hand is already finished.")
         stats = member_casino_stats(conn, gid, uid)
@@ -1944,7 +1973,7 @@ def _resolve_war_decision(
             if settings.jackpot_enabled:
                 pot_after = get_jackpot(conn, gid)
         return WarStep(
-            player=player, dealer=dealer, stake=stake,
+            player=player, dealer=dealer, stake=stake, original=original,
             hand_id=hand_id, outcome=outcome, payout=payout,
             streak=int(stats["streak"]) if stats is not None else 0,
             pot_after=pot_after,
@@ -1954,30 +1983,27 @@ def _resolve_war_decision(
 
     if action == "retreat":
         return _finish(
-            casino_logic.war_retreat_payout(stake), "retreat"
+            original, casino_logic.war_retreat_payout(original), "retreat"
         )
     # war: the raise equals the original stake, debited before the draw.
     err = take_stake(
-        conn, gid, uid, stake, "war", now=now, enforce_bet_limits=False
+        conn, gid, uid, original, "war", now=now, enforce_bet_limits=False
     )
     if err is not None:
         return WarStep(err=err)
     conn.execute(
         "UPDATE casino_war_hands SET stake = stake + ? WHERE id = ?",
-        (stake, hand_id),
+        (original, hand_id),
     )
-    doubled = stake * 2
+    doubled = original * 2
     war_player, war_dealer = casino_logic.draw_war_cards()
     conn.execute(
         "UPDATE casino_war_hands SET state_json = ? WHERE id = ?",
         (_war_state(player, dealer, war_player, war_dealer), hand_id),
     )
     payout = casino_logic.war_raise_payout(war_player, war_dealer, doubled)
-    # _finish reads the pre-raise stake from the closure; rebind to the
-    # doubled figure so record_play and the pot feed see the real amount.
-    stake = doubled
     return _finish(
-        payout, "war_win" if payout else "war_lose",
+        doubled, payout, "war_win" if payout else "war_lose",
         war_player=war_player, war_dealer=war_dealer,
     )
 
@@ -2011,25 +2037,11 @@ def idle_live_war_hands(
     conn: sqlite3.Connection, older_than: float
 ) -> list[sqlite3.Row]:
     """Live war decisions untouched since ``older_than`` — the auto sweep."""
-    return conn.execute(
-        "SELECT * FROM casino_war_hands "
-        "WHERE settled_at IS NULL AND last_action_at < ?",
-        (older_than,),
-    ).fetchall()
+    return _idle_live_hands(conn, WAR_HANDS, older_than)
 
 
 def refund_live_war_hands(
     conn: sqlite3.Connection, *, now: float | None = None
 ) -> list[sqlite3.Row]:
     """Boot sweep: refund every live decision's stake (honest reset)."""
-    rows = conn.execute(
-        "SELECT * FROM casino_war_hands WHERE settled_at IS NULL"
-    ).fetchall()
-    swept = []
-    for row in rows:
-        if _settle_war_hand(
-            conn, int(row["id"]), int(row["stake"]), "refunded",
-            kind=REFUND_KIND, now=now,
-        ):
-            swept.append(row)
-    return swept
+    return _refund_live_hands(conn, WAR_HANDS, now=now)
