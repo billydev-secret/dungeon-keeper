@@ -344,3 +344,142 @@ def describe_bet(bet_type: str, selection: int) -> str:
     if bet_type == "dozen":
         return f"Dozen {_DOZEN_LABELS[selection]}"
     return f"Straight {selection}"
+
+
+# ── Baccarat (Punto Banco, EZ-Baccarat commission-free) ────────────────
+#
+# A no-decision windowed game: members back Player / Banker / Tie, both
+# hands are dealt by the fixed punto-banco drawing rules, nearest to 9 wins.
+# Cards are drawn from an *infinite shoe* — each card independent, uniform
+# over the 13 ranks — which is the standard no-removal baccarat model and,
+# critically, makes the RTP an EXACT enumeration (values 1–9 land 1/13 each,
+# the four 0-valued tens/faces 4/13), pinned by the test rather than sampled.
+#
+# Paytable (EZ-Baccarat, avoids the fractional 5% Banker commission): Player
+# 1:1, Banker 1:1 EXCEPT a Banker win on a three-card total of 7 pushes (the
+# "Dragon 7" bar that stands in for the commission), Tie 8:1. Player/Banker
+# sit ABOVE the house band (~98.8–99.0% RTP) — baccarat is a low-edge classic
+# — with Tie the clearly-labeled high-edge long shot (~85.6%).
+
+BACCARAT_SIDES = ("player", "banker", "tie")
+# Tie pays 8:1 → 9× the stake back in total-return terms.
+BACCARAT_TIE_MULT = 9
+
+
+def baccarat_card_value(card: str) -> int:
+    """Baccarat pip value: A=1, 2–9 face, 10/J/Q/K=0 (rank+suit string)."""
+    rank = card[:-1]
+    if rank == "A":
+        return 1
+    if rank in ("10", "J", "Q", "K"):
+        return 0
+    return int(rank)
+
+
+def baccarat_total(cards: list[str]) -> int:
+    """A baccarat hand's total — pip sum modulo 10 (0–9)."""
+    return sum(baccarat_card_value(c) for c in cards) % 10
+
+
+def _draw_baccarat_card() -> str:
+    """One card from the infinite shoe (rank uniform over 13, suit cosmetic)."""
+    return random.choice(_RANKS) + random.choice(_SUITS)
+
+
+def _banker_draws(banker_total: int, player_third: int) -> bool:
+    """The punto-banco Banker third-card rule, given the Player's third-card
+    pip value. Only consulted when the Player drew a third card and neither
+    hand was a natural; a Banker total of 7 always stands here."""
+    if banker_total <= 2:
+        return True
+    if banker_total == 3:
+        return player_third != 8
+    if banker_total == 4:
+        return 2 <= player_third <= 7
+    if banker_total == 5:
+        return 4 <= player_third <= 7
+    if banker_total == 6:
+        return 6 <= player_third <= 7
+    return False  # 7 stands (8/9 are naturals, handled before this)
+
+
+def deal_baccarat() -> tuple[list[str], list[str]]:
+    """Deal one coup from the infinite shoe; returns (player, banker) cards
+    after the fixed draws. No decisions — the drawing tree is deterministic
+    given the cards."""
+    cards: list[str] = []
+
+    def draw() -> int:
+        card = _draw_baccarat_card()
+        cards.append(card)
+        return baccarat_card_value(card)
+
+    # Two to each side, then the fixed third-card rules.
+    p = [draw(), draw()]
+    b = [draw(), draw()]
+    pt = sum(p) % 10
+    bt = sum(b) % 10
+    if pt < 8 and bt < 8:  # neither a natural → drawing rules apply
+        player_third: int | None = None
+        if pt <= 5:
+            player_third = draw()
+            p.append(player_third)
+        if player_third is None:
+            if bt <= 5:  # Player stood → Banker draws on 0–5
+                b.append(draw())
+        elif _banker_draws(bt, player_third):
+            b.append(draw())
+    # Rebuild card strings in deal order: p1 p2 b1 b2 [p3] [b3].
+    player = cards[0:2]
+    banker = cards[2:4]
+    idx = 4
+    if len(p) == 3:
+        player = player + [cards[idx]]
+        idx += 1
+    if len(b) == 3:
+        banker = banker + [cards[idx]]
+    return player, banker
+
+
+def baccarat_winner(player: list[str], banker: list[str]) -> str:
+    """Which side won the coup — ``"player"`` / ``"banker"`` / ``"tie"``."""
+    pt, bt = baccarat_total(player), baccarat_total(banker)
+    if pt > bt:
+        return "player"
+    if bt > pt:
+        return "banker"
+    return "tie"
+
+
+def baccarat_payout(
+    side: str, player: list[str], banker: list[str], amount: int
+) -> int:
+    """Total return for one bet on ``side`` against the dealt coup (0 = lost).
+
+    Player/Banker bets push (stake back) on a tie. A Banker win on a
+    three-card total of 7 pushes Banker bets (the EZ-Baccarat Dragon-7 bar
+    that replaces the 5% commission). Tie pays 8:1.
+    """
+    if side not in BACCARAT_SIDES:
+        raise ValueError(f"unknown baccarat side: {side}")
+    winner = baccarat_winner(player, banker)
+    if side == "tie":
+        return amount * BACCARAT_TIE_MULT if winner == "tie" else 0
+    if winner == "tie":
+        return amount  # Player/Banker bets push on a tie
+    if side != winner:
+        return 0
+    if side == "banker" and len(banker) == 3 and baccarat_total(banker) == 7:
+        return amount  # Dragon-7: a three-card-7 Banker win is barred to a push
+    return amount * 2
+
+
+_BACCARAT_LABELS = {
+    "player": "🔵 Player",
+    "banker": "🔴 Banker",
+    "tie": "🟡 Tie",
+}
+
+
+def describe_baccarat_side(side: str) -> str:
+    return _BACCARAT_LABELS[side]

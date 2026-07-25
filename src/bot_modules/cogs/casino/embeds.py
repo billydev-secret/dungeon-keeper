@@ -42,6 +42,7 @@ _GAME_LINES = {
     "blackjack": "🃏 **Blackjack** — beat the dealer to 21; naturals pay 3:2",
     "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
     "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
+    "baccarat": "🎴 **Baccarat** — Player, Banker, or Tie; nearest to nine wins",
 }
 
 
@@ -242,6 +243,19 @@ def build_help_embed(
                 "Back a critter to win — the favorite pays least, the snail "
                 "pays big (91–96% return by runner). Betting stays open for "
                 f"{settings.derby_window_seconds}s, then they're off.\n​"
+            ),
+            inline=False,
+        )
+    if settings.baccarat_enabled:
+        embed.add_field(
+            name="🎴 Baccarat",
+            value=(
+                "Back the **Player** or **Banker** — both pay **2×** "
+                "(~99% return, the best odds in the house; a Banker win on a "
+                "three-card 7 pushes instead). **Tie** pays **9×** — the long "
+                "shot (~86% return). Ties push the side bets. A betting window "
+                f"opens for {settings.baccarat_window_seconds}s, then the cards "
+                "decide for everyone at once.\n​"
             ),
             inline=False,
         )
@@ -711,6 +725,134 @@ def build_race_running_note(closes_at: float, url: str | None = None) -> str:
     if url:
         return f"{note} Jump in and back a critter: {url}"
     return f"{note} Back a critter on the race message above."
+
+
+# ── baccarat (casino-classics Stage 1a) ────────────────────────────────
+
+
+def _baccarat_hand_line(cards: list[str], *, reveal: int | None = None) -> str:
+    """One hand as monospace cards + total; ``reveal`` shows only the first
+    N cards (the rest as 🂠) for the dealing frame."""
+    if reveal is not None and reveal < len(cards):
+        shown = cards[:reveal] + ["🂠"] * (len(cards) - reveal)
+        return f"`{'  '.join(shown)}`"
+    return f"`{'  '.join(cards)}`  ({logic.baccarat_total(cards)})"
+
+
+def build_baccarat_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, side description, amount), placement order."""
+    embed = discord.Embed(
+        title="🎴 Baccarat — bets open!",
+        description=(
+            f"The cards come down <t:{int(closes_at)}:R>. "
+            "Back the Player, the Banker, or the long-shot Tie — "
+            "nearest to nine wins.\n​"
+        ),
+        color=_accent(accent),
+    )
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_baccarat_deal_embed(
+    econ: EconSettings,
+    player: list[str],
+    banker: list[str],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """The dealing frame: both starting hands down, draws still to come."""
+    embed = discord.Embed(
+        title="🎴 Baccarat — no more bets!",
+        description=(
+            f"🔵 Player  {_baccarat_hand_line(player, reveal=2)}\n"
+            f"🔴 Banker  {_baccarat_hand_line(banker, reveal=2)}\n"
+            "The cards hit the felt…"
+        ),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+_BACCARAT_VERDICTS = {
+    "player": "🔵 **Player wins.**",
+    "banker": "🔴 **Banker wins.**",
+    "tie": "🟡 **A tie!** Side bets come home; Tie pays 9×.",
+}
+
+
+def build_baccarat_result_embed(
+    econ: EconSettings,
+    player: list[str],
+    banker: list[str],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, side description, amount, payout)."""
+    winner = logic.baccarat_winner(player, banker)
+    verdict = _BACCARAT_VERDICTS[winner]
+    if (
+        winner == "banker"
+        and len(banker) == 3
+        and logic.baccarat_total(banker) == 7
+    ):
+        verdict += " A three-card seven — Banker bets push."
+    hands = (
+        f"🔵 Player  {_baccarat_hand_line(player)}\n"
+        f"🔴 Banker  {_baccarat_hand_line(banker)}"
+    )
+    if bets:
+        description = f"{hands}\n{verdict}\n​"
+    else:
+        description = (
+            f"{hands}\n{verdict} Nobody bet — the cards fall for no one."
+        )
+    # Green only for a genuine win (payout above the stake) — a coup of
+    # pushed side bets came home, it didn't win.
+    won = [b for b in bets if b[3] > b[2]]
+    paid = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    embed = discord.Embed(
+        title="🎴 Baccarat — cards down!",
+        description=description,
+        color=COLOR_GREEN if won else COLOR_RED,
+    )
+    if paid:
+        paid_lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in paid
+        ]
+        embed.add_field(
+            name="Winners" if won else "Pushed",
+            value="\n".join(logic.cap_lines(paid_lines, limit=1022)) + "\n​",
+            inline=False,
+        )
+    if losers_total:
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name="The house keeps", value=kept, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_coup_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens baccarat mid-hand."""
+    note = (
+        f"🎴 A baccarat hand is already forming — cards down "
+        f"<t:{int(closes_at)}:R>."
+    )
+    if url:
+        return f"{note} Jump in and pick a side: {url}"
+    return f"{note} Pick a side on the hand message above."
 
 
 def build_my_stats_embed(

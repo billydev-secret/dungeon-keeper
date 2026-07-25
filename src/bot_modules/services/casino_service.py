@@ -43,7 +43,7 @@ STAKE_KIND = "casino_stake"
 PAYOUT_KIND = "casino_payout"
 REFUND_KIND = "casino_refund"
 
-GAMES = ("coinflip", "slots", "blackjack", "roulette", "derby")
+GAMES = ("coinflip", "slots", "blackjack", "roulette", "derby", "baccarat")
 
 
 @dataclass(frozen=True)
@@ -59,9 +59,11 @@ class CasinoSettings:
     blackjack_enabled: bool = True
     roulette_enabled: bool = True
     derby_enabled: bool = True
+    baccarat_enabled: bool = True
     roulette_window_seconds: int = 45
     # Derby races want a touch more hype time than a roulette spin.
     derby_window_seconds: int = 60
+    baccarat_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
     # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
@@ -87,6 +89,7 @@ _BOOL_KEYS = [
     "blackjack_enabled",
     "roulette_enabled",
     "derby_enabled",
+    "baccarat_enabled",
     "jackpot_enabled",
 ]
 # Everything else on the dataclass is a plain int.
@@ -999,7 +1002,7 @@ def refund_member_live_stakes(
         kind=REFUND_KIND, now=now,
     ):
         out["blackjack"] = int(hand["stake"])
-    for t in (ROULETTE_TABLES, DERBY_TABLES):
+    for t in (ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES):
         bets = conn.execute(
             f"SELECT b.id, b.amount FROM {t.bets} b "
             f"JOIN {t.rounds} r ON r.id = b.round_id "
@@ -1076,6 +1079,10 @@ ROULETTE_TABLES = RoundTables(
 DERBY_TABLES = RoundTables(
     "derby", "casino_race_rounds", "casino_race_bets",
     "winner", "Betting on that race has closed.",
+)
+BACCARAT_TABLES = RoundTables(
+    "baccarat", "casino_baccarat_rounds", "casino_baccarat_bets",
+    "result", "Betting on that hand has closed.",
 )
 
 
@@ -1187,7 +1194,7 @@ def _settle_round(
     conn: sqlite3.Connection,
     t: RoundTables,
     round_id: int,
-    result: int,
+    result: int | str,  # a number (roulette/derby) or JSON (baccarat's coup)
     payout_fn,
     *,
     now: float | None = None,
@@ -1434,3 +1441,91 @@ def void_race_round(
 
 def open_race_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return _open_rounds(conn, DERBY_TABLES)
+
+
+# ── baccarat coups (Stage 1a of casino-classics — same wrappers) ───────
+
+
+def live_baccarat_round(
+    conn: sqlite3.Connection, channel_id: int
+) -> sqlite3.Row | None:
+    return _live_round(conn, BACCARAT_TABLES, channel_id)
+
+
+def get_baccarat_round(
+    conn: sqlite3.Connection, round_id: int
+) -> sqlite3.Row | None:
+    return _get_round(conn, BACCARAT_TABLES, round_id)
+
+
+def open_baccarat_round(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    window_seconds: int,
+    *,
+    now: float | None = None,
+) -> int | None:
+    return _open_round(
+        conn, BACCARAT_TABLES, guild_id, channel_id, window_seconds, now=now
+    )
+
+
+def set_baccarat_message(
+    conn: sqlite3.Connection, round_id: int, message_id: int
+) -> None:
+    _set_round_message(conn, BACCARAT_TABLES, round_id, message_id)
+
+
+def place_baccarat_bet(
+    conn: sqlite3.Connection,
+    round_id: int,
+    user_id: int,
+    side: str,
+    amount: int,
+    *,
+    now: float | None = None,
+) -> str | None:
+    if side not in casino_logic.BACCARAT_SIDES:
+        raise ValueError(f"unknown baccarat side: {side}")
+    return _place_bet(
+        conn, BACCARAT_TABLES, get_baccarat_round(conn, round_id), round_id,
+        user_id, {"side": side}, amount, now=now,
+    )
+
+
+def baccarat_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
+    return _round_bets(conn, BACCARAT_TABLES, round_id)
+
+
+def settle_baccarat_round(
+    conn: sqlite3.Connection,
+    round_id: int,
+    player: list[str],
+    banker: list[str],
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    """Settle the coup against the dealt hands. Unlike roulette's single
+    number, the outcome is the cards themselves — they persist as JSON in
+    the round's result column so a recap can always re-render the coup."""
+    result = json.dumps({"player": player, "banker": banker})
+
+    def payout_for(bet: dict, _result: str) -> int:
+        return casino_logic.baccarat_payout(
+            str(bet["side"]), player, banker, int(bet["amount"])
+        )
+
+    return _settle_round(
+        conn, BACCARAT_TABLES, round_id, result, payout_for, now=now
+    )
+
+
+def void_baccarat_round(
+    conn: sqlite3.Connection, round_id: int, *, now: float | None = None
+) -> dict[int, int]:
+    return _void_round(conn, BACCARAT_TABLES, round_id, now=now)
+
+
+def open_baccarat_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return _open_rounds(conn, BACCARAT_TABLES)

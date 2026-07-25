@@ -507,6 +507,181 @@ def test_losing_race_stakes_feed_the_jackpot(db):
         assert svc.get_jackpot(conn, GUILD) == 110
 
 
+# ── baccarat coups (casino-classics Stage 1a) ──────────────────────────
+
+# Deterministic coups — settle takes the dealt hands, so no RNG to pin.
+_P_WIN = (["A♠", "8♦"], ["K♠", "Q♦"])          # player 9 beats banker 0
+_TIE = (["4♠", "3♦"], ["2♠", "5♦"])            # 7 all — the long shot lands
+_DRAGON7 = (["2♠", "3♦"], ["A♠", "2♦", "4♣"])  # banker 3-card 7 beats 5
+
+
+def _open_coup(conn, channel=CHAN, now=NOW):
+    round_id = svc.open_baccarat_round(conn, GUILD, channel, 45, now=now)
+    assert round_id is not None
+    return round_id
+
+
+def test_one_open_coup_per_channel(db):
+    with open_db(db) as conn:
+        _open_coup(conn)
+        assert svc.open_baccarat_round(conn, GUILD, CHAN, 45, now=NOW) is None
+        assert (
+            svc.open_baccarat_round(conn, GUILD, CHAN + 1, 45, now=NOW)
+            is not None
+        )
+
+
+def test_baccarat_bets_debit_and_close_with_the_window(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        assert (
+            svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 1)
+            is None
+        )
+        assert get_balance(conn, GUILD, A) == 90
+        err = svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 46)
+        assert err == "Betting on that hand has closed."
+        with pytest.raises(ValueError):
+            svc.place_baccarat_bet(conn, round_id, A, "dragon", 10, now=NOW + 2)
+
+
+def test_baccarat_bet_refused_when_table_closed(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"baccarat_enabled": False})
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        err = svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 1)
+        assert err == "That table is closed right now."
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_settle_coup_pays_winners_exactly_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        round_id = _open_coup(conn)
+        svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 1)
+        svc.place_baccarat_bet(conn, round_id, A, "tie", 10, now=NOW + 2)
+        svc.place_baccarat_bet(conn, round_id, B, "banker", 20, now=NOW + 3)
+
+        bets = svc.settle_baccarat_round(conn, round_id, *_P_WIN, now=NOW + 45)
+        assert bets is not None
+        assert [int(b["payout"]) for b in bets] == [20, 0, 0]
+        assert get_balance(conn, GUILD, A) == 100 - 20 + 20
+        assert get_balance(conn, GUILD, B) == 80
+        # losing stakes recorded in the stats books
+        stats = svc.member_casino_stats(conn, GUILD, B)
+        assert stats is not None and int(stats["plays"]) == 1
+        # the dealt coup persists as JSON for recaps
+        import json
+
+        rnd = svc.get_baccarat_round(conn, round_id)
+        assert rnd is not None
+        assert json.loads(str(rnd["result"])) == {
+            "player": _P_WIN[0], "banker": _P_WIN[1],
+        }
+        # replay pays nothing again
+        assert svc.settle_baccarat_round(conn, round_id, *_P_WIN, now=NOW + 46) is None
+        assert get_balance(conn, GUILD, A) == 100
+        # a settled coup takes no more bets
+        err = svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 2)
+        assert err == "Betting on that hand has closed."
+
+
+def test_settle_coup_tie_pays_9x_and_pushes_the_sides(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        round_id = _open_coup(conn)
+        svc.place_baccarat_bet(conn, round_id, A, "tie", 10, now=NOW + 1)
+        svc.place_baccarat_bet(conn, round_id, B, "player", 20, now=NOW + 2)
+        bets = svc.settle_baccarat_round(conn, round_id, *_TIE, now=NOW + 45)
+        assert bets is not None
+        assert [int(b["payout"]) for b in bets] == [90, 20]
+        assert get_balance(conn, GUILD, A) == 100 - 10 + 90
+        assert get_balance(conn, GUILD, B) == 100  # pushed
+
+
+def test_settle_coup_dragon7_pushes_banker_bets(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        svc.place_baccarat_bet(conn, round_id, A, "banker", 30, now=NOW + 1)
+        bets = svc.settle_baccarat_round(conn, round_id, *_DRAGON7, now=NOW + 45)
+        assert bets is not None
+        assert [int(b["payout"]) for b in bets] == [30]  # barred to a push
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_void_coup_refunds_totals_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 1)
+        svc.place_baccarat_bet(conn, round_id, A, "tie", 15, now=NOW + 2)
+        assert svc.void_baccarat_round(conn, round_id, now=NOW + 5) == {A: 25}
+        assert get_balance(conn, GUILD, A) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 25)
+        assert svc.void_baccarat_round(conn, round_id, now=NOW + 6) == {}
+
+
+def test_boot_sweep_lists_open_coups(db):
+    with open_db(db) as conn:
+        r1 = _open_coup(conn)
+        r2 = _open_coup(conn, channel=CHAN + 1)
+        svc.settle_baccarat_round(conn, r2, *_P_WIN, now=NOW + 45)
+        assert [int(r["id"]) for r in svc.open_baccarat_rounds(conn)] == [r1]
+
+
+def test_stale_precheck_cannot_strand_a_baccarat_stake(db, monkeypatch):
+    """The roulette buzzer-beater race, on baccarat: the settler claimed
+    the coup between our pre-check and our debit — the in-transaction
+    claim must refuse the bet before any money moves."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        assert (
+            svc.settle_baccarat_round(conn, round_id, *_P_WIN, now=NOW + 45)
+            is not None
+        )
+        stale = {
+            "id": round_id, "status": "open",
+            "closes_at": NOW + 45, "guild_id": GUILD,
+        }
+        monkeypatch.setattr(svc, "get_baccarat_round", lambda *_: stale)
+        err = svc.place_baccarat_bet(conn, round_id, A, "player", 10, now=NOW + 2)
+        assert err == "Betting on that hand has closed."
+        assert get_balance(conn, GUILD, A) == 100  # nothing debited
+        monkeypatch.undo()
+        assert all(int(b["user_id"]) != A for b in svc.baccarat_bets(conn, round_id))
+
+
+def test_losing_baccarat_stakes_feed_the_jackpot(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        svc.place_baccarat_bet(conn, round_id, A, "tie", 40, now=NOW + 1)
+        assert (
+            svc.settle_baccarat_round(conn, round_id, *_P_WIN, now=NOW + 45)
+            is not None
+        )
+        # seed (100) + 25% of the lost 40-coin stake
+        assert svc.get_jackpot(conn, GUILD) == 110
+
+
+def test_member_leave_refunds_live_baccarat_stakes(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_coup(conn)
+        svc.place_baccarat_bet(conn, round_id, A, "banker", 25, now=NOW + 1)
+        out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 2)
+        assert out.get("baccarat") == 25
+        assert get_balance(conn, GUILD, A) == 100
+        assert svc.baccarat_bets(conn, round_id) == []
+
+
 # ── review-fix regressions (docs/reviews round, 2026-07-22) ────────────
 
 

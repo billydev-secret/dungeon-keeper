@@ -254,6 +254,160 @@ def test_derby_labels():
     assert logic.derby_odds_label(4) == "9.5×"
 
 
+# ── baccarat ───────────────────────────────────────────────────────────
+
+
+def test_baccarat_card_and_hand_values():
+    assert logic.baccarat_card_value("A♠") == 1
+    assert logic.baccarat_card_value("9♦") == 9
+    for rank in ("10", "J", "Q", "K"):
+        assert logic.baccarat_card_value(rank + "♥") == 0
+    assert logic.baccarat_total(["7♠", "8♦"]) == 5  # 15 → 5
+    assert logic.baccarat_total(["K♠", "Q♦"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("banker_total", "draws_on", "stands_on"),
+    [
+        (0, range(10), ()),
+        (1, range(10), ()),
+        (2, range(10), ()),
+        (3, [v for v in range(10) if v != 8], [8]),
+        (4, range(2, 8), [0, 1, 8, 9]),
+        (5, range(4, 8), [0, 1, 2, 3, 8, 9]),
+        (6, [6, 7], [0, 1, 2, 3, 4, 5, 8, 9]),
+        (7, (), range(10)),
+    ],
+)
+def test_banker_third_card_rule_matrix(banker_total, draws_on, stands_on):
+    """The full punto-banco tableau — the drawing rules ARE the paytable."""
+    for p3 in draws_on:
+        assert logic._banker_draws(banker_total, p3), (banker_total, p3)
+    for p3 in stands_on:
+        assert not logic._banker_draws(banker_total, p3), (banker_total, p3)
+
+
+def _scripted_shoe(monkeypatch, ranks):
+    """Feed deal_baccarat an exact rank sequence (suits pinned to ♠)."""
+    queue = list(ranks)
+    monkeypatch.setattr(
+        logic.random,
+        "choice",
+        lambda seq: queue.pop(0) if seq is logic._RANKS else "♠",
+    )
+
+
+def test_deal_baccarat_natural_stands_both(monkeypatch):
+    _scripted_shoe(monkeypatch, ["A", "8", "K", "K"])
+    player, banker = logic.deal_baccarat()
+    assert player == ["A♠", "8♠"] and banker == ["K♠", "K♠"]
+    assert logic.baccarat_winner(player, banker) == "player"
+
+
+def test_deal_baccarat_player_and_banker_third_cards_in_deal_order(monkeypatch):
+    # Player 2+3=5 draws; third card 5 → banker on 4 draws against 5.
+    _scripted_shoe(monkeypatch, ["2", "3", "4", "K", "5", "6"])
+    player, banker = logic.deal_baccarat()
+    assert player == ["2♠", "3♠", "5♠"]
+    assert banker == ["4♠", "K♠", "6♠"]
+
+
+def test_deal_baccarat_player_stands_banker_draws_to_five(monkeypatch):
+    # Player 3+4=7 stands; banker 2+3=5 draws when the player stood.
+    _scripted_shoe(monkeypatch, ["3", "4", "2", "3", "9"])
+    player, banker = logic.deal_baccarat()
+    assert player == ["3♠", "4♠"]
+    assert banker == ["2♠", "3♠", "9♠"]
+    assert logic.baccarat_winner(player, banker) == "player"  # 7 beats 4
+
+
+def test_baccarat_payout_matrix():
+    pay = logic.baccarat_payout
+    p9, b0 = ["A♠", "8♦"], ["K♠", "Q♦"]
+    assert pay("player", p9, b0, 10) == 20
+    assert pay("banker", p9, b0, 10) == 0
+    assert pay("tie", p9, b0, 10) == 0
+    # Two-card banker 7 win pays even — no Dragon-7 bar on two cards.
+    p5, b7 = ["2♠", "3♦"], ["4♠", "3♦"]
+    assert pay("banker", p5, b7, 10) == 20
+    # Three-card banker 7 win is barred to a push (EZ Dragon-7).
+    b7_3 = ["A♠", "2♦", "4♣"]
+    assert pay("banker", p5, b7_3, 10) == 10
+    assert pay("player", p5, b7_3, 10) == 0  # player bet still just loses
+    # Ties: tie bet pays 8:1, side bets push.
+    p_t, b_t = ["4♠", "3♦"], ["2♠", "5♦"]
+    assert pay("tie", p_t, b_t, 10) == 90
+    assert pay("player", p_t, b_t, 10) == 10
+    assert pay("banker", p_t, b_t, 10) == 10
+
+
+def test_baccarat_unknown_side_raises():
+    with pytest.raises(ValueError):
+        logic.baccarat_payout("dragon", ["A♠", "8♦"], ["K♠", "Q♦"], 10)
+
+
+def test_baccarat_exact_rtp_pinned():
+    """Exact EV over the infinite-shoe punto-banco tree (values 1–9 weigh
+    1/13 each, the 0-valued tens/faces 4/13). Pins all three bets: Player
+    98.77%, Banker 98.98% (EZ Dragon-7 replaces the 5% commission), Tie
+    85.88% — the labeled long shot, priced like the house intends."""
+    from fractions import Fraction
+
+    w = {v: Fraction(4 if v == 0 else 1, 13) for v in range(10)}
+    # Cards realizing a value: 0 via a face card so 3-card hands read right.
+    card = {v: ("K♠" if v == 0 else ("A♠" if v == 1 else f"{v}♠")) for v in range(10)}
+    dist2: dict[int, Fraction] = {t: Fraction(0) for t in range(10)}
+    for v1 in range(10):
+        for v2 in range(10):
+            dist2[(v1 + v2) % 10] += w[v1] * w[v2]
+
+    ev = {side: Fraction(0) for side in logic.BACCARAT_SIDES}
+    total_prob = Fraction(0)
+
+    def settle(prob, player, banker):
+        nonlocal total_prob
+        total_prob += prob
+        for side in logic.BACCARAT_SIDES:
+            ev[side] += prob * logic.baccarat_payout(side, player, banker, 1)
+
+    for pt in range(10):
+        for bt in range(10):
+            prob0 = dist2[pt] * dist2[bt]
+            p2, b2 = [card[pt], card[0]], [card[bt], card[0]]
+            if pt >= 8 or bt >= 8:  # natural — both stand
+                settle(prob0, p2, b2)
+            elif pt <= 5:  # player draws; banker consults the tableau
+                for p3 in range(10):
+                    p_hand = p2 + [card[p3]]
+                    if logic._banker_draws(bt, p3):
+                        for b3 in range(10):
+                            settle(prob0 * w[p3] * w[b3], p_hand, b2 + [card[b3]])
+                    else:
+                        settle(prob0 * w[p3], p_hand, b2)
+            elif bt <= 5:  # player stands on 6/7; banker draws on 0–5
+                for b3 in range(10):
+                    settle(prob0 * w[b3], p2, b2 + [card[b3]])
+            else:
+                settle(prob0, p2, b2)
+
+    assert total_prob == 1
+    assert float(ev["player"]) == pytest.approx(0.987719, abs=1e-6)
+    assert float(ev["banker"]) == pytest.approx(0.989752, abs=1e-6)
+    assert float(ev["tie"]) == pytest.approx(0.858830, abs=1e-6)
+
+
+def test_deal_baccarat_uses_module_random(monkeypatch):
+    _scripted_shoe(monkeypatch, ["9", "K", "K", "K"])  # 9 vs 0, both natural-side
+    player, banker = logic.deal_baccarat()
+    assert logic.baccarat_winner(player, banker) == "player"
+
+
+def test_baccarat_labels():
+    assert logic.describe_baccarat_side("player") == "🔵 Player"
+    assert logic.describe_baccarat_side("banker") == "🔴 Banker"
+    assert logic.describe_baccarat_side("tie") == "🟡 Tie"
+
+
 # ── fancy round: streaks & thresholds ──────────────────────────────────
 
 

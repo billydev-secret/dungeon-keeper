@@ -103,6 +103,7 @@ feature and also appear in the Design table above.
 
 | Plan | What it covers | Status |
 |---|---|---|
+| [plans/casino-classics-and-prediction-market.md](plans/casino-classics-and-prediction-market.md) | New casino games (Baccarat, Sic Bo, War, Keno) + a parimutuel prediction market | Stage 1a (Baccarat) built 2026-07-25; prediction market paused |
 | [plans/ai-advisor.md](plans/ai-advisor.md) | AI advisor (per-guild name, default "Billy-bot"): grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
 | [plans/help_bot_knowledge.md](plans/help_bot_knowledge.md) | Billy-bot as a setup guide: model tiering, settings registry, gap detection, proactive suggestions | Stages 1–6 built (latest 2026-07-25: per-feature KV fetch + intake registry entry) |
 | [plans/chat-revive.md](plans/chat-revive.md) | Chat Revive ("Ember") v1: rhythm-aware lull questions | Built 2026-07-14 |

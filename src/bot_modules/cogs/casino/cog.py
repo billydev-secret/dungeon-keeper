@@ -35,6 +35,9 @@ from discord.ext import commands, tasks
 
 from bot_modules.cogs.casino import embeds as casino_embeds
 from bot_modules.cogs.casino.views import (
+    BaccaratBetButton,
+    BaccaratBetModal,
+    BaccaratNextView,
     BetModal,
     BlackjackActionButton,
     CasinoHubView,
@@ -45,6 +48,7 @@ from bot_modules.cogs.casino.views import (
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
+    build_baccarat_view,
     build_blackjack_view,
     build_derby_view,
     build_hub_view,
@@ -132,7 +136,9 @@ class _WindowUI(NamedTuple):
     round_bets: Callable[..., list[sqlite3.Row]]
     settle: Callable[..., list[dict] | None]
     void: Callable[..., dict[int, int]]
-    draw: Callable[[], int]
+    # A number (roulette/derby) or the dealt coup (baccarat) — opaque here,
+    # only draw/settle/build_show agree on its shape.
+    draw: Callable[[], object]
     describe_bet: Callable[..., str]
     round_embed: Callable[..., discord.Embed]
     running_note: Callable[..., str]
@@ -224,6 +230,57 @@ _DERBY_UI = _WindowUI(
 )
 
 
+def _baccarat_show(
+    econ: EconSettings,
+    accent: discord.Color | None,
+    coup: tuple[list[str], list[str]],
+    bets: list[tuple[int, str, int, int]],
+    pot_after: int,
+) -> tuple[list[discord.Embed], discord.Embed]:
+    player, banker = coup
+    frames = [
+        casino_embeds.build_baccarat_deal_embed(econ, player, banker, accent)
+    ]
+    return frames, casino_embeds.build_baccarat_result_embed(
+        econ, player, banker, bets, pot_after=pot_after
+    )
+
+
+def _settle_baccarat(
+    conn: sqlite3.Connection,
+    round_id: int,
+    coup: tuple[list[str], list[str]],
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    """_WindowUI.settle adapter — the draw's coup unpacks into the service's
+    explicit (player, banker) signature."""
+    player, banker = coup
+    return svc.settle_baccarat_round(conn, round_id, player, banker, now=now)
+
+
+_BACCARAT_UI = _WindowUI(
+    key="baccarat",
+    enabled_attr="baccarat_enabled",
+    window_attr="baccarat_window_seconds",
+    live_round=svc.live_baccarat_round,
+    get_round=svc.get_baccarat_round,
+    open_round=svc.open_baccarat_round,
+    set_message=svc.set_baccarat_message,
+    round_bets=svc.baccarat_bets,
+    settle=_settle_baccarat,
+    void=svc.void_baccarat_round,
+    draw=logic.deal_baccarat,
+    describe_bet=lambda b: logic.describe_baccarat_side(str(b["side"])),
+    round_embed=casino_embeds.build_baccarat_round_embed,
+    running_note=casino_embeds.build_coup_running_note,
+    build_view=build_baccarat_view,
+    next_view=BaccaratNextView,
+    build_show=_baccarat_show,
+    frame_sleep=1.5,
+)
+
+
 class CasinoCog(commands.Cog, name="CasinoCog"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -260,9 +317,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.bot.add_view(CasinoHubView())
         self.bot.add_view(RouletteNextView())
         self.bot.add_view(DerbyNextView())
+        self.bot.add_view(BaccaratNextView())
         self.bot.add_dynamic_items(
             BlackjackActionButton, RouletteBetButton, DerbyBetButton,
-            PlayAgainButton,
+            BaccaratBetButton, PlayAgainButton,
         )
         self._boot_task = asyncio.create_task(self._boot())
         self.maintenance.start()
@@ -285,17 +343,19 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         await self.bot.wait_until_ready()
 
         def _sweep() -> tuple[
-            list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row]
+            list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row],
+            list[sqlite3.Row],
         ]:
             with self.ctx.open_db() as conn:
                 return (
                     svc.refund_live_blackjack_hands(conn),
                     svc.open_roulette_rounds(conn),
                     svc.open_race_rounds(conn),
+                    svc.open_baccarat_rounds(conn),
                 )
 
         try:
-            swept, rounds, races = await asyncio.to_thread(_sweep)
+            swept, rounds, races, coups = await asyncio.to_thread(_sweep)
         except Exception:
             log.exception("casino boot sweep failed")
             return
@@ -304,7 +364,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             # the register feed's casino_refund entry is the player-facing
             # notice, and stale buttons answer "already finished".
             log.info("casino boot sweep refunded %d live hand(s)", len(swept))
-        for ui, open_rows in ((_ROULETTE_UI, rounds), (_DERBY_UI, races)):
+        for ui, open_rows in (
+            (_ROULETTE_UI, rounds), (_DERBY_UI, races), (_BACCARAT_UI, coups),
+        ):
             for rnd in open_rows:
                 if self.bot.get_guild(int(rnd["guild_id"])) is None:
                     await self._void_window(ui, int(rnd["id"]))
@@ -332,7 +394,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             if stored_at < cutoff:  # webhook token expired — handle is dead
                 self._bj_followups.pop(hand_id, None)
 
-        def _scan() -> tuple[list[int], list[int], list[int], dict[int, int]]:
+        def _scan() -> tuple[
+            list[int], list[int], list[int], list[int], dict[int, int]
+        ]:
             with self.ctx.open_db() as conn:
                 stale: list[int] = []
                 thresholds: dict[int, int] = {}
@@ -355,6 +419,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     for r in svc.open_race_rounds(conn)
                     if float(r["closes_at"]) <= now - 5
                 ]
+                overdue_coups = [
+                    int(r["id"])
+                    for r in svc.open_baccarat_rounds(conn)
+                    if float(r["closes_at"]) <= now - 5
+                ]
                 # Pots for guilds whose panel we're maintaining — repainted
                 # below when the value drifted from the rendered one. Same
                 # seed semantics as ensure_panel's read, or an unfed pot
@@ -366,10 +435,12 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     cs = svc.load_casino_settings(conn, gid)
                     if cs.jackpot_enabled and cs.slots_enabled:
                         pots[gid] = svc.get_jackpot(conn, gid, seed=cs.jackpot_seed)
-                return stale, overdue, overdue_races, pots
+                return stale, overdue, overdue_races, overdue_coups, pots
 
         try:
-            stale, overdue, overdue_races, pots = await asyncio.to_thread(_scan)
+            stale, overdue, overdue_races, overdue_coups, pots = (
+                await asyncio.to_thread(_scan)
+            )
         except Exception:
             log.exception("casino maintenance sweep failed")
             return
@@ -384,7 +455,10 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 await self._auto_stand(hand_id)
             except Exception:
                 log.exception("casino auto-stand failed for hand %s", hand_id)
-        for ui, overdue_ids in ((_ROULETTE_UI, overdue), (_DERBY_UI, overdue_races)):
+        for ui, overdue_ids in (
+            (_ROULETTE_UI, overdue), (_DERBY_UI, overdue_races),
+            (_BACCARAT_UI, overdue_coups),
+        ):
             for round_id in overdue_ids:
                 if (ui.key, round_id) in self._window_timers:
                     continue  # a healthy timer owns it
@@ -1241,6 +1315,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
     async def open_derby(self, interaction: discord.Interaction) -> None:
         await self._open_window(interaction, _DERBY_UI)
 
+    async def open_baccarat(self, interaction: discord.Interaction) -> None:
+        await self._open_window(interaction, _BACCARAT_UI)
+
     async def _open_window(
         self, interaction: discord.Interaction, ui: _WindowUI
     ) -> None:
@@ -1597,6 +1674,49 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         desc = logic.describe_runner(runner)
         await safe_ephemeral(interaction, f"✅ Bet placed: {desc} for {amount:,}.")
         self._schedule_window_repaint(_DERBY_UI, guild, round_id)
+
+    # ── baccarat-only glue (everything else rides _WindowUI above) ─────
+
+    async def open_baccarat_bet_modal(
+        self, interaction: discord.Interaction, round_id: int, side: str
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        label, last = await self._modal_context(
+            guild.id, interaction.user.id, "baccarat"
+        )
+        await interaction.response.send_modal(
+            BaccaratBetModal(
+                round_id, side, logic.describe_baccarat_side(side),
+                limits_label=label, default_amount=last,
+            )
+        )
+
+    async def place_baccarat_bet(
+        self,
+        interaction: discord.Interaction,
+        round_id: int,
+        side: str,
+        amount: int,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        uid = interaction.user.id
+
+        def _bet() -> str | None:
+            with self.ctx.open_db() as conn:
+                return svc.place_baccarat_bet(conn, round_id, uid, side, amount)
+
+        err = await asyncio.to_thread(_bet)
+        if err is not None:
+            await safe_ephemeral(interaction, f"❌ {err}")
+            return
+        self._last_bets[(guild.id, uid, "baccarat")] = amount
+        desc = logic.describe_baccarat_side(side)
+        await safe_ephemeral(interaction, f"✅ Bet placed: {desc} for {amount:,}.")
+        self._schedule_window_repaint(_BACCARAT_UI, guild, round_id)
 
 
 async def setup(bot: Bot) -> None:

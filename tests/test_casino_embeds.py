@@ -167,6 +167,70 @@ def test_ticker_line_marks_push_and_partial_return():
     assert "10 back" in ticker_line(1, "blackjack", 20, 10)
 
 
+# ── baccarat result cards ──────────────────────────────────────────────
+
+_BC_PWIN = (["A♠", "8♦"], ["K♠", "Q♦"])           # player 9 over banker 0
+_BC_TIE = (["4♠", "3♦"], ["2♠", "5♦"])            # 7 all
+_BC_DRAGON7 = (["2♠", "3♦"], ["A♠", "2♦", "4♣"])  # banker 3-card 7
+
+
+def test_baccarat_result_win_is_green_and_shows_hands_with_totals():
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_PWIN, [(42, "🔵 Player", 10, 20)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    assert "(9)" in embed.description and "(0)" in embed.description
+    assert "Player wins" in embed.description
+
+
+def test_baccarat_result_all_losses_is_red():
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_PWIN, [(42, "🔴 Banker", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
+def test_baccarat_result_pushes_alone_are_not_green():
+    """A pushed side bet came home — it didn't win. The board says
+    'Pushed' and the card stays red (nobody beat the house)."""
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_TIE, [(42, "🔵 Player", 10, 10)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+    names = [f.name for f in embed.fields]
+    assert "Pushed" in names and "Winners" not in names
+
+
+def test_baccarat_result_dragon7_names_the_push():
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_DRAGON7, [(42, "🔴 Banker", 10, 10)]
+    )
+    assert embed.description is not None
+    assert "three-card seven" in embed.description
+    assert "Banker bets push" in embed.description
+
+
+def test_baccarat_deal_frame_hides_third_cards():
+    from bot_modules.cogs.casino.embeds import build_baccarat_deal_embed
+
+    embed = build_baccarat_deal_embed(
+        _ECON, ["2♠", "3♦", "5♣"], ["4♠", "K♦"], None
+    )
+    assert embed.description is not None
+    assert "🂠" in embed.description        # player's third card still down
+    assert "5♣" not in embed.description
+    assert "(0)" not in embed.description   # no totals until the reveal
+
+
 # ── the hub panel's "Today at the tables" standings ────────────────────
 
 
