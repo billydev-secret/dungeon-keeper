@@ -23,6 +23,7 @@ from bot_modules.services.economy_quests_service import (
 from bot_modules.cogs.economy_cog import (
     _NICK_FORBIDDEN,
     _custom_name_confirmation,
+    _quest_line_reward,
     _quest_line_status,
     _quest_section_lines,
     _status_disp_width,
@@ -512,6 +513,19 @@ def test_quest_line_status_draws_bar_for_counted_and_community():
     assert _quest_line_status({"state": "done"}) == "✅ done"
     assert _quest_line_status({"state": "pending"}) == "⏳ sign-off"
     assert _quest_line_status({"state": "claimable"}) == "🔶 claim below"
+
+
+def test_quest_line_reward_xp_suffix_is_glyph_free():
+    """The board's XP suffix carries no ⭐ — on phone widths the reward
+    column hugs the wrap point and the star pushed it onto its own line.
+    The spotlight bolt (rarer, and last on the line) stays."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    line = _quest_line_reward({"reward": 15, "reward_xp": 8}, settings)
+    assert line == "🪙 15 +8xp"
+    bolt = _quest_line_reward(
+        {"reward": 15, "reward_xp": 8, "spotlight": True}, settings
+    )
+    assert bolt.endswith("⚡")
 
 
 def test_quest_section_lines_labels_only_when_multi_cadence():

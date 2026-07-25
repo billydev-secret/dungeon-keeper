@@ -406,10 +406,12 @@ def _quest_line_status(q: dict) -> str:
 
 
 def _quest_line_reward(q: dict, settings: EconSettings) -> str:
-    """The payment column: coins, optional XP, optional spotlight bolt."""
+    """The payment column: coins, optional XP, optional spotlight bolt.
+    The XP suffix stays glyph-free — on phone widths the reward column
+    hugs the wrap point, and a ⭐ was enough to push it onto its own line."""
     reward = f"{settings.currency_emoji} {int(q['reward']):,}"
     if q.get("reward_xp"):
-        reward += f" +⭐{int(q['reward_xp']):,}xp"
+        reward += f" +{int(q['reward_xp']):,}xp"
     if q.get("spotlight"):
         reward += " ⚡"
     return reward
