@@ -483,3 +483,61 @@ _BACCARAT_LABELS = {
 
 def describe_baccarat_side(side: str) -> str:
     return _BACCARAT_LABELS[side]
+
+
+# ── Dice (Sic Bo, Big/Small/Odd/Even) ──────────────────────────────────
+#
+# Three dice, one roll, everyone settles. v1 keeps the classic even-money
+# quartet — Big (11–17), Small (4–10), Odd, Even, each paying 2× total
+# return and ALL losing to any triple (the house's tax on the wheel) —
+# which lands every bet at exactly 105/216 → 97.22% RTP, already in the
+# design band with no bespoke tuning. Exact-total and triple bets are a
+# deliberate later iteration (their casino pays are sucker-bet territory
+# and need custom in-band math).
+
+SICBO_BET_TYPES = ("big", "small", "odd", "even")
+DICE_FACES = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
+
+
+def roll_sicbo() -> tuple[int, int, int]:
+    return (
+        random.randint(1, 6), random.randint(1, 6), random.randint(1, 6)
+    )
+
+
+def sicbo_payout(bet_type: str, dice: tuple[int, int, int], amount: int) -> int:
+    """Total return for one bet against the rolled ``dice`` (0 = lost).
+
+    Every v1 bet pays even money and loses to any triple — that exclusion
+    IS the house edge (2.78%).
+    """
+    if bet_type not in SICBO_BET_TYPES:
+        raise ValueError(f"unknown dice bet type: {bet_type}")
+    a, b, c = dice
+    if a == b == c:
+        return 0
+    total = a + b + c
+    won = (
+        total >= 11 if bet_type == "big"
+        else total <= 10 if bet_type == "small"
+        else total % 2 == 1 if bet_type == "odd"
+        else total % 2 == 0
+    )
+    return amount * 2 if won else 0
+
+
+_SICBO_LABELS = {
+    "big": "⬆️ Big (11–17)",
+    "small": "⬇️ Small (4–10)",
+    "odd": "1️⃣ Odd",
+    "even": "2️⃣ Even",
+}
+
+
+def describe_sicbo_bet(bet_type: str) -> str:
+    return _SICBO_LABELS[bet_type]
+
+
+def dice_faces(dice: tuple[int, int, int]) -> str:
+    """"⚃ ⚅ ⚀" — the roll as die faces."""
+    return " ".join(DICE_FACES[d] for d in dice)

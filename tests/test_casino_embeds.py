@@ -231,6 +231,41 @@ def test_baccarat_deal_frame_hides_third_cards():
     assert "(0)" not in embed.description   # no totals until the reveal
 
 
+# ── dice result cards ──────────────────────────────────────────────────
+
+
+def test_dice_result_win_is_green_and_reads_the_roll():
+    from bot_modules.cogs.casino.embeds import build_dice_result_embed
+
+    embed = build_dice_result_embed(
+        _ECON, (6, 5, 4), [(42, "⬆️ Big (11–17)", 10, 20)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    assert "⚅ ⚄ ⚃" in embed.description
+    assert "**15**" in embed.description and "Big" in embed.description
+
+
+def test_dice_result_all_losses_is_red():
+    from bot_modules.cogs.casino.embeds import build_dice_result_embed
+
+    embed = build_dice_result_embed(
+        _ECON, (1, 2, 3), [(42, "⬆️ Big (11–17)", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
+def test_dice_result_triple_names_the_sweep():
+    from bot_modules.cogs.casino.embeds import build_dice_result_embed
+
+    embed = build_dice_result_embed(
+        _ECON, (4, 4, 4), [(42, "⬆️ Big (11–17)", 10, 0)]
+    )
+    assert embed.description is not None
+    assert "a triple 4!" in embed.description
+    assert "sweeps every bet" in embed.description
+
+
 # ── the hub panel's "Today at the tables" standings ────────────────────
 
 

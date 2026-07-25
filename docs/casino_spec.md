@@ -5,9 +5,10 @@ House gambling games staking the guild currency in one admin-configured
 the Meadow Derby joined 2026-07-24 (plan:
 [plans/casino-derby.md](plans/casino-derby.md)); the ephemeral-play UX
 landed 2026-07-24 (plan:
-[plans/casino-ephemeral-ux.md](plans/casino-ephemeral-ux.md)); Baccarat
-joined 2026-07-25 (plan: [plans/casino-classics-and-prediction-market.md](
-plans/casino-classics-and-prediction-market.md), Stage 1a). Sunny-meadow
+[plans/casino-ephemeral-ux.md](plans/casino-ephemeral-ux.md)); Baccarat and
+Dice (Sic Bo) joined 2026-07-25 (plan:
+[plans/casino-classics-and-prediction-market.md](
+plans/casino-classics-and-prediction-market.md), Stages 1a–1b). Sunny-meadow
 theming over an unmistakably Vegas core.
 
 **The casino's name is per-guild branding**, not a constant: it comes from
@@ -25,8 +26,8 @@ jackpot embed titles interpolate the configured name directly.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
-🏇 Derby · 🎴 Baccarat · ❓ How It Works); every flow is buttons + amount
-modals.
+🏇 Derby · 🎴 Baccarat · 🎲 Dice · ❓ How It Works); every flow is buttons
++ amount modals.
 
 **Private play, public moments** (2026-07-24; before this, every result was
 its own public message and heavy slots play scrolled the channel non-stop,
@@ -119,13 +120,14 @@ All movement goes through `services/casino_service.py`:
 | `channel_id` | 0 | **Master switch** — 0 = casino closed (ships dark) |
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
-| `{game}_enabled` ×6 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
+| `{game}_enabled` ×7 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
 | `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
 | `baccarat_window_seconds` | 45 | baccarat betting window (bounds 15–600) |
+| `dice_window_seconds` | 45 | dice betting window (bounds 15–600) |
 | `blackjack_idle_seconds` | 180 | idle hand auto-stands (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
 | `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
@@ -166,13 +168,13 @@ guild's casino name, which is edited on **Config → Branding**
   (`status='open'` claim → exactly-once), edits the round message and posts
   a recap. Boot re-arms timers (elapsed windows resolve immediately);
   a round whose guild is gone is **voided** (all bets refunded).
-- **Roulette, the derby and baccarat are ONE machine** — the windowed-round
-  family (`RoundTables` descriptor in `casino_service.py`: open/place/
-  settle/void with the exactly-once claims, and the `_WindowUI` descriptor
-  driving the cog's open/repaint/timer/resolve flow) is implemented once and
-  parameterized per game, so a money-safety fix can never land in one game
-  and miss the others. Per-game code is the paytable, the bet columns/
-  validation, the embeds and the show frames.
+- **Roulette, the derby, baccarat and dice are ONE machine** — the
+  windowed-round family (`RoundTables` descriptor in `casino_service.py`:
+  open/place/settle/void with the exactly-once claims, and the `_WindowUI`
+  descriptor driving the cog's open/repaint/timer/resolve flow) is
+  implemented once and parameterized per game, so a money-safety fix can
+  never land in one game and miss the others. Per-game code is the
+  paytable, the bet columns/validation, the embeds and the show frames.
 - **Derby** (plan: [plans/casino-derby.md](plans/casino-derby.md)) — the
   shared windowed machinery re-raced: six fixed runners
   (`casino_logic.DERBY_FIELD`, weights /100 × total-return ratios:
@@ -199,14 +201,26 @@ guild's casino name, which is edited on **Config → Branding**
   number). One deal frame, then the result embed — pushes list under
   "Pushed" and only a genuine win (payout > stake) goes green. Recap
   carries 🎴 Next Hand.
+- **Dice / Sic Bo** (plan: [plans/casino-classics-and-prediction-market.md](
+  plans/casino-classics-and-prediction-market.md) Stage 1b) — three dice,
+  one communal roll on the shared machinery: call buttons
+  (`casino_dc:{big|small|odd|even}:{round_id}`) + amount modal. v1 keeps
+  the classic even-money quartet — Big 11–17, Small 4–10, Odd, Even, each
+  2× total return, **all losing to any triple** (that exclusion is the
+  house edge). Every bet enumerates to exactly 105/216 wins → 97.22% RTP,
+  pinned by the exact-EV test; exact-total/triple bets are deliberately
+  deferred (their casino pays are sucker-bet territory). The roll persists
+  as JSON `[d1, d2, d3]` in the round's `result` column; one tumble frame,
+  then die-face verdict (a triple names the sweep). Recap carries
+  🎲 Next Roll.
 
 Every terminal path settles or refunds, exactly-once via
 `settled_at IS NULL` / `status='open'` claims — a stake can never evaporate
 or double-pay, including replayed timers and double-clicks. Because the
 pre-checks run in autocommit (legacy DEFERRED isolation), every money-moving
 path **re-claims its row inside the write transaction** with a guarded
-no-op UPDATE before the debit: `place_roulette_bet`, `place_race_bet` and
-`place_baccarat_bet`
+no-op UPDATE before the debit: `place_roulette_bet`, `place_race_bet`,
+`place_baccarat_bet` and `place_dice_bet`
 (a buzzer-beater bet racing the resolution misses the claim instead of
 stranding a stake), `double_blackjack_stake`, and `resolve_blackjack_action` (which also bumps
 `last_action_at`, resetting the idle clock per press, and reports

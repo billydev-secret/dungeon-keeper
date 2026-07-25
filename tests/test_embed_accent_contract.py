@@ -454,6 +454,20 @@ CASES = [
         ),
         discord.Color(services_embeds.COLOR_GOLD),
     ),
+    case(
+        "casino.dice_round",
+        lambda **kw: casino_embeds.build_dice_round_embed(
+            _econ_settings(), 0.0, [], kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.dice_tumble",
+        lambda **kw: casino_embeds.build_dice_tumble_embed(
+            _econ_settings(), kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
     # ── welcome / leave (member arg is constructed mock data) ───────────
     case(
         "welcome.join",
@@ -529,6 +543,8 @@ KNOWN_UNCOVERED = {
     # content string — both out of accent scope by design.
     "bot_modules.cogs.casino.embeds.build_baccarat_result_embed",
     "bot_modules.cogs.casino.embeds.build_coup_running_note",
+    "bot_modules.cogs.casino.embeds.build_dice_result_embed",
+    "bot_modules.cogs.casino.embeds.build_roll_running_note",
     "bot_modules.cogs.casino.embeds.build_blackjack_embed",
     "bot_modules.cogs.casino.embeds.build_blackjack_reveal_embed",
     "bot_modules.cogs.casino.embeds.build_coinflip_embed",

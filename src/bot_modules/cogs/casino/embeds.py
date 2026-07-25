@@ -43,6 +43,7 @@ _GAME_LINES = {
     "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
     "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
     "baccarat": "🎴 **Baccarat** — Player, Banker, or Tie; nearest to nine wins",
+    "dice": "🎲 **Dice** — three dice, one roll; call Big, Small, Odd, or Even",
 }
 
 
@@ -256,6 +257,18 @@ def build_help_embed(
                 "shot (~86% return). Ties push the side bets. A betting window "
                 f"opens for {settings.baccarat_window_seconds}s, then the cards "
                 "decide for everyone at once.\n​"
+            ),
+            inline=False,
+        )
+    if settings.dice_enabled:
+        embed.add_field(
+            name="🎲 Dice",
+            value=(
+                "Three dice, one shared roll. **Big** (11–17), **Small** "
+                "(4–10), **Odd**, **Even** — all pay **2×**, and any triple "
+                "sweeps the table (~97% return). A betting window opens for "
+                f"{settings.dice_window_seconds}s, then one roll settles "
+                "everyone.\n​"
             ),
             inline=False,
         )
@@ -853,6 +866,103 @@ def build_coup_running_note(closes_at: float, url: str | None = None) -> str:
     if url:
         return f"{note} Jump in and pick a side: {url}"
     return f"{note} Pick a side on the hand message above."
+
+
+# ── dice / sic bo (casino-classics Stage 1b) ───────────────────────────
+
+
+def build_dice_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, bet description, amount), placement order."""
+    embed = discord.Embed(
+        title="🎲 Dice — bets open!",
+        description=(
+            f"Three dice roll <t:{int(closes_at)}:R>. "
+            "Call Big, Small, Odd, or Even — but any triple sweeps "
+            "the table.\n​"
+        ),
+        color=_accent(accent),
+    )
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_dice_tumble_embed(
+    econ: EconSettings, accent: discord.Color | None
+) -> discord.Embed:
+    """The rolling frame — dice still in the air."""
+    embed = discord.Embed(
+        title="🎲 Dice — no more bets!",
+        description="The dice tumble across the felt… 🎲 🎲 🎲 …",
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_dice_result_embed(
+    econ: EconSettings,
+    dice: tuple[int, int, int],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, bet description, amount, payout)."""
+    total = sum(dice)
+    is_triple = dice[0] == dice[1] == dice[2]
+    call = "Big" if total >= 11 else "Small"
+    parity = "odd" if total % 2 else "even"
+    verdict = f"{logic.dice_faces(dice)} — **{total}**, {call} and {parity}."
+    if is_triple:
+        verdict = (
+            f"{logic.dice_faces(dice)} — **a triple {dice[0]}!** "
+            "The house sweeps every bet."
+        )
+    if bets:
+        description = f"{verdict}\n​"
+    else:
+        description = f"{verdict} Nobody bet — the dice roll for no one."
+    winners = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    embed = discord.Embed(
+        title="🎲 Dice — no more bets!",
+        description=description,
+        color=COLOR_GREEN if winners else COLOR_RED,
+    )
+    if winners:
+        winner_lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in winners
+        ]
+        embed.add_field(
+            name="Winners",
+            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
+            inline=False,
+        )
+    if losers_total:
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name="The house keeps", value=kept, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_roll_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens dice mid-roll."""
+    note = (
+        f"🎲 A dice roll is already forming — they fly "
+        f"<t:{int(closes_at)}:R>."
+    )
+    if url:
+        return f"{note} Jump in and call it: {url}"
+    return f"{note} Call it on the roll message above."
 
 
 def build_my_stats_embed(

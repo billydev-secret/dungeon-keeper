@@ -490,9 +490,11 @@ def _casino_section(conn, guild_id: int) -> dict:
         "roulette_enabled": s.roulette_enabled,
         "derby_enabled": s.derby_enabled,
         "baccarat_enabled": s.baccarat_enabled,
+        "dice_enabled": s.dice_enabled,
         "roulette_window_seconds": s.roulette_window_seconds,
         "derby_window_seconds": s.derby_window_seconds,
         "baccarat_window_seconds": s.baccarat_window_seconds,
+        "dice_window_seconds": s.dice_window_seconds,
         "blackjack_idle_seconds": s.blackjack_idle_seconds,
         "jackpot_enabled": s.jackpot_enabled,
         "jackpot_cut_pct": s.jackpot_cut_pct,
@@ -3845,9 +3847,11 @@ class CasinoConfigUpdate(BaseModel):
     roulette_enabled: bool | None = None
     derby_enabled: bool | None = None
     baccarat_enabled: bool | None = None
+    dice_enabled: bool | None = None
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
     derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
     baccarat_window_seconds: int | None = Field(default=None, ge=15, le=600)
+    dice_window_seconds: int | None = Field(default=None, ge=15, le=600)
     # Capped at 840s: an ephemeral hand message is editable only through
     # its interaction webhook, whose token Discord expires after 15 min —
     # a longer idle window would auto-stand hands nobody can repaint.

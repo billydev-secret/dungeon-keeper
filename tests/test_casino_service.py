@@ -682,6 +682,154 @@ def test_member_leave_refunds_live_baccarat_stakes(db):
         assert svc.baccarat_bets(conn, round_id) == []
 
 
+# ── dice rolls (casino-classics Stage 1b) ──────────────────────────────
+
+
+def _open_roll(conn, channel=CHAN, now=NOW):
+    round_id = svc.open_dice_round(conn, GUILD, channel, 45, now=now)
+    assert round_id is not None
+    return round_id
+
+
+def test_one_open_roll_per_channel(db):
+    with open_db(db) as conn:
+        _open_roll(conn)
+        assert svc.open_dice_round(conn, GUILD, CHAN, 45, now=NOW) is None
+        assert svc.open_dice_round(conn, GUILD, CHAN + 1, 45, now=NOW) is not None
+
+
+def test_dice_bets_debit_and_close_with_the_window(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        assert (
+            svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 1)
+            is None
+        )
+        assert get_balance(conn, GUILD, A) == 90
+        err = svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 46)
+        assert err == "Betting on that roll has closed."
+        with pytest.raises(ValueError):
+            svc.place_dice_bet(conn, round_id, A, "triple", 10, now=NOW + 2)
+
+
+def test_dice_bet_refused_when_table_closed(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"dice_enabled": False})
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        err = svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 1)
+        assert err == "That table is closed right now."
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_settle_roll_pays_winners_exactly_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        round_id = _open_roll(conn)
+        svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 1)
+        svc.place_dice_bet(conn, round_id, A, "odd", 10, now=NOW + 2)
+        svc.place_dice_bet(conn, round_id, B, "small", 20, now=NOW + 3)
+
+        bets = svc.settle_dice_round(conn, round_id, (6, 5, 4), now=NOW + 45)
+        assert bets is not None  # 15: big and odd win, small loses
+        assert [int(b["payout"]) for b in bets] == [20, 20, 0]
+        assert get_balance(conn, GUILD, A) == 100 - 20 + 40
+        assert get_balance(conn, GUILD, B) == 80
+        # the roll persists as JSON for recaps
+        import json
+
+        rnd = svc.get_dice_round(conn, round_id)
+        assert rnd is not None and json.loads(str(rnd["result"])) == [6, 5, 4]
+        # replay pays nothing again
+        assert svc.settle_dice_round(conn, round_id, (6, 5, 4), now=NOW + 46) is None
+        assert get_balance(conn, GUILD, A) == 120
+        # a settled roll takes no more bets
+        err = svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 2)
+        assert err == "Betting on that roll has closed."
+
+
+def test_settle_roll_triple_sweeps_every_bet(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 1)   # 12 is big…
+        svc.place_dice_bet(conn, round_id, A, "even", 10, now=NOW + 2)  # …and even
+        bets = svc.settle_dice_round(conn, round_id, (4, 4, 4), now=NOW + 45)
+        assert bets is not None
+        assert [int(b["payout"]) for b in bets] == [0, 0]  # triple beats both
+        assert get_balance(conn, GUILD, A) == 80
+
+
+def test_void_roll_refunds_totals_once(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 1)
+        svc.place_dice_bet(conn, round_id, A, "odd", 15, now=NOW + 2)
+        assert svc.void_dice_round(conn, round_id, now=NOW + 5) == {A: 25}
+        assert get_balance(conn, GUILD, A) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 25)
+        assert svc.void_dice_round(conn, round_id, now=NOW + 6) == {}
+
+
+def test_boot_sweep_lists_open_rolls(db):
+    with open_db(db) as conn:
+        r1 = _open_roll(conn)
+        r2 = _open_roll(conn, channel=CHAN + 1)
+        svc.settle_dice_round(conn, r2, (1, 2, 3), now=NOW + 45)
+        assert [int(r["id"]) for r in svc.open_dice_rounds(conn)] == [r1]
+
+
+def test_stale_precheck_cannot_strand_a_dice_stake(db, monkeypatch):
+    """The roulette buzzer-beater race, on dice: the settler claimed the
+    roll between our pre-check and our debit — the in-transaction claim
+    must refuse the bet before any money moves."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        assert (
+            svc.settle_dice_round(conn, round_id, (1, 2, 3), now=NOW + 45)
+            is not None
+        )
+        stale = {
+            "id": round_id, "status": "open",
+            "closes_at": NOW + 45, "guild_id": GUILD,
+        }
+        monkeypatch.setattr(svc, "get_dice_round", lambda *_: stale)
+        err = svc.place_dice_bet(conn, round_id, A, "big", 10, now=NOW + 2)
+        assert err == "Betting on that roll has closed."
+        assert get_balance(conn, GUILD, A) == 100  # nothing debited
+        monkeypatch.undo()
+        assert all(int(b["user_id"]) != A for b in svc.dice_bets(conn, round_id))
+
+
+def test_losing_dice_stakes_feed_the_jackpot(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        svc.place_dice_bet(conn, round_id, A, "big", 40, now=NOW + 1)
+        assert (
+            svc.settle_dice_round(conn, round_id, (1, 2, 3), now=NOW + 45)
+            is not None
+        )
+        # seed (100) + 25% of the lost 40-coin stake
+        assert svc.get_jackpot(conn, GUILD) == 110
+
+
+def test_member_leave_refunds_live_dice_stakes(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_roll(conn)
+        svc.place_dice_bet(conn, round_id, A, "even", 25, now=NOW + 1)
+        out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 2)
+        assert out.get("dice") == 25
+        assert get_balance(conn, GUILD, A) == 100
+        assert svc.dice_bets(conn, round_id) == []
+
+
 # ── review-fix regressions (docs/reviews round, 2026-07-22) ────────────
 
 

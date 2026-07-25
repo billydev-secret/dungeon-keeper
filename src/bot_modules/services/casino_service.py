@@ -43,7 +43,7 @@ STAKE_KIND = "casino_stake"
 PAYOUT_KIND = "casino_payout"
 REFUND_KIND = "casino_refund"
 
-GAMES = ("coinflip", "slots", "blackjack", "roulette", "derby", "baccarat")
+GAMES = ("coinflip", "slots", "blackjack", "roulette", "derby", "baccarat", "dice")
 
 
 @dataclass(frozen=True)
@@ -60,10 +60,12 @@ class CasinoSettings:
     roulette_enabled: bool = True
     derby_enabled: bool = True
     baccarat_enabled: bool = True
+    dice_enabled: bool = True
     roulette_window_seconds: int = 45
     # Derby races want a touch more hype time than a roulette spin.
     derby_window_seconds: int = 60
     baccarat_window_seconds: int = 45
+    dice_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
     # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
@@ -90,6 +92,7 @@ _BOOL_KEYS = [
     "roulette_enabled",
     "derby_enabled",
     "baccarat_enabled",
+    "dice_enabled",
     "jackpot_enabled",
 ]
 # Everything else on the dataclass is a plain int.
@@ -1002,7 +1005,7 @@ def refund_member_live_stakes(
         kind=REFUND_KIND, now=now,
     ):
         out["blackjack"] = int(hand["stake"])
-    for t in (ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES):
+    for t in (ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES):
         bets = conn.execute(
             f"SELECT b.id, b.amount FROM {t.bets} b "
             f"JOIN {t.rounds} r ON r.id = b.round_id "
@@ -1083,6 +1086,10 @@ DERBY_TABLES = RoundTables(
 BACCARAT_TABLES = RoundTables(
     "baccarat", "casino_baccarat_rounds", "casino_baccarat_bets",
     "result", "Betting on that hand has closed.",
+)
+DICE_TABLES = RoundTables(
+    "dice", "casino_dice_rounds", "casino_dice_bets",
+    "result", "Betting on that roll has closed.",
 )
 
 
@@ -1529,3 +1536,87 @@ def void_baccarat_round(
 
 def open_baccarat_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return _open_rounds(conn, BACCARAT_TABLES)
+
+
+# ── dice rolls (casino-classics Stage 1b — same wrappers) ──────────────
+
+
+def live_dice_round(
+    conn: sqlite3.Connection, channel_id: int
+) -> sqlite3.Row | None:
+    return _live_round(conn, DICE_TABLES, channel_id)
+
+
+def get_dice_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
+    return _get_round(conn, DICE_TABLES, round_id)
+
+
+def open_dice_round(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    window_seconds: int,
+    *,
+    now: float | None = None,
+) -> int | None:
+    return _open_round(
+        conn, DICE_TABLES, guild_id, channel_id, window_seconds, now=now
+    )
+
+
+def set_dice_message(
+    conn: sqlite3.Connection, round_id: int, message_id: int
+) -> None:
+    _set_round_message(conn, DICE_TABLES, round_id, message_id)
+
+
+def place_dice_bet(
+    conn: sqlite3.Connection,
+    round_id: int,
+    user_id: int,
+    bet_type: str,
+    amount: int,
+    *,
+    now: float | None = None,
+) -> str | None:
+    if bet_type not in casino_logic.SICBO_BET_TYPES:
+        raise ValueError(f"unknown dice bet type: {bet_type}")
+    return _place_bet(
+        conn, DICE_TABLES, get_dice_round(conn, round_id), round_id,
+        user_id, {"bet_type": bet_type}, amount, now=now,
+    )
+
+
+def dice_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
+    return _round_bets(conn, DICE_TABLES, round_id)
+
+
+def settle_dice_round(
+    conn: sqlite3.Connection,
+    round_id: int,
+    dice: tuple[int, int, int],
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    """Settle the roll. The three dice persist as JSON in the round's
+    result column (the outcome is the dice, not their sum)."""
+    result = json.dumps(list(dice))
+
+    def payout_for(bet: dict, _result: str) -> int:
+        return casino_logic.sicbo_payout(
+            str(bet["bet_type"]), dice, int(bet["amount"])
+        )
+
+    return _settle_round(
+        conn, DICE_TABLES, round_id, result, payout_for, now=now
+    )
+
+
+def void_dice_round(
+    conn: sqlite3.Connection, round_id: int, *, now: float | None = None
+) -> dict[int, int]:
+    return _void_round(conn, DICE_TABLES, round_id, now=now)
+
+
+def open_dice_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return _open_rounds(conn, DICE_TABLES)

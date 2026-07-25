@@ -83,7 +83,7 @@ Each row is a standalone commit/merge with its own tests.
 - **Flow:** `Baccarat` hub button → pick side (3 buttons) → amount modal → round
   settles publicly with a card-reveal embed (animated like derby optional).
 
-### Stage 1b — Sic Bo / "Dice" (windowed)
+### Stage 1b — Sic Bo / "Dice" (windowed) — **built 2026-07-25**
 
 - **Mechanics:** windowed round; three dice rolled once, settles all bets.
 - **v1 bets:** Big (11–17), Small (4–10), Odd, Even — all **1:1, lose on any

@@ -408,6 +408,51 @@ def test_baccarat_labels():
     assert logic.describe_baccarat_side("tie") == "🟡 Tie"
 
 
+# ── dice (sic bo) ──────────────────────────────────────────────────────
+
+
+def test_sicbo_payout_matrix():
+    pay = logic.sicbo_payout
+    assert pay("big", (6, 5, 4), 10) == 20     # 15 is big
+    assert pay("big", (1, 2, 3), 10) == 0      # 6 is small
+    assert pay("small", (1, 2, 3), 10) == 20
+    assert pay("odd", (1, 2, 4), 10) == 20     # 7
+    assert pay("even", (1, 2, 3), 10) == 20    # 6
+    assert pay("odd", (1, 2, 3), 10) == 0
+    # every bet loses to any triple — that exclusion is the house edge
+    for bet in logic.SICBO_BET_TYPES:
+        assert pay(bet, (4, 4, 4), 10) == 0, bet
+
+
+def test_sicbo_unknown_bet_type_raises():
+    with pytest.raises(ValueError):
+        logic.sicbo_payout("triple", (1, 2, 3), 10)
+
+
+@pytest.mark.parametrize("bet_type", logic.SICBO_BET_TYPES)
+def test_sicbo_exact_rtp_is_105_216(bet_type):
+    """Enumerate all 216 rolls: each even-money bet wins exactly 105 of
+    them (triples excluded), pinning RTP at 210/216 ≈ 97.22%."""
+    stake = 10
+    total = sum(
+        logic.sicbo_payout(bet_type, (a, b, c), stake)
+        for a, b, c in itertools.product(range(1, 7), repeat=3)
+    )
+    assert total == 105 * stake * 2
+    assert total / (216 * stake) == pytest.approx(105 * 2 / 216)
+
+
+def test_roll_sicbo_uses_module_random(monkeypatch):
+    monkeypatch.setattr(logic.random, "randint", lambda a, b: 6)
+    assert logic.roll_sicbo() == (6, 6, 6)
+
+
+def test_sicbo_labels_and_faces():
+    assert logic.describe_sicbo_bet("big") == "⬆️ Big (11–17)"
+    assert logic.describe_sicbo_bet("even") == "2️⃣ Even"
+    assert logic.dice_faces((1, 3, 6)) == "⚀ ⚂ ⚅"
+
+
 # ── fancy round: streaks & thresholds ──────────────────────────────────
 
 
