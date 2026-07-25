@@ -433,9 +433,10 @@ def build_tools(tools: AdvisorTools) -> list[dict]:
             "description": (
                 "Look up this Discord server's saved Dungeon Keeper settings for "
                 "one feature. Returns raw 'field = value' lines (channel/role ids "
-                "already resolved to names). 'general' covers the shared settings "
-                "(welcome, moderation, spoiler, and other core keys). Available "
-                "only because the asker is a server admin."
+                "already resolved to names). Prefer the named feature; 'general' "
+                "is the fallback covering every shared setting not listed as its "
+                "own feature (moderation, spoiler, and other core keys). "
+                "Available only because the asker is a server admin."
             ),
             "input_schema": {
                 "type": "object",

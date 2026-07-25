@@ -85,6 +85,25 @@ def test_check_registry_rejects_an_unknown_kind(monkeypatch):
         sr._check_registry()
 
 
+def test_intake_feature_is_registered():
+    """Regression: Intake Cards shipped without a registry entry, so Billy-bot
+    could neither report it as a setup gap nor propose turning it on."""
+    f = sr.FEATURES_BY_SLUG.get("intake")
+    assert f is not None
+    assert f.enable_key == "intake_enabled"
+    keys = {s.key for s in f.settings}
+    assert {
+        "intake_enabled",
+        "intake_channel_id",
+        "intake_completion_code",
+        "intake_stale_hours",
+        "intake_reference_channel_id",
+    } <= keys
+    # Turning it on / pointing it at a channel is proposable without full admin.
+    assert "intake_enabled" in sr.writable_keys(is_admin=False)
+    assert "intake_channel_id" in sr.writable_keys(is_admin=False)
+
+
 # ── lookups ─────────────────────────────────────────────────────────────────
 
 

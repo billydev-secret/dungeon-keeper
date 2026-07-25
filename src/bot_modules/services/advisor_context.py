@@ -32,9 +32,10 @@ from collections.abc import Callable
 
 import discord
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.docs.db import list_docs
 from bot_modules.services.announcements_service import list_announcements
+from bot_modules.services.settings_registry import FEATURES as REGISTRY_FEATURES
 
 log = logging.getLogger(__name__)
 
@@ -216,6 +217,37 @@ def _feature_section(guild, label: str, obj) -> str:
     return f"[{label}]\n" + "\n".join(lines) if lines else ""
 
 
+def _registry_feature_section(conn, guild, feature) -> str:
+    """One registry feature's KV-backed settings as a `[Label]` block.
+
+    Same shape as :func:`_feature_section`; unset keys are skipped so an
+    unconfigured feature yields "" and the caller's pointer-to-the-panel
+    message. The registry never lists secret-shaped keys (asserted at its
+    import), so no extra filtering is needed here.
+    """
+    lines: list[str] = []
+    for s in feature.settings:
+        raw = (get_config_value(conn, s.key, "", guild.id) or "").strip()
+        if not raw:
+            continue
+        # Channels/roles use "0" for "not configured" — skip rather than
+        # letting _fmt_value render the 0 as "off".
+        if s.kind in ("channel", "role") and raw in ("0", "-1"):
+            continue
+        fv = _fmt_value(guild, s.key, raw)
+        if fv is None:
+            continue
+        lines.append(f"{s.key} = {fv}")
+    if not lines:
+        return ""
+    if feature.extra_panel_only:
+        lines.append(
+            "(dashboard-only, not shown here: "
+            + ", ".join(feature.extra_panel_only) + ")"
+        )
+    return f"[{feature.label}]\n" + "\n".join(lines)
+
+
 def _mk_getter(module: str, func: str, kind: str) -> Callable:
     """Lazily import a loader and adapt its call shape ('conn' vs 'dbpath')."""
     def _get(conn, guild_id, db_path):
@@ -256,8 +288,16 @@ _FEATURES_BY_SLUG: dict[str, tuple[str, Callable]] = {
     _slugify(label): (label, getter) for label, getter in _FEATURE_LOADERS
 }
 
+# KV-backed features described in the settings registry (greeting watch,
+# intake, welcome, …). Their keys live in the shared config table, but burying
+# them behind "general" made the model conclude it couldn't see them — so each
+# registry feature is fetchable by its own slug, same as the own-table ones.
+_REGISTRY_BY_SLUG = {f.slug: f for f in REGISTRY_FEATURES}
+
 # "general" is the shared config KV table (welcome, moderation, spoiler, …).
-FEATURE_KEYS: list[str] = ["general", *_FEATURES_BY_SLUG]
+FEATURE_KEYS: list[str] = [
+    "general", *dict.fromkeys((*_FEATURES_BY_SLUG, *_REGISTRY_BY_SLUG))
+]
 
 can_see_config = _can_see_config  # public alias for surface wiring
 
@@ -280,9 +320,20 @@ def fetch_feature_settings(
         with open_db(db_path) as conn:
             if slug == "general":
                 sec = _kv_config_section(conn, guild)
-            elif slug in _FEATURES_BY_SLUG:
-                label, getter = _FEATURES_BY_SLUG[slug]
-                sec = _feature_section(guild, label, getter(conn, guild.id, db_path))
+            elif slug in _FEATURES_BY_SLUG or slug in _REGISTRY_BY_SLUG:
+                # A slug can be both (e.g. voice_master: own-table settings
+                # plus KV keys) — show every section that has values.
+                parts: list[str] = []
+                if slug in _FEATURES_BY_SLUG:
+                    label, getter = _FEATURES_BY_SLUG[slug]
+                    parts.append(
+                        _feature_section(guild, label, getter(conn, guild.id, db_path))
+                    )
+                if slug in _REGISTRY_BY_SLUG:
+                    parts.append(
+                        _registry_feature_section(conn, guild, _REGISTRY_BY_SLUG[slug])
+                    )
+                sec = "\n\n".join(p for p in parts if p)
             else:
                 return (
                     f"Unknown feature '{feature}'. "
