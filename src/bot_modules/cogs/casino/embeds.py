@@ -267,6 +267,15 @@ def build_coinflip_embed(
     return embed
 
 
+def _slot_cabinet(cells: tuple[str, ...]) -> str:
+    """Box the reel row in a small text-art slot machine. The reel row
+    carries no side walls and no code span — emoji width varies per
+    platform (and code spans swallow emoji rendering), so only the pure
+    box-glyph lines are expected to align with each other."""
+    row = f"▶ {cells[0]} │ {cells[1]} │ {cells[2]} ◀"
+    return f"╭─────┤🎰├─────╮\n{row}\n╰──┬─────────┬──╯"
+
+
 def build_slots_embed(
     econ: EconSettings,
     user_id: int,
@@ -280,7 +289,7 @@ def build_slots_embed(
     pot_after: int = 0,
     casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
-    reel_line = f"▶ {reels[0]} │ {reels[1]} │ {reels[2]} ◀"
+    reel_line = _slot_cabinet(reels)
     title = f"🎰 {casino_name} Slots"
     if payout > 0:
         desc = (
@@ -354,12 +363,12 @@ def build_slots_spin_embed(
     *,
     casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
-    cells = " │ ".join(sym if sym is not None else "🌀" for sym in revealed)
+    cells = tuple(sym if sym is not None else "🌀" for sym in revealed)
     embed = discord.Embed(
         title=f"🎰 {casino_name} Slots",
         description=(
-            f"▶ {cells} ◀\n\n<@{user_id}> bet {_coins(econ, stake)} — "
-            "the reels are spinning…"
+            f"{_slot_cabinet(cells)}\n\n<@{user_id}> bet "
+            f"{_coins(econ, stake)} — the reels are spinning…"
         ),
         color=_accent(accent),
     )

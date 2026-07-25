@@ -73,6 +73,9 @@ RESTICK_QUICK_SECONDS = 60
 RESTICK_ROUND_HOLD_SECONDS = 300
 # Floor-ticker repaints coalesce a burst of plays into one hub-panel edit.
 HUB_REPAINT_SECONDS = 8.0
+# Big-bet slots show: pause between each reel stopping (and before the
+# verdict). Sits between coinflip's hang (1.2s) and roulette frames (1.5s).
+SLOTS_REEL_STOP_SECONDS = 1.4
 # Ephemeral messages are editable only through their interaction's webhook,
 # and Discord expires those tokens after 15 minutes — followup handles for
 # the blackjack auto-stand are useless past this age.
@@ -904,7 +907,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     ),
                 )
                 for stop in (1, 2):
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(SLOTS_REEL_STOP_SECONDS)
                     revealed = (
                         reels[0] if stop >= 1 else None,
                         reels[1] if stop >= 2 else None,
@@ -916,7 +919,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                             accent, casino_name=casino_name,
                         )
                     )
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(SLOTS_REEL_STOP_SECONDS)
                 await interaction.edit_original_response(
                     embed=final, view=play_again_view("slots", amount)
                 )

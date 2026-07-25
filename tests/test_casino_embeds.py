@@ -13,6 +13,7 @@ from bot_modules.cogs.casino.embeds import (
     build_help_embed,
     build_roulette_round_embed,
     build_slots_embed,
+    build_slots_spin_embed,
 )
 from bot_modules.services import casino_logic as logic
 from bot_modules.services.casino_service import CasinoSettings
@@ -45,6 +46,18 @@ def test_jackpot_win_is_green_but_keeps_its_copy():
 
 def test_loss_is_red():
     assert _slots(10, 0).color == discord.Color(COLOR_RED)
+
+
+def test_slots_reels_sit_inside_the_cabinet():
+    """Result and spin frames both box the reel row in the text-art
+    machine; unrevealed reels spin as 🌀."""
+    final = _slots(10, 20)
+    spin = build_slots_spin_embed(_ECON, 42, 10, ("🍯", None, None), None)
+    for embed in (final, spin):
+        assert embed.description is not None
+        assert "┤🎰├" in embed.description
+    assert "▶ 🍯 │ 🍯 │ 🍯 ◀" in (final.description or "")
+    assert "▶ 🍯 │ 🌀 │ 🌀 ◀" in (spin.description or "")
 
 
 # ── derby ──────────────────────────────────────────────────────────────
