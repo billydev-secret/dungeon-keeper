@@ -62,6 +62,17 @@ SQLite-backed. Tests in `tests/`.
   guard/branch**, especially safety gates (NSFW `is_nsfw()`, opt-in, role gates)
   — a passing test *is* the enforcement CLAUDE.md's safety rule demands; and for
   a bug fix, **a test that fails before the fix** (write it first, watch it fail).
+- **A bug observed in Discord still gets its failing test at the logic/service
+  layer** — reproduce the state that broke, not the Discord surface where it
+  showed up; add at most one wiring assertion in the cog test when the glue
+  itself was wrong. Cog tests that re-prove service behavior through Discord
+  mocks were the suite's main historical bloat (see
+  docs/plans/test-suite-slim-and-remote-resilience.md).
+- **Prefer a `pytest.param` row over a new test function** when covering
+  another value variant of an existing behavior, and check whether a shared
+  contract table already covers it (embed accents:
+  `tests/test_embed_accent_contract.py` — new builders add one `case()` row,
+  never per-file accent copies).
 - **Coverage target is on the patch, not the repo.** New `*_logic.py` /
   `*_service.py` code should land ~80% of its new lines exercised. Don't chase
   whole-repo line %; don't lower `fail_under` in pyproject.toml — raise it when a
