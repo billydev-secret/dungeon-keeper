@@ -954,54 +954,6 @@ _ACCENT = discord.Color(0x123456)
 _GREEN = discord.Color(COLOR_GREEN)
 
 
-def test_lobby_embed_honors_passed_accent():
-    embed = build_lobby_embed("Alice", {"rounds": 5}, [], _name_resolver, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_submit_embed_honors_passed_accent():
-    embed = build_submit_embed(
-        prompt="p", round_num=1, total_rounds=5, deadline_str="<t:1:R>",
-        answers_in=0, total_players=3, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_vote_embed_honors_passed_accent():
-    embed = build_vote_embed(
-        answer_a="a", answer_b="b", round_num=1, matchup_index=0,
-        total_matchups=1, deadline_str="<t:1:R>", color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_scoreboard_embed_honors_passed_accent():
-    embed = build_scoreboard_embed(
-        {"scores": {"1": 10}}, 1, 5, bye_player=None, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_recap_embed_honors_passed_accent():
-    payload = {"scores": {}, "clapbacks": {}, "round_history": [], "players": []}
-    embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_reveal_tie_branch_honors_passed_accent():
-    """A tie has no winner → neutral, so it follows the accent, not a palette."""
-    result = {
-        "winner": None, "scores": {10: 50, 20: 50},
-        "clapback": False, "vote_counts": {10: 1, 20: 1},
-    }
-    embed = build_reveal_embed(
-        result=result, answers={"10": "a", "20": "b"},
-        player_a=10, player_b=20, anonymous=False,
-        name_resolver=_name_resolver, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
 def test_reveal_clapback_winner_stays_green_ignoring_accent():
     """A clapback is a win → green stays semantic even when an accent is passed."""
     result = {

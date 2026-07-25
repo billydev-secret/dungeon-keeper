@@ -9,7 +9,6 @@ module proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
-import discord
 import pytest
 
 from bot_modules.games.constants import (
@@ -169,29 +168,6 @@ def test_build_wyr_embed_title_when_closed():
     assert embed.color.value == PHASE_PLAYING
 
 
-def test_build_wyr_embed_honors_passed_accent():
-    """A passed accent color wins over the PHASE_PLAYING default."""
-    accent = discord.Color(0x123456)
-    embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1, color=accent)
-    assert embed.color == accent
-
-
-def test_build_wyr_embed_accent_used_in_closed_state_too():
-    """The accent applies regardless of the closed flag (no phase override)."""
-    accent = discord.Color(0xABCDEF)
-    embed = build_wyr_embed(
-        "Alice", "fly", "swim", [], [], False, 1, closed=True, color=accent
-    )
-    assert embed.color == accent
-
-
-def test_build_wyr_embed_falls_back_when_accent_none():
-    """color=None (no guild / resolution failed) → PHASE_PLAYING default."""
-    embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 1, color=None)
-    assert embed.color is not None
-    assert embed.color.value == PHASE_PLAYING
-
-
 def test_build_wyr_embed_shows_round_and_options():
     embed = build_wyr_embed("Alice", "fly", "swim", [], [], False, 3)
     by_name = _field_by_name(embed)
@@ -275,13 +251,6 @@ def test_build_closed_embed_defaults_to_phase_playing():
     embed = build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1)
     assert embed.color is not None
     assert embed.color.value == PHASE_PLAYING
-
-
-def test_build_closed_embed_honors_passed_accent():
-    """The CLOSED variant threads the guild accent through unchanged."""
-    accent = discord.Color(0x0FF1CE)
-    embed = build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1, color=accent)
-    assert embed.color == accent
 
 
 def test_build_closed_embed_preserves_vote_counts():

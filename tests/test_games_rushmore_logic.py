@@ -816,93 +816,15 @@ def test_join_embed_blitz_explains_simultaneous_flow():
 # ── accent color migration (ruling 2026-07-21) ───────────────────────
 #
 # Games follow the guild accent; only the true *win* embed stays semantic
-# green. Every builder takes an optional ``color`` and, absent a guild,
-# falls back to its old per-phase constant (kept only as the no-guild
-# default). These tests pin both the passed-accent path and the fallback.
+# green. The per-builder accent/fallback contracts live in the shared
+# parametrized harness; only the winner embed's semantic-green rule is
+# pinned here.
 
 import discord  # noqa: E402
 
-from bot_modules.games.constants import (  # noqa: E402
-    PHASE_JOINING,
-    PHASE_PLAYING,
-    PHASE_RECAP,
-    PHASE_RESULTS,
-)
 from bot_modules.services.embeds import COLOR_GREEN  # noqa: E402
 
 _ACCENT = discord.Color(0x123456)
-
-
-def _sample_boards():
-    return {"1": ["Pizza", "Sushi", "Tacos", "Burgers"]}
-
-
-def test_join_embed_honors_passed_accent():
-    embed = build_join_embed("Host", [], topic="Snacks", color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_join_embed_falls_back_to_phase_joining():
-    embed = build_join_embed("Host", [], topic="Snacks")
-    assert embed.color == discord.Color(PHASE_JOINING)
-
-
-def test_draft_embed_honors_passed_accent():
-    embed = build_draft_embed(
-        "Host", "Snacks", [(1, "Alice")], {"1": [None] * 4},
-        active_player_id=1, active_player_name="Alice",
-        round_num=1, timer_secs=30, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_draft_embed_falls_back_to_phase_playing():
-    embed = build_draft_embed(
-        "Host", "Snacks", [(1, "Alice")], {"1": [None] * 4},
-        active_player_id=1, active_player_name="Alice",
-        round_num=1, timer_secs=30,
-    )
-    assert embed.color == discord.Color(PHASE_PLAYING)
-
-
-def test_final_boards_embed_honors_passed_accent():
-    embed = build_final_boards_embed(
-        "Host", "Snacks", [(1, "Alice")], _sample_boards(), color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_final_boards_embed_falls_back_to_phase_results():
-    embed = build_final_boards_embed(
-        "Host", "Snacks", [(1, "Alice")], _sample_boards(),
-    )
-    assert embed.color == discord.Color(PHASE_RESULTS)
-
-
-def test_vote_embed_honors_passed_accent():
-    embed = build_vote_embed("Host", "Snacks", timer_secs=30, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_vote_embed_falls_back_to_phase_playing():
-    embed = build_vote_embed("Host", "Snacks", timer_secs=30)
-    assert embed.color == discord.Color(PHASE_PLAYING)
-
-
-def test_recap_embed_honors_passed_accent():
-    embed = build_recap_embed(
-        "Host", "Snacks", 3, 60.0, ["Alice"], 2,
-        [["A", "B", "C", "D"]], stats={"skipped_count": 0}, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_recap_embed_falls_back_to_phase_recap():
-    embed = build_recap_embed(
-        "Host", "Snacks", 3, 60.0, ["Alice"], 2,
-        [["A", "B", "C", "D"]], stats={"skipped_count": 0},
-    )
-    assert embed.color == discord.Color(PHASE_RECAP)
 
 
 def test_winner_embed_is_semantic_green_by_default():

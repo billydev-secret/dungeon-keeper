@@ -52,15 +52,7 @@ def test_bounty_card_uses_the_canonical_semantic_pair():
     assert _bounty("expired").color == discord.Color(COLOR_RED)
 
 
-def test_bounty_card_open_state_follows_the_accent():
-    assert _bounty("open").color == _ACCENT
-
-
 def test_pin_review_card_uses_the_canonical_semantic_pair():
     assert _pin("live").color == discord.Color(COLOR_GREEN)
     assert _pin("denied").color == discord.Color(COLOR_RED)
     assert _pin("superseded").color == discord.Color(COLOR_RED)
-
-
-def test_pin_review_card_pending_follows_the_accent():
-    assert _pin("pending").color == _ACCENT

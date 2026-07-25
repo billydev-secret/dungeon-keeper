@@ -792,33 +792,6 @@ def test_build_embed_winner_no_loser_is_green_regardless_of_accent():
     assert build_embed(s).color == discord.Color(embed_colors.COLOR_GREEN)
 
 
-def test_build_embed_open_round_uses_accent_when_supplied():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    assert build_embed(s, None, _ACCENT).color == _ACCENT
-
-
-def test_build_embed_open_round_falls_back_to_old_red_without_accent():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    assert build_embed(s).color == discord.Color(0xDC3545)
-
-
-def test_build_embed_reroll_uses_accent_and_falls_back_to_old_orange():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.reroll_user_ids = {1, 2}
-    assert build_embed(s, None, _ACCENT).color == _ACCENT
-    assert build_embed(s).color == discord.Color(0xFF9800)
-
-
-def test_build_embed_round_over_with_loser_uses_accent_and_falls_back_to_greyple():
-    s = RiskyRollState(channel_id=100, guild_id=1, opener_id=10)
-    s.rolls = {1: 90, 2: 5}
-    s.highest_user = 1
-    s.lowest_user = 2
-    s.is_open = False
-    assert build_embed(s, None, _ACCENT).color == _ACCENT
-    assert build_embed(s).color == discord.Color(0x546E7A)
-
-
 # ── formatters.resolve_embed_accent guards ──────────────────────────
 
 
