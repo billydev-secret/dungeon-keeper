@@ -248,6 +248,28 @@ FEATURES: tuple[Feature, ...] = (
         ),
     ),
     Feature(
+        slug="intake",
+        label="Intake cards",
+        panel="Config → Intake Cards",
+        blurb="Posts a live welcome-checklist card in greeter chat for every newcomer.",
+        enable_key="intake_enabled",
+        settings=(
+            _flag("intake_enabled", "Intake cards on", required=True),
+            _ch("intake_channel_id", "Card channel", required=True,
+                help="Where cards post; the greeting watch's fallback chat "
+                     "channel (greeter_chat_channel_id) is used when unset."),
+            _text("intake_completion_code", "Completion code",
+                  help="Posting a welcome message containing this phrase and "
+                       "@mentioning the newcomer completes their card."),
+            _num("intake_stale_hours", "Hours before a stale-card nudge",
+                 minimum=1, maximum=720),
+            _ch("intake_reference_channel_id", "Procedure reference channel",
+                help="The bot keeps this channel in sync with the dashboard's "
+                     "procedure block editor."),
+        ),
+        extra_panel_only=("checklist step editor", "procedure reference blocks"),
+    ),
+    Feature(
         slug="rules_watch",
         label="Rules watch",
         panel="Config → Rules watch",

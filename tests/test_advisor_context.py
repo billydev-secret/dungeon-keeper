@@ -441,6 +441,58 @@ def test_feature_keys_cover_general_and_loaders():
     assert len(ac.FEATURE_KEYS) == len(set(ac.FEATURE_KEYS))
 
 
+def test_feature_keys_cover_registry_kv_features():
+    """Regression: greeting watch / intake keys live in the shared KV, and
+    burying them behind 'general' made the model conclude it couldn't see
+    them — every registry feature must be fetchable by its own slug."""
+    from bot_modules.services.settings_registry import FEATURES
+
+    for f in FEATURES:
+        assert f.slug in ac.FEATURE_KEYS, f.slug
+
+
+def test_fetch_settings_registry_feature_reads_kv(monkeypatch):
+    conn = _conn_with_config([
+        ("greeting_watch_enabled", "1"),
+        ("greeter_role_id", "55"),
+        ("greeter_chat_channel_id", "0"),  # unset-by-convention → skipped
+    ])
+    _patch_settings_db(monkeypatch, conn)
+    guild = FakeGuild(
+        1, [], roles=[FakeRole(name="Greeter", is_default=False, rid=55)]
+    )
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    out = ac.fetch_feature_settings(guild, admin, "db", "greeting_watch")
+    assert "[Greeting watch]" in out
+    assert "greeting_watch_enabled = on" in out
+    assert "greeter_role_id = @Greeter" in out
+    assert "greeter_chat_channel_id" not in out
+
+
+def test_fetch_settings_unconfigured_registry_feature_points_to_panel(monkeypatch):
+    conn = _conn_with_config([])
+    _patch_settings_db(monkeypatch, conn)
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    out = ac.fetch_feature_settings(FakeGuild(1, []), admin, "db", "intake")
+    assert "No saved settings" in out
+
+
+def test_fetch_settings_merges_loader_and_registry_sections(monkeypatch):
+    """A slug present in both worlds (voice_master) shows both sections."""
+    conn = _conn_with_config([("voice_master_hub_channel_id", "10")])
+    _patch_settings_db(monkeypatch, conn)
+    monkeypatch.setattr(ac, "_FEATURES_BY_SLUG", {
+        "voice_master": ("Voice Master", lambda conn, gid, db: {"max_rooms": 3}),
+    })
+    guild = FakeGuild(1, [FakeChannel(10, "hub")])
+    admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
+    out = ac.fetch_feature_settings(guild, admin, "db", "voice_master")
+    assert "[Voice Master]" in out and "max_rooms = 3" in out
+    assert "voice_master_hub_channel_id = #hub" in out
+    # Panel-only knobs are named so the model answers honestly about them.
+    assert "dashboard-only" in out
+
+
 def test_fetch_settings_requires_admin(monkeypatch):
     member = FakeMember(1, perms=FakeGuildPerms())
     out = ac.fetch_feature_settings(FakeGuild(1, []), member, "db", "general")

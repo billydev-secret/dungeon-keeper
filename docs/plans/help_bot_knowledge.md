@@ -144,9 +144,30 @@ admin *and* the guild has grants, so an empty enum can never let an arbitrary
 name through. `upsert_grant_role` takes a whole row, so applying is a
 read-modify-write — tested to confirm untouched fields survive.
 
+### Stage 6 — per-feature fetch for KV-backed features (2026-07-25)
+
+`get_server_settings` originally enumerated only the features with their own
+tables plus a catch-all `general`. Registry features whose keys live in the
+shared config KV (greeting watch, welcome, …) were reachable *only* through
+`general`, whose tool description gave no hint they were there — and the
+system prompt tells the model that a feature it can't fetch is one it cannot
+see. Net effect, observed live 2026-07-25: an admin asking about greeters was
+told the assistant couldn't see those settings.
+
+Two fixes, one per drift:
+
+- Every registry feature is now fetchable by its own slug
+  (`advisor_context._registry_feature_section`); a slug present in both worlds
+  (`voice_master`) returns both sections. New registry entries become
+  fetchable automatically, so this class of drift is closed, not patched.
+- Intake Cards had shipped with no registry entry at all, so gap detection and
+  `propose_config_change` didn't know it existed. It now has one (`intake`,
+  KV keys `intake_*`); its step editor and procedure reference blocks stay
+  panel-only via `extra_panel_only`.
+
 ## Follow-ups
 
-- The registry covers 16 features / 57 settings out of ~240 live config keys,
+- The registry covers 17 features / 62 settings out of ~240 live config keys,
   a good number of which are dead rows like the above rather than real gaps.
   Extending it is additive and safe (the import-time check enforces the rules).
 - Other feature-table settings (Economy, Voice Master dials, Starboard) are
