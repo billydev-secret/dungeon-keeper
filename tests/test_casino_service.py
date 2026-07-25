@@ -832,6 +832,87 @@ def test_record_play_tracks_streaks_stats_and_weekly(db):
         assert svc.weekly_table_highlights(conn, GUILD, "1999-W01") == (None, None)
 
 
+def test_daily_standings_names_biggest_winner_and_loser(db):
+    with open_db(db) as conn:
+        svc.record_play(conn, GUILD, A, "coinflip", 10, 19, now=NOW)  # net +9
+        svc.record_play(conn, GUILD, B, "slots", 20, 0, now=NOW)      # net −20
+        earner, loser = svc.daily_standings(conn, GUILD, now=NOW)
+        assert earner == svc.DailyStanding(A, 9)
+        assert loser == svc.DailyStanding(B, -20)
+
+
+def test_daily_standings_accumulate_a_members_plays_across_the_day(db):
+    with open_db(db) as conn:
+        svc.record_play(conn, GUILD, A, "slots", 10, 0, now=NOW)       # −10
+        svc.record_play(conn, GUILD, A, "coinflip", 10, 30, now=NOW)   # +20 ⇒ A net +10
+        svc.record_play(conn, GUILD, B, "slots", 50, 0, now=NOW)       # −50
+        earner, loser = svc.daily_standings(conn, GUILD, now=NOW)
+        assert earner == svc.DailyStanding(A, 10)
+        assert loser == svc.DailyStanding(B, -50)
+
+
+def test_daily_standings_no_loser_when_everyone_is_up(db):
+    with open_db(db) as conn:
+        svc.record_play(conn, GUILD, A, "coinflip", 10, 19, now=NOW)   # +9
+        svc.record_play(conn, GUILD, B, "roulette", 10, 30, now=NOW)   # +20
+        earner, loser = svc.daily_standings(conn, GUILD, now=NOW)
+        assert earner == svc.DailyStanding(B, 20)
+        assert loser is None
+
+
+def test_daily_standings_no_earner_when_everyone_is_down(db):
+    with open_db(db) as conn:
+        svc.record_play(conn, GUILD, A, "slots", 10, 0, now=NOW)       # −10
+        svc.record_play(conn, GUILD, B, "slots", 20, 0, now=NOW)       # −20
+        earner, loser = svc.daily_standings(conn, GUILD, now=NOW)
+        assert earner is None
+        assert loser == svc.DailyStanding(B, -20)
+
+
+def test_daily_standings_ignore_break_even_players(db):
+    with open_db(db) as conn:
+        svc.record_play(conn, GUILD, A, "blackjack", 10, 10, now=NOW)  # push, net 0
+        assert svc.daily_standings(conn, GUILD, now=NOW) == (None, None)
+
+
+def test_daily_standings_reset_at_the_day_boundary(db):
+    with open_db(db) as conn:
+        # Yesterday's blowout must not colour today's board.
+        svc.record_play(conn, GUILD, B, "slots", 10, 200, now=NOW - 86_400)
+        svc.record_play(conn, GUILD, A, "coinflip", 10, 19, now=NOW)
+        earner, loser = svc.daily_standings(conn, GUILD, now=NOW)
+        assert earner == svc.DailyStanding(A, 9)
+        assert loser is None
+        # A day nobody has played yet shows an empty board.
+        assert svc.daily_standings(conn, GUILD, now=NOW + 86_400) == (None, None)
+
+
+def test_daily_standings_bucket_by_guild_local_day_not_utc(db):
+    # A −10h guild: a win at 05:00 UTC belongs to the *previous* local day
+    # (19:00), so a same-UTC-day read at 20:00 UTC (10:00 local) must not
+    # see it — the same guild-local boundary the wager cap uses.
+    with open_db(db) as conn:
+        set_config_value(conn, "tz_offset_hours", "-10", GUILD)
+        early = 1_799_989_200.0  # 05:00 UTC Jan 15 → 19:00 Jan 14 local
+        late = 1_800_043_200.0   # 20:00 UTC Jan 15 → 10:00 Jan 15 local
+        svc.record_play(conn, GUILD, A, "slots", 10, 100, now=early)   # +90, prev local day
+        svc.record_play(conn, GUILD, B, "coinflip", 10, 19, now=late)  # +9, this local day
+        earner, loser = svc.daily_standings(conn, GUILD, now=late)
+        assert earner == svc.DailyStanding(B, 9)  # A's cross-midnight win is excluded
+        assert loser is None
+
+
+def test_daily_standings_ignore_refunded_bets(db):
+    # record_play is the only writer; refunds/voids never reach it, so a
+    # handed-back stake leaves the board untouched.
+    with open_db(db) as conn:
+        _fund(conn, A, 200)
+        _deal(conn, A, stake=80)  # stake debited, hand still live
+        assert svc.daily_standings(conn, GUILD, now=NOW) == (None, None)
+        assert svc.refund_live_blackjack_hands(conn, now=NOW)  # boot sweep
+        assert svc.daily_standings(conn, GUILD, now=NOW) == (None, None)
+
+
 def test_settled_games_land_in_stats_via_their_settle_paths(db):
     with open_db(db) as conn:
         _fund(conn, A, 1_000)

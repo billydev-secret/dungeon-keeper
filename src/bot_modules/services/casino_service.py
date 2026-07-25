@@ -510,7 +510,8 @@ def record_play(
         ),
     )
     ts = time.time() if now is None else now
-    week = iso_week_for(local_day_for(ts, get_tz_offset_hours(conn, guild_id)))
+    day = local_day_for(ts, get_tz_offset_hours(conn, guild_id))
+    week = iso_week_for(day)
     mult_x100 = payout * 100 // stake if won else 0
     conn.execute(
         "INSERT INTO casino_weekly "
@@ -526,6 +527,18 @@ def record_play(
             payout if won else 0, mult_x100,
         ),
     )
+    # Per-guild-local-day net, for the hub's "Today at the tables" standings.
+    # Unconditional (casino_daily only exists under a wager cap), so the
+    # standings hold even for uncapped guilds; net = returned - wagered.
+    conn.execute(
+        "INSERT INTO casino_daily_net "
+        "(guild_id, user_id, local_day, wagered, returned) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(guild_id, user_id, local_day) DO UPDATE SET "
+        "wagered = wagered + excluded.wagered, "
+        "returned = returned + excluded.returned",
+        (guild_id, user_id, day, stake, payout),
+    )
     return streak
 
 
@@ -536,6 +549,54 @@ def member_casino_stats(
         "SELECT * FROM casino_member_stats WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     ).fetchone()
+
+
+class DailyStanding(NamedTuple):
+    """One member's net swing today (net = returned − wagered)."""
+
+    user_id: int
+    net: int
+
+
+def daily_standings(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> tuple[DailyStanding | None, DailyStanding | None]:
+    """Today's biggest net winner and biggest net loser for the hub panel.
+
+    Ranks the guild-local day's settled plays by net = returned − wagered
+    (refunds/voids never enter record_play, so a handed-back bet never
+    sways them). The earner is surfaced only when actually up (net > 0) and
+    the loser only when actually down (net < 0): on a day where everyone is
+    even or ahead there is simply no loser line, and that same sign gate
+    means one member can never fill both slots.
+    """
+    from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
+
+    ts = time.time() if now is None else now
+    day = local_day_for(ts, get_tz_offset_hours(conn, guild_id))
+    top = conn.execute(
+        "SELECT user_id, returned - wagered AS net FROM casino_daily_net "
+        "WHERE guild_id = ? AND local_day = ? "
+        "ORDER BY net DESC, returned DESC, user_id LIMIT 1",
+        (guild_id, day),
+    ).fetchone()
+    bottom = conn.execute(
+        "SELECT user_id, returned - wagered AS net FROM casino_daily_net "
+        "WHERE guild_id = ? AND local_day = ? "
+        "ORDER BY net ASC, wagered DESC, user_id LIMIT 1",
+        (guild_id, day),
+    ).fetchone()
+    earner = (
+        DailyStanding(int(top["user_id"]), int(top["net"]))
+        if top is not None and int(top["net"]) > 0
+        else None
+    )
+    loser = (
+        DailyStanding(int(bottom["user_id"]), int(bottom["net"]))
+        if bottom is not None and int(bottom["net"]) < 0
+        else None
+    )
+    return earner, loser
 
 
 def weekly_table_highlights(
