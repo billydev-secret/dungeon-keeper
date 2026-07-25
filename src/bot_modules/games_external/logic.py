@@ -16,8 +16,15 @@ import discord
 # Parser kinds a watch can carry — each selects a parser + economy mapping in
 # parser.py. Ordered for display; the first is the default a bare migration row
 # takes. Labels are what /games track shows.
+#
+# 'gamebot' covers every Gamebot sub-game tracked so far (CAH + Connect 4) —
+# they share one Discord bot account and channel, so they can't be split into
+# separate watches under UNIQUE(guild_id, bot_user_id); the cog tells a
+# terminal message's game type apart per-message instead (parser.is_game_over
+# for CAH, else Connect 4). Renamed from 'gamebot_cah' (2026-07-25) since no
+# rows carried that value yet — a pure rename, no data migration needed.
 WATCH_KIND_LABELS: dict[str, str] = {
-    "gamebot_cah": "Gamebot (Cards Against Humanity)",
+    "gamebot": "Gamebot (Cards Against Humanity + Connect 4)",
     "catbot": "Cat Bot",
 }
 VALID_WATCH_KINDS: tuple[str, ...] = tuple(WATCH_KIND_LABELS)

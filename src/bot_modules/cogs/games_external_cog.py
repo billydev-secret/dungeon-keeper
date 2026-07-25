@@ -1,5 +1,6 @@
-"""Collect results from an external game bot (e.g. "Gamebot" Cards Against
-Humanity) so we can build our own leaderboards/streaks over games we don't run.
+"""Collect results from an external game bot (e.g. "Gamebot" — Cards Against
+Humanity, Connect 4) so we can build our own leaderboards/streaks over games
+we don't run.
 
 Design (per review): a format-agnostic collector. An on_message listener scoped
 to one configured channel + bot user banks every watched message RAW into
@@ -21,7 +22,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.economy.game_rewards import pay_cah_game_by_score, pay_cat_catch
+from bot_modules.economy.game_rewards import (
+    pay_cah_game_by_score,
+    pay_cat_catch,
+    pay_game_rewards,
+)
 from bot_modules.games.command_groups import games
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.games_external import logic, parser
@@ -83,12 +88,17 @@ class GamesExternalCog(commands.Cog):
         except Exception:
             log.exception("External game tracking: failed to store message %s", message.id)
             return
-        # Bank first, then pay: the CAH payout reads the just-banked window back
-        # out; the Cat Bot payout keys off this message's content.
-        if kind == "gamebot_cah" and parser.is_game_over(
-            [e.to_dict() for e in message.embeds]
-        ):
-            await self._pay_cah_game(message)
+        # Bank first, then pay: the CAH/Connect 4 payouts read the just-banked
+        # window back out; the Cat Bot payout keys off this message's content.
+        if kind == "gamebot":
+            embeds = [e.to_dict() for e in message.embeds]
+            if parser.is_game_over(embeds):
+                await self._pay_cah_game(message)
+            elif parser.is_terminal(embeds):
+                # Any other *Game over!* from this bot — Connect 4 is the only
+                # other sub-game tracked so far. Adding a third means this
+                # elif needs its own specific check instead of "not CAH".
+                await self._pay_connect4_game(message)
         elif kind == "catbot":
             await self._pay_cat_catch(message)
 
@@ -156,6 +166,53 @@ class GamesExternalCog(commands.Cog):
             )
         except Exception:
             log.exception("CAH payout failed for message %s", message.id)
+
+    async def _pay_connect4_game(self, message: discord.Message) -> None:
+        """Pay participation + a win bonus for a finished Gamebot Connect 4 game.
+
+        Connect 4 has no per-round score to scale by (like CAH does) — it's a
+        single win/lose outcome — so this reuses the flat ``pay_game_rewards``
+        faucet instead of a score-proportional one. Idempotent the same way as
+        CAH: ``claim_payout`` reserves the game before any credit.
+        """
+        guild = message.guild
+        if guild is None:
+            return
+        try:
+            first = await logic.claim_payout(
+                self.db, message.id, guild.id, "gamebot_connect4"
+            )
+            if not first:
+                return
+            rows = await logic.recent_channel_messages(
+                self.db, guild.id, message.channel.id, message.author.id,
+                message.created_at.isoformat(),
+            )
+            parsed = [
+                {"embeds": json.loads(r["embeds_json"] or "[]")} for r in rows
+            ]
+            idx = next(
+                (i for i, r in enumerate(rows) if int(r["message_id"]) == message.id),
+                len(parsed) - 1,
+            )
+            roster, winner = parser.extract_connect4_game(
+                parser.current_game_window(parsed, idx)
+            )
+            if not roster:
+                await logic.mark_parsed(self.db, message.id, "skip")
+                return
+            await pay_game_rewards(
+                self.bot, guild.id, sorted(roster),
+                [winner] if winner is not None else [], "connect4",
+                occurrence=str(message.id),
+            )
+            await logic.mark_parsed(self.db, message.id, "ok")
+            log.info(
+                "Connect 4 payout: guild %s game %s — %d players, winner %s",
+                guild.id, message.id, len(roster), winner,
+            )
+        except Exception:
+            log.exception("Connect 4 payout failed for message %s", message.id)
 
     async def _pay_cat_catch(self, message: discord.Message) -> None:
         """Pay a Cat Bot catch: rarity-tiered coins + the cat_catch trigger.
