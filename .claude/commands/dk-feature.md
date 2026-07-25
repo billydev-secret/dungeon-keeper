@@ -1,24 +1,44 @@
 ---
-description: Start a feature — branch off fresh local main and label the session
-argument-hint: <feature-name>
-allowed-tools: Bash(git:*)
+description: Start a feature — worktree, branch, tmux window, and a claude running in it
+argument-hint: [opus|sonnet|haiku|fable] <feature name>
+allowed-tools: Bash(python3:*), Bash(git:*), Bash(tmux:*)
 ---
-Start a new feature branch named `$ARGUMENTS` in THIS session's checkout.
+Spawn a new feature session from `$ARGUMENTS`: a git worktree off `origin/main`, a
+branch, a tmux window, and a `claude` running inside it — one command, one name for
+all four.
+
+**This does not move the session you typed it in.** The old flow put you on a new
+branch in your own checkout; this one launches a *worker beside you* and leaves your
+tree alone. That's the point: you can start several and attach to whichever you want.
+
+Argument shape — an optional leading model alias, then the feature name as prose:
+
+    /dk-feature opus documentation review     → model opus,  branch documentation-review
+    /dk-feature sonnet casino derby           → model sonnet, branch casino-derby
+    /dk-feature quest digest redesign         → default model, branch quest-digest-redesign
 
 Do exactly this, stopping with a clear message on any problem:
 
 1. If `$ARGUMENTS` is empty, ask the user for a feature name and stop.
-2. Normalize it: lowercase, spaces and underscores → hyphens. Call the result NAME.
-3. Check for unfinished work: `git status --porcelain -uno`. If there are **tracked**
-   changes, STOP and tell the user to commit or discard them first (untracked files
-   are fine — they carry over harmlessly).
-4. Get the latest main: `git fetch origin`.
-5. Branch off it: `git checkout -b NAME --no-track origin/main`. The `--no-track` is
-   important — without it the branch tracks origin/main and a stray `git push` would
-   target main. If a branch NAME already exists, tell the user and stop rather than
-   clobbering it.
-6. Report: "Started feature **NAME** off main," then tell the user: *"Run `/rename NAME`
-   to set the session title."* The terminal statusLine already shows NAME as the label,
-   but the title shown in Remote Control / the web UI can only be changed by the user's
-   own `/rename` — a command or hook can't set it mid-session (the built-in title is
-   settable only at session startup/resume, never on demand).
+2. Run it — the launcher does the parsing, normalization, and every guard:
+
+       python3 scripts/dk_session.py new $ARGUMENTS
+
+   It splits the model alias off the front, normalizes the rest into a name that is
+   legal as a branch *and* a directory *and* a tmux window, then refuses rather than
+   clobbers if that worktree or branch already exists. It branches with `--no-track`
+   so a stray `git push` from the new session can never target main.
+3. If it exits non-zero, show its stderr verbatim and stop — do not retry with a
+   different name unless the user asks.
+4. On success, report the branch, the model, and the attach line it printed
+   (`tmux select-window -t NAME`). Mention that the worker starts on a fresh
+   `origin/main` and ships with `/dk-ship` from inside its own window.
+
+Notes:
+
+- Worktrees live in `../dk-sessions/<name>`, siblings of this checkout — never inside
+  it, because this checkout is production and runs the live bot.
+- A worktree shares one object store and one hooks dir with prod, so the pre-commit
+  gate is already installed in every new session; there is nothing to set up.
+- `python3 scripts/dk_session.py list` shows every session, its branch, whether its
+  tree is dirty, and whether its window is still live.

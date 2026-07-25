@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""tmux-native feature sessions: worktree + branch + window + claude, in one step.
+
+Replaces the old hand-provisioned clone flow (`dk-sessions/work1`, `work2`, …
+each a full `git clone` whose origin was the prod checkout). A worktree shares
+one object store and one hooks dir with prod, so a session costs a checkout
+instead of a clone, and `/dk-ship` merges a branch that already lives in the
+same repo — no push-into-MAINREPO round trip.
+
+    dk_session.py new [MODEL] NAME...   worktree off origin/main + tmux window
+    dk_session.py list                  every session: branch, dirty, window
+    dk_session.py teardown NAME         remove worktree, drop branch, kill window
+
+`new` names the branch, the worktree directory, and the tmux window the same
+thing, so `tmux select-window -t <name>` is the only address you need.
+
+`teardown` is what `/dk-ship` calls, and it runs *inside the window it kills* —
+hence `--delay`, which lets the caller detach it (`setsid nohup … &`) and still
+get its final report on screen before the pane disappears.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+SESSIONS_DIRNAME = "dk-sessions"
+
+# Friendly aliases only. A full model id (claude-opus-5, …) passes through
+# untouched so the launcher never becomes the thing that gates model choice.
+MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
+
+
+# ── pure helpers (unit-tested in tests/test_dk_session.py) ───────────────
+
+def normalize_name(tokens: list[str]) -> str:
+    """`['Documentation', 'Review']` → `documentation-review`.
+
+    The feature name arrives as free prose (`/dk-feature opus documentation
+    review`), so collapse whitespace/underscores to hyphens and drop anything
+    that isn't safe in a branch name, a directory name, *and* a tmux window
+    name at once.
+    """
+    raw = "-".join(str(t) for t in tokens).lower()
+    raw = re.sub(r"[\s_]+", "-", raw)
+    raw = re.sub(r"[^a-z0-9.-]+", "-", raw)
+    raw = re.sub(r"-{2,}", "-", raw).strip("-.")
+    return raw
+
+
+def resolve_model(token: str | None) -> str | None:
+    """Map a leading token to a `--model` value, or None if it isn't one."""
+    if not token:
+        return None
+    low = token.lower()
+    if low in MODEL_ALIASES:
+        return low
+    if low.startswith("claude-"):
+        return low
+    return None
+
+
+def split_model(tokens: list[str]) -> tuple[str | None, list[str]]:
+    """Peel a leading model alias off the argument list.
+
+    `['opus', 'documentation', 'review']` → `('opus', ['documentation',
+    'review'])`. A feature genuinely named "opus something" is why this only
+    ever looks at position 0 and only when more tokens follow it.
+    """
+    if len(tokens) >= 2:
+        model = resolve_model(tokens[0])
+        if model:
+            return model, list(tokens[1:])
+    return None, list(tokens)
+
+
+def sessions_dir(main_repo: Path) -> Path:
+    """Sibling of the prod checkout — keeps worktrees out of the prod tree."""
+    return Path(main_repo).parent / SESSIONS_DIRNAME
+
+
+def worktree_path(main_repo: Path, name: str) -> Path:
+    return sessions_dir(main_repo) / name
+
+
+def claude_command(model: str | None) -> str:
+    """Shell line for the window: run claude, then keep the window alive.
+
+    `exec $SHELL` matters — without it, quitting claude closes the window and
+    the worktree is orphaned with no visible trace that it still exists.
+    """
+    cmd = "claude"
+    if model:
+        cmd += f" --model {shlex.quote(model)}"
+    return f"{cmd}; exec $SHELL"
+
+
+def new_window_args(name: str, path: Path, model: str | None) -> list[str]:
+    return [
+        "tmux", "new-window",
+        "-d",
+        "-n", name,
+        "-c", str(path),
+        claude_command(model),
+    ]
+
+
+def parse_worktrees(porcelain: str) -> list[dict[str, str]]:
+    """Parse `git worktree list --porcelain` into dicts of path/branch."""
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in porcelain.splitlines():
+        if not line.strip():
+            if current:
+                entries.append(current)
+                current = {}
+            continue
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            current = {"path": value, "branch": ""}
+        elif key == "branch":
+            current["branch"] = value.removeprefix("refs/heads/")
+        elif key == "detached":
+            current["branch"] = "(detached)"
+    if current:
+        entries.append(current)
+    return entries
+
+
+# ── process plumbing ─────────────────────────────────────────────────────
+
+def run(args: list[str], cwd: Path | None = None, check: bool = True):
+    """Run a command, surfacing failures as a one-line error, not a traceback.
+
+    Everything here shells out to git or tmux; when one of those fails the
+    useful information is its stderr, and a Python stack on top of it just
+    buries the message the user needs to act on.
+    """
+    res = subprocess.run(
+        args, cwd=str(cwd) if cwd else None,
+        capture_output=True, text=True,
+    )
+    if check and res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip().splitlines()
+        die(f"{' '.join(args[:3])} failed: {detail[0] if detail else res.returncode}")
+    return res
+
+
+def git_out(main_repo: Path, *args: str) -> str:
+    return run(["git", "-C", str(main_repo), *args]).stdout.strip()
+
+
+def find_main_repo() -> Path:
+    """The main worktree, even when called from inside a session worktree."""
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return Path(common).parent
+
+
+def die(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def tmux_windows() -> dict[str, str]:
+    """window name → window id, empty when tmux isn't running."""
+    res = run(["tmux", "list-windows", "-a", "-F", "#{window_name}\t#{window_id}"],
+              check=False)
+    if res.returncode != 0:
+        return {}
+    out = {}
+    for line in res.stdout.splitlines():
+        name, _, wid = line.partition("\t")
+        if name:
+            out[name] = wid
+    return out
+
+
+# ── commands ─────────────────────────────────────────────────────────────
+
+def cmd_new(args: argparse.Namespace) -> int:
+    main_repo = find_main_repo()
+    model, name_tokens = split_model(args.tokens)
+    if args.model:  # explicit --model wins over a positional alias
+        model = resolve_model(args.model) or args.model
+    name = normalize_name(name_tokens)
+    if not name:
+        die("no feature name given — try: dk_session.py new opus documentation review")
+
+    if not os.environ.get("TMUX") and not args.no_window:
+        die("not inside tmux — start one first, or pass --no-window")
+
+    path = worktree_path(main_repo, name)
+    if path.exists():
+        die(f"{path} already exists — pick another name or tear it down first")
+
+    branches = git_out(main_repo, "branch", "--list", name)
+    if branches.strip():
+        die(f"branch {name!r} already exists — pick another name")
+
+    # Non-fatal: offline or a dead SSH agent shouldn't block starting work.
+    # The branch then comes off the last-known origin/main, and /dk-ship
+    # re-fetches and rebases before it merges anything, so staleness is caught
+    # at ship time rather than becoming a reason you can't start at all.
+    fetched = run(["git", "-C", str(main_repo), "fetch", "origin"], check=False)
+    if fetched.returncode != 0:
+        first = (fetched.stderr or "").strip().splitlines()
+        print(f"warning: fetch failed ({first[0] if first else '?'})", file=sys.stderr)
+        print("warning: branching off the last-known origin/main", file=sys.stderr)
+
+    sessions_dir(main_repo).mkdir(parents=True, exist_ok=True)
+    # --no-track: without it the new branch tracks origin/main and a stray
+    # `git push` from the session would target main directly.
+    run([
+        "git", "-C", str(main_repo), "worktree", "add",
+        "-b", name, "--no-track", str(path), "origin/main",
+    ])
+    print(f"worktree: {path}  (branch {name} off origin/main)")
+
+    if args.no_window:
+        print("window: skipped (--no-window)")
+        return 0
+
+    run(new_window_args(name, path, model))
+    label = model or "default model"
+    print(f"window:   {name}  ({label})")
+    print(f"attach:   tmux select-window -t {name}")
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    main_repo = find_main_repo()
+    trees = parse_worktrees(git_out(main_repo, "worktree", "list", "--porcelain"))
+    windows = tmux_windows()
+
+    rows = []
+    for wt in trees:
+        path = Path(wt["path"])
+        is_main = path == main_repo
+        dirty = run(["git", "-C", str(path), "status", "--porcelain", "-uno"],
+                    check=False).stdout.strip()
+        rows.append((
+            "(prod)" if is_main else path.name,
+            wt["branch"] or "?",
+            "dirty" if dirty else "clean",
+            "live" if path.name in windows else "-",
+        ))
+
+    width = max([len("SESSION"), *(len(r[0]) for r in rows)])
+    bwidth = max([len("BRANCH"), *(len(r[1]) for r in rows)])
+    print(f"{'SESSION'.ljust(width)}  {'BRANCH'.ljust(bwidth)}  TREE   WINDOW")
+    for name, branch, dirty, live in rows:
+        print(f"{name.ljust(width)}  {branch.ljust(bwidth)}  {dirty.ljust(5)}  {live}")
+    return 0
+
+
+def cmd_teardown(args: argparse.Namespace) -> int:
+    main_repo = find_main_repo()
+    name = normalize_name([args.name])
+    path = worktree_path(main_repo, name)
+
+    if args.delay:
+        # Called detached from inside the doomed window: give the caller time
+        # to print its ship report before the pane vanishes underneath it.
+        time.sleep(args.delay)
+
+    if path.exists():
+        remove = ["git", "-C", str(main_repo), "worktree", "remove", str(path)]
+        if args.force:
+            remove.append("--force")
+        res = run(remove, check=False)
+        if res.returncode != 0:
+            print(f"worktree remove failed: {res.stderr.strip()}", file=sys.stderr)
+            return 1
+        print(f"removed worktree {path}")
+    run(["git", "-C", str(main_repo), "worktree", "prune"], check=False)
+
+    # Only after the worktree is gone: git refuses to delete a checked-out branch.
+    res = run(["git", "-C", str(main_repo), "branch", "-d", name], check=False)
+    if res.returncode == 0:
+        print(f"deleted branch {name}")
+    elif "not fully merged" in res.stderr:
+        print(f"kept branch {name} — not merged into main", file=sys.stderr)
+
+    window = args.window or name
+    run(["tmux", "kill-window", "-t", window], check=False)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="dk_session.py", description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_new = sub.add_parser("new", help="worktree + branch + tmux window running claude")
+    p_new.add_argument("tokens", nargs="+", help="[model] feature name words")
+    p_new.add_argument("--model", help="model override (opus/sonnet/haiku/fable or full id)")
+    p_new.add_argument("--no-window", action="store_true", help="worktree only, no tmux")
+    p_new.set_defaults(func=cmd_new)
+
+    p_list = sub.add_parser("list", help="every session worktree and its window")
+    p_list.set_defaults(func=cmd_list)
+
+    p_down = sub.add_parser("teardown", help="remove worktree, drop branch, kill window")
+    p_down.add_argument("name")
+    p_down.add_argument("--window", help="tmux target to kill (default: the name)")
+    p_down.add_argument("--delay", type=float, default=0.0, help="seconds to wait first")
+    p_down.add_argument("--force", action="store_true", help="discard uncommitted work")
+    p_down.set_defaults(func=cmd_teardown)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
