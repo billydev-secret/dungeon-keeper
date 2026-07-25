@@ -139,7 +139,7 @@ def _reconcile_125(conn):
         Path(__file__).resolve().parents[1]
         / "src" / "migrations" / "125_econ_monthly_community.sql"
     )
-    sql = path.read_text()
+    sql = path.read_text(encoding="utf-8")
     marker = "ALTER TABLE econ_day_marks ADD COLUMN last_community_month TEXT;"
     conn.executescript(sql.split(marker, 1)[1])
 

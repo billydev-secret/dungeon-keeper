@@ -147,8 +147,10 @@ which asks `scripts/remote_test.py` first and falls back locally whenever it
 returns `None`:
 
 1. Probe with `ssh -o ConnectTimeout=3 -o BatchMode=yes`
-2. Ship `src/ tests/ scripts/ pyproject.toml` via a **tar pipe** — no rsync,
-   which native Windows lacks. A few MB, ~1-2s on a LAN.
+2. Ship `src/ tests/ scripts/ docs/ assets/fonts/ pyproject.toml` via a
+   **tar pipe** — no rsync, which native Windows lacks. A few MB, ~1-2s on a
+   LAN. docs/ and the fonts are test inputs (QA-card chunking, the quote
+   renderer); the rest of assets/ is deliberately not shipped.
 3. Run `python -m pytest -n <jobs> <targets>` over SSH, streaming output
 4. Return the remote exit code
 

@@ -313,6 +313,16 @@ def test_readme_is_synced_so_its_doc_test_cant_go_stale():
     assert "README.md" in rt.SYNC_PATHS
 
 
+def test_test_input_trees_are_synced():
+    # The quote renderer hard-fails without assets/fonts, and the QA-card
+    # chunker reads docs/testing checklists — a workspace missing either
+    # fails 8 tests that pass everywhere else. The full assets/ tree
+    # (logos, an 8MB gif) stays out: fonts only.
+    assert "docs" in rt.SYNC_PATHS
+    assert "assets/fonts" in rt.SYNC_PATHS
+    assert "assets" not in rt.SYNC_PATHS
+
+
 # ── .env fallback ──────────────────────────────────────────────────────────────
 
 

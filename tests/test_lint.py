@@ -39,8 +39,13 @@ def test_ruff() -> None:
 
 
 def test_pyright() -> None:
+    # --pythonpath pins import resolution to the interpreter running this
+    # suite, overriding pyproject's venvPath="." — which only resolves when
+    # the cwd holds the venv. The remote runner's per-checkout workspaces
+    # don't (the venv lives in the base checkout), and without this pyright
+    # reported 807 phantom missing-imports there.
     result = subprocess.run(
-        [sys.executable, "-m", "pyright"],
+        [sys.executable, "-m", "pyright", "--pythonpath", sys.executable],
         capture_output=True,
         text=True,
         cwd=_ROOT,

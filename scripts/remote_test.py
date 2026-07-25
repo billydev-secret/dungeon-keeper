@@ -70,7 +70,16 @@ LOCK_FILES = ("requirements.lock", "requirements-dev.lock")
 # asserts it stays in sync with the actual party-game list, and a remote whose
 # only copy dates back to its initial `git clone` will drift the moment either
 # side changes — silently, since nothing else re-syncs it.
-SYNC_PATHS = ("src", "tests", "scripts", "pyproject.toml", "README.md", *LOCK_FILES)
+# docs/ and assets/fonts/ are test inputs, not documentation niceties: the
+# quote renderer refuses to run without its bundled fonts, and the QA-card
+# chunker reads the real checklists — a workspace without them fails 8 tests
+# that pass everywhere else (found the first time a full suite ran in the
+# workspace layout; the legacy layout hid it because git clone had the full
+# tree). assets/ beyond fonts/ (logos, an 8MB gif) stays unsynced.
+SYNC_PATHS = (
+    "src", "tests", "scripts", "docs", "assets/fonts",
+    "pyproject.toml", "README.md", *LOCK_FILES,
+)
 
 # Records which lock hash the remote venv was last installed from. Kept beside
 # the venv rather than in a workspace: workspaces come and go per checkout, and
