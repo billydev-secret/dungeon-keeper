@@ -7,6 +7,8 @@ tests exercise that without touching the network.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from pathlib import Path
 
@@ -17,6 +19,21 @@ from scripts import remote_test as rt
 # machine), and these pre-fixture bindings are how their own unit tests still
 # reach the real implementations.
 from scripts.remote_test import gc_workspaces, preflight, sweep_stale_pytest_tmp
+
+
+class _Exit:
+    """Stub subprocess result: just a returncode."""
+
+    def __init__(self, code):
+        self.returncode = code
+
+
+class _Result(_Exit):
+    """Stub subprocess result with captured stdout (for the git helpers)."""
+
+    def __init__(self, code, stdout=""):
+        super().__init__(code)
+        self.stdout = stdout
 
 
 @pytest.fixture(autouse=True)
@@ -234,7 +251,7 @@ def test_bootstrap_skips_install_when_stamp_current(tmp_path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(rt, "install_deps", lambda py, root, lock: calls.append("install") or 0)
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
 
     assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 0
     assert calls == []
@@ -244,7 +261,7 @@ def test_bootstrap_installs_then_stamps_when_stale(tmp_path, monkeypatch):
     _write_locks(tmp_path)
 
     monkeypatch.setattr(rt, "install_deps", lambda py, root, lock: 0)
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
 
     assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 0
     assert rt.read_stamp(tmp_path) == rt.lock_hash(tmp_path)
@@ -269,7 +286,7 @@ def test_bootstrap_sentinel_cannot_collide_with_pytest_exit_codes():
 def test_bootstrap_propagates_test_failure(tmp_path, monkeypatch):
     _write_locks(tmp_path)
     rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(1))
 
     assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 1
 
@@ -278,10 +295,7 @@ def test_run_falls_back_locally_on_bootstrap_sentinel(monkeypatch, capsys):
     """A broken remote venv is an environment problem, not a red suite."""
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
-    monkeypatch.setattr(
-        rt.subprocess, "run",
-        lambda *a, **k: type("R", (), {"returncode": rt.BOOTSTRAP_FAILED})(),
-    )
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(rt.BOOTSTRAP_FAILED))
 
     assert rt.run(["tests/test_a.py"], env=FULL_ENV) is None
     assert "remote setup failed" in capsys.readouterr().err
@@ -358,17 +372,14 @@ def test_env_path_falls_back_to_the_main_checkout_from_a_worktree(tmp_path, monk
 
     def fake_git(cmd, **kwargs):
         assert cmd[:2] == ["git", "rev-parse"]
-        return type("R", (), {"returncode": 0, "stdout": str(main / ".git")})()
+        return _Result(0, str(main / ".git"))
 
     monkeypatch.setattr(rt.subprocess, "run", fake_git)
     assert rt.env_path(worktree) == main / ".env"
 
 
 def test_env_path_is_none_when_git_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        rt.subprocess, "run",
-        lambda *a, **k: type("R", (), {"returncode": 128, "stdout": ""})(),
-    )
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Result(128))
     assert rt.env_path(tmp_path) is None
 
 
@@ -428,7 +439,7 @@ def test_install_deps_uses_the_configured_lock(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         seen["cmd"] = cmd
-        return type("R", (), {"returncode": 0})()
+        return _Exit(0)
 
     monkeypatch.setattr(rt.subprocess, "run", fake_run)
     rt.install_deps("py", Path("/tmp"), "requirements-win.lock")
@@ -441,7 +452,7 @@ def test_bootstrap_passes_lock_through_to_install(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "install_deps",
                         lambda py, root, lock: seen.setdefault("lock", lock) or 0)
     monkeypatch.setattr(rt.subprocess, "run",
-                        lambda *a, **k: type("R", (), {"returncode": 0})())
+                        lambda *a, **k: _Exit(0))
 
     rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python"), lock="requirements-win.lock")
     assert seen["lock"] == "requirements-win.lock"
@@ -489,10 +500,7 @@ def test_run_returns_remote_exit_code_on_success(monkeypatch):
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
 
-    class _Completed:
-        returncode = 0
-
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Completed())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
     assert rt.run(["tests/test_a.py"], env=FULL_ENV) == 0
 
 
@@ -501,10 +509,7 @@ def test_run_propagates_remote_failure(monkeypatch):
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
 
-    class _Failed:
-        returncode = 1
-
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Failed())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(1))
     assert rt.run(["tests/test_a.py"], env=FULL_ENV) == 1
 
 
@@ -530,8 +535,7 @@ def _fake_git(mapping):
     def run(cmd, **kwargs):
         key = tuple(cmd[1:])
         out = mapping.get(key)
-        rc = 0 if out is not None else 128
-        return type("R", (), {"returncode": rc, "stdout": out or ""})()
+        return _Result(0 if out is not None else 128, out or "")
     return run
 
 
@@ -716,11 +720,6 @@ def test_stamp_dir_sits_beside_the_venv_not_in_a_workspace(exe, expected):
 # commit — the exact outcome the module docstring promises can't happen.
 
 
-class _Exit:
-    def __init__(self, code):
-        self.returncode = code
-
-
 @pytest.mark.parametrize("code", [255, 137, 6, -9])
 def test_run_falls_back_on_transport_failure(monkeypatch, capsys, code):
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
@@ -832,7 +831,6 @@ def test_run_falls_back_when_sync_fails_twice(monkeypatch, capsys):
 def test_sweep_removes_only_stale_session_dirs(tmp_path):
     base = tmp_path / "pytest-of-ben"
     base.mkdir()
-    import os
     stale = base / "pytest-1"
     fresh = base / "pytest-2"
     stale.mkdir()
@@ -883,7 +881,6 @@ def test_bootstrap_bails_before_pytest_when_preflight_fails(tmp_path, monkeypatc
 
 
 def test_gc_removes_only_old_sibling_workspaces(tmp_path):
-    import os
     mine = tmp_path / "ws-mine"
     dead = tmp_path / "ws-dead"
     fresh = tmp_path / "ws-fresh"

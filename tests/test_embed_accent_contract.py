@@ -13,6 +13,8 @@ tests ("winner stays green regardless of accent") and resolver-wiring tests
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import discord
 import pytest
 
@@ -32,6 +34,7 @@ from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
 from bot_modules.services import economy_service
 from bot_modules.services import embeds as services_embeds
+from bot_modules.services import welcome_service
 from bot_modules.services.risky_roll import formatters as risky_formatters
 from bot_modules.services.risky_roll import models as risky_models
 
@@ -60,30 +63,40 @@ def _risky_state(**kw):
     return risky_models.RiskyRollState(channel_id=100, guild_id=1, opener_id=10, **kw)
 
 
+def _welcome_member() -> MagicMock:
+    member = MagicMock(spec=discord.Member)
+    member.mention = "<@1>"
+    member.display_name = "Alex"
+    member.id = 1
+    guild = MagicMock()
+    guild.name = "Test Guild"
+    guild.member_count = 42
+    guild.icon = None
+    member.guild = guild
+    member.display_avatar.url = "https://cdn.example/a.png"
+    return member
+
+
 CASES = [
-    # ── risky roll (accent param is named `accent`, adapted in the lambdas) ──
+    # ── risky roll (accent param is named `accent`; accent=None IS the
+    #    fallback path, so one call covers both harness invocations) ─────
     case(
         "risky.open_round",
-        lambda **kw: risky_formatters.build_embed(
-            _risky_state(), None, accent=kw["color"]
-        ) if kw else risky_formatters.build_embed(_risky_state()),
+        lambda **kw: risky_formatters.build_embed(_risky_state(), accent=kw.get("color")),
         discord.Color(0xDC3545),
     ),
     case(
         "risky.reroll",
         lambda **kw: risky_formatters.build_embed(
-            _risky_state(reroll_user_ids={1, 2}), None, accent=kw["color"]
-        ) if kw else risky_formatters.build_embed(_risky_state(reroll_user_ids={1, 2})),
+            _risky_state(reroll_user_ids={1, 2}), accent=kw.get("color")
+        ),
         discord.Color(0xFF9800),
     ),
     case(
         "risky.round_over",
         lambda **kw: risky_formatters.build_embed(
             _risky_state(rolls={1: 90, 2: 5}, highest_user=1, lowest_user=2, is_open=False),
-            None,
-            accent=kw["color"],
-        ) if kw else risky_formatters.build_embed(
-            _risky_state(rolls={1: 90, 2: 5}, highest_user=1, lowest_user=2, is_open=False)
+            accent=kw.get("color"),
         ),
         discord.Color(0x546E7A),
     ),
@@ -419,6 +432,21 @@ CASES = [
             [{"text": "x", "same_pct": 0.5, "voters": [1], "category": "Fantasy"}], **kw
         ),
         discord.Color(games_constants.BRAND_COLOR),
+    ),
+    # ── welcome / leave (member arg is constructed mock data) ───────────
+    case(
+        "welcome.join",
+        lambda **kw: welcome_service.build_welcome_embed(
+            _welcome_member(), "hi {member}", **kw
+        ),
+        discord.Color.blurple(),
+    ),
+    case(
+        "welcome.leave",
+        lambda **kw: welcome_service.build_leave_embed(
+            _welcome_member(), "bye {member_name}", **kw
+        ),
+        None,
     ),
     # ── economy approval cards (accent is a required positional) ────────
     case(

@@ -32,7 +32,7 @@ def test_copy_records_every_migration_as_applied(tmp_path):
     assert applied == {p.name for p in _migration_files()}
 
 
-def test_template_is_built_once_per_process(tmp_path):
+def test_template_is_built_once_per_process():
     assert template_db() == template_db()
 
 

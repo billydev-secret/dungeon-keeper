@@ -16,6 +16,12 @@ template per worker.
 Tests that exercise migration behaviour itself (idempotency, upgrades from
 partial schemas) must keep calling the real ``apply_migrations_sync`` — a
 template copy would skip exactly the code they test.
+
+Two invariants the reaping depends on: every ``migrated_db()`` caller must
+run under ``tests/conftest.py``'s autouse ``_reap_template_dbs`` fixture
+(true for anything under tests/; a consumer outside pytest would silently
+accumulate copies), and only function-scoped fixtures may call it — a
+wider-scoped fixture's DB would be deleted after the first test that uses it.
 """
 
 from __future__ import annotations

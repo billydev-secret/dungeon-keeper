@@ -94,9 +94,18 @@ PYTEST_EXIT_CODES = range(6)
 # errors that read as a red run — these keep that failure mode from ever
 # blocking a commit again.
 STALE_TMP_AGE = 2 * 3600        # pytest tmp sessions older than this are dead
-WORKSPACE_GC_AGE = 30 * 86400   # ws-* untouched this long belong to dead checkouts
-MIN_FREE_BYTES = 2 * 1024**3    # a full suite writes ~1-2 GB of tmp today
-MIN_FREE_INODES = 100_000       # ~4 inodes per DB-backed test, ~7.8k tests
+WORKSPACE_GC_AGE = 30 * 86400   # workspaces untouched this long belong to dead checkouts
+# Safety margins, not budgets: since the template-copy fixtures (tests/
+# db_template.py) a run's tmp footprint stays small, so a host under these
+# floors is already in trouble for other reasons.
+MIN_FREE_BYTES = 2 * 1024**3
+MIN_FREE_INODES = 100_000       # ~4 inodes per DB-backed test worst case
+
+# Prefix for per-checkout workspace directories. Spelled once: workspace_slug
+# mints names with it, gc_workspaces matches on it, and bootstrap uses it to
+# recognize that its cwd IS a workspace (the config never ships over ssh, so
+# the directory name is the only layout signal the remote has).
+WORKSPACE_PREFIX = "ws-"
 
 # Characters that would change meaning inside the single remote command string.
 # Rather than guess at cmd.exe vs POSIX quoting, refuse to build a command we
@@ -144,7 +153,7 @@ def workspace_slug(root: Path = ROOT) -> str:
     resolved = root.resolve()
     digest = hashlib.sha256(str(resolved).encode()).hexdigest()[:10]
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in resolved.name)[:24]
-    return f"ws-{safe or 'checkout'}-{digest}"
+    return f"{WORKSPACE_PREFIX}{safe or 'checkout'}-{digest}"
 
 
 def _git(root: Path, *args: str) -> str | None:
@@ -480,13 +489,31 @@ def prune_to_manifest(root: Path) -> list[str]:
     return removed
 
 
+def _remove_older_than(candidates, age: float, now: float) -> list[str]:
+    """rmtree every candidate whose mtime is older than age; return their names.
+
+    Age-gating is the concurrency guard for both callers: anything a live run
+    (this checkout's or a sibling's) still owns has a fresh mtime and is never
+    touched. Unstattable/undeletable entries are skipped — housekeeping must
+    never fail the run it's protecting.
+    """
+    removed: list[str] = []
+    for path in candidates:
+        try:
+            if now - path.stat().st_mtime > age:
+                shutil.rmtree(path, ignore_errors=True)
+                removed.append(path.name)
+        except OSError:
+            continue
+    return removed
+
+
 def sweep_stale_pytest_tmp(base: Path | None = None, now: float | None = None) -> int:
     """Delete pytest tmp session dirs old enough that no run can still own them.
 
     tmp_path_retention_count only prunes *previous* sessions at startup, and
     a run that dies (or a box that sleeps mid-run) leaves its whole session
-    behind. Age-gated so a concurrent run from another checkout — whose dirs
-    are fresh — is never touched.
+    behind.
     """
     if base is None:
         try:
@@ -496,19 +523,11 @@ def sweep_stale_pytest_tmp(base: Path | None = None, now: float | None = None) -
     if now is None:
         now = time.time()
 
-    removed = 0
     try:
         children = list(base.iterdir())
     except OSError:
         return 0
-    for child in children:
-        try:
-            if now - child.stat().st_mtime > STALE_TMP_AGE:
-                shutil.rmtree(child, ignore_errors=True)
-                removed += 1
-        except OSError:
-            continue
-    return removed
+    return len(_remove_older_than(children, STALE_TMP_AGE, now))
 
 
 def tmp_headroom(path: str | Path | None = None) -> tuple[int, int | None]:
@@ -537,7 +556,7 @@ def preflight(path: str | Path | None = None) -> str | None:
 
 
 def gc_workspaces(base: Path, keep: Path, now: float | None = None) -> list[str]:
-    """Remove sibling ws-* workspaces untouched for WORKSPACE_GC_AGE.
+    """Remove sibling workspaces untouched for WORKSPACE_GC_AGE.
 
     Every session checkout gets its own workspace and nothing ever deleted
     them, so dead checkouts accumulated forever. Each sync refreshes the live
@@ -545,17 +564,11 @@ def gc_workspaces(base: Path, keep: Path, now: float | None = None) -> list[str]
     """
     if now is None:
         now = time.time()
-    removed: list[str] = []
-    for candidate in sorted(base.glob("ws-*")):
-        if candidate == keep or not candidate.is_dir():
-            continue
-        try:
-            if now - candidate.stat().st_mtime > WORKSPACE_GC_AGE:
-                shutil.rmtree(candidate, ignore_errors=True)
-                removed.append(candidate.name)
-        except OSError:
-            continue
-    return removed
+    candidates = [
+        c for c in sorted(base.glob(WORKSPACE_PREFIX + "*"))
+        if c != keep and c.is_dir()
+    ]
+    return _remove_older_than(candidates, WORKSPACE_GC_AGE, now)
 
 
 def needs_install(root: Path, expected: str) -> bool:
@@ -592,7 +605,7 @@ def bootstrap(
     swept = sweep_stale_pytest_tmp()
     if swept:
         print(f"remote-test: swept {swept} stale pytest tmp dir(s)", flush=True)
-    if root.name.startswith("ws-"):  # legacy layout has no sibling workspaces
+    if root.name.startswith(WORKSPACE_PREFIX):  # legacy layout has no sibling workspaces
         for name in gc_workspaces(root.parent, keep=root):
             print(f"remote-test: removed dead workspace {name}", flush=True)
 
@@ -717,8 +730,12 @@ def run(args: Sequence[str], env: Mapping[str, str] | None = None) -> int | None
             pytest_command(cfg, args), timeout=cfg.timeout or None
         ).returncode
     except subprocess.TimeoutExpired:
-        # ssh is killed locally; the orphaned remote run finishes harmlessly
-        # in its own workspace.
+        # ssh is killed locally, but the remote pytest is orphaned, not killed —
+        # and the workspace is per-checkout, not per-run, so a *next* dispatch
+        # from this same checkout can interleave with the orphan. Accepted:
+        # the cap is opt-in, and killing remote processes portably (Windows/
+        # WSL/Linux remotes) isn't worth the machinery. If a timed-out run is
+        # followed quickly by another, distrust the second run's result.
         print(
             f"remote-test: no result after {cfg.timeout}s — running locally.",
             file=sys.stderr,
