@@ -122,6 +122,69 @@ TRIGGER_KINDS: dict[str, str] = {
     "shop_purchase": "Make your first shop purchase",
 }
 
+# Warm one-liners for the leaderboard's community-goals block, shown in
+# place of the functional TRIGGER_KINDS label (goal titles there are
+# descriptive, so the dry label just repeated them). Display-only flavor:
+# everything mechanical (dashboard copy, kickoff beat sheets, income-source
+# docs) keeps using TRIGGER_KINDS / TRIGGER_KIND_INFO. A kind missing here
+# falls back to its TRIGGER_KINDS label.
+TRIGGER_FLAVOR: dict[str, str] = {
+    "photo_post": "show us the world through your lens",
+    "party_game": "play is better with company",
+    "game_host": "every party needs someone to start it",
+    "duel": "settle it with style",
+    "risky_roll": "fortune favors the bold",
+    "guess": "trust those hunches",
+    "voice_session": "your voice makes this place home",
+    "qotd_reply": "your take makes the question worth asking",
+    "starboard": "greatness gets noticed here",
+    "invite": "bring a friend to the fire",
+    "boost": "rocket fuel for all of us",
+    "bio_set": "tell us who you are",
+    "media_post": "brighten the feed",
+    "pen_pal": "strangers are friends in waiting",
+    "message_sent": "every word keeps the fire crackling",
+    "reply_sent": "no message left hanging",
+    "reaction_given": "a little love goes a long way",
+    "game_win": "glory looks good on you",
+    "duel_win": "champions are made here",
+    "duel_lose": "losing bravely still counts",
+    "confession": "shared secrets weigh less",
+    "ama_ask": "curiosity is a gift",
+    "whisper": "a little mystery keeps things fun",
+    "quote": "immortalize the good stuff",
+    "chat_revive": "no silence lasts long around here",
+    "bump": "fly the flag for us",
+    "voice_room_host": "open a door and see who wanders in",
+    "pen_pal_complete": "see a friendship through",
+    "whisper_guess": "nobody stays anonymous forever",
+    "guess_win": "you know us too well",
+    "guess_post": "keep the mystery coming",
+    "quoted": "say something worth framing",
+    "session_join": "showing up is half the magic",
+    "voice_message": "good to hear your voice",
+    "music_request": "add your song to our soundtrack",
+    "birthday_set": "so we never miss your big day",
+    "level_up": "onward and upward",
+    "ama_answer": "spill it — we're all ears",
+    "conversed": "make the rounds, spread the cheer",
+    "replied_to": "write things worth answering",
+    "reacted_to_member": "spread the love around",
+    "channel_hop": "explore every corner of the map",
+    "active_day": "keep showing up — it matters",
+    "voice_partner": "new voices become old friends",
+    "thread_deep": "down the rabbit hole together",
+    "welcome": "first hellos set the tone",
+    "conversation_starter": "light a spark, watch it catch",
+    "cat_catch": "the cats won't catch themselves",
+    "greeting_answered": "no hello goes unanswered",
+    "birthday_wish": "make someone's whole day",
+    "drop_claim": "quick hands, shiny prizes",
+    "role_pick": "fly your colors",
+    "confession_reply": "someone needed to hear that",
+    "shop_purchase": "treat yourself — you've earned it",
+}
+
 # Longer per-kind copy for the Income Sources page: what fires it and what
 # the event-quest occurrence key means for repeat payouts.
 TRIGGER_KIND_INFO: dict[str, str] = {

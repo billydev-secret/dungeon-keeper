@@ -159,9 +159,10 @@ class CommunityGoal:
     today_delta: int | None = None
     on_track: bool = True
     ends_ts: float | None = None
-    # What action the goal is tracking (quests.TRIGGER_KINDS), "" for manual
-    # goals — shown next to the title so the board explains itself.
-    kind_label: str = ""
+    # Warm per-kind one-liner (quests.TRIGGER_FLAVOR, falling back to the
+    # functional TRIGGER_KINDS label), "" for manual goals — shown next to
+    # the title, which stays descriptive on its own.
+    kind_flavor: str = ""
 
 
 @dataclass(frozen=True)
@@ -400,9 +401,12 @@ def collect_leaderboard_data(
                     today_delta=today_delta,
                     on_track=on_track,
                     ends_ts=(month_end if is_monthly else week_end) if auto else None,
-                    kind_label=(
-                        quest_rules.TRIGGER_KINDS.get(
-                            str(row["trigger_kind"]), ""
+                    kind_flavor=(
+                        quest_rules.TRIGGER_FLAVOR.get(
+                            str(row["trigger_kind"]),
+                            quest_rules.TRIGGER_KINDS.get(
+                                str(row["trigger_kind"]), ""
+                            ),
                         )
                         if auto
                         else ""
@@ -469,14 +473,18 @@ def _pulse_lines(data: LeaderboardData, emoji: str, plural: str) -> str:
 
 
 def _community_block(g: CommunityGoal) -> str:
-    """One goal's lines: what it tracks, a tier-region bar, then detail."""
+    """One goal's lines: title + flavor, a tier-region bar, then detail."""
     if g.settled:
         state = " — ✅ paid out"
     elif g.completed:
         state = " — 🎉 complete, payout coming"
     else:
         state = ""
-    title = f"**{g.title}** — {g.kind_label}" if g.kind_label else f"**{g.title}**"
+    title = (
+        f"**{g.title}** — *{g.kind_flavor}*"
+        if g.kind_flavor
+        else f"**{g.title}**"
+    )
     bar = community_progress_bar(g.current, g.target or 0)
     lines = [title, f"{bar}{state}"]
     target = int(g.target or 0)
