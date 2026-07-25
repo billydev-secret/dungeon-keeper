@@ -628,9 +628,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
     async def _restick_later(self, guild_id: int) -> None:
         """Restick once the coast is clear: quick when the burying traffic
-        is chatter, held (up to RESTICK_ROUND_HOLD_SECONDS) while a
-        roulette/derby round is open in the channel — a delete+repost
-        would move the panel around under members who are mid-bet."""
+        is chatter, held (up to RESTICK_ROUND_HOLD_SECONDS) while ANY
+        communal round is open in the channel — a delete+repost would
+        move the panel around under members who are mid-bet."""
         try:
             deadline = time.monotonic() + RESTICK_ROUND_HOLD_SECONDS
             while True:
@@ -642,11 +642,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 def _read() -> tuple[svc.CasinoSettings, bool]:
                     with self.ctx.open_db() as conn:
                         settings = svc.load_casino_settings(conn, guild_id)
-                        round_open = bool(settings.channel_id) and (
-                            svc.live_roulette_round(conn, settings.channel_id)
-                            is not None
-                            or svc.live_race_round(conn, settings.channel_id)
-                            is not None
+                        round_open = bool(settings.channel_id) and any(
+                            ui.live_round(conn, settings.channel_id) is not None
+                            for ui in _WINDOW_UIS
                         )
                         return settings, round_open
 

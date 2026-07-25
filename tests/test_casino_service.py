@@ -970,6 +970,63 @@ def test_member_leave_refunds_live_keno_tickets(db, monkeypatch):
         assert svc.keno_bets(conn, round_id) == []
 
 
+class _RacingConn:
+    """Wraps a connection; fires ``trigger`` once, just before the first
+    DELETE against ``table`` — a cross-connection interleave (a settle
+    landing between the leaver sweep's read and its delete) reproduced
+    deterministically on one connection."""
+
+    def __init__(self, conn, table, trigger):
+        self._conn = conn
+        self._table = table
+        self._trigger = trigger
+        self._fired = False
+
+    def _maybe_fire(self, sql):
+        if (
+            not self._fired
+            and sql.lstrip().upper().startswith("DELETE")
+            and self._table in sql
+        ):
+            self._fired = True
+            self._trigger(self._conn)
+
+    def execute(self, sql, *args):
+        self._maybe_fire(sql)
+        return self._conn.execute(sql, *args)
+
+    def executemany(self, sql, *args):
+        self._maybe_fire(sql)
+        return self._conn.executemany(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_leaver_sweep_cannot_refund_a_bet_the_settle_already_paid(db, monkeypatch):
+    """The buzzer-beater race on the leaver sweep: a settle claiming the
+    round between the sweep's read and its delete must win — a bet pays
+    OR refunds, never both. The sweep's DELETE carries the status='open'
+    claim, so a just-settled round leaves it nothing to remove."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        _fixed_picks(monkeypatch, [1, 2, 3, 4])
+        svc.place_keno_ticket(conn, round_id, A, 4, 10, now=NOW + 1)  # 4/4 → 60×
+
+        def _settle(raw):
+            assert (
+                svc.settle_keno_round(raw, round_id, list(range(1, 21)), now=NOW + 2)
+                is not None
+            )
+
+        racing = _RacingConn(conn, "casino_keno_bets", _settle)
+        out = svc.refund_member_live_stakes(racing, GUILD, A, now=NOW + 3)
+        assert out == {}  # the settle won the race — nothing left to refund
+        assert get_balance(conn, GUILD, A) == 100 - 10 + 600  # paid exactly once
+        assert _kinds(conn, A)[-1] == ("casino_payout", 600)  # no trailing refund
+
+
 # ── casino war (casino-classics Stage 1c) ──────────────────────────────
 
 

@@ -1086,18 +1086,20 @@ def refund_member_live_stakes(
     ):
         out["war"] = int(war_hand["stake"])
     for t in ALL_ROUND_TABLES:
-        bets = conn.execute(
-            f"SELECT b.id, b.amount FROM {t.bets} b "
-            f"JOIN {t.rounds} r ON r.id = b.round_id "
-            "WHERE b.guild_id = ? AND b.user_id = ? AND r.status = 'open'",
+        # The DELETE itself is the claim: its status='open' predicate is
+        # re-evaluated inside OUR write transaction, so a settle that
+        # landed after any earlier read simply leaves nothing to delete —
+        # a settled bet can never ALSO be refunded (the double-pay race a
+        # separate SELECT would open), and refunds pay only what was
+        # actually removed.
+        removed = conn.execute(
+            f"DELETE FROM {t.bets} WHERE guild_id = ? AND user_id = ? "
+            f"AND round_id IN (SELECT id FROM {t.rounds} WHERE status = 'open') "
+            "RETURNING amount",
             (guild_id, user_id),
         ).fetchall()
-        total = sum(int(b["amount"]) for b in bets)
+        total = sum(int(r["amount"]) for r in removed)
         if total:
-            conn.executemany(
-                f"DELETE FROM {t.bets} WHERE id = ?",
-                [(int(b["id"]),) for b in bets],
-            )
             refund(
                 conn, guild_id, user_id, total, t.game,
                 meta={"left_guild": True}, now=now,

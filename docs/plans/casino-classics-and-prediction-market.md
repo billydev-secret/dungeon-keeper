@@ -175,6 +175,25 @@ and a member-initiated **casino self-exclusion / cool-off** (tighten instantly,
 loosen with delay). No losses-disguised-as-wins, no manufactured near-misses,
 big-win celebrations stay proportional (already gated ≥10×).
 
+## Follow-ups (from the 2026-07-25 /simplify review)
+
+- **Parameterize the windowed-contract test suites.** The generic machinery
+  behaviors (one-open-per-channel, debit/close, void-once, boot sweep,
+  stale-precheck, jackpot feed, leaver refund) are near-identical across the
+  five windowed games (~450 lines of copies in `test_casino_service.py`).
+  Fold them into one `pytest.param` table over a per-game spec, keeping only
+  genuinely game-specific tests standalone. Standalone change; don't bundle.
+- **Third live-hand game rule:** blackjack + war now share `HandTables`
+  settle/idle/boot-sweep machinery; a third live-hand game must extend that
+  descriptor (and the cog's `_auto_resolve_hand`), never clone.
+- **Design note (from the 2026-07-25 correctness review):** if an admin
+  closes the casino/war table while tie standoffs are pending, the idle
+  sweep's war attempt fails the `take_stake` gates and falls back to
+  retreat (member forfeits half), whereas a restart's boot sweep refunds
+  those rows in full. Inconsistent outcomes for the same admin action —
+  worth a deliberate choice (e.g. void/refund on table-closed errors) if
+  it ever matters in practice.
+
 ## Testing standard (every stage)
 
 - **Exact-EV enumeration** pins each paytable's RTP into 93–97% (Keno/market by
