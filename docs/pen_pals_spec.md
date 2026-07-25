@@ -26,7 +26,7 @@ Each pair gets a private two-person text channel with a conversation-starter fro
 
 ### Pool and pairing
 
-`/penpals join` adds the invoker to the pool. In **instant mode** it then immediately looks for a partner: a candidate is eligible when they are **not already in an active session** and are past the re-match cooldown; among the eligible waiters (oldest signup first) the bot prefers one the invoker hasn't been paired with recently, falling back to the oldest. If a partner is found the channel opens right there and the invoker is told "🖊️ Matched! Say hi to @them in #channel." If nobody is eligible — an empty pool, everyone waiting is on cooldown or already chatting, or the invoker is themselves on cooldown — they're told "You're in the pool! The moment someone else joins, your private channel opens automatically." In **scheduled mode**, joining never attempts a match — the invoker is always told "You're in the pool! Matches go out once a day at 8:00 AM Eastern," and pairing happens only in the daily round below. A member already in an active pen pal is blocked from joining at all until their session expires or they end it early; in instant mode, a pairing that fails (permissions, a lost race, a member who left) leaves the joiner in the pool rather than costing them their spot.
+`/penpals join` adds the invoker to the pool. In **instant mode** it then immediately looks for a partner: a candidate is eligible when they are **not already in an active session** and are past the re-match cooldown; among the eligible waiters (oldest signup first) the bot takes the oldest one the invoker has never been paired with, and matches nobody if they have all been pen pals with the invoker before. If a partner is found the channel opens right there and the invoker is told "🖊️ Matched! Say hi to @them in #channel." If nobody is eligible — an empty pool, everyone waiting is on cooldown or already chatting, everyone waiting has already been their pen pal, or the invoker is themselves on cooldown — they're told "You're in the pool! The moment someone else joins, your private channel opens automatically." In **scheduled mode**, joining never attempts a match — the invoker is always told "You're in the pool! Matches go out once a day at 8:00 AM Eastern," and pairing happens only in the daily round below. A member already in an active pen pal is blocked from joining at all until their session expires or they end it early; in instant mode, a pairing that fails (permissions, a lost race, a member who left) leaves the joiner in the pool rather than costing them their spot.
 
 **One chat at a time** is enforced in three places: the join guard, the eligibility filter (so a stale pool row can never hand someone a second channel), and a final re-check inside the pairing transaction that aborts and deletes the freshly-created channel if a concurrent join won the race.
 
@@ -117,7 +117,13 @@ A member is only eligible for a new pairing once they've had no pen pal for a co
 
 ### No-repeat pairing
 
-Both paths share `_pick_partner`: among the *eligible* candidates the bot checks the last **10 pairings** for the member within the guild and prefers anyone they haven't been paired with. Avoiding a repeat is a preference, not a gate — if the only eligible candidate is a past partner, the bot pairs them anyway rather than leaving both alone.
+Both paths share `_pick_partner`: among the *eligible* candidates it takes the oldest waiter the member has **never** been paired with in this guild. The exclusion list (`_past_partners`) is all-time, not a recency window — two members who have been pen pals once are never matched again.
+
+This is a hard gate, not a preference. When every eligible candidate is a past partner, `_pick_partner` returns `None` and the member stays pooled for a later round; a repeat is deferred until someone new turns up, never forced. The member is left in the pool untouched on both paths — instant matching tells the joiner "You're in the pool!", and a round skips them and moves on.
+
+The cooldown alone cannot deliver this, which is what the original preference-only version missed: the cooldown runs from a session's `started_at`, so **both halves of a pair come off it at the same instant** and float back into a pool that may hold nobody else. The two guild rematches observed in production (2026-07-23 → 2026-07-25, both at cooldown + ~1 minute) were exactly this — the fallback-to-oldest branch handing each member back the person they had just finished with.
+
+`/penpals pair <user1> <user2>` remains the admin override and ignores the no-repeat gate, the same way it ignores the cooldown.
 
 ### Opt-in role (optional)
 

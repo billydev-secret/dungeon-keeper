@@ -31,7 +31,6 @@ _WARN_SECS = 3600                # post 1-h warning when this much time remains
 _Q_SUPPRESS_SECS = 2 * 3600     # skip auto-question if fewer than 2 h remain
 _MAX_SWAPS = 3
 _TICK_SECS = 300                 # background loop tick every 5 min
-_RECENT_LIMIT = 10               # past pairings to check for repeats
 _MATCH_COOLDOWN_SECS = 30 * 86400  # only re-match a member once they've had no pen pal for a month
 _GAME_TYPE = "pen_pals"
 
@@ -437,16 +436,19 @@ def _get_shown_questions(conn, session_id: str) -> list[str]:
     return [r[0] for r in rows]
 
 
-def _recent_partners(conn, guild_id: int, user_id: int) -> set[int]:
+def _past_partners(conn, guild_id: int, user_id: int) -> set[int]:
+    """Everyone *user_id* has ever been a pen pal with in this guild.
+
+    All-time, deliberately: a pairing is one-per-lifetime, so this is the
+    exclusion list `_pick_partner` enforces rather than a recency window.
+    """
     rows = conn.execute(
         """
         SELECT CASE WHEN user1_id = ? THEN user2_id ELSE user1_id END AS partner
         FROM pen_pals_sessions
         WHERE guild_id = ? AND (user1_id = ? OR user2_id = ?)
-        ORDER BY started_at DESC
-        LIMIT ?
         """,
-        (user_id, guild_id, user_id, user_id, _RECENT_LIMIT),
+        (user_id, guild_id, user_id, user_id),
     ).fetchall()
     return {r[0] for r in rows}
 
@@ -512,15 +514,18 @@ def _force_pair_status(conn, guild_id: int, user1_id: int, user2_id: int) -> str
     return "ok"
 
 
-def _pick_partner(candidates: list[int], recent: set[int]) -> int | None:
-    """Best partner from *candidates* (FIFO): first non-recent, else the oldest.
+def _pick_partner(candidates: list[int], past: set[int]) -> int | None:
+    """Oldest waiter in *candidates* (FIFO) who isn't already a past partner.
 
-    Avoiding a repeat is a preference, not a gate — when the only person
-    waiting is a past partner, pairing them beats leaving both alone.
+    Never repeating a pairing is a hard gate, not a preference: two members who
+    have been pen pals once are never matched again, and when everyone waiting
+    is a past partner the answer is None — both stay pooled for a later round
+    rather than being handed the same person back. The cooldown alone can't do
+    this, because it runs from a shared session's ``started_at`` and so expires
+    for both halves of a pair at the same moment, floating them back into an
+    otherwise-empty pool together.
     """
-    if not candidates:
-        return None
-    return next((u for u in candidates if u not in recent), candidates[0])
+    return next((u for u in candidates if u not in past), None)
 
 
 def _find_instant_match(conn, guild_id: int, user_id: int) -> int | None:
@@ -537,7 +542,7 @@ def _find_instant_match(conn, guild_id: int, user_id: int) -> int | None:
         for u in _eligible_pool(conn, guild_id, now, cooldown)
         if u != user_id and not _is_blocked_pair(conn, guild_id, user_id, u)
     ]
-    return _pick_partner(candidates, _recent_partners(conn, guild_id, user_id))
+    return _pick_partner(candidates, _past_partners(conn, guild_id, user_id))
 
 
 def _cfg_allows_nsfw(cfg) -> bool:
@@ -928,17 +933,18 @@ async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[
     while len(remaining) >= 2:
         u1 = remaining.pop(0)
 
-        def _recent_and_allowed(uid: int = u1, pool: list[int] = remaining):
+        def _past_and_allowed(uid: int = u1, pool: list[int] = remaining):
             with open_db(db_path) as conn:
-                recent = _recent_partners(conn, guild_id, uid)
+                past = _past_partners(conn, guild_id, uid)
                 allowed = [u for u in pool if not _is_blocked_pair(conn, guild_id, uid, u)]
-                return recent, allowed
+                return past, allowed
 
-        recent, allowed = await asyncio.to_thread(_recent_and_allowed)
-        partner = _pick_partner(allowed, recent)
+        past, allowed = await asyncio.to_thread(_past_and_allowed)
+        partner = _pick_partner(allowed, past)
         if partner is None:
-            # u1 has blocked (or been blocked by) everyone still waiting — leave
-            # them pooled for a future round rather than forcing a bad pairing.
+            # Everyone still waiting is either blocked with u1 or already been
+            # their pen pal — leave u1 pooled for a future round rather than
+            # forcing a bad pairing or a repeat.
             continue
         remaining.remove(partner)
 
