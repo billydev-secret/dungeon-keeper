@@ -22,30 +22,30 @@ def gdb(tmp_path):
 
 @pytest.mark.asyncio
 async def test_set_and_get_watch_carries_kind(gdb):
-    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot_cah", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
     row = await logic.get_watch_for_bot(gdb, GUILD, GAMEBOT)
     assert row is not None
     assert row["channel_id"] == CHAN_A
-    assert row["kind"] == "gamebot_cah"
+    assert row["kind"] == "gamebot"
     assert row["enabled"] == 1
 
 
 @pytest.mark.asyncio
 async def test_multiple_bots_coexist_per_guild(gdb):
-    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot_cah", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
     await logic.set_watch(gdb, GUILD, CHAN_B, CATBOT, "catbot", set_by=9)
 
     watches = await logic.list_watches(gdb, GUILD)
     by_bot = {int(w["bot_user_id"]): w for w in watches}
     assert set(by_bot) == {GAMEBOT, CATBOT}
     assert by_bot[CATBOT]["kind"] == "catbot"
-    assert by_bot[GAMEBOT]["kind"] == "gamebot_cah"
+    assert by_bot[GAMEBOT]["kind"] == "gamebot"
 
 
 @pytest.mark.asyncio
 async def test_re_watching_same_bot_repoints_not_duplicates(gdb):
-    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot_cah", set_by=9)
-    await logic.set_watch(gdb, GUILD, CHAN_B, GAMEBOT, "gamebot_cah", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_B, GAMEBOT, "gamebot", set_by=9)
 
     watches = await logic.list_watches(gdb, GUILD)
     assert len(watches) == 1
@@ -54,7 +54,7 @@ async def test_re_watching_same_bot_repoints_not_duplicates(gdb):
 
 @pytest.mark.asyncio
 async def test_enable_is_per_bot(gdb):
-    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot_cah", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
     await logic.set_watch(gdb, GUILD, CHAN_B, CATBOT, "catbot", set_by=9)
 
     assert await logic.set_watch_enabled(gdb, GUILD, GAMEBOT, False) is True
@@ -80,7 +80,7 @@ async def test_count_messages_filters_by_bot(gdb):
 
 
 def test_valid_kinds_expose_labels():
-    assert "gamebot_cah" in logic.VALID_WATCH_KINDS
+    assert "gamebot" in logic.VALID_WATCH_KINDS
     assert "catbot" in logic.VALID_WATCH_KINDS
     assert logic.WATCH_KIND_LABELS["catbot"] == "Cat Bot"
 

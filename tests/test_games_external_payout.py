@@ -1,8 +1,8 @@
-"""Integration test for the Gamebot CAH payout wiring (#70).
+"""Integration test for the Gamebot CAH/Connect 4 payout wiring (#70).
 
-Banks a full game's messages, then drives GamesExternalCog._pay_cah_game and
-asserts it calls pay_cah_game_by_score with the right scores/winner exactly
-once.
+Banks a full game's messages, then drives GamesExternalCog._pay_cah_game /
+_pay_connect4_game and asserts each calls the right payout with the right
+roster/scores/winner exactly once.
 """
 
 from __future__ import annotations
@@ -35,6 +35,22 @@ def _embeds_submissions(uids):
 
 def _embeds_game_over(winner):
     return [{"title": "Game over!", "description": f"<@{winner}> is the winner!"}]
+
+
+def _embeds_c4_start(joined):
+    return [{
+        "title": "host is starting a Connect 4 game!",
+        "description": 'Click "Join" below to join in the next **120 seconds**.',
+        "fields": [{
+            "name": "Joined Players",
+            "value": ", ".join(f"<@{u}>" for u in joined),
+            "inline": False,
+        }],
+    }]
+
+
+def _embeds_c4_game_over(winner):
+    return [{"title": "Game over!", "description": f"<@{winner}> has won! ```board```"}]
 
 
 async def _bank(gdb, mid, ts, embeds):
@@ -107,6 +123,94 @@ async def test_cah_payout_lone_game_over_pays_the_winner(gdb):
     args, _ = pay.await_args
     assert args[2] == {ALICE: 0}
     assert args[3] == ALICE
+
+
+# ── Connect 4 payout (#70 follow-up) ───────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_connect4_payout_pays_roster_and_winner_once(gdb):
+    await _bank(gdb, 4101, "2026-07-21T01:08:00", _embeds_c4_start([ALICE, BOB]))
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_c4_game_over(ALICE))
+
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_game_rewards", new=AsyncMock()
+    ) as pay:
+        await cog._pay_connect4_game(_over_message())
+        await cog._pay_connect4_game(_over_message())  # replayed edit — must not re-pay
+
+    pay.assert_awaited_once()
+    args, kwargs = pay.await_args
+    assert args[1] == GUILD
+    assert set(args[2]) == {ALICE, BOB}
+    assert args[3] == [ALICE]
+    assert args[4] == "connect4"
+    assert kwargs["occurrence"] == str(OVER_ID)
+
+
+@pytest.mark.asyncio
+async def test_connect4_payout_unrecognised_finish_pays_participation_only(gdb):
+    # A draw's exact wording isn't confirmed yet — the unmatched "Game over!"
+    # still pays the roster, just with no winner.
+    await _bank(gdb, 4101, "2026-07-21T01:08:00", _embeds_c4_start([ALICE, BOB]))
+    draw = [{"title": "Game over!", "description": "It's a draw! ```board```"}]
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", draw)
+
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_game_rewards", new=AsyncMock()
+    ) as pay:
+        await cog._pay_connect4_game(_over_message())
+
+    pay.assert_awaited_once()
+    args, _ = pay.await_args
+    assert set(args[2]) == {ALICE, BOB}
+    assert args[3] == []  # no winner recognised -> no win bonus
+
+
+# ── dispatch: one 'gamebot' watch tells CAH and Connect 4 apart ───────────────
+
+def _live_message(mid, embeds_dicts):
+    return SimpleNamespace(
+        id=mid,
+        guild=SimpleNamespace(id=GUILD),
+        channel=SimpleNamespace(id=CHAN),
+        author=SimpleNamespace(id=GAMEBOT),
+        created_at=datetime(2026, 7, 21, 3, 0, 0, tzinfo=timezone.utc),
+        edited_at=None,
+        content="",
+        embeds=[SimpleNamespace(to_dict=lambda d=d: d) for d in embeds_dicts],
+    )
+
+
+@pytest.mark.asyncio
+async def test_capture_dispatches_cah_and_connect4_from_one_gamebot_kind(gdb):
+    # Both games share a single bot_user_id (and so a single watch row/kind
+    # under UNIQUE(guild_id, bot_user_id)) — _capture must tell them apart
+    # per-message rather than needing separate watches.
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with (
+        patch.object(cog, "_pay_cah_game", new=AsyncMock()) as pay_cah,
+        patch.object(cog, "_pay_connect4_game", new=AsyncMock()) as pay_c4,
+    ):
+        await cog._capture(_live_message(9001, _embeds_game_over(ALICE)), "gamebot")
+        await cog._capture(_live_message(9002, _embeds_c4_game_over(ALICE)), "gamebot")
+        # A non-terminal message (mid-game standings) triggers neither payout.
+        await cog._capture(
+            _live_message(9003, _embeds_standings({ALICE: 1})), "gamebot"
+        )
+
+    pay_cah.assert_awaited_once()
+    pay_c4.assert_awaited_once()
 
 
 # ── Cat Bot payout (#65) ──────────────────────────────────────────────────────

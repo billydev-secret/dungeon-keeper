@@ -1,4 +1,4 @@
-# External game-bot economy sources (Gamebot CAH + Cat Bot)
+# External game-bot economy sources (Gamebot CAH + Connect 4, + Cat Bot)
 
 Turn the existing raw external-message collector (`/games track`, migration
 056, "stage 1") into economy payouts, and generalise it so more than one
@@ -64,6 +64,28 @@ returns `{member_id: score}` instead of a bare roster set, reading the *last*
 Current Standings embed in the window (each is a full cumulative snapshot, so
 later ones supersede earlier ones) and folding in submission-only/winner-only
 players at 0.
+
+**Stage 5 — Connect 4 alongside CAH, `gamebot_cah` renamed to `gamebot`
+(2026-07-25). SHIPPED.** Discovered the watched CAH channel *also* hosts
+Gamebot's Connect 4 (same bot account, same channel — `&play c4`). Both games
+end in a title-only-identical *Game over!* embed, and `UNIQUE(guild_id,
+bot_user_id)` means the same bot can't hold two separate watch rows, so the
+`kind` value had to broaden rather than add a sibling: `gamebot_cah` →
+`gamebot` (safe rename — no production row carried the old value). The cog's
+dispatch now checks `parser.is_game_over` (CAH's specific "is the winner"
+phrasing) first, and treats any other *Game over!* as Connect 4 — the only
+other sub-game tracked so far; a third Gamebot game needs its own check
+instead of that fallback. Window-bounding (`current_game_window`) moved from
+CAH-only `is_game_over` to the new title-only `is_terminal`, so back-to-back
+games of *either* type don't bleed rosters into each other.
+
+Connect 4 has no per-round score (win/lose only), so `_pay_connect4_game`
+reuses the flat `pay_game_rewards` faucet exactly like the original
+(pre-score-payout) CAH design — participation to the roster (from the start
+embed's **Joined Players** field / *Time's up!* recap), a win bonus to the
+`<@id> has won!` winner. A draw's exact wording is unconfirmed (no real sample
+yet in the banked history) — an unrecognised finish just pays participation,
+no winner, same safe default as CAH's own no-winner case.
 
 ## Notes
 

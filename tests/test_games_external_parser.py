@@ -1,8 +1,10 @@
-"""Tests for games_external.parser — Gamebot CAH parsing (#70).
+"""Tests for games_external.parser — Gamebot CAH + Connect 4 parsing (#70).
 
 Fixtures mirror the real /games track sample: standings (`<@id>: N`),
 submission status (`✅ <@id> Submitted!`), round wins, and the terminal
-`Game over!` embed (`<@id> is the winner!`).
+`Game over!` embed (`<@id> is the winner!`) for CAH; the join-phase start
+embed, the `Time's up!` recap, and the terminal `Game over!` embed
+(`<@id> has won!`) for Connect 4.
 """
 
 from __future__ import annotations
@@ -35,6 +37,35 @@ def _game_over(winner: int) -> dict:
     )}]}
 
 
+# ── Connect 4 fixtures ─────────────────────────────────────────────────────────
+
+def _c4_start(host: int, joined: list[int]) -> dict:
+    return {"embeds": [{
+        "title": f"host{host} is starting a Connect 4 game!",
+        "description": 'Click "Join" below to join in the next **120 seconds**.',
+        "fields": [{
+            "name": "Joined Players",
+            "value": ", ".join(f"<@{u}>" for u in joined),
+            "inline": False,
+        }],
+    }]}
+
+
+def _c4_times_up(joined: list[int]) -> dict:
+    desc = ", ".join(f"<@{u}>" for u in joined) + " joined the game!"
+    return {"embeds": [{"title": "Time's up!", "description": desc}]}
+
+
+def _c4_move() -> dict:
+    return {"embeds": [{"description": (
+        "First to 4 in a row wins!\n```board```\n<@111> 🔴, select a column between 1-7!"
+    )}]}
+
+
+def _c4_game_over(winner: int) -> dict:
+    return {"embeds": [{"title": "Game over!", "description": f"<@{winner}> has won! ```board```"}]}
+
+
 def test_players_from_standings():
     embeds = _standings({ALICE: 5, BOB: 1, CAROL: 0})["embeds"]
     assert parser.players_from_standings(embeds) == {ALICE, BOB, CAROL}
@@ -61,6 +92,19 @@ def test_round_win_is_not_game_over():
     embeds = _round_win(ALICE)["embeds"]
     assert parser.is_game_over(embeds) is False
     assert parser.winner_from_game_over(embeds) is None
+
+
+def test_is_terminal_true_for_either_games_over_embed():
+    # Both games share the "Game over!" title — is_terminal is title-only,
+    # unlike is_game_over which is CAH's "is the winner" phrasing specifically.
+    assert parser.is_terminal(_game_over(ALICE)["embeds"]) is True
+    assert parser.is_terminal(_c4_game_over(ALICE)["embeds"]) is True
+    assert parser.is_terminal(_round_win(ALICE)["embeds"]) is False
+
+
+def test_is_game_over_does_not_match_connect4s_game_over():
+    # Connect 4's "<@id> has won!" must not be mistaken for CAH's finish.
+    assert parser.is_game_over(_c4_game_over(ALICE)["embeds"]) is False
 
 
 def test_extract_cah_game_unions_roster_and_finds_winner():
@@ -121,6 +165,74 @@ def test_extract_handles_no_winner():
     scores, winner = parser.extract_cah_game([_standings({ALICE: 2, BOB: 2})])
     assert scores == {ALICE: 2, BOB: 2}
     assert winner is None
+
+
+# ── Connect 4 (#70 follow-up) ──────────────────────────────────────────────────
+
+def test_players_from_connect4_start_reads_joined_players_field():
+    embeds = _c4_start(999, [ALICE, BOB])["embeds"]
+    assert parser.players_from_connect4_start(embeds) == {ALICE, BOB}
+
+
+def test_players_from_connect4_start_reads_times_up_recap():
+    embeds = _c4_times_up([ALICE, BOB])["embeds"]
+    assert parser.players_from_connect4_start(embeds) == {ALICE, BOB}
+
+
+def test_players_from_connect4_ignores_unrelated_embeds():
+    # A move embed mentions the current player, but that's not a join signal.
+    assert parser.players_from_connect4_start(_c4_move()["embeds"]) == set()
+
+
+def test_winner_from_connect4_over():
+    embeds = _c4_game_over(ALICE)["embeds"]
+    assert parser.winner_from_connect4_over(embeds) == ALICE
+
+
+def test_extract_connect4_game_unions_roster_and_finds_winner():
+    window = [
+        _c4_start(999, [ALICE, BOB]),
+        _c4_times_up([ALICE, BOB]),
+        _c4_move(),
+        _c4_game_over(ALICE),
+    ]
+    roster, winner = parser.extract_connect4_game(window)
+    assert roster == {ALICE, BOB}
+    assert winner == ALICE
+
+
+def test_extract_connect4_game_folds_in_absent_winner():
+    roster, winner = parser.extract_connect4_game([_c4_game_over(ALICE)])
+    assert roster == {ALICE}
+    assert winner == ALICE
+
+
+def test_extract_connect4_game_unrecognised_finish_pays_participation_only():
+    # A draw's exact wording isn't confirmed yet — an unmatched "Game over!"
+    # must still credit the roster, just with no winner.
+    window = [
+        _c4_start(999, [ALICE, BOB]),
+        {"embeds": [{"title": "Game over!", "description": "It's a draw! ```board```"}]},
+    ]
+    roster, winner = parser.extract_connect4_game(window)
+    assert roster == {ALICE, BOB}
+    assert winner is None
+
+
+def test_current_game_window_bounds_across_mixed_game_types():
+    # A CAH game ends, then a Connect 4 game starts and ends in the same
+    # channel (same Gamebot account) — the Connect 4 window must not reach
+    # back into the CAH game's roster.
+    parsed = [
+        _standings({ALICE: 5, BOB: 3}),  # 0: CAH game A
+        _game_over(ALICE),               # 1: CAH game A ends
+        _c4_start(999, [BOB, CAROL]),    # 2: Connect 4 game B
+        _c4_game_over(BOB),              # 3: Connect 4 game B ends
+    ]
+    window = parser.current_game_window(parsed, over_index=3)
+    roster, winner = parser.extract_connect4_game(window)
+    assert roster == {BOB, CAROL}
+    assert winner == BOB
 
 
 # ── Cat Bot (#65) ─────────────────────────────────────────────────────────────

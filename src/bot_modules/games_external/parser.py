@@ -4,16 +4,28 @@ Pure functions over the raw ``embeds`` dicts (``embed.to_dict()``) the collector
 banks — no DB, no Discord I/O — so they're trivially testable against real
 ``/games track sample`` dumps and re-runnable on the full history.
 
-Currently: Gamebot Cards Against Humanity. A CAH game is a run of messages in
-one channel ending in a *Game over!* embed. Players always render as real
-mentions (``<@id>``), so rosters, scores, and winners are reliable:
+Currently: Gamebot, which hosts more than one game in the same watched
+channel — Cards Against Humanity and Connect 4 so far (kind='gamebot' covers
+both; the cog tells them apart per terminal message). Both are a run of
+messages in one channel ending in a *Game over!* embed. Players always render
+as real mentions (``<@id>``), so rosters, scores, and winners are reliable:
 
-* *Current Standings* embeds → each player's running score (``<@id>: N``).
-  Later standings supersede earlier ones (the count is cumulative, not
-  incremental), so only the last one before *Game over!* matters.
-* *Submission status* embeds → players seen before any standings post
-  (``✅ <@id> Submitted!``), folded in at score 0.
-* *Game over!* embed → the winner (``<@id> is the winner!``).
+* CAH — *Current Standings* embeds → each player's running score
+  (``<@id>: N``). Later standings supersede earlier ones (the count is
+  cumulative, not incremental), so only the last one before *Game over!*
+  matters. *Submission status* embeds (``✅ <@id> Submitted!``) fold in
+  players seen before any standings post, at score 0. *Game over!* →
+  ``<@id> is the winner!``.
+* Connect 4 — the *"<host> is starting a Connect 4 game!"* embed's
+  **Joined Players** field, and the *Time's up!* recap (``<@id>, <@id> joined
+  the game!``), give the roster. *Game over!* → ``<@id> has won!`` (a draw's
+  exact wording is unconfirmed — no real sample yet — so an unrecognised
+  finish just pays participation, no winner).
+
+Both games reuse the same *Game over!* title, so window-bounding (telling two
+back-to-back games apart) is title-only (``is_terminal``); telling *which*
+game a terminal message belongs to is the more specific check (``is_game_over``
+for CAH's "is the winner" phrasing, else it's Connect 4).
 """
 from __future__ import annotations
 
@@ -22,9 +34,14 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 # <@123> / <@!123>, tolerant of the nickname bang.
+_MENTION = re.compile(r"<@!?(\d+)>")
 _STANDINGS_ENTRY = re.compile(r"<@!?(\d+)>\s*:\s*(\d+)")
 _SUBMITTED = re.compile(r"<@!?(\d+)>\s+Submitted")
 _WINNER = re.compile(r"<@!?(\d+)>\s+is the winner")
+_C4_WON = re.compile(r"<@!?(\d+)>\s+has won")
+_C4_START_MARK = "is starting a Connect 4 game!"
+_C4_RECAP_TITLE = "Time's up!"
+_C4_JOINED_FIELD = "Joined Players"
 
 _GAME_OVER_TITLE = "Game over!"
 
@@ -68,9 +85,22 @@ def winner_from_game_over(embeds: Sequence[Mapping[str, Any]]) -> int | None:
 
 
 def is_game_over(embeds: Sequence[Mapping[str, Any]]) -> bool:
-    """True when these embeds are Gamebot's end-of-game announcement."""
+    """True when these embeds are Gamebot's **CAH** end-of-game announcement."""
     for title, desc in _embed_texts(embeds):
         if title.strip() == _GAME_OVER_TITLE and "is the winner" in desc:
+            return True
+    return False
+
+
+def is_terminal(embeds: Sequence[Mapping[str, Any]]) -> bool:
+    """True for any Gamebot *Game over!* embed, CAH or Connect 4 alike.
+
+    Used to bound a game's message window — both games share this title, so
+    telling *a* game apart from the next one only needs the title; telling
+    *which* game it was needs the more specific ``is_game_over`` (CAH).
+    """
+    for title, _desc in _embed_texts(embeds):
+        if title.strip() == _GAME_OVER_TITLE:
             return True
     return False
 
@@ -82,12 +112,13 @@ def current_game_window(
     to and including the one at ``over_index``.
 
     ``parsed`` is the channel's banked messages oldest-first, each a mapping with
-    an ``embeds`` list. Bounding on the previous game-over keeps a busy channel's
-    back-to-back games from bleeding rosters into each other.
+    an ``embeds`` list. Bounding on the previous game-over (of either game
+    type sharing this channel) keeps a busy channel's back-to-back games from
+    bleeding rosters into each other.
     """
     start = 0
     for i in range(over_index - 1, -1, -1):
-        if is_game_over(parsed[i].get("embeds") or []):
+        if is_terminal(parsed[i].get("embeds") or []):
             start = i + 1
             break
     return list(parsed[start : over_index + 1])
@@ -117,6 +148,58 @@ def extract_cah_game(
     if winner is not None:
         scores.setdefault(winner, 0)
     return scores, winner
+
+
+# ── Gamebot Connect 4 ─────────────────────────────────────────────────────────
+
+
+def players_from_connect4_start(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
+    """Member ids from the join phase: the **Joined Players** field on the
+    "*host* is starting a Connect 4 game!" embed, and/or the *Time's up!*
+    recap's "``<@id>, <@id> joined the game!``" description — either is
+    sufficient, both list the same roster."""
+    out: set[int] = set()
+    for e in embeds:
+        if not isinstance(e, Mapping):
+            continue
+        title = str(e.get("title") or "")
+        if _C4_START_MARK in title or title.strip() == _C4_RECAP_TITLE:
+            out.update(int(m) for m in _MENTION.findall(str(e.get("description") or "")))
+        for f in e.get("fields") or []:
+            if isinstance(f, Mapping) and str(f.get("name") or "").strip() == _C4_JOINED_FIELD:
+                out.update(int(m) for m in _MENTION.findall(str(f.get("value") or "")))
+    return out
+
+
+def winner_from_connect4_over(embeds: Sequence[Mapping[str, Any]]) -> int | None:
+    """The winner's id from a Connect 4 *Game over!* embed (``<@id> has won!``),
+    or None — including for a draw, whose exact wording isn't confirmed yet."""
+    for _title, desc in _embed_texts(embeds):
+        m = _C4_WON.search(desc)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def extract_connect4_game(
+    window: Sequence[Mapping[str, Any]]
+) -> tuple[set[int], int | None]:
+    """(roster, winner) for one Connect 4 game's window of messages.
+
+    The winner is folded into the roster even if somehow absent from the join
+    phase — they plainly played.
+    """
+    roster: set[int] = set()
+    winner: int | None = None
+    for msg in window:
+        embeds = msg.get("embeds") or []
+        roster |= players_from_connect4_start(embeds)
+        w = winner_from_connect4_over(embeds)
+        if w is not None:
+            winner = w
+    if winner is not None:
+        roster.add(winner)
+    return roster, winner
 
 
 # ── Cat Bot (kind='catbot') ──────────────────────────────────────────────────
