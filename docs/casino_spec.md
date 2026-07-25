@@ -216,7 +216,9 @@ caller-supplied.
   blackjack results.
 - **Tiered animations** — `is_big_bet` (≥70% of `max_bet`, or ≥100 coins
   uncapped; fixed constants) gates the staged reveals: slots reels stop
-  one at a time, coinflip hangs in the air, blackjack pauses on the
+  one at a time (`SLOTS_REEL_STOP_SECONDS`, 1.4s per stop; the reel row
+  sits in a text-art cabinet on every slots frame, spinning reels shown
+  as 🌀), coinflip hangs in the air, blackjack pauses on the
   hole-card flip. Roulette's once-per-round resolution always gets a
   two-frame ball bounce. **Money settles before the first frame** — a
   crash mid-show leaves a stale message, never a wrong balance.
