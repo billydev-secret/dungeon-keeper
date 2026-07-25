@@ -23,8 +23,10 @@ from typing import NamedTuple
 _GREETING_RE = re.compile(
     r"^\W*(?:"
     r"g(?:ood)?\s*mornin[g']?"
-    r"|g(?:ood)?\s*afternoon"
-    r"|g(?:ood)?\s*evening"
+    r"|(?:g(?:ood)?\s*)?afternoon"
+    # Bare "evening"/"afternoon" open greetings just like bare "morning" does
+    # ("Evening frands") — the good/g prefix is optional for all three.
+    r"|(?:g(?:ood)?\s*)?evening"
     # "good timezone" — a jokey stand-in for "good morning/afternoon/evening"
     # in servers spread across timezones, so nobody's greeting reads as wrong
     # for the reader's local time.
