@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from bot_modules.core.branding import SECTION_SPACER
 from bot_modules.games_rushmore.embeds import (
     build_draft_embed,
     build_final_boards_embed,
@@ -673,6 +674,30 @@ def test_build_recap_embed_renders_all_stat_fields():
     assert "Fastest Pick" in val and "Sushi" in val and "1.2s" in val
     assert "Slowest Pick" in val and "Tacos" in val and "28.9s" in val
     assert "2-way split" in val
+
+
+def test_build_recap_embed_spaces_summary_when_stats_follow():
+    # Summary is not the last field when Draft Stats renders, so it carries a
+    # trailing spacer to break cleanly before the stats heading; the last
+    # field (Draft Stats) does not.
+    embed = build_recap_embed(
+        "Host", "Topic", 4, 60.0, ["Alice"], 2,
+        [["A", "B", "C", "D"]], stats={"skipped_count": 1},
+    )
+    assert len(embed.fields) == 2
+    assert (embed.fields[0].value or "").endswith(SECTION_SPACER)
+    assert not (embed.fields[1].value or "").endswith(SECTION_SPACER)
+
+
+def test_build_recap_embed_no_spacer_when_summary_is_last():
+    # With no stat lines there is a single field, so no trailing spacer is
+    # appended (nothing follows it).
+    embed = build_recap_embed(
+        "Host", "Topic", 4, 60.0, ["Alice"], 2,
+        [["A", "B", "C", "D"]], stats={},
+    )
+    assert len(embed.fields) == 1
+    assert not (embed.fields[0].value or "").endswith(SECTION_SPACER)
 
 
 def test_build_recap_embed_unanimous_overrides_vote_split():

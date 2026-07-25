@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import discord
 
+from bot_modules.core.branding import SECTION_SPACER
 from bot_modules.services.dm_perms_service import (
     ROLE_DM_ASK,
     ROLE_DM_CLOSED,
@@ -146,3 +147,13 @@ def test_build_panel_embed_substitutes_custom_role_names():
     assert ROLE_DM_OPEN not in value
     # Unspecified modes keep their default label.
     assert ROLE_DM_ASK in value
+
+
+def test_build_panel_embed_spaces_sections_but_not_the_last():
+    # Every stacked section but the last carries a trailing zero-width spacer,
+    # so each heading gets an even break above it instead of hugging the
+    # section above (matches the login-digest convention).
+    embed = build_panel_embed()
+    ends = [(f.value or "").endswith(SECTION_SPACER) for f in embed.fields]
+    assert ends[:-1] == [True] * (len(ends) - 1)
+    assert ends[-1] is False

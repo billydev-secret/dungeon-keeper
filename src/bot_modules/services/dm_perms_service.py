@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import discord
 
+from bot_modules.core.branding import apply_section_spacing
 from bot_modules.core.db_utils import open_db
 
 ROLE_DM_OPEN = "DMs: Open"
@@ -691,6 +692,7 @@ def build_panel_embed(
         ),
         inline=False,
     )
+    apply_section_spacing(embed)
     embed.set_footer(text="You can revoke any connection at any time with /dm_revoke.")
     return embed
 

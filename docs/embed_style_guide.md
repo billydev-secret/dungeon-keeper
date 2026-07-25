@@ -164,6 +164,12 @@ Which embed slot does which job:
   the previous value. The **last** field skips the trailing blank.
 - Give a section heading breathing room *above* it this way rather than padding
   inside the value.
+- Builders that assemble a `discord.Embed` directly should call
+  `apply_section_spacing(embed)` (`bot_modules.core.branding`, exposing
+  `SECTION_SPACER`) once after adding fields — it appends the spacer to every
+  field but the last, idempotently. String-layer builders that return
+  `(name, value)` pairs (login digest, weekly leaderboard) stay
+  Discord-object-free and append the same `"\n​"` spacer themselves.
 
 ## Tables & column alignment
 
