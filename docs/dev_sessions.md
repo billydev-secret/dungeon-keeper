@@ -76,6 +76,13 @@ Override per session with `--permission-mode` (`manual`, `plan`, `acceptEdits`,
 `bypassPermissions`, `dontAsk`). Inside a running session, `shift+tab` cycles modes —
 which is how to change an already-running worker without restarting it.
 
+**Auto mode is model-gated.** Opus sessions come up `⏵⏵ auto mode on`; a haiku session
+launched with the same flag reports `auto mode unavailable for this model` and falls
+back to manual. The launcher passes `--permission-mode` regardless and Claude Code
+degrades gracefully, so nothing breaks — but a cheap-model worker spun up to run
+unattended may quietly be waiting on a prompt. Check the status line before walking
+away from one.
+
 **`/dk-feature` does not move the session you typed it in.** It launches a worker
 beside you and leaves your tree alone — that is what makes several at once possible.
 
