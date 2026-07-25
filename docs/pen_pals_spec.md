@@ -14,7 +14,7 @@ Members opt in to a pairing pool. Joining pairs immediately when an eligible mem
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
 | `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two members who are both waiting in the pool, bypassing queue order and cooldown |
 | `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the 5-minute tick |
-| Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels; manage never-match separations |
+| Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels, session opening message; manage never-match separations |
 | Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
 
 ## Behavior
@@ -36,14 +36,15 @@ The bot posts two messages in sequence and pins the first:
 **Message 1 — intro embed (pinned)**
 
 ```
-Title:  🖊️ Pen Pals
-Fields: Matched with  |  @user1  @user2
-        Session ends  |  <t:{unix_expiry}:F> (<t:{unix_expiry}:R>)
-        Commands      |  /penpals new-question — swap the prompt (3 max)
-                         /penpals end — leave this chat early
-Footer: Admins can see this channel.   (footer varies with room visibility —
-        "Admins and mods can see this channel." or
-        "This channel is visible to everyone (they can read, not post).")
+Title:       🖊️ Pen Pals
+Description: {pen_pals_config.intro_message}   (omitted entirely when blank — the default)
+Fields:      Matched with  |  @user1  @user2
+             Session ends  |  <t:{unix_expiry}:F> (<t:{unix_expiry}:R>)
+             Commands      |  /penpals new-question — swap the prompt (3 max)
+                              /penpals end — leave this chat early
+Footer:      Admins can see this channel.   (footer varies with room visibility —
+             "Admins and mods can see this channel." or
+             "This channel is visible to everyone (they can read, not post).")
 ```
 
 **Room visibility** (`pen_pals_config.room_visibility`, dashboard select, default
@@ -163,6 +164,11 @@ Per-guild keys set via the dashboard:
 - **Opt-in role** — if set, only members with this role can `/penpals join`. Optional.
 - **Question category** — `sfw` (default) or `all` (includes NSFW questions). Optional.
 - **Log channel** — where the bot posts pair confirmations. Optional.
+- **Session opening message** — free text (up to 1000 characters) shown as the
+  description of the pinned intro embed when a pair's channel opens, above
+  who they're matched with and when the chat ends. Optional; blank (the
+  default) omits the description entirely, leaving the embed unchanged from
+  before this field existed.
 - **Enabled** — per-guild on/off switch. Default off.
 - **Never-match separations** — mod-defined pairs of members who must never be matched. Optional; independent of members' own `/penpals block` lists.
 
