@@ -140,7 +140,7 @@ def test_collect_quests_and_community_goals(db):
     goal = data.community[0]
     assert (goal.title, goal.current, goal.target) == ("Group goal", 40, 100)
     assert not goal.completed and not goal.settled
-    assert goal.kind_label == ""  # manual goal, nothing to label
+    assert goal.kind_flavor == ""  # manual goal, no flavor line
 
 
 def test_collect_pulse_and_today_deltas(db):
@@ -220,7 +220,8 @@ def test_collect_auto_goal_live_detail(db):
     assert goal.today_delta == 1
     assert goal.on_track  # 30 done ≥ 90% of the linear-pace expectation
     assert goal.ends_ts == data.week_roll_ts
-    assert goal.kind_label == "Send a message"  # TRIGGER_KINDS[message_sent]
+    # TRIGGER_FLAVOR[message_sent] — warm copy, not the functional label
+    assert goal.kind_flavor == "every word keeps the fire crackling"
 
 
 # ── builder ─────────────────────────────────────────────────────────────────
@@ -302,13 +303,13 @@ def test_community_progress_bar_marks_tier_regions():
     assert community_progress_bar(5, 0) == "5"  # no target, plain count
 
 
-def test_embed_goal_title_shows_kind_label():
+def test_embed_goal_title_shows_kind_flavor():
     data = LeaderboardData(
         top_earners=[],
         community=[
             CommunityGoal(
                 "Server Buzz", 10, 100, completed=False, settled=False,
-                auto=True, kind_label="Send a message",
+                auto=True, kind_flavor="every word keeps the fire crackling",
             ),
             CommunityGoal("Manual goal", 1, 10, completed=False, settled=False),
         ],
@@ -316,8 +317,8 @@ def test_embed_goal_title_shows_kind_label():
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
     goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
-    assert "**Server Buzz** — Send a message" in goals
-    assert "**Manual goal**\n" in goals  # no dangling "—" without a label
+    assert "**Server Buzz** — *every word keeps the fire crackling*" in goals
+    assert "**Manual goal**\n" in goals  # no dangling "—" without flavor
 
 
 def test_embed_sections_stack_full_width():

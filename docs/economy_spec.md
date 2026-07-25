@@ -1227,7 +1227,11 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   new-weeklies clocks as Discord relative timestamps, which tick client-side
   between edits); top 5 earners over a rolling 7 days (income = positive
   ledger sums excluding `transfer_in`, matching the Statistics page) each
-  annotated **(+N today)**; community-goal progress bars — auto weeklies add
+  annotated **(+N today)**; community-goal progress bars — each auto goal's
+  title carries an italic per-kind flavor line (`quests.TRIGGER_FLAVOR`,
+  warm copy like "*every word keeps the fire crackling*"; falls back to the
+  functional `TRIGGER_KINDS` label for a kind without one — titles stay
+  descriptive, the flavor is the uplift), auto weeklies add
   a tier-secured marker once the first tier is banked (no marker before
   that, to keep the panel from reading as a numeric checklist), contributor
   count, today's contribution delta (from `econ_kind_activity`; omitted for
