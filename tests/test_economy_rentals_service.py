@@ -38,7 +38,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     get_ledger,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 500
 USER = 1001
@@ -52,7 +52,7 @@ SETTINGS = EconSettings(enabled=True, booster_multiplier=1.5)
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

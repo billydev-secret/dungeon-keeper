@@ -101,11 +101,11 @@ def snowflake_client() -> Generator[tuple[TestClient, object], None, None]:
     import tempfile
     from pathlib import Path
 
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
     td = tempfile.mkdtemp()
     db = Path(td) / "snowflake.db"
-    apply_migrations_sync(db)
+    migrated_db(db)
     ctx = FakeCtx(db, guild_id=SNOWFLAKE)
     app = create_app(ctx, auth=OpenAuth())
     # raise_server_exceptions=False: a handler that 500s on an empty DB is another

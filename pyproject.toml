@@ -32,12 +32,13 @@ markers = [
     # test is also a browser test.
     "mobile: responsive-layout subset of the browser suite",
 ]
-# Each test gets a fresh SQLite db under the tmp dir; the full suite writes
-# ~1-2 GB per run. Default retention keeps 3 whole sessions, so /tmp/pytest-of-ben
-# accumulates until a run hits a transient "disk I/O error" at fixture setup.
-# Keep only the most recent session (pruned at startup by the main process —
-# this works under xdist; the per-test `retention_policy` does not, so we don't
-# rely on it). If mass sqlite setup errors ever recur: rm -rf /tmp/pytest-of-ben.
+# Test DBs are template copies deleted per test (tests/db_template.py), so a
+# run's tmp footprint stays flat; what remains here is the empty tmp_path dirs
+# and any non-DB files tests write. Keep only the most recent session (pruned
+# at startup by the main process — this works under xdist; the per-test
+# `retention_policy` does not, so we don't rely on it). If mass sqlite setup
+# errors ever recur: rm -rf /tmp/pytest-of-ben and see the remote runner's
+# preflight in scripts/remote_test.py.
 tmp_path_retention_count = 1
 
 [tool.coverage.run]

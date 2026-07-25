@@ -32,7 +32,7 @@ from bot_modules.services.qa_service import (
     set_test_message,
     void_verdict,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 123
 USER = 1001
@@ -46,7 +46,7 @@ DAY = local_day_for(time.time(), 0.0)  # today in UTC — matches ledger created
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

@@ -20,7 +20,7 @@ from bot_modules.services.intake_views import (
     format_step_lines,
     post_intake_card,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 42
 NEWCOMER = 7
@@ -102,7 +102,7 @@ class _Ctx:
 @pytest.fixture
 def ctx(tmp_path):
     path = tmp_path / "views.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return _Ctx(path)
 
 

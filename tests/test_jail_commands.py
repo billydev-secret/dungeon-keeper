@@ -21,11 +21,11 @@ from bot_modules.commands.jail_commands import (
 )
 from bot_modules.core.app_context import AppContext
 from bot_modules.core.db_utils import open_db, set_config_value as _db_set
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 def _make_ctx(db_path, guild_id: int = 10) -> AppContext:
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return AppContext(
         bot=MagicMock(),
         log=logging.getLogger("test"),

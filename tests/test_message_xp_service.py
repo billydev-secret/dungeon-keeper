@@ -13,7 +13,7 @@ from bot_modules.services.message_xp_service import (
     award_reaction_given_xp,
     split_award_into_text_and_reply,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── no reply bonus ────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ MESSAGE_ID = 555
 @pytest.fixture
 def react_db(tmp_path):
     db_path = tmp_path / "react.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

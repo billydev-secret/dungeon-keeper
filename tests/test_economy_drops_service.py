@@ -23,7 +23,7 @@ from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
     get_balance,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 1234
 CHANNEL = 5678
@@ -44,7 +44,7 @@ LIVE = replace(
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

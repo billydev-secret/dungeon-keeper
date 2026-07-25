@@ -24,6 +24,12 @@ checkout's `.env` (which gate.py does not otherwise load). Absent
     REMOTE_TEST_CD        Override the `cd` template if the remote shell needs
                           it (e.g. "cd /d {dir} && {cmd}" for a cmd.exe remote
                           on a different drive letter).
+    REMOTE_TEST_TIMEOUT   Wall-clock cap in seconds on the remote pytest run,
+                          enforced on the remote (bootstrap kills its pytest
+                          child and reports a setup failure ⇒ local fallback,
+                          no orphan); the local side allows 60s of grace on
+                          top as an outer belt. 0 or unset ⇒ no cap
+                          (keepalives still catch a dead connection ~60s).
     REMOTE_TEST_WORKSPACE Sub-directory of REMOTE_TEST_DIR to sync into (default
                           derived per checkout, so parallel checkouts don't
                           collide). Set to "off" for the legacy layout: sync
@@ -39,11 +45,14 @@ no model files, so nothing secret is ever synced.
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -77,6 +86,29 @@ MANIFEST_FILE = ".remote-manifest"
 # genuine test result, which must keep failing the gate.
 BOOTSTRAP_FAILED = 97
 
+# pytest's documented exit codes. Anything else coming back from the ssh
+# invocation is the transport failing (255 = connection lost, 128+N/-N =
+# signal-killed), which must fall back locally rather than fail the gate.
+PYTEST_EXIT_CODES = range(6)
+
+# Remote-side housekeeping thresholds. The remote box once filled its tmp with
+# leftover pytest session dirs and the suite sprayed hundreds of bogus sqlite
+# errors that read as a red run — these keep that failure mode from ever
+# blocking a commit again.
+STALE_TMP_AGE = 2 * 3600        # pytest tmp sessions older than this are dead
+WORKSPACE_GC_AGE = 30 * 86400   # workspaces untouched this long belong to dead checkouts
+# Safety margins, not budgets: since the template-copy fixtures (tests/
+# db_template.py) a run's tmp footprint stays small, so a host under these
+# floors is already in trouble for other reasons.
+MIN_FREE_BYTES = 2 * 1024**3
+MIN_FREE_INODES = 100_000       # ~4 inodes per DB-backed test worst case
+
+# Prefix for per-checkout workspace directories. Spelled once: workspace_slug
+# mints names with it, gc_workspaces matches on it, and bootstrap uses it to
+# recognize that its cwd IS a workspace (the config never ships over ssh, so
+# the directory name is the only layout signal the remote has).
+WORKSPACE_PREFIX = "ws-"
+
 # Characters that would change meaning inside the single remote command string.
 # Rather than guess at cmd.exe vs POSIX quoting, refuse to build a command we
 # cannot faithfully represent — a loud failure beats a silently wrong test run.
@@ -102,6 +134,8 @@ class RemoteConfig:
     # Sub-directory of `directory` this checkout syncs into. Empty means the
     # legacy behaviour of syncing straight over the remote checkout.
     workspace: str = ""
+    # Wall-clock cap in seconds for the whole remote run; 0 means uncapped.
+    timeout: int = 0
 
     @property
     def run_dir(self) -> str:
@@ -121,7 +155,7 @@ def workspace_slug(root: Path = ROOT) -> str:
     resolved = root.resolve()
     digest = hashlib.sha256(str(resolved).encode()).hexdigest()[:10]
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in resolved.name)[:24]
-    return f"ws-{safe or 'checkout'}-{digest}"
+    return f"{WORKSPACE_PREFIX}{safe or 'checkout'}-{digest}"
 
 
 def _git(root: Path, *args: str) -> str | None:
@@ -268,6 +302,16 @@ def load_config(env: Mapping[str, str] | None = None) -> RemoteConfig | None:
     if jobs < 1:
         raise ValueError(f"REMOTE_TEST_JOBS must be >= 1, got {jobs}")
 
+    raw_timeout = env.get("REMOTE_TEST_TIMEOUT", "").strip()
+    try:
+        timeout = int(raw_timeout) if raw_timeout else 0
+    except ValueError:
+        raise ValueError(
+            f"REMOTE_TEST_TIMEOUT must be an integer number of seconds, got {raw_timeout!r}"
+        ) from None
+    if timeout < 0:
+        raise ValueError(f"REMOTE_TEST_TIMEOUT must be >= 0, got {timeout}")
+
     workspace = env.get("REMOTE_TEST_WORKSPACE", "").strip()
     if workspace.lower() in ("0", "off", "false", "none"):
         workspace = ""          # opt back into syncing over the checkout itself
@@ -284,6 +328,7 @@ def load_config(env: Mapping[str, str] | None = None) -> RemoteConfig | None:
         workspace=workspace,
         cd_template=env.get("REMOTE_TEST_CD", "").strip() or DEFAULT_CD,
         lock=env.get("REMOTE_TEST_LOCK", "").strip() or DEFAULT_LOCK,
+        timeout=timeout,
     )
 
 
@@ -321,8 +366,12 @@ def remote_command(cfg: RemoteConfig, command: str, *, base: bool = False) -> li
     workspace, which is where the code under test actually is.
     """
     directory = cfg.directory if base else cfg.run_dir
-    return ["ssh", "-o", "BatchMode=yes", cfg.host,
-            cfg.cd_template.format(dir=directory, cmd=command)]
+    # Keepalives make a dead connection surface as exit 255 within ~60s
+    # instead of hanging the commit hook on a silent TCP session; run() maps
+    # that 255 to a local fallback.
+    return ["ssh", "-o", "BatchMode=yes",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
+            cfg.host, cfg.cd_template.format(dir=directory, cmd=command)]
 
 
 def tar_command(paths: Sequence[str] = SYNC_PATHS, prefix: str = "") -> list[str]:
@@ -349,9 +398,13 @@ def pytest_command(cfg: RemoteConfig, args: Sequence[str]) -> list[str]:
     """
     check_args(args)
     check_args([cfg.lock])
+    # The cap ships to the remote so expiry kills pytest *there* (a direct
+    # child of bootstrap) and comes back as BOOTSTRAP_FAILED — no orphan left
+    # writing into the shared workspace.
+    cap = f"--timeout {cfg.timeout} " if cfg.timeout else ""
     inner = (
         f"{cfg.python} scripts/remote_test.py --bootstrap --lock {cfg.lock} "
-        f"-n {cfg.jobs} " + " ".join(args)
+        f"{cap}-n {cfg.jobs} " + " ".join(args)
     )
     # Runs in the workspace, whose freshly synced scripts/ is the copy that
     # matches the code under test.
@@ -442,6 +495,96 @@ def prune_to_manifest(root: Path) -> list[str]:
     return removed
 
 
+def _remove_older_than(candidates, age: float, now: float) -> list[str]:
+    """rmtree every candidate whose mtime is older than age; return their names.
+
+    Age-gating is the concurrency guard for both callers: anything a live run
+    (this checkout's or a sibling's) still owns has a fresh mtime and is never
+    touched. Unstattable/undeletable entries are skipped — housekeeping must
+    never fail the run it's protecting.
+    """
+    removed: list[str] = []
+    for path in candidates:
+        try:
+            if now - path.stat().st_mtime > age:
+                shutil.rmtree(path, ignore_errors=True)
+                removed.append(path.name)
+        except OSError:
+            continue
+    return removed
+
+
+def sweep_stale_pytest_tmp(base: Path | None = None, now: float | None = None) -> int:
+    """Delete pytest tmp session dirs old enough that no run can still own them.
+
+    tmp_path_retention_count only prunes *previous* sessions at startup, and
+    a run that dies (or a box that sleeps mid-run) leaves its whole session
+    behind.
+    """
+    if base is None:
+        try:
+            base = Path(tempfile.gettempdir()) / f"pytest-of-{getpass.getuser()}"
+        except (KeyError, OSError):  # no resolvable user — nothing to sweep
+            return 0
+    if now is None:
+        now = time.time()
+
+    try:
+        children = list(base.iterdir())
+    except OSError:
+        return 0
+    return len(_remove_older_than(children, STALE_TMP_AGE, now))
+
+
+def tmp_headroom(path: str | Path | None = None) -> tuple[int, int | None]:
+    """(free bytes, free inodes) for the tmp filesystem.
+
+    Inodes are None wherever they aren't a meaningful resource: Windows has
+    no statvfs, and dynamic-inode filesystems (btrfs — Fedora's default root)
+    report f_files == 0, which must not be read as "none free" or the
+    preflight would permanently declare the host unfit.
+    """
+    target = str(path or tempfile.gettempdir())
+    free = shutil.disk_usage(target).free
+    inodes: int | None = None
+    if hasattr(os, "statvfs"):
+        st = os.statvfs(target)
+        if st.f_files > 0:
+            inodes = st.f_favail
+    return free, inodes
+
+
+def preflight(path: str | Path | None = None) -> str | None:
+    """Why this host cannot safely run the suite right now, or None if it can.
+
+    A box with no tmp headroom doesn't fail cleanly — it produces hundreds of
+    unrelated sqlite errors that read as a red suite. Refusing up front turns
+    that into a BOOTSTRAP_FAILED local fallback instead.
+    """
+    free, inodes = tmp_headroom(path)
+    if free < MIN_FREE_BYTES:
+        return f"only {free // 2**20} MiB free in tmp (need {MIN_FREE_BYTES // 2**20})"
+    if inodes is not None and inodes < MIN_FREE_INODES:
+        return f"only {inodes} free inodes in tmp (need {MIN_FREE_INODES})"
+    return None
+
+
+def gc_workspaces(base: Path, keep: Path, now: float | None = None) -> list[str]:
+    """Remove sibling workspaces untouched for WORKSPACE_GC_AGE.
+
+    Every session checkout gets its own workspace and nothing ever deleted
+    them, so dead checkouts accumulated forever. Each sync refreshes the live
+    workspace's mtime, so age is a safe liveness signal.
+    """
+    if now is None:
+        now = time.time()
+    candidates = [
+        c for c in sorted(base.glob(WORKSPACE_PREFIX + "*"))
+        if c != keep and c.is_dir()
+    ]
+    return _remove_older_than(candidates, WORKSPACE_GC_AGE, now)
+
+
 def needs_install(root: Path, expected: str) -> bool:
     """True when the remote venv was built from different pins than we shipped."""
     return read_stamp(root) != expected
@@ -458,6 +601,7 @@ def bootstrap(
     root: Path | None = None,
     python: str | None = None,
     lock: str = DEFAULT_LOCK,
+    timeout: int = 0,
 ) -> int:
     """Entry point executed **on the remote**: sync deps, then run pytest.
 
@@ -473,6 +617,18 @@ def bootstrap(
         shown = ", ".join(removed[:5]) + (f" (+{len(removed) - 5} more)" if len(removed) > 5 else "")
         print(f"remote-test: pruned {len(removed)} stale file(s): {shown}", flush=True)
 
+    swept = sweep_stale_pytest_tmp()
+    if swept:
+        print(f"remote-test: swept {swept} stale pytest tmp dir(s)", flush=True)
+    if root.name.startswith(WORKSPACE_PREFIX):  # legacy layout has no sibling workspaces
+        for name in gc_workspaces(root.parent, keep=root):
+            print(f"remote-test: removed dead workspace {name}", flush=True)
+
+    unfit = preflight()
+    if unfit is not None:
+        print(f"remote-test: host not fit to run ({unfit})", file=sys.stderr, flush=True)
+        return BOOTSTRAP_FAILED
+
     stamps = stamp_dir(python)
     expected = lock_hash(root)
     if needs_install(stamps, expected):
@@ -482,7 +638,19 @@ def bootstrap(
             return BOOTSTRAP_FAILED
         write_stamp(stamps, expected)
 
-    return subprocess.run([python, "-m", "pytest", *args], cwd=root).returncode
+    try:
+        return subprocess.run(
+            [python, "-m", "pytest", *args], cwd=root, timeout=timeout or None
+        ).returncode
+    except subprocess.TimeoutExpired:
+        # pytest is a direct child here, so the expiry actually kills it —
+        # unlike the local-side cap, which can only kill ssh and orphan the
+        # remote run. Environment problem, not a verdict: fall back locally.
+        print(
+            f"remote-test: suite exceeded {timeout}s on the remote — giving up",
+            file=sys.stderr, flush=True,
+        )
+        return BOOTSTRAP_FAILED
 
 
 def is_available(cfg: RemoteConfig, timeout: int = 3) -> bool:
@@ -578,14 +746,43 @@ def run(args: Sequence[str], env: Mapping[str, str] | None = None) -> int | None
 
     print(f"remote-test: dispatching to {cfg.host} (-n {cfg.jobs})", flush=True)
     if not sync(cfg):
-        print("remote-test: sync failed — running locally.", file=sys.stderr)
+        # One retry: a transient blip shouldn't cost a 10x slower local run.
+        print("remote-test: sync failed — retrying once.", file=sys.stderr)
+        if not sync(cfg):
+            print("remote-test: sync failed — running locally.", file=sys.stderr)
+            return None
+
+    try:
+        # The real cap is enforced remote-side (bootstrap kills its own
+        # pytest child and exits BOOTSTRAP_FAILED — no orphan). This local
+        # cap is the outer belt for an ssh session that stays alive while the
+        # remote wedges *outside* pytest, so it gets a grace margin; killing
+        # ssh here does orphan whatever the remote was doing.
+        code = subprocess.run(
+            pytest_command(cfg, args),
+            timeout=(cfg.timeout + 60) if cfg.timeout else None,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        print(
+            f"remote-test: no result after {cfg.timeout}s — running locally.",
+            file=sys.stderr,
+        )
         return None
 
-    code = subprocess.run(pytest_command(cfg, args)).returncode
     if code == BOOTSTRAP_FAILED:
-        # The remote couldn't ready its venv. That's an environment problem,
+        # The remote couldn't ready itself (stale venv install failed, or the
+        # preflight found no tmp headroom). That's an environment problem,
         # not a test result — don't let it read as a red suite.
         print("remote-test: remote setup failed — running locally.", file=sys.stderr)
+        return None
+    if code not in PYTEST_EXIT_CODES:
+        # 255 = ssh lost the connection; 128+N/-N = ssh killed by a signal.
+        # The suite never reported a verdict, so falling back is honest —
+        # whereas propagating this would block the commit on a network blip.
+        print(
+            f"remote-test: transport failed (exit {code}) — running locally.",
+            file=sys.stderr,
+        )
         return None
     return code
 
@@ -595,8 +792,13 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--bootstrap":
         rest = sys.argv[2:]
         lock = DEFAULT_LOCK
-        if len(rest) >= 2 and rest[0] == "--lock":
-            lock, rest = rest[1], rest[2:]
-        sys.exit(bootstrap(rest, lock=lock))
+        cap = 0
+        while len(rest) >= 2 and rest[0] in ("--lock", "--timeout"):
+            if rest[0] == "--lock":
+                lock = rest[1]
+            else:
+                cap = int(rest[1])
+            rest = rest[2:]
+        sys.exit(bootstrap(rest, lock=lock, timeout=cap))
     print(__doc__)
     sys.exit(0)

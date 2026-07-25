@@ -206,65 +206,60 @@ def test_create_matchups_strips_and_lowercases_for_dup_check():
 # ── calculate_matchup_score ─────────────────────────────────────────
 
 
-def test_calculate_matchup_score_no_votes_returns_5050_tie():
-    result = calculate_matchup_score({}, 10, 20)
-    assert result["winner"] is None
-    assert result["scores"] == {10: 50, 20: 50}
-    assert result["clapback"] is False
-    assert result["vote_counts"] == {10: 0, 20: 0}
-
-
-def test_calculate_matchup_score_single_vote_no_clapback():
-    """Clapback rule requires >= 2 votes even when unanimous."""
-    result = calculate_matchup_score({"v1": 10}, 10, 20)
-    assert result["clapback"] is False
-    assert result["winner"] == 10
-
-
-def test_calculate_matchup_score_two_unanimous_is_clapback():
-    result = calculate_matchup_score({"v1": 10, "v2": 10}, 10, 20)
-    assert result["clapback"] is True
-    assert result["winner"] == 10
-    # +25 clapback bonus on top of 100% pct
-    assert result["scores"][10] == 125
-    assert result["scores"][20] == 0
-
-
-def test_calculate_matchup_score_split_no_clapback():
-    """Non-unanimous → no clapback even if a clear winner."""
-    result = calculate_matchup_score(
-        {"v1": 10, "v2": 10, "v3": 20}, 10, 20
-    )
-    assert result["clapback"] is False
-    assert result["winner"] == 10
-    assert result["vote_counts"] == {10: 2, 20: 1}
-
-
-def test_calculate_matchup_score_even_split_is_tie():
-    result = calculate_matchup_score(
-        {"v1": 10, "v2": 20}, 10, 20
-    )
-    assert result["winner"] is None
-    assert result["scores"][10] == 50
-    assert result["scores"][20] == 50
-
-
-def test_calculate_matchup_score_player_b_wins():
-    result = calculate_matchup_score(
-        {"v1": 20, "v2": 20, "v3": 10}, 10, 20
-    )
-    assert result["winner"] == 20
-    assert result["vote_counts"] == {10: 1, 20: 2}
-
-
-def test_calculate_matchup_score_unanimous_b_yields_clapback():
-    result = calculate_matchup_score(
-        {"v1": 20, "v2": 20}, 10, 20
-    )
-    assert result["clapback"] is True
-    assert result["winner"] == 20
-    assert result["scores"][20] == 125
-    assert result["scores"][10] == 0
+@pytest.mark.parametrize(
+    "votes,expected",
+    [
+        # The 50/50 zero-votes fallback is the cog's intentional
+        # "show up and play" behavior.
+        pytest.param(
+            {},
+            {"winner": None, "scores": {10: 50, 20: 50},
+             "clapback": False, "vote_counts": {10: 0, 20: 0}},
+            id="no-votes-5050-tie",
+        ),
+        # Clapback rule requires >= 2 votes even when unanimous.
+        pytest.param(
+            {"v1": 10},
+            {"winner": 10, "scores": {10: 100, 20: 0},
+             "clapback": False, "vote_counts": {10: 1, 20: 0}},
+            id="single-vote-no-clapback",
+        ),
+        # +25 clapback bonus on top of 100% pct
+        pytest.param(
+            {"v1": 10, "v2": 10},
+            {"winner": 10, "scores": {10: 125, 20: 0},
+             "clapback": True, "vote_counts": {10: 2, 20: 0}},
+            id="two-unanimous-is-clapback",
+        ),
+        # Non-unanimous → no clapback even if a clear winner.
+        pytest.param(
+            {"v1": 10, "v2": 10, "v3": 20},
+            {"winner": 10, "scores": {10: 67, 20: 33},
+             "clapback": False, "vote_counts": {10: 2, 20: 1}},
+            id="split-no-clapback",
+        ),
+        pytest.param(
+            {"v1": 10, "v2": 20},
+            {"winner": None, "scores": {10: 50, 20: 50},
+             "clapback": False, "vote_counts": {10: 1, 20: 1}},
+            id="even-split-is-tie",
+        ),
+        pytest.param(
+            {"v1": 20, "v2": 20, "v3": 10},
+            {"winner": 20, "scores": {10: 33, 20: 67},
+             "clapback": False, "vote_counts": {10: 1, 20: 2}},
+            id="player-b-wins",
+        ),
+        pytest.param(
+            {"v1": 20, "v2": 20},
+            {"winner": 20, "scores": {10: 0, 20: 125},
+             "clapback": True, "vote_counts": {10: 0, 20: 2}},
+            id="unanimous-b-yields-clapback",
+        ),
+    ],
+)
+def test_calculate_matchup_score(votes, expected):
+    assert calculate_matchup_score(votes, 10, 20) == expected
 
 
 def test_calculate_matchup_score_handles_string_or_int_vote_values():
@@ -952,54 +947,6 @@ def test_build_recap_embed_omits_total_clapbacks_when_zero():
 
 _ACCENT = discord.Color(0x123456)
 _GREEN = discord.Color(COLOR_GREEN)
-
-
-def test_lobby_embed_honors_passed_accent():
-    embed = build_lobby_embed("Alice", {"rounds": 5}, [], _name_resolver, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_submit_embed_honors_passed_accent():
-    embed = build_submit_embed(
-        prompt="p", round_num=1, total_rounds=5, deadline_str="<t:1:R>",
-        answers_in=0, total_players=3, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_vote_embed_honors_passed_accent():
-    embed = build_vote_embed(
-        answer_a="a", answer_b="b", round_num=1, matchup_index=0,
-        total_matchups=1, deadline_str="<t:1:R>", color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_scoreboard_embed_honors_passed_accent():
-    embed = build_scoreboard_embed(
-        {"scores": {"1": 10}}, 1, 5, bye_player=None, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_recap_embed_honors_passed_accent():
-    payload = {"scores": {}, "clapbacks": {}, "round_history": [], "players": []}
-    embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_reveal_tie_branch_honors_passed_accent():
-    """A tie has no winner → neutral, so it follows the accent, not a palette."""
-    result = {
-        "winner": None, "scores": {10: 50, 20: 50},
-        "clapback": False, "vote_counts": {10: 1, 20: 1},
-    }
-    embed = build_reveal_embed(
-        result=result, answers={"10": "a", "20": "b"},
-        player_a=10, player_b=20, anonymous=False,
-        name_resolver=_name_resolver, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
 
 
 def test_reveal_clapback_winner_stays_green_ignoring_accent():

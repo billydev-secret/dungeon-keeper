@@ -17,7 +17,7 @@ from bot_modules.services.greeting_watch_service import (
     was_acknowledged,
 )
 from bot_modules.services.interaction_graph import record_interactions
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Detection heuristic ──────────────────────────────────────────────
@@ -220,7 +220,7 @@ def test_parse_notify_ids_ignores_zero_legacy():
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "gw.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

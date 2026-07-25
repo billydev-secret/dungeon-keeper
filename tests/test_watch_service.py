@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from bot_modules.services.watch_service import add_watched_user, load_watched_users, remove_watched_user
 
 GUILD = 123
@@ -17,7 +17,7 @@ WATCHED_B = 1002
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

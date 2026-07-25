@@ -58,28 +58,30 @@ def test_skipped_marker_is_string():
 # ── generate_snake_order ─────────────────────────────────────────────
 
 
-def test_generate_snake_order_three_players_four_rounds():
-    order = generate_snake_order([10, 20, 30])
-    assert order == [
-        [1, 10], [1, 20], [1, 30],
-        [2, 30], [2, 20], [2, 10],
-        [3, 10], [3, 20], [3, 30],
-        [4, 30], [4, 20], [4, 10],
-    ]
-
-
-def test_generate_snake_order_custom_rounds():
-    order = generate_snake_order([1, 2], rounds=2)
-    assert order == [[1, 1], [1, 2], [2, 2], [2, 1]]
-
-
-def test_generate_snake_order_single_round():
-    order = generate_snake_order([1, 2, 3], rounds=1)
-    assert order == [[1, 1], [1, 2], [1, 3]]
-
-
-def test_generate_snake_order_empty_players():
-    assert generate_snake_order([]) == []
+@pytest.mark.parametrize(
+    ("players", "rounds", "expected"),
+    [
+        pytest.param(
+            [10, 20, 30],
+            None,
+            [
+                [1, 10], [1, 20], [1, 30],
+                [2, 30], [2, 20], [2, 10],
+                [3, 10], [3, 20], [3, 30],
+                [4, 30], [4, 20], [4, 10],
+            ],
+            id="three-players-four-default-rounds",
+        ),
+        pytest.param([1, 2], 2, [[1, 1], [1, 2], [2, 2], [2, 1]], id="custom-rounds"),
+        pytest.param([1, 2, 3], 1, [[1, 1], [1, 2], [1, 3]], id="single-round"),
+        pytest.param([], None, [], id="empty-players"),
+    ],
+)
+def test_generate_snake_order(
+    players: list[int], rounds: int | None, expected: list[list[int]]
+):
+    kwargs = {} if rounds is None else {"rounds": rounds}
+    assert generate_snake_order(players, **kwargs) == expected
 
 
 def test_generate_snake_order_round_count_matches():
@@ -113,33 +115,47 @@ def test_is_duplicate_against_empty_list():
 # ── find_who_picked ──────────────────────────────────────────────────
 
 
-def test_find_who_picked_returns_uid_str_of_owner():
-    boards = {
-        "1": ["Pizza", None, None, None],
-        "2": ["Sushi", "Tacos", None, None],
-    }
-    assert find_who_picked("pizza", boards) == "1"
-    assert find_who_picked("TACOS", boards) == "2"
-
-
-def test_find_who_picked_skips_skipped_markers():
-    """A slot holding the SKIPPED_MARKER must not match any input."""
-    boards = {"1": [SKIPPED_MARKER, None, None, None]}
-    assert find_who_picked(SKIPPED_MARKER, boards) is None
-
-
-def test_find_who_picked_returns_none_when_not_found():
-    boards = {"1": ["Pizza", None, None, None]}
-    assert find_who_picked("Burger", boards) is None
-
-
-def test_find_who_picked_skips_none_slots():
-    boards = {"1": [None, None, None, None]}
-    assert find_who_picked("anything", boards) is None
-
-
-def test_find_who_picked_empty_boards_dict():
-    assert find_who_picked("anything", {}) is None
+@pytest.mark.parametrize(
+    ("pick", "boards", "expected"),
+    [
+        pytest.param(
+            "pizza",
+            {"1": ["Pizza", None, None, None], "2": ["Sushi", "Tacos", None, None]},
+            "1",
+            id="returns-uid-str-of-owner",
+        ),
+        pytest.param(
+            "TACOS",
+            {"1": ["Pizza", None, None, None], "2": ["Sushi", "Tacos", None, None]},
+            "2",
+            id="case-insensitive-owner-lookup",
+        ),
+        # A slot holding the SKIPPED_MARKER must not match any input.
+        pytest.param(
+            SKIPPED_MARKER,
+            {"1": [SKIPPED_MARKER, None, None, None]},
+            None,
+            id="skips-skipped-markers",
+        ),
+        pytest.param(
+            "Burger",
+            {"1": ["Pizza", None, None, None]},
+            None,
+            id="returns-none-when-not-found",
+        ),
+        pytest.param(
+            "anything",
+            {"1": [None, None, None, None]},
+            None,
+            id="skips-none-slots",
+        ),
+        pytest.param("anything", {}, None, id="empty-boards-dict"),
+    ],
+)
+def test_find_who_picked(
+    pick: str, boards: dict[str, list[str | None]], expected: str | None
+):
+    assert find_who_picked(pick, boards) == expected
 
 
 # ── eligible_voters ──────────────────────────────────────────────────
@@ -816,93 +832,15 @@ def test_join_embed_blitz_explains_simultaneous_flow():
 # ── accent color migration (ruling 2026-07-21) ───────────────────────
 #
 # Games follow the guild accent; only the true *win* embed stays semantic
-# green. Every builder takes an optional ``color`` and, absent a guild,
-# falls back to its old per-phase constant (kept only as the no-guild
-# default). These tests pin both the passed-accent path and the fallback.
+# green. The per-builder accent/fallback contracts live in the shared
+# parametrized harness; only the winner embed's semantic-green rule is
+# pinned here.
 
 import discord  # noqa: E402
 
-from bot_modules.games.constants import (  # noqa: E402
-    PHASE_JOINING,
-    PHASE_PLAYING,
-    PHASE_RECAP,
-    PHASE_RESULTS,
-)
 from bot_modules.services.embeds import COLOR_GREEN  # noqa: E402
 
 _ACCENT = discord.Color(0x123456)
-
-
-def _sample_boards():
-    return {"1": ["Pizza", "Sushi", "Tacos", "Burgers"]}
-
-
-def test_join_embed_honors_passed_accent():
-    embed = build_join_embed("Host", [], topic="Snacks", color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_join_embed_falls_back_to_phase_joining():
-    embed = build_join_embed("Host", [], topic="Snacks")
-    assert embed.color == discord.Color(PHASE_JOINING)
-
-
-def test_draft_embed_honors_passed_accent():
-    embed = build_draft_embed(
-        "Host", "Snacks", [(1, "Alice")], {"1": [None] * 4},
-        active_player_id=1, active_player_name="Alice",
-        round_num=1, timer_secs=30, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_draft_embed_falls_back_to_phase_playing():
-    embed = build_draft_embed(
-        "Host", "Snacks", [(1, "Alice")], {"1": [None] * 4},
-        active_player_id=1, active_player_name="Alice",
-        round_num=1, timer_secs=30,
-    )
-    assert embed.color == discord.Color(PHASE_PLAYING)
-
-
-def test_final_boards_embed_honors_passed_accent():
-    embed = build_final_boards_embed(
-        "Host", "Snacks", [(1, "Alice")], _sample_boards(), color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_final_boards_embed_falls_back_to_phase_results():
-    embed = build_final_boards_embed(
-        "Host", "Snacks", [(1, "Alice")], _sample_boards(),
-    )
-    assert embed.color == discord.Color(PHASE_RESULTS)
-
-
-def test_vote_embed_honors_passed_accent():
-    embed = build_vote_embed("Host", "Snacks", timer_secs=30, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_vote_embed_falls_back_to_phase_playing():
-    embed = build_vote_embed("Host", "Snacks", timer_secs=30)
-    assert embed.color == discord.Color(PHASE_PLAYING)
-
-
-def test_recap_embed_honors_passed_accent():
-    embed = build_recap_embed(
-        "Host", "Snacks", 3, 60.0, ["Alice"], 2,
-        [["A", "B", "C", "D"]], stats={"skipped_count": 0}, color=_ACCENT,
-    )
-    assert embed.color == _ACCENT
-
-
-def test_recap_embed_falls_back_to_phase_recap():
-    embed = build_recap_embed(
-        "Host", "Snacks", 3, 60.0, ["Alice"], 2,
-        [["A", "B", "C", "D"]], stats={"skipped_count": 0},
-    )
-    assert embed.color == discord.Color(PHASE_RECAP)
 
 
 def test_winner_embed_is_semantic_green_by_default():

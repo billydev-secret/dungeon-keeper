@@ -13,7 +13,7 @@ from bot_modules.services.attention_report import (
     ASYM_CUT,
     compute_one_sided_attention,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 7
 NOW = 1_000_000_000
@@ -23,7 +23,7 @@ DAY = 86400
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "ar.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         yield conn
 

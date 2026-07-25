@@ -25,6 +25,9 @@ Two register notes up front:
   `color=`/`accent` **param** and lets the cog resolve it; a hard-coded value as
   a `color is None` fallback is fine, an *un-overridable* hard-code is not.
   (Also: the kwarg is `color=`, not `colour=` — 551 vs 1 in the codebase.)
+  This contract is enforced by `tests/test_embed_accent_contract.py` — a new
+  builder adds one `case()` row there (passthrough + fallback), never
+  per-file accent tests.
 - Keep **red / green / etc. only where the color *is* the information** — a
   deliberate, commented exception. The sanctioned semantic set is
   **green** = success / win / approved / credit, **red** = error / loss /

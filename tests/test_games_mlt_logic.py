@@ -12,18 +12,10 @@ proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
-import discord
 import pytest
 
-from bot_modules.games.constants import (
-    PHASE_JOINING,
-    PHASE_PLAYING,
-    PHASE_RECAP,
-    PHASE_RESULTS,
-)
 from bot_modules.games_mlt.embeds import (
     build_closed_embed,
-    build_final_standings_embed,
     build_join_embed,
     build_results_embed,
     build_round_embed,
@@ -96,30 +88,48 @@ def test_max_players_matches_select_option_limit():
     assert MAX_PLAYERS == 25
 
 
-def test_add_player_rejects_new_uid_past_cap():
-    """A new joiner is dropped once the lobby is full (would 400 the vote select)."""
-    players: list[int] = list(range(MAX_PLAYERS))
-    assert add_player(players, 9999) is False
-    assert len(players) == MAX_PLAYERS
-    assert 9999 not in players
-
-
-def test_add_player_allows_last_slot_at_cap():
-    players: list[int] = list(range(MAX_PLAYERS - 1))
-    assert add_player(players, 9999) is True
-    assert len(players) == MAX_PLAYERS
-
-
-def test_add_player_existing_uid_at_cap_still_idempotent():
-    players: list[int] = list(range(MAX_PLAYERS))
-    assert add_player(players, 0) is False
-    assert len(players) == MAX_PLAYERS
-
-
-def test_add_player_respects_custom_cap():
-    players: list[int] = [1, 2]
-    assert add_player(players, 3, max_players=2) is False
-    assert players == [1, 2]
+@pytest.mark.parametrize(
+    ("initial", "uid", "max_players", "expected_added", "expected_players"),
+    [
+        # A new joiner is dropped once the lobby is full (would 400 the vote select).
+        pytest.param(
+            list(range(MAX_PLAYERS)),
+            9999,
+            None,
+            False,
+            list(range(MAX_PLAYERS)),
+            id="rejects-new-uid-past-cap",
+        ),
+        pytest.param(
+            list(range(MAX_PLAYERS - 1)),
+            9999,
+            None,
+            True,
+            [*range(MAX_PLAYERS - 1), 9999],
+            id="allows-last-slot-at-cap",
+        ),
+        pytest.param(
+            list(range(MAX_PLAYERS)),
+            0,
+            None,
+            False,
+            list(range(MAX_PLAYERS)),
+            id="existing-uid-at-cap-still-idempotent",
+        ),
+        pytest.param([1, 2], 3, 2, False, [1, 2], id="respects-custom-cap"),
+    ],
+)
+def test_add_player_cap_variants(
+    initial: list[int],
+    uid: int,
+    max_players: int | None,
+    expected_added: bool,
+    expected_players: list[int],
+):
+    players = list(initial)
+    kwargs = {} if max_players is None else {"max_players": max_players}
+    assert add_player(players, uid, **kwargs) is expected_added
+    assert players == expected_players
 
 
 def test_lobby_is_full_false_below_cap():
@@ -133,26 +143,24 @@ def test_lobby_is_full_true_at_cap():
 # ── can_start ────────────────────────────────────────────────────────
 
 
-def test_can_start_false_below_minimum():
-    assert can_start([1, 2]) is False
-
-
-def test_can_start_true_at_minimum():
-    assert can_start([1, 2, 3]) is True
-
-
-def test_can_start_true_above_minimum():
-    assert can_start([1, 2, 3, 4, 5]) is True
+@pytest.mark.parametrize(
+    ("players", "min_players", "expected"),
+    [
+        pytest.param([1, 2], None, False, id="below-minimum"),
+        pytest.param([1, 2, 3], None, True, id="at-minimum"),
+        pytest.param([1, 2, 3, 4, 5], None, True, id="above-minimum"),
+        pytest.param([1, 2], 2, True, id="custom-threshold-at"),
+        pytest.param([1], 2, False, id="custom-threshold-below"),
+    ],
+)
+def test_can_start(players: list[int], min_players: int | None, expected: bool):
+    kwargs = {} if min_players is None else {"min_players": min_players}
+    assert can_start(players, **kwargs) is expected
 
 
 def test_can_start_min_players_constant_matches_cog_threshold():
     """The cog's hard-coded check used 3 — guard against drift."""
     assert MIN_PLAYERS == 3
-
-
-def test_can_start_custom_threshold():
-    assert can_start([1, 2], min_players=2) is True
-    assert can_start([1], min_players=2) is False
 
 
 # ── apply_vote ───────────────────────────────────────────────────────
@@ -550,79 +558,6 @@ def test_build_results_embed_renders_vote_counts():
     assert embed.description is not None
     assert "5 votes" in embed.description
     assert "2 votes" in embed.description
-
-
-# ── accent color (guild accent vs. phase fallback) ───────────────────
-
-_ACCENT = discord.Color(0x112233)
-
-
-def test_join_embed_honors_passed_accent():
-    embed = build_join_embed("Alice", [], color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_join_embed_falls_back_to_phase_color():
-    embed = build_join_embed("Alice", [])
-    assert embed.color == discord.Color(PHASE_JOINING)
-
-
-def test_round_embed_active_honors_passed_accent():
-    embed = build_round_embed("x", round_num=1, vote_count=0, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_round_embed_closed_honors_passed_accent():
-    """Round-over is a voting phase, not a win — accent, not semantic green."""
-    embed = build_round_embed(
-        "x", round_num=1, vote_count=0, closed=True, color=_ACCENT
-    )
-    assert embed.color == _ACCENT
-
-
-def test_round_embed_falls_back_to_phase_colors():
-    active = build_round_embed("x", round_num=1, vote_count=0)
-    closed = build_round_embed("x", round_num=1, vote_count=0, closed=True)
-    assert active.color == discord.Color(PHASE_PLAYING)
-    assert closed.color == discord.Color(PHASE_RESULTS)
-
-
-def test_closed_embed_honors_passed_accent():
-    embed = build_closed_embed("x", round_num=1, vote_count=0, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_closed_embed_falls_back_to_recap_color():
-    embed = build_closed_embed("x", round_num=1, vote_count=0)
-    assert embed.color == discord.Color(PHASE_RECAP)
-
-
-def test_results_embed_honors_passed_accent():
-    embed = build_results_embed(
-        prompt="x", round_num=1, tally={1: 3, 2: 1}, color=_ACCENT
-    )
-    assert embed.color == _ACCENT
-
-
-def test_results_embed_falls_back_to_phase_color():
-    embed = build_results_embed(prompt="x", round_num=1, tally={1: 1})
-    assert embed.color == discord.Color(PHASE_RESULTS)
-
-
-def test_final_standings_embed_honors_passed_accent():
-    embed = build_final_standings_embed({"1": 2}, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_final_standings_embed_falls_back_to_phase_color():
-    embed = build_final_standings_embed({"1": 2})
-    assert embed.color == discord.Color(PHASE_RECAP)
-
-
-def test_final_standings_embed_empty_still_honors_accent():
-    """The no-crowns early-return path must still carry the accent."""
-    embed = build_final_standings_embed({}, color=_ACCENT)
-    assert embed.color == _ACCENT
 
 
 # ── sanity / integration ─────────────────────────────────────────────

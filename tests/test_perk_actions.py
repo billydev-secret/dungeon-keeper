@@ -26,7 +26,7 @@ from bot_modules.services.economy_rentals_service import (
     get_personal_role,
     upsert_personal_role,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD_ID = 4242
 USER_ID = 700
@@ -35,7 +35,7 @@ USER_ID = 700
 @pytest.fixture
 def db(tmp_path):
     p = tmp_path / "test.db"
-    apply_migrations_sync(p)
+    migrated_db(p)
     return p
 
 

@@ -10,10 +10,8 @@ module proves the extracted pieces work without spinning up Discord.
 
 from __future__ import annotations
 
-import discord
 import pytest
 
-from bot_modules.services.embeds import COLOR_GREEN
 from bot_modules.games_price.embeds import (
     build_recap_embed,
     build_reveal_embed,
@@ -189,38 +187,28 @@ def test_ladder_stats_truncates_floats_to_int() -> None:
 # ── tally_winners ────────────────────────────────────────────────────
 
 
-def test_tally_winners_no_votes() -> None:
-    winners, max_votes = tally_winners({})
-    assert winners == []
-    assert max_votes == 0
-
-
-def test_tally_winners_single_winner() -> None:
-    votes = {1: 100, 2: 100, 3: 200}
+@pytest.mark.parametrize(
+    "votes,expected_winners,expected_max_votes",
+    [
+        pytest.param({}, [], 0, id="no-votes"),
+        pytest.param({1: 100, 2: 100, 3: 200}, [100], 2, id="single-winner"),
+        pytest.param(
+            {1: 100, 2: 200, 3: 100, 4: 200}, [100, 200], 2, id="two-way-tie"
+        ),
+        pytest.param(
+            {1: 100, 2: 200, 3: 300}, [100, 200, 300], 1, id="three-way-tie"
+        ),
+        pytest.param({1: 50, 2: 50, 3: 50}, [50], 3, id="unanimous"),
+    ],
+)
+def test_tally_winners(
+    votes: dict[int, int],
+    expected_winners: list[int],
+    expected_max_votes: int,
+) -> None:
     winners, max_votes = tally_winners(votes)
-    assert winners == [100]
-    assert max_votes == 2
-
-
-def test_tally_winners_two_way_tie() -> None:
-    votes = {1: 100, 2: 200, 3: 100, 4: 200}
-    winners, max_votes = tally_winners(votes)
-    assert sorted(winners) == [100, 200]
-    assert max_votes == 2
-
-
-def test_tally_winners_three_way_tie() -> None:
-    votes = {1: 100, 2: 200, 3: 300}
-    winners, max_votes = tally_winners(votes)
-    assert sorted(winners) == [100, 200, 300]
-    assert max_votes == 1
-
-
-def test_tally_winners_unanimous() -> None:
-    votes = {1: 50, 2: 50, 3: 50}
-    winners, max_votes = tally_winners(votes)
-    assert winners == [50]
-    assert max_votes == 3
+    assert sorted(winners) == expected_winners
+    assert max_votes == expected_max_votes
 
 
 # ── compute_recap_awards ─────────────────────────────────────────────
@@ -632,63 +620,6 @@ def test_build_recap_embed_footer_mentions_host() -> None:
     embed = build_recap_embed("Host", 1, 1, {}, None)
     assert embed.footer.text is not None
     assert "Host" in embed.footer.text
-
-
-# ── accent color (2026-07-21 branding ruling) ────────────────────────
-#
-# Games follow the guild accent; only a true win stays semantic green.
-# Name Your Price has a per-round winner (Most Reasonable / Most Unhinged),
-# so the round-results embed keeps COLOR_GREEN; every other phase takes the
-# passed accent, falling back to its PHASE_* color when none is supplied.
-
-_ACCENT = discord.Color(0x8B5CF6)  # a distinctive violet, unlike any PHASE_*
-
-
-def test_build_start_embed_honors_accent() -> None:
-    embed = build_start_embed("Host", 1, 5, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_build_scenario_embed_honors_accent() -> None:
-    embed = build_scenario_embed("Host", "scen", 1, 5, 30, submitted=0, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_build_reveal_embed_honors_accent() -> None:
-    embed = build_reveal_embed("Host", "scen", 1, 3, [("Alice", 100)], color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_build_vote_embed_honors_accent() -> None:
-    embed = build_vote_embed("Host", "scen", 1, 3, 20, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_build_recap_embed_honors_accent() -> None:
-    embed = build_recap_embed("Host", 3, 4, {}, None, color=_ACCENT)
-    assert embed.color == _ACCENT
-
-
-def test_build_round_results_embed_stays_semantic_green() -> None:
-    """The winner embed defaults to COLOR_GREEN, not the guild accent."""
-    embed = build_round_results_embed(
-        "Host", 1, 3,
-        "Alice", 100, 1,
-        "Bob", 5000, 4,
-    )
-    assert embed.color is not None
-    assert embed.color.value == COLOR_GREEN
-
-
-def test_build_round_results_embed_ignores_accent_by_default() -> None:
-    """The cog never passes the accent here; green survives even alongside one."""
-    green = build_round_results_embed("Host", 1, 3, "A", 100, 1, "B", 500, 2)
-    assert green.color is not None and green.color.value == COLOR_GREEN
-    # Explicit override is still respected (belt-and-suspenders for the param).
-    overridden = build_round_results_embed(
-        "Host", 1, 3, "A", 100, 1, "B", 500, 2, color=_ACCENT
-    )
-    assert overridden.color == _ACCENT
 
 
 # ── economy roster enrichment (Stage 2 faucet) ──────────────────────

@@ -13,12 +13,12 @@ from bot_modules.services.welcome_service import (
     DEFAULT_LEAVE_MESSAGE,
     DEFAULT_WELCOME_MESSAGE,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 def _make_ctx(db_path, guild_id: int = 123) -> AppContext:
     """Construct a minimal AppContext backed by a real (migrated) temp DB."""
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return AppContext(
         bot=MagicMock(),
         log=logging.getLogger("test"),
@@ -74,7 +74,7 @@ def test_bucket_mutators_invalidate_guild_config_cache(tmp_path):
 
 def test_guild_config_load_returns_defaults_when_unconfigured(tmp_path):
     db_path = tmp_path / "gc1.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         cfg = GuildConfig.load(conn, guild_id=999, allow_legacy_fallback=False)
 
@@ -88,7 +88,7 @@ def test_guild_config_load_returns_defaults_when_unconfigured(tmp_path):
 
 def test_guild_config_load_reads_guild_specific_values(tmp_path):
     db_path = tmp_path / "gc2.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         _db_set(conn, "welcome_channel_id", "111", guild_id=42)
         _db_set(conn, "welcome_message", "hi {mention}", guild_id=42)
@@ -116,7 +116,7 @@ def test_guild_config_load_reads_guild_specific_values(tmp_path):
 def test_guild_config_load_strict_mode_ignores_legacy(tmp_path):
     """A non-home guild with no rows must NOT inherit legacy guild_id=0 config."""
     db_path = tmp_path / "gc3.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         _db_set(conn, "welcome_channel_id", "999", guild_id=0)  # legacy
         _db_set(conn, "mod_role_ids", "1,2,3", guild_id=0)
@@ -130,7 +130,7 @@ def test_guild_config_load_strict_mode_ignores_legacy(tmp_path):
 def test_guild_config_load_home_guild_uses_legacy_fallback(tmp_path):
     """Home guild reads legacy rows when its own rows aren't present."""
     db_path = tmp_path / "gc4.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         _db_set(conn, "welcome_channel_id", "888", guild_id=0)  # legacy only
 
@@ -141,7 +141,7 @@ def test_guild_config_load_home_guild_uses_legacy_fallback(tmp_path):
 
 def test_guild_config_load_join_leave_log_defaults_to_leave_channel(tmp_path):
     db_path = tmp_path / "gc5.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         _db_set(conn, "leave_channel_id", "55", guild_id=42)
         cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)

@@ -13,7 +13,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import health_metrics as hm
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 GUILD = 10
@@ -25,7 +25,7 @@ GUILD = 10
 @pytest.fixture
 def db_conn(tmp_path):
     path = tmp_path / "hm.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         yield conn
 

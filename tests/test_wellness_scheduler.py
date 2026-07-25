@@ -59,7 +59,7 @@ from bot_modules.services.wellness_service import (
     upsert_wellness_config,
     user_now,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ from migrations import apply_migrations_sync
 def db_path(tmp_path: Path) -> Path:
     """A migrated SQLite database file path."""
     path = tmp_path / "wellness.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

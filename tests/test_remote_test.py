@@ -7,10 +7,47 @@ tests exercise that without touching the network.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from pathlib import Path
 
 from scripts import remote_test as rt
+
+# Direct bindings for the housekeeping helpers: the autouse fixture below
+# stubs them out on the module (so bootstrap() in tests never touches the real
+# machine), and these pre-fixture bindings are how their own unit tests still
+# reach the real implementations.
+from scripts.remote_test import gc_workspaces, preflight, sweep_stale_pytest_tmp
+
+
+class _Exit:
+    """Stub subprocess result: just a returncode."""
+
+    def __init__(self, code):
+        self.returncode = code
+
+
+class _Result(_Exit):
+    """Stub subprocess result with captured stdout (for the git helpers)."""
+
+    def __init__(self, code, stdout=""):
+        super().__init__(code)
+        self.stdout = stdout
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_housekeeping(monkeypatch):
+    """bootstrap() housekeeping must never touch the machine running the tests.
+
+    Without this, every bootstrap test would sweep the real pytest tmp dir and
+    stat the real filesystem — and a nearly-full /tmp would fail unrelated
+    tests. Tests of the helpers themselves use the module-level imports above;
+    tests of bootstrap's *wiring* re-monkeypatch over these stubs.
+    """
+    monkeypatch.setattr(rt, "sweep_stale_pytest_tmp", lambda *a, **k: 0)
+    monkeypatch.setattr(rt, "preflight", lambda *a, **k: None)
+    monkeypatch.setattr(rt, "gc_workspaces", lambda *a, **k: [])
 
 FULL_ENV = {
     "REMOTE_TEST_HOST": "ben@bigbox",
@@ -214,7 +251,7 @@ def test_bootstrap_skips_install_when_stamp_current(tmp_path, monkeypatch):
 
     calls = []
     monkeypatch.setattr(rt, "install_deps", lambda py, root, lock: calls.append("install") or 0)
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
 
     assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 0
     assert calls == []
@@ -224,7 +261,7 @@ def test_bootstrap_installs_then_stamps_when_stale(tmp_path, monkeypatch):
     _write_locks(tmp_path)
 
     monkeypatch.setattr(rt, "install_deps", lambda py, root, lock: 0)
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
 
     assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 0
     assert rt.read_stamp(tmp_path) == rt.lock_hash(tmp_path)
@@ -249,7 +286,7 @@ def test_bootstrap_sentinel_cannot_collide_with_pytest_exit_codes():
 def test_bootstrap_propagates_test_failure(tmp_path, monkeypatch):
     _write_locks(tmp_path)
     rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(1))
 
     assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == 1
 
@@ -258,10 +295,7 @@ def test_run_falls_back_locally_on_bootstrap_sentinel(monkeypatch, capsys):
     """A broken remote venv is an environment problem, not a red suite."""
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
-    monkeypatch.setattr(
-        rt.subprocess, "run",
-        lambda *a, **k: type("R", (), {"returncode": rt.BOOTSTRAP_FAILED})(),
-    )
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(rt.BOOTSTRAP_FAILED))
 
     assert rt.run(["tests/test_a.py"], env=FULL_ENV) is None
     assert "remote setup failed" in capsys.readouterr().err
@@ -338,17 +372,14 @@ def test_env_path_falls_back_to_the_main_checkout_from_a_worktree(tmp_path, monk
 
     def fake_git(cmd, **kwargs):
         assert cmd[:2] == ["git", "rev-parse"]
-        return type("R", (), {"returncode": 0, "stdout": str(main / ".git")})()
+        return _Result(0, str(main / ".git"))
 
     monkeypatch.setattr(rt.subprocess, "run", fake_git)
     assert rt.env_path(worktree) == main / ".env"
 
 
 def test_env_path_is_none_when_git_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        rt.subprocess, "run",
-        lambda *a, **k: type("R", (), {"returncode": 128, "stdout": ""})(),
-    )
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Result(128))
     assert rt.env_path(tmp_path) is None
 
 
@@ -408,7 +439,7 @@ def test_install_deps_uses_the_configured_lock(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         seen["cmd"] = cmd
-        return type("R", (), {"returncode": 0})()
+        return _Exit(0)
 
     monkeypatch.setattr(rt.subprocess, "run", fake_run)
     rt.install_deps("py", Path("/tmp"), "requirements-win.lock")
@@ -421,7 +452,7 @@ def test_bootstrap_passes_lock_through_to_install(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "install_deps",
                         lambda py, root, lock: seen.setdefault("lock", lock) or 0)
     monkeypatch.setattr(rt.subprocess, "run",
-                        lambda *a, **k: type("R", (), {"returncode": 0})())
+                        lambda *a, **k: _Exit(0))
 
     rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python"), lock="requirements-win.lock")
     assert seen["lock"] == "requirements-win.lock"
@@ -469,10 +500,7 @@ def test_run_returns_remote_exit_code_on_success(monkeypatch):
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
 
-    class _Completed:
-        returncode = 0
-
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Completed())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
     assert rt.run(["tests/test_a.py"], env=FULL_ENV) == 0
 
 
@@ -481,10 +509,7 @@ def test_run_propagates_remote_failure(monkeypatch):
     monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
 
-    class _Failed:
-        returncode = 1
-
-    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Failed())
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(1))
     assert rt.run(["tests/test_a.py"], env=FULL_ENV) == 1
 
 
@@ -510,8 +535,7 @@ def _fake_git(mapping):
     def run(cmd, **kwargs):
         key = tuple(cmd[1:])
         out = mapping.get(key)
-        rc = 0 if out is not None else 128
-        return type("R", (), {"returncode": rc, "stdout": out or ""})()
+        return _Result(0 if out is not None else 128, out or "")
     return run
 
 
@@ -685,3 +709,253 @@ def test_prune_is_a_no_op_without_a_manifest(tmp_path):
 def test_stamp_dir_sits_beside_the_venv_not_in_a_workspace(exe, expected):
     """Workspaces are disposable; a multi-GB reinstall per checkout is not."""
     assert rt.stamp_dir(exe).as_posix() == expected
+
+
+# ── Transport failures must not read as test failures ─────────────────
+#
+# pytest's own exit codes are 0-5 and BOOTSTRAP_FAILED is 97; everything else
+# coming back from the ssh invocation is the *transport* failing (255 for a
+# dropped connection, 128+N for a signal-killed ssh). Before this was handled,
+# a Wi-Fi blip mid-run surfaced as "GATE FAILED: pytest" and blocked the
+# commit — the exact outcome the module docstring promises can't happen.
+
+
+@pytest.mark.parametrize("code", [255, 137, 6, -9])
+def test_run_falls_back_on_transport_failure(monkeypatch, capsys, code):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(code))
+
+    assert rt.run(["tests/test_a.py"], env=FULL_ENV) is None
+    assert "running locally" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("code", [0, 1, 2, 3, 4, 5])
+def test_run_propagates_every_genuine_pytest_exit_code(monkeypatch, code):
+    """Real results — pass, red, interrupted, usage error — must reach the gate."""
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(code))
+
+    assert rt.run(["tests/test_a.py"], env=FULL_ENV) == code
+
+
+def test_remote_command_keeps_the_connection_alive():
+    """A network drop mid-run must fail fast, not hang the commit hook on TCP."""
+    cfg = rt.load_config(FULL_ENV)
+    assert cfg is not None
+    cmd = rt.remote_command(cfg, "echo hi")
+    assert "ServerAliveInterval=15" in cmd
+    assert "ServerAliveCountMax=4" in cmd
+
+
+# ── Wall-clock cap ─────────────────────────────────────────────────────
+
+
+def test_timeout_defaults_to_uncapped():
+    cfg = rt.load_config(FULL_ENV)
+    assert cfg is not None and cfg.timeout == 0
+
+
+def test_timeout_parsed_from_env():
+    cfg = rt.load_config({**FULL_ENV, "REMOTE_TEST_TIMEOUT": "900"})
+    assert cfg is not None and cfg.timeout == 900
+
+
+@pytest.mark.parametrize("bad", ["abc", "1.5", "-30"])
+def test_invalid_timeout_rejected(bad):
+    with pytest.raises(ValueError):
+        rt.load_config({**FULL_ENV, "REMOTE_TEST_TIMEOUT": bad})
+
+
+def test_run_falls_back_when_remote_exceeds_timeout(monkeypatch, capsys):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+
+    def hang(*args, **kwargs):
+        # Local cap = remote cap + grace, so the remote-side enforcement
+        # (which kills pytest cleanly) always gets to fire first.
+        assert kwargs.get("timeout") == 960, "the outer cap must reach subprocess.run"
+        raise rt.subprocess.TimeoutExpired(cmd="ssh", timeout=960)
+
+    monkeypatch.setattr(rt.subprocess, "run", hang)
+    assert rt.run(["-q"], env={**FULL_ENV, "REMOTE_TEST_TIMEOUT": "900"}) is None
+    assert "running locally" in capsys.readouterr().err
+
+
+def test_timeout_ships_to_the_remote_bootstrap():
+    cfg = rt.load_config({**FULL_ENV, "REMOTE_TEST_TIMEOUT": "900"})
+    assert cfg is not None
+    assert "--timeout 900" in rt.pytest_command(cfg, [])[-1]
+
+
+def test_no_timeout_flag_when_uncapped():
+    cfg = rt.load_config(FULL_ENV)
+    assert cfg is not None
+    assert "--timeout" not in rt.pytest_command(cfg, [])[-1]
+
+
+def test_bootstrap_times_out_as_setup_failure_not_verdict(tmp_path, monkeypatch, capsys):
+    """Remote-side expiry must read as BOOTSTRAP_FAILED (local fallback),
+    never as a test result — and it kills pytest as a direct child."""
+    _write_locks(tmp_path)
+    rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
+
+    def expire(*args, **kwargs):
+        assert kwargs.get("timeout") == 900
+        raise rt.subprocess.TimeoutExpired(cmd="pytest", timeout=900)
+
+    monkeypatch.setattr(rt.subprocess, "run", expire)
+    code = rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python"), timeout=900)
+    assert code == rt.BOOTSTRAP_FAILED
+    assert "exceeded 900s" in capsys.readouterr().err
+
+
+def test_run_passes_no_timeout_when_uncapped(monkeypatch):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    monkeypatch.setattr(rt, "sync", lambda cfg: True)
+    seen = {}
+
+    def record(*args, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        return _Exit(0)
+
+    monkeypatch.setattr(rt.subprocess, "run", record)
+    assert rt.run(["-q"], env=FULL_ENV) == 0
+    assert seen["timeout"] is None
+
+
+# ── Sync retry ─────────────────────────────────────────────────────────
+
+
+def test_sync_is_retried_once_before_falling_back(monkeypatch):
+    """One transient blip must not cost a 10x slower local run."""
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    attempts = []
+    monkeypatch.setattr(rt, "sync", lambda cfg: attempts.append(1) or len(attempts) > 1)
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
+
+    assert rt.run(["-q"], env=FULL_ENV) == 0
+    assert len(attempts) == 2
+
+
+def test_run_falls_back_when_sync_fails_twice(monkeypatch, capsys):
+    monkeypatch.setattr(rt, "is_available", lambda cfg, timeout=3: True)
+    attempts = []
+    monkeypatch.setattr(rt, "sync", lambda cfg: attempts.append(1) and False)
+
+    assert rt.run(["-q"], env=FULL_ENV) is None
+    assert len(attempts) == 2
+    assert "running locally" in capsys.readouterr().err
+
+
+# ── Remote-side housekeeping and preflight ─────────────────────────────
+#
+# The remote box exhausted tmp inodes once and the result was hundreds of
+# bogus sqlite failures reported as a red suite. bootstrap() runs on the
+# remote as plain Python, so it can defend itself: sweep stale pytest tmp,
+# GC dead workspaces, and refuse (BOOTSTRAP_FAILED → clean local fallback)
+# when the host has no headroom.
+
+
+def test_sweep_removes_only_stale_session_dirs(tmp_path):
+    base = tmp_path / "pytest-of-ben"
+    base.mkdir()
+    stale = base / "pytest-1"
+    fresh = base / "pytest-2"
+    stale.mkdir()
+    fresh.mkdir()
+    old = 1_000_000.0
+    os.utime(stale, (old, old))
+
+    assert sweep_stale_pytest_tmp(base=base, now=old + rt.STALE_TMP_AGE + 1) == 1
+    assert not stale.exists() and fresh.exists()
+
+
+def test_sweep_tolerates_a_missing_base(tmp_path):
+    assert sweep_stale_pytest_tmp(base=tmp_path / "absent", now=0.0) == 0
+
+
+def test_preflight_rejects_low_disk(monkeypatch):
+    monkeypatch.setattr(rt, "tmp_headroom", lambda path=None: (1024, 10**6))
+    assert "free" in (preflight() or "")
+
+
+def test_preflight_rejects_low_inodes(monkeypatch):
+    monkeypatch.setattr(rt, "tmp_headroom", lambda path=None: (10**12, 10))
+    assert "inode" in (preflight() or "")
+
+
+def test_preflight_accepts_a_healthy_host(monkeypatch):
+    monkeypatch.setattr(rt, "tmp_headroom", lambda path=None: (10**12, 10**6))
+    assert preflight() is None
+
+
+def test_preflight_skips_inode_check_where_unavailable(monkeypatch):
+    """Windows has no statvfs; a None inode count must not read as 'low'."""
+    monkeypatch.setattr(rt, "tmp_headroom", lambda path=None: (10**12, None))
+    assert preflight() is None
+
+
+def test_headroom_treats_dynamic_inode_filesystems_as_not_applicable(monkeypatch, tmp_path):
+    """btrfs reports f_files=0/f_favail=0 — that's 'inodes don't apply here',
+    not 'zero free', which would permanently fail the preflight."""
+    class _Vfs:
+        f_files = 0
+        f_favail = 0
+
+    class _Usage:
+        free = 10**12
+
+    # shutil.disk_usage also calls os.statvfs on Linux, so stub it as well.
+    monkeypatch.setattr(rt.shutil, "disk_usage", lambda target: _Usage())
+    monkeypatch.setattr(rt.os, "statvfs", lambda target: _Vfs(), raising=False)
+    _, inodes = rt.tmp_headroom(tmp_path)
+    assert inodes is None
+
+
+def test_bootstrap_bails_before_pytest_when_preflight_fails(tmp_path, monkeypatch, capsys):
+    _write_locks(tmp_path)
+    rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
+    monkeypatch.setattr(rt, "preflight", lambda *a, **k: "only 12 MiB free in tmp")
+
+    ran = []
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: ran.append(a) or None)
+
+    assert rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python")) == rt.BOOTSTRAP_FAILED
+    assert ran == [], "an unfit host must not run the suite and report noise"
+    assert "12 MiB" in capsys.readouterr().err
+
+
+def test_gc_removes_only_old_sibling_workspaces(tmp_path):
+    mine = tmp_path / "ws-mine"
+    dead = tmp_path / "ws-dead"
+    fresh = tmp_path / "ws-fresh"
+    other = tmp_path / "not-a-workspace"
+    for d in (mine, dead, fresh, other):
+        d.mkdir()
+    old = 1_000_000.0
+    os.utime(dead, (old, old))
+    os.utime(other, (old, old))
+
+    removed = gc_workspaces(tmp_path, keep=mine, now=old + rt.WORKSPACE_GC_AGE + 1)
+    assert removed == ["ws-dead"]
+    assert mine.exists() and fresh.exists() and other.exists()
+
+
+def test_bootstrap_gc_only_applies_to_workspace_layouts(tmp_path, monkeypatch):
+    """In the legacy layout the run dir IS the checkout — never GC its siblings."""
+    _write_locks(tmp_path)
+    rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
+    called = []
+    monkeypatch.setattr(rt, "gc_workspaces", lambda *a, **k: called.append(1) or [])
+    monkeypatch.setattr(rt.subprocess, "run", lambda *a, **k: _Exit(0))
+
+    rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python"))
+    assert called == [], "root has no ws- prefix, so no sibling GC"
+
+    ws = tmp_path / "ws-abc"
+    ws.mkdir()
+    _write_locks(ws)
+    rt.bootstrap(["-q"], root=ws, python=str(tmp_path / "python"))
+    assert called == [1]

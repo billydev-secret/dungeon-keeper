@@ -35,7 +35,7 @@ from bot_modules.services.economy_service import (
     save_econ_settings,
     transfer_currency,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from tests.fakes import FakeGuild
 
 GUILD_ID = 9001
@@ -47,7 +47,7 @@ NOW = 1_700_000_000.0
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

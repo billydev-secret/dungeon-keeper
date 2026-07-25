@@ -118,36 +118,39 @@ def test_resolved_question_statuses_constant_matches_set():
 # ── should_expire ────────────────────────────────────────────────────
 
 
-def test_should_expire_returns_false_when_asked_at_is_none():
-    now = datetime(2024, 5, 1, tzinfo=timezone.utc)
-    assert should_expire(None, now) is False
-
-
-def test_should_expire_returns_true_after_default_retention():
+@pytest.mark.parametrize(
+    ("asked_delta", "retention", "expected"),
+    [
+        pytest.param(None, None, False, id="asked-at-none"),
+        pytest.param(timedelta(days=8), None, True, id="after-default-retention"),
+        pytest.param(timedelta(days=6), None, False, id="within-default-retention"),
+        pytest.param(
+            timedelta(hours=2), timedelta(hours=1), True, id="custom-retention-expired"
+        ),
+        pytest.param(
+            timedelta(hours=2),
+            timedelta(hours=3),
+            False,
+            id="custom-retention-not-expired",
+        ),
+        # The cog used ``(now - asked) > retention`` (strict greater);
+        # equal should NOT expire.
+        pytest.param(
+            UNANSWERED_QUESTION_RETENTION,
+            None,
+            False,
+            id="exact-boundary-not-expired",
+        ),
+    ],
+)
+def test_should_expire(
+    asked_delta: timedelta | None, retention: timedelta | None, expected: bool
+):
+    """``asked_delta=None`` means asked_at is None (never asked)."""
     now = datetime(2024, 5, 10, tzinfo=timezone.utc)
-    asked = now - timedelta(days=8)
-    assert should_expire(asked, now) is True
-
-
-def test_should_expire_returns_false_within_default_retention():
-    now = datetime(2024, 5, 10, tzinfo=timezone.utc)
-    asked = now - timedelta(days=6)
-    assert should_expire(asked, now) is False
-
-
-def test_should_expire_uses_custom_retention():
-    now = datetime(2024, 5, 10, tzinfo=timezone.utc)
-    asked = now - timedelta(hours=2)
-    assert should_expire(asked, now, retention=timedelta(hours=1)) is True
-    assert should_expire(asked, now, retention=timedelta(hours=3)) is False
-
-
-def test_should_expire_exact_retention_boundary_is_not_expired():
-    """The cog used ``(now - asked) > retention`` (strict greater);
-    equal should NOT expire."""
-    now = datetime(2024, 5, 10, tzinfo=timezone.utc)
-    asked = now - UNANSWERED_QUESTION_RETENTION
-    assert should_expire(asked, now) is False
+    asked = None if asked_delta is None else now - asked_delta
+    kwargs = {} if retention is None else {"retention": retention}
+    assert should_expire(asked, now, **kwargs) is expected
 
 
 # ── build_question_entry / add_question ──────────────────────────────
@@ -445,43 +448,24 @@ def test_recompute_totals_no_answered():
 # ── first_content_line ───────────────────────────────────────────────
 
 
-def test_first_content_line_strips_bullet():
-    assert first_content_line("- Hello") == "Hello"
-
-
-def test_first_content_line_strips_star_bullet():
-    assert first_content_line("* Hello") == "Hello"
-
-
-def test_first_content_line_strips_numeric_bullet():
-    assert first_content_line("1. Hello") == "Hello"
-
-
-def test_first_content_line_strips_surrounding_quotes():
-    assert first_content_line('"Hello there"') == "Hello there"
-    assert first_content_line("'Hello'") == "Hello"
-
-
-def test_first_content_line_skips_blank_lines():
-    assert first_content_line("\n  \n- Real Question\n") == "Real Question"
-
-
-def test_first_content_line_empty_returns_none():
-    assert first_content_line("") is None
-    assert first_content_line("\n\n  \n") is None
-
-
-def test_first_content_line_truncates_to_500():
-    long = "x" * 600
-    out = first_content_line(long)
-    assert out is not None
-    assert len(out) == 500
-
-
-def test_first_content_line_uses_only_first_nonblank():
-    """The cog only returns the first non-blank line, not joined text."""
-    text = "Q1?\nQ2?"
-    assert first_content_line(text) == "Q1?"
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("- Hello", "Hello", id="strips-dash-bullet"),
+        pytest.param("* Hello", "Hello", id="strips-star-bullet"),
+        pytest.param("1. Hello", "Hello", id="strips-numeric-bullet"),
+        pytest.param('"Hello there"', "Hello there", id="strips-double-quotes"),
+        pytest.param("'Hello'", "Hello", id="strips-single-quotes"),
+        pytest.param("\n  \n- Real Question\n", "Real Question", id="skips-blank-lines"),
+        pytest.param("", None, id="empty-returns-none"),
+        pytest.param("\n\n  \n", None, id="whitespace-only-returns-none"),
+        pytest.param("x" * 600, "x" * 500, id="truncates-to-500"),
+        # The cog only returns the first non-blank line, not joined text.
+        pytest.param("Q1?\nQ2?", "Q1?", id="uses-only-first-nonblank"),
+    ],
+)
+def test_first_content_line(text: str, expected: str | None):
+    assert first_content_line(text) == expected
 
 
 # ── unique_asker_count / compute_recap_stats ─────────────────────────

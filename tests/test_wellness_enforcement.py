@@ -50,7 +50,7 @@ from bot_modules.services.wellness_service import (
     update_user_settings,
     user_now,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ from migrations import apply_migrations_sync
 def db_conn(tmp_path):
     """Sync sqlite3 connection with the full schema applied."""
     path = tmp_path / "wellness.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         yield conn
 
@@ -69,7 +69,7 @@ def db_conn(tmp_path):
 def db_path(tmp_path):
     """Path to a migrated DB — for tests that open their own ctx.open_db."""
     path = tmp_path / "wellness.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

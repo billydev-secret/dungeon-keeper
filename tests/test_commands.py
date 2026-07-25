@@ -240,11 +240,11 @@ async def test_grant_marks_open_prune_event_restored(grant_setup, tmp_path):
         get_open_prune_events,
         record_prune_events,
     )
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
     guild_id = 12345
     db_path = tmp_path / "grant.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
 
     ctx, grant = grant_setup
     ctx.open_db = lambda: open_db(db_path)
@@ -275,10 +275,10 @@ async def test_grant_marks_open_prune_event_restored(grant_setup, tmp_path):
 @pytest.fixture
 def grant_audit_setup(tmp_path):
     from bot_modules.core.db_utils import open_db
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
     db_path = tmp_path / "audit_card.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
 
     ctx = _make_ctx(is_mod=True)
     ctx.grant_roles["nsfw"]["role_id"] = 555

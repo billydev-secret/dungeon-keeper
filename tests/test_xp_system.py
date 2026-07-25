@@ -193,10 +193,10 @@ def test_reaction_given_source_records_event(xp_conn):
 def test_load_xp_settings_reads_reaction_given_coeff(tmp_path):
     from bot_modules.core.db_utils import open_db, set_config_value
     from bot_modules.core.xp_system import load_xp_settings
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         set_config_value(conn, "xp_coeff_reaction_given_xp", "0.5", 7)
     with open_db(db_path) as conn:
@@ -212,10 +212,10 @@ def test_load_xp_settings_clamps_zero_voice_interval(tmp_path):
     """A stored 0 voice interval must be clamped so voice XP never divides by 0."""
     from bot_modules.core.db_utils import open_db, set_config_value
     from bot_modules.core.xp_system import completed_voice_intervals, load_xp_settings
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
     db_path = tmp_path / "vi.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         set_config_value(conn, "xp_coeff_voice_interval_seconds", "0", 7)
     with open_db(db_path) as conn:

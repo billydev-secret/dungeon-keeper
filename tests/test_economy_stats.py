@@ -24,7 +24,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.economy import stats
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.economy_stats_service import compute_stats
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 900
 NOW = 1_800_000_000.0
@@ -133,7 +133,7 @@ def test_affordability_rounds_and_short_circuits():
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "stats.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 
@@ -266,7 +266,7 @@ def test_compute_stats_supply():
     from pathlib import Path
 
     tmp = Path(tempfile.mkdtemp()) / "s.db"
-    apply_migrations_sync(tmp)
+    migrated_db(tmp)
     _seed(tmp)
     with open_db(tmp) as conn:
         out = compute_stats(conn, SETTINGS, GUILD, now=NOW)
@@ -692,7 +692,7 @@ def test_compute_live_shapes_and_counts(tmp_path):
     from bot_modules.services.economy_stats_service import compute_live
 
     db_path = tmp_path / "live.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         save_econ_settings(conn, GUILD, {"enabled": True})
         settings = SETTINGS

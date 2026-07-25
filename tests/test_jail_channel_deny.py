@@ -25,14 +25,14 @@ from bot_modules.commands.jail_commands import (
     stamp_channel_jail_deny,
 )
 from bot_modules.cogs.jail_cog import JailCog
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
 def _make_ctx(db_path, *, guild_id: int = 100) -> AppContext:
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return AppContext(
         bot=MagicMock(),
         log=logging.getLogger("test"),

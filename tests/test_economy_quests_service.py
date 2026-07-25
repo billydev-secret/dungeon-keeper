@@ -64,7 +64,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     save_econ_settings,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 500
 USER = 1001
@@ -86,7 +86,7 @@ SETTINGS = EconSettings(
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 
@@ -321,46 +321,32 @@ def test_paid_uniqueness_race_direct_duplicate_insert(db):
 # ── claim guards ──────────────────────────────────────────────────────
 
 
-def test_claim_missing_quest_raises(db):
+@pytest.mark.parametrize(
+    ("quest_kwargs", "guild", "period", "match"),
+    [
+        pytest.param(None, GUILD, "2026-07-10", "not found", id="missing"),
+        pytest.param({"active": False}, GUILD, "2026-07-10", "not active", id="inactive"),
+        pytest.param({}, GUILD + 1, "2026-07-10", "not found", id="wrong-guild"),
+        pytest.param(
+            {"starts_at": time.time() + 3600}, GUILD, "2026-07-10", "not started",
+            id="before-start",
+        ),
+        pytest.param(
+            {"ends_at": time.time() - 3600}, GUILD, "2026-07-10", "ended",
+            id="after-end",
+        ),
+        # Community quests pay via settlement; a self-claim would double-pay.
+        pytest.param(
+            {"qtype": "community", "reward": 30, "community_target": 10},
+            GUILD, "once", "cannot be claimed", id="community",
+        ),
+    ],
+)
+def test_claim_guards_raise(db, quest_kwargs, guild, period, match):
     with open_db(db) as conn:
-        with pytest.raises(ValueError, match="not found"):
-            claim_quest(conn, SETTINGS, GUILD, 999, USER, period="2026-07-10", booster=False)
-
-
-def test_claim_inactive_quest_raises(db):
-    with open_db(db) as conn:
-        qid = _make(conn, active=False)
-        with pytest.raises(ValueError, match="not active"):
-            claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-07-10", booster=False)
-
-
-def test_claim_wrong_guild_raises(db):
-    with open_db(db) as conn:
-        qid = _make(conn)
-        with pytest.raises(ValueError, match="not found"):
-            claim_quest(conn, SETTINGS, GUILD + 1, qid, USER, period="2026-07-10", booster=False)
-
-
-def test_claim_before_start_raises(db):
-    with open_db(db) as conn:
-        qid = _make(conn, starts_at=time.time() + 3600)
-        with pytest.raises(ValueError, match="not started"):
-            claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-07-10", booster=False)
-
-
-def test_claim_after_end_raises(db):
-    with open_db(db) as conn:
-        qid = _make(conn, ends_at=time.time() - 3600)
-        with pytest.raises(ValueError, match="ended"):
-            claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-07-10", booster=False)
-
-
-def test_community_quest_not_directly_claimable(db):
-    # Community quests pay via settlement; a self-claim would double-pay.
-    with open_db(db) as conn:
-        qid = _make(conn, qtype="community", reward=30, community_target=10)
-        with pytest.raises(ValueError, match="cannot be claimed"):
-            claim_quest(conn, SETTINGS, GUILD, qid, USER, period="once", booster=False)
+        qid = 999 if quest_kwargs is None else _make(conn, **quest_kwargs)
+        with pytest.raises(ValueError, match=match):
+            claim_quest(conn, SETTINGS, guild, qid, USER, period=period, booster=False)
 
 
 # ── sign-off flow ─────────────────────────────────────────────────────
@@ -808,16 +794,24 @@ def test_rotate_cycles_the_tagged_pool(db):
         assert _get(conn, GUILD, a)["active"] == 1
 
 
-def test_rotate_noop_when_pool_of_one(db):
+@pytest.mark.parametrize(
+    "quests",
+    [
+        pytest.param([{"rotate_tag": "solo", "active": True}], id="pool-of-one"),
+        pytest.param(
+            [
+                {"rotate_tag": "", "active": True},
+                {"rotate_tag": "pool", "active": False},
+            ],
+            id="no-active-tagged",
+        ),
+        pytest.param([], id="no-quests-of-type"),
+    ],
+)
+def test_rotate_noop(db, quests):
     with open_db(db) as conn:
-        _make(conn, qtype="daily", rotate_tag="solo", active=True)
-        assert rotate_pool(conn, GUILD, "daily") is None
-
-
-def test_rotate_noop_when_no_active_tagged(db):
-    with open_db(db) as conn:
-        _make(conn, qtype="daily", rotate_tag="", active=True)
-        _make(conn, qtype="daily", rotate_tag="pool", active=False)
+        for kwargs in quests:
+            _make(conn, qtype="daily", **kwargs)
         assert rotate_pool(conn, GUILD, "daily") is None
 
 
@@ -829,11 +823,6 @@ def test_rotate_respects_slot_rule(db):
         rotate_pool(conn, GUILD, "daily")
         active = list_quests(conn, GUILD, active_only=True)
         assert len([q for q in active if q["qtype"] == "daily"]) == 1
-
-
-def test_rotate_empty_type_is_none(db):
-    with open_db(db) as conn:
-        assert rotate_pool(conn, GUILD, "weekly") is None
 
 
 def test_rotate_noop_when_multiple_pool_members_active(db):
@@ -1055,24 +1044,6 @@ def test_confession_quest_rejects_signoff(db):
         _make(conn, qtype="daily", trigger_kind="whisper", signoff=1)
 
 
-def test_new_engagement_kinds_registered(db):
-    # The confession/AMA/whisper/quote faucets must be full trigger kinds:
-    # in TRIGGER_KINDS (dropdown + validation) with matching Income-Sources
-    # copy, or their fire sites are dead code.
-    for kind in ("confession", "ama_ask", "whisper", "quote"):
-        assert kind in TRIGGER_KINDS, kind
-        assert kind in TRIGGER_KIND_INFO, kind
-        assert list_income_sources_has(db, kind)
-
-
-def test_game_host_kind_registered(db):
-    # game_host must be authorable (dropdown + validation), documented, and a
-    # toggleable income source — or its fire site in pay_game_rewards is dead.
-    assert "game_host" in TRIGGER_KINDS
-    assert "game_host" in TRIGGER_KIND_INFO
-    assert list_income_sources_has(db, "game_host")
-
-
 def list_income_sources_has(db, kind):
     with open_db(db) as conn:
         return kind in list_income_sources(conn, GUILD)
@@ -1095,13 +1066,6 @@ VARIETY_KINDS = (
     "level_up",
     "ama_answer",
 )
-
-
-def test_variety_round_kinds_registered(db):
-    for kind in VARIETY_KINDS:
-        assert kind in TRIGGER_KINDS, kind
-        assert kind in TRIGGER_KIND_INFO, kind
-        assert list_income_sources_has(db, kind)
 
 
 @pytest.mark.parametrize("kind", VARIETY_KINDS)
@@ -2866,11 +2830,26 @@ SOCIAL_KINDS = (
 )
 
 
-def test_social_kinds_registered(db):
-    for kind in SOCIAL_KINDS:
+def test_every_trigger_kind_fully_registered(db):
+    """One registry contract for every fireable kind, wherever it was added.
+
+    Each kind must be in TRIGGER_KINDS (dropdown + validation) and
+    TRIGGER_KIND_INFO (documented), and appear as a toggleable income source —
+    a kind missing any of the three leaves its fire site as dead code.
+    Covers the engagement faucets (confession/ama_ask/whisper/quote),
+    game_host (fire site: pay_game_rewards), the variety-round kinds, and
+    the social kinds.
+    """
+    kinds = (
+        "confession", "ama_ask", "whisper", "quote",
+        "game_host",
+        *VARIETY_KINDS,
+        *SOCIAL_KINDS,
+    )
+    for kind in kinds:
         assert kind in TRIGGER_KINDS, kind
         assert kind in TRIGGER_KIND_INFO, kind
-        assert list_income_sources_has(db, kind)
+        assert list_income_sources_has(db, kind), kind
 
 
 def test_distinct_entity_counting_via_occurrences(db):

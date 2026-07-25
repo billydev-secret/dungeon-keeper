@@ -28,7 +28,7 @@ from bot_modules.rules_watch.ledger import (
     names_platform,
     record_hit,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 123
 CHANNEL = 456
@@ -44,7 +44,7 @@ DAY = 86400
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as conn:
         conn.execute(
             "INSERT INTO known_channels (guild_id, channel_id, channel_name) VALUES (?,?,?)",

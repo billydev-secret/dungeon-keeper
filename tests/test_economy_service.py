@@ -10,7 +10,7 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
     ECON_PREFIX,
@@ -48,7 +48,7 @@ OTHER = 1002
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

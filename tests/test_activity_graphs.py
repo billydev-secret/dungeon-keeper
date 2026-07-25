@@ -53,7 +53,7 @@ from bot_modules.services.activity_graphs import (
     render_role_growth_chart,
     render_session_burst_chart,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -66,7 +66,7 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 def db_conn(tmp_path):
     """A migrated SQLite connection ready for activity-graph tests."""
     path = tmp_path / "ag.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         yield conn
 

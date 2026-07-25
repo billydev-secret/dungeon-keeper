@@ -21,7 +21,7 @@ from bot_modules.services.economy_auction_service import (
     place_bid,
 )
 from bot_modules.services.economy_service import EconSettings, apply_credit
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 900
 HOST, A, B = 5001, 5002, 5003
@@ -38,7 +38,7 @@ SETTINGS = EconSettings(
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

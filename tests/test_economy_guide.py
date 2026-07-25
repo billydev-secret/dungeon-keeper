@@ -27,7 +27,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     save_econ_settings,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from tests.fakes import FakeGuild, fake_interaction
 
 GUILD_ID = 9001
@@ -177,7 +177,7 @@ def test_restick_false_when_no_panel_posted():
 
 def test_guide_ids_round_trip(tmp_path):
     db = tmp_path / "test.db"
-    apply_migrations_sync(db)
+    migrated_db(db)
     with open_db(db) as conn:
         save_econ_settings(
             conn, GUILD_ID, {"guide_channel_id": 123, "guide_message_id": 456}
@@ -193,7 +193,7 @@ def test_guide_ids_round_trip(tmp_path):
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 
