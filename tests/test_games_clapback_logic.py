@@ -206,65 +206,60 @@ def test_create_matchups_strips_and_lowercases_for_dup_check():
 # ── calculate_matchup_score ─────────────────────────────────────────
 
 
-def test_calculate_matchup_score_no_votes_returns_5050_tie():
-    result = calculate_matchup_score({}, 10, 20)
-    assert result["winner"] is None
-    assert result["scores"] == {10: 50, 20: 50}
-    assert result["clapback"] is False
-    assert result["vote_counts"] == {10: 0, 20: 0}
-
-
-def test_calculate_matchup_score_single_vote_no_clapback():
-    """Clapback rule requires >= 2 votes even when unanimous."""
-    result = calculate_matchup_score({"v1": 10}, 10, 20)
-    assert result["clapback"] is False
-    assert result["winner"] == 10
-
-
-def test_calculate_matchup_score_two_unanimous_is_clapback():
-    result = calculate_matchup_score({"v1": 10, "v2": 10}, 10, 20)
-    assert result["clapback"] is True
-    assert result["winner"] == 10
-    # +25 clapback bonus on top of 100% pct
-    assert result["scores"][10] == 125
-    assert result["scores"][20] == 0
-
-
-def test_calculate_matchup_score_split_no_clapback():
-    """Non-unanimous → no clapback even if a clear winner."""
-    result = calculate_matchup_score(
-        {"v1": 10, "v2": 10, "v3": 20}, 10, 20
-    )
-    assert result["clapback"] is False
-    assert result["winner"] == 10
-    assert result["vote_counts"] == {10: 2, 20: 1}
-
-
-def test_calculate_matchup_score_even_split_is_tie():
-    result = calculate_matchup_score(
-        {"v1": 10, "v2": 20}, 10, 20
-    )
-    assert result["winner"] is None
-    assert result["scores"][10] == 50
-    assert result["scores"][20] == 50
-
-
-def test_calculate_matchup_score_player_b_wins():
-    result = calculate_matchup_score(
-        {"v1": 20, "v2": 20, "v3": 10}, 10, 20
-    )
-    assert result["winner"] == 20
-    assert result["vote_counts"] == {10: 1, 20: 2}
-
-
-def test_calculate_matchup_score_unanimous_b_yields_clapback():
-    result = calculate_matchup_score(
-        {"v1": 20, "v2": 20}, 10, 20
-    )
-    assert result["clapback"] is True
-    assert result["winner"] == 20
-    assert result["scores"][20] == 125
-    assert result["scores"][10] == 0
+@pytest.mark.parametrize(
+    "votes,expected",
+    [
+        # The 50/50 zero-votes fallback is the cog's intentional
+        # "show up and play" behavior.
+        pytest.param(
+            {},
+            {"winner": None, "scores": {10: 50, 20: 50},
+             "clapback": False, "vote_counts": {10: 0, 20: 0}},
+            id="no-votes-5050-tie",
+        ),
+        # Clapback rule requires >= 2 votes even when unanimous.
+        pytest.param(
+            {"v1": 10},
+            {"winner": 10, "scores": {10: 100, 20: 0},
+             "clapback": False, "vote_counts": {10: 1, 20: 0}},
+            id="single-vote-no-clapback",
+        ),
+        # +25 clapback bonus on top of 100% pct
+        pytest.param(
+            {"v1": 10, "v2": 10},
+            {"winner": 10, "scores": {10: 125, 20: 0},
+             "clapback": True, "vote_counts": {10: 2, 20: 0}},
+            id="two-unanimous-is-clapback",
+        ),
+        # Non-unanimous → no clapback even if a clear winner.
+        pytest.param(
+            {"v1": 10, "v2": 10, "v3": 20},
+            {"winner": 10, "scores": {10: 67, 20: 33},
+             "clapback": False, "vote_counts": {10: 2, 20: 1}},
+            id="split-no-clapback",
+        ),
+        pytest.param(
+            {"v1": 10, "v2": 20},
+            {"winner": None, "scores": {10: 50, 20: 50},
+             "clapback": False, "vote_counts": {10: 1, 20: 1}},
+            id="even-split-is-tie",
+        ),
+        pytest.param(
+            {"v1": 20, "v2": 20, "v3": 10},
+            {"winner": 20, "scores": {10: 33, 20: 67},
+             "clapback": False, "vote_counts": {10: 1, 20: 2}},
+            id="player-b-wins",
+        ),
+        pytest.param(
+            {"v1": 20, "v2": 20},
+            {"winner": 20, "scores": {10: 0, 20: 125},
+             "clapback": True, "vote_counts": {10: 0, 20: 2}},
+            id="unanimous-b-yields-clapback",
+        ),
+    ],
+)
+def test_calculate_matchup_score(votes, expected):
+    assert calculate_matchup_score(votes, 10, 20) == expected
 
 
 def test_calculate_matchup_score_handles_string_or_int_vote_values():

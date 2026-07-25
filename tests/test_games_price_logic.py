@@ -187,38 +187,28 @@ def test_ladder_stats_truncates_floats_to_int() -> None:
 # ── tally_winners ────────────────────────────────────────────────────
 
 
-def test_tally_winners_no_votes() -> None:
-    winners, max_votes = tally_winners({})
-    assert winners == []
-    assert max_votes == 0
-
-
-def test_tally_winners_single_winner() -> None:
-    votes = {1: 100, 2: 100, 3: 200}
+@pytest.mark.parametrize(
+    "votes,expected_winners,expected_max_votes",
+    [
+        pytest.param({}, [], 0, id="no-votes"),
+        pytest.param({1: 100, 2: 100, 3: 200}, [100], 2, id="single-winner"),
+        pytest.param(
+            {1: 100, 2: 200, 3: 100, 4: 200}, [100, 200], 2, id="two-way-tie"
+        ),
+        pytest.param(
+            {1: 100, 2: 200, 3: 300}, [100, 200, 300], 1, id="three-way-tie"
+        ),
+        pytest.param({1: 50, 2: 50, 3: 50}, [50], 3, id="unanimous"),
+    ],
+)
+def test_tally_winners(
+    votes: dict[int, int],
+    expected_winners: list[int],
+    expected_max_votes: int,
+) -> None:
     winners, max_votes = tally_winners(votes)
-    assert winners == [100]
-    assert max_votes == 2
-
-
-def test_tally_winners_two_way_tie() -> None:
-    votes = {1: 100, 2: 200, 3: 100, 4: 200}
-    winners, max_votes = tally_winners(votes)
-    assert sorted(winners) == [100, 200]
-    assert max_votes == 2
-
-
-def test_tally_winners_three_way_tie() -> None:
-    votes = {1: 100, 2: 200, 3: 300}
-    winners, max_votes = tally_winners(votes)
-    assert sorted(winners) == [100, 200, 300]
-    assert max_votes == 1
-
-
-def test_tally_winners_unanimous() -> None:
-    votes = {1: 50, 2: 50, 3: 50}
-    winners, max_votes = tally_winners(votes)
-    assert winners == [50]
-    assert max_votes == 3
+    assert sorted(winners) == expected_winners
+    assert max_votes == expected_max_votes
 
 
 # ── compute_recap_awards ─────────────────────────────────────────────

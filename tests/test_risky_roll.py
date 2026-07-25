@@ -243,56 +243,63 @@ def _resolved_state(
     return s
 
 
-def test_build_main_prompt_state_returns_none_without_highest():
-    s = _resolved_state(highest=None)
+@pytest.mark.parametrize(
+    "state_kwargs",
+    [
+        pytest.param({"highest": None}, id="no-highest"),
+        # OK with no lowest should never happen but defensively returns None.
+        pytest.param({"lowest": None}, id="ok-but-no-lowest"),
+    ],
+)
+def test_build_main_prompt_state_returns_none(state_kwargs):
+    s = _resolved_state(**state_kwargs)
     assert build_main_prompt_state("g", s, RoundResult.OK) is None
 
 
-def test_build_main_prompt_state_returns_none_when_ok_but_no_lowest():
-    """OK with no lowest should never happen but defensively returns None."""
-    s = _resolved_state(lowest=None)
-    assert build_main_prompt_state("g", s, RoundResult.OK) is None
-
-
-def test_build_main_prompt_state_room_prompt_on_sixtynine():
-    s = _resolved_state(rolls={10: 69, 20: 5, 30: 7})
-    prompt = build_main_prompt_state("g", s, RoundResult.SIXTYNINE)
+@pytest.mark.parametrize(
+    "state_kwargs,result_type,expected_kind,expected_participants,expected_tie",
+    [
+        # Room prompt targets every roller (whole room asks)
+        pytest.param(
+            {"rolls": {10: 69, 20: 5, 30: 7}},
+            RoundResult.SIXTYNINE, PromptKind.ROOM, {10, 20, 30}, set(),
+            id="room-prompt-on-sixtynine",
+        ),
+        # SIXTYNINE_TIE goes down the same room-prompt branch.
+        pytest.param(
+            {"rolls": {10: 69, 20: 69, 30: 5}},
+            RoundResult.SIXTYNINE_TIE, PromptKind.ROOM, {10, 20, 30}, set(),
+            id="room-prompt-on-sixtynine-tie",
+        ),
+        pytest.param(
+            {"highest": 10, "lowest": 20},
+            RoundResult.OK, PromptKind.DIRECT, {20}, set(),
+            id="direct-prompt-targets-lowest-only",
+        ),
+        # The 100 rule adds the second-lowest as a second target.
+        pytest.param(
+            {"highest": 10, "lowest": 20, "second_lowest": 30},
+            RoundResult.OK, PromptKind.DIRECT, {20, 30}, set(),
+            id="direct-adds-second-lowest-on-100-rule",
+        ),
+        pytest.param(
+            {"highest": 10, "lowest": 20, "lowest_tie": [20, 21, 22]},
+            RoundResult.OK, PromptKind.DIRECT, {20}, {20, 21, 22},
+            id="carries-lowest-tie-user-ids",
+        ),
+    ],
+)
+def test_build_main_prompt_state_variants(
+    state_kwargs, result_type, expected_kind, expected_participants, expected_tie
+):
+    s = _resolved_state(**state_kwargs)
+    prompt = build_main_prompt_state("g", s, result_type)
     assert prompt is not None
-    assert prompt.prompt_kind == PromptKind.ROOM
-    # Room prompt targets every roller (whole room asks)
-    assert prompt.participant_user_ids == {10, 20, 30}
+    assert prompt.prompt_kind == expected_kind
+    assert prompt.participant_user_ids == expected_participants
+    assert prompt.lowest_tie_user_ids == expected_tie
     assert prompt.winner_id == 10
     assert prompt.game_id == "g"
-
-
-def test_build_main_prompt_state_room_prompt_on_sixtynine_tie():
-    """SIXTYNINE_TIE goes down the same room-prompt branch."""
-    s = _resolved_state(rolls={10: 69, 20: 69, 30: 5})
-    prompt = build_main_prompt_state("g", s, RoundResult.SIXTYNINE_TIE)
-    assert prompt is not None
-    assert prompt.prompt_kind == PromptKind.ROOM
-
-
-def test_build_main_prompt_state_direct_prompt_targets_lowest_only():
-    s = _resolved_state(highest=10, lowest=20)
-    prompt = build_main_prompt_state("g", s, RoundResult.OK)
-    assert prompt is not None
-    assert prompt.prompt_kind == PromptKind.DIRECT
-    assert prompt.participant_user_ids == {20}
-
-
-def test_build_main_prompt_state_direct_prompt_adds_second_lowest_on_100_rule():
-    s = _resolved_state(highest=10, lowest=20, second_lowest=30)
-    prompt = build_main_prompt_state("g", s, RoundResult.OK)
-    assert prompt is not None
-    assert prompt.participant_user_ids == {20, 30}
-
-
-def test_build_main_prompt_state_carries_lowest_tie_user_ids():
-    s = _resolved_state(highest=10, lowest=20, lowest_tie=[20, 21, 22])
-    prompt = build_main_prompt_state("g", s, RoundResult.OK)
-    assert prompt is not None
-    assert prompt.lowest_tie_user_ids == {20, 21, 22}
 
 
 # ── logic.build_one_rule_prompt_state ────────────────────────────────
@@ -605,60 +612,53 @@ def _pending_room() -> PendingQuestionState:
     )
 
 
-def test_build_pending_prompt_content_room_kind_mentions_winner_and_thread():
-    text = build_pending_prompt_content(_pending_room())
-    assert "<@10>" in text
-    assert "**69**" in text
-    assert "thread" in text.lower()
-
-
-def test_build_pending_prompt_content_direct_kind_targets_participants():
+@pytest.mark.parametrize(
+    "state_kwargs,expected_substrings",
+    [
+        # Room kind mentions the winner, the 69 wording, and the thread hint
+        # ("thread" was originally matched case-insensitively — the merged
+        # test lowercases both sides for every substring).
+        pytest.param(
+            {"participant_user_ids": {20, 30}, "prompt_kind": PromptKind.ROOM},
+            ["<@10>", "**69**", "thread"],
+            id="room-kind-mentions-winner-and-thread",
+        ),
+        pytest.param(
+            {"participant_user_ids": {20}, "prompt_kind": PromptKind.DIRECT},
+            ["<@10>", "<@20>", "Ask Question"],
+            id="direct-kind-targets-participants",
+        ),
+        # When the 100 rule fired the prompt has two targets; the content
+        # should mention both and use the multi-target ("**100**") phrasing.
+        pytest.param(
+            {"participant_user_ids": {20, 30}, "prompt_kind": PromptKind.DIRECT},
+            ["<@20>", "<@30>", "**100**"],
+            id="direct-kind-with-100-rule-mentions-targets",
+        ),
+        pytest.param(
+            {"participant_user_ids": {20}, "extra_questioner_id": 11,
+             "prompt_kind": PromptKind.TWO_QUESTIONERS},
+            ["<@10>", "<@11>"],
+            id="two-questioners-lists-unasked",
+        ),
+        # Only id 11 should be in the "can ask" line; 10 in the
+        # "already asked" line.
+        pytest.param(
+            {"participant_user_ids": {20}, "extra_questioner_id": 11,
+             "prompt_kind": PromptKind.TWO_QUESTIONERS,
+             "questioners_asked": {10}},
+            ["already asked"],
+            id="two-questioners-notes-already-asked",
+        ),
+    ],
+)
+def test_build_pending_prompt_content(state_kwargs, expected_substrings):
     s = PendingQuestionState(
-        channel_id=100, guild_id=1, winner_id=10,
-        participant_user_ids={20},
-        game_id="g", prompt_kind=PromptKind.DIRECT,
+        channel_id=100, guild_id=1, winner_id=10, game_id="g", **state_kwargs,
     )
     text = build_pending_prompt_content(s)
-    assert "<@10>" in text
-    assert "<@20>" in text
-    assert "Ask Question" in text
-
-
-def test_build_pending_prompt_content_direct_kind_with_100_rule_mentions_targets():
-    """When the 100 rule fired the prompt has two targets; the content
-    should mention both and use the multi-target phrasing."""
-    s = PendingQuestionState(
-        channel_id=100, guild_id=1, winner_id=10,
-        participant_user_ids={20, 30},
-        game_id="g", prompt_kind=PromptKind.DIRECT,
-    )
-    text = build_pending_prompt_content(s)
-    assert "<@20>" in text and "<@30>" in text
-    assert "**100**" in text  # the 100 rule wording fires
-
-
-def test_build_pending_prompt_content_two_questioners_lists_unasked():
-    s = PendingQuestionState(
-        channel_id=100, guild_id=1, winner_id=10,
-        participant_user_ids={20}, game_id="g",
-        extra_questioner_id=11,
-        prompt_kind=PromptKind.TWO_QUESTIONERS,
-    )
-    text = build_pending_prompt_content(s)
-    assert "<@10>" in text and "<@11>" in text
-
-
-def test_build_pending_prompt_content_two_questioners_notes_already_asked():
-    s = PendingQuestionState(
-        channel_id=100, guild_id=1, winner_id=10,
-        participant_user_ids={20}, game_id="g",
-        extra_questioner_id=11,
-        prompt_kind=PromptKind.TWO_QUESTIONERS,
-        questioners_asked={10},
-    )
-    text = build_pending_prompt_content(s)
-    # Only id 11 should be in the "can ask" line; 10 in the "already asked" line
-    assert "already asked" in text
+    for sub in expected_substrings:
+        assert sub.lower() in text.lower()
 
 
 # ── formatters.build_pending_question_summary ───────────────────────

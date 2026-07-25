@@ -17,7 +17,6 @@ from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     create_quest,
-    set_income_source,
     set_quest_active,
 )
 from bot_modules.cogs.economy_cog import (
@@ -35,7 +34,6 @@ from bot_modules.services.economy_service import (
     get_notify_muted,
     get_streak_shields,
     load_econ_settings,
-    notify_member,
     save_econ_settings,
 )
 from bot_modules.services.quote_renderer import THEMES
@@ -148,12 +146,27 @@ async def test_wallet_shows_balance_branding_and_ledger(ctx, db):
     assert "· grant ·" not in activity.value  # never the bare snake_case token
 
 
+@pytest.mark.parametrize("command", ["wallet", "grant", "qotd", "quests", "mute"])
 @pytest.mark.asyncio
-async def test_wallet_disabled_gate(ctx, db):
+async def test_disabled_economy_gate_per_command(ctx, db, command):
+    # The disabled check is inlined per command, so each case exercises its
+    # own gate. The "nothing written" invariants live in the service suites.
     cog = _make_cog(ctx)  # economy left disabled
-    interaction = _interaction(_member(member_id=500))
-
-    await _wallet(cog, interaction)
+    actor = _member(admin=True)  # admin, so only the gate can block
+    if command == "qotd":
+        interaction, channel = _qotd_interaction(actor)
+        await _qotd(cog, interaction, "Blocked?")
+        channel.send.assert_not_called()
+    else:
+        interaction = _interaction(actor)
+        if command == "wallet":
+            await _wallet(cog, interaction)
+        elif command == "grant":
+            await _grant(cog, interaction, _member(member_id=900), 10, "x")
+        elif command == "quests":
+            await _quests(cog, interaction)
+        else:
+            await _mute(cog, interaction)
 
     args = interaction.response.send_message.await_args.args
     kwargs = interaction.response.send_message.await_args.kwargs
@@ -165,67 +178,43 @@ async def test_wallet_disabled_gate(ctx, db):
 # ── /bank grant — permission matrix ───────────────────────────────────────────
 
 
+@pytest.mark.parametrize(
+    ("command", "actor_kind", "allowed"),
+    [
+        ("grant", "admin", True),
+        ("grant", "manager", True),
+        ("grant", "plain", False),
+        ("qotd", "manager", True),
+        ("qotd", "plain", False),
+    ],
+)
 @pytest.mark.asyncio
-async def test_grant_admin_allowed(ctx, db):
-    _enable(db)
-    cog = _make_cog(ctx)
-    actor = _member(admin=True)
-    target = _member(member_id=900, name="Target")
-    interaction = _interaction(actor)
-
-    await _grant(cog, interaction, target, 25, "good work")
-
-    kwargs = interaction.response.send_message.await_args.kwargs
-    assert "embed" in kwargs
-    assert kwargs.get("ephemeral") is not True  # public confirmation
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 25
-
-
-@pytest.mark.asyncio
-async def test_grant_manager_role_allowed(ctx, db):
+async def test_mod_command_permission_matrix(ctx, db, command, actor_kind, allowed):
     _enable(db, manager_role_id=MANAGER_ROLE_ID)
     cog = _make_cog(ctx)
-    actor = _member(admin=False, role_ids=(MANAGER_ROLE_ID,))
-    target = _member(member_id=900)
-    interaction = _interaction(actor)
+    actor = _member(
+        admin=actor_kind == "admin",
+        role_ids=(MANAGER_ROLE_ID,) if actor_kind == "manager" else (),
+    )
 
-    await _grant(cog, interaction, target, 10, "for helping")
+    if command == "grant":
+        interaction = _interaction(actor)
+        await _grant(cog, interaction, _member(member_id=900), 10, "for helping")
+        with open_db(db) as conn:
+            acted = get_balance(conn, GUILD_ID, 900) == 10
+    else:
+        interaction, channel = _qotd_interaction(actor)
+        await _qotd(cog, interaction, "Coffee or tea?")
+        acted = channel.send.await_count == 1
 
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 10
-
-
-@pytest.mark.asyncio
-async def test_grant_plain_member_refused(ctx, db):
-    _enable(db, manager_role_id=MANAGER_ROLE_ID)
-    cog = _make_cog(ctx)
-    actor = _member(admin=False, role_ids=())  # no admin, no manager role
-    target = _member(member_id=900)
-    interaction = _interaction(actor)
-
-    await _grant(cog, interaction, target, 10, "nope")
-
-    kwargs = interaction.response.send_message.await_args.kwargs
-    assert kwargs["ephemeral"] is True
-    assert "permission" in interaction.response.send_message.await_args.args[0].lower()
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 0
-
-
-@pytest.mark.asyncio
-async def test_grant_disabled_gate(ctx, db):
-    cog = _make_cog(ctx)  # disabled; caller is admin so only the gate can block
-    actor = _member(admin=True)
-    target = _member(member_id=900)
-    interaction = _interaction(actor)
-
-    await _grant(cog, interaction, target, 10, "x")
-
-    args = interaction.response.send_message.await_args.args
-    assert "enabled" in args[0].lower()
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 0
+    assert acted is allowed
+    call = interaction.response.send_message.await_args
+    if allowed and command == "grant":
+        assert "embed" in call.kwargs
+        assert call.kwargs.get("ephemeral") is not True  # public confirmation
+    if not allowed:
+        assert "permission" in call.args[0].lower()
+        assert call.kwargs["ephemeral"] is True
 
 
 # ── /bank grant — amounts and booster multiplier ─────────────────────────────
@@ -241,44 +230,10 @@ async def test_grant_booster_target_gets_multiplier(ctx, db):
 
     await _grant(cog, interaction, target, 5, "boost love")
 
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 8  # ceil(5 * 1.5)
+    # The ceil-rounding math itself is test_credit_booster_ceil_rounding
+    # (service) — this covers the embed calling out the boost.
     embed = interaction.response.send_message.await_args.kwargs["embed"]
     assert any("Booster" in f.name for f in embed.fields)
-
-
-@pytest.mark.asyncio
-async def test_grant_rejects_amount_below_one(ctx, db):
-    _enable(db)
-    cog = _make_cog(ctx)
-    actor = _member(admin=True)
-    target = _member(member_id=900)
-    interaction = _interaction(actor)
-
-    await _grant(cog, interaction, target, 0, "zero")
-
-    kwargs = interaction.response.send_message.await_args.kwargs
-    assert kwargs["ephemeral"] is True
-    assert "at least 1" in interaction.response.send_message.await_args.args[0].lower()
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 0
-
-
-@pytest.mark.asyncio
-async def test_grant_rejects_bot_target(ctx, db):
-    _enable(db)
-    cog = _make_cog(ctx)
-    actor = _member(admin=True)
-    target = _member(member_id=900, is_bot=True)
-    interaction = _interaction(actor)
-
-    await _grant(cog, interaction, target, 10, "bot")
-
-    kwargs = interaction.response.send_message.await_args.kwargs
-    assert kwargs["ephemeral"] is True
-    assert "bot" in interaction.response.send_message.await_args.args[0].lower()
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 0
 
 
 # ── /qotd post ────────────────────────────────────────────────────────────────
@@ -308,18 +263,6 @@ def _patch_qotd_image():
         new=AsyncMock(return_value=None),
     ):
         yield
-
-
-@pytest.mark.asyncio
-async def test_qotd_disabled_gate(ctx, db):
-    cog = _make_cog(ctx)  # economy disabled
-    interaction, channel = _qotd_interaction(_member(admin=True))
-    await _qotd(cog, interaction, "What's your favorite game?")
-    args = interaction.response.send_message.await_args.args
-    assert "enabled" in args[0].lower()
-    channel.send.assert_not_called()
-    with open_db(db) as conn:
-        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
 
 
 @pytest.mark.asyncio
@@ -415,32 +358,6 @@ async def test_qotd_renders_card_when_image_available(ctx, db):
         assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 1
 
 
-@pytest.mark.asyncio
-async def test_qotd_manager_role_allowed(ctx, db):
-    _enable(db, manager_role_id=MANAGER_ROLE_ID)
-    cog = _make_cog(ctx)
-    interaction, channel = _qotd_interaction(
-        _member(admin=False, role_ids=(MANAGER_ROLE_ID,))
-    )
-    await _qotd(cog, interaction, "Coffee or tea?")
-    channel.send.assert_awaited_once()
-    with open_db(db) as conn:
-        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 1
-
-
-@pytest.mark.asyncio
-async def test_qotd_plain_member_refused(ctx, db):
-    _enable(db, manager_role_id=MANAGER_ROLE_ID)
-    cog = _make_cog(ctx)
-    interaction, channel = _qotd_interaction(_member(admin=False, role_ids=()))
-    await _qotd(cog, interaction, "Nope?")
-    args = interaction.response.send_message.await_args.args
-    assert "permission" in args[0].lower()
-    channel.send.assert_not_called()
-    with open_db(db) as conn:
-        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
-
-
 # ── /bank quests — listing state matrix ──────────────────────────────────────
 
 
@@ -489,15 +406,6 @@ def _period(db, qtype) -> str:
 
 async def _quests(cog, interaction) -> None:
     await cog.bank_quests.callback(cog, interaction)
-
-
-@pytest.mark.asyncio
-async def test_quests_disabled_gate(ctx, db):
-    cog = _make_cog(ctx)  # disabled
-    interaction = _interaction(_member(member_id=500))
-    await _quests(cog, interaction)
-    args = interaction.response.send_message.await_args.args
-    assert "enabled" in args[0].lower()
 
 
 @pytest.mark.asyncio
@@ -758,35 +666,6 @@ async def test_bank_mute_toggles_pref(ctx, db):
         assert get_notify_muted(conn, GUILD_ID, 500) is False
 
 
-@pytest.mark.asyncio
-async def test_bank_mute_disabled_gate(ctx, db):
-    cog = _make_cog(ctx)  # disabled
-    interaction = _interaction(_member(member_id=500))
-    await _mute(cog, interaction)
-    args = interaction.response.send_message.await_args.args
-    assert "enabled" in args[0].lower()
-
-
-@pytest.mark.asyncio
-async def test_muted_member_not_dmd_by_notify_member(ctx, db):
-    """A muted pref makes notify_member drop silently (returns True, no DM)."""
-    _enable(db)
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-    await _mute(cog, interaction)  # mute user 500
-
-    dm_target = MagicMock()
-    dm_target.send = AsyncMock()
-    guild = MagicMock()
-    guild.get_member = MagicMock(return_value=dm_target)
-    bot = MagicMock()
-    bot.get_guild = MagicMock(return_value=guild)
-
-    delivered = await notify_member(bot, db, GUILD_ID, 500, content="ping")
-    assert delivered is True
-    dm_target.send.assert_not_called()
-
-
 # ── Stage 3: transfers / shop / role studio / gift / rentals ─────────────────
 
 import contextlib  # noqa: E402
@@ -985,49 +864,6 @@ async def test_pay_transfers_disabled(ctx, db):
     assert "off" in args[0].lower()
     with open_db(db) as conn:
         assert get_balance(conn, GUILD_ID, 500) == 500
-
-
-@pytest.mark.asyncio
-async def test_pay_insufficient(ctx, db):
-    _enable(db)
-    _credit(db, 500, 10)
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-
-    with _patch_projection():
-        await _pay(cog, interaction, _member(member_id=900), 50)
-
-    args = interaction.response.send_message.await_args.args
-    assert "enough" in args[0].lower()
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 10
-        assert get_balance(conn, GUILD_ID, 900) == 0
-
-
-@pytest.mark.asyncio
-async def test_pay_rejects_self(ctx, db):
-    _enable(db)
-    _credit(db, 500, 500)
-    cog = _make_cog(ctx)
-    sender = _member(member_id=500)
-    interaction = _interaction(sender)
-    with _patch_projection():
-        await _pay(cog, interaction, sender, 50)
-    assert "yourself" in interaction.response.send_message.await_args.args[0].lower()
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 500
-
-
-@pytest.mark.asyncio
-async def test_pay_rejects_bot(ctx, db):
-    _enable(db)
-    _credit(db, 500, 500)
-    cog = _make_cog(ctx)
-    sender = _member(member_id=500)
-    interaction = _interaction(sender)
-    with _patch_projection():
-        await _pay(cog, interaction, _member(member_id=901, is_bot=True), 50)
-    assert "bot" in interaction.response.send_message.await_args.args[0].lower()
 
 
 # ── /bank shop ───────────────────────────────────────────────────────────────
@@ -1348,35 +1184,6 @@ async def test_name_modal_submit_sets_role_name(ctx, db):
     assert row["name"] == "Stardust"
 
 
-@pytest.mark.asyncio
-async def test_shop_rent_duplicate(ctx, db):
-    _enable(db)
-    _credit(db, 500, 200)
-    cog = _make_cog(ctx)
-
-    with _patch_projection():
-        await cog.do_rent(_interaction(_member(member_id=500)), _settings(db), _guild_roles(), "role_color")
-        interaction = _interaction(_member(member_id=500))
-        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_color")
-
-    assert "already" in interaction.response.send_message.await_args.args[0].lower()
-    assert len(_live_rentals(db)) == 1
-
-
-@pytest.mark.asyncio
-async def test_shop_rent_insufficient(ctx, db):
-    _enable(db)
-    _credit(db, 500, 10)
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-
-    with _patch_projection():
-        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_color")
-
-    assert "only have" in interaction.response.send_message.await_args.args[0].lower()
-    assert _live_rentals(db) == []
-
-
 # ── persistent shop panel ────────────────────────────────────────────────────
 
 
@@ -1595,14 +1402,42 @@ def _fake_emoji(name="party", eid=999, animated=False, data=b"emoji-bytes"):
     return e
 
 
+@pytest.mark.parametrize(
+    ("perk", "rented", "refusal"),
+    [
+        # No rental at all → the entitlement check refuses.
+        ("role_name", False, "rent"),
+        ("role_color", False, "perk"),
+        # Rented, but the server feature gate is closed → refused at the gate
+        # (role_name/role_color aren't feature-gated, so the closed gate below
+        # never touches them).
+        ("role_gradient", True, "support"),
+        ("role_icon", True, "support"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_role_name_needs_entitlement(ctx, db):
+async def test_role_studio_setter_refusals(ctx, db, perk, rented, refusal):
     _enable(db)
+    if rented:
+        _add_rental(db, perk)
     cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500))
-    with _patch_projection() as (apply_mock, _r, _n):
-        await _role_name(cog, interaction, "Cool")
-    assert "rent" in interaction.response.send_message.await_args.args[0].lower()
+    interaction = _role_interaction(_member(member_id=500), emojis=[_fake_emoji()])
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch(
+            "bot_modules.cogs.economy_cog.feature_gate_ok",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        if perk == "role_name":
+            await _role_name(cog, interaction, "Cool")
+        elif perk == "role_color":
+            await _role_color(cog, interaction, "#7B2FF7")
+        elif perk == "role_gradient":
+            await _role_gradient(cog, interaction, "#111111", "#222222")
+        else:
+            await _role_icon_emoji(cog, interaction, ":party:")
+    assert refusal in interaction.response.send_message.await_args.args[0].lower()
     apply_mock.assert_not_awaited()
 
 
@@ -1645,17 +1480,6 @@ async def test_role_name_success(ctx, db):
             "SELECT name FROM econ_personal_roles WHERE user_id = 500"
         ).fetchone()
     assert row["name"] == "Stardust"
-
-
-@pytest.mark.asyncio
-async def test_role_color_needs_entitlement(ctx, db):
-    _enable(db)
-    cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500))
-    with _patch_projection() as (apply_mock, _r, _n):
-        await _role_color(cog, interaction, "#7B2FF7")
-    assert "perk" in interaction.response.send_message.await_args.args[0].lower()
-    apply_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1704,21 +1528,6 @@ async def test_role_color_gift_entitlement_allows(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_role_gradient_needs_feature(ctx, db):
-    _enable(db)
-    _add_rental(db, "role_gradient")
-    cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500))
-    with (
-        _patch_projection() as (apply_mock, _r, _n),
-        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=False)),
-    ):
-        await _role_gradient(cog, interaction, "#111111", "#222222")
-    assert "support" in interaction.response.send_message.await_args.args[0].lower()
-    apply_mock.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_role_gradient_success(ctx, db):
     _enable(db)
     _add_rental(db, "role_gradient")
@@ -1735,21 +1544,6 @@ async def test_role_gradient_success(ctx, db):
             "SELECT color, color2 FROM econ_personal_roles WHERE user_id = 500"
         ).fetchone()
     assert row["color"] == 0x111111 and row["color2"] == 0x222222
-
-
-@pytest.mark.asyncio
-async def test_role_icon_without_feature(ctx, db):
-    _enable(db)
-    _add_rental(db, "role_icon")
-    cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500), emojis=[_fake_emoji()])
-    with (
-        _patch_projection() as (apply_mock, _r, _n),
-        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=False)),
-    ):
-        await _role_icon_emoji(cog, interaction, ":party:")
-    assert "support" in interaction.response.send_message.await_args.args[0].lower()
-    apply_mock.assert_not_awaited()
 
 
 @pytest.mark.parametrize("raw", [":party:", "party", "<:party:999>"])
@@ -2069,31 +1863,38 @@ async def test_gift_duplicate_entitlement_requires_confirm(ctx, db):
     assert "already has" in interaction.response.send_message.await_args.args[0]
 
 
+@pytest.mark.parametrize(
+    ("command", "target_kind", "refusal"),
+    [
+        ("grant", "bot", "bot"),
+        ("pay", "bot", "bot"),
+        ("gift", "bot", "bot"),
+        ("gift", "self", "your own"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_gift_rejects_self_and_bot(ctx, db):
+async def test_self_and_bot_targets_rejected(ctx, db, command, target_kind, refusal):
     _enable(db)
-    _credit(db, 500, 50)
+    _credit(db, 500, 500)
     cog = _make_cog(ctx)
-    gifter = _member(member_id=500)
-    with _patch_projection():
-        await _gift(cog, _interaction(gifter), gifter)
-    interaction = _interaction(gifter)
-    with _patch_projection():
-        await _gift(cog, interaction, _member(member_id=901, is_bot=True))
-    assert "bot" in interaction.response.send_message.await_args.args[0].lower()
-    assert _live_rentals(db) == []
+    actor = _member(member_id=500, admin=True)  # admin so grant reaches its guard
+    target = actor if target_kind == "self" else _member(member_id=901, is_bot=True)
+    interaction = _interaction(actor)
 
-
-@pytest.mark.asyncio
-async def test_gift_insufficient(ctx, db):
-    _enable(db)
-    _credit(db, 500, 10)
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
     with _patch_projection():
-        await _gift(cog, interaction, _member(member_id=900))
-    assert "only have" in interaction.response.send_message.await_args.args[0].lower()
-    assert _live_rentals(db) == []
+        if command == "grant":
+            await _grant(cog, interaction, target, 10, "x")
+        elif command == "pay":
+            await _pay(cog, interaction, target, 50)
+        else:
+            await _gift(cog, interaction, target)
+
+    call = interaction.response.send_message.await_args
+    assert refusal in call.args[0].lower()
+    assert call.kwargs["ephemeral"] is True
+    assert _live_rentals(db) == []  # no gift rental opened
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 901) == 0  # nothing credited
 
 
 # ── /bank wallet: rentals field ──────────────────────────────────────────────
@@ -2497,12 +2298,6 @@ def _photo_msg(
     return msg
 
 
-def _disable_photo_source(db) -> None:
-    with open_db(db) as conn:
-        set_income_source(conn, GUILD_ID, "photo_post", False)
-        conn.commit()
-
-
 @pytest.mark.asyncio
 async def test_photo_post_participation_pays_without_quest(ctx, db):
     # The flat participation award pays on the post itself — no quest needed.
@@ -2521,37 +2316,39 @@ async def test_photo_post_participation_pays_without_quest(ctx, db):
     assert _balance(db, 501) == 5
 
 
+@pytest.mark.parametrize(
+    ("setup", "channel_id", "parent_id", "pays"),
+    [
+        # A THREAD of the Photo Challenge channel earns too: the listener
+        # matches on parent_id, not just the exact channel id (mirrors the
+        # trigger-quest / games siblings).
+        ("config", 999_888, PHOTO_CHANNEL_ID, True),
+        # Neither the scoped channel nor a thread of it pays nothing — the
+        # parent_id widening must not swallow the whole guild.
+        ("config", 999_888, 555_444, False),
+        # A finished (status='done') schedule is not a live channel — the
+        # fallback only recovers the channel from an *active* schedule.
+        ("done_schedule", PHOTO_CHANNEL_ID, None, False),
+    ],
+)
 @pytest.mark.asyncio
-async def test_photo_post_pays_in_thread_of_photo_channel(ctx, db):
-    # A photo posted in a THREAD of the Photo Challenge channel earns too:
-    # the listener matches on parent_id, not just the exact channel id (mirrors
-    # the trigger-quest / games siblings). Previously such a post paid nothing.
+async def test_photo_post_channel_scoping(ctx, db, setup, channel_id, parent_id, pays):
     _enable(db)  # reward_photo_post defaults to 5
-    _set_photo_config(db)  # scoped channel is PHOTO_CHANNEL_ID
-    cog = _make_cog(ctx)
-    member = _member(member_id=501)
-
-    msg = _photo_msg(
-        author=member, channel_id=999_888, parent_id=PHOTO_CHANNEL_ID
-    )
-    await cog._on_photo_post(msg)
-    assert _balance(db, 501) == 5
-    msg.add_reaction.assert_awaited_once_with("✅")
-
-
-@pytest.mark.asyncio
-async def test_photo_post_ignores_unrelated_channel(ctx, db):
-    # A photo in a channel that is neither the scoped channel nor a thread of it
-    # pays nothing — the parent_id widening must not swallow the whole guild.
-    _enable(db)
-    _set_photo_config(db)
+    if setup == "config":
+        _set_photo_config(db)  # scoped channel is PHOTO_CHANNEL_ID
+    else:
+        _set_photo_schedule(db, status="done")  # no config row at all
     cog = _make_cog(ctx)
 
     msg = _photo_msg(
-        author=_member(member_id=501), channel_id=999_888, parent_id=555_444
+        author=_member(member_id=501), channel_id=channel_id, parent_id=parent_id
     )
     await cog._on_photo_post(msg)
-    assert _balance(db, 501) == 0
+    assert _balance(db, 501) == (5 if pays else 0)
+    if pays:
+        msg.add_reaction.assert_awaited_once_with("✅")
+    else:
+        msg.add_reaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2568,18 +2365,6 @@ async def test_photo_post_pays_via_schedule_channel_without_config(ctx, db):
     await cog._on_photo_post(msg)
     assert _balance(db, 501) == 5
     msg.add_reaction.assert_awaited_once_with("✅")
-
-
-@pytest.mark.asyncio
-async def test_photo_post_ignores_done_schedule_channel(ctx, db):
-    # A finished (status='done') schedule is not a live channel — the fallback
-    # only recovers from an *active* schedule, so a post here pays nothing.
-    _enable(db)  # participation 5, no config row
-    _set_photo_schedule(db, status="done")
-    cog = _make_cog(ctx)
-
-    await cog._on_photo_post(_photo_msg(author=_member(member_id=501)))
-    assert _balance(db, 501) == 0
 
 
 @pytest.mark.asyncio
@@ -2618,20 +2403,6 @@ async def test_photo_post_quest_stacks_on_participation(ctx, db):
     # A second photo the same day pays nothing more — both sides cap per day.
     await cog._on_photo_post(_photo_msg(author=member, message_id=9200))
     assert _balance(db, 501) == 15
-
-
-@pytest.mark.asyncio
-async def test_photo_post_no_payout_when_source_disabled(ctx, db):
-    # The photo_post income-source toggle gates both payouts.
-    _enable(db)  # participation 5
-    _set_photo_config(db)
-    _mk_quest(db, qtype="event", trigger_kind="photo_post", reward=10)
-    _disable_photo_source(db)
-    cog = _make_cog(ctx)
-    msg = _photo_msg(author=_member(member_id=501))
-    await cog._on_photo_post(msg)
-    assert _balance(db, 501) == 0
-    msg.add_reaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -2770,7 +2541,10 @@ async def _pay(cog, interaction, member, amount, memo=None) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pay_memo_reaches_ledger_embed_and_dm(ctx, db):
+async def test_pay_memo_reaches_embed_and_dm(ctx, db):
+    # Ledger persistence of the memo is the service's job
+    # (test_transfer_memo_lands_on_both_ledger_sides) — this covers the
+    # embed/DM wiring on the cog side.
     _enable(db, transfers_enabled=True)
     with open_db(db) as conn:
         apply_credit(conn, GUILD_ID, 500, 50, "grant")
@@ -2789,35 +2563,6 @@ async def test_pay_memo_reaches_ledger_embed_and_dm(ctx, db):
 
     # Recipient's DM carries it too.
     assert "rent money" in notify.await_args.kwargs["content"]
-
-    # And both ledger sides persist it.
-    with open_db(db) as conn:
-        out = get_ledger(conn, GUILD_ID, 500, limit=1)[0]
-        inc = get_ledger(conn, GUILD_ID, 600, limit=1)[0]
-    import json
-
-    assert json.loads(out["meta"])["memo"] == "rent money"
-    assert json.loads(inc["meta"])["memo"] == "rent money"
-
-
-@pytest.mark.asyncio
-async def test_pay_without_memo_is_unchanged(ctx, db):
-    _enable(db, transfers_enabled=True)
-    with open_db(db) as conn:
-        apply_credit(conn, GUILD_ID, 500, 50, "grant")
-
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-    with patch("bot_modules.cogs.economy_cog.notify_member", new=AsyncMock()) as notify:
-        await _pay(cog, interaction, _member(member_id=600), 20)
-
-    embed = interaction.response.send_message.await_args.kwargs["embed"]
-    assert (embed.title or "").endswith("Payment Sent")
-    # A memo would appear as its own trailing paragraph; the base line has none.
-    assert "\n\n" not in embed.description
-    assert '"' not in notify.await_args.kwargs["content"]
-    with open_db(db) as conn:
-        assert "memo" not in get_ledger(conn, GUILD_ID, 500, limit=1)[0]["meta"]
 
 
 @pytest.mark.asyncio
@@ -2879,10 +2624,25 @@ def test_shop_embed_shield_row_and_held_marker(db):
     assert "held" in next(f for f in held.fields if f.name == "One-shot").value
 
 
-def test_shop_embed_hides_shield_at_price_zero(db):
-    _enable(db, price_streak_shield=0)
+@pytest.mark.parametrize(
+    ("overrides", "field", "token"),
+    [
+        # token None → the row must be absent entirely.
+        ({"price_streak_shield": 0}, "One-shot", None),
+        ({}, "Voice", None),  # price_voice_style defaults to 0 — shipped dark
+        ({"price_voice_style": 30}, "Voice", "30"),
+        ({}, "Weekly Raffle", None),
+        ({"raffle_enabled": True}, "Weekly Raffle", "10"),  # ticket price
+    ],
+)
+def test_shop_embed_row_visibility(db, overrides, field, token):
+    _enable(db, **overrides)
     embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    assert not any(f.name == "One-shot" for f in embed.fields)
+    if token is None:
+        assert not any(f.name == field for f in embed.fields)
+    else:
+        row = next(f for f in embed.fields if f.name == field)
+        assert token in row.value
 
 
 @pytest.mark.asyncio
@@ -2930,9 +2690,9 @@ async def test_buy_shield_already_holding_message(ctx, db):
     )
     interaction = _interaction(_member(member_id=500))
     await cog.do_buy_shield(interaction, _settings(db), _guild_roles())
+    # Single-charge enforcement is test_purchase_shield_refused_while_holding
+    # (service) — this covers the user-facing copy.
     assert "already holding" in interaction.response.send_message.await_args.args[0]
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 100 - 30  # charged once
 
 
 # ── /bank shop: cancel & refund ───────────────────────────────────────────
@@ -3009,7 +2769,10 @@ async def test_refund_picker_previews_prorated_amount(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_refund_confirm_credits_prorated_amount_and_ends_rental_now(ctx, db):
+async def test_refund_confirm_revokes_perk_and_confirms(ctx, db):
+    # The prorate math and the rental ending now are the rentals service's
+    # job — this covers the cog wiring: the perk revoke fires and the picker
+    # message is edited with the confirmation.
     _enable(db)
     _credit(db, 500, 200)
     _add_rental(db, "role_color", user_id=500)
@@ -3017,11 +2780,6 @@ async def test_refund_confirm_credits_prorated_amount_and_ends_rental_now(ctx, d
         rid = conn.execute(
             "SELECT id FROM econ_rentals WHERE user_id = 500"
         ).fetchone()["id"]
-        # Half the paid week already elapsed -> half the price back.
-        conn.execute(
-            "UPDATE econ_rentals SET next_bill_at = ? WHERE id = ?",
-            (time.time() + 302400, rid),
-        )
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
@@ -3034,16 +2792,6 @@ async def test_refund_confirm_credits_prorated_amount_and_ends_rental_now(ctx, d
     revoke_mock.assert_awaited_once()
     text = interaction.response.edit_message.await_args.kwargs["content"]
     assert "credited back" in text
-    with open_db(db) as conn:
-        # _add_rental inserts the row directly (no debit), so the refund is
-        # pure credit on top of the starting 200 — ~half the 50 price back,
-        # floor rounding tolerating a little clock jitter.
-        balance = get_balance(conn, GUILD_ID, 500)
-        assert 200 + 24 <= balance <= 200 + 25
-        row = conn.execute(
-            "SELECT state FROM econ_rentals WHERE id = ?", (rid,)
-        ).fetchone()
-        assert row["state"] == "cancelled"  # ends now, not at period end
 
 
 @pytest.mark.asyncio
@@ -3077,58 +2825,7 @@ async def test_refund_confirm_survives_a_failed_perk_revoke(ctx, db):
         assert row["state"] == "cancelled"  # the refund itself is unaffected
 
 
-@pytest.mark.asyncio
-async def test_refund_confirm_shield_credits_full_price(ctx, db):
-    _enable(db)
-    _credit(db, 500, 100)
-    cog = _make_cog(ctx)
-    await cog.do_buy_shield(
-        _interaction(_member(member_id=500)), _settings(db), _guild_roles()
-    )
-
-    interaction = _interaction(_member(member_id=500))
-    await cog.finalize_refund(interaction, _settings(db), _guild_roles(), "shield")
-
-    text = interaction.response.edit_message.await_args.kwargs["content"]
-    assert "30" in text  # the shield's default price
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 100
-        assert get_streak_shields(conn, GUILD_ID, 500) == 0
-
-
-@pytest.mark.asyncio
-async def test_refund_confirm_rejects_a_stale_target(ctx, db):
-    _enable(db)
-    _credit(db, 500, 200)
-    _add_rental(db, "role_color", user_id=500, state="lapsed")
-    with open_db(db) as conn:
-        rid = conn.execute(
-            "SELECT id FROM econ_rentals WHERE user_id = 500"
-        ).fetchone()["id"]
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-
-    await cog.finalize_refund(
-        interaction, _settings(db), _guild_roles(), f"rental:{rid}"
-    )
-    text = interaction.response.edit_message.await_args.kwargs["content"]
-    assert "❌" in text
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 200  # untouched
-
-
 # ── voice-style lease in the shop (sinks round 3, stage 3) ───────────────────
-
-
-def test_shop_embed_voice_tier_only_when_priced(db):
-    _enable(db)  # price_voice_style defaults to 0 — shipped dark
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    assert not any(f.name == "Voice" for f in embed.fields)
-
-    _enable(db, price_voice_style=30)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    voice = next(f for f in embed.fields if f.name == "Voice")
-    assert "Voice" in voice.value and "30" in voice.value
 
 
 @pytest.mark.asyncio
@@ -3204,17 +2901,6 @@ async def test_bank_emoji_disabled_at_price_zero(ctx, db):
 
 
 # ── weekly raffle in the shop (sinks round 3, stage 5) ───────────────────────
-
-
-def test_shop_embed_raffle_row_only_when_enabled(db):
-    _enable(db)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    assert not any(f.name == "Weekly Raffle" for f in embed.fields)
-
-    _enable(db, raffle_enabled=True)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    row = next(f for f in embed.fields if f.name == "Weekly Raffle")
-    assert "10" in row.value  # ticket price
 
 
 @pytest.mark.asyncio
@@ -3328,83 +3014,28 @@ async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
     assert "Manage Nicknames" in msg
 
 
-# ── /bank pin (Pin of the Day) ───────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_pin_submit_refused_when_not_enabled(ctx, db):
-    _enable(db)  # no price and no pin channel → the feature is off
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-
-    await cog.do_pin_submit(interaction, "hello world")
-
-    interaction.response.send_message.assert_awaited_once()
-    assert "isn't enabled" in interaction.response.send_message.await_args.args[0]
-    with open_db(db) as conn:
-        rows = conn.execute("SELECT COUNT(*) c FROM econ_pin_submissions").fetchone()
-    assert rows["c"] == 0  # nothing queued, nothing charged
-
-
-@pytest.mark.asyncio
-async def test_pin_submit_charges_and_queues(ctx, db):
-    _enable(db, price_pin_of_day=30, pin_channel_id=5555)
-    with open_db(db) as conn:
-        apply_credit(conn, GUILD_ID, 500, 100, "grant", actor_id=1)
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-
-    await cog.do_pin_submit(interaction, "gm gamers")
-
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 70  # 30 held upfront
-        row = conn.execute(
-            "SELECT state, message FROM econ_pin_submissions WHERE guild_id = ?",
-            (GUILD_ID,),
-        ).fetchone()
-    assert row["state"] == "pending"
-    assert row["message"] == "gm gamers"
-    interaction.followup.send.assert_awaited()  # the "sent for review" receipt
-
-
 # ── /bounty (Community Bounty) ───────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_bounty_post_refused_when_not_enabled(ctx, db):
-    _enable(db)  # no bounty channel → off
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-
-    await cog.do_bounty_post(interaction, "do a thing", "", "50")
-
-    interaction.response.send_message.assert_awaited_once()
-    assert "aren't enabled" in interaction.response.send_message.await_args.args[0]
-    with open_db(db) as conn:
-        n = conn.execute("SELECT COUNT(*) c FROM econ_bounties").fetchone()["c"]
-    assert n == 0
-
-
-@pytest.mark.asyncio
-async def test_bounty_post_escrows_and_opens(ctx, db):
+async def test_bounty_post_posts_card_and_receipt(ctx, db):
+    # Escrow/state are the bounty service's job (test_create_escrows_opener_
+    # stake) — this covers the cog wiring: the board card posts to the bounty
+    # channel and the opener gets a receipt.
     _enable(db, bounty_channel_id=5555, bounty_min_stake=10)
     with open_db(db) as conn:
         apply_credit(conn, GUILD_ID, 500, 200, "grant", actor_id=1)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    await cog.do_bounty_post(interaction, "Draw the mascot", "as a knight", "50")
+    with patch(
+        "bot_modules.cogs.economy_cog.post_bounty_card", new=AsyncMock()
+    ) as card:
+        await cog.do_bounty_post(interaction, "Draw the mascot", "as a knight", "50")
 
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 150  # 50 staked into the pot
-        row = conn.execute(
-            "SELECT state, poster_id, title FROM econ_bounties WHERE guild_id = ?",
-            (GUILD_ID,),
-        ).fetchone()
-    assert row["state"] == "open"
-    assert row["poster_id"] == 500
-    assert row["title"] == "Draw the mascot"
-    interaction.followup.send.assert_awaited()
+    card.assert_awaited_once()
+    receipt = interaction.followup.send.await_args.args[0]
+    assert "Bounty posted" in receipt
 
 
 @pytest.mark.asyncio

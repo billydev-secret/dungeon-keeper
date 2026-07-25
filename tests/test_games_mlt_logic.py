@@ -88,30 +88,48 @@ def test_max_players_matches_select_option_limit():
     assert MAX_PLAYERS == 25
 
 
-def test_add_player_rejects_new_uid_past_cap():
-    """A new joiner is dropped once the lobby is full (would 400 the vote select)."""
-    players: list[int] = list(range(MAX_PLAYERS))
-    assert add_player(players, 9999) is False
-    assert len(players) == MAX_PLAYERS
-    assert 9999 not in players
-
-
-def test_add_player_allows_last_slot_at_cap():
-    players: list[int] = list(range(MAX_PLAYERS - 1))
-    assert add_player(players, 9999) is True
-    assert len(players) == MAX_PLAYERS
-
-
-def test_add_player_existing_uid_at_cap_still_idempotent():
-    players: list[int] = list(range(MAX_PLAYERS))
-    assert add_player(players, 0) is False
-    assert len(players) == MAX_PLAYERS
-
-
-def test_add_player_respects_custom_cap():
-    players: list[int] = [1, 2]
-    assert add_player(players, 3, max_players=2) is False
-    assert players == [1, 2]
+@pytest.mark.parametrize(
+    ("initial", "uid", "max_players", "expected_added", "expected_players"),
+    [
+        # A new joiner is dropped once the lobby is full (would 400 the vote select).
+        pytest.param(
+            list(range(MAX_PLAYERS)),
+            9999,
+            None,
+            False,
+            list(range(MAX_PLAYERS)),
+            id="rejects-new-uid-past-cap",
+        ),
+        pytest.param(
+            list(range(MAX_PLAYERS - 1)),
+            9999,
+            None,
+            True,
+            [*range(MAX_PLAYERS - 1), 9999],
+            id="allows-last-slot-at-cap",
+        ),
+        pytest.param(
+            list(range(MAX_PLAYERS)),
+            0,
+            None,
+            False,
+            list(range(MAX_PLAYERS)),
+            id="existing-uid-at-cap-still-idempotent",
+        ),
+        pytest.param([1, 2], 3, 2, False, [1, 2], id="respects-custom-cap"),
+    ],
+)
+def test_add_player_cap_variants(
+    initial: list[int],
+    uid: int,
+    max_players: int | None,
+    expected_added: bool,
+    expected_players: list[int],
+):
+    players = list(initial)
+    kwargs = {} if max_players is None else {"max_players": max_players}
+    assert add_player(players, uid, **kwargs) is expected_added
+    assert players == expected_players
 
 
 def test_lobby_is_full_false_below_cap():
@@ -125,26 +143,24 @@ def test_lobby_is_full_true_at_cap():
 # ── can_start ────────────────────────────────────────────────────────
 
 
-def test_can_start_false_below_minimum():
-    assert can_start([1, 2]) is False
-
-
-def test_can_start_true_at_minimum():
-    assert can_start([1, 2, 3]) is True
-
-
-def test_can_start_true_above_minimum():
-    assert can_start([1, 2, 3, 4, 5]) is True
+@pytest.mark.parametrize(
+    ("players", "min_players", "expected"),
+    [
+        pytest.param([1, 2], None, False, id="below-minimum"),
+        pytest.param([1, 2, 3], None, True, id="at-minimum"),
+        pytest.param([1, 2, 3, 4, 5], None, True, id="above-minimum"),
+        pytest.param([1, 2], 2, True, id="custom-threshold-at"),
+        pytest.param([1], 2, False, id="custom-threshold-below"),
+    ],
+)
+def test_can_start(players: list[int], min_players: int | None, expected: bool):
+    kwargs = {} if min_players is None else {"min_players": min_players}
+    assert can_start(players, **kwargs) is expected
 
 
 def test_can_start_min_players_constant_matches_cog_threshold():
     """The cog's hard-coded check used 3 — guard against drift."""
     assert MIN_PLAYERS == 3
-
-
-def test_can_start_custom_threshold():
-    assert can_start([1, 2], min_players=2) is True
-    assert can_start([1], min_players=2) is False
 
 
 # ── apply_vote ───────────────────────────────────────────────────────

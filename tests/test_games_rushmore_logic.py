@@ -58,28 +58,30 @@ def test_skipped_marker_is_string():
 # ── generate_snake_order ─────────────────────────────────────────────
 
 
-def test_generate_snake_order_three_players_four_rounds():
-    order = generate_snake_order([10, 20, 30])
-    assert order == [
-        [1, 10], [1, 20], [1, 30],
-        [2, 30], [2, 20], [2, 10],
-        [3, 10], [3, 20], [3, 30],
-        [4, 30], [4, 20], [4, 10],
-    ]
-
-
-def test_generate_snake_order_custom_rounds():
-    order = generate_snake_order([1, 2], rounds=2)
-    assert order == [[1, 1], [1, 2], [2, 2], [2, 1]]
-
-
-def test_generate_snake_order_single_round():
-    order = generate_snake_order([1, 2, 3], rounds=1)
-    assert order == [[1, 1], [1, 2], [1, 3]]
-
-
-def test_generate_snake_order_empty_players():
-    assert generate_snake_order([]) == []
+@pytest.mark.parametrize(
+    ("players", "rounds", "expected"),
+    [
+        pytest.param(
+            [10, 20, 30],
+            None,
+            [
+                [1, 10], [1, 20], [1, 30],
+                [2, 30], [2, 20], [2, 10],
+                [3, 10], [3, 20], [3, 30],
+                [4, 30], [4, 20], [4, 10],
+            ],
+            id="three-players-four-default-rounds",
+        ),
+        pytest.param([1, 2], 2, [[1, 1], [1, 2], [2, 2], [2, 1]], id="custom-rounds"),
+        pytest.param([1, 2, 3], 1, [[1, 1], [1, 2], [1, 3]], id="single-round"),
+        pytest.param([], None, [], id="empty-players"),
+    ],
+)
+def test_generate_snake_order(
+    players: list[int], rounds: int | None, expected: list[list[int]]
+):
+    kwargs = {} if rounds is None else {"rounds": rounds}
+    assert generate_snake_order(players, **kwargs) == expected
 
 
 def test_generate_snake_order_round_count_matches():
@@ -113,33 +115,47 @@ def test_is_duplicate_against_empty_list():
 # ── find_who_picked ──────────────────────────────────────────────────
 
 
-def test_find_who_picked_returns_uid_str_of_owner():
-    boards = {
-        "1": ["Pizza", None, None, None],
-        "2": ["Sushi", "Tacos", None, None],
-    }
-    assert find_who_picked("pizza", boards) == "1"
-    assert find_who_picked("TACOS", boards) == "2"
-
-
-def test_find_who_picked_skips_skipped_markers():
-    """A slot holding the SKIPPED_MARKER must not match any input."""
-    boards = {"1": [SKIPPED_MARKER, None, None, None]}
-    assert find_who_picked(SKIPPED_MARKER, boards) is None
-
-
-def test_find_who_picked_returns_none_when_not_found():
-    boards = {"1": ["Pizza", None, None, None]}
-    assert find_who_picked("Burger", boards) is None
-
-
-def test_find_who_picked_skips_none_slots():
-    boards = {"1": [None, None, None, None]}
-    assert find_who_picked("anything", boards) is None
-
-
-def test_find_who_picked_empty_boards_dict():
-    assert find_who_picked("anything", {}) is None
+@pytest.mark.parametrize(
+    ("pick", "boards", "expected"),
+    [
+        pytest.param(
+            "pizza",
+            {"1": ["Pizza", None, None, None], "2": ["Sushi", "Tacos", None, None]},
+            "1",
+            id="returns-uid-str-of-owner",
+        ),
+        pytest.param(
+            "TACOS",
+            {"1": ["Pizza", None, None, None], "2": ["Sushi", "Tacos", None, None]},
+            "2",
+            id="case-insensitive-owner-lookup",
+        ),
+        # A slot holding the SKIPPED_MARKER must not match any input.
+        pytest.param(
+            SKIPPED_MARKER,
+            {"1": [SKIPPED_MARKER, None, None, None]},
+            None,
+            id="skips-skipped-markers",
+        ),
+        pytest.param(
+            "Burger",
+            {"1": ["Pizza", None, None, None]},
+            None,
+            id="returns-none-when-not-found",
+        ),
+        pytest.param(
+            "anything",
+            {"1": [None, None, None, None]},
+            None,
+            id="skips-none-slots",
+        ),
+        pytest.param("anything", {}, None, id="empty-boards-dict"),
+    ],
+)
+def test_find_who_picked(
+    pick: str, boards: dict[str, list[str | None]], expected: str | None
+):
+    assert find_who_picked(pick, boards) == expected
 
 
 # ── eligible_voters ──────────────────────────────────────────────────
