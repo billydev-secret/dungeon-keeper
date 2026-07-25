@@ -681,7 +681,7 @@ def test_post_bot_identity_updates_nick(ctx, make_client):
 
 def test_post_bot_identity_fetches_avatar_url(ctx, make_client):
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
     edit_calls = []
     async def mock_edit(**kwargs): edit_calls.append(kwargs)
     guild = SimpleNamespace(
@@ -694,13 +694,28 @@ def test_post_bot_identity_fetches_avatar_url(ctx, make_client):
     ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
     client = make_client()
     fake_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-    mock_response = SimpleNamespace(
-        status_code=200, content=fake_image, raise_for_status=lambda: None,
-    )
-    async def mock_get(*_a, **_kw): return mock_response
+
+    # The route streams the body (client.stream is a sync call returning an
+    # async context manager — mocking it as a coroutine breaks `async with`).
+    class _FakeStreamResponse:
+        is_redirect = False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            yield fake_image
+
+    class _FakeStreamCM:
+        async def __aenter__(self):
+            return _FakeStreamResponse()
+
+        async def __aexit__(self, *exc):
+            return False
+
     with patch("web_server.routes.config.httpx.AsyncClient") as MockClient:
         instance = AsyncMock()
-        instance.get = mock_get
+        instance.stream = MagicMock(return_value=_FakeStreamCM())
         instance.__aenter__ = AsyncMock(return_value=instance)
         instance.__aexit__ = AsyncMock(return_value=False)
         MockClient.return_value = instance
