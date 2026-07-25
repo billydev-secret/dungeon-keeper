@@ -773,12 +773,42 @@ def test_run_falls_back_when_remote_exceeds_timeout(monkeypatch, capsys):
     monkeypatch.setattr(rt, "sync", lambda cfg: True)
 
     def hang(*args, **kwargs):
-        assert kwargs.get("timeout") == 900, "the cap must reach subprocess.run"
-        raise rt.subprocess.TimeoutExpired(cmd="ssh", timeout=900)
+        # Local cap = remote cap + grace, so the remote-side enforcement
+        # (which kills pytest cleanly) always gets to fire first.
+        assert kwargs.get("timeout") == 960, "the outer cap must reach subprocess.run"
+        raise rt.subprocess.TimeoutExpired(cmd="ssh", timeout=960)
 
     monkeypatch.setattr(rt.subprocess, "run", hang)
     assert rt.run(["-q"], env={**FULL_ENV, "REMOTE_TEST_TIMEOUT": "900"}) is None
     assert "running locally" in capsys.readouterr().err
+
+
+def test_timeout_ships_to_the_remote_bootstrap():
+    cfg = rt.load_config({**FULL_ENV, "REMOTE_TEST_TIMEOUT": "900"})
+    assert cfg is not None
+    assert "--timeout 900" in rt.pytest_command(cfg, [])[-1]
+
+
+def test_no_timeout_flag_when_uncapped():
+    cfg = rt.load_config(FULL_ENV)
+    assert cfg is not None
+    assert "--timeout" not in rt.pytest_command(cfg, [])[-1]
+
+
+def test_bootstrap_times_out_as_setup_failure_not_verdict(tmp_path, monkeypatch, capsys):
+    """Remote-side expiry must read as BOOTSTRAP_FAILED (local fallback),
+    never as a test result — and it kills pytest as a direct child."""
+    _write_locks(tmp_path)
+    rt.write_stamp(tmp_path, rt.lock_hash(tmp_path))
+
+    def expire(*args, **kwargs):
+        assert kwargs.get("timeout") == 900
+        raise rt.subprocess.TimeoutExpired(cmd="pytest", timeout=900)
+
+    monkeypatch.setattr(rt.subprocess, "run", expire)
+    code = rt.bootstrap(["-q"], root=tmp_path, python=str(tmp_path / "python"), timeout=900)
+    assert code == rt.BOOTSTRAP_FAILED
+    assert "exceeded 900s" in capsys.readouterr().err
 
 
 def test_run_passes_no_timeout_when_uncapped(monkeypatch):
@@ -865,6 +895,23 @@ def test_preflight_skips_inode_check_where_unavailable(monkeypatch):
     """Windows has no statvfs; a None inode count must not read as 'low'."""
     monkeypatch.setattr(rt, "tmp_headroom", lambda path=None: (10**12, None))
     assert preflight() is None
+
+
+def test_headroom_treats_dynamic_inode_filesystems_as_not_applicable(monkeypatch, tmp_path):
+    """btrfs reports f_files=0/f_favail=0 — that's 'inodes don't apply here',
+    not 'zero free', which would permanently fail the preflight."""
+    class _Vfs:
+        f_files = 0
+        f_favail = 0
+
+    class _Usage:
+        free = 10**12
+
+    # shutil.disk_usage also calls os.statvfs on Linux, so stub it as well.
+    monkeypatch.setattr(rt.shutil, "disk_usage", lambda target: _Usage())
+    monkeypatch.setattr(rt.os, "statvfs", lambda target: _Vfs(), raising=False)
+    _, inodes = rt.tmp_headroom(tmp_path)
+    assert inodes is None
 
 
 def test_bootstrap_bails_before_pytest_when_preflight_fails(tmp_path, monkeypatch, capsys):

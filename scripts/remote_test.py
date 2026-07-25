@@ -24,10 +24,12 @@ checkout's `.env` (which gate.py does not otherwise load). Absent
     REMOTE_TEST_CD        Override the `cd` template if the remote shell needs
                           it (e.g. "cd /d {dir} && {cmd}" for a cmd.exe remote
                           on a different drive letter).
-    REMOTE_TEST_TIMEOUT   Wall-clock cap in seconds on the remote run; on
-                          expiry the local side gives up and runs locally.
-                          0 or unset ⇒ no cap (keepalives still catch a dead
-                          connection within ~60s).
+    REMOTE_TEST_TIMEOUT   Wall-clock cap in seconds on the remote pytest run,
+                          enforced on the remote (bootstrap kills its pytest
+                          child and reports a setup failure ⇒ local fallback,
+                          no orphan); the local side allows 60s of grace on
+                          top as an outer belt. 0 or unset ⇒ no cap
+                          (keepalives still catch a dead connection ~60s).
     REMOTE_TEST_WORKSPACE Sub-directory of REMOTE_TEST_DIR to sync into (default
                           derived per checkout, so parallel checkouts don't
                           collide). Set to "off" for the legacy layout: sync
@@ -396,9 +398,13 @@ def pytest_command(cfg: RemoteConfig, args: Sequence[str]) -> list[str]:
     """
     check_args(args)
     check_args([cfg.lock])
+    # The cap ships to the remote so expiry kills pytest *there* (a direct
+    # child of bootstrap) and comes back as BOOTSTRAP_FAILED — no orphan left
+    # writing into the shared workspace.
+    cap = f"--timeout {cfg.timeout} " if cfg.timeout else ""
     inner = (
         f"{cfg.python} scripts/remote_test.py --bootstrap --lock {cfg.lock} "
-        f"-n {cfg.jobs} " + " ".join(args)
+        f"{cap}-n {cfg.jobs} " + " ".join(args)
     )
     # Runs in the workspace, whose freshly synced scripts/ is the copy that
     # matches the code under test.
@@ -531,12 +537,20 @@ def sweep_stale_pytest_tmp(base: Path | None = None, now: float | None = None) -
 
 
 def tmp_headroom(path: str | Path | None = None) -> tuple[int, int | None]:
-    """(free bytes, free inodes) for the tmp filesystem; inodes None on Windows."""
+    """(free bytes, free inodes) for the tmp filesystem.
+
+    Inodes are None wherever they aren't a meaningful resource: Windows has
+    no statvfs, and dynamic-inode filesystems (btrfs — Fedora's default root)
+    report f_files == 0, which must not be read as "none free" or the
+    preflight would permanently declare the host unfit.
+    """
     target = str(path or tempfile.gettempdir())
     free = shutil.disk_usage(target).free
     inodes: int | None = None
     if hasattr(os, "statvfs"):
-        inodes = os.statvfs(target).f_favail
+        st = os.statvfs(target)
+        if st.f_files > 0:
+            inodes = st.f_favail
     return free, inodes
 
 
@@ -587,6 +601,7 @@ def bootstrap(
     root: Path | None = None,
     python: str | None = None,
     lock: str = DEFAULT_LOCK,
+    timeout: int = 0,
 ) -> int:
     """Entry point executed **on the remote**: sync deps, then run pytest.
 
@@ -623,7 +638,19 @@ def bootstrap(
             return BOOTSTRAP_FAILED
         write_stamp(stamps, expected)
 
-    return subprocess.run([python, "-m", "pytest", *args], cwd=root).returncode
+    try:
+        return subprocess.run(
+            [python, "-m", "pytest", *args], cwd=root, timeout=timeout or None
+        ).returncode
+    except subprocess.TimeoutExpired:
+        # pytest is a direct child here, so the expiry actually kills it —
+        # unlike the local-side cap, which can only kill ssh and orphan the
+        # remote run. Environment problem, not a verdict: fall back locally.
+        print(
+            f"remote-test: suite exceeded {timeout}s on the remote — giving up",
+            file=sys.stderr, flush=True,
+        )
+        return BOOTSTRAP_FAILED
 
 
 def is_available(cfg: RemoteConfig, timeout: int = 3) -> bool:
@@ -726,16 +753,16 @@ def run(args: Sequence[str], env: Mapping[str, str] | None = None) -> int | None
             return None
 
     try:
+        # The real cap is enforced remote-side (bootstrap kills its own
+        # pytest child and exits BOOTSTRAP_FAILED — no orphan). This local
+        # cap is the outer belt for an ssh session that stays alive while the
+        # remote wedges *outside* pytest, so it gets a grace margin; killing
+        # ssh here does orphan whatever the remote was doing.
         code = subprocess.run(
-            pytest_command(cfg, args), timeout=cfg.timeout or None
+            pytest_command(cfg, args),
+            timeout=(cfg.timeout + 60) if cfg.timeout else None,
         ).returncode
     except subprocess.TimeoutExpired:
-        # ssh is killed locally, but the remote pytest is orphaned, not killed —
-        # and the workspace is per-checkout, not per-run, so a *next* dispatch
-        # from this same checkout can interleave with the orphan. Accepted:
-        # the cap is opt-in, and killing remote processes portably (Windows/
-        # WSL/Linux remotes) isn't worth the machinery. If a timed-out run is
-        # followed quickly by another, distrust the second run's result.
         print(
             f"remote-test: no result after {cfg.timeout}s — running locally.",
             file=sys.stderr,
@@ -765,8 +792,13 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--bootstrap":
         rest = sys.argv[2:]
         lock = DEFAULT_LOCK
-        if len(rest) >= 2 and rest[0] == "--lock":
-            lock, rest = rest[1], rest[2:]
-        sys.exit(bootstrap(rest, lock=lock))
+        cap = 0
+        while len(rest) >= 2 and rest[0] in ("--lock", "--timeout"):
+            if rest[0] == "--lock":
+                lock = rest[1]
+            else:
+                cap = int(rest[1])
+            rest = rest[2:]
+        sys.exit(bootstrap(rest, lock=lock, timeout=cap))
     print(__doc__)
     sys.exit(0)

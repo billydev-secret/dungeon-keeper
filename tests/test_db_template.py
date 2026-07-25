@@ -48,3 +48,12 @@ def test_reap_spares_the_template(tmp_path):
     migrated_db(tmp_path / "copy.db")
     db_template.reap()
     assert template_db().exists()
+
+
+def test_unreaped_copy_survives_for_wider_scoped_fixtures(tmp_path):
+    # Module-scoped consumers (browser-suite servers) opt out of per-test
+    # reaping; their DB must outlive a reap cycle.
+    keeper = migrated_db(tmp_path / "module.db", reap=False)
+    victim = migrated_db(tmp_path / "test.db")
+    db_template.reap()
+    assert keeper.exists() and not victim.exists()

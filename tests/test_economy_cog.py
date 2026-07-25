@@ -17,6 +17,7 @@ from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     create_quest,
+    set_income_source,
     set_quest_active,
 )
 from bot_modules.cogs.economy_cog import (
@@ -2240,6 +2241,12 @@ def test_board_size_zero_round_trips_through_settings(db):
 PHOTO_CHANNEL_ID = 111
 
 
+def _disable_photo_source(db) -> None:
+    with open_db(db) as conn:
+        set_income_source(conn, GUILD_ID, "photo_post", False)
+        conn.commit()
+
+
 def _set_photo_config(db, *, channel_id=PHOTO_CHANNEL_ID) -> None:
     opts: dict[str, object] = {"channel_id": str(channel_id) if channel_id else ""}
     with open_db(db) as conn:
@@ -2349,6 +2356,25 @@ async def test_photo_post_channel_scoping(ctx, db, setup, channel_id, parent_id,
         msg.add_reaction.assert_awaited_once_with("✅")
     else:
         msg.add_reaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_photo_post_no_payout_when_source_disabled(ctx, db):
+    # The photo_post income-source toggle gates both payouts. The
+    # participation-award half of this gate lives only in the cog listener
+    # (economy_cog._on_photo_post) with no service-layer equivalent, so this
+    # is its sole enforcement test — a dashboard toggle must never ship
+    # unenforced (restored after the 2026-07 dedup removed it as a supposed
+    # service-test duplicate; only the quest-bonus half was covered there).
+    _enable(db)  # participation 5
+    _set_photo_config(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_post", reward=10)
+    _disable_photo_source(db)
+    cog = _make_cog(ctx)
+    msg = _photo_msg(author=_member(member_id=501))
+    await cog._on_photo_post(msg)
+    assert _balance(db, 501) == 0
+    msg.add_reaction.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -92,7 +92,9 @@ def _free_port() -> int:
 class _Server:
     def __init__(self, tmp: Path):
         db = tmp / "mobile.db"
-        migrated_db(db)
+        # Module-scoped: the per-test reaper must not delete this DB while
+        # the server is still using it for later tests in the module.
+        migrated_db(db, reap=False)
         self.port = _free_port()
         self._server = serve(db, self.port)
         self.base = f"http://127.0.0.1:{self.port}"

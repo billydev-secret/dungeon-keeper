@@ -20,8 +20,11 @@ template copy would skip exactly the code they test.
 Two invariants the reaping depends on: every ``migrated_db()`` caller must
 run under ``tests/conftest.py``'s autouse ``_reap_template_dbs`` fixture
 (true for anything under tests/; a consumer outside pytest would silently
-accumulate copies), and only function-scoped fixtures may call it — a
-wider-scoped fixture's DB would be deleted after the first test that uses it.
+accumulate copies), and only function-scoped fixtures may use the default
+``reap=True`` — a wider-scoped fixture's DB would be deleted after the first
+test that uses it. Module/session-scoped consumers (the browser suites'
+served dashboards) pass ``reap=False`` and let tmp_path retention collect
+the file.
 """
 
 from __future__ import annotations
@@ -49,16 +52,19 @@ def template_db() -> Path:
     return _template
 
 
-def migrated_db(db_path: str | Path) -> Path:
+def migrated_db(db_path: str | Path, reap: bool = True) -> Path:
     """Drop-in for ``apply_migrations_sync(db_path)``: same schema, ~450x faster.
 
     Overwrites whatever is at db_path — callers always hand it a fresh
     tmp_path file. The copy is recorded so the conftest reaper can delete it
-    (plus WAL sidecars) when the test finishes.
+    (plus WAL sidecars) when the test finishes. Fixtures scoped wider than a
+    single test MUST pass ``reap=False`` — the reaper runs per test and would
+    delete their DB out from under the remaining tests in the scope.
     """
     path = Path(db_path)
     shutil.copyfile(template_db(), path)
-    _handed_out.append(path)
+    if reap:
+        _handed_out.append(path)
     return path
 
 

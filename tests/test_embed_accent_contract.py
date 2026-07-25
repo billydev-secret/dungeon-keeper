@@ -13,6 +13,10 @@ tests ("winner stays green regardless of accent") and resolver-wiring tests
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
+import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import discord
@@ -492,3 +496,154 @@ def test_builder_honors_passed_accent(build, fallback):
 @pytest.mark.parametrize(("build", "fallback"), FALLBACK_CASES)
 def test_builder_falls_back_without_accent(build, fallback):
     assert build().color == fallback
+
+
+# ── completeness guard ───────────────────────────────────────────────────
+# Without this, the table is documentation: a new embeds module could ship
+# builders with zero accent coverage while every test stays green. Discovery
+# walks the embeds/rendering/formatters modules; every builder must appear in
+# a case() above or in the ledger below. The ledger is the debt as of
+# 2026-07-25 — move entries into CASES over time; never add to it silently
+# (adding an entry is an explicit, reviewable decision to skip the contract,
+# e.g. for content-string builders or semantic-color-only surfaces).
+KNOWN_UNCOVERED = {
+    "bot_modules.bios.embeds.build_bio_embed",
+    "bot_modules.cogs.casino.embeds.build_blackjack_embed",
+    "bot_modules.cogs.casino.embeds.build_blackjack_reveal_embed",
+    "bot_modules.cogs.casino.embeds.build_coinflip_embed",
+    "bot_modules.cogs.casino.embeds.build_coinflip_spin_embed",
+    "bot_modules.cogs.casino.embeds.build_derby_race_embed",
+    "bot_modules.cogs.casino.embeds.build_derby_result_embed",
+    "bot_modules.cogs.casino.embeds.build_derby_round_embed",
+    "bot_modules.cogs.casino.embeds.build_help_embed",
+    "bot_modules.cogs.casino.embeds.build_hub_embed",
+    "bot_modules.cogs.casino.embeds.build_jackpot_celebration",
+    "bot_modules.cogs.casino.embeds.build_my_stats_embed",
+    "bot_modules.cogs.casino.embeds.build_race_running_note",
+    "bot_modules.cogs.casino.embeds.build_roulette_bounce_embed",
+    "bot_modules.cogs.casino.embeds.build_roulette_result_embed",
+    "bot_modules.cogs.casino.embeds.build_roulette_round_embed",
+    "bot_modules.cogs.casino.embeds.build_round_running_note",
+    "bot_modules.cogs.casino.embeds.build_slots_embed",
+    "bot_modules.cogs.casino.embeds.build_slots_spin_embed",
+    "bot_modules.cogs.games_legitlibs.rendering.render_filled_body",
+    "bot_modules.cogs.games_legitlibs.rendering.render_filled_body_attributed",
+    "bot_modules.cogs.games_legitlibs.rendering.render_redacted_body",
+    "bot_modules.dm_perms.embeds.build_acceptance_embed",
+    "bot_modules.dm_perms.embeds.build_denial_embed_for_requester",
+    "bot_modules.dm_perms.embeds.build_denial_embed_for_view",
+    "bot_modules.dm_perms.embeds.build_dm_help_embed",
+    "bot_modules.dm_perms.embeds.build_expired_embed",
+    "bot_modules.dm_perms.embeds.build_guild_unavailable_embed",
+    "bot_modules.dm_perms.embeds.build_mode_updated_embed",
+    "bot_modules.dm_perms.embeds.build_request_dm_embed",
+    "bot_modules.dm_perms.embeds.build_request_sent_embed",
+    "bot_modules.dm_perms.embeds.build_revoked_embed",
+    "bot_modules.dm_perms.embeds.build_stale_request_embed",
+    "bot_modules.games_ama.embeds.build_answered_embed",
+    "bot_modules.games_ama.embeds.build_asker_dm_embed",
+    "bot_modules.games_ama.embeds.build_main_embed",
+    "bot_modules.games_ama.embeds.build_panel_embed",
+    "bot_modules.games_ama.embeds.build_question_embed",
+    "bot_modules.games_compliment.embeds.build_pairings_embed",
+    "bot_modules.games_config.embeds.build_audit_channel_embed",
+    "bot_modules.games_config.embeds.build_channel_allowed_embed",
+    "bot_modules.games_config.embeds.build_channel_disallowed_embed",
+    "bot_modules.games_config.embeds.build_channel_list_embed",
+    "bot_modules.games_config.embeds.build_force_end_embed",
+    "bot_modules.games_config.embeds.build_game_status_embed",
+    "bot_modules.games_fantasies.embeds.build_round_submit_embed",
+    "bot_modules.games_help.embeds.build_help_embed",
+    "bot_modules.games_help.embeds.build_support_embed",
+    "bot_modules.games_mfk.embeds.build_assignments_embed",
+    "bot_modules.games_rushmore.embeds.build_winner_embed",
+    "bot_modules.games_rushmore.embeds.render_draft_board",
+    "bot_modules.games_session.embeds.build_session_recap_embed",
+    "bot_modules.games_story.embeds.build_attribution_embed",
+    "bot_modules.games_story.embeds.build_complete_story_embed",
+    "bot_modules.games_story.embeds.build_turn_embed",
+    "bot_modules.games_traditional.embeds.build_question_embed",
+    "bot_modules.games_traditional.embeds.build_tod_embed",
+    "bot_modules.jail.embeds.build_adopted_policies_embed",
+    "bot_modules.jail.embeds.build_jail_audit_embed",
+    "bot_modules.jail.embeds.build_modinfo_embed",
+    "bot_modules.jail.embeds.build_policy_close_embed",
+    "bot_modules.jail.embeds.build_policy_list_embed",
+    "bot_modules.jail.embeds.build_policy_proposal_embed",
+    "bot_modules.jail.embeds.build_policy_vote_initial_embed",
+    "bot_modules.jail.embeds.build_policy_vote_update_embed",
+    "bot_modules.jail.embeds.build_setup_complete_embed",
+    "bot_modules.jail.embeds.build_setup_step_embed",
+    "bot_modules.jail.embeds.build_ticket_open_embed",
+    "bot_modules.jail.embeds.build_ticket_panel_embed",
+    "bot_modules.jail.embeds.build_warning_audit_embed",
+    "bot_modules.jail.embeds.build_warning_revoke_audit_embed",
+    "bot_modules.jail.embeds.build_warning_threshold_embed",
+    "bot_modules.jail.embeds.build_warnings_list_embed",
+    "bot_modules.music.embeds.build_247_status_embed",
+    "bot_modules.music.embeds.build_queue_embed",
+    "bot_modules.services.risky_roll.formatters.build_how_to_play_content",
+    "bot_modules.services.risky_roll.formatters.build_pending_prompt_content",
+    "bot_modules.services.risky_roll.formatters.build_pending_question_summary",
+    "bot_modules.services.risky_roll.formatters.build_question_reply_content",
+    "bot_modules.services.risky_roll.formatters.build_rolloff_embed",
+    "bot_modules.starboard.embeds.build_starboard_embed",
+    "bot_modules.voice_master.embeds.build_admin_audit_mirror_embed",
+    "bot_modules.voice_master.embeds.build_claim_done_embed",
+    "bot_modules.voice_master.embeds.build_claim_prompt_embed",
+    "bot_modules.voice_master.embeds.build_howto_embed",
+    "bot_modules.voice_master.embeds.build_inline_panel_embed",
+    "bot_modules.voice_master.embeds.build_knock_request_embed",
+    "bot_modules.voice_master.embeds.build_panel_embed",
+    "bot_modules.voice_master.embeds.build_profile_show_embed",
+    "bot_modules.whisper.embeds.build_inbox_embed",
+    "bot_modules.whisper.embeds.build_reply_audit_embed",
+    "bot_modules.whisper.embeds.build_reply_report_audit_embed",
+    "bot_modules.whisper.embeds.build_report_audit_embed",
+    "bot_modules.whisper.embeds.build_send_feed_embed",
+    "bot_modules.whisper.embeds.build_share_feed_embed",
+}
+
+
+def _discover_builders() -> set[str]:
+    """Every build_*/render_* callable in an embeds/rendering/formatters module."""
+    import bot_modules
+
+    found: set[str] = set()
+    for info in pkgutil.walk_packages(bot_modules.__path__, "bot_modules."):
+        if info.name.rsplit(".", 1)[-1] not in ("embeds", "rendering", "formatters"):
+            continue
+        module = importlib.import_module(info.name)
+        for attr, obj in vars(module).items():
+            if (
+                callable(obj)
+                and getattr(obj, "__module__", None) == info.name
+                and attr.startswith(("build_", "render_"))
+            ):
+                found.add(f"{info.name}.{attr}")
+    return found
+
+
+def test_every_builder_is_under_contract_or_explicitly_exempt():
+    # A builder counts as covered if its (unqualified) name is invoked
+    # somewhere in this file — i.e. it has a case() row. Ledger entries are
+    # fully-qualified and never followed by "(", so they don't self-match.
+    source = Path(__file__).read_text(encoding="utf-8")
+    covered = set(re.findall(r"\.((?:build|render)_\w+)\(", source))
+    discovered = _discover_builders()
+
+    missing = sorted(
+        b for b in discovered
+        if b.rsplit(".", 1)[-1] not in covered and b not in KNOWN_UNCOVERED
+    )
+    assert not missing, (
+        "New embed builder(s) with no accent-contract coverage. Add a case() "
+        "row above (preferred) or an explicit KNOWN_UNCOVERED entry:\n  "
+        + "\n  ".join(missing)
+    )
+
+    stale = sorted(KNOWN_UNCOVERED - discovered)
+    assert not stale, (
+        "KNOWN_UNCOVERED entries that no longer exist (or moved) — remove "
+        "them so the ledger stays honest:\n  " + "\n  ".join(stale)
+    )

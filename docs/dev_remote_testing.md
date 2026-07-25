@@ -129,7 +129,7 @@ Set these where your shell will see them (the pre-commit hook inherits them):
 | `REMOTE_TEST_PYTHON` | e.g. `C:/dev/dungeon-keeper/.venv/Scripts/python.exe` |
 | `REMOTE_TEST_JOBS` | xdist workers, default 12 — leaves a desktop usable |
 | `REMOTE_TEST_CD` | Override the `cd` template, e.g. `cd /d {dir} && {cmd}` |
-| `REMOTE_TEST_TIMEOUT` | Wall-clock cap in seconds on the remote run; on expiry the local side gives up and runs locally. 0/unset ⇒ no cap. |
+| `REMOTE_TEST_TIMEOUT` | Wall-clock cap in seconds on the remote pytest run, enforced remote-side (expiry kills pytest there and falls back locally — no orphaned run); the local ssh allows the cap + 60s grace as an outer belt. 0/unset ⇒ no cap. |
 | `GATE_NO_REMOTE=1` | Force local for one run |
 
 Forward slashes work fine in Windows paths here. Use `REMOTE_TEST_CD` with
