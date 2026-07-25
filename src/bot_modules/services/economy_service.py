@@ -70,6 +70,12 @@ class EconSettings:
     reward_qotd: int = 10
     reward_game_participation: int = 5
     reward_game_win: int = 20
+    # External CAH (Gamebot) score payout: replaces the flat participation/win
+    # amounts above for CAH games only. The top scorer (the *Game over!*
+    # winner) earns this many coins; everyone else earns it scaled by their
+    # score's ratio to the winner's, rounded to the nearest coin (a share that
+    # rounds to 0 pays nothing). 0 turns the payout off for CAH entirely.
+    reward_cah_win_max: int = 50
     # Host bounty: the member who *ran* a game earns per attendee who joined
     # (excluding themselves), capped at ``host_bounty_cap`` attendees so one
     # busy game can't dwarf other faucets. The point is recruiting hosts, so

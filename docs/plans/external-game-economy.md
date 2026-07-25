@@ -52,6 +52,19 @@ top, off an earlier flat 3/8/20/50/120/300): common 1, uncommon 3, rare 11, epic
 credits the tiered coins (`apply_credit` kind `cat_catch`, booster-multiplied)
 and fires the new `cat_catch` trigger. Once per catch via the payout ledger.
 
+**Stage 4 — CAH score-proportional payout (2026-07-24). SHIPPED.** Replaced the
+flat participation/win payout for `gamebot_cah` with `pay_cah_game_by_score`:
+the *Game over!* winner (top scorer) earns `EconSettings.reward_cah_win_max`
+(default 50, dashboard-configurable on Income Sources) and everyone else earns
+that cap scaled by their score's ratio to the winner's, rounded to the nearest
+coin (a share that rounds to 0 pays nothing). `party_game`/`game_win` quest
+triggers still fire for the same roster/winner — only the direct coin amount
+changed. Required teaching the parser real scores: `extract_cah_game` now
+returns `{member_id: score}` instead of a bare roster set, reading the *last*
+Current Standings embed in the window (each is a full cumulative snapshot, so
+later ones supersede earlier ones) and folding in submission-only/winner-only
+players at 0.
+
 ## Notes
 
 - This worktree is behind main (main has migrations 091–096); 097 is safe and

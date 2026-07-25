@@ -286,6 +286,21 @@ to currency.
   scoreboards pay nobody (an everyone-ties-at-0 board must not pay the room). Game
   types with no meaningful winner (story, AMA, MFK, compliment, traditional, WYR by
   design) pay participation only.
+- **External CAH score payout (2026-07-24):** the flat participation/win amounts
+  above do **not** apply to external Gamebot CAH games — `games_external_cog
+  ._pay_cah_game` calls `pay_cah_game_by_score` instead of `pay_game_rewards`.
+  The top scorer (the *Game over!* winner) earns `EconSettings
+  .reward_cah_win_max` (default 50) coins; every other player earns that cap
+  scaled by their score's ratio to the winner's, rounded to the nearest coin —
+  a share that rounds to 0 pays nothing. 0 turns the CAH payout off entirely.
+  Ledger kind is still `game_win`/`game_participation` (so it groups with
+  everything else under "games" in `metrics.py`), and the same
+  `party_game`/`game_win` quest triggers fire for the full roster/winner as a
+  flat payout would — only the coin math changed. Configurable on the Income
+  Sources dashboard page next to the flat game rewards. Scores come from
+  `parser.extract_cah_game`, which reads the *last* Current Standings embed in
+  the game's window (each is a cumulative snapshot, so later ones supersede
+  earlier ones) and folds in submission-only/winner-only players at 0.
 - **Payout visibility (2026-07-20):** every paying party game's recap embed gets a
   footer via `append_payout_footer` — `🪙 +20 to winners · +5 to everyone who
   played`, using the guild's configured amounts and currency emoji; winner line only
@@ -588,7 +603,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
 | `photo_post` | a member posts an image in the configured Photo Challenge channel (the post itself pays — no reactions needed) | `EconomyCog._on_photo_post` (on_message listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_post:<local_day>` (once/day by construction) |
-| `party_game` | party game completes with the member in the roster — **including external games** (a Gamebot Cards Against Humanity game parsed from `/games track`, `game_type="cah"`) | `pay_game_rewards` via `game_manager.end_game`, or `games_external_cog._pay_cah_game` for CAH | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`) |
+| `party_game` | party game completes with the member in the roster — **including external games** (a Gamebot Cards Against Humanity game parsed from `/games track`) | `pay_game_rewards` via `game_manager.end_game`, or `pay_cah_game_by_score` via `games_external_cog._pay_cah_game` for CAH (score-proportional coins, same trigger) | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`) |
 | `game_host` | a party game the member hosted completes with **at least one other member** in the roster (empty games pay nothing — the anti-farm gate); party games only, since only `game_manager` passes `host_id` | `pay_game_rewards` via `game_manager.end_game`, host bounty through `award_host_bounty` | `game_host:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
@@ -604,7 +619,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `message_sent` | any member message (channel-scopable) | `events_cog._econ_work` (same txn as login/QOTD) | `message_sent:<message_id>` |
 | `reply_sent` | a Discord reply to someone ELSE's message (self-replies skipped; unresolvable references count) | `events_cog._econ_work` | `reply_sent:<message_id>` |
 | `reaction_given` | reaction-given XP newly awarded (inherits the farm guard: one per message+reactor ever, no self-reacts) | `events_cog.on_raw_reaction_add` | `reaction_given:<message_id>` |
-| `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the *Game over!* winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
+| `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the *Game over!* winner) | `pay_game_rewards` winners pass, or `pay_cah_game_by_score` for CAH | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
 | `cat_catch` | catching a cat with the external **Cat Bot** in a `/games track … kind:Cat Bot` channel — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 1 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |

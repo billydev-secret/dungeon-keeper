@@ -7,7 +7,11 @@ from typing import Any
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.economy.game_rewards import pay_game_rewards, resolve_winners
+from bot_modules.economy.game_rewards import (
+    pay_cah_game_by_score,
+    pay_game_rewards,
+    resolve_winners,
+)
 from bot_modules.games.utils.game_manager import (
     create_game,
     end_game,
@@ -330,6 +334,112 @@ async def test_host_bounty_fires_the_game_host_quest(db_path):
     )
     assert _bal(db_path, 9) == 50  # host quest paid, no participation (not a player)
     assert _bal(db_path, 1) == 25  # player got participation + win, no host quest
+
+
+# ── pay_cah_game_by_score ───────────────────────────────────────────────────────
+
+async def test_cah_score_payout_scales_by_ratio(db_path):
+    _enable(db_path)  # reward_cah_win_max defaults to 50
+    bot: Any = _Bot(db_path, [_member(1), _member(2), _member(3), _member(4)])
+    await pay_cah_game_by_score(
+        bot, GUILD, {1: 5, 2: 3, 3: 1, 4: 0}, 1, occurrence="9001"
+    )
+    assert _bal(db_path, 1) == 50  # winner (top score): the full cap
+    assert _bal(db_path, 2) == 30  # 50 * 3/5
+    assert _bal(db_path, 3) == 10  # 50 * 1/5
+    assert _bal(db_path, 4) == 0   # share rounds to 0 -> no credit at all
+
+
+async def test_cah_score_payout_uses_configured_cap(db_path):
+    _enable(db_path, reward_cah_win_max=100)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    await pay_cah_game_by_score(bot, GUILD, {1: 4, 2: 2}, 1)
+    assert _bal(db_path, 1) == 100
+    assert _bal(db_path, 2) == 50
+
+
+async def test_cah_score_payout_off_when_cap_is_zero(db_path):
+    _enable(db_path, reward_cah_win_max=0)
+    bot: Any = _Bot(db_path, [_member(1)])
+    await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1)
+    assert _bal(db_path, 1) == 0
+
+
+async def test_cah_score_payout_noop_when_disabled(db_path):
+    bot: Any = _Bot(db_path, [_member(1)])
+    await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1)
+    assert _bal(db_path, 1) == 0
+
+
+async def test_cah_score_payout_all_zero_scores_pays_nobody(db_path):
+    # A degenerate game with no points scored has no ratio to scale by.
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    await pay_cah_game_by_score(bot, GUILD, {1: 0, 2: 0}, None)
+    assert _bal(db_path, 1) == 0
+    assert _bal(db_path, 2) == 0
+
+
+async def test_cah_score_payout_filters_bots_and_unresolvable(db_path):
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [_member(1), _member(2, bot=True)])
+    await pay_cah_game_by_score(bot, GUILD, {1: 5, 2: 3, 999: 1}, 1)
+    assert _bal(db_path, 1) == 50
+    assert _bal(db_path, 2) == 0
+    assert _bal(db_path, 999) == 0
+
+
+async def test_cah_score_payout_booster_ceils(db_path):
+    _enable(db_path)  # booster_multiplier defaults to 1.5
+    bot: Any = _Bot(db_path, [_member(1, booster=True)])
+    await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1)
+    assert _bal(db_path, 1) == 75  # ceil(50 * 1.5)
+
+
+async def test_cah_score_payout_coerces_string_scores(db_path):
+    # The parser hands back int keys, but the coercion mirrors pay_game_rewards
+    # for defence-in-depth against a JSON-payload-shaped caller.
+    _enable(db_path)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    await pay_cah_game_by_score(bot, GUILD, {"1": "5", "2": "3"}, "1")
+    assert _bal(db_path, 1) == 50
+    assert _bal(db_path, 2) == 30
+
+
+async def test_cah_score_payout_fires_party_game_and_game_win_triggers(db_path):
+    # Checked via the claim table rather than dollar totals — the weekly
+    # ⚡ spotlight kind can double a quest's payout, which would make an
+    # amount-based assertion flaky depending on the calendar week it runs in.
+    _enable(db_path)
+    with open_db(db_path) as conn:
+        pg_id = create_quest(
+            conn, GUILD, title="party_game", description="", qtype="daily",
+            reward=7, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind="party_game",
+        )
+        set_quest_active(conn, GUILD, pg_id, True)
+        gw_id = create_quest(
+            conn, GUILD, title="game_win", description="", qtype="daily",
+            reward=13, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind="game_win",
+        )
+        set_quest_active(conn, GUILD, gw_id, True)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    # player 2 scores 0 -> no direct coins, but still "played" for the quest.
+    await pay_cah_game_by_score(bot, GUILD, {1: 5, 2: 0}, 1, occurrence="9002")
+    with open_db(db_path) as conn:
+        claims = {
+            (row["quest_id"], row["user_id"])
+            for row in conn.execute(
+                "SELECT quest_id, user_id FROM econ_quest_claims WHERE guild_id = ?",
+                (GUILD,),
+            )
+        }
+    assert (pg_id, 1) in claims and (pg_id, 2) in claims  # both "played"
+    assert (gw_id, 1) in claims and (gw_id, 2) not in claims  # only the winner
+    assert _bal(db_path, 1) >= 50  # at least the direct score credit
 
 
 # ── end_game payout hook ──────────────────────────────────────────────────────

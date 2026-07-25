@@ -6,10 +6,13 @@ banks — no DB, no Discord I/O — so they're trivially testable against real
 
 Currently: Gamebot Cards Against Humanity. A CAH game is a run of messages in
 one channel ending in a *Game over!* embed. Players always render as real
-mentions (``<@id>``), so rosters and winners are reliable:
+mentions (``<@id>``), so rosters, scores, and winners are reliable:
 
-* *Current Standings* / *Submission status* embeds → the roster (``<@id>: N``
-  and ``✅ <@id> Submitted!``).
+* *Current Standings* embeds → each player's running score (``<@id>: N``).
+  Later standings supersede earlier ones (the count is cumulative, not
+  incremental), so only the last one before *Game over!* matters.
+* *Submission status* embeds → players seen before any standings post
+  (``✅ <@id> Submitted!``), folded in at score 0.
 * *Game over!* embed → the winner (``<@id> is the winner!``).
 """
 from __future__ import annotations
@@ -19,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 # <@123> / <@!123>, tolerant of the nickname bang.
-_MENTION_SCORE = re.compile(r"<@!?(\d+)>\s*:\s*\d+")
+_STANDINGS_ENTRY = re.compile(r"<@!?(\d+)>\s*:\s*(\d+)")
 _SUBMITTED = re.compile(r"<@!?(\d+)>\s+Submitted")
 _WINNER = re.compile(r"<@!?(\d+)>\s+is the winner")
 
@@ -35,9 +38,15 @@ def _embed_texts(embeds: Sequence[Mapping[str, Any]]):
 
 def players_from_standings(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
     """Member ids from a *Current Standings* embed (``<@id>: N`` lines)."""
-    out: set[int] = set()
+    return set(scores_from_standings(embeds))
+
+
+def scores_from_standings(embeds: Sequence[Mapping[str, Any]]) -> dict[int, int]:
+    """``{member_id: score}`` from a *Current Standings* embed."""
+    out: dict[int, int] = {}
     for _title, desc in _embed_texts(embeds):
-        out.update(int(m) for m in _MENTION_SCORE.findall(desc))
+        for m in _STANDINGS_ENTRY.finditer(desc):
+            out[int(m.group(1))] = int(m.group(2))
     return out
 
 
@@ -84,25 +93,30 @@ def current_game_window(
     return list(parsed[start : over_index + 1])
 
 
-def extract_cah_game(window: Sequence[Mapping[str, Any]]) -> tuple[set[int], int | None]:
-    """(roster, winner) for one game's window of messages.
+def extract_cah_game(
+    window: Sequence[Mapping[str, Any]]
+) -> tuple[dict[int, int], int | None]:
+    """(scores, winner) for one game's window of messages.
 
-    Roster is the union of everyone seen in standings/submission embeds across
-    the game (so a player who left before the final standings is still counted).
-    The winner is always folded into the roster — they plainly played.
+    ``scores`` reflects the *last* Current Standings embed in the window
+    (each one is a full cumulative snapshot, so later ones supersede earlier
+    ones rather than merging with them). A player only seen submitting before
+    the first standings post is folded in at 0, and so is the winner if
+    they're otherwise absent — they plainly played.
     """
-    roster: set[int] = set()
+    scores: dict[int, int] = {}
     winner: int | None = None
     for msg in window:
         embeds = msg.get("embeds") or []
-        roster |= players_from_standings(embeds)
-        roster |= players_from_submissions(embeds)
+        scores.update(scores_from_standings(embeds))
+        for uid in players_from_submissions(embeds):
+            scores.setdefault(uid, 0)
         w = winner_from_game_over(embeds)
         if w is not None:
             winner = w
     if winner is not None:
-        roster.add(winner)
-    return roster, winner
+        scores.setdefault(winner, 0)
+    return scores, winner
 
 
 # ── Cat Bot (kind='catbot') ──────────────────────────────────────────────────

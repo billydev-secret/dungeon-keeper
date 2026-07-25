@@ -78,6 +78,7 @@ class EconomyConfigUpdate(BaseModel):
     reward_game_participation: int | None = Field(default=None, ge=0)
     reward_photo_post: int | None = Field(default=None, ge=0)
     reward_game_win: int | None = Field(default=None, ge=0)
+    reward_cah_win_max: int | None = Field(default=None, ge=0)
     # Host bounty: per-attendee payout to a party game's host, capped at
     # host_bounty_cap attendees. 0 rate ships it dark.
     host_bounty_per_joiner: int | None = Field(default=None, ge=0)

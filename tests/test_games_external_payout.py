@@ -1,7 +1,8 @@
 """Integration test for the Gamebot CAH payout wiring (#70).
 
 Banks a full game's messages, then drives GamesExternalCog._pay_cah_game and
-asserts it reuses pay_game_rewards with the right roster/winner exactly once.
+asserts it calls pay_cah_game_by_score with the right scores/winner exactly
+once.
 """
 
 from __future__ import annotations
@@ -74,7 +75,7 @@ async def test_cah_payout_pays_roster_and_winner_once(gdb):
     cog = GamesExternalCog(bot)
 
     with patch(
-        "bot_modules.cogs.games_external_cog.pay_game_rewards", new=AsyncMock()
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
     ) as pay:
         await cog._pay_cah_game(_over_message())
         await cog._pay_cah_game(_over_message())  # replayed edit — must not re-pay
@@ -82,16 +83,15 @@ async def test_cah_payout_pays_roster_and_winner_once(gdb):
     pay.assert_awaited_once()
     args, kwargs = pay.await_args
     assert args[1] == GUILD
-    assert set(args[2]) == {ALICE, BOB, CAROL}   # full roster
-    assert args[3] == [ALICE]                    # winner
-    assert args[4] == "cah"
+    assert args[2] == {ALICE: 5, BOB: 1, CAROL: 1}  # full roster + scores
+    assert args[3] == ALICE                          # winner
     assert kwargs["occurrence"] == str(OVER_ID)
 
 
 @pytest.mark.asyncio
 async def test_cah_payout_lone_game_over_pays_the_winner(gdb):
     # A Game over! with no preceding standings still pays: the winner is folded
-    # into the roster, so they get participation + the win bonus.
+    # into the roster at score 0.
     await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_game_over(ALICE))
 
     bot = MagicMock()
@@ -99,14 +99,14 @@ async def test_cah_payout_lone_game_over_pays_the_winner(gdb):
     cog = GamesExternalCog(bot)
 
     with patch(
-        "bot_modules.cogs.games_external_cog.pay_game_rewards", new=AsyncMock()
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
     ) as pay:
         await cog._pay_cah_game(_over_message())
 
     pay.assert_awaited_once()
     args, _ = pay.await_args
-    assert set(args[2]) == {ALICE}
-    assert args[3] == [ALICE]
+    assert args[2] == {ALICE: 0}
+    assert args[3] == ALICE
 
 
 # ── Cat Bot payout (#65) ──────────────────────────────────────────────────────

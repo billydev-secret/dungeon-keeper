@@ -40,6 +40,11 @@ def test_players_from_standings():
     assert parser.players_from_standings(embeds) == {ALICE, BOB, CAROL}
 
 
+def test_scores_from_standings():
+    embeds = _standings({ALICE: 5, BOB: 1, CAROL: 0})["embeds"]
+    assert parser.scores_from_standings(embeds) == {ALICE: 5, BOB: 1, CAROL: 0}
+
+
 def test_players_from_submissions():
     embeds = _submissions([ALICE, BOB])["embeds"]
     assert parser.players_from_submissions(embeds) == {ALICE, BOB}
@@ -65,8 +70,34 @@ def test_extract_cah_game_unions_roster_and_finds_winner():
         _standings({ALICE: 5, BOB: 1, CAROL: 1}),
         _game_over(ALICE),
     ]
-    roster, winner = parser.extract_cah_game(window)
-    assert roster == {ALICE, BOB, CAROL}
+    scores, winner = parser.extract_cah_game(window)
+    assert scores == {ALICE: 5, BOB: 1, CAROL: 1}
+    assert winner == ALICE
+
+
+def test_extract_cah_game_last_standings_supersedes_earlier_ones():
+    # Current Standings is a cumulative snapshot each time — later posts
+    # replace earlier scores for the same player rather than merging with them.
+    window = [
+        _standings({ALICE: 2, BOB: 0}),
+        _standings({ALICE: 5, BOB: 1}),
+        _game_over(ALICE),
+    ]
+    scores, winner = parser.extract_cah_game(window)
+    assert scores == {ALICE: 5, BOB: 1}
+    assert winner == ALICE
+
+
+def test_extract_cah_game_submission_only_player_folded_in_at_zero():
+    # A player who submitted before the first standings post (or left before
+    # any standings) still counts as having played, at score 0.
+    window = [
+        _submissions([ALICE, BOB, CAROL]),
+        _standings({ALICE: 3, BOB: 1}),
+        _game_over(ALICE),
+    ]
+    scores, winner = parser.extract_cah_game(window)
+    assert scores == {ALICE: 3, BOB: 1, CAROL: 0}
     assert winner == ALICE
 
 
@@ -81,14 +112,14 @@ def test_current_game_window_bounds_on_previous_game_over():
         _game_over(CAROL),                # 3: game B ends
     ]
     window = parser.current_game_window(parsed, over_index=3)
-    roster, winner = parser.extract_cah_game(window)
-    assert roster == {CAROL, DAVE}
+    scores, winner = parser.extract_cah_game(window)
+    assert scores == {CAROL: 5, DAVE: 2}
     assert winner == CAROL
 
 
 def test_extract_handles_no_winner():
-    roster, winner = parser.extract_cah_game([_standings({ALICE: 2, BOB: 2})])
-    assert roster == {ALICE, BOB}
+    scores, winner = parser.extract_cah_game([_standings({ALICE: 2, BOB: 2})])
+    assert scores == {ALICE: 2, BOB: 2}
     assert winner is None
 
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -303,6 +303,106 @@ async def pay_cat_catch(
         )
     except Exception:
         log.exception("pay_cat_catch failed for guild %s", guild_id)
+
+
+async def pay_cah_game_by_score(
+    bot: "Bot",
+    guild_id: int,
+    scores: Mapping[Any, Any],
+    winner_id: Any,
+    *,
+    occurrence: str | None = None,
+) -> None:
+    """Credit a finished external CAH game proportional to each player's score.
+
+    Replaces the flat participation/win payout for CAH specifically: the top
+    scorer (the *Game over!* winner) earns ``reward_cah_win_max`` coins, and
+    everyone else earns that amount scaled by their score's ratio to the
+    winner's, rounded to the nearest coin — a share that rounds to 0 pays
+    nothing (``apply_credit`` rejects amounts under 1). Still fires the same
+    ``party_game``/``game_win`` quest triggers as ``pay_game_rewards`` so
+    external CAH games keep feeding quests identically; only the coin math
+    changes. Same guarantees as the other faucets: no-op when the economy is
+    off, bots/unresolvable members are dropped, failures logged not raised.
+    """
+    try:
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return
+
+        def _coerce(raw: object) -> int | None:
+            try:
+                return int(raw)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return None
+
+        def _valid(uid: int) -> bool:
+            if uid <= 0:
+                return False
+            member = guild.get_member(uid)
+            return member is not None and not member.bot
+
+        numeric_scores: dict[int, int] = {}
+        for raw_uid, raw_score in scores.items():
+            uid, score = _coerce(raw_uid), _coerce(raw_score)
+            if uid is not None and score is not None and _valid(uid):
+                numeric_scores[uid] = score
+        if not numeric_scores:
+            return
+
+        top_score = max(numeric_scores.values())
+        if top_score <= 0:
+            return
+
+        participants = sorted(numeric_scores)
+        winner = _coerce(winner_id)
+        winners = {winner} if winner in numeric_scores else set()
+
+        db_path = bot.ctx.db_path
+
+        def _load() -> EconSettings:
+            with open_db(db_path) as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            return
+        cap = settings.reward_cah_win_max
+        if cap <= 0:
+            return
+
+        boosters = {uid: member_is_booster(bot, guild_id, uid) for uid in participants}
+
+        def _credit() -> None:
+            with open_db(db_path) as conn:
+                for uid in participants:
+                    share = round(cap * numeric_scores[uid] / top_score)
+                    if share < 1:
+                        continue
+                    kind = "game_win" if uid in winners else "game_participation"
+                    try:
+                        apply_credit(
+                            conn, guild_id, uid, share, kind,
+                            meta={"score": numeric_scores[uid], "top_score": top_score},
+                            booster=boosters[uid], multiplier=settings.booster_multiplier,
+                        )
+                    except Exception:
+                        log.exception(
+                            "CAH score payout failed for user %s (guild %s)", uid, guild_id
+                        )
+
+        await asyncio.to_thread(_credit)
+
+        scoped = f"cah:{occurrence}" if occurrence is not None else None
+        await _fire_triggers(
+            bot, guild, settings, "party_game", participants, boosters, scoped
+        )
+        if winners:
+            await _fire_triggers(
+                bot, guild, settings, "game_win", sorted(winners), boosters, scoped
+            )
+    except Exception:
+        log.exception("pay_cah_game_by_score failed for guild %s", guild_id)
 
 
 async def _fire_triggers(
