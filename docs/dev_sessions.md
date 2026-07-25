@@ -54,10 +54,26 @@ and nesting working trees under it invites a stray glob into production.
 The branch is created with `--no-track`, so a stray `git push` from a session cannot
 target `main`.
 
-If `git fetch` fails (offline, dead SSH agent) the session is still created, off the
-last-known `origin/main`, with a warning. `/dk-ship` re-fetches and rebases before it
-merges anything, so staleness is caught at ship time rather than blocking you from
-starting work at all.
+## What a session branches off — and why it isn't `origin/main`
+
+Sessions branch off **local `main`**, the branch in the prod checkout.
+
+This is the one place converting from clones to worktrees changed a meaning. The old
+flow branched off `origin/main`, which was safe *because each clone's `origin` was the
+prod checkout* — `origin/main` and prod's `main` were the same commit. In a worktree,
+`origin` is GitHub. Prod's `main` runs ahead of it by every commit `/dk-ship` has
+merged but nobody has pushed, so `origin/main` there means "main as of the last push",
+not "current main".
+
+Carrying the literal `origin/main` across is exactly the bug the first session hit: it
+was cut 12 commits behind, missing everything merged that afternoon. Basing on local
+`main` is correct because local `main` is what `/dk-ship` merges into — the integration
+point *is* the prod checkout.
+
+The remote still matters in one direction: `new` fetches, and if prod's `main` is
+*behind* `origin/main` — someone pushed from elsewhere — it warns you to pull before
+starting real work. A failed fetch (offline, dead SSH agent) is non-fatal; the session
+is created anyway and the warning says the staleness check couldn't run.
 
 ## Seeing what's running
 
@@ -100,10 +116,21 @@ dropped — it says "kept branch — not merged into main" and leaves it.
 Refuses to remove a worktree with uncommitted changes. `--force` overrides that and
 discards the work; `/dk-ship` never passes it.
 
-## Note on `dk-sessions/`
+## The clone migration (2026-07-25)
 
-The directory also holds leftover **clones** from the pre-worktree flow (`work1`–`work4`,
-`gambling`, `stats`, `todo`, `fable`, `sonnet-work`, `valdiation`). They are not worktrees
-and `dk_session.py list` does not show them. Some still hold unmerged feature branches,
-so they are left alone rather than swept — check each with `git -C <dir> log origin/main..HEAD`
-before deleting it.
+`dk-sessions/` previously held eleven hand-made clones (`work1`–`work4`, `gambling`,
+`stats`, `todo`, `fable`, `sonnet-work`, `valdiation`) totalling 971 MB. They were
+audited, their unmerged work salvaged into `main`, and the directories removed.
+
+Three of them held commits that were not in `main`, and **two were on branches nobody
+had checked out** — `gambling` sat on `website-cleanup` while its unmerged commit was
+on `website-ux`, and `work4` looked idle on `main` but was one commit ahead of it. If
+you ever sweep session directories again, audit *every* `refs/heads/` ref, not just
+`HEAD`:
+
+    for b in $(git -C <dir> for-each-ref --format='%(refname:short)' refs/heads/); do
+      git -C <dir> log --oneline origin/main.."$b"
+    done
+
+And compare against the *prod* main, not the clone's own `main` — the stale local ref
+made three already-merged branches look 75–154 commits ahead.

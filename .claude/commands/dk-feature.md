@@ -3,7 +3,7 @@ description: Start a feature — worktree, branch, tmux window, and a claude run
 argument-hint: [opus|sonnet|haiku|fable] <feature name>
 allowed-tools: Bash(python3:*), Bash(git:*), Bash(tmux:*)
 ---
-Spawn a new feature session from `$ARGUMENTS`: a git worktree off `origin/main`, a
+Spawn a new feature session from `$ARGUMENTS`: a git worktree off prod's `main`, a
 branch, a tmux window, and a `claude` running inside it — one command, one name for
 all four.
 
@@ -26,13 +26,16 @@ Do exactly this, stopping with a clear message on any problem:
 
    It splits the model alias off the front, normalizes the rest into a name that is
    legal as a branch *and* a directory *and* a tmux window, then refuses rather than
-   clobbers if that worktree or branch already exists. It branches with `--no-track`
-   so a stray `git push` from the new session can never target main.
+   clobbers if that worktree or branch already exists. It branches off **local**
+   `main` — the branch `/dk-ship` merges into, and which runs ahead of `origin/main`
+   by every commit not yet pushed — with `--no-track`, so a stray `git push` from the
+   new session can never target main.
 3. If it exits non-zero, show its stderr verbatim and stop — do not retry with a
    different name unless the user asks.
 4. On success, report the branch, the model, and the attach line it printed
-   (`tmux select-window -t NAME`). Mention that the worker starts on a fresh
-   `origin/main` and ships with `/dk-ship` from inside its own window.
+   (`tmux select-window -t NAME`). Relay any `warning:` lines verbatim — a warning
+   that prod trails `origin/main` means the session just started on stale code.
+   Mention that it ships with `/dk-ship` from inside its own window.
 
 Notes:
 

@@ -111,6 +111,33 @@ def new_window_args(name: str, path: Path, model: str | None) -> list[str]:
     ]
 
 
+def worktree_add_args(main_repo: Path, name: str, path: Path) -> list[str]:
+    """The `git worktree add` invocation for a new session.
+
+    Bases on *local* main, never origin/main — see the note in cmd_new. Kept
+    separate from the subprocess call so the base ref is pinned by a test.
+    """
+    return [
+        "git", "-C", str(main_repo), "worktree", "add",
+        "-b", name, "--no-track", str(path), "main",
+    ]
+
+
+def staleness_warning(behind: int) -> str | None:
+    """Warn when prod's main trails origin/main, i.e. someone else pushed.
+
+    Sessions branch off *local* main because that is what /dk-ship merges into.
+    That makes prod's main the integration point, and a prod that has fallen
+    behind the remote silently bases every new session on old code.
+    """
+    if behind > 0:
+        return (
+            f"prod main is {behind} commit(s) behind origin/main — "
+            "`git pull` in the prod checkout before starting real work"
+        )
+    return None
+
+
 def parse_worktrees(porcelain: str) -> list[dict[str, str]]:
     """Parse `git worktree list --porcelain` into dicts of path/branch."""
     entries: list[dict[str, str]] = []
@@ -206,24 +233,34 @@ def cmd_new(args: argparse.Namespace) -> int:
     if branches.strip():
         die(f"branch {name!r} already exists — pick another name")
 
-    # Non-fatal: offline or a dead SSH agent shouldn't block starting work.
-    # The branch then comes off the last-known origin/main, and /dk-ship
-    # re-fetches and rebases before it merges anything, so staleness is caught
-    # at ship time rather than becoming a reason you can't start at all.
+    # Fetch only to judge staleness — non-fatal, since being offline or having
+    # a dead SSH agent shouldn't stop you starting work.
     fetched = run(["git", "-C", str(main_repo), "fetch", "origin"], check=False)
-    if fetched.returncode != 0:
+    if fetched.returncode == 0:
+        behind = run(
+            ["git", "-C", str(main_repo), "rev-list", "--count", "main..origin/main"],
+            check=False,
+        )
+        if behind.returncode == 0 and behind.stdout.strip().isdigit():
+            note = staleness_warning(int(behind.stdout.strip()))
+            if note:
+                print(f"warning: {note}", file=sys.stderr)
+    else:
         first = (fetched.stderr or "").strip().splitlines()
         print(f"warning: fetch failed ({first[0] if first else '?'})", file=sys.stderr)
-        print("warning: branching off the last-known origin/main", file=sys.stderr)
+        print("warning: cannot tell whether prod main is behind origin", file=sys.stderr)
 
     sessions_dir(main_repo).mkdir(parents=True, exist_ok=True)
-    # --no-track: without it the new branch tracks origin/main and a stray
-    # `git push` from the session would target main directly.
-    run([
-        "git", "-C", str(main_repo), "worktree", "add",
-        "-b", name, "--no-track", str(path), "origin/main",
-    ])
-    print(f"worktree: {path}  (branch {name} off origin/main)")
+    # Base off *local* main, never origin/main. The old clone-per-session flow
+    # used origin/main because each clone's origin *was* the prod checkout, so
+    # the two were one ref. In a worktree origin is GitHub, and prod's main runs
+    # ahead of it by every commit not yet pushed — branching off origin/main
+    # there silently starts the session on stale code.
+    #
+    # --no-track: without it the new branch tracks main and a stray `git push`
+    # from the session would target main directly.
+    run(worktree_add_args(main_repo, name, path))
+    print(f"worktree: {path}  (branch {name} off main)")
 
     if args.no_window:
         print("window: skipped (--no-window)")

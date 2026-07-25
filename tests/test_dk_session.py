@@ -115,6 +115,43 @@ def test_new_window_args_names_window_after_branch():
     assert args[args.index("-c") + 1] == "/tmp/wt"
 
 
+# ── base ref ─────────────────────────────────────────────────────────────
+
+def test_sessions_branch_off_local_main_not_origin():
+    """Regression: a session based on origin/main starts on stale code.
+
+    The clone-per-session flow used origin/main safely because each clone's
+    origin *was* the prod checkout. In a worktree origin is GitHub, so prod's
+    main leads it by every unpushed commit — the first session cut after this
+    change was 12 commits behind because of exactly that.
+    """
+    args = dk_session.worktree_add_args(
+        Path("/home/ben/discord-bots/dungeon-keeper"),
+        "casino-derby",
+        Path("/home/ben/discord-bots/dk-sessions/casino-derby"),
+    )
+    assert args[-1] == "main"
+    assert "origin/main" not in args
+
+
+def test_worktree_add_does_not_track_its_base():
+    """Without --no-track a stray `git push` from a session targets main."""
+    args = dk_session.worktree_add_args(Path("/repo"), "feat", Path("/wt/feat"))
+    assert "--no-track" in args
+    assert args[args.index("-b") + 1] == "feat"
+
+
+@pytest.mark.parametrize("behind", [1, 12, 300])
+def test_staleness_warning_when_prod_trails_origin(behind):
+    note = dk_session.staleness_warning(behind)
+    assert note is not None
+    assert str(behind) in note
+
+
+def test_no_staleness_warning_when_prod_is_current():
+    assert dk_session.staleness_warning(0) is None
+
+
 # ── worktree listing ─────────────────────────────────────────────────────
 
 def test_parse_worktrees_reads_paths_and_branches():
