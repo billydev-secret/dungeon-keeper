@@ -121,3 +121,34 @@ def test_help_embed_hides_closed_tables():
     names = [f.name for f in build_help_embed(_ECON, settings, None).fields]
     assert "🏇 Derby" not in names and "🎰 Slots" not in names
     assert "🪙 Coinflip" in names and "🎡 Roulette" in names
+
+
+# ── the hub panel's floor ticker ───────────────────────────────────────
+
+
+def test_hub_embed_shows_ticker_lines_newest_first():
+    from bot_modules.cogs.casino.embeds import build_hub_embed
+
+    embed = build_hub_embed(
+        _ECON, CasinoSettings(channel_id=1), None,
+        ticker=[(2, "slots", 50, 500), (1, "coinflip", 10, 0)],
+    )
+    field = next(f for f in embed.fields if "On the floor" in (f.name or ""))
+    assert field.value is not None
+    assert field.value.index("<@2>") < field.value.index("<@1>")
+    assert "**500**" in field.value  # the win shows its payout
+    assert "the house" in field.value  # the loss names its destination
+
+
+def test_hub_embed_omits_empty_ticker():
+    from bot_modules.cogs.casino.embeds import build_hub_embed
+
+    embed = build_hub_embed(_ECON, CasinoSettings(channel_id=1), None, ticker=[])
+    assert all("On the floor" not in (f.name or "") for f in embed.fields)
+
+
+def test_ticker_line_marks_push_and_partial_return():
+    from bot_modules.cogs.casino.embeds import ticker_line
+
+    assert "push" in ticker_line(1, "blackjack", 20, 20)
+    assert "10 back" in ticker_line(1, "blackjack", 20, 10)

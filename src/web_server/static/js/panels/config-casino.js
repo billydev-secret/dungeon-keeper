@@ -190,9 +190,20 @@ export function mount(container) {
     ));
     cardTiming.appendChild(field(
       "Blackjack Idle Timeout (seconds)",
-      numInput("blackjack_idle_seconds", c.blackjack_idle_seconds ?? 180, 30, "1", 3600),
+      numInput("blackjack_idle_seconds", Math.min(c.blackjack_idle_seconds ?? 180, 840), 30, "1", 840),
       "A hand nobody touches for this long stands automatically so the table " +
-        "frees up. Between 30 and 3600 seconds.",
+        "frees up. Between 30 and 840 seconds (private hand messages can only " +
+        "be updated for 14 minutes).",
+    ));
+
+    const cardFloor = card("Casino Floor");
+    cardFloor.appendChild(field(
+      "Big-Win Broadcast Threshold",
+      numInput("broadcast_min_payout", c.broadcast_min_payout ?? 0, 0),
+      "Players spin privately; the panel's floor ticker shows recent action. " +
+        "A win paying at least this much also gets its own public message in " +
+        "the casino channel, with a Play Again button anyone can press. " +
+        "Enter 0 to never broadcast wins (jackpot hits are always announced).",
     ));
 
     const row = document.createElement("div");
@@ -219,7 +230,8 @@ export function mount(container) {
         ["jackpot_seed", "Starting Pot After a Win", 0, null],
         ["roulette_window_seconds", "Roulette Betting Window", 15, 600],
         ["derby_window_seconds", "Derby Betting Window", 15, 600],
-        ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 3600],
+        ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 840],
+        ["broadcast_min_payout", "Big-Win Broadcast Threshold", 0, null],
       ]) {
         const raw = String(fd.get(name) ?? "").trim();
         const v = parseInt(raw, 10);

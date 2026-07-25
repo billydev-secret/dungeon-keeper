@@ -505,8 +505,10 @@ class PlayAgainButton(
     ),
 ):
     """On every instant/blackjack result: replay the same bet — for
-    WHOEVER clicks (their own coins, every guard re-applies), which turns
-    each result into a "me too" invitation rather than a dead end."""
+    WHOEVER clicks (their own coins, every guard re-applies). On your own
+    ephemeral machine it spins the same message in place; on a public
+    big-win broadcast it opens the clicker's own machine — the "me too"
+    invitation surviving the ephemeral move."""
 
     def __init__(self, game: str, side: str, amount: int) -> None:
         side_note = f" · {side}" if game == "coinflip" else ""

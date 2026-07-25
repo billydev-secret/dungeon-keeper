@@ -1,9 +1,11 @@
 # Casino — Feature Spec
 
-House gambling games staking the guild currency, played publicly in one
-admin-configured **casino channel**. Built 2026-07-22 (plan:
-[plans/casino.md](plans/casino.md)); the Meadow Derby joined 2026-07-24
-(plan: [plans/casino-derby.md](plans/casino-derby.md)). Sunny-meadow
+House gambling games staking the guild currency in one admin-configured
+**casino channel**. Built 2026-07-22 (plan: [plans/casino.md](plans/casino.md));
+the Meadow Derby joined 2026-07-24 (plan:
+[plans/casino-derby.md](plans/casino-derby.md)); the ephemeral-play UX
+landed 2026-07-24 (plan:
+[plans/casino-ephemeral-ux.md](plans/casino-ephemeral-ux.md)). Sunny-meadow
 theming over an unmistakably Vegas core.
 
 **The casino's name is per-guild branding**, not a constant: it comes from
@@ -21,12 +23,37 @@ jackpot embed titles interpolate the configured name directly.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
-🏇 Derby · ❓ How It Works); every flow is buttons + amount modals. Results post
-publicly (mentions live in embeds, so nothing pings). The panel is
-**bottom-sticky** (the economy sticky-panel pattern): channel traffic
-debounces a 60s restick that deletes and reposts it, since it is the
-casino's only entry point. Roulette round embeds repaint on a 2s debounce
-per round (one edit per burst of bets, the live_signal idea). Both the
+🏇 Derby · ❓ How It Works); every flow is buttons + amount modals.
+
+**Private play, public moments** (2026-07-24; before this, every result was
+its own public message and heavy slots play scrolled the channel non-stop,
+yanking active UI around): instant games (coinflip/slots/blackjack) render
+**ephemerally** — each player's private machine edits itself in place
+(`_respond_private`: a press on your own ephemeral message edits it via
+`response.edit_message`; any other press opens a fresh ephemeral). Animation
+frames ride `edit_original_response` (the interaction webhook, not the
+channel edit bucket). The channel itself carries only shared surfaces:
+
+- the **hub panel**, whose **📡 On the floor ticker** (`casino_ticker`
+  table, `record_ticker`/`recent_ticker`, written inside `record_play`'s
+  settlement transaction for instant games only) lists the last few plays;
+  a debounced per-guild repaint (`_schedule_hub_repaint`, 8s) coalesces a
+  burst of plays into one in-place panel edit — an edit never moves the
+  panel;
+- **communal roulette/derby rounds** (public as ever, repainting on a 2s
+  debounce per round — one edit per burst of bets, the live_signal idea);
+- **broadcast moments**: the jackpot celebration (always), and any
+  instant-game win paying ≥ `broadcast_min_payout` (0 = off) — the result
+  embed reposted publicly with its 🔁 Play Again button, so the "me too"
+  invitation survives for wins worth advertising (`_after_instant`;
+  skipped when the jackpot celebration already announced the spin).
+
+The panel is **bottom-sticky** (the economy sticky-panel pattern): channel
+traffic debounces a restick (delete + repost, since it is the casino's only
+entry point) after 60s — but the restick **holds while a roulette/derby
+round is open** in the channel (rechecking every 60s, up to a 5-minute
+cap) so the panel never jumps under members who are mid-bet
+(`RESTICK_QUICK_SECONDS` / `RESTICK_ROUND_HOLD_SECONDS`). Both the
 casino config PUT **and the economy config PUT** dispatch
 `casino_config_change`, so enabling/disabling/moving anything updates or
 tears down the panel without a restart.
@@ -86,7 +113,8 @@ All movement goes through `services/casino_service.py`:
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
 | `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
-| `blackjack_idle_seconds` | 180 | idle hand auto-stands (bounds 30–3600) |
+| `blackjack_idle_seconds` | 180 | idle hand auto-stands (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
+| `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
 Dashboard: **Economy → Casino** (`config-casino.js`, admin-only;
@@ -110,8 +138,13 @@ guild's casino name, which is edited on **Config → Branding**
   hand per member (partial unique index backstops the pre-check). Buttons
   are DynamicItems (`casino_bj:{action}:{hand_id}`) so they survive
   restarts; only the owner may press. Idle hands auto-stand via the 60s
-  maintenance sweep; **boot refunds every live hand** (honest reset,
-  message edited best-effort).
+  maintenance sweep — the hand's ephemeral message is repainted through a
+  cog-held `(followup webhook, message_id)` handle (`_bj_followups`,
+  in-memory, swept after the 15-minute token TTL); the settle itself never
+  depends on that edit. **Boot refunds every live hand** (honest reset; the
+  old message is unreachable post-restart — the register feed's
+  `casino_refund` entry is the player-facing notice, and stale buttons
+  answer "already finished").
 - **Roulette** — European single zero. One open round per channel (partial
   unique index). Any member opens a round from the hub; bets (red/black 2×,
   dozens 3×, straight 0–36 36×) debit at placement via buttons
@@ -192,9 +225,11 @@ caller-supplied.
 
 - **Loop-closers:** every instant/blackjack result carries a persistent
   🔁 button (`casino_again:{game}:{side}:{amount}`) that replays the same
-  stake **for whoever clicks** (their coins; every guard re-applies) —
-  results are invitations, not dead ends. Roulette recaps carry
-  🎡 Next Round. Stale buttons stay safe: stakes re-validate at click.
+  stake **for whoever clicks** (their coins; every guard re-applies). On
+  your own ephemeral machine it respins the same message in place; on a
+  public big-win broadcast it opens the clicker's own machine — results
+  stay invitations, not dead ends. Roulette recaps carry 🎡 Next Round.
+  Stale buttons stay safe: stakes re-validate at click.
 - **Informed bets:** the bet modal's label carries live limits and cap
   headroom ("Your bet (5–100 · 340 left today)") and pre-fills the
   member's last stake per game (in-memory). The cap error names its reset
@@ -206,7 +241,7 @@ caller-supplied.
   carries a jump link to the live round message. Blackjack hides Double
   Down when the clicker can't afford the second stake.
 
-## Storage (migrations 113 + 114 + 127)
+## Storage (migrations 113 + 114 + 127 + 128)
 
 `casino_daily`, `casino_blackjack_hands` (state_json = deck/player/dealer,
 `settled_at` guard, partial unique live index), `casino_roulette_rounds`
@@ -214,7 +249,9 @@ caller-supplied.
 114 adds `casino_jackpot` (one row per guild), `casino_member_stats` and
 `casino_weekly` (bounded upserts, no per-play log); 127 adds
 `casino_race_rounds` + `casino_race_bets` (the roulette pair's shape, with
-`winner`/`runner` in place of `result`/bet type).
+`winner`/`runner` in place of `result`/bet type); 128 adds `casino_ticker`
+(the hub floor ticker's bounded per-play log — instant games only,
+trimmed to `TICKER_KEEP` rows per guild on insert).
 
 ## Files
 
@@ -235,6 +272,10 @@ accounting across local days, no-boost payouts, blackjack lifecycle
 (exactly-once settle, boot sweep, idle sweep, double), roulette rounds
 and derby races (one-per-channel, window close, exactly-once settle/void,
 conservation, jackpot feeding, the buzzer-beater claim, leaver refunds).
-`tests/web/test_casino_routes.py` — section shape (string ids), PUT
-persistence + guards; authz/snowflake/browser sweeps cover the panel
-automatically.
+The ticker rides `tests/test_casino_service.py` (rows land via each
+instant settle path, communal games and refunds stay off it, per-guild
+trim to `TICKER_KEEP`) and `tests/test_casino_embeds.py` (hub "On the
+floor" section renders newest-first, omitted when empty, push/partial
+lines). `tests/web/test_casino_routes.py` — section shape (string ids), PUT
+persistence + guards, `broadcast_min_payout` roundtrip/bounds, the 840s
+idle cap; authz/snowflake/browser sweeps cover the panel automatically.
