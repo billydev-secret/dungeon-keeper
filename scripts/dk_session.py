@@ -89,8 +89,14 @@ def worktree_path(main_repo: Path, name: str) -> Path:
     return sessions_dir(main_repo) / name
 
 
-def claude_command(model: str | None) -> str:
+def claude_command(model: str | None, name: str | None = None,
+                   remote: bool = True) -> str:
     """Shell line for the window: run claude, then keep the window alive.
+
+    Remote Control is on by default and named after the feature. The name has
+    to be passed at launch: a session's Remote Control title is fixed at
+    startup, so nothing — not a hook, not a slash command — can set it later.
+    Spawning is the only moment it can be named, so this is where it happens.
 
     `exec $SHELL` matters — without it, quitting claude closes the window and
     the worktree is orphaned with no visible trace that it still exists.
@@ -98,16 +104,21 @@ def claude_command(model: str | None) -> str:
     cmd = "claude"
     if model:
         cmd += f" --model {shlex.quote(model)}"
+    if remote:
+        cmd += " --remote-control"
+        if name:
+            cmd += f" {shlex.quote(name)}"
     return f"{cmd}; exec $SHELL"
 
 
-def new_window_args(name: str, path: Path, model: str | None) -> list[str]:
+def new_window_args(name: str, path: Path, model: str | None,
+                    remote: bool = True) -> list[str]:
     return [
         "tmux", "new-window",
         "-d",
         "-n", name,
         "-c", str(path),
-        claude_command(model),
+        claude_command(model, name, remote),
     ]
 
 
@@ -266,9 +277,10 @@ def cmd_new(args: argparse.Namespace) -> int:
         print("window: skipped (--no-window)")
         return 0
 
-    run(new_window_args(name, path, model))
+    run(new_window_args(name, path, model, remote=not args.no_remote_control))
     label = model or "default model"
-    print(f"window:   {name}  ({label})")
+    remote = "remote control off" if args.no_remote_control else f"remote: {name}"
+    print(f"window:   {name}  ({label}, {remote})")
     print(f"attach:   tmux select-window -t {name}")
     return 0
 
@@ -340,6 +352,10 @@ def main(argv: list[str] | None = None) -> int:
     p_new.add_argument("tokens", nargs="+", help="[model] feature name words")
     p_new.add_argument("--model", help="model override (opus/sonnet/haiku/fable or full id)")
     p_new.add_argument("--no-window", action="store_true", help="worktree only, no tmux")
+    p_new.add_argument(
+        "--no-remote-control", action="store_true",
+        help="local-only session (Remote Control is on by default)",
+    )
     p_new.set_defaults(func=cmd_new)
 
     p_list = sub.add_parser("list", help="every session worktree and its window")

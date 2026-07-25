@@ -100,7 +100,7 @@ def test_claude_command_includes_the_model():
 
 
 def test_claude_command_omits_model_when_unset():
-    assert dk_session.claude_command(None).startswith("claude;")
+    assert dk_session.claude_command(None).startswith("claude --remote-control")
 
 
 def test_claude_command_keeps_the_window_alive():
@@ -108,11 +108,33 @@ def test_claude_command_keeps_the_window_alive():
     assert dk_session.claude_command("opus").endswith("; exec $SHELL")
 
 
+def test_remote_control_is_on_by_default():
+    assert "--remote-control" in dk_session.claude_command("opus", "casino-derby")
+
+
+def test_remote_control_session_is_named_after_the_feature():
+    """The name is only settable at launch — nothing can rename it later."""
+    cmd = dk_session.claude_command("opus", "casino-derby")
+    assert "--remote-control casino-derby" in cmd
+
+
+def test_remote_control_can_be_opted_out():
+    cmd = dk_session.claude_command("opus", "casino-derby", remote=False)
+    assert "--remote-control" not in cmd
+    assert cmd.startswith("claude --model opus;")
+
+
 def test_new_window_args_names_window_after_branch():
     args = dk_session.new_window_args("casino-derby", Path("/tmp/wt"), "opus")
     assert args[:3] == ["tmux", "new-window", "-d"]
     assert "-n" in args and args[args.index("-n") + 1] == "casino-derby"
     assert args[args.index("-c") + 1] == "/tmp/wt"
+
+
+def test_new_window_passes_the_name_through_to_remote_control():
+    """One name for the branch, the directory, the window, and Remote Control."""
+    args = dk_session.new_window_args("casino-derby", Path("/tmp/wt"), "opus")
+    assert "--remote-control casino-derby" in args[-1]
 
 
 # ── base ref ─────────────────────────────────────────────────────────────

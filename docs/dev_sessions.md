@@ -43,7 +43,22 @@ address to remember:
 | branch | `documentation-review` |
 | worktree | `../dk-sessions/documentation-review` |
 | tmux window | `documentation-review` |
+| Remote Control session | `documentation-review` |
 | attach with | `tmux select-window -t documentation-review` |
+
+## Remote Control is on by default
+
+Every session launches with `claude --remote-control <name>`, so you can pick it up
+from claude.ai or your phone without attaching to tmux at all. The session prints its
+URL on startup.
+
+The name has to be passed at launch. A session's Remote Control title is fixed at
+startup — no hook and no slash command can set it afterwards, which is why the older
+version of `/dk-feature` told you to run `/rename` by hand. Spawning is the one moment
+the name can be applied, so that is where it happens, and it reuses the same feature
+name as everything else.
+
+Pass `--no-remote-control` to `dk_session.py new` for a local-only session.
 
 **`/dk-feature` does not move the session you typed it in.** It launches a worker
 beside you and leaves your tree alone — that is what makes several at once possible.

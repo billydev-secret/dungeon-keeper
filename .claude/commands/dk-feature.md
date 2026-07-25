@@ -4,8 +4,8 @@ argument-hint: [opus|sonnet|haiku|fable] <feature name>
 allowed-tools: Bash(python3:*), Bash(git:*), Bash(tmux:*)
 ---
 Spawn a new feature session from `$ARGUMENTS`: a git worktree off prod's `main`, a
-branch, a tmux window, and a `claude` running inside it — one command, one name for
-all four.
+branch, a tmux window, and a Remote Control-enabled `claude` running inside it — one
+command, one name for all five.
 
 **This does not move the session you typed it in.** The old flow put you on a new
 branch in your own checkout; this one launches a *worker beside you* and leaves your
@@ -36,6 +36,10 @@ Do exactly this, stopping with a clear message on any problem:
    (`tmux select-window -t NAME`). Relay any `warning:` lines verbatim — a warning
    that prod trails `origin/main` means the session just started on stale code.
    Mention that it ships with `/dk-ship` from inside its own window.
+5. The worker starts with Remote Control enabled and named after the feature, so it
+   can be driven from claude.ai or a phone without attaching to tmux. It prints its
+   own session URL on startup; `tmux capture-pane -p -t NAME` will show it if the
+   user wants the link without switching windows.
 
 Notes:
 
