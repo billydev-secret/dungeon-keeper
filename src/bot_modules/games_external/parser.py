@@ -212,6 +212,8 @@ def extract_connect4_game(
 # so the catcher is always the non-emoji token adjacent to "cought". Rarity is
 # read from the emoji name (``<:wildcat:…>`` → ``wild``), which is reliable in
 # both orders. A "blessed … got doubled!" line means Cat Bot doubled the catch.
+# The username arrives markdown-*escaped* (``tryingnewthingz\_0504``) in either
+# order, and the payout resolves it by name, so the escapes must come off.
 
 # Rarity → tier → coins (defaults; a future dashboard panel can override).
 # Tapered against an earlier flatter table (3/8/20/50/120/300): a 75% cut on the
@@ -234,6 +236,16 @@ _DEFAULT_TIER = "common"
 
 _CAT_EMOJI = re.compile(r"^<a?:(\w+?)cat:\d+>$", re.IGNORECASE)
 _BLESSED = "blessed your catch and it got doubled"
+# Cat Bot markdown-escapes usernames before printing them, so an underscore
+# arrives as ``\_`` (``tryingnewthingz\_0504``). The escape survives verbatim in
+# reverse-cat lines too. Left in, the name never matches a real member and the
+# catch silently pays nobody, so strip the backslash off the markdown characters
+# Discord escapes (underscore is the one that actually occurs in usernames).
+_MD_ESCAPE = re.compile(r"\\([_*~`|\\>])")
+
+
+def _unescape_markdown(name: str) -> str:
+    return _MD_ESCAPE.sub(r"\1", name)
 
 
 def rarity_coins(rarity: str) -> int:
@@ -274,7 +286,7 @@ def parse_cat_catch(content: str) -> CatCatch | None:
             username, rarity = after, m_before.group(1)
         else:
             continue           # "Anyone who cought this cat" — not an individual catch
-        username = username.strip(",.!?")
+        username = _unescape_markdown(username.strip(",.!?"))
         if not username or _CAT_EMOJI.match(username):
             continue
         rarity = rarity.lower()

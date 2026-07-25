@@ -9,6 +9,8 @@ embed, the `Time's up!` recap, and the terminal `Game over!` embed
 
 from __future__ import annotations
 
+import pytest
+
 from bot_modules.games_external import parser
 
 ALICE, BOB, CAROL = 111, 222, 333
@@ -249,6 +251,14 @@ _CATCH_DOUBLED = (
     "💫 rjoy_26 blessed your catch and it got doubled!"
 )
 _CATCH_REVERSE = "!1!!!!cat Reverse <:reversecat:1279106519581069313> cought ceilruxdealta"
+# Cat Bot markdown-escapes underscores in usernames, in both word orders.
+_CATCH_ESCAPED = (
+    "tryingnewthingz\\_0504 cought <:nicecat:1279106518423441478> Nice cat!!!!1!\n"
+    "You now have 2,505 cats of dat type!!!"
+)
+_CATCH_ESCAPED_REVERSE = (
+    "!1!!!!cat Reverse <:reversecat:1279106519581069313> cought tryingnewthingz\\_0504"
+)
 _SPAWN = "** A <:finecat:1279106515894141019> @Cats! has appeared**\nCatch Fine for cuddles!!"
 _BONUS = (
     "🎁 **BONUS <:reversecat:1279106519581069313> REVERSE CAT!**\n"
@@ -291,6 +301,18 @@ def test_parse_cat_catch_reverse_cat():
     assert catch.username == "ceilruxdealta"   # the non-emoji token by "cought"
     assert catch.rarity == "reverse"
     assert catch.coins == 11
+
+
+@pytest.mark.parametrize(
+    "content", [_CATCH_ESCAPED, _CATCH_ESCAPED_REVERSE], ids=["normal", "reverse"]
+)
+def test_parse_cat_catch_unescapes_markdown_in_username(content):
+    """Cat Bot prints ``tryingnewthingz\\_0504``; the payout resolves the *real*
+    username by name, so the escapes have to come off or the catch pays nobody.
+    """
+    catch = parser.parse_cat_catch(content)
+    assert catch is not None
+    assert catch.username == "tryingnewthingz_0504"
 
 
 def test_spawn_and_bonus_are_not_catches():

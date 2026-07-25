@@ -43,7 +43,10 @@ re-parse or restart never double-pays. `parse_status` marks each message
 banked messages, not embeds): catches are message *content*
 `{username} cought <:raritycat:id> {Rarity} cat`. The catcher is a plain
 Discord **username** (not a mention) — resolved to a member via
-`guild.get_member_named`; unresolved (left/renamed) pay nobody. Rarity from the
+`guild.get_member_named`; unresolved (left/renamed) pay nobody. The printed name
+is markdown-**escaped** (`tryingnewthingz\_0504`), in both word orders, so the
+parser unescapes before resolving — left in, every username containing an
+underscore silently paid nobody (fixed 2026-07-25; 213 catches missed). Rarity from the
 emoji name; reverse cats print the line reversed but keep the emoji intact, so
 the catcher is the non-emoji token beside "cought". "blessed…got doubled" →
 ×2. Tiers (tapered 2026-07-21 — a 75%→0% linear cut from the bottom tier to the
