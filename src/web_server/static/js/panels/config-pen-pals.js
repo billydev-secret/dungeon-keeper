@@ -60,6 +60,15 @@ export function mount(container) {
             </div>
 
             <div class="field">
+              <label for="pp-match-mode">Pairing Mode</label>
+              <select name="match_mode" id="pp-match-mode">
+                <option value="instant" ${(pp.match_mode || "instant") === "instant" ? "selected" : ""}>Instant — match the moment a partner is waiting</option>
+                <option value="scheduled" ${pp.match_mode === "scheduled" ? "selected" : ""}>Once a day — pair everyone waiting at 8:00 AM Eastern</option>
+              </select>
+              <div class="field-hint">Instant matches members as soon as someone eligible is already in the pool. Scheduled queues everyone and pairs the whole pool in one batch, once a day at 8am Eastern — nobody is matched on join.</div>
+            </div>
+
+            <div class="field">
               <label for="pp-question-category">Question Ratings</label>
               <select name="question_category" id="pp-question-category">
                 <option value="sfw" ${(pp.question_category || "sfw") === "sfw" ? "selected" : ""}>Safe for work only</option>
@@ -221,6 +230,7 @@ export function mount(container) {
           category_id:        categoryPicker.getValue() || null,
           opt_in_role_id:     optInPicker.getValue() || null,
           question_category:  fd.get("question_category"),
+          match_mode:         fd.get("match_mode"),
           room_visibility:    fd.get("room_visibility"),
           intro_message:      fd.get("intro_message"),
           log_channel_id:     logPicker.getValue() || null,

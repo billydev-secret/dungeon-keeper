@@ -131,10 +131,12 @@ from bot_modules.cogs.bump_tracker_cog import (
 )
 from bot_modules.starboard.filters import validate_emoji as _starboard_validate_emoji
 from bot_modules.cogs.pen_pals_cog import (
+    DEFAULT_MATCH_MODE as _PP_DEFAULT_MATCH_MODE,
     DEFAULT_ROOM_VISIBILITY as _PP_DEFAULT_ROOM_VISIBILITY,
     _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
     _get_pool as _pp_get_pool,
+    _normalize_match_mode as _pp_normalize_match_mode,
     _normalize_room_visibility as _pp_normalize_room_visibility,
     _set_admin_separations as _pp_set_admin_separations,
     _set_config as _pp_set_config,
@@ -732,6 +734,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "panel_channel_id": None,
             "room_visibility": _PP_DEFAULT_ROOM_VISIBILITY,
             "intro_message": "",
+            "match_mode": _PP_DEFAULT_MATCH_MODE,
             "pool_size": pool_size,
             "session_seconds": 86400,
             "match_cooldown_seconds": 2592000,
@@ -751,6 +754,9 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             cfg["room_visibility"] if "room_visibility" in cfg.keys() else None
         ),
         "intro_message": cfg["intro_message"] if "intro_message" in cfg.keys() else "",
+        "match_mode": _pp_normalize_match_mode(
+            cfg["match_mode"] if "match_mode" in cfg.keys() else None
+        ),
         "pool_size": pool_size,
         "session_seconds": int(cfg["session_seconds"]),
         "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
@@ -3170,6 +3176,7 @@ class PenPalsConfigUpdate(BaseModel):
     panel_channel_id: str | None = None
     room_visibility: str = _PP_DEFAULT_ROOM_VISIBILITY
     intro_message: str = ""
+    match_mode: str = _PP_DEFAULT_MATCH_MODE
 
 
 @router.put("/config/pen-pals")
@@ -3201,6 +3208,7 @@ async def update_pen_pals_config(
                 panel_channel_id=new_channel_id,
                 room_visibility=_pp_normalize_room_visibility(body.room_visibility),
                 intro_message=intro_message,
+                match_mode=_pp_normalize_match_mode(body.match_mode),
             )
             return old_channel_id, old_message_id
 

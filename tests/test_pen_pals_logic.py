@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -57,6 +58,7 @@ def _configure(
     question_category: str = "sfw",
     room_visibility: str = pp.DEFAULT_ROOM_VISIBILITY,
     intro_message: str = "",
+    match_mode: str = pp.DEFAULT_MATCH_MODE,
     guild_id: int = GUILD_ID,
 ) -> None:
     with open_db(db_path) as conn:
@@ -71,6 +73,7 @@ def _configure(
             panel_channel_id=0,
             room_visibility=room_visibility,
             intro_message=intro_message,
+            match_mode=match_mode,
         )
 
 
@@ -679,6 +682,24 @@ def test_set_config_normalizes_bad_room_visibility_to_default(sync_db_path):
         assert pp._get_config(conn, GUILD_ID)["room_visibility"] == "mods"
 
 
+def test_set_config_round_trips_match_mode(sync_db_path):
+    _configure(sync_db_path, match_mode="scheduled")
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["match_mode"] == "scheduled"
+
+
+def test_set_config_normalizes_bad_match_mode_to_instant(sync_db_path):
+    _configure(sync_db_path, match_mode="nonsense")
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["match_mode"] == "instant"
+
+
+def test_set_config_defaults_match_mode_to_instant(sync_db_path):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        assert pp._get_config(conn, GUILD_ID)["match_mode"] == "instant"
+
+
 # ── _handle_join ──────────────────────────────────────────────────────
 
 
@@ -880,6 +901,25 @@ async def test_handle_join_prefers_a_partner_you_havent_had(sync_db_path, monkey
     await pp._handle_join(_join_interaction(1), sync_db_path)
 
     assert do_pair.await_args.args[4] == 3
+
+
+async def test_handle_join_scheduled_mode_never_matches_on_join(sync_db_path, monkeypatch):
+    """Scheduled mode queues everyone — even with a partner waiting, join never pairs."""
+    _configure(sync_db_path, match_mode="scheduled")
+    _set_cooldown(sync_db_path, 0)
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
+    do_pair = AsyncMock(return_value=True)
+    monkeypatch.setattr(pp, "_do_pair", do_pair)
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+
+    interaction = _join_interaction(1)
+    await pp._handle_join(interaction, sync_db_path)
+
+    do_pair.assert_not_awaited()
+    assert set(_pool_ids(sync_db_path)) == {1, 2}
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "once a day at 8:00 AM Eastern" in msg
 
 
 # ── _pick_partner / _eligible_pool ────────────────────────────────────
@@ -1348,6 +1388,21 @@ async def test_refresh_panel_noop_without_config(sync_db_path):
     bot.get_channel.assert_not_called()
 
 
+# ── Signup panel embed ──────────────────────────────────────────────
+
+
+def test_panel_embed_instant_mode_describes_matching_on_the_spot():
+    embed = pp._build_panel_embed(3, mode="instant")
+    assert "matched on the spot" in embed.description
+    assert "8:00 AM Eastern" not in embed.description
+
+
+def test_panel_embed_scheduled_mode_describes_daily_round():
+    embed = pp._build_panel_embed(3, mode="scheduled")
+    assert "8:00 AM Eastern" in embed.description
+    assert "matched on the spot" not in embed.description
+
+
 # ── _tick pool sweep ──────────────────────────────────────────────────
 
 
@@ -1397,6 +1452,98 @@ async def test_tick_skips_sweep_for_disabled_guild(sync_db_path, monkeypatch):
     await pp._tick(MagicMock(), sync_db_path)
 
     do_round.assert_not_awaited()
+
+
+# ── _scheduled_round_due ────────────────────────────────────────────
+
+
+def _et(y: int, m: int, d: int, h: int, mi: int = 0) -> float:
+    return datetime(y, m, d, h, mi, tzinfo=pp._SCHEDULED_MATCH_TZ).timestamp()
+
+
+def test_scheduled_round_not_due_before_8am_local():
+    cfg = {"last_auto_round_at": 0}
+    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 7, 59)) is False
+
+
+def test_scheduled_round_due_at_8am_if_never_run():
+    cfg = {"last_auto_round_at": 0}
+    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 8, 0)) is True
+
+
+def test_scheduled_round_not_due_again_same_local_day():
+    cfg = {"last_auto_round_at": _et(2026, 7, 24, 8, 3)}
+    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 14, 0)) is False
+
+
+def test_scheduled_round_due_again_the_next_local_day():
+    cfg = {"last_auto_round_at": _et(2026, 7, 24, 8, 3)}
+    assert pp._scheduled_round_due(cfg, _et(2026, 7, 25, 8, 1)) is True
+
+
+def test_scheduled_round_catches_up_after_bot_downtime_past_8am():
+    """A round missed at 8am (e.g. the bot was offline) still runs later that day."""
+    cfg = {"last_auto_round_at": _et(2026, 7, 23, 8, 5)}
+    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 20, 0)) is True
+
+
+# ── _tick scheduled-mode round ────────────────────────────────────────
+
+
+async def test_tick_runs_scheduled_round_when_due(sync_db_path, monkeypatch):
+    _configure(sync_db_path, match_mode="scheduled")
+    monkeypatch.setattr(pp.time, "time", lambda: _et(2026, 7, 24, 8, 30))
+    do_round = AsyncMock(return_value=(1, 0))
+    monkeypatch.setattr(pp, "_do_round", do_round)
+
+    await pp._tick(MagicMock(), sync_db_path)
+
+    assert do_round.await_args.args[2] == GUILD_ID
+
+
+async def test_tick_skips_scheduled_round_before_8am(sync_db_path, monkeypatch):
+    _configure(sync_db_path, match_mode="scheduled")
+    monkeypatch.setattr(pp.time, "time", lambda: _et(2026, 7, 24, 7, 59))
+    do_round = AsyncMock(return_value=(0, 0))
+    monkeypatch.setattr(pp, "_do_round", do_round)
+
+    await pp._tick(MagicMock(), sync_db_path)
+
+    do_round.assert_not_awaited()
+
+
+async def test_tick_skips_scheduled_round_already_run_today(sync_db_path, monkeypatch):
+    _configure(sync_db_path, match_mode="scheduled")
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "UPDATE pen_pals_config SET last_auto_round_at = ? WHERE guild_id = ?",
+            (_et(2026, 7, 24, 8, 5), GUILD_ID),
+        )
+    monkeypatch.setattr(pp.time, "time", lambda: _et(2026, 7, 24, 14, 0))
+    do_round = AsyncMock(return_value=(0, 0))
+    monkeypatch.setattr(pp, "_do_round", do_round)
+
+    await pp._tick(MagicMock(), sync_db_path)
+
+    do_round.assert_not_awaited()
+
+
+async def test_tick_scheduled_round_runs_even_with_fewer_than_two_pending(sync_db_path, monkeypatch):
+    """Scheduled mode always draws at 8am ET, even to just stamp a 0- or 1-person pool
+
+    — unlike instant mode's sweep, which skips guilds with fewer than two eligible
+    members so it doesn't spin every 5 minutes on an empty pool.
+    """
+    _configure(sync_db_path, match_mode="scheduled")
+    with open_db(sync_db_path) as conn:
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+    monkeypatch.setattr(pp.time, "time", lambda: _et(2026, 7, 24, 8, 30))
+    do_round = AsyncMock(return_value=(0, 1))
+    monkeypatch.setattr(pp, "_do_round", do_round)
+
+    await pp._tick(MagicMock(), sync_db_path)
+
+    do_round.assert_awaited_once()
 
 
 # ── Abnormal session teardown ─────────────────────────────────────────

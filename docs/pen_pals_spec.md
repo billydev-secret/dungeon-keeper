@@ -1,19 +1,24 @@
 # Pen Pals — Feature Spec
 
-Members opt in to a pairing pool. Joining pairs immediately when an eligible member is already waiting; otherwise the joiner sits in the pool and is paired the moment the next eligible member joins. The background loop also sweeps each pool every 5 minutes, so anyone who was ineligible at join time is paired within minutes of becoming eligible. Each pair gets a private two-person text channel with a conversation-starter from the question bank posted into it, torn down after a configurable session length (default 24 hours). **A member is in at most one pen pal chat at a time**, and is only re-matched once they've had no pen pal for a configurable cooldown (default a month). The goal is low-stakes 1-on-1 connection inside the server. Session length, match cooldown, question-swap cap, close-warning window, and question-suppress window are all configured on the dashboard's Pen Pals → Pairing Mechanics panel.
+Members opt in to a pairing pool. How they're paired depends on the guild's **Pairing Mode** (`pen_pals_config.match_mode`, dashboard-set, default `instant`):
+
+- **Instant** — joining pairs immediately when an eligible member is already waiting; otherwise the joiner sits in the pool and is paired the moment the next eligible member joins. The background loop also sweeps each pool every 5 minutes, so anyone who was ineligible at join time is paired within minutes of becoming eligible.
+- **Scheduled** — joining never pairs on the spot; everyone queues, and the whole eligible pool is drawn in one batch once a day at 8:00 AM Eastern (DST-aware).
+
+Each pair gets a private two-person text channel with a conversation-starter from the question bank posted into it, torn down after a configurable session length (default 24 hours). **A member is in at most one pen pal chat at a time**, and is only re-matched once they've had no pen pal for a configurable cooldown (default a month). The goal is low-stakes 1-on-1 connection inside the server. Session length, match cooldown, question-swap cap, close-warning window, and question-suppress window are all configured on the dashboard's Pen Pals → Pairing Mechanics panel; Pairing Mode lives with the rest of the Setup fields.
 
 ## Commands
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/penpals join` | Slash | Everyone (server only) | Matched on the spot if someone eligible is waiting, otherwise queued until the next person joins |
+| `/penpals join` | Slash | Everyone (server only) | Instant mode: matched on the spot if someone eligible is waiting, otherwise queued until the next person joins. Scheduled mode: always queued, paired in the next 8am Eastern round |
 | `/penpals leave` | Slash | Everyone (server only) | Leave the pool before being paired |
 | `/penpals status` | Slash | Everyone (server only) | Ephemeral: current pairing state, time remaining, or pool position |
 | `/penpals block` | Slash | Everyone (server only) | Ephemeral panel to manage your own "never match me with these members" list |
 | `/penpals new-question` | Slash | Session members (active channel only) | Replace the current question with a fresh one from the bank (max 3 per session) |
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
 | `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two members who are both waiting in the pool, bypassing queue order and cooldown |
-| `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the 5-minute tick |
+| `/penpals round` | Slash | Manage Guild | Force a pool sweep now instead of waiting for the automatic one (the 5-minute tick in instant mode, or the once-daily 8am ET round in scheduled mode) |
 | Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, log + panel channels, session opening message; manage never-match separations |
 | Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
 
@@ -21,11 +26,11 @@ Members opt in to a pairing pool. Joining pairs immediately when an eligible mem
 
 ### Pool and pairing
 
-`/penpals join` adds the invoker to the pool, then immediately looks for a partner. A candidate is eligible when they are **not already in an active session** and are past the re-match cooldown; among the eligible waiters (oldest signup first) the bot prefers one the invoker hasn't been paired with recently, falling back to the oldest. If a partner is found the channel opens right there and the invoker is told "🖊️ Matched! Say hi to @them in #channel." If nobody is eligible — an empty pool, everyone waiting is on cooldown or already chatting, or the invoker is themselves on cooldown — they're told "You're in the pool! The moment someone else joins, your private channel opens automatically." A member already in an active pen pal is blocked from joining at all until their session expires or they end it early; a pairing that fails (permissions, a lost race, a member who left) leaves the joiner in the pool rather than costing them their spot.
+`/penpals join` adds the invoker to the pool. In **instant mode** it then immediately looks for a partner: a candidate is eligible when they are **not already in an active session** and are past the re-match cooldown; among the eligible waiters (oldest signup first) the bot prefers one the invoker hasn't been paired with recently, falling back to the oldest. If a partner is found the channel opens right there and the invoker is told "🖊️ Matched! Say hi to @them in #channel." If nobody is eligible — an empty pool, everyone waiting is on cooldown or already chatting, or the invoker is themselves on cooldown — they're told "You're in the pool! The moment someone else joins, your private channel opens automatically." In **scheduled mode**, joining never attempts a match — the invoker is always told "You're in the pool! Matches go out once a day at 8:00 AM Eastern," and pairing happens only in the daily round below. A member already in an active pen pal is blocked from joining at all until their session expires or they end it early; in instant mode, a pairing that fails (permissions, a lost race, a member who left) leaves the joiner in the pool rather than costing them their spot.
 
 **One chat at a time** is enforced in three places: the join guard, the eligibility filter (so a stale pool row can never hand someone a second channel), and a final re-check inside the pairing transaction that aborts and deletes the freshly-created channel if a concurrent join won the race.
 
-Rounds are the sweeper for whoever instant matching left behind (the odd one out, members who joined while on cooldown, failed pairs). A round pairs the *eligible* pool members (see **Match cooldown**) in FIFO order, leaving ineligible members in the pool; if an odd number is eligible, the last one stays in. The background tick runs a round for every enabled guild whose pool holds **two or more eligible members** — checked every 5 minutes, so a backlog clears on its own without any schedule. `/penpals round` forces the same sweep immediately and reports ephemerally: "Paired **N** pairs. **M** members still in the pool (waiting or on cooldown)." — the pool count includes members left behind by the cooldown, so it isn't the number who'll pair next.
+Rounds pair the *eligible* pool members (see **Match cooldown**) in FIFO order, leaving ineligible members in the pool; if an odd number is eligible, the last one stays in. In **instant mode**, rounds are the sweeper for whoever instant matching left behind (the odd one out, members who joined while on cooldown, failed pairs): the background tick runs a round for every such guild whose pool holds **two or more eligible members**, checked every 5 minutes, so a backlog clears on its own without any schedule. In **scheduled mode**, rounds are the *only* way anyone gets paired: the background tick runs one round per guild once each local day, the first tick at or after 8:00 AM Eastern (`_scheduled_round_due` compares local dates against `last_auto_round_at`, so a bot restart after 8am catches up immediately rather than waiting for the next day, and the round never fires twice in one day even if ticks drift). `/penpals round` forces the same sweep immediately in either mode and reports ephemerally: "Paired **N** pairs. **M** members still in the pool (waiting or on cooldown)." — the pool count includes members left behind by the cooldown, so it isn't the number who'll pair next.
 
 ### Channel lifecycle
 
@@ -108,7 +113,7 @@ A manual swap does not reset the 24-hour auto-cadence clock. After the configure
 
 ### Match cooldown
 
-A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month, from the `started_at` of their most recent session — active or closed). It applies to both sides of a match and on both paths: instant matching checks the joiner *and* the candidate, and a round skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule, and not consent: both members must already be in the pool (`/penpals join`), the same population a round draws from. There is no bypass flag; if an override is ever wanted it belongs on the dashboard.
+A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month, from the `started_at` of their most recent session — active or closed). It applies to both sides of a match on every path: instant matching (when in that mode) checks the joiner *and* the candidate, and a round — instant mode's sweep or scheduled mode's daily draw — skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule, and not consent: both members must already be in the pool (`/penpals join`), the same population a round draws from. There is no bypass flag; if an override is ever wanted it belongs on the dashboard.
 
 ### No-repeat pairing
 
@@ -129,7 +134,7 @@ Enforcement is layered so no path can slip a blocked pair through: instant match
 
 ### Pool sweep
 
-There is no round schedule to configure — the weekly auto-round (day-of-week + UTC hour) was removed when instant matching landed, since the 5-minute sweep always gets there first. The `auto_round_dow` / `auto_round_hour` columns remain in `pen_pals_config` but are unread; `last_auto_round_at` now records the last sweep. Pair confirmations go to the configured log channel (or nowhere if none is set).
+In instant mode there is no round schedule to configure — the original weekly auto-round (day-of-week + UTC hour) was removed when instant matching landed, since the 5-minute sweep always gets there first. In scheduled mode the round *is* the schedule: a fixed daily time (8am Eastern), not dashboard-configurable. The `auto_round_dow` / `auto_round_hour` columns remain in `pen_pals_config` but are unread by either mode; `last_auto_round_at` records the timestamp of the last round and, in scheduled mode, doubles as the "did today's round already run" marker. Pair confirmations go to the configured log channel (or nowhere if none is set).
 
 ## User-visible errors
 
@@ -161,6 +166,7 @@ There is no round schedule to configure — the weekly auto-round (day-of-week +
 Per-guild keys set via the dashboard:
 
 - **Category** — the Discord category under which pen pal channels are created. Required.
+- **Pairing Mode** — `instant` (default) or `scheduled`. See **Pool and pairing** above.
 - **Opt-in role** — if set, only members with this role can `/penpals join`. Optional.
 - **Question category** — `sfw` (default) or `all` (includes NSFW questions). Optional.
 - **Log channel** — where the bot posts pair confirmations. Optional.
@@ -196,4 +202,4 @@ Past pairings are queried from `pen_pals_sessions` for the no-repeat check. No s
 
 ## Elevator pitch
 
-Most servers have hundreds of members who never talk to each other beyond the same handful of regulars. Pen Pals quietly solves that. Members opt in and — if anyone else is waiting — land immediately in a private channel with someone they probably haven't spoken to one-on-one, a conversation starter already waiting, no awkward "so… hi." The 24-hour window creates just enough structure to make it feel like an event rather than a neglected DM thread. After the timer expires the channel disappears, so there's no pressure to maintain it forever. Matching is instant so nobody sits waiting for a scheduled round, while the re-match cooldown keeps it from becoming a chore — a slow, low-stakes way for the whole community to actually meet.
+Most servers have hundreds of members who never talk to each other beyond the same handful of regulars. Pen Pals quietly solves that. Members opt in and — if anyone else is waiting — land immediately in a private channel with someone they probably haven't spoken to one-on-one, a conversation starter already waiting, no awkward "so… hi." The 24-hour window creates just enough structure to make it feel like an event rather than a neglected DM thread. After the timer expires the channel disappears, so there's no pressure to maintain it forever. In instant mode nobody sits waiting for a scheduled round; a server that prefers a predictable daily "drop" instead can switch to scheduled mode and pair the whole pool at once every morning. Either way the re-match cooldown keeps it from becoming a chore — a slow, low-stakes way for the whole community to actually meet.
