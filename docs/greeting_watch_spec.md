@@ -26,16 +26,21 @@ web" rule.
    `is_greeting` is a heuristic, not a classifier: it matches a short message
    (≤ 8 words) that *starts* with a hello-ish token — "good morning", "gm",
    "morning", "hello", "hey", "hi", "hiya", "howdy", "good afternoon/evening"
-   (the "good" is optional — bare "afternoon"/"evening" count, like bare
-   "morning"), "yo", "sup", "what's up", "greetings", "hola" — or a check-in
-   phrase
-   standing in for one: "good timezone" (a jokey stand-in for "good
-   morning/afternoon/evening" in servers spread across timezones) and "how's
-   everyone's/your morning/afternoon/evening/day/night/weekend (going)". A
-   word boundary keeps "history" / "gaming" / "morningstar" from matching, and
-   the check-in phrase requires a plural/2nd-person subject right after
-   "how's" so generic questions ("how's this bug possible") don't match. Tune
-   the vocabulary in `greeting_watch_service.py` as real misses surface.
+   (the "good" is optional — bare "afternoon"/"evening"/"evenin'" count, like
+   bare "morning"), "g'day", "yo", "oi", "sup", "what's up", "greetings",
+   meme-speak ("henlo", "hewwo", "heyo", "ello", "hai"), a few borrowed hellos
+   ("hola", "bonjour", "ciao", "aloha", "salut"), the `o/` wave (also `\o/`)
+   and a bare 👋 — or a check-in phrase standing in for one: "good timezone"
+   (a jokey stand-in for "good morning/afternoon/evening" in servers spread
+   across timezones) and "how's everyone's/your
+   morning/afternoon/evening/day/night/weekend (going)". A word boundary keeps
+   "history" / "gaming" / "morningstar" / "oil" from matching, and the
+   check-in phrase requires a plural/2nd-person subject right after "how's" so
+   generic questions ("how's this bug possible") don't match. Tune the
+   built-in vocabulary in `greeting_watch_service.py` as real misses surface;
+   server-specific in-jokes belong in the dashboard's **extra greeting words**
+   instead (`greeting_watch_extra_tokens`, folded into the compiled matcher
+   per guild — escaped literally, so tokens can't inject regex syntax).
 
    One open watch per (channel, author): a second greeting from the same person
    while the first is still pending is a no-op, so a "gm 🙂 … hey all" double
@@ -69,10 +74,12 @@ attributed and so reads as unanswered — the practical soft edge of the feature
 | Watched channels | `greeting_watch_channel_ids` | CSV of channel ids — your "main chat". Empty = nothing watched. |
 | Notify (DM) these members | `greeting_watch_notify_user_ids` | CSV of member ids — everyone listed gets the DM. Empty = no DM sent. Falls back to the legacy single `greeting_watch_notify_user_id` if the CSV is unset. |
 | Unanswered window (minutes) | `greeting_watch_window_minutes` | Wait before flagging (default 10). |
+| Extra greeting words | `greeting_watch_extra_tokens` | CSV of server-specific greetings ("henlo, good yawn"). Normalized on save (trim/lowercase/dedupe); matched at message start, case-insensitive, alongside the built-ins. Empty = built-ins only. |
 
-`greeting_watch_enabled` and `greeting_watch_channel_ids` are read on the ingest
-hot path via the cached `GuildConfig` snapshot (invalidated on save); the loop
-reads its own keys straight from the DB each tick.
+`greeting_watch_enabled`, `greeting_watch_channel_ids` and
+`greeting_watch_extra_tokens` are read on the ingest hot path via the cached
+`GuildConfig` snapshot (invalidated on save); the loop reads its own keys
+straight from the DB each tick.
 
 ## Data
 

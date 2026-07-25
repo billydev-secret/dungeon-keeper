@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from functools import lru_cache
 from typing import NamedTuple
 
 # Matched against the start of a stripped message. A greeting is a short message
@@ -19,29 +20,39 @@ from typing import NamedTuple
 # evening" or "good timezone". The trailing ``\b`` stops prefixes like
 # "history" / "gaming" / "morningstar" from matching. This is a heuristic
 # dial, not a classifier: widen the vocabulary as real misses surface rather
-# than treating it as exhaustive.
-_GREETING_RE = re.compile(
-    r"^\W*(?:"
+# than treating it as exhaustive — and per-guild additions come in through
+# ``is_greeting``'s ``extra_tokens`` (dashboard-configured), so server in-jokes
+# don't need a code change.
+_WORD_TOKENS = (
     r"g(?:ood)?\s*mornin[g']?"
-    r"|(?:g(?:ood)?\s*)?afternoon"
     # Bare "evening"/"afternoon" open greetings just like bare "morning" does
     # ("Evening frands") — the good/g prefix is optional for all three.
-    r"|(?:g(?:ood)?\s*)?evening"
+    r"|(?:g(?:ood)?\s*)?afternoon"
+    r"|(?:g(?:ood)?\s*)?evenin[g']?"
     # "good timezone" — a jokey stand-in for "good morning/afternoon/evening"
     # in servers spread across timezones, so nobody's greeting reads as wrong
     # for the reader's local time.
     r"|g(?:ood)?\s*time\s*zone"
+    r"|g'?day"
     r"|mornin[g']?"
     r"|gm"
-    r"|hey+"
+    r"|hey+o*"  # hey / heyyy / heyo / heyooo
     r"|hi+"
+    r"|hai+"
     r"|hello+"
+    r"|henlo+"  # meme-speak hello ("henlo frands")
+    r"|hewwo+"
+    r"|ello+"
     r"|heya+"
     r"|hiya+"
     r"|howdy"
     r"|greetings"
     r"|yo+"
+    r"|oi+"
     r"|hola"
+    r"|bonjour"
+    r"|ciao"
+    r"|aloha"
     r"|salut(?:ations)?"
     r"|what'?s\s*up"
     r"|wass?up"
@@ -52,23 +63,63 @@ _GREETING_RE = re.compile(
     # "how's this bug" questions don't match.
     r"|(?:how'?s|how\s+is)\s+(?:everyone|everybody|every1|y'?all|your)'?s?\s+"
     r"(?:mornin[g']?|afternoon|evening|day|night|weekend|doing|going)"
-    r")\b",
-    re.IGNORECASE,
 )
+
+# Tokens that end in a non-word character can't take the trailing ``\b`` (there
+# is no word boundary after "/" or an emoji), so they live in a second
+# alternation: the "o/" wave (also catches "\o/") and a bare 👋.
+_SYMBOL_TOKENS = (r"o/", "👋")
+
+
+@lru_cache(maxsize=128)
+def _greeting_re(extra_tokens: tuple[str, ...]) -> re.Pattern[str]:
+    """Compile the greeting matcher with a guild's extra tokens folded in.
+
+    Extras are matched literally (``re.escape``) so a token like "what?" can't
+    smuggle in regex syntax. Each goes to the word-boundary group or the
+    symbol group by its final character, mirroring the built-in split. Cached
+    per distinct token tuple — one entry per configured guild in practice.
+    """
+    bounded: list[str] = [_WORD_TOKENS]
+    symbols: list[str] = list(_SYMBOL_TOKENS)
+    for tok in extra_tokens:
+        (bounded if re.match(r"\w", tok[-1]) else symbols).append(re.escape(tok))
+    return re.compile(
+        r"^\W*(?:(?:" + "|".join(bounded) + r")\b|" + "|".join(symbols) + r")",
+        re.IGNORECASE,
+    )
+
+
+def parse_extra_tokens(raw: str | None) -> tuple[str, ...]:
+    """Parse the ``greeting_watch_extra_tokens`` CSV into a clean tuple.
+
+    Comma- or newline-separated; entries are trimmed, lowercased, de-duplicated
+    preserving first-seen order. The tuple form keeps GuildConfig hashable and
+    feeds ``_greeting_re``'s cache key directly.
+    """
+    if not raw:
+        return ()
+    seen: dict[str, None] = {}
+    for part in re.split(r"[,\n]", raw):
+        tok = part.strip().lower()
+        if tok:
+            seen.setdefault(tok, None)
+    return tuple(seen)
+
 
 # A greeting to the room is short; a longer message is a conversation that
 # merely opens with "hey", and we don't want to babysit those.
 _MAX_GREETING_WORDS = 8
 
 
-def is_greeting(content: str) -> bool:
+def is_greeting(content: str, extra_tokens: tuple[str, ...] = ()) -> bool:
     """True if *content* reads as a greeting addressed to the channel."""
     if not content:
         return False
     text = content.strip()
     if not text or len(text.split()) > _MAX_GREETING_WORDS:
         return False
-    return _GREETING_RE.match(text) is not None
+    return _greeting_re(extra_tokens).match(text) is not None
 
 
 def parse_notify_ids(raw: str | None, legacy: str | None = None) -> list[int]:

@@ -1862,3 +1862,38 @@ def test_game_host_can_still_edit_guess_config(fake_ctx):
         assert resp.status_code != 403
     finally:
         client.close()
+
+
+# ── Greeting Watch: extra greeting words round-trip ────────────────────
+
+
+def test_greeting_watch_extra_tokens_roundtrip_and_bot_side_read(
+    authed_client, fake_ctx
+):
+    """PUT normalizes the CSV (trim/lowercase/dedupe), GET returns the stored
+    form, and the bot-side GuildConfig picks the tuple up after the cache
+    invalidation the route performs."""
+    resp = authed_client.put(
+        "/api/config/greeting-watch",
+        json={"extra_tokens": " Henlo ,henlo, GOOD Yawn ,\n o7 ,"},
+    )
+    assert resp.status_code == 200
+
+    section = authed_client.get("/api/config").json()["greeting_watch"]
+    assert section["extra_tokens"] == "henlo, good yawn, o7"
+
+    cfg = fake_ctx.guild_config(fake_ctx.guild_id)
+    assert cfg.greeting_watch_extra_tokens == ("henlo", "good yawn", "o7")
+
+
+def test_greeting_watch_extra_tokens_empty_string_clears(authed_client, fake_ctx):
+    authed_client.put(
+        "/api/config/greeting-watch", json={"extra_tokens": "henlo"}
+    )
+    resp = authed_client.put("/api/config/greeting-watch", json={"extra_tokens": ""})
+    assert resp.status_code == 200
+
+    section = authed_client.get("/api/config").json()["greeting_watch"]
+    assert section["extra_tokens"] == ""
+    cfg = fake_ctx.guild_config(fake_ctx.guild_id)
+    assert cfg.greeting_watch_extra_tokens == ()

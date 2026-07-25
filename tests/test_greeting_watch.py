@@ -10,6 +10,7 @@ from bot_modules.services.greeting_watch_service import (
     is_greeting,
     list_due_greetings,
     mark_resolved,
+    parse_extra_tokens,
     parse_notify_ids,
     pending_greetings_for,
     record_greeting,
@@ -45,7 +46,26 @@ from migrations import apply_migrations_sync
         "good evening all",
         "Evening frands",
         "evening",
+        "evenin'",
         "afternoon all",
+        "henlo",
+        "hewwo frands",
+        "heyo",
+        "heyooo",
+        "ello",
+        "hai",
+        "haii chat",
+        "oi",
+        "oi oi oi",
+        "g'day",
+        "gday mates",
+        "bonjour",
+        "ciao",
+        "aloha",
+        "o/",
+        "\\o/",
+        "👋",
+        "👋🏽",
         "yo",
         "sup",
         "what's up",
@@ -78,10 +98,75 @@ def test_is_greeting_positive(text):
         "how's this bug even possible",  # "how's" without a check-in subject
         "how's the weather where you live today at all",  # not everyone/your + time word
         "how do I fix this",
+        "oil prices are wild",  # "oi" prefix, but a word
+        "hairline fracture update",  # "hai" prefix, but a word
+        "ciaociao pasta place review",  # "ciao" not at a word boundary
     ],
 )
 def test_is_greeting_negative(text):
     assert is_greeting(text) is False
+
+
+# ---------------------------------------------------------------------------
+# per-guild extra tokens
+
+
+def test_parse_extra_tokens_splits_commas_and_newlines():
+    assert parse_extra_tokens("henlo, good yawn\no7") == (
+        "henlo",
+        "good yawn",
+        "o7",
+    )
+
+
+def test_parse_extra_tokens_trims_lowercases_dedupes_preserving_order():
+    assert parse_extra_tokens(" Henlo ,henlo, GOOD Yawn ,, ") == (
+        "henlo",
+        "good yawn",
+    )
+
+
+def test_parse_extra_tokens_empty_and_none():
+    assert parse_extra_tokens(None) == ()
+    assert parse_extra_tokens("") == ()
+    assert parse_extra_tokens(" , ,\n") == ()
+
+
+def test_extra_token_matches_at_start_case_insensitive():
+    extras = ("good yawn",)
+    assert is_greeting("Good Yawn frands", extras) is True
+    assert is_greeting("good yawn", extras) is True
+
+
+def test_extra_token_not_matched_mid_message():
+    assert is_greeting("I said good yawn earlier", ("good yawn",)) is False
+
+
+def test_extra_token_respects_word_boundary():
+    # "mep" the greeting shouldn't fire on "mepping" the verb.
+    extras = ("mep",)
+    assert is_greeting("mep", extras) is True
+    assert is_greeting("mepping through my inbox", extras) is False
+
+
+def test_extra_token_regex_specials_are_literal():
+    # "h.y" must not act as a wildcard for "hey"-alikes.
+    extras = ("h.y",)
+    assert is_greeting("h.y all", extras) is True
+    assert is_greeting("hay all", extras) is False
+
+
+def test_extra_token_ending_in_symbol_matches_without_boundary():
+    # A token ending in a non-word char can't take a trailing \b — it should
+    # still match exactly.
+    extras = ("yo!",)
+    assert is_greeting("yo!", extras) is True
+
+
+def test_extra_tokens_do_not_disturb_core_vocabulary():
+    extras = ("good yawn",)
+    assert is_greeting("good morning", extras) is True
+    assert is_greeting("does anyone know when the store opens", extras) is False
 
 
 # ── notify-id parsing (multi-subscriber) ─────────────────────────────
