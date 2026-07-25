@@ -129,6 +129,7 @@ Set these where your shell will see them (the pre-commit hook inherits them):
 | `REMOTE_TEST_PYTHON` | e.g. `C:/dev/dungeon-keeper/.venv/Scripts/python.exe` |
 | `REMOTE_TEST_JOBS` | xdist workers, default 12 — leaves a desktop usable |
 | `REMOTE_TEST_CD` | Override the `cd` template, e.g. `cd /d {dir} && {cmd}` |
+| `REMOTE_TEST_TIMEOUT` | Wall-clock cap in seconds on the remote run; on expiry the local side gives up and runs locally. 0/unset ⇒ no cap. |
 | `GATE_NO_REMOTE=1` | Force local for one run |
 
 Forward slashes work fine in Windows paths here. Use `REMOTE_TEST_CD` with
@@ -152,9 +153,18 @@ returns `None`:
 4. Return the remote exit code
 
 Every "can't dispatch" path returns `None` → local run: host unset, host
-unreachable, sync failed, `GATE_NO_REMOTE`, or an argument that cannot be
-safely embedded in the remote command string. A remote *test failure* is
-different — that propagates and fails the gate, as it should.
+unreachable, sync failed (after one retry), `GATE_NO_REMOTE`, an argument that
+cannot be safely embedded in the remote command string, the
+`REMOTE_TEST_TIMEOUT` cap expiring, or an exit code outside pytest's 0-5
+(ssh's 255 for a lost connection, 128+N for a signal-killed ssh — the suite
+never reported a verdict, so a network blip must not read as a red run). A
+remote *test failure* is different — that propagates and fails the gate, as
+it should.
+
+The pytest ssh session runs with `ServerAliveInterval=15` /
+`ServerAliveCountMax=4`, so a connection that dies mid-run surfaces as exit
+255 within ~60 seconds — and falls back locally — instead of hanging the
+commit hook on a silent TCP session.
 
 ### Argument safety
 
@@ -187,6 +197,22 @@ locally. A broken remote venv is an environment problem, not a red suite. A
 genuine test failure still propagates and fails the gate.
 
 The first dispatch after setup will always reinstall, since no stamp exists yet.
+
+### Remote housekeeping and preflight
+
+The remote box once filled its tmp with leftover pytest session dirs and the
+suite sprayed hundreds of unrelated sqlite errors that looked like a red run.
+`--bootstrap` now defends the host before running anything:
+
+1. **Sweeps stale pytest tmp** — session dirs under `pytest-of-<user>` older
+   than 2 hours are deleted (age-gated, so a concurrent run from another
+   checkout is never touched).
+2. **GCs dead workspaces** — sibling `ws-*` directories untouched for 30 days
+   belong to deleted session checkouts and are removed (skipped in the legacy
+   `REMOTE_TEST_WORKSPACE=off` layout).
+3. **Preflights headroom** — under 2 GiB free (or 100k free inodes, where the
+   OS exposes them) in tmp exits with the sentinel (97), so an unfit host
+   becomes a clean local fallback instead of a wall of bogus failures.
 
 ## WSL2 fallback
 
