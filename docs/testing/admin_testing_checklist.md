@@ -174,7 +174,7 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Pen Pals
 
-- [ ] **Pen Pals config (dashboard)** — Set category, opt-in role, question category, auto-round schedule.
+- [ ] **Pen Pals config (dashboard)** — Set category, opt-in role, question category, pairing mode (instant vs. once-a-day at 8am Eastern).
 
 ## Reporting & Analytics
 

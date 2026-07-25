@@ -6,8 +6,10 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -43,10 +45,34 @@ ROOM_VIS_EVERYONE = "everyone"  # world-readable, watch-only (members/staff post
 ROOM_VISIBILITIES = (ROOM_VIS_ADMIN, ROOM_VIS_MODS, ROOM_VIS_EVERYONE)
 DEFAULT_ROOM_VISIBILITY = ROOM_VIS_MODS
 
+# ── Match mode ───────────────────────────────────────────────────────────────
+# 'instant' (default): pair the moment someone joins if a partner is waiting,
+# with the background sweep only mopping up stragglers. 'scheduled': never
+# match on join — everyone queues, and the whole pool is drawn once a day at
+# _SCHEDULED_MATCH_HOUR in _SCHEDULED_MATCH_TZ. Stored on
+# pen_pals_config.match_mode (migration 128).
+MATCH_MODE_INSTANT = "instant"
+MATCH_MODE_SCHEDULED = "scheduled"
+MATCH_MODES = (MATCH_MODE_INSTANT, MATCH_MODE_SCHEDULED)
+DEFAULT_MATCH_MODE = MATCH_MODE_INSTANT
+_SCHEDULED_MATCH_TZ = ZoneInfo("America/New_York")
+_SCHEDULED_MATCH_HOUR = 8  # 8am Eastern, DST-aware via ZoneInfo
+
+_QUEUED_MSG_INSTANT = (
+    "✅ You're in the pool! The moment someone else joins, "
+    "your private channel opens automatically."
+)
+_QUEUED_MSG_SCHEDULED = "✅ You're in the pool! Matches go out once a day at 8:00 AM Eastern."
+
 
 def _normalize_room_visibility(value: object) -> str:
     """Coerce a stored/incoming value to a known state, defaulting to mods."""
     return value if value in ROOM_VISIBILITIES else DEFAULT_ROOM_VISIBILITY
+
+
+def _normalize_match_mode(value: object) -> str:
+    """Coerce a stored/incoming value to a known mode, defaulting to instant."""
+    return value if value in MATCH_MODES else DEFAULT_MATCH_MODE
 
 
 def _room_everyone_can_view(visibility: str) -> bool:
@@ -101,16 +127,19 @@ def _set_config(
     panel_channel_id: int,
     room_visibility: str = DEFAULT_ROOM_VISIBILITY,
     intro_message: str = "",
+    match_mode: str = DEFAULT_MATCH_MODE,
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET enabled=?, category_id=?, opt_in_role_id=?, question_category=?,
-               log_channel_id=?, panel_channel_id=?, room_visibility=?, intro_message=?
+               log_channel_id=?, panel_channel_id=?, room_visibility=?, intro_message=?,
+               match_mode=?
            WHERE guild_id=?""",
         (int(enabled), category_id, opt_in_role_id, question_category,
          log_channel_id, panel_channel_id,
-         _normalize_room_visibility(room_visibility), intro_message, guild_id),
+         _normalize_room_visibility(room_visibility), intro_message,
+         _normalize_match_mode(match_mode), guild_id),
     )
 
 
@@ -555,11 +584,34 @@ def _draw_from_bank(conn, allow_nsfw: bool, exclude: list[str]) -> str | None:
 
 
 def _update_last_sweep(conn, guild_id: int) -> None:
-    """Stamp when the pool was last drained (column kept from the old auto-round)."""
+    """Stamp when the pool was last drained.
+
+    Every ``_do_round`` call stamps this, instant-mode sweeps and scheduled
+    rounds alike; scheduled mode also reads it back via
+    ``_scheduled_round_due`` to know whether today's round has already run.
+    """
     conn.execute(
         "UPDATE pen_pals_config SET last_auto_round_at = ? WHERE guild_id = ?",
         (time.time(), guild_id),
     )
+
+
+def _scheduled_round_due(cfg, now: float) -> bool:
+    """True once per day: it's past _SCHEDULED_MATCH_HOUR local time and
+    today's round hasn't run yet.
+
+    Compares local dates (not a 24h interval) so a bot restart after 8am
+    catches up immediately instead of waiting a full day, and so the round
+    never fires twice in the same local day even if the tick interval drifts.
+    """
+    local_now = datetime.fromtimestamp(now, tz=_SCHEDULED_MATCH_TZ)
+    if local_now.hour < _SCHEDULED_MATCH_HOUR:
+        return False
+    last_at = cfg["last_auto_round_at"] or 0
+    if not last_at:
+        return True
+    last_local_date = datetime.fromtimestamp(last_at, tz=_SCHEDULED_MATCH_TZ).date()
+    return last_local_date != local_now.date()
 
 
 # ── Question draw ─────────────────────────────────────────────────────────────
@@ -1079,12 +1131,25 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
                     _advance_next_question(conn, sid, nq + _Q_INTERVAL)
             await asyncio.to_thread(_save_q)
 
-    # Pool sweep. Joining pairs on the spot, so a backlog only forms when
-    # someone was ineligible at join time (on cooldown, mid-session) and became
-    # eligible later. Sweeping every tick means those pairs go out within
-    # minutes of becoming possible instead of waiting for a scheduled round.
+    # Pool sweep. In instant mode, joining pairs on the spot, so a backlog only
+    # forms when someone was ineligible at join time (on cooldown, mid-session)
+    # and became eligible later — sweeping every tick means those pairs go out
+    # within minutes instead of waiting for a scheduled round. In scheduled
+    # mode nothing pairs on join at all, so the whole pool waits here for the
+    # once-daily draw.
     for cfg in auto_cfgs:
         guild_id = cfg["guild_id"]
+        mode = _normalize_match_mode(cfg["match_mode"] if "match_mode" in cfg.keys() else None)
+
+        if mode == MATCH_MODE_SCHEDULED:
+            if not _scheduled_round_due(cfg, now):
+                continue
+            pairs, left = await _do_round(bot, db_path, guild_id)
+            log.info(
+                "pen_pals: scheduled 8am ET round for guild %d — %d pairs, %d left over",
+                guild_id, pairs, left,
+            )
+            continue
 
         def _pending(gid: int = guild_id, c=cfg) -> int:
             with open_db(db_path) as conn:
@@ -1101,18 +1166,21 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
 
 
 def _build_panel_embed(
-    pool_size: int, color: "discord.Color | None" = None
+    pool_size: int, color: "discord.Color | None" = None, mode: str = DEFAULT_MATCH_MODE
 ) -> discord.Embed:
     if color is None:
         color = discord.Color.from_str("#5865F2")
+    match_line = (
+        "Matches go out once a day at 8:00 AM Eastern — "
+        "join any time before then to be in the next round."
+        if _normalize_match_mode(mode) == MATCH_MODE_SCHEDULED else
+        "If someone's already waiting you're matched on the spot — "
+        "a private channel opens for just the two of you, "
+        "with a conversation starter already in it."
+    )
     embed = discord.Embed(
         title="🖊️ Pen Pals",
-        description=(
-            "Get matched 1-on-1 with another server member for 24 hours.\n"
-            "If someone's already waiting you're matched on the spot — "
-            "a private channel opens for just the two of you, "
-            "with a conversation starter already in it."
-        ),
+        description=f"Get matched 1-on-1 with another server member for 24 hours.\n{match_line}",
         color=color,
     )
     label = f"{pool_size} member{'s' if pool_size != 1 else ''} waiting" if pool_size else "No one waiting yet"
@@ -1176,7 +1244,8 @@ async def _refresh_panel_locked(
 
     guild = bot.get_guild(guild_id)
     accent = await resolve_accent_color(db_path, guild) if guild else None
-    embed = _build_panel_embed(pool_size, color=accent)
+    mode = _normalize_match_mode(cfg["match_mode"] if "match_mode" in cfg.keys() else None)
+    embed = _build_panel_embed(pool_size, color=accent, mode=mode)
     view = _build_panel_view()
 
     if not repost and panel_message_id:
@@ -1235,6 +1304,10 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
             )
             return
 
+    scheduled = _normalize_match_mode(
+        cfg["match_mode"] if "match_mode" in cfg.keys() else None
+    ) == MATCH_MODE_SCHEDULED
+
     def _check() -> tuple[str, int | None]:
         with open_db(db_path) as conn:
             if _get_active_session(conn, guild_id, user_id):
@@ -1242,6 +1315,10 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
             if _in_pool(conn, guild_id, user_id):
                 return "in_pool", None
             _add_to_pool(conn, guild_id, user_id)
+            if scheduled:
+                # Scheduled mode never matches on join — everyone waits for
+                # the once-a-day round.
+                return "queued", None
             # Joining pairs immediately when someone eligible is already
             # waiting; the pool is only for when nobody is.
             return "queued", _find_instant_match(conn, guild_id, user_id)
@@ -1260,11 +1337,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
         return
 
     if partner_id is None:
-        await interaction.response.send_message(
-            "✅ You're in the pool! The moment someone else joins, "
-            "your private channel opens automatically.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(_QUEUED_MSG_SCHEDULED if scheduled else _QUEUED_MSG_INSTANT, ephemeral=True)
         await _refresh_panel(interaction.client, db_path, guild_id)
         return
 
@@ -1285,11 +1358,9 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
     else:
         # Pairing fell through (permissions, a lost race, member left) — the
         # joiner stays pooled for the sweeper rather than losing their spot.
-        await interaction.followup.send(
-            "✅ You're in the pool! The moment someone else joins, "
-            "your private channel opens automatically.",
-            ephemeral=True,
-        )
+        # Only reachable in instant mode: scheduled mode never returns a
+        # partner_id from _check above, so _do_pair is never called there.
+        await interaction.followup.send(_QUEUED_MSG_INSTANT, ephemeral=True)
     await _refresh_panel(interaction.client, db_path, guild_id)
 
 
@@ -1731,14 +1802,17 @@ class PenPalsCog(commands.Cog):
                     return "active", (dict(session), max_swaps)
                 pool = [r["user_id"] for r in _get_pool(conn, guild_id)]
                 if user_id in pool:
-                    return "pool", pool.index(user_id) + 1
+                    cfg = _get_config(conn, guild_id)
+                    mode = _normalize_match_mode(
+                        cfg["match_mode"] if cfg and "match_mode" in cfg.keys() else None
+                    )
+                    return "pool", (pool.index(user_id) + 1, mode)
                 return "none", None
 
         status, data = await asyncio.to_thread(_check)
 
         if status == "active":
-            assert isinstance(data, tuple)
-            session_data, max_swaps = data
+            session_data, max_swaps = cast("tuple[dict, int]", data)
             ch = interaction.guild.get_channel(session_data["channel_id"])
             other_id = session_data["user2_id"] if session_data["user1_id"] == user_id else session_data["user1_id"]
             other = interaction.guild.get_member(other_id)
@@ -1752,10 +1826,14 @@ class PenPalsCog(commands.Cog):
             ]
             await interaction.response.send_message("\n".join(lines), ephemeral=True)
         elif status == "pool":
-            pos = data
+            pos, mode = cast("tuple[int, str]", data)
+            when = (
+                "in the next daily round, at 8:00 AM Eastern"
+                if mode == MATCH_MODE_SCHEDULED
+                else "as soon as someone eligible joins"
+            )
             await interaction.response.send_message(
-                f"You're in the pool at position **#{pos}** — you'll be matched "
-                "as soon as someone eligible joins.",
+                f"You're in the pool at position **#{pos}** — you'll be matched {when}.",
                 ephemeral=True,
             )
         else:

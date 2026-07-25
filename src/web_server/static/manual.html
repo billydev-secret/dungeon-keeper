@@ -745,19 +745,19 @@
 
     
     <h2 id="pen-pals" class="section-break"><span class="section-num">8</span> Pen Pals</h2>
-    <p>Pen Pals quietly matches members into private one-on-one conversations. Joining matches you straight away if someone eligible is already waiting — otherwise you sit in the pool and are matched the moment the next person joins. Either way the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours). Nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again. If there's someone you'd rather not be matched with, <span class="cmd-name">/penpals block</span> keeps the two of you apart — privately, and one block is enough.</p>
+    <p>Pen Pals quietly matches members into private one-on-one conversations. How you're matched depends on the server's <strong>Pairing Mode</strong>, set on the dashboard: <em>Instant</em> matches you straight away if someone eligible is already waiting, otherwise you sit in the pool and are matched the moment the next person joins; <em>Once a day</em> never matches on join — everyone who joins queues up and the whole pool is paired in one batch at 8:00 AM Eastern. Either way the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after a configurable session length (default 24 hours). Nobody is ever in two pen pal chats at once, and after a chat ends there's a re-match cooldown (set on the dashboard) before you can be paired again. If there's someone you'd rather not be matched with, <span class="cmd-name">/penpals block</span> keeps the two of you apart — privately, and one block is enough.</p>
 
     <table>
       <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>/penpals join</code></td><td><span class="perm perm-all">Everyone</span></td><td>Get a pen pal — matched on the spot if someone's waiting, otherwise you join the pool and are matched when the next person does</td></tr>
+        <tr><td><code>/penpals join</code></td><td><span class="perm perm-all">Everyone</span></td><td>Get a pen pal — instant mode matches you on the spot if someone's waiting, otherwise (or in "once a day" mode) you join the pool and wait for the next match</td></tr>
         <tr><td><code>/penpals leave</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the pool before you're matched</td></tr>
         <tr><td><code>/penpals status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Whether you're waiting or matched, and when your session ends</td></tr>
         <tr><td><code>/penpals block</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private panel to pick members Pen Pals should never match you with (or unblock them) — one block is enough, the other person is never told, and it doesn't end a chat you're already in</td></tr>
         <tr><td><code>/penpals new-question</code></td><td><span class="perm perm-all">Everyone</span></td><td>Swap the current conversation-starter for a fresh one (limited swaps per session)</td></tr>
         <tr><td><code>/penpals end</code></td><td><span class="perm perm-all">Everyone</span></td><td>End your current session early and close the shared channel</td></tr>
         <tr><td><code>/penpals pair &lt;user1&gt; &lt;user2&gt;</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force-pair two specific members, bypassing the pool — both must already have joined the pool, so force-pairing never overrides opt-in</td></tr>
-        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep now (the bot sweeps automatically every few minutes anyway)</td></tr>
+        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep right now, instead of waiting for the automatic sweep (every few minutes in Instant mode, once a day at 8am Eastern in Once-a-day mode)</td></tr>
       </tbody>
     </table>
 
@@ -765,7 +765,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Configure via the <a href="/#/config-pen-pals">web dashboard</a></strong>
-        <p>The <strong>Games → Pen Pals → Config</strong> panel has the enable toggle and wiring (channel category), session length, and the re-match cooldown; the conversation-starter question bank sits beside it under <strong>Questions</strong>. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message.</p>
+        <p>The <strong>Games → Pen Pals → Config</strong> panel has the enable toggle and wiring (channel category), session length, and the re-match cooldown; the conversation-starter question bank sits beside it under <strong>Questions</strong>. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Once a day</em> to queue everyone and pair the whole pool in a single batch at 8:00 AM Eastern instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message.</p>
       </div>
     </div>
 
