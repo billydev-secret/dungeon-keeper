@@ -254,6 +254,317 @@ def test_derby_labels():
     assert logic.derby_odds_label(4) == "9.5×"
 
 
+# ── baccarat ───────────────────────────────────────────────────────────
+
+
+def test_baccarat_card_and_hand_values():
+    assert logic.baccarat_card_value("A♠") == 1
+    assert logic.baccarat_card_value("9♦") == 9
+    for rank in ("10", "J", "Q", "K"):
+        assert logic.baccarat_card_value(rank + "♥") == 0
+    assert logic.baccarat_total(["7♠", "8♦"]) == 5  # 15 → 5
+    assert logic.baccarat_total(["K♠", "Q♦"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("banker_total", "draws_on", "stands_on"),
+    [
+        (0, range(10), ()),
+        (1, range(10), ()),
+        (2, range(10), ()),
+        (3, [v for v in range(10) if v != 8], [8]),
+        (4, range(2, 8), [0, 1, 8, 9]),
+        (5, range(4, 8), [0, 1, 2, 3, 8, 9]),
+        (6, [6, 7], [0, 1, 2, 3, 4, 5, 8, 9]),
+        (7, (), range(10)),
+    ],
+)
+def test_banker_third_card_rule_matrix(banker_total, draws_on, stands_on):
+    """The full punto-banco tableau — the drawing rules ARE the paytable."""
+    for p3 in draws_on:
+        assert logic._banker_draws(banker_total, p3), (banker_total, p3)
+    for p3 in stands_on:
+        assert not logic._banker_draws(banker_total, p3), (banker_total, p3)
+
+
+def _scripted_shoe(monkeypatch, ranks):
+    """Feed deal_baccarat an exact rank sequence (suits pinned to ♠)."""
+    queue = list(ranks)
+    monkeypatch.setattr(
+        logic.random,
+        "choice",
+        lambda seq: queue.pop(0) if seq is logic._RANKS else "♠",
+    )
+
+
+def test_deal_baccarat_natural_stands_both(monkeypatch):
+    _scripted_shoe(monkeypatch, ["A", "8", "K", "K"])
+    player, banker = logic.deal_baccarat()
+    assert player == ["A♠", "8♠"] and banker == ["K♠", "K♠"]
+    assert logic.baccarat_winner(player, banker) == "player"
+
+
+def test_deal_baccarat_player_and_banker_third_cards_in_deal_order(monkeypatch):
+    # Player 2+3=5 draws; third card 5 → banker on 4 draws against 5.
+    _scripted_shoe(monkeypatch, ["2", "3", "4", "K", "5", "6"])
+    player, banker = logic.deal_baccarat()
+    assert player == ["2♠", "3♠", "5♠"]
+    assert banker == ["4♠", "K♠", "6♠"]
+
+
+def test_deal_baccarat_player_stands_banker_draws_to_five(monkeypatch):
+    # Player 3+4=7 stands; banker 2+3=5 draws when the player stood.
+    _scripted_shoe(monkeypatch, ["3", "4", "2", "3", "9"])
+    player, banker = logic.deal_baccarat()
+    assert player == ["3♠", "4♠"]
+    assert banker == ["2♠", "3♠", "9♠"]
+    assert logic.baccarat_winner(player, banker) == "player"  # 7 beats 4
+
+
+def test_baccarat_payout_matrix():
+    pay = logic.baccarat_payout
+    p9, b0 = ["A♠", "8♦"], ["K♠", "Q♦"]
+    assert pay("player", p9, b0, 10) == 20
+    assert pay("banker", p9, b0, 10) == 0
+    assert pay("tie", p9, b0, 10) == 0
+    # Two-card banker 7 win pays even — no Dragon-7 bar on two cards.
+    p5, b7 = ["2♠", "3♦"], ["4♠", "3♦"]
+    assert pay("banker", p5, b7, 10) == 20
+    # Three-card banker 7 win is barred to a push (EZ Dragon-7).
+    b7_3 = ["A♠", "2♦", "4♣"]
+    assert pay("banker", p5, b7_3, 10) == 10
+    assert pay("player", p5, b7_3, 10) == 0  # player bet still just loses
+    # Ties: tie bet pays 8:1, side bets push.
+    p_t, b_t = ["4♠", "3♦"], ["2♠", "5♦"]
+    assert pay("tie", p_t, b_t, 10) == 90
+    assert pay("player", p_t, b_t, 10) == 10
+    assert pay("banker", p_t, b_t, 10) == 10
+
+
+def test_baccarat_unknown_side_raises():
+    with pytest.raises(ValueError):
+        logic.baccarat_payout("dragon", ["A♠", "8♦"], ["K♠", "Q♦"], 10)
+
+
+def test_baccarat_exact_rtp_pinned():
+    """Exact EV over the infinite-shoe punto-banco tree (values 1–9 weigh
+    1/13 each, the 0-valued tens/faces 4/13). Pins all three bets: Player
+    98.77%, Banker 98.98% (EZ Dragon-7 replaces the 5% commission), Tie
+    85.88% — the labeled long shot, priced like the house intends."""
+    from fractions import Fraction
+
+    w = {v: Fraction(4 if v == 0 else 1, 13) for v in range(10)}
+    # Cards realizing a value: 0 via a face card so 3-card hands read right.
+    card = {v: ("K♠" if v == 0 else ("A♠" if v == 1 else f"{v}♠")) for v in range(10)}
+    dist2: dict[int, Fraction] = {t: Fraction(0) for t in range(10)}
+    for v1 in range(10):
+        for v2 in range(10):
+            dist2[(v1 + v2) % 10] += w[v1] * w[v2]
+
+    ev = {side: Fraction(0) for side in logic.BACCARAT_SIDES}
+    total_prob = Fraction(0)
+
+    def settle(prob, player, banker):
+        nonlocal total_prob
+        total_prob += prob
+        for side in logic.BACCARAT_SIDES:
+            ev[side] += prob * logic.baccarat_payout(side, player, banker, 1)
+
+    for pt in range(10):
+        for bt in range(10):
+            prob0 = dist2[pt] * dist2[bt]
+            p2, b2 = [card[pt], card[0]], [card[bt], card[0]]
+            if pt >= 8 or bt >= 8:  # natural — both stand
+                settle(prob0, p2, b2)
+            elif pt <= 5:  # player draws; banker consults the tableau
+                for p3 in range(10):
+                    p_hand = p2 + [card[p3]]
+                    if logic._banker_draws(bt, p3):
+                        for b3 in range(10):
+                            settle(prob0 * w[p3] * w[b3], p_hand, b2 + [card[b3]])
+                    else:
+                        settle(prob0 * w[p3], p_hand, b2)
+            elif bt <= 5:  # player stands on 6/7; banker draws on 0–5
+                for b3 in range(10):
+                    settle(prob0 * w[b3], p2, b2 + [card[b3]])
+            else:
+                settle(prob0, p2, b2)
+
+    assert total_prob == 1
+    assert float(ev["player"]) == pytest.approx(0.987719, abs=1e-6)
+    assert float(ev["banker"]) == pytest.approx(0.989752, abs=1e-6)
+    assert float(ev["tie"]) == pytest.approx(0.858830, abs=1e-6)
+
+
+def test_deal_baccarat_uses_module_random(monkeypatch):
+    _scripted_shoe(monkeypatch, ["9", "K", "K", "K"])  # 9 vs 0, both natural-side
+    player, banker = logic.deal_baccarat()
+    assert logic.baccarat_winner(player, banker) == "player"
+
+
+def test_baccarat_labels():
+    assert logic.describe_baccarat_side("player") == "🔵 Player"
+    assert logic.describe_baccarat_side("banker") == "🔴 Banker"
+    assert logic.describe_baccarat_side("tie") == "🟡 Tie"
+
+
+# ── dice (sic bo) ──────────────────────────────────────────────────────
+
+
+def test_sicbo_payout_matrix():
+    pay = logic.sicbo_payout
+    assert pay("big", (6, 5, 4), 10) == 20     # 15 is big
+    assert pay("big", (1, 2, 3), 10) == 0      # 6 is small
+    assert pay("small", (1, 2, 3), 10) == 20
+    assert pay("odd", (1, 2, 4), 10) == 20     # 7
+    assert pay("even", (1, 2, 3), 10) == 20    # 6
+    assert pay("odd", (1, 2, 3), 10) == 0
+    # every bet loses to any triple — that exclusion is the house edge
+    for bet in logic.SICBO_BET_TYPES:
+        assert pay(bet, (4, 4, 4), 10) == 0, bet
+
+
+def test_sicbo_unknown_bet_type_raises():
+    with pytest.raises(ValueError):
+        logic.sicbo_payout("triple", (1, 2, 3), 10)
+
+
+@pytest.mark.parametrize("bet_type", logic.SICBO_BET_TYPES)
+def test_sicbo_exact_rtp_is_105_216(bet_type):
+    """Enumerate all 216 rolls: each even-money bet wins exactly 105 of
+    them (triples excluded), pinning RTP at 210/216 ≈ 97.22%."""
+    stake = 10
+    total = sum(
+        logic.sicbo_payout(bet_type, (a, b, c), stake)
+        for a, b, c in itertools.product(range(1, 7), repeat=3)
+    )
+    assert total == 105 * stake * 2
+    assert total / (216 * stake) == pytest.approx(105 * 2 / 216)
+
+
+def test_roll_sicbo_uses_module_random(monkeypatch):
+    monkeypatch.setattr(logic.random, "randint", lambda a, b: 6)
+    assert logic.roll_sicbo() == (6, 6, 6)
+
+
+def test_sicbo_labels_and_faces():
+    assert logic.describe_sicbo_bet("big") == "⬆️ Big (11–17)"
+    assert logic.describe_sicbo_bet("even") == "2️⃣ Even"
+    assert logic.dice_faces((1, 3, 6)) == "⚀ ⚂ ⚅"
+
+
+# ── war ────────────────────────────────────────────────────────────────
+
+
+def test_war_ranks_aces_high():
+    assert logic.war_rank("A♠") == 14
+    assert logic.war_rank("K♦") == 13
+    assert logic.war_rank("Q♥") == 12
+    assert logic.war_rank("J♣") == 11
+    assert logic.war_rank("10♠") == 10
+    assert logic.war_rank("2♠") == 2
+
+
+def test_war_payout_matrix():
+    assert logic.war_payout("A♠", "K♦", 10) == 20   # high card wins even
+    assert logic.war_payout("2♠", "3♦", 10) == 0
+    assert logic.war_payout("7♠", "7♦", 10) is None  # tie → member decides
+    # war round: win or SECOND tie takes 3× the original (on the doubled stake)
+    assert logic.war_raise_payout("9♠", "5♦", 20) == 30
+    assert logic.war_raise_payout("5♠", "5♦", 20) == 30
+    assert logic.war_raise_payout("4♠", "9♦", 20) == 0
+    assert logic.war_retreat_payout(10) == 5
+    assert logic.war_retreat_payout(11) == 5  # floored — the house keeps the odd coin
+
+
+def test_war_exact_rtp_pinned_for_both_strategies():
+    """Exact EV over the infinite shoe (13×13 first cards; 13×13 war cards
+    on a tie). Always-war returns 177/182 ≈ 97.25%; always-retreat 25/26 ≈
+    96.15% — both in band, and war strictly better, so the idle default
+    (war when affordable) never plays against the member."""
+    from fractions import Fraction
+
+    s = 26  # divisible by 2 — retreat floors nothing
+    n = Fraction(1, 13)
+    ranks = [logic.war_rank(r + "♠") for r in logic._RANKS]
+    ev_war = Fraction(0)
+    ev_retreat = Fraction(0)
+    wagered_war = Fraction(0)
+    for p in ranks:
+        for d in ranks:
+            prob = n * n
+            if p != d:
+                ret = 2 * s if p > d else 0
+                ev_war += prob * ret
+                ev_retreat += prob * ret
+                wagered_war += prob * s
+                continue
+            # tie: retreat takes half; war doubles and draws again
+            ev_retreat += prob * (s // 2)
+            wagered_war += prob * 2 * s
+            for wp in ranks:
+                for wd in ranks:
+                    if wp >= wd:
+                        ev_war += prob * n * n * 3 * s
+    assert ev_war / wagered_war == Fraction(177, 182)
+    assert ev_retreat / (s * 1) == Fraction(25, 26)
+    assert 0.93 <= 177 / 182 <= 0.975 and 0.93 <= 25 / 26 <= 0.975
+
+
+def test_draw_war_cards_uses_module_random(monkeypatch):
+    monkeypatch.setattr(logic.random, "choice", lambda seq: seq[0])
+    assert logic.draw_war_cards() == ("A♠", "A♠")
+
+
+# ── keno ───────────────────────────────────────────────────────────────
+
+
+def test_keno_payout_matrix():
+    drawn = list(range(1, 21))  # 1–20 drawn
+    assert logic.keno_payout([1, 2, 30, 40], drawn, 10) == 20      # 2/4 → 2×
+    assert logic.keno_payout([1, 2, 3, 4], drawn, 10) == 600       # 4/4 → 60×
+    assert logic.keno_payout([21, 22, 23, 24], drawn, 10) == 0     # 0/4
+    assert logic.keno_payout([1, 2, 30, 40, 50, 60], drawn, 10) == 10  # 2/6 money back
+    assert logic.keno_payout(list(range(1, 11)), drawn, 10) == 50_000  # 10/10 → 5000×
+    with pytest.raises(ValueError):
+        logic.keno_payout([1, 2, 3], drawn, 10)  # 3 spots is not a tier
+
+
+def test_keno_catches_counts_the_overlap():
+    assert logic.keno_catches([1, 2, 3, 4], [3, 4, 5, 6]) == 2
+
+
+@pytest.mark.parametrize(
+    ("tier", "pinned"),
+    [(4, 0.955058), (6, 0.953625), (8, 0.946554), (10, 0.952529)],
+)
+def test_keno_exact_rtp_pinned_and_in_band(tier, pinned):
+    """Exact hypergeometric EV per tier — the bespoke paytables sit in
+    ~94–96% (nothing like real casino keno's 65–75%), pinned exactly."""
+    from fractions import Fraction
+    from math import comb
+
+    total = comb(80, 20)
+    rtp = sum(
+        Fraction(comb(tier, k) * comb(80 - tier, 20 - k), total) * mult
+        for k, mult in logic.KENO_PAYTABLE[tier].items()
+    )
+    assert float(rtp) == pytest.approx(pinned, abs=1e-6)
+    assert 0.94 <= float(rtp) <= 0.96, f"Pick-{tier} RTP drifted to {float(rtp):.4f}"
+
+
+def test_keno_quick_pick_and_draw_shapes(monkeypatch):
+    monkeypatch.setattr(
+        logic.random, "sample", lambda pop, k: list(pop)[:k][::-1]
+    )
+    assert logic.keno_quick_pick(6) == [1, 2, 3, 4, 5, 6]  # sorted
+    assert logic.draw_keno() == list(range(1, 21))
+
+
+def test_keno_ticket_label():
+    assert logic.describe_keno_ticket([4, 12, 33]) == "Pick-3 · 4 12 33"
+
+
 # ── fancy round: streaks & thresholds ──────────────────────────────────
 
 

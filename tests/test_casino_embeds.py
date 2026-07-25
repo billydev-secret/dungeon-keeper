@@ -167,6 +167,176 @@ def test_ticker_line_marks_push_and_partial_return():
     assert "10 back" in ticker_line(1, "blackjack", 20, 10)
 
 
+# ── baccarat result cards ──────────────────────────────────────────────
+
+_BC_PWIN = (["A♠", "8♦"], ["K♠", "Q♦"])           # player 9 over banker 0
+_BC_TIE = (["4♠", "3♦"], ["2♠", "5♦"])            # 7 all
+_BC_DRAGON7 = (["2♠", "3♦"], ["A♠", "2♦", "4♣"])  # banker 3-card 7
+
+
+def test_baccarat_result_win_is_green_and_shows_hands_with_totals():
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_PWIN, [(42, "🔵 Player", 10, 20)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    assert "(9)" in embed.description and "(0)" in embed.description
+    assert "Player wins" in embed.description
+
+
+def test_baccarat_result_all_losses_is_red():
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_PWIN, [(42, "🔴 Banker", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
+def test_baccarat_result_pushes_alone_are_not_green():
+    """A pushed side bet came home — it didn't win. The board says
+    'Pushed' and the card stays red (nobody beat the house)."""
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_TIE, [(42, "🔵 Player", 10, 10)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+    names = [f.name for f in embed.fields]
+    assert "Pushed" in names and "Winners" not in names
+
+
+def test_baccarat_result_dragon7_names_the_push():
+    from bot_modules.cogs.casino.embeds import build_baccarat_result_embed
+
+    embed = build_baccarat_result_embed(
+        _ECON, *_BC_DRAGON7, [(42, "🔴 Banker", 10, 10)]
+    )
+    assert embed.description is not None
+    assert "three-card seven" in embed.description
+    assert "Banker bets push" in embed.description
+
+
+def test_baccarat_deal_frame_hides_third_cards():
+    from bot_modules.cogs.casino.embeds import build_baccarat_deal_embed
+
+    embed = build_baccarat_deal_embed(
+        _ECON, ["2♠", "3♦", "5♣"], ["4♠", "K♦"], None
+    )
+    assert embed.description is not None
+    assert "🂠" in embed.description        # player's third card still down
+    assert "5♣" not in embed.description
+    assert "(0)" not in embed.description   # no totals until the reveal
+
+
+# ── dice result cards ──────────────────────────────────────────────────
+
+
+def test_dice_result_win_is_green_and_reads_the_roll():
+    from bot_modules.cogs.casino.embeds import build_dice_result_embed
+
+    embed = build_dice_result_embed(
+        _ECON, (6, 5, 4), [(42, "⬆️ Big (11–17)", 10, 20)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    assert "⚅ ⚄ ⚃" in embed.description
+    assert "**15**" in embed.description and "Big" in embed.description
+
+
+def test_dice_result_all_losses_is_red():
+    from bot_modules.cogs.casino.embeds import build_dice_result_embed
+
+    embed = build_dice_result_embed(
+        _ECON, (1, 2, 3), [(42, "⬆️ Big (11–17)", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
+def test_dice_result_triple_names_the_sweep():
+    from bot_modules.cogs.casino.embeds import build_dice_result_embed
+
+    embed = build_dice_result_embed(
+        _ECON, (4, 4, 4), [(42, "⬆️ Big (11–17)", 10, 0)]
+    )
+    assert embed.description is not None
+    assert "a triple 4!" in embed.description
+    assert "sweeps every bet" in embed.description
+
+
+# ── keno result cards ──────────────────────────────────────────────────
+
+
+def test_keno_result_win_is_green_and_shows_the_board():
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    drawn = list(range(1, 21))
+    embed = build_keno_result_embed(
+        _ECON, drawn, [(42, "Pick-4 · 1 2 3 4", 10, 600)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    # two monospace rows of ten
+    assert embed.description.count("`") == 4
+    assert " 1" in embed.description and "20" in embed.description
+
+
+def test_keno_result_all_losses_is_red():
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    embed = build_keno_result_embed(
+        _ECON, list(range(1, 21)), [(42, "Pick-4 · 61 62 63 64", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
+# ── war result cards ───────────────────────────────────────────────────
+
+
+def _war(player="K♠", dealer="5♦", stake=10, **kw) -> discord.Embed:
+    from bot_modules.cogs.casino.embeds import build_war_embed
+
+    return build_war_embed(_ECON, 42, player, dealer, stake, None, **kw)
+
+
+def test_war_win_is_green_and_loss_is_red():
+    assert _war(outcome="win", payout=20).color == discord.Color(COLOR_GREEN)
+    assert _war(outcome="lose", payout=0).color == discord.Color(COLOR_RED)
+    assert _war(
+        outcome="war_win", payout=30, stake=20,
+        war_player="9♠", war_dealer="5♦",
+    ).color == discord.Color(COLOR_GREEN)
+    assert _war(
+        outcome="war_lose", payout=0, stake=20,
+        war_player="2♠", war_dealer="9♦",
+    ).color == discord.Color(COLOR_RED)
+
+
+def test_war_retreat_is_neutral_not_red():
+    embed = _war(player="7♠", dealer="7♦", outcome="retreat", payout=5)
+    assert embed.color != discord.Color(COLOR_RED)
+    assert embed.color != discord.Color(COLOR_GREEN)
+
+
+def test_war_standoff_shows_the_decision_not_a_verdict():
+    embed = _war(player="7♠", dealer="7♦")
+    names = [f.name for f in embed.fields]
+    assert "A standoff!" in names and "Result" not in names
+    assert embed.color != discord.Color(COLOR_GREEN)
+    assert embed.color != discord.Color(COLOR_RED)
+
+
+def test_war_result_shows_war_cards_when_drawn():
+    embed = _war(
+        player="7♠", dealer="7♦", outcome="war_win", payout=30, stake=20,
+        war_player="9♠", war_dealer="5♦",
+    )
+    assert embed.description is not None
+    assert "9♠" in embed.description and "5♦" in embed.description
+
+
 # ── the hub panel's "Today at the tables" standings ────────────────────
 
 

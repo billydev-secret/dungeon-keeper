@@ -145,6 +145,10 @@ export function mount(container) {
       checkbox("blackjack_enabled", c.blackjack_enabled !== false, "Blackjack"),
       checkbox("roulette_enabled", c.roulette_enabled !== false, "Roulette"),
       checkbox("derby_enabled", c.derby_enabled !== false, "Derby"),
+      checkbox("baccarat_enabled", c.baccarat_enabled !== false, "Baccarat"),
+      checkbox("dice_enabled", c.dice_enabled !== false, "Dice"),
+      checkbox("war_enabled", c.war_enabled !== false, "War"),
+      checkbox("keno_enabled", c.keno_enabled !== false, "Keno"),
     );
     cardTables.appendChild(field(
       "Open Tables", tables,
@@ -189,11 +193,29 @@ export function mount(container) {
         "Between 15 and 600 seconds.",
     ));
     cardTiming.appendChild(field(
+      "Baccarat Betting Window (seconds)",
+      numInput("baccarat_window_seconds", c.baccarat_window_seconds ?? 45, 15, "1", 600),
+      "How long members can pick a side after someone opens a hand. " +
+        "Between 15 and 600 seconds.",
+    ));
+    cardTiming.appendChild(field(
+      "Dice Betting Window (seconds)",
+      numInput("dice_window_seconds", c.dice_window_seconds ?? 45, 15, "1", 600),
+      "How long members can call the roll after someone opens one. " +
+        "Between 15 and 600 seconds.",
+    ));
+    cardTiming.appendChild(field(
+      "Keno Ticket Window (seconds)",
+      numInput("keno_window_seconds", c.keno_window_seconds ?? 45, 15, "1", 600),
+      "How long members can grab tickets after someone opens a draw. " +
+        "Between 15 and 600 seconds.",
+    ));
+    cardTiming.appendChild(field(
       "Blackjack Idle Timeout (seconds)",
       numInput("blackjack_idle_seconds", Math.min(c.blackjack_idle_seconds ?? 180, 840), 30, "1", 840),
-      "A hand nobody touches for this long stands automatically so the table " +
-        "frees up. Between 30 and 840 seconds (private hand messages can only " +
-        "be updated for 14 minutes).",
+      "A blackjack hand or War standoff nobody touches for this long " +
+        "resolves automatically so the table frees up. Between 30 and 840 " +
+        "seconds (private hand messages can only be updated for 14 minutes).",
     ));
 
     const cardFloor = card("Casino Floor");
@@ -230,6 +252,9 @@ export function mount(container) {
         ["jackpot_seed", "Starting Pot After a Win", 0, null],
         ["roulette_window_seconds", "Roulette Betting Window", 15, 600],
         ["derby_window_seconds", "Derby Betting Window", 15, 600],
+        ["baccarat_window_seconds", "Baccarat Betting Window", 15, 600],
+        ["dice_window_seconds", "Dice Betting Window", 15, 600],
+        ["keno_window_seconds", "Keno Ticket Window", 15, 600],
         ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 840],
         ["broadcast_min_payout", "Big-Win Broadcast Threshold", 0, null],
       ]) {
@@ -257,6 +282,10 @@ export function mount(container) {
           blackjack_enabled: fd.has("blackjack_enabled"),
           roulette_enabled: fd.has("roulette_enabled"),
           derby_enabled: fd.has("derby_enabled"),
+          baccarat_enabled: fd.has("baccarat_enabled"),
+          dice_enabled: fd.has("dice_enabled"),
+          war_enabled: fd.has("war_enabled"),
+          keno_enabled: fd.has("keno_enabled"),
           jackpot_enabled: fd.has("jackpot_enabled"),
         });
         showStatus(statusEl, true);

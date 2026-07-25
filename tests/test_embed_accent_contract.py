@@ -22,6 +22,7 @@ from unittest.mock import MagicMock
 import discord
 import pytest
 
+from bot_modules.cogs.casino import embeds as casino_embeds
 from bot_modules.cogs.games_legitlibs import rendering as ll_rendering
 from bot_modules.economy import bounty_views as economy_bounty_views
 from bot_modules.economy import pin_views as economy_pin_views
@@ -437,6 +438,59 @@ CASES = [
         ),
         discord.Color(games_constants.BRAND_COLOR),
     ),
+    # ── casino (fallback is the house gold; older casino builders are
+    # ledger debt below — new ones land here) ────────────────────────────
+    case(
+        "casino.baccarat_round",
+        lambda **kw: casino_embeds.build_baccarat_round_embed(
+            _econ_settings(), 0.0, [], kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.baccarat_deal",
+        lambda **kw: casino_embeds.build_baccarat_deal_embed(
+            _econ_settings(), ["A♠", "8♦"], ["K♠", "Q♦"], kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.dice_round",
+        lambda **kw: casino_embeds.build_dice_round_embed(
+            _econ_settings(), 0.0, [], kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.dice_tumble",
+        lambda **kw: casino_embeds.build_dice_tumble_embed(
+            _econ_settings(), kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        # The live standoff (outcome=None) is the accent-colored state;
+        # win/lose verdicts are semantic and tested in the embeds file.
+        "casino.war_standoff",
+        lambda **kw: casino_embeds.build_war_embed(
+            _econ_settings(), 1, "7♠", "7♦", 10, kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.keno_round",
+        lambda **kw: casino_embeds.build_keno_round_embed(
+            _econ_settings(), 0.0, [], kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
+        "casino.keno_tumble",
+        lambda **kw: casino_embeds.build_keno_tumble_embed(
+            _econ_settings(), kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
     # ── welcome / leave (member arg is constructed mock data) ───────────
     case(
         "welcome.join",
@@ -508,6 +562,14 @@ def test_builder_falls_back_without_accent(build, fallback):
 # e.g. for content-string builders or semantic-color-only surfaces).
 KNOWN_UNCOVERED = {
     "bot_modules.bios.embeds.build_bio_embed",
+    # baccarat result is semantic green/red only; the running note is a
+    # content string — both out of accent scope by design.
+    "bot_modules.cogs.casino.embeds.build_baccarat_result_embed",
+    "bot_modules.cogs.casino.embeds.build_coup_running_note",
+    "bot_modules.cogs.casino.embeds.build_dice_result_embed",
+    "bot_modules.cogs.casino.embeds.build_draw_running_note",
+    "bot_modules.cogs.casino.embeds.build_keno_result_embed",
+    "bot_modules.cogs.casino.embeds.build_roll_running_note",
     "bot_modules.cogs.casino.embeds.build_blackjack_embed",
     "bot_modules.cogs.casino.embeds.build_blackjack_reveal_embed",
     "bot_modules.cogs.casino.embeds.build_coinflip_embed",

@@ -56,26 +56,23 @@ def parse_amount(raw: str) -> int | None:
 # ── bet modals ─────────────────────────────────────────────────────────
 
 
-class BetModal(discord.ui.Modal):
-    """One amount box; ``game`` (+ coinflip's ``side``) decides the table.
+class _AmountBetModal(discord.ui.Modal):
+    """One amount box + the shared parse/apologize flow.
 
     The label carries the live limits ("Your bet (5–100 · 340 left today)")
     and the box pre-fills the member's last bet on this game — nobody
-    should learn about a limit from the error after submitting.
+    should learn about a limit from the error after submitting. Subclasses
+    set the title, stash their routing fields, and implement ``_place``.
     """
 
     def __init__(
         self,
         *,
         title: str,
-        game: str,
-        side: str | None = None,
         limits_label: str = "Your bet",
         default_amount: int | None = None,
     ) -> None:
-        super().__init__(title=title)
-        self.game = game
-        self.side = side
+        super().__init__(title=title[:45])
         self.amount: discord.ui.TextInput = discord.ui.TextInput(
             label=limits_label[:45],
             placeholder="A whole number of coins",
@@ -92,12 +89,43 @@ class BetModal(discord.ui.Modal):
         if amount is None:
             await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
             return
+        await self._place(cog, interaction, amount)
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        raise NotImplementedError
+
+
+class BetModal(_AmountBetModal):
+    """``game`` (+ coinflip's ``side``) decides the instant table."""
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        game: str,
+        side: str | None = None,
+        limits_label: str = "Your bet",
+        default_amount: int | None = None,
+    ) -> None:
+        super().__init__(
+            title=title, limits_label=limits_label, default_amount=default_amount
+        )
+        self.game = game
+        self.side = side
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         if self.game == "coinflip" and self.side is not None:
             await cog.play_coinflip(interaction, self.side, amount)
         elif self.game == "slots":
             await cog.play_slots(interaction, amount)
         elif self.game == "blackjack":
             await cog.deal_blackjack(interaction, amount)
+        elif self.game == "war":
+            await cog.play_war(interaction, amount)
 
 
 _ROULETTE_KINDS = {
@@ -109,7 +137,9 @@ _ROULETTE_KINDS = {
 }
 
 
-class RouletteBetModal(discord.ui.Modal):
+class RouletteBetModal(_AmountBetModal):
+    """Amount box, plus the straight-number box when the bet needs one."""
+
     def __init__(
         self,
         round_id: int,
@@ -118,16 +148,12 @@ class RouletteBetModal(discord.ui.Modal):
         limits_label: str = "Your bet",
         default_amount: int | None = None,
     ) -> None:
-        super().__init__(title="Roulette bet")
+        super().__init__(
+            title="Roulette bet",
+            limits_label=limits_label, default_amount=default_amount,
+        )
         self.round_id = round_id
         self.kind = kind
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
         self.number: discord.ui.TextInput | None = None
         if kind == "num":
             self.number = discord.ui.TextInput(
@@ -137,14 +163,9 @@ class RouletteBetModal(discord.ui.Modal):
             )
             self.add_item(self.number)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         if self.kind == "num":
             assert self.number is not None
             raw = str(self.number.value).strip()
@@ -159,7 +180,7 @@ class RouletteBetModal(discord.ui.Modal):
         )
 
 
-class DerbyBetModal(discord.ui.Modal):
+class DerbyBetModal(_AmountBetModal):
     """One amount box; the runner was chosen by the button that opened it."""
 
     def __init__(
@@ -167,30 +188,60 @@ class DerbyBetModal(discord.ui.Modal):
         round_id: int,
         runner: int,
         runner_label: str,
-        *,
-        limits_label: str = "Your bet",
-        default_amount: int | None = None,
+        **kwargs,
     ) -> None:
-        super().__init__(title=f"Back {runner_label}"[:45])
+        super().__init__(title=f"Back {runner_label}", **kwargs)
         self.round_id = round_id
         self.runner = runner
-        self.amount: discord.ui.TextInput = discord.ui.TextInput(
-            label=limits_label[:45],
-            placeholder="A whole number of coins",
-            default=str(default_amount) if default_amount else None,
-            max_length=10,
-        )
-        self.add_item(self.amount)
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        cog = await _dispatch_or_apologize(interaction)
-        if cog is None:
-            return
-        amount = parse_amount(str(self.amount.value))
-        if amount is None:
-            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
-            return
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
         await cog.place_derby_bet(interaction, self.round_id, self.runner, amount)
+
+
+class BaccaratBetModal(_AmountBetModal):
+    """One amount box; the side was chosen by the button that opened it."""
+
+    def __init__(
+        self,
+        round_id: int,
+        side: str,
+        side_label: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(title=f"Back {side_label}", **kwargs)
+        self.round_id = round_id
+        self.side = side
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        await cog.place_baccarat_bet(
+            interaction, self.round_id, self.side, amount
+        )
+
+
+class DiceBetModal(_AmountBetModal):
+    """One amount box; the call was chosen by the button that opened it."""
+
+    def __init__(
+        self,
+        round_id: int,
+        bet_type: str,
+        call_label: str,
+        **kwargs,
+    ) -> None:
+        super().__init__(title=f"Call {call_label}", **kwargs)
+        self.round_id = round_id
+        self.bet_type = bet_type
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        await cog.place_dice_bet(
+            interaction, self.round_id, self.bet_type, amount
+        )
 
 
 # ── the hub panel ──────────────────────────────────────────────────────
@@ -281,8 +332,52 @@ class CasinoHubView(discord.ui.View):
             await cog.open_derby(interaction)
 
     @discord.ui.button(
+        label="Baccarat", emoji="🎴",
+        style=discord.ButtonStyle.primary, custom_id="casino:baccarat", row=1,
+    )
+    async def baccarat(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_baccarat(interaction)
+
+    @discord.ui.button(
+        label="Dice", emoji="🎲",
+        style=discord.ButtonStyle.primary, custom_id="casino:dice", row=1,
+    )
+    async def dice(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_dice(interaction)
+
+    @discord.ui.button(
+        label="War", emoji="⚔️",
+        style=discord.ButtonStyle.primary, custom_id="casino:war", row=1,
+    )
+    async def war(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_bet_modal(interaction, "war")
+
+    @discord.ui.button(
+        label="Keno", emoji="🔢",
+        style=discord.ButtonStyle.primary, custom_id="casino:keno", row=1,
+    )
+    async def keno(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_keno(interaction)
+
+    @discord.ui.button(
         label="My Stats", emoji="📊",
-        style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=1,
+        style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=2,
     )
     async def my_stats(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -293,7 +388,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="How It Works", emoji="❓",
-        style=discord.ButtonStyle.secondary, custom_id="casino:help", row=1,
+        style=discord.ButtonStyle.secondary, custom_id="casino:help", row=2,
     )
     async def help(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -488,19 +583,276 @@ class DerbyNextView(discord.ui.View):
             await cog.open_derby(interaction)
 
 
+# ── baccarat coup buttons ──────────────────────────────────────────────
+
+_BC_SPECS: dict[str, tuple[str, str, discord.ButtonStyle]] = {
+    "player": ("Player 2×", "🔵", discord.ButtonStyle.primary),
+    "banker": ("Banker 2×", "🔴", discord.ButtonStyle.danger),
+    "tie": ("Tie 9×", "🟡", discord.ButtonStyle.secondary),
+}
+
+
+class BaccaratBetButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_bc:(?P<side>player|banker|tie):(?P<rid>\d+)"),
+):
+    def __init__(self, side: str, round_id: int) -> None:
+        label, emoji, style = _BC_SPECS[side]
+        super().__init__(
+            discord.ui.Button(
+                label=label, emoji=emoji, style=style,
+                custom_id=f"casino_bc:{side}:{round_id}",
+            )
+        )
+        self.side = side
+        self.round_id = round_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> BaccaratBetButton:
+        return cls(match["side"], int(match["rid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_baccarat_bet_modal(
+                interaction, self.round_id, self.side
+            )
+
+
+def build_baccarat_view(round_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    for side in logic.BACCARAT_SIDES:
+        view.add_item(BaccaratBetButton(side, round_id))
+    return view
+
+
+class BaccaratNextView(discord.ui.View):
+    """One persistent button on coup recaps — the next hand is a click."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Next Hand", emoji="🎴",
+        style=discord.ButtonStyle.secondary, custom_id="casino:baccarat_next",
+    )
+    async def next_hand(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_baccarat(interaction)
+
+
+# ── dice roll buttons ──────────────────────────────────────────────────
+
+_DC_SPECS: dict[str, tuple[str, str | None, discord.ButtonStyle, int]] = {
+    "big": ("Big 11–17", "⬆️", discord.ButtonStyle.primary, 0),
+    "small": ("Small 4–10", "⬇️", discord.ButtonStyle.primary, 0),
+    "odd": ("Odd", None, discord.ButtonStyle.secondary, 1),
+    "even": ("Even", None, discord.ButtonStyle.secondary, 1),
+}
+
+
+class DiceBetButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_dc:(?P<kind>big|small|odd|even):(?P<rid>\d+)"),
+):
+    def __init__(self, kind: str, round_id: int) -> None:
+        label, emoji, style, row = _DC_SPECS[kind]
+        super().__init__(
+            discord.ui.Button(
+                label=label, emoji=emoji, style=style, row=row,
+                custom_id=f"casino_dc:{kind}:{round_id}",
+            )
+        )
+        self.kind = kind
+        self.round_id = round_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> DiceBetButton:
+        return cls(match["kind"], int(match["rid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_dice_bet_modal(
+                interaction, self.round_id, self.kind
+            )
+
+
+def build_dice_view(round_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    for kind in logic.SICBO_BET_TYPES:
+        view.add_item(DiceBetButton(kind, round_id))
+    return view
+
+
+class DiceNextView(discord.ui.View):
+    """One persistent button on roll recaps — the next roll is a click."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Next Roll", emoji="🎲",
+        style=discord.ButtonStyle.secondary, custom_id="casino:dice_next",
+    )
+    async def next_roll(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_dice(interaction)
+
+
+# ── keno ticket buttons ────────────────────────────────────────────────
+
+
+class KenoTicketModal(_AmountBetModal):
+    """One amount box; the tier was chosen by the button that opened it."""
+
+    def __init__(self, round_id: int, spots: int, **kwargs) -> None:
+        super().__init__(title=f"Keno — Pick {spots}", **kwargs)
+        self.round_id = round_id
+        self.spots = spots
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        await cog.place_keno_ticket(
+            interaction, self.round_id, self.spots, amount
+        )
+
+
+class KenoTierButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_kn:(?P<spots>4|6|8|10):(?P<rid>\d+)"),
+):
+    def __init__(self, spots: int, round_id: int) -> None:
+        top = max(logic.KENO_PAYTABLE[spots].values())
+        super().__init__(
+            discord.ui.Button(
+                label=f"Pick {spots} · to {top}×",
+                emoji="🎟️",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"casino_kn:{spots}:{round_id}",
+            )
+        )
+        self.spots = spots
+        self.round_id = round_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> KenoTierButton:
+        return cls(int(match["spots"]), int(match["rid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_keno_ticket_modal(
+                interaction, self.round_id, self.spots
+            )
+
+
+def build_keno_view(round_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    for spots in logic.KENO_TIERS:
+        view.add_item(KenoTierButton(spots, round_id))
+    return view
+
+
+class KenoNextView(discord.ui.View):
+    """One persistent button on draw recaps — the next draw is a click."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Next Draw", emoji="🔢",
+        style=discord.ButtonStyle.secondary, custom_id="casino:keno_next",
+    )
+    async def next_draw(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_keno(interaction)
+
+
+# ── war standoff buttons ───────────────────────────────────────────────
+
+_WAR_STYLES = {
+    "war": ("Go to War", "⚔️", discord.ButtonStyle.danger),
+    "retreat": ("Retreat", "🏳️", discord.ButtonStyle.secondary),
+}
+
+
+class WarActionButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_wr:(?P<action>war|retreat):(?P<hid>\d+)"),
+):
+    def __init__(self, action: str, hand_id: int) -> None:
+        label, emoji, style = _WAR_STYLES[action]
+        super().__init__(
+            discord.ui.Button(
+                label=label, emoji=emoji, style=style,
+                custom_id=f"casino_wr:{action}:{hand_id}",
+            )
+        )
+        self.action = action
+        self.hand_id = hand_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WarActionButton:
+        return cls(match["action"], int(match["hid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.war_action(interaction, self.hand_id, self.action)
+
+
+def build_war_view(hand_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(WarActionButton("war", hand_id))
+    view.add_item(WarActionButton("retreat", hand_id))
+    return view
+
+
 # ── the loop-closers: Play Again / Next Round ──────────────────────────
 
 _AGAIN_LABELS = {
     "coinflip": "Flip again",
     "slots": "Spin again",
     "blackjack": "Deal again",
+    "war": "Battle again",
 }
 
 
 class PlayAgainButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(
-        r"casino_again:(?P<game>coinflip|slots|blackjack)"
+        r"casino_again:(?P<game>coinflip|slots|blackjack|war)"
         r":(?P<side>heads|tails|x):(?P<amt>\d+)"
     ),
 ):
@@ -541,6 +893,8 @@ class PlayAgainButton(
             await cog.play_coinflip(interaction, self.side, self.amount)
         elif self.game == "slots":
             await cog.play_slots(interaction, self.amount)
+        elif self.game == "war":
+            await cog.play_war(interaction, self.amount)
         else:
             await cog.deal_blackjack(interaction, self.amount)
 

@@ -42,6 +42,10 @@ _GAME_LINES = {
     "blackjack": "🃏 **Blackjack** — beat the dealer to 21; naturals pay 3:2",
     "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
     "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
+    "baccarat": "🎴 **Baccarat** — Player, Banker, or Tie; nearest to nine wins",
+    "dice": "🎲 **Dice** — three dice, one roll; call Big, Small, Odd, or Even",
+    "war": "⚔️ **War** — one card each, high card wins; on a tie, go to war",
+    "keno": "🔢 **Keno** — grab a ticket, 20 numbers drop, catches pay big",
 }
 
 
@@ -75,7 +79,49 @@ def _pot_line(pot_after: int) -> str:
     return f"💰 The loss feeds the jackpot — now **{pot_after:,}**."
 
 
-_TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏"}
+def _add_result_fields(
+    embed: discord.Embed,
+    econ: EconSettings,
+    paid: list[tuple[int, str, int, int]],
+    losers_total: int,
+    pot_after: int,
+    *,
+    paid_name: str = "Winners",
+    keep_name: str = "The house keeps",
+) -> None:
+    """Every result card's shared tail: the paid board (💥 big-win prefix,
+    char-capped under the 1024 field limit) and the house-keeps line with
+    its pot ad. One implementation so a field-limit fix can never land in
+    one game's recap and miss another's."""
+    if paid:
+        lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in paid
+        ]
+        embed.add_field(
+            name=paid_name,
+            value="\n".join(logic.cap_lines(lines, limit=1022)) + "\n​",
+            inline=False,
+        )
+    if losers_total:
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name=keep_name, value=kept, inline=False)
+
+
+def _running_note(
+    lead: str, closes_at: float, url: str | None, jump: str, above: str
+) -> str:
+    """The already-running ephemeral pointer every windowed game shares."""
+    note = f"{lead} <t:{int(closes_at)}:R>."
+    if url:
+        return f"{note} {jump}: {url}"
+    return f"{note} {above}."
+
+
+_TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏", "war": "⚔️"}
 
 
 def ticker_line(user_id: int, game: str, stake: int, payout: int) -> str:
@@ -242,6 +288,59 @@ def build_help_embed(
                 "Back a critter to win — the favorite pays least, the snail "
                 "pays big (91–96% return by runner). Betting stays open for "
                 f"{settings.derby_window_seconds}s, then they're off.\n​"
+            ),
+            inline=False,
+        )
+    if settings.baccarat_enabled:
+        embed.add_field(
+            name="🎴 Baccarat",
+            value=(
+                "Back the **Player** or **Banker** — both pay **2×** "
+                "(~99% return, the best odds in the house; a Banker win on a "
+                "three-card 7 pushes instead). **Tie** pays **9×** — the long "
+                "shot (~86% return). Ties push the side bets. A betting window "
+                f"opens for {settings.baccarat_window_seconds}s, then the cards "
+                "decide for everyone at once.\n​"
+            ),
+            inline=False,
+        )
+    if settings.dice_enabled:
+        embed.add_field(
+            name="🎲 Dice",
+            value=(
+                "Three dice, one shared roll. **Big** (11–17), **Small** "
+                "(4–10), **Odd**, **Even** — all pay **2×**, and any triple "
+                "sweeps the table (~97% return). A betting window opens for "
+                f"{settings.dice_window_seconds}s, then one roll settles "
+                "everyone.\n​"
+            ),
+            inline=False,
+        )
+    if settings.war_enabled:
+        embed.add_field(
+            name="⚔️ War",
+            value=(
+                "One card each, aces high — the higher card pays **2×** on "
+                "the spot. A tie is a standoff: **go to war** (match your bet; "
+                "win *or tie* the next card for **3×** your original) or "
+                "**retreat** (half your bet back). ~97% return going to war — "
+                "always the braver *and* the better play.\n​"
+            ),
+            inline=False,
+        )
+    if settings.keno_enabled:
+        pays = " · ".join(
+            f"Pick-{tier} up to **{max(table.values())}×**"
+            for tier, table in logic.KENO_PAYTABLE.items()
+        )
+        embed.add_field(
+            name="🔢 Keno",
+            value=(
+                "Grab a quick-pick ticket of 4, 6, 8, or 10 numbers; 20 of 80 "
+                f"drop in one shared draw. {pays} — pays scale with how many "
+                "of yours hit (~95% return, tuned far kinder than real keno). "
+                f"Tickets stay open for {settings.keno_window_seconds}s, then "
+                "one draw settles everyone.\n​"
             ),
             inline=False,
         )
@@ -576,36 +675,19 @@ def build_roulette_result_embed(
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    if winners:
-        winner_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in winners
-        ]
-        # Cap under the 1024 field limit (reserve 2 for the trailing "\n​").
-        embed.add_field(
-            name="Winners",
-            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The house keeps", value=kept, inline=False)
+    _add_result_fields(embed, econ, winners, losers_total, pot_after)
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_round_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens roulette mid-round."""
-    note = (
-        f"🎡 A roulette round is already running — the wheel spins "
-        f"<t:{int(closes_at)}:R>."
+    return _running_note(
+        "🎡 A roulette round is already running — the wheel spins",
+        closes_at, url,
+        "Jump to it and place your bet",
+        "Place your bet on the round message above",
     )
-    if url:
-        return f"{note} Jump to it and place your bet: {url}"
-    return f"{note} Place your bet on the round message above."
 
 
 # ── derby (docs/plans/casino-derby.md) ─────────────────────────────────
@@ -683,34 +765,374 @@ def build_derby_result_embed(
         description=description + "\n​",
         color=COLOR_GREEN if winners else COLOR_RED,
     )
-    if winners:
-        winner_lines = [
-            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
-            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
-            for uid, d, amount, payout in winners
-        ]
-        embed.add_field(
-            name="Winners",
-            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
-            inline=False,
-        )
-    if losers_total:
-        kept = _coins(econ, losers_total)
-        if pot_after > 0:
-            kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The meadow keeps", value=kept, inline=False)
+    _add_result_fields(
+        embed, econ, winners, losers_total, pot_after,
+        keep_name="The meadow keeps",
+    )
     embed.set_footer(text=_FOOTER)
     return embed
 
 
 def build_race_running_note(closes_at: float, url: str | None = None) -> str:
     """Ephemeral pointer when a member opens the derby mid-race."""
-    note = (
-        f"🏇 A race is already forming — they're off <t:{int(closes_at)}:R>."
+    return _running_note(
+        "🏇 A race is already forming — they're off",
+        closes_at, url,
+        "Jump in and back a critter",
+        "Back a critter on the race message above",
     )
-    if url:
-        return f"{note} Jump in and back a critter: {url}"
-    return f"{note} Back a critter on the race message above."
+
+
+# ── baccarat (casino-classics Stage 1a) ────────────────────────────────
+
+
+def _baccarat_hand_line(cards: list[str], *, reveal: int | None = None) -> str:
+    """One hand as monospace cards + total; ``reveal`` shows only the first
+    N cards (the rest as 🂠) for the dealing frame."""
+    if reveal is not None and reveal < len(cards):
+        shown = cards[:reveal] + ["🂠"] * (len(cards) - reveal)
+        return f"`{'  '.join(shown)}`"
+    return f"`{'  '.join(cards)}`  ({logic.baccarat_total(cards)})"
+
+
+def build_baccarat_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, side description, amount), placement order."""
+    embed = discord.Embed(
+        title="🎴 Baccarat — bets open!",
+        description=(
+            f"The cards come down <t:{int(closes_at)}:R>. "
+            "Back the Player, the Banker, or the long-shot Tie — "
+            "nearest to nine wins.\n​"
+        ),
+        color=_accent(accent),
+    )
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_baccarat_deal_embed(
+    econ: EconSettings,
+    player: list[str],
+    banker: list[str],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """The dealing frame: both starting hands down, draws still to come."""
+    embed = discord.Embed(
+        title="🎴 Baccarat — no more bets!",
+        description=(
+            f"🔵 Player  {_baccarat_hand_line(player, reveal=2)}\n"
+            f"🔴 Banker  {_baccarat_hand_line(banker, reveal=2)}\n"
+            "The cards hit the felt…"
+        ),
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+_BACCARAT_VERDICTS = {
+    "player": "🔵 **Player wins.**",
+    "banker": "🔴 **Banker wins.**",
+    "tie": "🟡 **A tie!** Side bets come home; Tie pays 9×.",
+}
+
+
+def build_baccarat_result_embed(
+    econ: EconSettings,
+    player: list[str],
+    banker: list[str],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, side description, amount, payout)."""
+    winner = logic.baccarat_winner(player, banker)
+    verdict = _BACCARAT_VERDICTS[winner]
+    if (
+        winner == "banker"
+        and len(banker) == 3
+        and logic.baccarat_total(banker) == 7
+    ):
+        verdict += " A three-card seven — Banker bets push."
+    hands = (
+        f"🔵 Player  {_baccarat_hand_line(player)}\n"
+        f"🔴 Banker  {_baccarat_hand_line(banker)}"
+    )
+    if bets:
+        description = f"{hands}\n{verdict}\n​"
+    else:
+        description = (
+            f"{hands}\n{verdict} Nobody bet — the cards fall for no one."
+        )
+    # Green only for a genuine win (payout above the stake) — a coup of
+    # pushed side bets came home, it didn't win.
+    won = [b for b in bets if b[3] > b[2]]
+    paid = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    embed = discord.Embed(
+        title="🎴 Baccarat — cards down!",
+        description=description,
+        color=COLOR_GREEN if won else COLOR_RED,
+    )
+    _add_result_fields(
+        embed, econ, paid, losers_total, pot_after,
+        paid_name="Winners" if won else "Pushed",
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_coup_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens baccarat mid-hand."""
+    return _running_note(
+        "🎴 A baccarat hand is already forming — cards down",
+        closes_at, url,
+        "Jump in and pick a side",
+        "Pick a side on the hand message above",
+    )
+
+
+# ── dice / sic bo (casino-classics Stage 1b) ───────────────────────────
+
+
+def build_dice_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, bet description, amount), placement order."""
+    embed = discord.Embed(
+        title="🎲 Dice — bets open!",
+        description=(
+            f"Three dice roll <t:{int(closes_at)}:R>. "
+            "Call Big, Small, Odd, or Even — but any triple sweeps "
+            "the table.\n​"
+        ),
+        color=_accent(accent),
+    )
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_dice_tumble_embed(
+    econ: EconSettings, accent: discord.Color | None
+) -> discord.Embed:
+    """The rolling frame — dice still in the air."""
+    embed = discord.Embed(
+        title="🎲 Dice — no more bets!",
+        description="The dice tumble across the felt… 🎲 🎲 🎲 …",
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_dice_result_embed(
+    econ: EconSettings,
+    dice: tuple[int, int, int],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, bet description, amount, payout)."""
+    total = sum(dice)
+    is_triple = dice[0] == dice[1] == dice[2]
+    call = "Big" if total >= 11 else "Small"
+    parity = "odd" if total % 2 else "even"
+    verdict = f"{logic.dice_faces(dice)} — **{total}**, {call} and {parity}."
+    if is_triple:
+        verdict = (
+            f"{logic.dice_faces(dice)} — **a triple {dice[0]}!** "
+            "The house sweeps every bet."
+        )
+    if bets:
+        description = f"{verdict}\n​"
+    else:
+        description = f"{verdict} Nobody bet — the dice roll for no one."
+    winners = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    embed = discord.Embed(
+        title="🎲 Dice — no more bets!",
+        description=description,
+        color=COLOR_GREEN if winners else COLOR_RED,
+    )
+    _add_result_fields(embed, econ, winners, losers_total, pot_after)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_roll_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens dice mid-roll."""
+    return _running_note(
+        "🎲 A dice roll is already forming — they fly",
+        closes_at, url,
+        "Jump in and call it",
+        "Call it on the roll message above",
+    )
+
+
+# ── keno (casino-classics Stage 1d) ────────────────────────────────────
+
+
+def build_keno_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, ticket description, amount), placement order."""
+    embed = discord.Embed(
+        title="🔢 Keno — tickets open!",
+        description=(
+            f"The draw drops <t:{int(closes_at)}:R>. "
+            "Pick a tier — the house quick-picks your numbers, fate does "
+            "the rest.\n​"
+        ),
+        color=_accent(accent),
+    )
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_keno_tumble_embed(
+    econ: EconSettings, accent: discord.Color | None
+) -> discord.Embed:
+    """The drawing frame — balls still in the hopper."""
+    embed = discord.Embed(
+        title="🔢 Keno — no more tickets!",
+        description="The hopper churns… numbers rattling into the chute…",
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def _keno_board(drawn: list[int]) -> str:
+    """The 20 drawn numbers as two monospace rows of ten."""
+    cells = [f"{n:>2}" for n in drawn]
+    return (
+        f"`{'  '.join(cells[:10])}`\n`{'  '.join(cells[10:])}`"
+    )
+
+
+def build_keno_result_embed(
+    econ: EconSettings,
+    drawn: list[int],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, ticket description, amount, payout)."""
+    if bets:
+        description = f"{_keno_board(drawn)}\n​"
+    else:
+        description = (
+            f"{_keno_board(drawn)}\nNobody held a ticket — twenty numbers "
+            "fall for no one."
+        )
+    winners = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    embed = discord.Embed(
+        title="🔢 Keno — the draw is in!",
+        description=description,
+        color=COLOR_GREEN if winners else COLOR_RED,
+    )
+    _add_result_fields(embed, econ, winners, losers_total, pot_after)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_draw_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens keno mid-draw."""
+    return _running_note(
+        "🔢 A keno draw is already forming — numbers drop",
+        closes_at, url,
+        "Jump in and grab a ticket",
+        "Grab a ticket on the draw message above",
+    )
+
+
+# ── war (casino-classics Stage 1c) ─────────────────────────────────────
+
+_WAR_OUTCOME_LINES = {
+    "win": "**High card!**",
+    "lose": "The dealer's card stands taller.",
+    "war_win": "**Victory on the battlefield!**",
+    "war_lose": "The war is lost — both stakes fall.",
+    "retreat": "A tactical retreat — half the bet comes home:",
+    "refunded": "The table was reset — the bet came home.",
+}
+
+
+def build_war_embed(
+    econ: EconSettings,
+    user_id: int,
+    player: str,
+    dealer: str,
+    stake: int,
+    accent: discord.Color | None,
+    *,
+    war_player: str | None = None,
+    war_dealer: str | None = None,
+    outcome: str | None = None,
+    payout: int = 0,
+    streak: int = 0,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """One war play — instant verdict, the tie standoff, or its resolution.
+
+    Green only for genuine wins; retreat (a partial return) and a refund
+    stay on the accent; full losses go red.
+    """
+    live = outcome is None
+    if live or outcome in ("retreat", "refunded"):
+        color: discord.Color | int = _accent(accent)
+    elif payout > stake:
+        color = COLOR_GREEN
+    else:
+        color = COLOR_RED
+    lines = [
+        f"<@{user_id}> is in for {_coins(econ, stake)}",
+        f"Their card `{player}` · Dealer `{dealer}`",
+    ]
+    if war_player is not None and war_dealer is not None:
+        lines.append(f"⚔️ War cards — theirs `{war_player}` · dealer `{war_dealer}`")
+    embed = discord.Embed(
+        title="⚔️ Casino War",
+        description="\n".join(lines) + "\n​",
+        color=color,
+    )
+    if live:
+        embed.add_field(
+            name="A standoff!",
+            value=(
+                "Matched cards. **Go to War** doubles your stake — win *or "
+                "tie* the next card and take 3× your original bet — or "
+                "**Retreat** with half. Fortune favors the bold (and so do "
+                "the odds)."
+            ),
+            inline=False,
+        )
+    else:
+        line = _WAR_OUTCOME_LINES.get(outcome or "", "")
+        if payout > 0:
+            line = f"{line} {_coins(econ, payout)}."
+        if payout == 0 and pot_after > 0:
+            line = f"{line}\n{_pot_line(pot_after)}"
+        if outcome != "refunded":
+            line = _with_streak(line, econ, streak)
+        embed.add_field(name="Result", value=line, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed
 
 
 def build_my_stats_embed(

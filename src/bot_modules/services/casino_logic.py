@@ -344,3 +344,297 @@ def describe_bet(bet_type: str, selection: int) -> str:
     if bet_type == "dozen":
         return f"Dozen {_DOZEN_LABELS[selection]}"
     return f"Straight {selection}"
+
+
+# ── Baccarat (Punto Banco, EZ-Baccarat commission-free) ────────────────
+#
+# A no-decision windowed game: members back Player / Banker / Tie, both
+# hands are dealt by the fixed punto-banco drawing rules, nearest to 9 wins.
+# Cards are drawn from an *infinite shoe* — each card independent, uniform
+# over the 13 ranks — which is the standard no-removal baccarat model and,
+# critically, makes the RTP an EXACT enumeration (values 1–9 land 1/13 each,
+# the four 0-valued tens/faces 4/13), pinned by the test rather than sampled.
+#
+# Paytable (EZ-Baccarat, avoids the fractional 5% Banker commission): Player
+# 1:1, Banker 1:1 EXCEPT a Banker win on a three-card total of 7 pushes (the
+# "Dragon 7" bar that stands in for the commission), Tie 8:1. Player/Banker
+# sit ABOVE the house band (~98.8–99.0% RTP) — baccarat is a low-edge classic
+# — with Tie the clearly-labeled high-edge long shot (~85.6%).
+
+BACCARAT_SIDES = ("player", "banker", "tie")
+# Tie pays 8:1 → 9× the stake back in total-return terms.
+BACCARAT_TIE_MULT = 9
+
+
+def baccarat_card_value(card: str) -> int:
+    """Baccarat pip value: A=1, 2–9 face, 10/J/Q/K=0 (rank+suit string)."""
+    rank = card[:-1]
+    if rank == "A":
+        return 1
+    if rank in ("10", "J", "Q", "K"):
+        return 0
+    return int(rank)
+
+
+def baccarat_total(cards: list[str]) -> int:
+    """A baccarat hand's total — pip sum modulo 10 (0–9)."""
+    return sum(baccarat_card_value(c) for c in cards) % 10
+
+
+def _draw_shoe_card() -> str:
+    """One card from the infinite shoe (rank uniform over 13, suit cosmetic).
+
+    Shared by baccarat and war — both use the no-removal shoe model so
+    their RTP tests are exact enumerations over independent draws."""
+    return random.choice(_RANKS) + random.choice(_SUITS)
+
+
+def _banker_draws(banker_total: int, player_third: int) -> bool:
+    """The punto-banco Banker third-card rule, given the Player's third-card
+    pip value. Only consulted when the Player drew a third card and neither
+    hand was a natural; a Banker total of 7 always stands here."""
+    if banker_total <= 2:
+        return True
+    if banker_total == 3:
+        return player_third != 8
+    if banker_total == 4:
+        return 2 <= player_third <= 7
+    if banker_total == 5:
+        return 4 <= player_third <= 7
+    if banker_total == 6:
+        return 6 <= player_third <= 7
+    return False  # 7 stands (8/9 are naturals, handled before this)
+
+
+def deal_baccarat() -> tuple[list[str], list[str]]:
+    """Deal one coup from the infinite shoe; returns (player, banker) cards
+    after the fixed draws. No decisions — the drawing tree is deterministic
+    given the cards. Draw order: p1 p2 b1 b2 [p3] [b3]."""
+    player: list[str] = []
+    banker: list[str] = []
+
+    def draw(hand: list[str]) -> int:
+        card = _draw_shoe_card()
+        hand.append(card)
+        return baccarat_card_value(card)
+
+    # Two to each side, then the fixed third-card rules.
+    pt = (draw(player) + draw(player)) % 10
+    bt = (draw(banker) + draw(banker)) % 10
+    if pt < 8 and bt < 8:  # neither a natural → drawing rules apply
+        if pt <= 5:
+            if _banker_draws(bt, draw(player)):
+                draw(banker)
+        elif bt <= 5:  # Player stood → Banker draws on 0–5
+            draw(banker)
+    return player, banker
+
+
+def baccarat_winner(player: list[str], banker: list[str]) -> str:
+    """Which side won the coup — ``"player"`` / ``"banker"`` / ``"tie"``."""
+    pt, bt = baccarat_total(player), baccarat_total(banker)
+    if pt > bt:
+        return "player"
+    if bt > pt:
+        return "banker"
+    return "tie"
+
+
+def baccarat_payout(
+    side: str, player: list[str], banker: list[str], amount: int
+) -> int:
+    """Total return for one bet on ``side`` against the dealt coup (0 = lost).
+
+    Player/Banker bets push (stake back) on a tie. A Banker win on a
+    three-card total of 7 pushes Banker bets (the EZ-Baccarat Dragon-7 bar
+    that replaces the 5% commission). Tie pays 8:1.
+    """
+    if side not in BACCARAT_SIDES:
+        raise ValueError(f"unknown baccarat side: {side}")
+    winner = baccarat_winner(player, banker)
+    if side == "tie":
+        return amount * BACCARAT_TIE_MULT if winner == "tie" else 0
+    if winner == "tie":
+        return amount  # Player/Banker bets push on a tie
+    if side != winner:
+        return 0
+    if side == "banker" and len(banker) == 3 and baccarat_total(banker) == 7:
+        return amount  # Dragon-7: a three-card-7 Banker win is barred to a push
+    return amount * 2
+
+
+_BACCARAT_LABELS = {
+    "player": "🔵 Player",
+    "banker": "🔴 Banker",
+    "tie": "🟡 Tie",
+}
+
+
+def describe_baccarat_side(side: str) -> str:
+    return _BACCARAT_LABELS[side]
+
+
+# ── Dice (Sic Bo, Big/Small/Odd/Even) ──────────────────────────────────
+#
+# Three dice, one roll, everyone settles. v1 keeps the classic even-money
+# quartet — Big (11–17), Small (4–10), Odd, Even, each paying 2× total
+# return and ALL losing to any triple (the house's tax on the wheel) —
+# which lands every bet at exactly 105/216 → 97.22% RTP, already in the
+# design band with no bespoke tuning. Exact-total and triple bets are a
+# deliberate later iteration (their casino pays are sucker-bet territory
+# and need custom in-band math).
+
+SICBO_BET_TYPES = ("big", "small", "odd", "even")
+DICE_FACES = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄", 6: "⚅"}
+
+
+def roll_sicbo() -> tuple[int, int, int]:
+    return (
+        random.randint(1, 6), random.randint(1, 6), random.randint(1, 6)
+    )
+
+
+def sicbo_payout(bet_type: str, dice: tuple[int, int, int], amount: int) -> int:
+    """Total return for one bet against the rolled ``dice`` (0 = lost).
+
+    Every v1 bet pays even money and loses to any triple — that exclusion
+    IS the house edge (2.78%).
+    """
+    if bet_type not in SICBO_BET_TYPES:
+        raise ValueError(f"unknown dice bet type: {bet_type}")
+    a, b, c = dice
+    if a == b == c:
+        return 0
+    total = a + b + c
+    won = (
+        total >= 11 if bet_type == "big"
+        else total <= 10 if bet_type == "small"
+        else total % 2 == 1 if bet_type == "odd"
+        else total % 2 == 0
+    )
+    return amount * 2 if won else 0
+
+
+_SICBO_LABELS = {
+    "big": "⬆️ Big (11–17)",
+    "small": "⬇️ Small (4–10)",
+    "odd": "1️⃣ Odd",
+    "even": "2️⃣ Even",
+}
+
+
+def describe_sicbo_bet(bet_type: str) -> str:
+    return _SICBO_LABELS[bet_type]
+
+
+def dice_faces(dice: tuple[int, int, int]) -> str:
+    """"⚃ ⚅ ⚀" — the roll as die faces."""
+    return " ".join(DICE_FACES[d] for d in dice)
+
+
+# ── Casino War ─────────────────────────────────────────────────────────
+#
+# One card each, high card wins even money — the fastest game in the
+# canon. On the ~1/13 tie the member chooses: **go to war** (stake a
+# matching raise; win OR tie the war card and the raise pays even while
+# the original pushes — 3× total return on the doubled stake) or
+# **retreat** (surrender half). Cards come from the infinite shoe (rank
+# uniform /13, the baccarat model), so the RTP is exact: always-war
+# 177/182 ≈ 97.25%, always-retreat 25/26 ≈ 96.15% — both in band, war
+# strictly better, no Tie side bet (its ~19% edge has no place here).
+
+WAR_ACTIONS = ("war", "retreat")
+
+
+def war_rank(card: str) -> int:
+    """Aces high, suits meaningless: 2 → 2 … K → 13, A → 14."""
+    rank = card[:-1]
+    if rank == "A":
+        return 14
+    if rank == "J":
+        return 11
+    if rank == "Q":
+        return 12
+    if rank == "K":
+        return 13
+    return int(rank)
+
+
+def draw_war_cards() -> tuple[str, str]:
+    """(member's card, dealer's card) from the infinite shoe."""
+    return _draw_shoe_card(), _draw_shoe_card()
+
+
+def war_payout(player: str, dealer: str, stake: int) -> int | None:
+    """Total return for the opening cards — None means a tie (the member
+    chooses war or retreat; nothing settles yet)."""
+    if war_rank(player) > war_rank(dealer):
+        return stake * 2
+    if war_rank(player) < war_rank(dealer):
+        return 0
+    return None
+
+
+def war_raise_payout(player: str, dealer: str, doubled_stake: int) -> int:
+    """Total return once the war cards land, on the doubled stake.
+
+    A win **or second tie** takes it: the raise pays even money and the
+    original pushes — 3× the original bet, which is exactly 3/2 of the
+    doubled stake."""
+    if war_rank(player) >= war_rank(dealer):
+        return doubled_stake * 3 // 2
+    return 0
+
+
+def war_retreat_payout(stake: int) -> int:
+    """Retreat surrenders half (floored — the house keeps the odd coin)."""
+    return stake // 2
+
+
+# ── Keno (bespoke paytable — NOT casino keno) ──────────────────────────
+#
+# 20 of 80 numbers drawn once per communal round; a ticket is a quick-
+# picked set of 4/6/8/10 spots paying by catch count. Real casino keno
+# returns a punishing 65–75% — these paytables are built from scratch on
+# the exact hypergeometric P(catch k) = C(t,k)·C(80−t,20−k)/C(80,20) to
+# land every tier at ~94–96%, pinned by the EV test. The pays are total
+# return (×stake); the low tiers give frequent money-back moments, the
+# top catches stay splashy (a Pick-8 solid ticket pays 5000×).
+
+KENO_POOL = 80
+KENO_DRAWN = 20
+KENO_TIERS = (4, 6, 8, 10)
+
+KENO_PAYTABLE: dict[int, dict[int, int]] = {
+    4: {2: 2, 3: 8, 4: 60},                                    # RTP 95.51%
+    6: {2: 1, 3: 2, 4: 8, 5: 30, 6: 500},                      # RTP 95.36%
+    8: {3: 1, 4: 3, 5: 12, 6: 70, 7: 500, 8: 5000},            # RTP 94.66%
+    10: {4: 1, 5: 4, 6: 20, 7: 130, 8: 1000, 9: 4000, 10: 5000},  # RTP 95.25%
+}
+
+
+def keno_quick_pick(spots: int) -> list[int]:
+    """A sorted quick-pick ticket of ``spots`` numbers from 1–80."""
+    return sorted(random.sample(range(1, KENO_POOL + 1), spots))
+
+
+def draw_keno() -> list[int]:
+    """The round's 20 drawn numbers, sorted."""
+    return sorted(random.sample(range(1, KENO_POOL + 1), KENO_DRAWN))
+
+
+def keno_catches(picks: list[int], drawn: list[int]) -> int:
+    return len(set(picks) & set(drawn))
+
+
+def keno_payout(picks: list[int], drawn: list[int], amount: int) -> int:
+    """Total return for one ticket against the draw (0 = lost)."""
+    tier = KENO_PAYTABLE.get(len(picks))
+    if tier is None:
+        raise ValueError(f"unknown keno tier: {len(picks)} spots")
+    return amount * tier.get(keno_catches(picks, drawn), 0)
+
+
+def describe_keno_ticket(picks: list[int]) -> str:
+    """"Pick-6 · 4 12 33 41 56 78" — the bets board / recap line."""
+    return f"Pick-{len(picks)} · {' '.join(str(n) for n in picks)}"
