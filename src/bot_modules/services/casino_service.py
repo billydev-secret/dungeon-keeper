@@ -69,6 +69,10 @@ class CasinoSettings:
     jackpot_enabled: bool = True
     jackpot_cut_pct: int = 25
     jackpot_seed: int = 100
+    # Instant-game wins paying at least this much get a public broadcast
+    # in the casino channel (results themselves render ephemerally).
+    # 0 = never broadcast.
+    broadcast_min_payout: int = 0
     # Bot bookkeeping (the hub panel message + where it lives, so a channel
     # move can clean up the old panel) — not dashboard-editable.
     panel_message_id: int = 0
@@ -402,6 +406,50 @@ def claim_jackpot(
     return int(row["last_amount"]) if row is not None else settings.jackpot_seed
 
 
+# Instant games land on the hub panel's floor ticker; communal rounds
+# (roulette/derby) already recap publicly, so they stay off it.
+TICKER_GAMES = ("coinflip", "slots", "blackjack")
+# Rows kept per guild — a small multiple of what the hub ever renders, so
+# the trim never fights the reader.
+TICKER_KEEP = 25
+
+
+def record_ticker(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    game: str,
+    stake: int,
+    payout: int,
+    *,
+    now: float | None = None,
+) -> None:
+    """Append one floor-ticker row and trim the guild to TICKER_KEEP."""
+    conn.execute(
+        "INSERT INTO casino_ticker (guild_id, user_id, game, stake, payout, ts) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (guild_id, user_id, game, stake, payout,
+         time.time() if now is None else now),
+    )
+    conn.execute(
+        "DELETE FROM casino_ticker WHERE guild_id = ? AND id NOT IN ("
+        "SELECT id FROM casino_ticker WHERE guild_id = ? "
+        "ORDER BY id DESC LIMIT ?)",
+        (guild_id, guild_id, TICKER_KEEP),
+    )
+
+
+def recent_ticker(
+    conn: sqlite3.Connection, guild_id: int, limit: int = 6
+) -> list[sqlite3.Row]:
+    """Newest-first recent instant-game plays for the hub's ticker."""
+    return conn.execute(
+        "SELECT user_id, game, stake, payout FROM casino_ticker "
+        "WHERE guild_id = ? ORDER BY id DESC LIMIT ?",
+        (guild_id, limit),
+    ).fetchall()
+
+
 def record_play(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -417,10 +465,14 @@ def record_play(
 
     Called in the same transaction as the play's settlement. Refunds and
     voids never reach here — a bet the house handed back is not a play.
+    Instant-game plays also land a floor-ticker row here, so the hub's
+    Recent action section can never disagree with the stats.
     """
     from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
     from bot_modules.economy.quests import iso_week_for  # noqa: PLC0415
 
+    if game in TICKER_GAMES:
+        record_ticker(conn, guild_id, user_id, game, stake, payout, now=now)
     streak = casino_logic.next_streak(
         int(
             (

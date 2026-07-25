@@ -490,6 +490,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "jackpot_enabled": s.jackpot_enabled,
         "jackpot_cut_pct": s.jackpot_cut_pct,
         "jackpot_seed": s.jackpot_seed,
+        "broadcast_min_payout": s.broadcast_min_payout,
     }
 
 
@@ -3817,10 +3818,14 @@ class CasinoConfigUpdate(BaseModel):
     derby_enabled: bool | None = None
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
     derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
-    blackjack_idle_seconds: int | None = Field(default=None, ge=30, le=3600)
+    # Capped at 840s: an ephemeral hand message is editable only through
+    # its interaction webhook, whose token Discord expires after 15 min —
+    # a longer idle window would auto-stand hands nobody can repaint.
+    blackjack_idle_seconds: int | None = Field(default=None, ge=30, le=840)
     jackpot_enabled: bool | None = None
     jackpot_cut_pct: int | None = Field(default=None, ge=0, le=100)
     jackpot_seed: int | None = Field(default=None, ge=0, le=1_000_000)
+    broadcast_min_payout: int | None = Field(default=None, ge=0, le=10_000_000)
 
 
 @router.put("/config/casino")

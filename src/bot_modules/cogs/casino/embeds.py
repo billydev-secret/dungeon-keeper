@@ -75,12 +75,29 @@ def _pot_line(pot_after: int) -> str:
     return f"💰 The loss feeds the jackpot — now **{pot_after:,}**."
 
 
+_TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏"}
+
+
+def ticker_line(user_id: int, game: str, stake: int, payout: int) -> str:
+    """One compact floor-ticker entry (embed mentions never ping)."""
+    if payout > stake:
+        result = f"**{payout:,}**"
+    elif payout == stake and payout > 0:
+        result = "push"
+    elif payout > 0:
+        result = f"{payout:,} back"
+    else:
+        result = "the house"
+    return f"{_TICKER_EMOJI.get(game, '🎲')} <@{user_id}> · {stake:,} → {result}"
+
+
 def build_hub_embed(
     econ: EconSettings,
     settings: CasinoSettings,
     accent: discord.Color | None,
     *,
     jackpot: int | None = None,
+    ticker: list[tuple[int, str, int, int]] | None = None,
     casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     open_lines = [
@@ -109,6 +126,15 @@ def build_hub_embed(
                 f"Currently {_coins(econ, jackpot)} — every lost bet feeds "
                 "it, and triple 7️⃣ on the slots takes it ALL.\n​"
             ),
+            inline=False,
+        )
+    if ticker:
+        embed.add_field(
+            name="📡 On the floor",
+            value="\n".join(
+                ticker_line(uid, game, stake, payout)
+                for uid, game, stake, payout in ticker
+            ) + "\n​",
             inline=False,
         )
     limits = [f"Bets: **{settings.min_bet:,}**–**{settings.max_bet:,}**"

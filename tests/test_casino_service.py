@@ -974,3 +974,72 @@ def test_owner_pressing_hit_still_resets_the_idle_clock(db):
             "SELECT last_action_at FROM casino_blackjack_hands WHERE id = ?", (hand_id,)
         ).fetchone()["last_action_at"]
         assert after == NOW + 120
+
+
+# ── the floor ticker (hub panel "On the floor" section) ────────────────
+
+
+def test_ticker_rows_land_via_instant_settle_paths(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        svc.settle_coinflip(conn, GUILD, A, 10, "heads", "heads", now=NOW)
+        svc.settle_slots(conn, GUILD, A, 20, ("🌻", "🍀", "🐝"), now=NOW + 1)
+        hand_id = _deal(conn, stake=30)
+        svc.settle_blackjack_hand(conn, hand_id, 60, "win", now=NOW + 2)
+        rows = svc.recent_ticker(conn, GUILD)
+    # newest first, one row per resolved play
+    assert [
+        (int(r["user_id"]), str(r["game"]), int(r["stake"]), int(r["payout"]))
+        for r in rows
+    ] == [
+        (A, "blackjack", 30, 60),
+        (A, "slots", 20, 0),
+        (A, "coinflip", 10, 19),
+    ]
+
+
+def test_ticker_skips_communal_games_and_refunds(db):
+    with open_db(db) as conn:
+        _fund(conn, A, 1_000)
+        # roulette settles through record_play too, but stays off the
+        # ticker — the round recap is already public
+        round_id = _open_round(conn)
+        svc.place_roulette_bet(conn, round_id, A, "red", 0, 10, now=NOW + 1)
+        svc.settle_roulette_round(conn, round_id, 3, now=NOW + 45)
+        # a boot-sweep refund is not a play, so it can't be floor news
+        hand_id = _deal(conn, stake=20)
+        assert hand_id and svc.refund_live_blackjack_hands(conn, now=NOW)
+        assert svc.recent_ticker(conn, GUILD) == []
+
+
+def test_ticker_trims_to_keep_and_respects_limit(db):
+    with open_db(db) as conn:
+        for i in range(svc.TICKER_KEEP + 7):
+            svc.record_ticker(
+                conn, GUILD, A, "slots", 5, i, now=NOW + i
+            )
+        total = conn.execute(
+            "SELECT COUNT(*) AS n FROM casino_ticker WHERE guild_id = ?",
+            (GUILD,),
+        ).fetchone()["n"]
+        assert int(total) == svc.TICKER_KEEP
+        rows = svc.recent_ticker(conn, GUILD, limit=3)
+    assert [int(r["payout"]) for r in rows] == [
+        svc.TICKER_KEEP + 6, svc.TICKER_KEEP + 5, svc.TICKER_KEEP + 4,
+    ]
+
+
+def test_ticker_is_per_guild(db):
+    other = GUILD + 1
+    with open_db(db) as conn:
+        svc.record_ticker(conn, GUILD, A, "slots", 5, 0, now=NOW)
+        svc.record_ticker(conn, other, B, "coinflip", 7, 13, now=NOW)
+        assert [int(r["user_id"]) for r in svc.recent_ticker(conn, GUILD)] == [A]
+        assert [int(r["user_id"]) for r in svc.recent_ticker(conn, other)] == [B]
+
+
+def test_broadcast_min_payout_defaults_off_and_roundtrips(db):
+    with open_db(db) as conn:
+        assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 0
+        svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 500})
+        assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 500

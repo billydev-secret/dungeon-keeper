@@ -199,3 +199,32 @@ def test_update_casino_jackpot_knobs_roundtrip_and_bounds(authed_client, fake_ct
         ).status_code
         == 422
     )
+
+
+def test_update_casino_broadcast_threshold_roundtrip_and_bounds(
+    authed_client, fake_ctx
+):
+    resp = authed_client.put(
+        "/api/config/casino", json={"broadcast_min_payout": 750}
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        assert load_casino_settings(conn, fake_ctx.guild_id).broadcast_min_payout == 750
+    resp = authed_client.get("/api/config")
+    assert resp.json()["casino"]["broadcast_min_payout"] == 750
+    assert authed_client.put(
+        "/api/config/casino", json={"broadcast_min_payout": -1}
+    ).status_code == 422
+
+
+def test_update_casino_blackjack_idle_capped_at_webhook_ttl(authed_client):
+    """Ephemeral hand messages are editable for 15 minutes only — the
+    dashboard must refuse an idle window the auto-stand can't repaint."""
+    ok = authed_client.put(
+        "/api/config/casino", json={"blackjack_idle_seconds": 840}
+    )
+    assert ok.status_code == 200
+    too_long = authed_client.put(
+        "/api/config/casino", json={"blackjack_idle_seconds": 900}
+    )
+    assert too_long.status_code == 422
