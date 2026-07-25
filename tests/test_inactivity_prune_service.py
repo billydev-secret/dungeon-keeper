@@ -138,11 +138,11 @@ async def test_run_prune_records_role_prune_events(tmp_path):
     from bot_modules.core.db_utils import open_db
     from bot_modules.services.inactivity_prune_service import run_prune_for_guild
     from bot_modules.services.role_grant_audit_service import get_open_prune_events
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
     guild_id, role_id, days = 12345, 555, 30
     db_path = tmp_path / "prune.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
 
     def make_member(uid):
         m = MagicMock()

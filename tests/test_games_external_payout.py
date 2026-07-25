@@ -16,7 +16,7 @@ import pytest
 
 from bot_modules.cogs.games_external_cog import GamesExternalCog
 from bot_modules.services.games_db import GamesDb
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD, CHAN, GAMEBOT = 111, 900, 620307267241377793
 ALICE, BOB, CAROL = 11, 22, 33
@@ -60,7 +60,7 @@ def _over_message():
 @pytest.fixture
 def gdb(tmp_path):
     db_path = tmp_path / "t.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return GamesDb(db_path)
 
 

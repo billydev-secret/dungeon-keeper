@@ -15,14 +15,14 @@ import discord
 from bot_modules.core.app_context import AppContext
 from bot_modules.core.db_utils import open_db, set_config_value as _db_set
 from bot_modules.jail.apply import apply_jail, check_jail_preconditions
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
 def _make_ctx(db_path, *, guild_id: int = 100) -> AppContext:
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return AppContext(
         bot=MagicMock(),
         log=logging.getLogger("test"),

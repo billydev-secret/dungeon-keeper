@@ -23,7 +23,7 @@ from bot_modules.services.economy_metrics_service import (
     latest_median_income,
 )
 from bot_modules.services.economy_service import EconSettings
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 700
 USER = 2001
@@ -38,7 +38,7 @@ NOW = 1_800_000_000.0
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

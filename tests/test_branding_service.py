@@ -15,7 +15,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import branding_service as bs
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 4242
 OTHER = 5353
@@ -24,7 +24,7 @@ OTHER = 5353
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "branding.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

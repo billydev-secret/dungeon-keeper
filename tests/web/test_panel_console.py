@@ -49,7 +49,7 @@ from mobile_layout_scan import (  # noqa: E402
     serve,
 )
 
-from migrations import apply_migrations_sync  # noqa: E402
+from tests.db_template import migrated_db  # noqa: E402
 
 
 def _chromium_available() -> bool:
@@ -93,7 +93,7 @@ def _free_port() -> int:
 class _Server:
     def __init__(self, tmp: Path):
         db = tmp / "console.db"
-        apply_migrations_sync(db)
+        migrated_db(db)
         self.port = _free_port()
         self._server = serve(db, self.port)
         self.base = f"http://127.0.0.1:{self.port}"

@@ -455,9 +455,9 @@ LEVEL5_LOG_CHANNEL = 5050
 def _seed_member_with_migrations(
     db_path: Path, *, total_xp: float, level: int, announced_level: int
 ):
-    from migrations import apply_migrations_sync
+    from tests.db_template import migrated_db
 
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO member_xp (guild_id, user_id, total_xp, level, announced_level) "

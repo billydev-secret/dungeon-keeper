@@ -16,7 +16,7 @@ from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services.greeting_watch_loop import _load_settings, _process_guild
 from bot_modules.services.greeting_watch_service import record_greeting
 from bot_modules.services.interaction_graph import record_interactions
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 1000
 CHANNEL = 2000
@@ -28,7 +28,7 @@ NOTIFY_B = 4002
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "gw.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

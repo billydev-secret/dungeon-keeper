@@ -29,7 +29,7 @@ from bot_modules.services.role_grant_audit_service import (
     resolve_grant_audit_buckets,
     save_card_ref,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD_ID = 12345
 ROLE_ID = 555
@@ -44,7 +44,7 @@ class FakeActivity:
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "audit.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

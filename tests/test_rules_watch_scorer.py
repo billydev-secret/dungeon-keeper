@@ -18,7 +18,7 @@ from bot_modules.rules_watch.scorer import (
     check_boundary_token,
     detect_boundary_crossing,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 123
 CHANNEL = 456
@@ -32,7 +32,7 @@ BASE_TS = 1_700_000_000
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

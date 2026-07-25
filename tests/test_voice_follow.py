@@ -10,7 +10,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.voice_follow import record_voice_follow
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 1000
 CHAN = 42
@@ -19,7 +19,7 @@ CHAN = 42
 @pytest.fixture
 def db_conn(tmp_path):
     path = tmp_path / "vf.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         yield conn
 

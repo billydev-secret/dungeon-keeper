@@ -18,7 +18,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import wellness_service as ws
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Shared fixtures ──────────────────────────────────────────────────
@@ -28,7 +28,7 @@ from migrations import apply_migrations_sync
 def db_conn(tmp_path):
     """A migrated SQLite connection with wellness_* tables initialised."""
     path = tmp_path / "ws.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         ws.init_wellness_tables(conn)
         yield conn

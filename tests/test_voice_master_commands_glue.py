@@ -22,7 +22,7 @@ from bot_modules.services.voice_master_service import (
     load_profile,
     set_voice_master_config_value,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from tests.fakes import fake_interaction
 
 GUILD = 9002
@@ -48,7 +48,7 @@ def _stub_accent_color(monkeypatch):
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "vm_glue.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

@@ -16,7 +16,7 @@ if str(_ROOT) not in sys.path:
 import aiosqlite
 
 from bot_modules.core.config import Config
-from migrations import apply_migrations, apply_migrations_sync
+from tests.db_template import migrated_db, reap
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction as _fake_interaction
 
 
@@ -56,13 +56,25 @@ def _reset_shared_module_state():
     _clear()
 
 
+@pytest.fixture(autouse=True)
+def _reap_template_dbs():
+    """Delete every template-copied DB (and WAL sidecars) after each test.
+
+    tmp_path retention only prunes *previous* sessions, so without this each
+    of the thousands of per-test DBs (plus -wal/-shm sidecars) survives the
+    whole run — the inode/disk churn that once exhausted the remote runner.
+    Autouse fixtures tear down last, so test-owned connections close first.
+    """
+    yield
+    reap()
+
+
 @pytest_asyncio.fixture
 async def temp_db(tmp_path):
     """Open an aiosqlite connection with the full schema applied."""
-    path = tmp_path / "test.db"
+    path = migrated_db(tmp_path / "test.db")
     db = await aiosqlite.connect(str(path))
     db.row_factory = aiosqlite.Row
-    await apply_migrations(db)
     yield db
     await db.close()
 
@@ -115,6 +127,4 @@ def sync_db_path(tmp_path: Path) -> Path:
 
     Use in tests that call open_db() directly (sync sqlite3 code).
     """
-    db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
-    return db_path
+    return migrated_db(tmp_path / "test.db")

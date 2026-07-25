@@ -20,7 +20,7 @@ from bot_modules.games.utils.game_manager import (
 from bot_modules.services.economy_quests_service import create_quest, set_quest_active
 from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.games_db import GamesDb
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from tests.fakes import FakeGuild
 
 GUILD = 4242
@@ -121,7 +121,7 @@ class _Bot:
 @pytest.fixture
 def db_path(tmp_path):
     p = tmp_path / "test.db"
-    apply_migrations_sync(p)
+    migrated_db(p)
     return p
 
 

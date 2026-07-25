@@ -6,7 +6,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.role_menus import db as menus_db
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 123
 
@@ -14,7 +14,7 @@ GUILD = 123
 @pytest.fixture
 def conn(tmp_path):
     db_path = tmp_path / "role_menus.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     with open_db(db_path) as c:
         yield c
 

@@ -6,7 +6,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.todo_service import create_todo
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 123
 USER = 9001
@@ -15,7 +15,7 @@ USER = 9001
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

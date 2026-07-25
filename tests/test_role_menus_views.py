@@ -18,7 +18,7 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.role_menus import db as menus_db
 from bot_modules.role_menus.views import handle_menu_interaction
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from tests.fakes import fake_interaction
 
 GUILD_ID = 123
@@ -89,7 +89,7 @@ def make_member(*roles):
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "views.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

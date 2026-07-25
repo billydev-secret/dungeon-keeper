@@ -21,7 +21,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     save_econ_settings,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 800
 CHAN = 9100
@@ -32,7 +32,7 @@ NOW = 1_800_000_000.0
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         save_econ_settings(conn, GUILD, {"enabled": True})
         svc.save_casino_settings(conn, GUILD, {"channel_id": CHAN})
@@ -59,7 +59,7 @@ def _kinds(conn, user_id):
 
 def test_settings_default_dark(tmp_path):
     path = tmp_path / "fresh.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         s = svc.load_casino_settings(conn, GUILD)
     assert s == svc.DEFAULT_CASINO_SETTINGS

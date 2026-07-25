@@ -12,7 +12,7 @@ from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.inactive.store import create_inactive
 from bot_modules.services import promotion_review_service as svc
 from bot_modules.services.role_grant_audit_service import record_prune_events
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 42
 ROLE = 900  # a role a sweep pruned
@@ -24,7 +24,7 @@ SLEEPER_CHANNEL = 777  # inactive_channel_id
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "promo.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

@@ -35,7 +35,7 @@ from bot_modules.services.chat_revive_service import (
     save_guild_config,
     seed_starter_pack,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GID, CID = 100, 200
 
@@ -43,7 +43,7 @@ GID, CID = 100, 200
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

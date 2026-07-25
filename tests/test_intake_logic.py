@@ -13,7 +13,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import intake_service as svc
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 42
 NEWCOMER = 7
@@ -33,7 +33,7 @@ CUSTOM_STEPS = [
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "intake.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

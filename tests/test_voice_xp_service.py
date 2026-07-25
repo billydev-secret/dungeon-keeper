@@ -15,7 +15,7 @@ from bot_modules.services.voice_xp_service import (
     VOICE_LOGIN_MIN_SECONDS,
     process_voice_xp_tick,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 VOICE_GID = 555
 VOICE_UID = 91
@@ -25,7 +25,7 @@ CHANNEL_ID = 300
 @pytest.fixture
 def voice_db(tmp_path):
     db_path = tmp_path / "voice.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

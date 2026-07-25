@@ -28,7 +28,7 @@ from bot_modules.inactive.store import (
     get_active_inactive,
     reactivate_inactive,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 INACTIVE_ROLE_ID = 555
 
@@ -37,7 +37,7 @@ INACTIVE_ROLE_ID = 555
 
 
 def _make_ctx(db_path, *, guild_id: int = 100) -> AppContext:
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return AppContext(
         bot=MagicMock(),
         log=logging.getLogger("test"),

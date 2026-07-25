@@ -30,7 +30,7 @@ from bot_modules.services.economy_wager_service import (
     settle,
     staked_players,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 700
 A, B, C = 2001, 2002, 2003
@@ -42,7 +42,7 @@ NOW = 1_800_000_000.0
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

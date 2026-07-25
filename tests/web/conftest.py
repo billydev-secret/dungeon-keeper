@@ -14,7 +14,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from bot_modules.core.db_utils import open_db
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from web_server.auth import DiscordOAuthAuth, OpenAuth, SESSION_COOKIE
 from web_server.deps import invalidate_report_cache
 from web_server.server import create_app
@@ -51,9 +51,7 @@ class FakeCtx:
 @pytest.fixture
 def web_db(tmp_path) -> Path:
     """A fresh SQLite database with full schema applied."""
-    db_path = tmp_path / "web_test.db"
-    apply_migrations_sync(db_path)
-    return db_path
+    return migrated_db(tmp_path / "web_test.db")
 
 
 @pytest.fixture

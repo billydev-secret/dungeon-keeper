@@ -23,7 +23,7 @@ from bot_modules.services.qa_service import (
     get_test,
     save_qa_settings,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 from tests.fakes import FakeGuild, fake_interaction
 
 GUILD_ID = 9001
@@ -34,7 +34,7 @@ USER_ID = 500
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 

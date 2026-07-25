@@ -8,7 +8,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.interaction_graph import init_interaction_tables, record_interactions
 from bot_modules.services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
 from bot_modules.services.reports_data import get_animated_heatmap_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_one_sided_attention_data
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 @pytest.fixture
@@ -112,7 +112,7 @@ def test_rejoin_pairs_correctly(conn):
 def ig_conn(tmp_path):
     """Migrated DB with interaction tables — for the interaction-graph report."""
     path = tmp_path / "ig.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as c:
         init_interaction_tables(c)
         yield c

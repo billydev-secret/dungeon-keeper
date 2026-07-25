@@ -28,7 +28,7 @@ from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 800
 A, B, C, MOD = 3001, 3002, 3003, 9001
@@ -48,7 +48,7 @@ SETTINGS = EconSettings(
 @pytest.fixture
 def db(tmp_path):
     path = tmp_path / "test.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

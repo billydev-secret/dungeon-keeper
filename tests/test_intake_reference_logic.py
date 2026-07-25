@@ -16,7 +16,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import intake_reference_service as ref
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 42
 
@@ -29,7 +29,7 @@ BLOCKS = [
 @pytest.fixture
 def db_path(tmp_path):
     path = tmp_path / "ref.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     return path
 
 

@@ -6,7 +6,7 @@ import pytest
 
 from bot_modules.games_external import logic
 from bot_modules.services.games_db import GamesDb
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 GUILD = 111
 CHAN_A, CHAN_B = 201, 202
@@ -16,7 +16,7 @@ GAMEBOT, CATBOT = 620307267241377793, 966695034340663367
 @pytest.fixture
 def gdb(tmp_path):
     db_path = tmp_path / "test.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return GamesDb(db_path)
 
 

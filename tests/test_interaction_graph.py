@@ -26,7 +26,7 @@ from bot_modules.services.interaction_graph import (
     render_connection_web,
     render_interaction_heatmap,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Label sanitization ───────────────────────────────────────────────
@@ -72,7 +72,7 @@ def test_wrap_label_breaks_on_underscores():
 def db_conn(tmp_path):
     """A migrated DB connection ready for interaction-graph tests."""
     path = tmp_path / "ig.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         init_interaction_tables(conn)
         yield conn
@@ -81,7 +81,7 @@ def db_conn(tmp_path):
 def test_init_interaction_tables_is_idempotent(tmp_path):
     """init can be called many times without error."""
     path = tmp_path / "ig.db"
-    apply_migrations_sync(path)
+    migrated_db(path)
     with open_db(path) as conn:
         init_interaction_tables(conn)
         init_interaction_tables(conn)

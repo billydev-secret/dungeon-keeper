@@ -20,7 +20,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     save_econ_settings,
 )
-from migrations import apply_migrations_sync
+from tests.db_template import migrated_db
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -898,7 +898,7 @@ ECON_CHANNEL = 88
 @pytest.fixture
 def econ_db(tmp_path):
     db_path = tmp_path / "econ.db"
-    apply_migrations_sync(db_path)
+    migrated_db(db_path)
     return db_path
 
 
