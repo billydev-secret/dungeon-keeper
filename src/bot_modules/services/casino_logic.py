@@ -381,8 +381,11 @@ def baccarat_total(cards: list[str]) -> int:
     return sum(baccarat_card_value(c) for c in cards) % 10
 
 
-def _draw_baccarat_card() -> str:
-    """One card from the infinite shoe (rank uniform over 13, suit cosmetic)."""
+def _draw_shoe_card() -> str:
+    """One card from the infinite shoe (rank uniform over 13, suit cosmetic).
+
+    Shared by baccarat and war — both use the no-removal shoe model so
+    their RTP tests are exact enumerations over independent draws."""
     return random.choice(_RANKS) + random.choice(_SUITS)
 
 
@@ -410,7 +413,7 @@ def deal_baccarat() -> tuple[list[str], list[str]]:
     cards: list[str] = []
 
     def draw() -> int:
-        card = _draw_baccarat_card()
+        card = _draw_shoe_card()
         cards.append(card)
         return baccarat_card_value(card)
 
@@ -541,3 +544,62 @@ def describe_sicbo_bet(bet_type: str) -> str:
 def dice_faces(dice: tuple[int, int, int]) -> str:
     """"⚃ ⚅ ⚀" — the roll as die faces."""
     return " ".join(DICE_FACES[d] for d in dice)
+
+
+# ── Casino War ─────────────────────────────────────────────────────────
+#
+# One card each, high card wins even money — the fastest game in the
+# canon. On the ~1/13 tie the member chooses: **go to war** (stake a
+# matching raise; win OR tie the war card and the raise pays even while
+# the original pushes — 3× total return on the doubled stake) or
+# **retreat** (surrender half). Cards come from the infinite shoe (rank
+# uniform /13, the baccarat model), so the RTP is exact: always-war
+# 177/182 ≈ 97.25%, always-retreat 25/26 ≈ 96.15% — both in band, war
+# strictly better, no Tie side bet (its ~19% edge has no place here).
+
+WAR_ACTIONS = ("war", "retreat")
+
+
+def war_rank(card: str) -> int:
+    """Aces high, suits meaningless: 2 → 2 … K → 13, A → 14."""
+    rank = card[:-1]
+    if rank == "A":
+        return 14
+    if rank == "J":
+        return 11
+    if rank == "Q":
+        return 12
+    if rank == "K":
+        return 13
+    return int(rank)
+
+
+def draw_war_cards() -> tuple[str, str]:
+    """(member's card, dealer's card) from the infinite shoe."""
+    return _draw_shoe_card(), _draw_shoe_card()
+
+
+def war_payout(player: str, dealer: str, stake: int) -> int | None:
+    """Total return for the opening cards — None means a tie (the member
+    chooses war or retreat; nothing settles yet)."""
+    if war_rank(player) > war_rank(dealer):
+        return stake * 2
+    if war_rank(player) < war_rank(dealer):
+        return 0
+    return None
+
+
+def war_raise_payout(player: str, dealer: str, doubled_stake: int) -> int:
+    """Total return once the war cards land, on the doubled stake.
+
+    A win **or second tie** takes it: the raise pays even money and the
+    original pushes — 3× the original bet, which is exactly 3/2 of the
+    doubled stake."""
+    if war_rank(player) >= war_rank(dealer):
+        return doubled_stake * 3 // 2
+    return 0
+
+
+def war_retreat_payout(stake: int) -> int:
+    """Retreat surrenders half (floored — the house keeps the odd coin)."""
+    return stake // 2

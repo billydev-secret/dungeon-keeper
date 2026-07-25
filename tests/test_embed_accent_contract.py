@@ -468,6 +468,15 @@ CASES = [
         ),
         discord.Color(services_embeds.COLOR_GOLD),
     ),
+    case(
+        # The live standoff (outcome=None) is the accent-colored state;
+        # win/lose verdicts are semantic and tested in the embeds file.
+        "casino.war_standoff",
+        lambda **kw: casino_embeds.build_war_embed(
+            _econ_settings(), 1, "7♠", "7♦", 10, kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
     # ── welcome / leave (member arg is constructed mock data) ───────────
     case(
         "welcome.join",

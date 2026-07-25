@@ -5,10 +5,10 @@ House gambling games staking the guild currency in one admin-configured
 the Meadow Derby joined 2026-07-24 (plan:
 [plans/casino-derby.md](plans/casino-derby.md)); the ephemeral-play UX
 landed 2026-07-24 (plan:
-[plans/casino-ephemeral-ux.md](plans/casino-ephemeral-ux.md)); Baccarat and
-Dice (Sic Bo) joined 2026-07-25 (plan:
+[plans/casino-ephemeral-ux.md](plans/casino-ephemeral-ux.md)); Baccarat,
+Dice (Sic Bo) and War joined 2026-07-25 (plan:
 [plans/casino-classics-and-prediction-market.md](
-plans/casino-classics-and-prediction-market.md), Stages 1a–1b). Sunny-meadow
+plans/casino-classics-and-prediction-market.md), Stages 1a–1c). Sunny-meadow
 theming over an unmistakably Vegas core.
 
 **The casino's name is per-guild branding**, not a constant: it comes from
@@ -26,8 +26,8 @@ jackpot embed titles interpolate the configured name directly.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
-🏇 Derby · 🎴 Baccarat · 🎲 Dice · ❓ How It Works); every flow is buttons
-+ amount modals.
+🏇 Derby · 🎴 Baccarat · 🎲 Dice · ⚔️ War · ❓ How It Works); every flow is
+buttons + amount modals.
 
 **Private play, public moments** (2026-07-24; before this, every result was
 its own public message and heavy slots play scrolled the channel non-stop,
@@ -120,7 +120,7 @@ All movement goes through `services/casino_service.py`:
 | `channel_id` | 0 | **Master switch** — 0 = casino closed (ships dark) |
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
-| `{game}_enabled` ×7 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
+| `{game}_enabled` ×8 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
@@ -128,7 +128,7 @@ All movement goes through `services/casino_service.py`:
 | `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
 | `baccarat_window_seconds` | 45 | baccarat betting window (bounds 15–600) |
 | `dice_window_seconds` | 45 | dice betting window (bounds 15–600) |
-| `blackjack_idle_seconds` | 180 | idle hand auto-stands (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
+| `blackjack_idle_seconds` | 180 | idle hand auto-stands **and idle War standoffs auto-resolve** — one table-idle knob, not two (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
 | `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
@@ -213,6 +213,27 @@ guild's casino name, which is edited on **Config → Branding**
   as JSON `[d1, d2, d3]` in the round's `result` column; one tumble frame,
   then die-face verdict (a triple names the sweep). Recap carries
   🎲 Next Roll.
+- **War** (plan: [plans/casino-classics-and-prediction-market.md](
+  plans/casino-classics-and-prediction-market.md) Stage 1c) — one card
+  each from the infinite shoe, aces high, high card pays even money. 12 of
+  13 plays settle instantly (ephemeral result + 🔁 Battle again, on the
+  floor ticker via `TICKER_GAMES`) and never persist a row; the ~1/13 tie
+  opens a **live decision** row (`casino_war_hands`, the blackjack shape:
+  one live decision per member via partial unique index, exactly-once
+  `settled_at IS NULL` settlement, in-transaction claims with ownership,
+  the raise derived from the row never the caller). **Go to War** debits a
+  matching raise (bet limits waived like the double-down; daily cap and
+  funds still apply) and one more card each decides: win **or second tie**
+  pays 3× the original (the raise pays even, the original pushes); lose
+  and both stakes fall. **Retreat** surrenders half (floored). No Tie side
+  bet — its ~19% edge has no place here. Pinned exact RTPs: always-war
+  **177/182 ≈ 97.25%**, always-retreat 25/26 ≈ 96.15% — war is strictly
+  better, so the idle sweep (same `blackjack_idle_seconds` clock)
+  **defaults to war, falling back to retreat** when the raise can't be
+  debited; boot sweeps refund pending standoffs, and a leaver's pending
+  standoff refunds via `refund_member_live_stakes`. The retreat's partial
+  return means the jackpot feeds on the **lost portion** of the stake
+  (`stake − payout`), not only total losses.
 
 Every terminal path settles or refunds, exactly-once via
 `settled_at IS NULL` / `status='open'` claims — a stake can never evaporate

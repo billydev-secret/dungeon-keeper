@@ -266,6 +266,56 @@ def test_dice_result_triple_names_the_sweep():
     assert "sweeps every bet" in embed.description
 
 
+# ── war result cards ───────────────────────────────────────────────────
+
+
+def _war(**kw) -> discord.Embed:
+    from bot_modules.cogs.casino.embeds import build_war_embed
+
+    args = dict(player="K♠", dealer="5♦", stake=10)
+    args.update(kw)
+    return build_war_embed(
+        _ECON, 42, args["player"], args["dealer"], args["stake"], None,
+        **{k: v for k, v in args.items() if k not in ("player", "dealer", "stake")},
+    )
+
+
+def test_war_win_is_green_and_loss_is_red():
+    assert _war(outcome="win", payout=20).color == discord.Color(COLOR_GREEN)
+    assert _war(outcome="lose", payout=0).color == discord.Color(COLOR_RED)
+    assert _war(
+        outcome="war_win", payout=30, stake=20,
+        war_player="9♠", war_dealer="5♦",
+    ).color == discord.Color(COLOR_GREEN)
+    assert _war(
+        outcome="war_lose", payout=0, stake=20,
+        war_player="2♠", war_dealer="9♦",
+    ).color == discord.Color(COLOR_RED)
+
+
+def test_war_retreat_is_neutral_not_red():
+    embed = _war(player="7♠", dealer="7♦", outcome="retreat", payout=5)
+    assert embed.color != discord.Color(COLOR_RED)
+    assert embed.color != discord.Color(COLOR_GREEN)
+
+
+def test_war_standoff_shows_the_decision_not_a_verdict():
+    embed = _war(player="7♠", dealer="7♦")
+    names = [f.name for f in embed.fields]
+    assert "A standoff!" in names and "Result" not in names
+    assert embed.color != discord.Color(COLOR_GREEN)
+    assert embed.color != discord.Color(COLOR_RED)
+
+
+def test_war_result_shows_war_cards_when_drawn():
+    embed = _war(
+        player="7♠", dealer="7♦", outcome="war_win", payout=30, stake=20,
+        war_player="9♠", war_dealer="5♦",
+    )
+    assert embed.description is not None
+    assert "9♠" in embed.description and "5♦" in embed.description
+
+
 # ── the hub panel's "Today at the tables" standings ────────────────────
 
 

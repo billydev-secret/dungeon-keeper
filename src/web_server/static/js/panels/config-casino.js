@@ -147,6 +147,7 @@ export function mount(container) {
       checkbox("derby_enabled", c.derby_enabled !== false, "Derby"),
       checkbox("baccarat_enabled", c.baccarat_enabled !== false, "Baccarat"),
       checkbox("dice_enabled", c.dice_enabled !== false, "Dice"),
+      checkbox("war_enabled", c.war_enabled !== false, "War"),
     );
     cardTables.appendChild(field(
       "Open Tables", tables,
@@ -205,9 +206,9 @@ export function mount(container) {
     cardTiming.appendChild(field(
       "Blackjack Idle Timeout (seconds)",
       numInput("blackjack_idle_seconds", Math.min(c.blackjack_idle_seconds ?? 180, 840), 30, "1", 840),
-      "A hand nobody touches for this long stands automatically so the table " +
-        "frees up. Between 30 and 840 seconds (private hand messages can only " +
-        "be updated for 14 minutes).",
+      "A blackjack hand or War standoff nobody touches for this long " +
+        "resolves automatically so the table frees up. Between 30 and 840 " +
+        "seconds (private hand messages can only be updated for 14 minutes).",
     ));
 
     const cardFloor = card("Casino Floor");
@@ -275,6 +276,7 @@ export function mount(container) {
           derby_enabled: fd.has("derby_enabled"),
           baccarat_enabled: fd.has("baccarat_enabled"),
           dice_enabled: fd.has("dice_enabled"),
+          war_enabled: fd.has("war_enabled"),
           jackpot_enabled: fd.has("jackpot_enabled"),
         });
         showStatus(statusEl, true);

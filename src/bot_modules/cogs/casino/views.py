@@ -98,6 +98,8 @@ class BetModal(discord.ui.Modal):
             await cog.play_slots(interaction, amount)
         elif self.game == "blackjack":
             await cog.deal_blackjack(interaction, amount)
+        elif self.game == "war":
+            await cog.play_war(interaction, amount)
 
 
 _ROULETTE_KINDS = {
@@ -373,6 +375,17 @@ class CasinoHubView(discord.ui.View):
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
             await cog.open_dice(interaction)
+
+    @discord.ui.button(
+        label="War", emoji="⚔️",
+        style=discord.ButtonStyle.primary, custom_id="casino:war", row=1,
+    )
+    async def war(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_bet_modal(interaction, "war")
 
     @discord.ui.button(
         label="My Stats", emoji="📊",
@@ -715,19 +728,65 @@ class DiceNextView(discord.ui.View):
             await cog.open_dice(interaction)
 
 
+# ── war standoff buttons ───────────────────────────────────────────────
+
+_WAR_STYLES = {
+    "war": ("Go to War", "⚔️", discord.ButtonStyle.danger),
+    "retreat": ("Retreat", "🏳️", discord.ButtonStyle.secondary),
+}
+
+
+class WarActionButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_wr:(?P<action>war|retreat):(?P<hid>\d+)"),
+):
+    def __init__(self, action: str, hand_id: int) -> None:
+        label, emoji, style = _WAR_STYLES[action]
+        super().__init__(
+            discord.ui.Button(
+                label=label, emoji=emoji, style=style,
+                custom_id=f"casino_wr:{action}:{hand_id}",
+            )
+        )
+        self.action = action
+        self.hand_id = hand_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WarActionButton:
+        return cls(match["action"], int(match["hid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.war_action(interaction, self.hand_id, self.action)
+
+
+def build_war_view(hand_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(WarActionButton("war", hand_id))
+    view.add_item(WarActionButton("retreat", hand_id))
+    return view
+
+
 # ── the loop-closers: Play Again / Next Round ──────────────────────────
 
 _AGAIN_LABELS = {
     "coinflip": "Flip again",
     "slots": "Spin again",
     "blackjack": "Deal again",
+    "war": "Battle again",
 }
 
 
 class PlayAgainButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(
-        r"casino_again:(?P<game>coinflip|slots|blackjack)"
+        r"casino_again:(?P<game>coinflip|slots|blackjack|war)"
         r":(?P<side>heads|tails|x):(?P<amt>\d+)"
     ),
 ):
@@ -768,6 +827,8 @@ class PlayAgainButton(
             await cog.play_coinflip(interaction, self.side, self.amount)
         elif self.game == "slots":
             await cog.play_slots(interaction, self.amount)
+        elif self.game == "war":
+            await cog.play_war(interaction, self.amount)
         else:
             await cog.deal_blackjack(interaction, self.amount)
 

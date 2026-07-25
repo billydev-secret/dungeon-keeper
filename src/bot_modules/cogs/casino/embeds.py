@@ -44,6 +44,7 @@ _GAME_LINES = {
     "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
     "baccarat": "🎴 **Baccarat** — Player, Banker, or Tie; nearest to nine wins",
     "dice": "🎲 **Dice** — three dice, one roll; call Big, Small, Odd, or Even",
+    "war": "⚔️ **War** — one card each, high card wins; on a tie, go to war",
 }
 
 
@@ -77,7 +78,7 @@ def _pot_line(pot_after: int) -> str:
     return f"💰 The loss feeds the jackpot — now **{pot_after:,}**."
 
 
-_TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏"}
+_TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏", "war": "⚔️"}
 
 
 def ticker_line(user_id: int, game: str, stake: int, payout: int) -> str:
@@ -269,6 +270,18 @@ def build_help_embed(
                 "sweeps the table (~97% return). A betting window opens for "
                 f"{settings.dice_window_seconds}s, then one roll settles "
                 "everyone.\n​"
+            ),
+            inline=False,
+        )
+    if settings.war_enabled:
+        embed.add_field(
+            name="⚔️ War",
+            value=(
+                "One card each, aces high — the higher card pays **2×** on "
+                "the spot. A tie is a standoff: **go to war** (match your bet; "
+                "win *or tie* the next card for **3×** your original) or "
+                "**retreat** (half your bet back). ~97% return going to war — "
+                "always the braver *and* the better play.\n​"
             ),
             inline=False,
         )
@@ -963,6 +976,80 @@ def build_roll_running_note(closes_at: float, url: str | None = None) -> str:
     if url:
         return f"{note} Jump in and call it: {url}"
     return f"{note} Call it on the roll message above."
+
+
+# ── war (casino-classics Stage 1c) ─────────────────────────────────────
+
+_WAR_OUTCOME_LINES = {
+    "win": "**High card!**",
+    "lose": "The dealer's card stands taller.",
+    "war_win": "**Victory on the battlefield!**",
+    "war_lose": "The war is lost — both stakes fall.",
+    "retreat": "A tactical retreat — half the bet comes home:",
+    "refunded": "The table was reset — the bet came home.",
+}
+
+
+def build_war_embed(
+    econ: EconSettings,
+    user_id: int,
+    player: str,
+    dealer: str,
+    stake: int,
+    accent: discord.Color | None,
+    *,
+    war_player: str | None = None,
+    war_dealer: str | None = None,
+    outcome: str | None = None,
+    payout: int = 0,
+    streak: int = 0,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """One war play — instant verdict, the tie standoff, or its resolution.
+
+    Green only for genuine wins; retreat (a partial return) and a refund
+    stay on the accent; full losses go red.
+    """
+    live = outcome is None
+    if live or outcome in ("retreat", "refunded"):
+        color: discord.Color | int = _accent(accent)
+    elif payout > stake:
+        color = COLOR_GREEN
+    else:
+        color = COLOR_RED
+    lines = [
+        f"<@{user_id}> is in for {_coins(econ, stake)}",
+        f"Their card `{player}` · Dealer `{dealer}`",
+    ]
+    if war_player is not None and war_dealer is not None:
+        lines.append(f"⚔️ War cards — theirs `{war_player}` · dealer `{war_dealer}`")
+    embed = discord.Embed(
+        title="⚔️ Casino War",
+        description="\n".join(lines) + "\n​",
+        color=color,
+    )
+    if live:
+        embed.add_field(
+            name="A standoff!",
+            value=(
+                "Matched cards. **Go to War** doubles your stake — win *or "
+                "tie* the next card and take 3× your original bet — or "
+                "**Retreat** with half. Fortune favors the bold (and so do "
+                "the odds)."
+            ),
+            inline=False,
+        )
+    else:
+        line = _WAR_OUTCOME_LINES.get(outcome or "", "")
+        if payout > 0:
+            line = f"{line} {_coins(econ, payout)}."
+        if payout == 0 and pot_after > 0:
+            line = f"{line}\n{_pot_line(pot_after)}"
+        if outcome != "refunded":
+            line = _with_streak(line, econ, streak)
+        embed.add_field(name="Result", value=line, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed
 
 
 def build_my_stats_embed(

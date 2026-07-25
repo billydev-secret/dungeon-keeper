@@ -453,6 +453,69 @@ def test_sicbo_labels_and_faces():
     assert logic.dice_faces((1, 3, 6)) == "⚀ ⚂ ⚅"
 
 
+# ── war ────────────────────────────────────────────────────────────────
+
+
+def test_war_ranks_aces_high():
+    assert logic.war_rank("A♠") == 14
+    assert logic.war_rank("K♦") == 13
+    assert logic.war_rank("Q♥") == 12
+    assert logic.war_rank("J♣") == 11
+    assert logic.war_rank("10♠") == 10
+    assert logic.war_rank("2♠") == 2
+
+
+def test_war_payout_matrix():
+    assert logic.war_payout("A♠", "K♦", 10) == 20   # high card wins even
+    assert logic.war_payout("2♠", "3♦", 10) == 0
+    assert logic.war_payout("7♠", "7♦", 10) is None  # tie → member decides
+    # war round: win or SECOND tie takes 3× the original (on the doubled stake)
+    assert logic.war_raise_payout("9♠", "5♦", 20) == 30
+    assert logic.war_raise_payout("5♠", "5♦", 20) == 30
+    assert logic.war_raise_payout("4♠", "9♦", 20) == 0
+    assert logic.war_retreat_payout(10) == 5
+    assert logic.war_retreat_payout(11) == 5  # floored — the house keeps the odd coin
+
+
+def test_war_exact_rtp_pinned_for_both_strategies():
+    """Exact EV over the infinite shoe (13×13 first cards; 13×13 war cards
+    on a tie). Always-war returns 177/182 ≈ 97.25%; always-retreat 25/26 ≈
+    96.15% — both in band, and war strictly better, so the idle default
+    (war when affordable) never plays against the member."""
+    from fractions import Fraction
+
+    s = 26  # divisible by 2 — retreat floors nothing
+    n = Fraction(1, 13)
+    ranks = [logic.war_rank(r + "♠") for r in logic._RANKS]
+    ev_war = Fraction(0)
+    ev_retreat = Fraction(0)
+    wagered_war = Fraction(0)
+    for p in ranks:
+        for d in ranks:
+            prob = n * n
+            if p != d:
+                ret = 2 * s if p > d else 0
+                ev_war += prob * ret
+                ev_retreat += prob * ret
+                wagered_war += prob * s
+                continue
+            # tie: retreat takes half; war doubles and draws again
+            ev_retreat += prob * (s // 2)
+            wagered_war += prob * 2 * s
+            for wp in ranks:
+                for wd in ranks:
+                    if wp >= wd:
+                        ev_war += prob * n * n * 3 * s
+    assert ev_war / wagered_war == Fraction(177, 182)
+    assert ev_retreat / (s * 1) == Fraction(25, 26)
+    assert 0.93 <= 177 / 182 <= 0.975 and 0.93 <= 25 / 26 <= 0.975
+
+
+def test_draw_war_cards_uses_module_random(monkeypatch):
+    monkeypatch.setattr(logic.random, "choice", lambda seq: seq[0])
+    assert logic.draw_war_cards() == ("A♠", "A♠")
+
+
 # ── fancy round: streaks & thresholds ──────────────────────────────────
 
 

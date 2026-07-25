@@ -93,7 +93,7 @@ Each row is a standalone commit/merge with its own tests.
 - **EV test:** enumerate all 216 three-dice outcomes → assert each bet's RTP.
 - **Machinery:** windowed machine; animated 3-dice reveal like derby.
 
-### Stage 1c — War (per-member live hand)
+### Stage 1c — War (per-member live hand) — **built 2026-07-25**
 
 - **Mechanics:** member vs. house, one card each, high card wins 1:1. On a tie:
   **Go to War** (double stake, burn, one more card; the raise pays even, the

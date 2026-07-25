@@ -51,12 +51,14 @@ from bot_modules.cogs.casino.views import (
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
+    WarActionButton,
     build_baccarat_view,
     build_blackjack_view,
     build_derby_view,
     build_dice_view,
     build_hub_view,
     build_roulette_view,
+    build_war_view,
     play_again_view,
     safe_ephemeral,
 )
@@ -336,6 +338,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.bot = bot
         self.ctx = bot.ctx
         self._bj_locks: dict[int, asyncio.Lock] = {}
+        self._war_locks: dict[int, asyncio.Lock] = {}
         # Windowed-game close timers and debounced round-embed repaints,
         # keyed (game key, round id) since the two tables' row ids can
         # collide; plus panel resticks (one per guild). The repaint/restick
@@ -350,6 +353,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         # die with the process or their 15-minute webhook token, whichever
         # comes first; the settle itself never depends on them.
         self._bj_followups: dict[int, tuple[discord.Webhook, int, float]] = {}
+        # Same handle map for war's tie standoffs (their own id space).
+        self._war_followups: dict[int, tuple[discord.Webhook, int, float]] = {}
         # guild_id → configured casino channel, kept warm by ensure_panel so
         # the on_message restick gate never touches the DB.
         self._casino_channels: dict[int, int] = {}
@@ -371,7 +376,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.bot.add_view(DiceNextView())
         self.bot.add_dynamic_items(
             BlackjackActionButton, RouletteBetButton, DerbyBetButton,
-            BaccaratBetButton, DiceBetButton, PlayAgainButton,
+            BaccaratBetButton, DiceBetButton, WarActionButton,
+            PlayAgainButton,
         )
         self._boot_task = asyncio.create_task(self._boot())
         self.maintenance.start()
@@ -399,7 +405,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         ]:
             with self.ctx.open_db() as conn:
                 return (
-                    svc.refund_live_blackjack_hands(conn),
+                    svc.refund_live_blackjack_hands(conn)
+                    + svc.refund_live_war_hands(conn),
                     svc.open_roulette_rounds(conn),
                     svc.open_race_rounds(conn),
                     svc.open_baccarat_rounds(conn),
@@ -443,26 +450,40 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         here free.
         """
         cutoff = time.time() - _BJ_FOLLOWUP_TTL
-        for hand_id, (_, _, stored_at) in list(self._bj_followups.items()):
-            if stored_at < cutoff:  # webhook token expired — handle is dead
-                self._bj_followups.pop(hand_id, None)
+        for followups in (self._bj_followups, self._war_followups):
+            for hand_id, (_, _, stored_at) in list(followups.items()):
+                if stored_at < cutoff:  # webhook token expired — handle is dead
+                    followups.pop(hand_id, None)
 
         def _scan() -> tuple[
-            list[int], list[int], list[int], list[int], list[int],
+            list[int], list[int], list[int], list[int], list[int], list[int],
             dict[int, int],
         ]:
             with self.ctx.open_db() as conn:
                 stale: list[int] = []
+                stale_wars: list[int] = []
                 thresholds: dict[int, int] = {}
                 now = time.time()
-                for row in svc.idle_live_blackjack_hands(conn, now):
-                    gid = int(row["guild_id"])
+
+                def _idle_after(gid: int) -> int:
                     if gid not in thresholds:
                         thresholds[gid] = svc.load_casino_settings(
                             conn, gid
                         ).blackjack_idle_seconds
-                    if now - float(row["last_action_at"]) >= thresholds[gid]:
+                    return thresholds[gid]
+
+                for row in svc.idle_live_blackjack_hands(conn, now):
+                    if now - float(row["last_action_at"]) >= _idle_after(
+                        int(row["guild_id"])
+                    ):
                         stale.append(int(row["id"]))
+                # War standoffs idle out on the same clock as blackjack
+                # hands — one table-idle knob, not two.
+                for row in svc.idle_live_war_hands(conn, now):
+                    if now - float(row["last_action_at"]) >= _idle_after(
+                        int(row["guild_id"])
+                    ):
+                        stale_wars.append(int(row["id"]))
                 overdue = [
                     int(r["id"])
                     for r in svc.open_roulette_rounds(conn)
@@ -494,12 +515,16 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     cs = svc.load_casino_settings(conn, gid)
                     if cs.jackpot_enabled and cs.slots_enabled:
                         pots[gid] = svc.get_jackpot(conn, gid, seed=cs.jackpot_seed)
-                return stale, overdue, overdue_races, overdue_coups, overdue_rolls, pots
+                return (
+                    stale, stale_wars, overdue, overdue_races, overdue_coups,
+                    overdue_rolls, pots,
+                )
 
         try:
-            stale, overdue, overdue_races, overdue_coups, overdue_rolls, pots = (
-                await asyncio.to_thread(_scan)
-            )
+            (
+                stale, stale_wars, overdue, overdue_races, overdue_coups,
+                overdue_rolls, pots,
+            ) = await asyncio.to_thread(_scan)
         except Exception:
             log.exception("casino maintenance sweep failed")
             return
@@ -514,6 +539,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 await self._auto_stand(hand_id)
             except Exception:
                 log.exception("casino auto-stand failed for hand %s", hand_id)
+        for hand_id in stale_wars:
+            try:
+                await self._auto_war(hand_id)
+            except Exception:
+                log.exception("casino auto-war failed for hand %s", hand_id)
         for ui, overdue_ids in (
             (_ROULETTE_UI, overdue), (_DERBY_UI, overdue_races),
             (_BACCARAT_UI, overdue_coups), (_DICE_UI, overdue_rolls),
@@ -781,6 +811,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         "coinflip": "Coinflip",
         "slots": "Slots",
         "blackjack": "Blackjack",
+        "war": "Casino War",
     }
 
     def _limits_label(
@@ -1359,6 +1390,206 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     await channel.send(
                         embed=embed,
                         view=play_again_view("blackjack", base_stake),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    log.warning(
+                        "casino big-win broadcast failed in #%s", channel.id
+                    )
+
+    # ── war (instant, with the tie's rare live decision) ───────────────
+
+    def _war_embed(
+        self,
+        econ: EconSettings,
+        user_id: int,
+        step: svc.WarStep,
+        accent: discord.Color | None,
+    ) -> discord.Embed:
+        return casino_embeds.build_war_embed(
+            econ, user_id, step.player, step.dealer, step.stake, accent,
+            war_player=step.war_player, war_dealer=step.war_dealer,
+            outcome=step.outcome, payout=step.payout, streak=step.streak,
+            pot_after=step.pot_after,
+        )
+
+    async def play_war(
+        self, interaction: discord.Interaction, amount: int
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        uid = interaction.user.id
+
+        def _play() -> tuple[
+            svc.WarStep, EconSettings | None, svc.CasinoSettings
+        ]:
+            with self.ctx.open_db() as conn:
+                step = svc.play_war(
+                    conn, guild.id, interaction.channel_id, uid, amount
+                )
+                if step.err is not None:
+                    return step, None, svc.DEFAULT_CASINO_SETTINGS
+                return (
+                    step,
+                    load_econ_settings(conn, guild.id),
+                    svc.load_casino_settings(conn, guild.id),
+                )
+
+        try:
+            step, econ, settings = await asyncio.to_thread(_play)
+        except sqlite3.IntegrityError:
+            await safe_ephemeral(
+                interaction,
+                "❌ You already have a war decision pending — finish it first.",
+            )
+            return
+        if step.err is not None or econ is None:
+            await safe_ephemeral(interaction, f"❌ {step.err}")
+            return
+        self._last_bets[(guild.id, uid, "war")] = amount
+        embed = self._war_embed(econ, uid, step, await self._accent(guild))
+        if step.outcome is None:  # the tie standoff — buttons, not a verdict
+            await self._respond_private(
+                interaction, embed, build_war_view(step.hand_id)
+            )
+            message = await interaction.original_response()
+            hand_id = step.hand_id
+            # The auto-resolve's only way back into the ephemeral message.
+            self._war_followups[hand_id] = (
+                interaction.followup, message.id, time.time()
+            )
+
+            def _bind() -> None:
+                with self.ctx.open_db() as conn:
+                    svc.set_war_message(conn, hand_id, message.id)
+
+            await asyncio.to_thread(_bind)
+            return
+        try:
+            await self._respond_private(
+                interaction, embed, play_again_view("war", amount)
+            )
+        except discord.HTTPException:
+            pass
+        await self._after_instant(
+            interaction, payout=step.payout,
+            threshold=settings.broadcast_min_payout, embed=embed,
+            view=play_again_view("war", amount),
+        )
+
+    async def war_action(
+        self, interaction: discord.Interaction, hand_id: int, action: str
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        lock = self._war_locks.setdefault(hand_id, asyncio.Lock())
+        async with lock:
+            done = await self._war_step(interaction, hand_id, action)
+        if done:
+            self._war_locks.pop(hand_id, None)
+
+    async def _war_step(
+        self, interaction: discord.Interaction, hand_id: int, action: str
+    ) -> bool:
+        """One standoff button press — rules in the service; True once the
+        hand is terminally gone (the blackjack lock-drop contract)."""
+        guild = interaction.guild
+        assert guild is not None
+        uid = interaction.user.id
+
+        def _step() -> tuple[
+            svc.WarStep, EconSettings | None, svc.CasinoSettings
+        ]:
+            with self.ctx.open_db() as conn:
+                step = svc.resolve_war_action(
+                    conn, guild.id, hand_id, uid, action
+                )
+                if step.err is not None:
+                    return step, None, svc.DEFAULT_CASINO_SETTINGS
+                return (
+                    step,
+                    load_econ_settings(conn, guild.id),
+                    svc.load_casino_settings(conn, guild.id),
+                )
+
+        step, econ, settings = await asyncio.to_thread(_step)
+        if step.err is not None or econ is None:
+            await safe_ephemeral(interaction, f"❌ {step.err}")
+            return step.err == "That hand is already finished."
+        embed = self._war_embed(econ, uid, step, await self._accent(guild))
+        original = step.stake // 2 if step.outcome in ("war_win", "war_lose") else step.stake
+        try:
+            await interaction.response.edit_message(
+                embed=embed, view=play_again_view("war", original)
+            )
+        except discord.HTTPException:
+            pass
+        self._war_followups.pop(hand_id, None)
+        await self._after_instant(
+            interaction, payout=step.payout,
+            threshold=settings.broadcast_min_payout, embed=embed,
+            view=play_again_view("war", original),
+        )
+        return True
+
+    async def _auto_war(self, hand_id: int) -> None:
+        """The idle sweep's resolve — war when affordable, else retreat.
+
+        ``resolve_idle_war_hand`` returns None when the standoff settled
+        concurrently, so this can never render an outcome the settle
+        didn't pay.
+        """
+        lock = self._war_locks.setdefault(hand_id, asyncio.Lock())
+        async with lock:
+
+            def _resolve():
+                with self.ctx.open_db() as conn:
+                    row = svc.get_war_hand(conn, hand_id)
+                    if row is None:
+                        return None
+                    step = svc.resolve_idle_war_hand(conn, hand_id)
+                    if step is None:
+                        return None
+                    gid = int(row["guild_id"])
+                    return (
+                        row, step, load_econ_settings(conn, gid),
+                        svc.load_casino_settings(conn, gid),
+                    )
+
+            result = await asyncio.to_thread(_resolve)
+        self._war_locks.pop(hand_id, None)
+        handle = self._war_followups.pop(hand_id, None)
+        if result is None:
+            return
+        row, step, econ, settings = result
+        guild = self.bot.get_guild(int(row["guild_id"]))
+        uid = int(row["user_id"])
+        embed = self._war_embed(econ, uid, step, await self._accent(guild))
+        embed.set_footer(
+            text="Resolved automatically — fortune favors the decisive."
+        )
+        original = step.stake // 2 if step.outcome in ("war_win", "war_lose") else step.stake
+        if handle is not None:
+            webhook, message_id, _ = handle
+            try:
+                await webhook.edit_message(
+                    message_id, embed=embed,
+                    view=play_again_view("war", original),
+                )
+            except discord.HTTPException:
+                pass
+        self._schedule_hub_repaint(int(row["guild_id"]))
+        if settings.broadcast_min_payout > 0 and (
+            step.payout >= settings.broadcast_min_payout
+        ):
+            channel = self.bot.get_channel(int(row["channel_id"]))
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    await channel.send(
+                        embed=embed,
+                        view=play_again_view("war", original),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except discord.HTTPException:

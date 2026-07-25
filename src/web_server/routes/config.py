@@ -491,6 +491,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "derby_enabled": s.derby_enabled,
         "baccarat_enabled": s.baccarat_enabled,
         "dice_enabled": s.dice_enabled,
+        "war_enabled": s.war_enabled,
         "roulette_window_seconds": s.roulette_window_seconds,
         "derby_window_seconds": s.derby_window_seconds,
         "baccarat_window_seconds": s.baccarat_window_seconds,
@@ -3848,6 +3849,7 @@ class CasinoConfigUpdate(BaseModel):
     derby_enabled: bool | None = None
     baccarat_enabled: bool | None = None
     dice_enabled: bool | None = None
+    war_enabled: bool | None = None
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
     derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
     baccarat_window_seconds: int | None = Field(default=None, ge=15, le=600)

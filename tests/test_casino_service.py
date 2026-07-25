@@ -830,6 +830,189 @@ def test_member_leave_refunds_live_dice_stakes(db):
         assert svc.dice_bets(conn, round_id) == []
 
 
+# ── casino war (casino-classics Stage 1c) ──────────────────────────────
+
+
+def _war_shoe(monkeypatch, ranks):
+    """Feed draw_war_cards an exact rank sequence (suits pinned to ♠)."""
+    queue = list(ranks)
+    monkeypatch.setattr(
+        logic.random,
+        "choice",
+        lambda seq: queue.pop(0) if seq is logic._RANKS else "♠",
+    )
+
+
+def test_play_war_high_card_settles_instantly(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["K", "5"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW)
+        assert step.err is None and step.outcome == "win"
+        assert (step.player, step.dealer) == ("K♠", "5♠")
+        assert step.payout == 20 and step.streak == 1
+        assert get_balance(conn, GUILD, A) == 110
+        assert svc.live_war_hand(conn, GUILD, A) is None  # no row for a clean win
+        # instant games land on the floor ticker
+        assert any(
+            str(r["game"]) == "war" for r in svc.recent_ticker(conn, GUILD)
+        )
+
+
+def test_play_war_loss_feeds_the_jackpot(db, monkeypatch):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["2", "A"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 40, now=NOW)
+        assert step.outcome == "lose" and step.payout == 0
+        assert step.pot_after == 110  # seed 100 + 25% of 40
+        assert get_balance(conn, GUILD, A) == 60
+
+
+def test_play_war_tie_opens_a_live_decision(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW)
+        assert step.err is None and step.outcome is None
+        assert step.hand_id > 0
+        assert get_balance(conn, GUILD, A) == 90  # staked, not settled
+        # one live decision per member
+        again = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW + 1)
+        assert again.err == (
+            "You already have a war decision pending — finish it first."
+        )
+
+
+def test_war_raise_win_and_second_tie_pay_3x_original(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        for war_ranks, expect_payout in ((["9", "5"], 30), (["6", "6"], 30)):
+            _war_shoe(monkeypatch, ["7", "7"])
+            step = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW)
+            before = get_balance(conn, GUILD, A)
+            _war_shoe(monkeypatch, war_ranks)
+            done = svc.resolve_war_action(
+                conn, GUILD, step.hand_id, A, "war", now=NOW + 1
+            )
+            assert done.err is None and done.outcome == "war_win"
+            assert done.stake == 20 and done.payout == expect_payout
+            assert get_balance(conn, GUILD, A) == before - 10 + expect_payout
+            # replayed action reports finished, pays nothing again
+            replay = svc.resolve_war_action(
+                conn, GUILD, step.hand_id, A, "war", now=NOW + 2
+            )
+            assert replay.err == "That hand is already finished."
+
+
+def test_war_raise_loss_feeds_the_doubled_stake(db, monkeypatch):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 20, now=NOW)
+        _war_shoe(monkeypatch, ["2", "K"])
+        done = svc.resolve_war_action(
+            conn, GUILD, step.hand_id, A, "war", now=NOW + 1
+        )
+        assert done.outcome == "war_lose" and done.payout == 0
+        assert done.stake == 40
+        assert get_balance(conn, GUILD, A) == 60
+        assert svc.get_jackpot(conn, GUILD) == 110  # seed + 25% of all 40
+
+
+def test_war_retreat_returns_half_floored(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 11, now=NOW)
+        done = svc.resolve_war_action(
+            conn, GUILD, step.hand_id, A, "retreat", now=NOW + 1
+        )
+        assert done.outcome == "retreat" and done.payout == 5
+        assert get_balance(conn, GUILD, A) == 100 - 11 + 5
+        stats = svc.member_casino_stats(conn, GUILD, A)
+        assert stats is not None and int(stats["streak"]) == -1  # a loss
+
+
+def test_war_decision_owner_and_action_guards(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW)
+        poked = svc.resolve_war_action(
+            conn, GUILD, step.hand_id, B, "war", now=NOW + 1
+        )
+        assert poked.err == "That's not your battle — play your own!"
+        with pytest.raises(ValueError):
+            svc.resolve_war_action(
+                conn, GUILD, step.hand_id, A, "flee", now=NOW + 2
+            )
+
+
+def test_war_raise_needs_funds_and_leaves_the_hand_live(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 10)  # exactly the opening stake
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW)
+        broke = svc.resolve_war_action(
+            conn, GUILD, step.hand_id, A, "war", now=NOW + 1
+        )
+        assert broke.err is not None and "You need" in broke.err
+        assert svc.live_war_hand(conn, GUILD, A) is not None  # still decidable
+        done = svc.resolve_war_action(
+            conn, GUILD, step.hand_id, A, "retreat", now=NOW + 2
+        )
+        assert done.outcome == "retreat" and done.payout == 5
+
+
+def test_idle_war_hand_defaults_to_war_with_retreat_fallback(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 10, now=NOW)
+        assert [int(r["id"]) for r in svc.idle_live_war_hands(conn, NOW + 1)] == [
+            step.hand_id
+        ]
+        _war_shoe(monkeypatch, ["A", "2"])
+        done = svc.resolve_idle_war_hand(conn, step.hand_id, now=NOW + 200)
+        assert done is not None and done.outcome == "war_win"
+        assert svc.resolve_idle_war_hand(conn, step.hand_id, now=NOW + 201) is None
+
+        # broke member: the sweep retreats instead of erroring out
+        _fund(conn, B, 10)
+        _war_shoe(monkeypatch, ["4", "4"])
+        tie = svc.play_war(conn, GUILD, CHAN, B, 10, now=NOW)
+        idle = svc.resolve_idle_war_hand(conn, tie.hand_id, now=NOW + 200)
+        assert idle is not None and idle.outcome == "retreat"
+        assert get_balance(conn, GUILD, B) == 5
+
+
+def test_boot_sweep_refunds_live_war_decisions(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        step = svc.play_war(conn, GUILD, CHAN, A, 30, now=NOW)
+        swept = svc.refund_live_war_hands(conn, now=NOW + 1)
+        assert [int(r["id"]) for r in swept] == [step.hand_id]
+        assert get_balance(conn, GUILD, A) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 30)
+        # a refund is not a play and never feeds the pot
+        assert svc.member_casino_stats(conn, GUILD, A) is None
+        assert svc.refund_live_war_hands(conn, now=NOW + 2) == []
+
+
+def test_member_leave_refunds_live_war_decision(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _war_shoe(monkeypatch, ["7", "7"])
+        svc.play_war(conn, GUILD, CHAN, A, 25, now=NOW)
+        out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 1)
+        assert out.get("war") == 25
+        assert get_balance(conn, GUILD, A) == 100
+
+
 # ── review-fix regressions (docs/reviews round, 2026-07-22) ────────────
 
 
@@ -896,7 +1079,7 @@ def test_member_leave_refunds_live_stakes_and_spares_the_round(db):
         svc.place_race_bet(conn, race_id, B, 1, 8, now=NOW + 4)
 
         out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 4)
-        assert out == {"blackjack": 20, "roulette": 25, "derby": 12}
+        assert out == {"blackjack": 20, "war": 0, "roulette": 25, "derby": 12}
         assert get_balance(conn, GUILD, A) == 200  # made whole
         assert svc.live_blackjack_hand(conn, GUILD, A) is None
         # A's bets are gone so the spin can't pay a ghost; B's bets survive
@@ -907,7 +1090,7 @@ def test_member_leave_refunds_live_stakes_and_spares_the_round(db):
         assert bets is not None and [int(b["payout"]) for b in bets] == [40]
         # a second leave call finds nothing live
         assert svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 5) == {
-            "blackjack": 0, "roulette": 0, "derby": 0,
+            "blackjack": 0, "war": 0, "roulette": 0, "derby": 0,
         }
 
 
