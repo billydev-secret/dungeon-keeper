@@ -165,3 +165,50 @@ def test_ticker_line_marks_push_and_partial_return():
 
     assert "push" in ticker_line(1, "blackjack", 20, 20)
     assert "10 back" in ticker_line(1, "blackjack", 20, 10)
+
+
+# ── the hub panel's "Today at the tables" standings ────────────────────
+
+
+def _standings_field(embed: discord.Embed) -> str | None:
+    field = next(
+        (f for f in embed.fields if "Today at the tables" in (f.name or "")),
+        None,
+    )
+    return field.value if field is not None else None
+
+
+def test_hub_embed_names_the_days_winner_and_loser_with_signed_amounts():
+    from bot_modules.cogs.casino.embeds import build_hub_embed
+
+    embed = build_hub_embed(
+        _ECON, CasinoSettings(channel_id=1), None,
+        standings=((7, 340), (9, -120)),
+    )
+    value = _standings_field(embed)
+    assert value is not None
+    assert "<@7>" in value and "**+340**" in value  # winner, signed +
+    assert "<@9>" in value and "**−120**" in value   # loser, magnitude with −
+    assert value.index("<@7>") < value.index("<@9>")  # up-most listed first
+
+
+def test_hub_embed_shows_only_the_winner_when_nobody_is_down():
+    from bot_modules.cogs.casino.embeds import build_hub_embed
+
+    embed = build_hub_embed(
+        _ECON, CasinoSettings(channel_id=1), None,
+        standings=((7, 340), None),
+    )
+    value = _standings_field(embed)
+    assert value is not None
+    assert "<@7>" in value and "Down most" not in value
+
+
+def test_hub_embed_omits_standings_when_the_board_is_empty():
+    from bot_modules.cogs.casino.embeds import build_hub_embed
+
+    for standings in (None, (None, None)):
+        embed = build_hub_embed(
+            _ECON, CasinoSettings(channel_id=1), None, standings=standings,
+        )
+        assert _standings_field(embed) is None

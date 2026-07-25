@@ -98,6 +98,8 @@ def build_hub_embed(
     *,
     jackpot: int | None = None,
     ticker: list[tuple[int, str, int, int]] | None = None,
+    standings: tuple[tuple[int, int] | None, tuple[int, int] | None]
+    | None = None,
     casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     open_lines = [
@@ -137,6 +139,27 @@ def build_hub_embed(
             ) + "\n​",
             inline=False,
         )
+    if standings is not None:
+        earner, loser = standings
+        rows = []
+        if earner is not None:
+            rows.append(
+                f"📈 Up most: <@{earner[0]}> · "
+                f"**+{earner[1]:,}** {econ.currency_plural}"
+            )
+        if loser is not None:
+            rows.append(
+                f"📉 Down most: <@{loser[0]}> · "
+                f"**−{abs(loser[1]):,}** {econ.currency_plural}"
+            )
+        if rows:
+            # Embed mentions never ping (the panel is sent/edited with
+            # AllowedMentions.none()); names render, nobody's tagged.
+            embed.add_field(
+                name="📊 Today at the tables",
+                value="\n".join(rows) + "\n​",
+                inline=False,
+            )
     limits = [f"Bets: **{settings.min_bet:,}**–**{settings.max_bet:,}**"
               if settings.max_bet else f"Bets: **{settings.min_bet:,}**+"]
     if settings.daily_wager_cap:

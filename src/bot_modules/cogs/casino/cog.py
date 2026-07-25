@@ -521,11 +521,15 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         def _read() -> tuple[
             EconSettings, svc.CasinoSettings, int | None, str,
             list[tuple[int, str, int, int]],
+            tuple[svc.DailyStanding | None, svc.DailyStanding | None],
         ]:
             with self.ctx.open_db() as conn:
                 settings = svc.load_casino_settings(conn, guild.id)
                 pot: int | None = None
                 ticker: list[tuple[int, str, int, int]] = []
+                standings: tuple[
+                    svc.DailyStanding | None, svc.DailyStanding | None
+                ] = (None, None)
                 if settings.jackpot_enabled and settings.slots_enabled:
                     pot = svc.get_jackpot(
                         conn, guild.id, seed=settings.jackpot_seed
@@ -536,16 +540,18 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                          int(r["payout"]))
                         for r in svc.recent_ticker(conn, guild.id)
                     ]
+                    standings = svc.daily_standings(conn, guild.id)
                 return (
                     load_econ_settings(conn, guild.id),
                     settings,
                     pot,
                     resolve_casino_name_conn(conn, guild.id),
                     ticker,
+                    standings,
                 )
 
         try:
-            econ, settings, pot, casino_name, ticker = (
+            econ, settings, pot, casino_name, ticker, standings = (
                 await asyncio.to_thread(_read)
             )
         except Exception:
@@ -587,7 +593,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             settings = replace(settings, panel_message_id=0)
         embed = casino_embeds.build_hub_embed(
             econ, settings, await self._accent(guild), jackpot=pot,
-            ticker=ticker, casino_name=casino_name,
+            ticker=ticker, standings=standings, casino_name=casino_name,
         )
         # Per-guild copy of the hub view: disabled tables' buttons drop
         # off (the full view stays registered for stale-panel routing).

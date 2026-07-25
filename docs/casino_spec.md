@@ -39,7 +39,16 @@ channel edit bucket). The channel itself carries only shared surfaces:
   settlement transaction for instant games only) lists the last few plays;
   a debounced per-guild repaint (`_schedule_hub_repaint`, 8s) coalesces a
   burst of plays into one in-place panel edit — an edit never moves the
-  panel;
+  panel. The panel also carries a **📊 Today at the tables** line naming the
+  day's biggest net winner and biggest net loser (`casino_daily_net` table,
+  `daily_standings`, folded into the same `record_play` transaction for
+  *every* game). Net = returned − wagered over the guild-local day (the same
+  YYYY-MM-DD boundary the wager cap uses); the winner shows only while up
+  (net > 0) and the loser only while down (net < 0), so an all-green day has
+  no loser line and one member can't hold both slots. Refunds/voids never
+  reach `record_play`, so a handed-back bet never sways the board. The line
+  refreshes on the instant-game repaint; a roulette/derby-only settle
+  updates the table but the panel catches up on the next repaint;
 - **communal roulette/derby rounds** (public as ever, repainting on a 2s
   debounce per round — one edit per burst of bets, the live_signal idea);
 - **broadcast moments**: the jackpot celebration (always), and any
