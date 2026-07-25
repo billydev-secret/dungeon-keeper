@@ -15,10 +15,11 @@ Covers:
   pairs on the spot when someone eligible is waiting, and every reason it
   falls back to queuing: empty pool, either side on cooldown, a waiting
   member who is already in a chat, a failed pairing).
-- ``_pick_partner`` / ``_eligible_pool`` — no-repeat preference, oldest-first
-  fallback, and the one-chat-at-a-time exclusion.
+- ``_pick_partner`` / ``_past_partners`` / ``_eligible_pool`` — the all-time
+  no-repeat gate (never pair the same two twice; wait instead), oldest-first
+  ordering, and the one-chat-at-a-time exclusion.
 - ``_do_round`` — FIFO drain of whoever is left over, odd-one-out, failed
-  pairs counted as waiting, the re-match cooldown, and the no-repeat rule.
+  pairs counted as waiting, the re-match cooldown, and the no-repeat gate.
 
 Discord objects are ``MagicMock(spec=...)`` so ``isinstance`` checks in the
 cog pass without a gateway connection; the network-facing helpers
@@ -448,13 +449,29 @@ def test_increment_swaps_counts_up(sync_db_path):
         assert pp._increment_swaps(conn, "s1") == 2
 
 
-def test_recent_partners_reads_both_sides(sync_db_path):
+def test_past_partners_reads_both_sides(sync_db_path):
     now = time.time()
     with open_db(sync_db_path) as conn:
         pp._create_session(conn, "a", GUILD_ID, 1, 1, 2, now)
         pp._create_session(conn, "b", GUILD_ID, 2, 3, 1, now)
-        assert pp._recent_partners(conn, GUILD_ID, 1) == {2, 3}
-        assert pp._recent_partners(conn, GUILD_ID, 2) == {1}
+        assert pp._past_partners(conn, GUILD_ID, 1) == {2, 3}
+        assert pp._past_partners(conn, GUILD_ID, 2) == {1}
+
+
+def test_past_partners_is_all_time_not_a_recent_window(sync_db_path):
+    """A partner from long ago and many pairings back still counts."""
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "ancient", GUILD_ID, 1, 1, 2, now - 400 * 86400)
+        for i in range(20):  # 20 pairings since, well past any recency window
+            pp._create_session(conn, f"s{i}", GUILD_ID, 100 + i, 1, 50 + i, now - i)
+        assert 2 in pp._past_partners(conn, GUILD_ID, 1)
+
+
+def test_past_partners_is_scoped_per_guild(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "elsewhere", GUILD_ID + 1, 1, 1, 2, time.time())
+        assert pp._past_partners(conn, GUILD_ID, 1) == set()
 
 
 # ── _do_pair ──────────────────────────────────────────────────────────
@@ -925,12 +942,13 @@ async def test_handle_join_scheduled_mode_never_matches_on_join(sync_db_path, mo
 # ── _pick_partner / _eligible_pool ────────────────────────────────────
 
 
-def test_pick_partner_prefers_first_non_recent():
+def test_pick_partner_takes_oldest_waiter_who_is_not_a_past_partner():
     assert pp._pick_partner([2, 3, 4], {2, 3}) == 4
 
 
-def test_pick_partner_falls_back_to_oldest_when_all_recent():
-    assert pp._pick_partner([2, 3], {2, 3}) == 2
+def test_pick_partner_returns_none_when_every_waiter_is_a_past_partner():
+    """No-repeat is a hard gate: waiting beats handing back the same person."""
+    assert pp._pick_partner([2, 3], {2, 3}) is None
 
 
 def test_pick_partner_returns_none_for_empty_pool():
@@ -1023,12 +1041,12 @@ async def test_do_round_counts_failed_pairs_as_waiting(sync_db_path, monkeypatch
     assert _pool_ids(sync_db_path) == [1, 2]  # nobody silently dropped
 
 
-async def test_do_round_avoids_recent_repeat_when_possible(sync_db_path, monkeypatch):
+async def test_do_round_steers_away_from_a_past_partner(sync_db_path, monkeypatch):
     _configure(sync_db_path)
     with open_db(sync_db_path) as conn:
         # 1 and 2 were paired before — but long enough ago to clear the
-        # month-long cooldown, so they're eligible and only the no-repeat
-        # preference should steer 1 away from 2. 3 is fresh.
+        # month-long cooldown, so all three are eligible and only the no-repeat
+        # gate should steer 1 away from 2. 3 is fresh.
         old = time.time() - (_COOLDOWN + 86400)
         pp._create_session(conn, "old", GUILD_ID, 5, 1, 2, old)
         pp._close_session(conn, "old", "expired")
@@ -1048,6 +1066,57 @@ async def test_do_round_avoids_recent_repeat_when_possible(sync_db_path, monkeyp
     await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
     assert calls == [(1, 3)]
     assert _pool_ids(sync_db_path) == [2]
+
+
+async def test_do_round_never_repairs_the_only_two_waiting(sync_db_path, monkeypatch):
+    """Regression: a sweep re-paired two members the moment their cooldown lapsed.
+
+    The cooldown runs from the *shared* session's ``started_at``, so both halves
+    of a pair come off it at the same instant and float back into a pool holding
+    nobody else. Before the no-repeat gate was hard, ``_pick_partner`` ran out of
+    non-past candidates and fell back to the oldest waiter — the same person.
+    """
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 172800)  # 2 days, as the live guild runs it
+    with open_db(sync_db_path) as conn:
+        started = time.time() - (172800 + 60)  # cooldown lapsed a minute ago
+        pp._create_session(conn, "yesterday", GUILD_ID, 5, 1, 2, started)
+        pp._close_session(conn, "yesterday", "expired")
+        for i, uid in enumerate([1, 2], start=1):
+            pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
+
+    do_pair = AsyncMock(return_value=True)
+    monkeypatch.setattr(pp, "_do_pair", do_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+
+    do_pair.assert_not_awaited()
+    assert pairs == 0 and waiting == 2
+    assert _pool_ids(sync_db_path) == [1, 2]  # both wait for someone new
+
+
+async def test_do_round_pairs_past_partners_onward_to_fresh_faces(sync_db_path, monkeypatch):
+    """The gate defers a repeat, it doesn't strand anyone: 3 joins, both match."""
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "old12", GUILD_ID, 5, 1, 2, time.time() - 86400)
+        pp._close_session(conn, "old12", "expired")
+        for i, uid in enumerate([1, 2, 3, 4], start=1):
+            pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
+
+    calls: list[tuple[int, int]] = []
+
+    async def fake_pair(bot, db_path, guild_id, u1, u2):
+        calls.append((u1, u2))
+        with open_db(db_path) as conn:
+            pp._remove_from_pool(conn, guild_id, u1)
+            pp._remove_from_pool(conn, guild_id, u2)
+        return True
+
+    monkeypatch.setattr(pp, "_do_pair", fake_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+    assert calls == [(1, 3), (2, 4)]
+    assert pairs == 2 and waiting == 0
 
 
 async def test_do_round_skips_members_matched_within_the_month(sync_db_path, monkeypatch):
@@ -1198,6 +1267,41 @@ def test_find_instant_match_excludes_a_blocked_candidate(sync_db_path):
         # A non-blocked waiter is still matched.
         pp._add_to_pool(conn, GUILD_ID, 3, joined_at=200.0)
         assert pp._find_instant_match(conn, GUILD_ID, 1) == 3
+
+
+def test_find_instant_match_excludes_a_past_partner(sync_db_path):
+    """Joining can't hand you back someone you've already had, ever."""
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "old12", GUILD_ID, 5, 1, 2, time.time() - 86400)
+        pp._close_session(conn, "old12", "expired")
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
+        assert pp._find_instant_match(conn, GUILD_ID, 1) is None
+        # A member they haven't had is still matched on the spot.
+        pp._add_to_pool(conn, GUILD_ID, 3, joined_at=200.0)
+        assert pp._find_instant_match(conn, GUILD_ID, 1) == 3
+
+
+async def test_handle_join_queues_when_only_candidate_is_a_past_partner(
+    sync_db_path, monkeypatch
+):
+    _configure(sync_db_path)
+    _set_cooldown(sync_db_path, 0)
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "old12", GUILD_ID, 5, 1, 2, time.time() - 86400)
+        pp._close_session(conn, "old12", "expired")
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
+    do_pair = AsyncMock(return_value=True)
+    monkeypatch.setattr(pp, "_do_pair", do_pair)
+    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
+
+    interaction = _join_interaction(1)
+    await pp._handle_join(interaction, sync_db_path)
+
+    do_pair.assert_not_awaited()
+    assert _pool_ids(sync_db_path) == [2, 1]
+    assert "in the pool" in interaction.response.send_message.await_args.args[0]
 
 
 async def test_handle_join_queues_when_only_candidate_is_blocked(sync_db_path, monkeypatch):
