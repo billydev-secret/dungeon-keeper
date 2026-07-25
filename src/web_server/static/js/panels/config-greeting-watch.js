@@ -21,6 +21,7 @@ export function mount(container) {
     ]);
     const g = config.greeting_watch || {
       enabled: false, channel_ids: "", notify_user_ids: [], window_minutes: 10,
+      extra_tokens: "",
     };
 
     container.innerHTML = `
@@ -44,6 +45,11 @@ export function mount(container) {
             <label>Notify (DM) These Members</label>
             <span data-picker="notify_users"></span>
             <div class="field-hint">Everyone selected gets the direct message when a greeting goes unanswered. Add as many as you like; leave it empty and nothing is sent.</div>
+          </div>
+          <div class="field">
+            <label>Extra Greeting Words</label>
+            <input type="text" name="extra_tokens" placeholder="henlo, good yawn, o7" />
+            <div class="field-hint">Comma-separated server-specific greetings — in-jokes the built-in list can't know. Each is matched at the start of a message, case-insensitive. Leave empty for the built-ins only.</div>
           </div>
           <div class="field">
             <label>Unanswered Window (minutes)</label>
@@ -73,6 +79,9 @@ export function mount(container) {
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
+    // Set via DOM, not the template string, so stored tokens containing
+    // quotes or angle brackets can't break out of the value attribute.
+    form.querySelector('input[name="extra_tokens"]').value = g.extra_tokens || "";
     guardForm(form);
 
     form.addEventListener("submit", async (e) => {
@@ -92,6 +101,7 @@ export function mount(container) {
           channel_ids: channelsPicker.getValues().join(","),
           notify_user_ids: notifyPicker.getValues().join(","),
           window_minutes,
+          extra_tokens: form.querySelector('input[name="extra_tokens"]').value,
         });
         showStatus(status, true);
       } catch (err) {

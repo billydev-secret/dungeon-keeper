@@ -767,7 +767,7 @@ class EventsCog(commands.Cog):
             cfg.greeting_watch_enabled
             and message.channel.id in cfg.greeting_watch_channel_ids
             and not reply_to_id
-            and is_greeting(message.content)
+            and is_greeting(message.content, cfg.greeting_watch_extra_tokens)
         ):
 
             def _record_greeting():
