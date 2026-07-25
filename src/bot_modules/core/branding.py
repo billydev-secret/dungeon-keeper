@@ -73,3 +73,34 @@ def invalidate_accent_cache(guild_id: int) -> None:
     to force an immediate recompute after a branding change.
     """
     _avatar_cache.pop(guild_id, None)
+
+
+# A trailing zero-width line. U+200B is a printable char Discord won't strip as
+# trailing whitespace, so a value ending in "\n​" renders one extra empty
+# line — used to widen the gap before the *next* stacked field's heading.
+SECTION_SPACER = "\n​"
+
+
+def apply_section_spacing(embed: discord.Embed) -> discord.Embed:
+    """Give a multi-section embed an even vertical rhythm, in place.
+
+    When an embed stacks several ``inline=False`` fields as sections and a
+    field value carries internal blank-line blocks, Discord's field boundary
+    is *tighter* than those blanks — so each section heading ends up hugging
+    the section above it. Appending :data:`SECTION_SPACER` to every field but
+    the last widens the gap before each following heading, so sections read as
+    bigger breaks than the items stacked inside them.
+
+    A no-op for embeds with fewer than two fields. Mirrors the convention the
+    login digest (``quest_digest``) and weekly leaderboard already apply at
+    their string layer; this is the equivalent for builders that assemble a
+    ``discord.Embed`` directly. Returns the same embed for convenient chaining.
+    """
+    for i in range(len(embed.fields) - 1):
+        field = embed.fields[i]
+        value = field.value or ""
+        if not value.endswith(SECTION_SPACER):
+            embed.set_field_at(
+                i, name=field.name, value=value + SECTION_SPACER, inline=field.inline
+            )
+    return embed

@@ -54,6 +54,14 @@ _FALLBACK_BLURB: dict[str, str] = {
 
 _MOVER_MEDALS = ["🥇", "🥈", "🥉"]
 
+# A trailing zero-width line (U+200B renders as an empty line Discord won't
+# strip as trailing whitespace) appended to every field but the last. Quests
+# inside a section are already separated by a blank line ("\n\n"); this widens
+# the gap before the *next* section's heading so sections read as bigger breaks
+# than the items stacked inside them, instead of a heading hugging the section
+# above it.
+_SECTION_SPACER = "\n​"
+
 
 def bar_meter(current: int, target: int, width: int = 10) -> str:
     """A monospace meter — ``▰▱`` fill plus spaced counts — in a code span."""
@@ -119,13 +127,18 @@ def _movers_value(gains: list[dict]) -> str:
 
 
 def _pack(heading: str, blocks: list[str]) -> list[tuple[str, str]]:
-    """Group blocks into ≤``FIELD_LIMIT`` fields, ``… (cont.)`` on overflow."""
+    """Group blocks into fields, ``… (cont.)`` on overflow.
+
+    Packs to leave room for a trailing ``_SECTION_SPACER`` so appending it
+    downstream still fits Discord's ``FIELD_LIMIT``.
+    """
+    limit = FIELD_LIMIT - len(_SECTION_SPACER)
     chunks: list[list[str]] = []
     current: list[str] = []
     length = 0
     for block in blocks:
         added = (2 if current else 0) + len(block)  # 2 = "\n\n" separator
-        if current and length + added > FIELD_LIMIT:
+        if current and length + added > limit:
             chunks.append(current)
             current, length, added = [], 0, len(block)
         current.append(block)
@@ -161,4 +174,10 @@ def digest_sections(
         if not group:
             continue
         sections.extend(_pack(heading, [quest_block(q) for q in group]))
-    return sections
+    # A spacer at the foot of every field but the last widens the gap before
+    # the following section's heading, so sections separate more than the
+    # quests stacked inside them (the last field needs no trailing air).
+    return [
+        (name, value + _SECTION_SPACER if i < len(sections) - 1 else value)
+        for i, (name, value) in enumerate(sections)
+    ]

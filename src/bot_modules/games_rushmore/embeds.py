@@ -18,6 +18,7 @@ from typing import Any
 
 import discord
 
+from bot_modules.core.branding import apply_section_spacing
 from bot_modules.games.constants import (
     GAME_ICONS,
     PHASE_JOINING,
@@ -401,5 +402,6 @@ def build_recap_embed(
             inline=False,
         )
 
+    apply_section_spacing(embed)
     embed.set_footer(text=_footer(host_name))
     return embed
