@@ -121,7 +121,31 @@ def test_remote_control_session_is_named_after_the_feature():
 def test_remote_control_can_be_opted_out():
     cmd = dk_session.claude_command("opus", "casino-derby", remote=False)
     assert "--remote-control" not in cmd
-    assert cmd.startswith("claude --model opus;")
+    assert "casino-derby" not in cmd  # the name only ever reached the remote flag
+    assert cmd.startswith("claude --model opus ")
+
+
+def test_auto_permission_mode_is_the_default():
+    """A worker driven from a phone must not stall on a permission prompt."""
+    assert "--permission-mode auto" in dk_session.claude_command("opus", "casino-derby")
+
+
+@pytest.mark.parametrize("mode", ["manual", "plan", "acceptEdits", "bypassPermissions"])
+def test_permission_mode_is_overridable(mode):
+    cmd = dk_session.claude_command("opus", "x", permission_mode=mode)
+    assert f"--permission-mode {mode}" in cmd
+    assert "--permission-mode auto" not in cmd
+
+
+def test_permission_mode_can_be_omitted_entirely():
+    cmd = dk_session.claude_command("opus", "x", permission_mode=None)
+    assert "--permission-mode" not in cmd
+
+
+def test_default_permission_mode_is_not_bypass():
+    """auto still runs calls past the classifier; bypass would not."""
+    assert dk_session.DEFAULT_PERMISSION_MODE == "auto"
+    assert dk_session.DEFAULT_PERMISSION_MODE in dk_session.PERMISSION_MODES
 
 
 def test_new_window_args_names_window_after_branch():

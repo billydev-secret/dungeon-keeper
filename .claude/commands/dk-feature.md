@@ -40,6 +40,10 @@ Do exactly this, stopping with a clear message on any problem:
    can be driven from claude.ai or a phone without attaching to tmux. It prints its
    own session URL on startup; `tmux capture-pane -p -t NAME` will show it if the
    user wants the link without switching windows.
+6. It also starts in **auto** permission mode, so it doesn't stall on prompts with
+   nobody watching. Auto still checks every call against the permission classifier —
+   it is not `bypassPermissions`. Override at spawn with `--permission-mode`, or
+   `shift+tab` inside a running session to cycle modes without restarting it.
 
 Notes:
 

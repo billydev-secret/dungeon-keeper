@@ -36,6 +36,16 @@ SESSIONS_DIRNAME = "dk-sessions"
 # untouched so the launcher never becomes the thing that gates model choice.
 MODEL_ALIASES = ("opus", "sonnet", "haiku", "fable")
 
+# Workers default to auto: a session you drive from a phone shouldn't stall on a
+# permission prompt nobody is sitting in front of. Auto still runs every call
+# past the permission classifier, so genuinely destructive commands (rm -rf, a
+# force push) are refused rather than waved through — that's why the default is
+# auto and not bypassPermissions.
+PERMISSION_MODES = (
+    "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan",
+)
+DEFAULT_PERMISSION_MODE = "auto"
+
 
 # ── pure helpers (unit-tested in tests/test_dk_session.py) ───────────────
 
@@ -90,7 +100,8 @@ def worktree_path(main_repo: Path, name: str) -> Path:
 
 
 def claude_command(model: str | None, name: str | None = None,
-                   remote: bool = True) -> str:
+                   remote: bool = True,
+                   permission_mode: str | None = DEFAULT_PERMISSION_MODE) -> str:
     """Shell line for the window: run claude, then keep the window alive.
 
     Remote Control is on by default and named after the feature. The name has
@@ -108,17 +119,20 @@ def claude_command(model: str | None, name: str | None = None,
         cmd += " --remote-control"
         if name:
             cmd += f" {shlex.quote(name)}"
+    if permission_mode:
+        cmd += f" --permission-mode {shlex.quote(permission_mode)}"
     return f"{cmd}; exec $SHELL"
 
 
 def new_window_args(name: str, path: Path, model: str | None,
-                    remote: bool = True) -> list[str]:
+                    remote: bool = True,
+                    permission_mode: str | None = DEFAULT_PERMISSION_MODE) -> list[str]:
     return [
         "tmux", "new-window",
         "-d",
         "-n", name,
         "-c", str(path),
-        claude_command(model, name, remote),
+        claude_command(model, name, remote, permission_mode),
     ]
 
 
@@ -277,10 +291,14 @@ def cmd_new(args: argparse.Namespace) -> int:
         print("window: skipped (--no-window)")
         return 0
 
-    run(new_window_args(name, path, model, remote=not args.no_remote_control))
+    run(new_window_args(
+        name, path, model,
+        remote=not args.no_remote_control,
+        permission_mode=args.permission_mode,
+    ))
     label = model or "default model"
     remote = "remote control off" if args.no_remote_control else f"remote: {name}"
-    print(f"window:   {name}  ({label}, {remote})")
+    print(f"window:   {name}  ({label}, {remote}, {args.permission_mode} mode)")
     print(f"attach:   tmux select-window -t {name}")
     return 0
 
@@ -355,6 +373,11 @@ def main(argv: list[str] | None = None) -> int:
     p_new.add_argument(
         "--no-remote-control", action="store_true",
         help="local-only session (Remote Control is on by default)",
+    )
+    p_new.add_argument(
+        "--permission-mode", choices=PERMISSION_MODES,
+        default=DEFAULT_PERMISSION_MODE,
+        help=f"worker permission mode (default: {DEFAULT_PERMISSION_MODE})",
     )
     p_new.set_defaults(func=cmd_new)
 

@@ -60,6 +60,22 @@ name as everything else.
 
 Pass `--no-remote-control` to `dk_session.py new` for a local-only session.
 
+## Auto mode is the default
+
+Workers launch with `--permission-mode auto`. A session you drive from a phone should
+not stall on a permission prompt with nobody sitting in front of it, and the whole
+point of spinning several up is that you are not watching any one of them.
+
+Auto is deliberately not `bypassPermissions`. Auto still runs every tool call past the
+permission classifier, so genuinely destructive things — an `rm -rf` of a directory
+tree, a force push — are refused rather than waved through. That safety net is real:
+during the clone cleanup it blocked an `rm -rf` of 971 MB of session directories and
+made a human approve it.
+
+Override per session with `--permission-mode` (`manual`, `plan`, `acceptEdits`,
+`bypassPermissions`, `dontAsk`). Inside a running session, `shift+tab` cycles modes —
+which is how to change an already-running worker without restarting it.
+
 **`/dk-feature` does not move the session you typed it in.** It launches a worker
 beside you and leaves your tree alone — that is what makes several at once possible.
 
