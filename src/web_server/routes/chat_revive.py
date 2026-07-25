@@ -17,11 +17,7 @@ import discord
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from bot_modules.chat_revive.actions import (
-    ReviveOptInButton,
-    channel_is_busy,
-    send_revive,
-)
+from bot_modules.chat_revive.actions import ReviveOptInButton, send_revive
 from bot_modules.chat_revive.logic import FLOURISHES, band_label, should_ping
 from bot_modules.games.utils.question_source import channel_allows_nsfw
 from bot_modules.services.chat_revive_loop import ReviveInFlight, send_guard
@@ -355,7 +351,9 @@ async def check(request: Request, channel_id: int, _: AuthenticatedUser = _MOD):
     guild = bot.get_guild(guild_id) if bot else None
     channel = guild.get_channel(channel_id) if guild else None
     live = isinstance(channel, discord.TextChannel)
-    busy = await channel_is_busy(bot, channel_id) if live and bot else False
+    # Busy-check (active game/round) disabled for now — decide purely from
+    # channel silence history, same as the loop.
+    busy = False
     slowmode = channel.slowmode_delay or 0 if live else 0
     allow_nsfw = channel_allows_nsfw(channel) if live else False
 

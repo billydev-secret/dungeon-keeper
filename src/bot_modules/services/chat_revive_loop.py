@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.chat_revive.actions import channel_is_busy, send_revive
+from bot_modules.chat_revive.actions import send_revive
 from bot_modules.chat_revive.logic import FLOURISHES, should_ping
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.question_source import channel_allows_nsfw
@@ -177,14 +177,15 @@ async def consider_channel(
     channel = guild.get_channel(cfg.channel_id) if guild else None
     if not isinstance(channel, discord.TextChannel):
         return False
-    busy = await channel_is_busy(bot, cfg.channel_id)
+    # Busy-check (active game/round) disabled for now — decide purely from
+    # channel silence history.
     ev = await asyncio.to_thread(
         evaluate_sync,
         db_path,
         cfg.guild_id,
         cfg.channel_id,
         now_ts=now_ts,
-        busy=busy,
+        busy=False,
         slowmode_delay=channel.slowmode_delay or 0,
     )
     if not ev.verdict.fire:
