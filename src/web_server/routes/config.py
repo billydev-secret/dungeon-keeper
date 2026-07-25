@@ -724,6 +724,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "log_channel_id": None,
             "panel_channel_id": None,
             "room_visibility": _PP_DEFAULT_ROOM_VISIBILITY,
+            "intro_message": "",
             "pool_size": pool_size,
             "session_seconds": 86400,
             "match_cooldown_seconds": 2592000,
@@ -742,6 +743,7 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "room_visibility": _pp_normalize_room_visibility(
             cfg["room_visibility"] if "room_visibility" in cfg.keys() else None
         ),
+        "intro_message": cfg["intro_message"] if "intro_message" in cfg.keys() else "",
         "pool_size": pool_size,
         "session_seconds": int(cfg["session_seconds"]),
         "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
@@ -3148,6 +3150,7 @@ class PenPalsConfigUpdate(BaseModel):
     log_channel_id: str | None = None
     panel_channel_id: str | None = None
     room_visibility: str = _PP_DEFAULT_ROOM_VISIBILITY
+    intro_message: str = ""
 
 
 @router.put("/config/pen-pals")
@@ -3159,6 +3162,9 @@ async def update_pen_pals_config(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     new_channel_id = int(body.panel_channel_id) if body.panel_channel_id else 0
+    intro_message = body.intro_message.strip()
+    if len(intro_message) > 1000:
+        raise HTTPException(400, "Message must be 1000 characters or fewer")
 
     def _q() -> tuple[int, int]:
         with open_db(ctx.db_path) as conn:
@@ -3175,6 +3181,7 @@ async def update_pen_pals_config(
                 log_channel_id=int(body.log_channel_id) if body.log_channel_id else 0,
                 panel_channel_id=new_channel_id,
                 room_visibility=_pp_normalize_room_visibility(body.room_visibility),
+                intro_message=intro_message,
             )
             return old_channel_id, old_message_id
 

@@ -760,6 +760,30 @@ def test_update_pen_pals_config_normalizes_bad_room_visibility(authed_client, fa
     assert pp["room_visibility"] == "mods"
 
 
+def test_get_config_pen_pals_intro_message_defaults_to_empty(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["pen_pals"]["intro_message"] == ""
+
+
+def test_update_pen_pals_config_persists_intro_message(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "intro_message": "  Be kind to your pen pal!  "},
+    )
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["intro_message"] == "Be kind to your pen pal!"
+
+
+def test_update_pen_pals_config_rejects_oversized_intro_message(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "intro_message": "x" * 1001},
+    )
+    assert resp.status_code == 400
+
+
 def test_update_pen_pals_timers_rejects_invalid_session_seconds(authed_client):
     resp = authed_client.put(
         "/api/config/pen-pals/timers",

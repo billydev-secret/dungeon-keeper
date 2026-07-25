@@ -100,16 +100,17 @@ def _set_config(
     log_channel_id: int,
     panel_channel_id: int,
     room_visibility: str = DEFAULT_ROOM_VISIBILITY,
+    intro_message: str = "",
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET enabled=?, category_id=?, opt_in_role_id=?, question_category=?,
-               log_channel_id=?, panel_channel_id=?, room_visibility=?
+               log_channel_id=?, panel_channel_id=?, room_visibility=?, intro_message=?
            WHERE guild_id=?""",
         (int(enabled), category_id, opt_in_role_id, question_category,
          log_channel_id, panel_channel_id,
-         _normalize_room_visibility(room_visibility), guild_id),
+         _normalize_room_visibility(room_visibility), intro_message, guild_id),
     )
 
 
@@ -678,10 +679,13 @@ async def _post_intro(
     question: str,
     color: "discord.Color | None" = None,
     visibility: str = DEFAULT_ROOM_VISIBILITY,
+    intro_message: str = "",
 ) -> None:
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(title="🖊️ Pen Pals", color=color)
+    if intro_message:
+        embed.description = intro_message[:4096]
     embed.add_field(
         name="Matched With",
         value=f"{user1.mention} × {user2.mention}",
@@ -828,6 +832,7 @@ async def _do_pair(
         await _post_intro(
             channel, user1, user2, expiry_at, question,
             color=accent, visibility=visibility,
+            intro_message=cfg["intro_message"] if "intro_message" in cfg.keys() else "",
         )
     except discord.HTTPException as exc:
         log.error("pen_pals: failed to post intro in channel %d: %s", channel.id, exc)

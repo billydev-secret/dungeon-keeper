@@ -56,6 +56,7 @@ def _configure(
     opt_in_role_id: int = 0,
     question_category: str = "sfw",
     room_visibility: str = pp.DEFAULT_ROOM_VISIBILITY,
+    intro_message: str = "",
     guild_id: int = GUILD_ID,
 ) -> None:
     with open_db(db_path) as conn:
@@ -69,6 +70,7 @@ def _configure(
             log_channel_id=0,
             panel_channel_id=0,
             room_visibility=room_visibility,
+            intro_message=intro_message,
         )
 
 
@@ -176,6 +178,41 @@ async def test_post_intro_embed_lists_new_question_and_end_commands():
     commands_field = next(f for f in embed.fields if f.name == "Commands")
     assert "/penpals new-question" in commands_field.value
     assert "/penpals end" in commands_field.value
+    assert not embed.description
+
+
+async def test_post_intro_embed_uses_configured_intro_message_as_description():
+    channel = MagicMock(spec=discord.TextChannel)
+    intro_msg = MagicMock()
+    intro_msg.pin = AsyncMock()
+    channel.send = AsyncMock(side_effect=[intro_msg, MagicMock()])
+    user1 = FakeUser(1, "Alice")
+    user2 = FakeUser(2, "Bob")
+
+    await pp._post_intro(
+        channel, user1, user2, time.time() + 3600, "A question?",
+        intro_message="Be kind to your pen pal!",
+    )
+
+    embed = channel.send.call_args_list[0].kwargs["embed"]
+    assert embed.description == "Be kind to your pen pal!"
+
+
+async def test_post_intro_embed_truncates_oversized_intro_message():
+    channel = MagicMock(spec=discord.TextChannel)
+    intro_msg = MagicMock()
+    intro_msg.pin = AsyncMock()
+    channel.send = AsyncMock(side_effect=[intro_msg, MagicMock()])
+    user1 = FakeUser(1, "Alice")
+    user2 = FakeUser(2, "Bob")
+
+    await pp._post_intro(
+        channel, user1, user2, time.time() + 3600, "A question?",
+        intro_message="x" * 5000,
+    )
+
+    embed = channel.send.call_args_list[0].kwargs["embed"]
+    assert embed.description == "x" * 4096
 
 
 # ── _channel_name ─────────────────────────────────────────────────────
@@ -462,6 +499,19 @@ async def test_do_pair_nsfw_channel_when_category_all(sync_db_path, pair_env):
     _configure(sync_db_path, question_category="all")
     assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is True
     assert len(created) == 1 and created[0]["nsfw"] is True
+
+
+async def test_do_pair_passes_configured_intro_message_to_post_intro(sync_db_path, pair_env):
+    bot, _channel, _created = pair_env
+    _configure(sync_db_path, intro_message="Be kind to your pen pal!")
+    assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is True
+    assert pp._post_intro.call_args.kwargs["intro_message"] == "Be kind to your pen pal!"
+
+
+async def test_do_pair_defaults_to_empty_intro_message(sync_db_path, pair_env):
+    bot, _channel, _created = pair_env
+    assert await pp._do_pair(bot, sync_db_path, GUILD_ID, 1, 2) is True
+    assert pp._post_intro.call_args.kwargs["intro_message"] == ""
 
 
 async def test_do_pair_guard_aborts_duplicate_session(sync_db_path, pair_env):

@@ -79,6 +79,13 @@ export function mount(container) {
             </div>
 
             <div class="field">
+              <label for="pp-intro-message">Session Opening Message</label>
+              <textarea name="intro_message" id="pp-intro-message" rows="3" maxlength="1000"
+                placeholder="Optional — shown above the match details when a chat opens">${esc(pp.intro_message || "")}</textarea>
+              <div class="field-hint">Shown at the top of the pinned embed when two members are matched, above who they're matched with and when the chat ends. Leave blank for no message.</div>
+            </div>
+
+            <div class="field">
               <label>Log Channel</label>
               <span data-picker="log_channel_id"></span>
               <div class="field-hint">Posts a line here each time two members are paired, so moderators can keep an eye on it. "(disabled)" logs nothing.</div>
@@ -215,6 +222,7 @@ export function mount(container) {
           opt_in_role_id:     optInPicker.getValue() || null,
           question_category:  fd.get("question_category"),
           room_visibility:    fd.get("room_visibility"),
+          intro_message:      fd.get("intro_message"),
           log_channel_id:     logPicker.getValue() || null,
           panel_channel_id:   panelPicker.getValue() || null,
         });
