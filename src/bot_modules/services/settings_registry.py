@@ -239,7 +239,7 @@ FEATURES: tuple[Feature, ...] = (
                   writable=False, help="Set from the panel — it's a channel list."),
             _num("greeting_watch_window_minutes", "Minutes before nudging",
                  minimum=1, maximum=1440),
-            _text("greeting_watch_extra_tokens", "Extra greeting words",
+            _text("greeting_watch_extra_words", "Extra greeting words",
                   help="Comma-separated server-specific greetings matched at "
                        "the start of a message, e.g. server in-jokes."),
             _ch("greeter_chat_channel_id", "Fallback chat channel"),

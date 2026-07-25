@@ -330,7 +330,7 @@ class GuildConfig:
     greeting_watch_notify_user_ids: frozenset[int]
     greeting_watch_window_minutes: int
     # dashboard-configured server-specific greeting words (lowercased tuple)
-    greeting_watch_extra_tokens: tuple[str, ...]
+    greeting_watch_extra_words: tuple[str, ...]
     # message archival / spoiler enforcement
     spoiler_required_channels: frozenset[int]
     bypass_role_ids: frozenset[int]
@@ -358,7 +358,7 @@ class GuildConfig:
         *,
         allow_legacy_fallback: bool,
     ) -> "GuildConfig":
-        from bot_modules.services.greeting_watch_service import parse_extra_tokens
+        from bot_modules.services.greeting_watch_service import parse_extra_words
         from bot_modules.services.welcome_service import (
             DEFAULT_LEAVE_MESSAGE,
             DEFAULT_WELCOME_MESSAGE,
@@ -420,8 +420,8 @@ class GuildConfig:
             greeting_watch_window_minutes=_int(
                 "greeting_watch_window_minutes", 10
             ),
-            greeting_watch_extra_tokens=parse_extra_tokens(
-                _val("greeting_watch_extra_tokens")
+            greeting_watch_extra_words=parse_extra_words(
+                _val("greeting_watch_extra_words")
             ),
             spoiler_required_channels=_ids("spoiler_required_channels"),
             bypass_role_ids=_ids("bypass_role_ids"),

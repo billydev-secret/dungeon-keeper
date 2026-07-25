@@ -514,7 +514,7 @@ class _StubGuildConfig:
         greeting_watch_channel_ids: Any = None,
         greeting_watch_notify_user_ids: Any = None,
         greeting_watch_window_minutes: int = 10,
-        greeting_watch_extra_tokens: tuple = (),
+        greeting_watch_extra_words: tuple = (),
     ):
         self.welcome_channel_id = welcome_channel_id
         self.welcome_message = welcome_message
@@ -558,7 +558,7 @@ class _StubGuildConfig:
             else frozenset(greeting_watch_notify_user_ids)
         )
         self.greeting_watch_window_minutes = greeting_watch_window_minutes
-        self.greeting_watch_extra_tokens = tuple(greeting_watch_extra_tokens)
+        self.greeting_watch_extra_words = tuple(greeting_watch_extra_words)
 
     @property
     def retains_content(self) -> bool:

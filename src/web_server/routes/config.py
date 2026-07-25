@@ -65,7 +65,7 @@ from bot_modules.services.booster_roles import (
     upsert_booster_role,
 )
 from bot_modules.services.greeting_watch_service import (
-    parse_extra_tokens,
+    parse_extra_words,
     parse_notify_ids,
 )
 from bot_modules.services.quote_renderer import (
@@ -529,8 +529,8 @@ def _greeting_watch_section(conn, guild_id: int) -> dict:
         "window_minutes": _int_val(
             conn, "greeting_watch_window_minutes", 10, guild_id=guild_id
         ),
-        "extra_tokens": _str_val(
-            conn, "greeting_watch_extra_tokens", guild_id=guild_id
+        "extra_words": _str_val(
+            conn, "greeting_watch_extra_words", guild_id=guild_id
         ),
     }
 
@@ -2378,7 +2378,7 @@ class GreetingWatchConfigUpdate(BaseModel):
     window_minutes: int | None = None
     # CSV of server-specific greeting words ("henlo, good yawn"). Empty string
     # clears the list.
-    extra_tokens: str | None = None
+    extra_words: str | None = None
 
 
 @router.put("/config/greeting-watch")
@@ -2424,13 +2424,13 @@ async def update_greeting_watch(
                     str(body.window_minutes),
                     guild_id,
                 )
-            if body.extra_tokens is not None:
+            if body.extra_words is not None:
                 # Normalize (trim/lowercase/dedupe) so the stored value matches
                 # what the ingest hook parses back out.
                 set_config_value(
                     conn,
-                    "greeting_watch_extra_tokens",
-                    ", ".join(parse_extra_tokens(body.extra_tokens)),
+                    "greeting_watch_extra_words",
+                    ", ".join(parse_extra_words(body.extra_words)),
                     guild_id,
                 )
         return {"ok": True}
