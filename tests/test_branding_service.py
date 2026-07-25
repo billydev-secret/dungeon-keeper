@@ -156,10 +156,35 @@ def test_saving_names_preserves_the_accent(db):
 def test_casino_embed_titles_use_the_guild_name():
     from bot_modules.cogs.casino import embeds as casino_embeds
 
-    # Default preserves the text the home server has always seen.
-    assert casino_embeds.casino_title() == "🌻 The Golden Meadow Casino"
-    assert casino_embeds.CASINO_TITLE == "🌻 The Golden Meadow Casino"
-    assert casino_embeds.casino_title("Neon Pines") == "🌻 The Neon Pines Casino"
+    # Default preserves the name the home server has always seen; the emoji
+    # is name-agnostic so a renamed casino isn't stuck with a sunflower.
+    assert casino_embeds.casino_title() == "🎲 The Golden Meadow Casino"
+    assert casino_embeds.CASINO_TITLE == "🎲 The Golden Meadow Casino"
+    assert casino_embeds.casino_title("Neon Pines") == "🎲 The Neon Pines Casino"
+
+
+def test_casino_flavor_text_honours_a_renamed_casino():
+    """Regression: game embeds used to hardcode "Meadow"/"Golden Meadow"
+    in their titles regardless of the guild's configured casino_name."""
+    from bot_modules.cogs.casino import embeds as casino_embeds
+    from bot_modules.services.economy_service import EconSettings
+
+    econ = EconSettings(currency_emoji="💎", currency_name="gem", currency_plural="gems")
+
+    slots = casino_embeds.build_slots_embed(
+        econ, 42, ("7", "7", "7"), 10, 100, "label", casino_name="Neon Pines",
+    )
+    assert slots.title == "🎰 Neon Pines Slots"
+
+    spin = casino_embeds.build_slots_spin_embed(
+        econ, 42, 10, (None, None, None), None, casino_name="Neon Pines",
+    )
+    assert spin.title == "🎰 Neon Pines Slots"
+
+    jackpot = casino_embeds.build_jackpot_celebration(
+        econ, 42, 5000, casino_name="Neon Pines",
+    )
+    assert jackpot.title == "🏆 JACKPOT AT THE NEON PINES 🏆"
 
 
 def test_advisor_prompt_and_error_use_the_guild_name():

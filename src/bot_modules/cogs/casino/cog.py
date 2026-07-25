@@ -423,7 +423,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
     async def _restick_later(self, guild_id: int) -> None:
         try:
-            await asyncio.sleep(20)
+            await asyncio.sleep(60)
             guild = self.bot.get_guild(guild_id)
             if guild is None:
                 return
@@ -563,7 +563,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
     _MODAL_TITLES = {
         "coinflip": "Coinflip",
-        "slots": "Meadow Slots",
+        "slots": "Slots",
         "blackjack": "Blackjack",
     }
 
@@ -719,7 +719,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
         def _play() -> tuple[
             str | None, EconSettings | None, tuple[str, str, str],
-            svc.InstantResult, int,
+            svc.InstantResult, int, str,
         ]:
             with self.ctx.open_db() as conn:
                 err = svc.take_stake(
@@ -727,15 +727,20 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     channel_id=interaction.channel_id,
                 )
                 if err is not None:
-                    return err, None, ("", "", ""), svc.InstantResult(0), 0
+                    return err, None, ("", "", ""), svc.InstantResult(0), 0, ""
                 reels = logic.spin_slots()
                 result = svc.settle_slots(
                     conn, guild.id, interaction.user.id, amount, reels
                 )
                 max_bet = svc.load_casino_settings(conn, guild.id).max_bet
-                return None, load_econ_settings(conn, guild.id), reels, result, max_bet
+                return (
+                    None, load_econ_settings(conn, guild.id), reels, result,
+                    max_bet, resolve_casino_name_conn(conn, guild.id),
+                )
 
-        err, econ, reels, result, max_bet = await asyncio.to_thread(_play)
+        err, econ, reels, result, max_bet, casino_name = (
+            await asyncio.to_thread(_play)
+        )
         if err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {err}")
             return
@@ -744,7 +749,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             econ, interaction.user.id, reels, amount, result.payout,
             result.label,
             jackpot_won=result.jackpot_won, streak=result.streak,
-            pot_after=result.pot_after,
+            pot_after=result.pot_after, casino_name=casino_name,
         )
         again = play_again_view("slots", amount)
         if logic.is_big_bet(amount, max_bet):
@@ -752,7 +757,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             accent = await self._accent(guild)
             await interaction.response.send_message(
                 embed=casino_embeds.build_slots_spin_embed(
-                    econ, interaction.user.id, amount, (None, None, None), accent
+                    econ, interaction.user.id, amount, (None, None, None),
+                    accent, casino_name=casino_name,
                 ),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
@@ -767,7 +773,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     )
                     await message.edit(
                         embed=casino_embeds.build_slots_spin_embed(
-                            econ, interaction.user.id, amount, revealed, accent
+                            econ, interaction.user.id, amount, revealed,
+                            accent, casino_name=casino_name,
                         )
                     )
                 await asyncio.sleep(1.0)
@@ -785,7 +792,8 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             try:
                 await interaction.channel.send(
                     embed=casino_embeds.build_jackpot_celebration(
-                        econ, interaction.user.id, result.jackpot_won
+                        econ, interaction.user.id, result.jackpot_won,
+                        casino_name=casino_name,
                     ),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )

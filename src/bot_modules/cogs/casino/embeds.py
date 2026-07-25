@@ -2,10 +2,16 @@
 
 Style-guide rules in force: accent color for neutral states, semantic
 green/red only for genuine win/loss — a big win is green like any other win,
-never a third tier — with COLOR_GOLD reserved for the meadow's own panels,
+never a third tier — with COLOR_GOLD reserved for the casino's own panels,
 currency always rendered through the guild's own emoji/name, section
 spacing via the trailing zero-width space, no custom emoji in footers.
 Builders are pure — color and settings arrive as parameters.
+
+Flavor copy stays name-agnostic: every guild can rename its casino from
+the Branding panel (``casino_name``/``DEFAULT_CASINO_NAME``), so nothing
+here hardcodes "meadow"/"honeypot"/other Golden-Meadow-specific imagery —
+generic gambling terms ("the house", "the jackpot", "the pot") read right
+under any name.
 """
 
 from __future__ import annotations
@@ -22,17 +28,17 @@ from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED
 
 
 def casino_title(casino_name: str = DEFAULT_CASINO_NAME) -> str:
-    """Hub-panel title for a guild's casino ("🌻 The Golden Meadow Casino")."""
-    return f"🌻 The {casino_name} Casino"
+    """Hub-panel title for a guild's casino ("🎲 The Golden Meadow Casino")."""
+    return f"🎲 The {casino_name} Casino"
 
 
 # Kept for callers with no guild handy; the per-guild name is the norm.
 CASINO_TITLE = casino_title()
-_FOOTER = "The meadow always wins — eventually. Play for fun, not for rent."
+_FOOTER = "Play for fun, not for rent."
 
 _GAME_LINES = {
     "coinflip": "🪙 **Coinflip** — call it in the air; a win pays 1.9× your bet",
-    "slots": "🎰 **Slots** — three meadow reels; pairs pay back, sevens pay big",
+    "slots": "🎰 **Slots** — three spinning reels; pairs pay back, sevens pay big",
     "blackjack": "🃏 **Blackjack** — beat the dealer to 21; naturals pay 3:2",
     "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
     "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
@@ -54,7 +60,7 @@ def _streak_line(econ: EconSettings, streak: int) -> str | None:
         return f"🔥 **{streak} wins in a row!**"
     if streak <= -logic.STREAK_CALLOUT_AT:
         return (
-            f"🧊 {abs(streak)} losses in a row — the meadow is merciless."
+            f"🧊 {abs(streak)} losses in a row — the house is merciless."
         )
     return None
 
@@ -66,7 +72,7 @@ def _with_streak(desc: str, econ: EconSettings, streak: int) -> str:
 
 def _pot_line(pot_after: int) -> str:
     """Every loss is a tiny ad for the jackpot."""
-    return f"🍯 The loss waters the honeypot — now **{pot_after:,}**."
+    return f"💰 The loss feeds the jackpot — now **{pot_after:,}**."
 
 
 def build_hub_embed(
@@ -85,7 +91,7 @@ def build_hub_embed(
     embed = discord.Embed(
         title=casino_title(casino_name),
         description=(
-            "Sunshine, clover, and questionable financial decisions. "
+            "Bright lights, long odds, and questionable financial decisions. "
             "Pick a table — every bet comes straight from your wallet.\n​"
         ),
         color=_accent(accent),
@@ -98,7 +104,7 @@ def build_hub_embed(
     )
     if jackpot is not None:
         embed.add_field(
-            name="🍯 Progressive jackpot",
+            name="💰 Progressive jackpot",
             value=(
                 f"Currently {_coins(econ, jackpot)} — every lost bet feeds "
                 "it, and triple 7️⃣ on the slots takes it ALL.\n​"
@@ -221,7 +227,7 @@ def build_coinflip_embed(
         + (
             f"The coin agrees — they collect {_coins(econ, payout)}."
             if won
-            else "The coin does not care. The meadow keeps the bet."
+            else "The coin does not care. The house keeps the bet."
         )
     )
     if not won and pot_after > 0:
@@ -246,24 +252,25 @@ def build_slots_embed(
     jackpot_won: int = 0,
     streak: int = 0,
     pot_after: int = 0,
+    casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     reel_line = f"▶ {reels[0]} │ {reels[1]} │ {reels[2]} ◀"
-    title = "🎰 Meadow Slots"
+    title = f"🎰 {casino_name} Slots"
     if payout > 0:
         desc = (
             f"{reel_line}\n\n{label} <@{user_id}> bet {_coins(econ, stake)} "
             f"and collects {_coins(econ, payout)}."
         )
         if jackpot_won:
-            title = "💥 🎰 THE HONEYPOT SPILLS"
-            desc += "\nThe whole progressive pot. The bees weep."
+            title = "💥 🎰 THE JACKPOT SPILLS"
+            desc += "\nThe whole progressive pot — gone in one spin."
         # A big win is still a win: the celebration lives in the copy, not in a
         # third color tier (style guide: green = win, red = loss, full stop).
         color = COLOR_GREEN
     else:
         desc = (
             f"{reel_line}\n\n<@{user_id}>'s {_coins(econ, stake)} scatters "
-            "into the wildflowers."
+            "into the house's take."
         )
         if pot_after > 0:
             desc += f"\n{_pot_line(pot_after)}"
@@ -276,15 +283,16 @@ def build_slots_embed(
 
 
 def build_jackpot_celebration(
-    econ: EconSettings, user_id: int, amount: int
+    econ: EconSettings, user_id: int, amount: int,
+    *, casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     """The standalone fanfare posted beside a jackpot result."""
     embed = discord.Embed(
-        title="🏆 JACKPOT AT THE GOLDEN MEADOW 🏆",
+        title=f"🏆 JACKPOT AT THE {casino_name.upper()} 🏆",
         description=(
-            f"🍯 7️⃣ 7️⃣ 7️⃣ 🍯\n\n<@{user_id}> just hit the progressive "
+            f"💰 7️⃣ 7️⃣ 7️⃣ 💰\n\n<@{user_id}> just hit the progressive "
             f"jackpot for {_coins(econ, amount)}!\n"
-            "The pot reseeds — every lost bet grows the next one. 🌱"
+            "The pot reseeds — every lost bet grows the next one."
         ),
         color=COLOR_GOLD,
     )
@@ -303,7 +311,7 @@ def build_coinflip_spin_embed(
         title="🪙 Coinflip — it's in the air!",
         description=(
             f"<@{user_id}> calls **{call}** for {_coins(econ, stake)}…\n"
-            "The coin spins high over the meadow. 🌾"
+            "The coin spins high in the air. 🪙"
         ),
         color=_accent(accent),
     )
@@ -317,10 +325,12 @@ def build_slots_spin_embed(
     stake: int,
     revealed: tuple[str | None, str | None, str | None],
     accent: discord.Color | None,
+    *,
+    casino_name: str = DEFAULT_CASINO_NAME,
 ) -> discord.Embed:
     cells = " │ ".join(sym if sym is not None else "🌀" for sym in revealed)
     embed = discord.Embed(
-        title="🎰 Meadow Slots",
+        title=f"🎰 {casino_name} Slots",
         description=(
             f"▶ {cells} ◀\n\n<@{user_id}> bet {_coins(econ, stake)} — "
             "the reels are spinning…"
@@ -501,7 +511,7 @@ def build_roulette_result_embed(
     else:
         description = (
             f"The ball lands on {dot} **{result}** — but nobody bet. "
-            "The wheel spins for the bees alone."
+            "The wheel spins for no one."
         )
     embed = discord.Embed(
         title="🎡 Roulette — no more bets!",
@@ -524,7 +534,7 @@ def build_roulette_result_embed(
         kept = _coins(econ, losers_total)
         if pot_after > 0:
             kept += f"\n{_pot_line(pot_after)}"
-        embed.add_field(name="The meadow keeps", value=kept, inline=False)
+        embed.add_field(name="The house keeps", value=kept, inline=False)
     embed.set_footer(text=_FOOTER)
     return embed
 

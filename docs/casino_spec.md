@@ -11,16 +11,20 @@ theming over an unmistakably Vegas core.
 default `DEFAULT_CASINO_NAME = "Golden Meadow"` — the home server's name, kept
 as the fallback so nothing moved for it). The cog reads it alongside its other
 settings and passes it to the pure builders; the hub title is
-`🌻 The {name} Casino` and the help embed `How the {name} pays`
+`🎲 The {name} Casino` and the help embed `How the {name} pays`
 (`casino/embeds.casino_title`). Edited on **Config → Branding**, which
-dispatches `casino_config_change` so a rename repaints the hub panel.
+dispatches `casino_config_change` so a rename repaints the hub panel. Flavor
+copy stays name-agnostic (2026-07-24: dropped the "meadow"/"honeypot"
+imagery that used to survive a rename) — result text says "the house" or
+"the jackpot" rather than assuming any particular theme, and the slots/
+jackpot embed titles interpolate the configured name directly.
 
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
 🏇 Derby · ❓ How It Works); every flow is buttons + amount modals. Results post
 publicly (mentions live in embeds, so nothing pings). The panel is
 **bottom-sticky** (the economy sticky-panel pattern): channel traffic
-debounces a 20s restick that deletes and reposts it, since it is the
+debounces a 60s restick that deletes and reposts it, since it is the
 casino's only entry point. Roulette round embeds repaint on a 2s debounce
 per round (one edit per burst of bets, the live_signal idea). Both the
 casino config PUT **and the economy config PUT** dispatch
@@ -196,9 +200,9 @@ caller-supplied.
   member's last stake per game (in-memory). The cap error names its reset
   time; the hub's 📊 My Stats button shows the personal tally + today's
   cap usage ephemerally.
-- **Honeypot feedback:** losing results append "the loss waters the
-  honeypot — now N" (from the settle's own transaction), so the jackpot's
-  funding is visible instead of silent. The round-already-running note
+- **Jackpot feedback:** losing results append "the loss feeds the jackpot
+  — now N" (from the settle's own transaction), so the jackpot's funding is
+  visible instead of silent. The round-already-running note
   carries a jump link to the live round message. Blackjack hides Double
   Down when the clicker can't afford the second stake.
 
