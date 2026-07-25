@@ -21,7 +21,7 @@ export function mount(container) {
     ]);
     const g = config.greeting_watch || {
       enabled: false, channel_ids: "", notify_user_ids: [], window_minutes: 10,
-      extra_tokens: "",
+      extra_words: "",
     };
 
     container.innerHTML = `
@@ -48,7 +48,7 @@ export function mount(container) {
           </div>
           <div class="field">
             <label>Extra Greeting Words</label>
-            <input type="text" name="extra_tokens" placeholder="henlo, good yawn, o7" />
+            <input type="text" name="extra_words" placeholder="henlo, good yawn, o7" />
             <div class="field-hint">Comma-separated server-specific greetings — in-jokes the built-in list can't know. Each is matched at the start of a message, case-insensitive. Leave empty for the built-ins only.</div>
           </div>
           <div class="field">
@@ -81,7 +81,7 @@ export function mount(container) {
     const status = container.querySelector("[data-status]");
     // Set via DOM, not the template string, so stored tokens containing
     // quotes or angle brackets can't break out of the value attribute.
-    form.querySelector('input[name="extra_tokens"]').value = g.extra_tokens || "";
+    form.querySelector('input[name="extra_words"]').value = g.extra_words || "";
     guardForm(form);
 
     form.addEventListener("submit", async (e) => {
@@ -101,7 +101,7 @@ export function mount(container) {
           channel_ids: channelsPicker.getValues().join(","),
           notify_user_ids: notifyPicker.getValues().join(","),
           window_minutes,
-          extra_tokens: form.querySelector('input[name="extra_tokens"]').value,
+          extra_words: form.querySelector('input[name="extra_words"]').value,
         });
         showStatus(status, true);
       } catch (err) {

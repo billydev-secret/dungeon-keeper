@@ -21,7 +21,7 @@ from typing import NamedTuple
 # "history" / "gaming" / "morningstar" from matching. This is a heuristic
 # dial, not a classifier: widen the vocabulary as real misses surface rather
 # than treating it as exhaustive — and per-guild additions come in through
-# ``is_greeting``'s ``extra_tokens`` (dashboard-configured), so server in-jokes
+# ``is_greeting``'s ``extra_words`` (dashboard-configured), so server in-jokes
 # don't need a code change.
 _WORD_TOKENS = (
     r"g(?:ood)?\s*mornin[g']?"
@@ -72,7 +72,7 @@ _SYMBOL_TOKENS = (r"o/", "👋")
 
 
 @lru_cache(maxsize=128)
-def _greeting_re(extra_tokens: tuple[str, ...]) -> re.Pattern[str]:
+def _greeting_re(extra_words: tuple[str, ...]) -> re.Pattern[str]:
     """Compile the greeting matcher with a guild's extra tokens folded in.
 
     Extras are matched literally (``re.escape``) so a token like "what?" can't
@@ -82,7 +82,7 @@ def _greeting_re(extra_tokens: tuple[str, ...]) -> re.Pattern[str]:
     """
     bounded: list[str] = [_WORD_TOKENS]
     symbols: list[str] = list(_SYMBOL_TOKENS)
-    for tok in extra_tokens:
+    for tok in extra_words:
         (bounded if re.match(r"\w", tok[-1]) else symbols).append(re.escape(tok))
     return re.compile(
         r"^\W*(?:(?:" + "|".join(bounded) + r")\b|" + "|".join(symbols) + r")",
@@ -90,8 +90,8 @@ def _greeting_re(extra_tokens: tuple[str, ...]) -> re.Pattern[str]:
     )
 
 
-def parse_extra_tokens(raw: str | None) -> tuple[str, ...]:
-    """Parse the ``greeting_watch_extra_tokens`` CSV into a clean tuple.
+def parse_extra_words(raw: str | None) -> tuple[str, ...]:
+    """Parse the ``greeting_watch_extra_words`` CSV into a clean tuple.
 
     Comma- or newline-separated; entries are trimmed, lowercased, de-duplicated
     preserving first-seen order. The tuple form keeps GuildConfig hashable and
@@ -112,14 +112,14 @@ def parse_extra_tokens(raw: str | None) -> tuple[str, ...]:
 _MAX_GREETING_WORDS = 8
 
 
-def is_greeting(content: str, extra_tokens: tuple[str, ...] = ()) -> bool:
+def is_greeting(content: str, extra_words: tuple[str, ...] = ()) -> bool:
     """True if *content* reads as a greeting addressed to the channel."""
     if not content:
         return False
     text = content.strip()
     if not text or len(text.split()) > _MAX_GREETING_WORDS:
         return False
-    return _greeting_re(extra_tokens).match(text) is not None
+    return _greeting_re(extra_words).match(text) is not None
 
 
 def parse_notify_ids(raw: str | None, legacy: str | None = None) -> list[int]:

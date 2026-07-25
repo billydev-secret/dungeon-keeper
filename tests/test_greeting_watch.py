@@ -10,7 +10,7 @@ from bot_modules.services.greeting_watch_service import (
     is_greeting,
     list_due_greetings,
     mark_resolved,
-    parse_extra_tokens,
+    parse_extra_words,
     parse_notify_ids,
     pending_greetings_for,
     record_greeting,
@@ -111,25 +111,25 @@ def test_is_greeting_negative(text):
 # per-guild extra tokens
 
 
-def test_parse_extra_tokens_splits_commas_and_newlines():
-    assert parse_extra_tokens("henlo, good yawn\no7") == (
+def test_parse_extra_words_splits_commas_and_newlines():
+    assert parse_extra_words("henlo, good yawn\no7") == (
         "henlo",
         "good yawn",
         "o7",
     )
 
 
-def test_parse_extra_tokens_trims_lowercases_dedupes_preserving_order():
-    assert parse_extra_tokens(" Henlo ,henlo, GOOD Yawn ,, ") == (
+def test_parse_extra_words_trims_lowercases_dedupes_preserving_order():
+    assert parse_extra_words(" Henlo ,henlo, GOOD Yawn ,, ") == (
         "henlo",
         "good yawn",
     )
 
 
-def test_parse_extra_tokens_empty_and_none():
-    assert parse_extra_tokens(None) == ()
-    assert parse_extra_tokens("") == ()
-    assert parse_extra_tokens(" , ,\n") == ()
+def test_parse_extra_words_empty_and_none():
+    assert parse_extra_words(None) == ()
+    assert parse_extra_words("") == ()
+    assert parse_extra_words(" , ,\n") == ()
 
 
 def test_extra_token_matches_at_start_case_insensitive():
@@ -163,10 +163,22 @@ def test_extra_token_ending_in_symbol_matches_without_boundary():
     assert is_greeting("yo!", extras) is True
 
 
-def test_extra_tokens_do_not_disturb_core_vocabulary():
+def test_extra_words_do_not_disturb_core_vocabulary():
     extras = ("good yawn",)
     assert is_greeting("good morning", extras) is True
     assert is_greeting("does anyone know when the store opens", extras) is False
+
+
+def test_extra_words_key_registered_and_not_secret_shaped():
+    # The registry rejects secret-shaped keys (anything matching "token" etc.)
+    # at import time — the original `greeting_watch_extra_tokens` name crashed
+    # the bot on every boot. Importing the registry here makes any regression
+    # fail in this feature's scoped-gate tests, not first in prod.
+    from bot_modules.services import settings_registry
+
+    setting = settings_registry.get_setting("greeting_watch_extra_words")
+    assert setting is not None
+    assert settings_registry.get_setting("greeting_watch_extra_tokens") is None
 
 
 # ── notify-id parsing (multi-subscriber) ─────────────────────────────
