@@ -603,3 +603,52 @@ def war_raise_payout(player: str, dealer: str, doubled_stake: int) -> int:
 def war_retreat_payout(stake: int) -> int:
     """Retreat surrenders half (floored — the house keeps the odd coin)."""
     return stake // 2
+
+
+# ── Keno (bespoke paytable — NOT casino keno) ──────────────────────────
+#
+# 20 of 80 numbers drawn once per communal round; a ticket is a quick-
+# picked set of 4/6/8/10 spots paying by catch count. Real casino keno
+# returns a punishing 65–75% — these paytables are built from scratch on
+# the exact hypergeometric P(catch k) = C(t,k)·C(80−t,20−k)/C(80,20) to
+# land every tier at ~94–96%, pinned by the EV test. The pays are total
+# return (×stake); the low tiers give frequent money-back moments, the
+# top catches stay splashy (a Pick-8 solid ticket pays 5000×).
+
+KENO_POOL = 80
+KENO_DRAWN = 20
+KENO_TIERS = (4, 6, 8, 10)
+
+KENO_PAYTABLE: dict[int, dict[int, int]] = {
+    4: {2: 2, 3: 8, 4: 60},                                    # RTP 95.51%
+    6: {2: 1, 3: 2, 4: 8, 5: 30, 6: 500},                      # RTP 95.36%
+    8: {3: 1, 4: 3, 5: 12, 6: 70, 7: 500, 8: 5000},            # RTP 94.66%
+    10: {4: 1, 5: 4, 6: 20, 7: 130, 8: 1000, 9: 4000, 10: 5000},  # RTP 95.25%
+}
+
+
+def keno_quick_pick(spots: int) -> list[int]:
+    """A sorted quick-pick ticket of ``spots`` numbers from 1–80."""
+    return sorted(random.sample(range(1, KENO_POOL + 1), spots))
+
+
+def draw_keno() -> list[int]:
+    """The round's 20 drawn numbers, sorted."""
+    return sorted(random.sample(range(1, KENO_POOL + 1), KENO_DRAWN))
+
+
+def keno_catches(picks: list[int], drawn: list[int]) -> int:
+    return len(set(picks) & set(drawn))
+
+
+def keno_payout(picks: list[int], drawn: list[int], amount: int) -> int:
+    """Total return for one ticket against the draw (0 = lost)."""
+    tier = KENO_PAYTABLE.get(len(picks))
+    if tier is None:
+        raise ValueError(f"unknown keno tier: {len(picks)} spots")
+    return amount * tier.get(keno_catches(picks, drawn), 0)
+
+
+def describe_keno_ticket(picks: list[int]) -> str:
+    """"Pick-6 · 4 12 33 41 56 78" — the bets board / recap line."""
+    return f"Pick-{len(picks)} · {' '.join(str(n) for n in picks)}"

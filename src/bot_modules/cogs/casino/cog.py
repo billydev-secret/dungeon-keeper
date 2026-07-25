@@ -21,6 +21,7 @@ celebrations + wins at or over the configured ``broadcast_min_payout``).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 import time
@@ -47,6 +48,9 @@ from bot_modules.cogs.casino.views import (
     DiceBetButton,
     DiceBetModal,
     DiceNextView,
+    KenoNextView,
+    KenoTicketModal,
+    KenoTierButton,
     PlayAgainButton,
     RouletteBetButton,
     RouletteBetModal,
@@ -57,6 +61,7 @@ from bot_modules.cogs.casino.views import (
     build_derby_view,
     build_dice_view,
     build_hub_view,
+    build_keno_view,
     build_roulette_view,
     build_war_view,
     play_again_view,
@@ -333,6 +338,54 @@ _DICE_UI = _WindowUI(
 )
 
 
+def _keno_show(
+    econ: EconSettings,
+    accent: discord.Color | None,
+    drawn: list[int],
+    bets: list[tuple[int, str, int, int]],
+    pot_after: int,
+) -> tuple[list[discord.Embed], discord.Embed]:
+    frames = [casino_embeds.build_keno_tumble_embed(econ, accent)]
+    return frames, casino_embeds.build_keno_result_embed(
+        econ, drawn, bets, pot_after=pot_after
+    )
+
+
+def _settle_keno(
+    conn: sqlite3.Connection,
+    round_id: int,
+    drawn: list[int],
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    """_WindowUI.settle adapter for the 20-number draw."""
+    return svc.settle_keno_round(conn, round_id, drawn, now=now)
+
+
+_KENO_UI = _WindowUI(
+    key="keno",
+    enabled_attr="keno_enabled",
+    window_attr="keno_window_seconds",
+    live_round=svc.live_keno_round,
+    get_round=svc.get_keno_round,
+    open_round=svc.open_keno_round,
+    set_message=svc.set_keno_message,
+    round_bets=svc.keno_bets,
+    settle=_settle_keno,
+    void=svc.void_keno_round,
+    draw=logic.draw_keno,
+    describe_bet=lambda b: logic.describe_keno_ticket(
+        json.loads(str(b["spots"]))
+    ),
+    round_embed=casino_embeds.build_keno_round_embed,
+    running_note=casino_embeds.build_draw_running_note,
+    build_view=build_keno_view,
+    next_view=KenoNextView,
+    build_show=_keno_show,
+    frame_sleep=1.5,
+)
+
+
 class CasinoCog(commands.Cog, name="CasinoCog"):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -374,10 +427,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         self.bot.add_view(DerbyNextView())
         self.bot.add_view(BaccaratNextView())
         self.bot.add_view(DiceNextView())
+        self.bot.add_view(KenoNextView())
         self.bot.add_dynamic_items(
             BlackjackActionButton, RouletteBetButton, DerbyBetButton,
-            BaccaratBetButton, DiceBetButton, WarActionButton,
-            PlayAgainButton,
+            BaccaratBetButton, DiceBetButton, KenoTierButton,
+            WarActionButton, PlayAgainButton,
         )
         self._boot_task = asyncio.create_task(self._boot())
         self.maintenance.start()
@@ -401,7 +455,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
         def _sweep() -> tuple[
             list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row],
-            list[sqlite3.Row], list[sqlite3.Row],
+            list[sqlite3.Row], list[sqlite3.Row], list[sqlite3.Row],
         ]:
             with self.ctx.open_db() as conn:
                 return (
@@ -411,10 +465,13 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     svc.open_race_rounds(conn),
                     svc.open_baccarat_rounds(conn),
                     svc.open_dice_rounds(conn),
+                    svc.open_keno_rounds(conn),
                 )
 
         try:
-            swept, rounds, races, coups, rolls = await asyncio.to_thread(_sweep)
+            swept, rounds, races, coups, rolls, draws = (
+                await asyncio.to_thread(_sweep)
+            )
         except Exception:
             log.exception("casino boot sweep failed")
             return
@@ -425,7 +482,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             log.info("casino boot sweep refunded %d live hand(s)", len(swept))
         for ui, open_rows in (
             (_ROULETTE_UI, rounds), (_DERBY_UI, races), (_BACCARAT_UI, coups),
-            (_DICE_UI, rolls),
+            (_DICE_UI, rolls), (_KENO_UI, draws),
         ):
             for rnd in open_rows:
                 if self.bot.get_guild(int(rnd["guild_id"])) is None:
@@ -457,7 +514,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
 
         def _scan() -> tuple[
             list[int], list[int], list[int], list[int], list[int], list[int],
-            dict[int, int],
+            list[int], dict[int, int],
         ]:
             with self.ctx.open_db() as conn:
                 stale: list[int] = []
@@ -504,6 +561,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                     for r in svc.open_dice_rounds(conn)
                     if float(r["closes_at"]) <= now - 5
                 ]
+                overdue_draws = [
+                    int(r["id"])
+                    for r in svc.open_keno_rounds(conn)
+                    if float(r["closes_at"]) <= now - 5
+                ]
                 # Pots for guilds whose panel we're maintaining — repainted
                 # below when the value drifted from the rendered one. Same
                 # seed semantics as ensure_panel's read, or an unfed pot
@@ -517,13 +579,13 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                         pots[gid] = svc.get_jackpot(conn, gid, seed=cs.jackpot_seed)
                 return (
                     stale, stale_wars, overdue, overdue_races, overdue_coups,
-                    overdue_rolls, pots,
+                    overdue_rolls, overdue_draws, pots,
                 )
 
         try:
             (
                 stale, stale_wars, overdue, overdue_races, overdue_coups,
-                overdue_rolls, pots,
+                overdue_rolls, overdue_draws, pots,
             ) = await asyncio.to_thread(_scan)
         except Exception:
             log.exception("casino maintenance sweep failed")
@@ -547,6 +609,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         for ui, overdue_ids in (
             (_ROULETTE_UI, overdue), (_DERBY_UI, overdue_races),
             (_BACCARAT_UI, overdue_coups), (_DICE_UI, overdue_rolls),
+            (_KENO_UI, overdue_draws),
         ):
             for round_id in overdue_ids:
                 if (ui.key, round_id) in self._window_timers:
@@ -1611,6 +1674,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
     async def open_dice(self, interaction: discord.Interaction) -> None:
         await self._open_window(interaction, _DICE_UI)
 
+    async def open_keno(self, interaction: discord.Interaction) -> None:
+        await self._open_window(interaction, _KENO_UI)
+
     async def _open_window(
         self, interaction: discord.Interaction, ui: _WindowUI
     ) -> None:
@@ -2053,6 +2119,50 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         desc = logic.describe_sicbo_bet(bet_type)
         await safe_ephemeral(interaction, f"✅ Bet placed: {desc} for {amount:,}.")
         self._schedule_window_repaint(_DICE_UI, guild, round_id)
+
+    # ── keno-only glue (everything else rides _WindowUI above) ─────────
+
+    async def open_keno_ticket_modal(
+        self, interaction: discord.Interaction, round_id: int, spots: int
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        label, last = await self._modal_context(
+            guild.id, interaction.user.id, "keno"
+        )
+        await interaction.response.send_modal(
+            KenoTicketModal(
+                round_id, spots, limits_label=label, default_amount=last
+            )
+        )
+
+    async def place_keno_ticket(
+        self,
+        interaction: discord.Interaction,
+        round_id: int,
+        spots: int,
+        amount: int,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return
+        uid = interaction.user.id
+
+        def _bet() -> str | list[int]:
+            with self.ctx.open_db() as conn:
+                return svc.place_keno_ticket(conn, round_id, uid, spots, amount)
+
+        result = await asyncio.to_thread(_bet)
+        if isinstance(result, str):
+            await safe_ephemeral(interaction, f"❌ {result}")
+            return
+        self._last_bets[(guild.id, uid, "keno")] = amount
+        desc = logic.describe_keno_ticket(result)
+        await safe_ephemeral(
+            interaction, f"✅ Ticket punched: {desc} for {amount:,}."
+        )
+        self._schedule_window_repaint(_KENO_UI, guild, round_id)
 
 
 async def setup(bot: Bot) -> None:

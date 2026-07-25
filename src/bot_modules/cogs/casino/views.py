@@ -388,8 +388,19 @@ class CasinoHubView(discord.ui.View):
             await cog.open_bet_modal(interaction, "war")
 
     @discord.ui.button(
+        label="Keno", emoji="🔢",
+        style=discord.ButtonStyle.primary, custom_id="casino:keno", row=1,
+    )
+    async def keno(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_keno(interaction)
+
+    @discord.ui.button(
         label="My Stats", emoji="📊",
-        style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=1,
+        style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=2,
     )
     async def my_stats(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -400,7 +411,7 @@ class CasinoHubView(discord.ui.View):
 
     @discord.ui.button(
         label="How It Works", emoji="❓",
-        style=discord.ButtonStyle.secondary, custom_id="casino:help", row=1,
+        style=discord.ButtonStyle.secondary, custom_id="casino:help", row=2,
     )
     async def help(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -726,6 +737,103 @@ class DiceNextView(discord.ui.View):
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
             await cog.open_dice(interaction)
+
+
+# ── keno ticket buttons ────────────────────────────────────────────────
+
+
+class KenoTicketModal(discord.ui.Modal):
+    """One amount box; the tier was chosen by the button that opened it."""
+
+    def __init__(
+        self,
+        round_id: int,
+        spots: int,
+        *,
+        limits_label: str = "Your bet",
+        default_amount: int | None = None,
+    ) -> None:
+        super().__init__(title=f"Keno — Pick {spots}")
+        self.round_id = round_id
+        self.spots = spots
+        self.amount: discord.ui.TextInput = discord.ui.TextInput(
+            label=limits_label[:45],
+            placeholder="A whole number of coins",
+            default=str(default_amount) if default_amount else None,
+            max_length=10,
+        )
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is None:
+            return
+        amount = parse_amount(str(self.amount.value))
+        if amount is None:
+            await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
+            return
+        await cog.place_keno_ticket(
+            interaction, self.round_id, self.spots, amount
+        )
+
+
+class KenoTierButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"casino_kn:(?P<spots>4|6|8|10):(?P<rid>\d+)"),
+):
+    def __init__(self, spots: int, round_id: int) -> None:
+        top = max(logic.KENO_PAYTABLE[spots].values())
+        super().__init__(
+            discord.ui.Button(
+                label=f"Pick {spots} · to {top}×",
+                emoji="🎟️",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"casino_kn:{spots}:{round_id}",
+            )
+        )
+        self.spots = spots
+        self.round_id = round_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> KenoTierButton:
+        return cls(int(match["spots"]), int(match["rid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_keno_ticket_modal(
+                interaction, self.round_id, self.spots
+            )
+
+
+def build_keno_view(round_id: int) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    for spots in logic.KENO_TIERS:
+        view.add_item(KenoTierButton(spots, round_id))
+    return view
+
+
+class KenoNextView(discord.ui.View):
+    """One persistent button on draw recaps — the next draw is a click."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Next Draw", emoji="🔢",
+        style=discord.ButtonStyle.secondary, custom_id="casino:keno_next",
+    )
+    async def next_draw(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_keno(interaction)
 
 
 # ── war standoff buttons ───────────────────────────────────────────────

@@ -45,7 +45,7 @@ REFUND_KIND = "casino_refund"
 
 GAMES = (
     "coinflip", "slots", "blackjack", "roulette", "derby", "baccarat",
-    "dice", "war",
+    "dice", "war", "keno",
 )
 
 
@@ -65,11 +65,13 @@ class CasinoSettings:
     baccarat_enabled: bool = True
     dice_enabled: bool = True
     war_enabled: bool = True
+    keno_enabled: bool = True
     roulette_window_seconds: int = 45
     # Derby races want a touch more hype time than a roulette spin.
     derby_window_seconds: int = 60
     baccarat_window_seconds: int = 45
     dice_window_seconds: int = 45
+    keno_window_seconds: int = 45
     # An untouched blackjack hand auto-stands after this long.
     blackjack_idle_seconds: int = 180
     # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
@@ -98,6 +100,7 @@ _BOOL_KEYS = [
     "baccarat_enabled",
     "dice_enabled",
     "war_enabled",
+    "keno_enabled",
     "jackpot_enabled",
 ]
 # Everything else on the dataclass is a plain int.
@@ -1016,7 +1019,10 @@ def refund_member_live_stakes(
         kind=REFUND_KIND, now=now,
     ):
         out["war"] = int(war_hand["stake"])
-    for t in (ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES):
+    for t in (
+        ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES,
+        KENO_TABLES,
+    ):
         bets = conn.execute(
             f"SELECT b.id, b.amount FROM {t.bets} b "
             f"JOIN {t.rounds} r ON r.id = b.round_id "
@@ -1101,6 +1107,10 @@ BACCARAT_TABLES = RoundTables(
 DICE_TABLES = RoundTables(
     "dice", "casino_dice_rounds", "casino_dice_bets",
     "result", "Betting on that roll has closed.",
+)
+KENO_TABLES = RoundTables(
+    "keno", "casino_keno_rounds", "casino_keno_bets",
+    "result", "Tickets for that draw have closed.",
 )
 
 
@@ -1631,6 +1641,94 @@ def void_dice_round(
 
 def open_dice_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return _open_rounds(conn, DICE_TABLES)
+
+
+# ── keno draws (casino-classics Stage 1d — same wrappers) ──────────────
+
+
+def live_keno_round(
+    conn: sqlite3.Connection, channel_id: int
+) -> sqlite3.Row | None:
+    return _live_round(conn, KENO_TABLES, channel_id)
+
+
+def get_keno_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
+    return _get_round(conn, KENO_TABLES, round_id)
+
+
+def open_keno_round(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    window_seconds: int,
+    *,
+    now: float | None = None,
+) -> int | None:
+    return _open_round(
+        conn, KENO_TABLES, guild_id, channel_id, window_seconds, now=now
+    )
+
+
+def set_keno_message(
+    conn: sqlite3.Connection, round_id: int, message_id: int
+) -> None:
+    _set_round_message(conn, KENO_TABLES, round_id, message_id)
+
+
+def place_keno_ticket(
+    conn: sqlite3.Connection,
+    round_id: int,
+    user_id: int,
+    spots: int,
+    amount: int,
+    *,
+    now: float | None = None,
+) -> str | list[int]:
+    """Quick-pick and place one ticket. A str is the member-facing error;
+    a list is the picked numbers (shown back in the confirmation)."""
+    if spots not in casino_logic.KENO_TIERS:
+        raise ValueError(f"unknown keno tier: {spots} spots")
+    picks = casino_logic.keno_quick_pick(spots)
+    err = _place_bet(
+        conn, KENO_TABLES, get_keno_round(conn, round_id), round_id,
+        user_id, {"spots": json.dumps(picks)}, amount, now=now,
+    )
+    return err if err is not None else picks
+
+
+def keno_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
+    return _round_bets(conn, KENO_TABLES, round_id)
+
+
+def settle_keno_round(
+    conn: sqlite3.Connection,
+    round_id: int,
+    drawn: list[int],
+    *,
+    now: float | None = None,
+) -> list[dict] | None:
+    """Settle the draw. The 20 drawn numbers persist as JSON in the
+    round's result column."""
+    result = json.dumps(drawn)
+
+    def payout_for(bet: dict, _result: str) -> int:
+        return casino_logic.keno_payout(
+            json.loads(str(bet["spots"])), drawn, int(bet["amount"])
+        )
+
+    return _settle_round(
+        conn, KENO_TABLES, round_id, result, payout_for, now=now
+    )
+
+
+def void_keno_round(
+    conn: sqlite3.Connection, round_id: int, *, now: float | None = None
+) -> dict[int, int]:
+    return _void_round(conn, KENO_TABLES, round_id, now=now)
+
+
+def open_keno_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return _open_rounds(conn, KENO_TABLES)
 
 
 # ── casino war (casino-classics Stage 1c — blackjack's live-hand shape) ─

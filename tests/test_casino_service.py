@@ -830,6 +830,151 @@ def test_member_leave_refunds_live_dice_stakes(db):
         assert svc.dice_bets(conn, round_id) == []
 
 
+# ── keno draws (casino-classics Stage 1d) ──────────────────────────────
+
+
+def _open_draw(conn, channel=CHAN, now=NOW):
+    round_id = svc.open_keno_round(conn, GUILD, channel, 45, now=now)
+    assert round_id is not None
+    return round_id
+
+
+def _fixed_picks(monkeypatch, picks):
+    """Pin the quick-pick (random.sample) to a fixed ticket."""
+    monkeypatch.setattr(logic.random, "sample", lambda pop, k: list(picks)[:k])
+
+
+def test_one_open_draw_per_channel(db):
+    with open_db(db) as conn:
+        _open_draw(conn)
+        assert svc.open_keno_round(conn, GUILD, CHAN, 45, now=NOW) is None
+        assert svc.open_keno_round(conn, GUILD, CHAN + 1, 45, now=NOW) is not None
+
+
+def test_keno_tickets_quick_pick_debit_and_close(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        _fixed_picks(monkeypatch, [4, 12, 33, 41, 56, 78])
+        picks = svc.place_keno_ticket(conn, round_id, A, 6, 10, now=NOW + 1)
+        assert picks == [4, 12, 33, 41, 56, 78]  # returned for the confirmation
+        assert get_balance(conn, GUILD, A) == 90
+        err = svc.place_keno_ticket(conn, round_id, A, 6, 10, now=NOW + 46)
+        assert err == "Tickets for that draw have closed."
+        with pytest.raises(ValueError):
+            svc.place_keno_ticket(conn, round_id, A, 5, 10, now=NOW + 2)
+
+
+def test_keno_ticket_refused_when_table_closed(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"keno_enabled": False})
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        err = svc.place_keno_ticket(conn, round_id, A, 6, 10, now=NOW + 1)
+        assert err == "That table is closed right now."
+        assert get_balance(conn, GUILD, A) == 100
+
+
+def test_settle_draw_pays_by_catches_exactly_once(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        _fund(conn, B, 100)
+        round_id = _open_draw(conn)
+        _fixed_picks(monkeypatch, [1, 2, 3, 4])       # will catch 4/4 → 60×
+        svc.place_keno_ticket(conn, round_id, A, 4, 10, now=NOW + 1)
+        _fixed_picks(monkeypatch, [61, 62, 63, 64])   # 0 catches
+        svc.place_keno_ticket(conn, round_id, B, 4, 20, now=NOW + 2)
+
+        drawn = list(range(1, 21))
+        bets = svc.settle_keno_round(conn, round_id, drawn, now=NOW + 45)
+        assert bets is not None
+        assert [int(b["payout"]) for b in bets] == [600, 0]
+        assert get_balance(conn, GUILD, A) == 100 - 10 + 600
+        assert get_balance(conn, GUILD, B) == 80
+        # the draw persists as JSON for recaps
+        import json
+
+        rnd = svc.get_keno_round(conn, round_id)
+        assert rnd is not None and json.loads(str(rnd["result"])) == drawn
+        # replay pays nothing again
+        assert svc.settle_keno_round(conn, round_id, drawn, now=NOW + 46) is None
+        assert get_balance(conn, GUILD, A) == 690
+        # a settled draw takes no more tickets
+        err = svc.place_keno_ticket(conn, round_id, A, 4, 10, now=NOW + 2)
+        assert err == "Tickets for that draw have closed."
+
+
+def test_void_draw_refunds_totals_once(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        _fixed_picks(monkeypatch, [1, 2, 3, 4])
+        svc.place_keno_ticket(conn, round_id, A, 4, 10, now=NOW + 1)
+        svc.place_keno_ticket(conn, round_id, A, 4, 15, now=NOW + 2)
+        assert svc.void_keno_round(conn, round_id, now=NOW + 5) == {A: 25}
+        assert get_balance(conn, GUILD, A) == 100
+        assert _kinds(conn, A)[-1] == ("casino_refund", 25)
+        assert svc.void_keno_round(conn, round_id, now=NOW + 6) == {}
+
+
+def test_boot_sweep_lists_open_draws(db):
+    with open_db(db) as conn:
+        r1 = _open_draw(conn)
+        r2 = _open_draw(conn, channel=CHAN + 1)
+        svc.settle_keno_round(conn, r2, list(range(1, 21)), now=NOW + 45)
+        assert [int(r["id"]) for r in svc.open_keno_rounds(conn)] == [r1]
+
+
+def test_stale_precheck_cannot_strand_a_keno_stake(db, monkeypatch):
+    """The roulette buzzer-beater race, on keno: the settler claimed the
+    draw between our pre-check and our debit — the in-transaction claim
+    must refuse the ticket before any money moves."""
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        assert (
+            svc.settle_keno_round(conn, round_id, list(range(1, 21)), now=NOW + 45)
+            is not None
+        )
+        stale = {
+            "id": round_id, "status": "open",
+            "closes_at": NOW + 45, "guild_id": GUILD,
+        }
+        monkeypatch.setattr(svc, "get_keno_round", lambda *_: stale)
+        err = svc.place_keno_ticket(conn, round_id, A, 4, 10, now=NOW + 2)
+        assert err == "Tickets for that draw have closed."
+        assert get_balance(conn, GUILD, A) == 100  # nothing debited
+        monkeypatch.undo()
+        assert all(int(b["user_id"]) != A for b in svc.keno_bets(conn, round_id))
+
+
+def test_losing_keno_tickets_feed_the_jackpot(db, monkeypatch):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        _fixed_picks(monkeypatch, [61, 62, 63, 64])
+        svc.place_keno_ticket(conn, round_id, A, 4, 40, now=NOW + 1)
+        assert (
+            svc.settle_keno_round(conn, round_id, list(range(1, 21)), now=NOW + 45)
+            is not None
+        )
+        # seed (100) + 25% of the lost 40-coin ticket
+        assert svc.get_jackpot(conn, GUILD) == 110
+
+
+def test_member_leave_refunds_live_keno_tickets(db, monkeypatch):
+    with open_db(db) as conn:
+        _fund(conn, A, 100)
+        round_id = _open_draw(conn)
+        _fixed_picks(monkeypatch, [1, 2, 3, 4])
+        svc.place_keno_ticket(conn, round_id, A, 4, 25, now=NOW + 1)
+        out = svc.refund_member_live_stakes(conn, GUILD, A, now=NOW + 2)
+        assert out.get("keno") == 25
+        assert get_balance(conn, GUILD, A) == 100
+        assert svc.keno_bets(conn, round_id) == []
+
+
 # ── casino war (casino-classics Stage 1c) ──────────────────────────────
 
 

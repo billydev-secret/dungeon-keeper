@@ -266,6 +266,32 @@ def test_dice_result_triple_names_the_sweep():
     assert "sweeps every bet" in embed.description
 
 
+# ── keno result cards ──────────────────────────────────────────────────
+
+
+def test_keno_result_win_is_green_and_shows_the_board():
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    drawn = list(range(1, 21))
+    embed = build_keno_result_embed(
+        _ECON, drawn, [(42, "Pick-4 · 1 2 3 4", 10, 600)]
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.description is not None
+    # two monospace rows of ten
+    assert embed.description.count("`") == 4
+    assert " 1" in embed.description and "20" in embed.description
+
+
+def test_keno_result_all_losses_is_red():
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    embed = build_keno_result_embed(
+        _ECON, list(range(1, 21)), [(42, "Pick-4 · 61 62 63 64", 10, 0)]
+    )
+    assert embed.color == discord.Color(COLOR_RED)
+
+
 # ── war result cards ───────────────────────────────────────────────────
 
 

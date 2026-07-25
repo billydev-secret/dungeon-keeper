@@ -106,7 +106,10 @@ Each row is a standalone commit/merge with its own tests.
 - **Flow:** `War` button → amount modal → cards revealed → (only on the ~7.4% tie)
   War / Retreat buttons.
 
-### Stage 1d — Keno (windowed, bespoke paytable)
+### Stage 1d — Keno (windowed, bespoke paytable) — **built 2026-07-25**
+(v1 is quick-pick only; a manual "lucky numbers" modal is a possible
+follow-up. Shipped paytables land 94.7–95.5% per tier — see
+`casino_logic.KENO_PAYTABLE`.)
 
 - **Mechanics:** windowed round; member picks a spot-count tier; bot quick-picks
   (or accepts a numbers modal); 20 of 80 drawn; pays by catch count.

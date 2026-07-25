@@ -45,6 +45,7 @@ _GAME_LINES = {
     "baccarat": "🎴 **Baccarat** — Player, Banker, or Tie; nearest to nine wins",
     "dice": "🎲 **Dice** — three dice, one roll; call Big, Small, Odd, or Even",
     "war": "⚔️ **War** — one card each, high card wins; on a tie, go to war",
+    "keno": "🔢 **Keno** — grab a ticket, 20 numbers drop, catches pay big",
 }
 
 
@@ -282,6 +283,22 @@ def build_help_embed(
                 "win *or tie* the next card for **3×** your original) or "
                 "**retreat** (half your bet back). ~97% return going to war — "
                 "always the braver *and* the better play.\n​"
+            ),
+            inline=False,
+        )
+    if settings.keno_enabled:
+        pays = " · ".join(
+            f"Pick-{tier} up to **{max(table.values())}×**"
+            for tier, table in logic.KENO_PAYTABLE.items()
+        )
+        embed.add_field(
+            name="🔢 Keno",
+            value=(
+                "Grab a quick-pick ticket of 4, 6, 8, or 10 numbers; 20 of 80 "
+                f"drop in one shared draw. {pays} — pays scale with how many "
+                "of yours hit (~95% return, tuned far kinder than real keno). "
+                f"Tickets stay open for {settings.keno_window_seconds}s, then "
+                "one draw settles everyone.\n​"
             ),
             inline=False,
         )
@@ -976,6 +993,104 @@ def build_roll_running_note(closes_at: float, url: str | None = None) -> str:
     if url:
         return f"{note} Jump in and call it: {url}"
     return f"{note} Call it on the roll message above."
+
+
+# ── keno (casino-classics Stage 1d) ────────────────────────────────────
+
+
+def build_keno_round_embed(
+    econ: EconSettings,
+    closes_at: float,
+    bets: list[tuple[int, str, int]],
+    accent: discord.Color | None,
+) -> discord.Embed:
+    """``bets`` = (user_id, ticket description, amount), placement order."""
+    embed = discord.Embed(
+        title="🔢 Keno — tickets open!",
+        description=(
+            f"The draw drops <t:{int(closes_at)}:R>. "
+            "Pick a tier — the house quick-picks your numbers, fate does "
+            "the rest.\n​"
+        ),
+        color=_accent(accent),
+    )
+    _add_bets_field(embed, econ, bets)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_keno_tumble_embed(
+    econ: EconSettings, accent: discord.Color | None
+) -> discord.Embed:
+    """The drawing frame — balls still in the hopper."""
+    embed = discord.Embed(
+        title="🔢 Keno — no more tickets!",
+        description="The hopper churns… numbers rattling into the chute…",
+        color=_accent(accent),
+    )
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def _keno_board(drawn: list[int]) -> str:
+    """The 20 drawn numbers as two monospace rows of ten."""
+    cells = [f"{n:>2}" for n in drawn]
+    return (
+        f"`{'  '.join(cells[:10])}`\n`{'  '.join(cells[10:])}`"
+    )
+
+
+def build_keno_result_embed(
+    econ: EconSettings,
+    drawn: list[int],
+    bets: list[tuple[int, str, int, int]],
+    *,
+    pot_after: int = 0,
+) -> discord.Embed:
+    """``bets`` = (user_id, ticket description, amount, payout)."""
+    if bets:
+        description = f"{_keno_board(drawn)}\n​"
+    else:
+        description = (
+            f"{_keno_board(drawn)}\nNobody held a ticket — twenty numbers "
+            "fall for no one."
+        )
+    winners = [b for b in bets if b[3] > 0]
+    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    embed = discord.Embed(
+        title="🔢 Keno — the draw is in!",
+        description=description,
+        color=COLOR_GREEN if winners else COLOR_RED,
+    )
+    if winners:
+        winner_lines = [
+            f"{'💥 ' if logic.is_big_win(amount, payout) else ''}"
+            f"<@{uid}> — {d} · {_coins(econ, amount)} → {_coins(econ, payout)}"
+            for uid, d, amount, payout in winners
+        ]
+        embed.add_field(
+            name="Winners",
+            value="\n".join(logic.cap_lines(winner_lines, limit=1022)) + "\n​",
+            inline=False,
+        )
+    if losers_total:
+        kept = _coins(econ, losers_total)
+        if pot_after > 0:
+            kept += f"\n{_pot_line(pot_after)}"
+        embed.add_field(name="The house keeps", value=kept, inline=False)
+    embed.set_footer(text=_FOOTER)
+    return embed
+
+
+def build_draw_running_note(closes_at: float, url: str | None = None) -> str:
+    """Ephemeral pointer when a member opens keno mid-draw."""
+    note = (
+        f"🔢 A keno draw is already forming — numbers drop "
+        f"<t:{int(closes_at)}:R>."
+    )
+    if url:
+        return f"{note} Jump in and grab a ticket: {url}"
+    return f"{note} Grab a ticket on the draw message above."
 
 
 # ── war (casino-classics Stage 1c) ─────────────────────────────────────
