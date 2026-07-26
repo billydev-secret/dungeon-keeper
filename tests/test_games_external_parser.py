@@ -641,3 +641,41 @@ def test_extract_coordle_unsolved_round_has_no_winner():
     assert winner is None
     assert state == parser.COORDLE_EXHAUSTED
     assert scores == {ALICE: 7}
+
+
+# ── host attribution (2026-07-26) ────────────────────────────────────────────
+#
+# The lobby title is the only place an external game names who started it, and
+# it names them by username. External games paid no host bounty at all until
+# this was read out.
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("efficientpanic is starting a Cards Against Humanity game!", "efficientpanic"),
+        ("regalruffian is starting a Connect 4 game!", "regalruffian"),
+        ("efficientpanic is starting a Anagrams game!", "efficientpanic"),
+        # Real usernames carry dots, underscores and spaces.
+        ("secretagentman. is starting a Cards Against Humanity game!", "secretagentman."),
+        ("displaced_alaskan is starting a Cards Against Humanity game!", "displaced_alaskan"),
+        ("some person is starting a Chess game!", "some person"),
+    ],
+)
+def test_host_from_lobby_reads_the_username_off_the_title(title, expected):
+    assert parser.host_from_lobby([{"title": title}]) == expected
+
+
+def test_host_from_lobby_ignores_non_lobby_embeds():
+    assert parser.host_from_lobby(_game_over(ALICE)["embeds"]) is None
+    assert parser.host_from_lobby(_standings({ALICE: 1})["embeds"]) is None
+
+
+def test_host_from_window_finds_the_lobby_anywhere_in_the_game():
+    window = [
+        _lobby("Cards Against Humanity", [ALICE, BOB]),
+        _standings({ALICE: 5, BOB: 1}),
+        _game_over(ALICE),
+    ]
+    assert parser.host_from_window(window) == "host"
+    # A window whose lobby aged out has no host to attribute.
+    assert parser.host_from_window([_standings({ALICE: 1}), _game_over(ALICE)]) is None

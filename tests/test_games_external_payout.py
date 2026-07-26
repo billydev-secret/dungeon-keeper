@@ -98,7 +98,9 @@ async def _bank(gdb, mid, ts, embeds):
 def _over_message(guild=None):
     return SimpleNamespace(
         id=OVER_ID,
-        guild=guild or SimpleNamespace(id=GUILD),
+        # Defaults to a guild that resolves nobody — a real discord.Guild always
+        # has get_member_named, which the host lookup calls.
+        guild=guild if guild is not None else _guild({}),
         channel=SimpleNamespace(id=CHAN),
         author=SimpleNamespace(id=GAMEBOT),
         created_at=datetime(2026, 7, 21, 1, 8, 36, tzinfo=timezone.utc),
@@ -664,3 +666,71 @@ async def test_coordle_exhausted_round_pays_with_no_winner(gdb):
     args, _ = pay.await_args
     assert args[2] == {ALICE: 7}
     assert args[3] is None  # never solved -> no win bonus
+
+
+# ── host bounty for external games (2026-07-26) ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_gamebot_game_passes_its_lobby_host_to_the_payout(gdb):
+    # External games never passed a host, so they paid the host bounty native
+    # party games have always paid — nothing at all. The lobby names them.
+    await _bank(gdb, 4000, "2026-07-21T01:07:40",
+                _embeds_lobby("Cards Against Humanity", [ALICE, BOB]))
+    await _bank(gdb, 4002, "2026-07-21T01:08:20", _embeds_standings({ALICE: 5, BOB: 1}))
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_game_over(ALICE))
+
+    members = {
+        "host": SimpleNamespace(id=CAROL, bot=False),
+        "alice": SimpleNamespace(id=ALICE, bot=False),
+    }
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild(members)))
+
+    _args, kwargs = pay.await_args
+    assert kwargs["host_id"] == CAROL   # resolved from "host is starting a …"
+
+
+@pytest.mark.asyncio
+async def test_connect4_and_anagrams_pass_their_host_too(gdb):
+    await _bank(gdb, 4101, "2026-07-21T01:08:00", _embeds_c4_start([ALICE, BOB]))
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_c4_game_over(ALICE))
+
+    members = {"host": SimpleNamespace(id=CAROL, bot=False)}
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_game_rewards", new=AsyncMock()
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild(members)))
+
+    _args, kwargs = pay.await_args
+    assert kwargs["host_id"] == CAROL
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_host_is_skipped_not_guessed(gdb):
+    # A host who has left or renamed pays nobody rather than mis-crediting.
+    await _bank(gdb, 4000, "2026-07-21T01:07:40",
+                _embeds_lobby("Cards Against Humanity", [ALICE, BOB]))
+    await _bank(gdb, 4002, "2026-07-21T01:08:20", _embeds_standings({ALICE: 5, BOB: 1}))
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_game_over(ALICE))
+
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild({})))  # nobody resolves
+
+    _args, kwargs = pay.await_args
+    assert kwargs["host_id"] is None
