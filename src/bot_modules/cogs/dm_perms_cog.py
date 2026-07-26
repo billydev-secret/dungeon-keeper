@@ -604,6 +604,7 @@ class DmPermsCog(commands.Cog):
         self.request_channels = loaded["request_channels"]
         self.panel_settings = loaded["panel_settings"]
         self.mode_role_ids = loaded["mode_role_ids"]
+        self._publish_panel_guilds()
 
         # Persistent views: clicks on DM consent buttons across ALL DMs route
         # to this single instance, which recovers per-request state from the DB.
@@ -853,6 +854,18 @@ class DmPermsCog(commands.Cog):
             "panel_message_id": message_id or None,
         }
         set_panel_settings(self.ctx.db_path, guild_id, channel_id, message_id)
+        self._publish_panel_guilds()
+
+    def _publish_panel_guilds(self) -> None:
+        """Keep the listener's fast path in sync with the in-memory settings, so
+        a guild with no panel costs a set lookup rather than a DB read."""
+        self.panel.set_known_guilds(
+            {
+                gid
+                for gid, s in self.panel_settings.items()
+                if s and s.get("panel_channel_id")
+            }
+        )
 
     async def _build_panel(self, guild: discord.Guild) -> PanelContent:
         accent = await resolve_accent_color(self.ctx.db_path, guild)
@@ -863,28 +876,16 @@ class DmPermsCog(commands.Cog):
             view=DmRequestPanelView(self),
         )
 
-    async def _ensure_panel(
-        self, guild: discord.Guild, panel_channel_id: int, *, force_repost: bool = False
+    async def post_panel(
+        self, guild: discord.Guild, panel_channel_id: int
     ) -> Optional[int]:
-        """Post, move or refresh the request panel. Returns the live message id.
-
-        ``force_repost`` moves it to the channel bottom; otherwise an existing
-        panel in the same channel is edited in place.
-        """
+        """Post the request panel (or refresh it in place if it's already
+        there). Returns the live message id, or None if the channel is
+        unusable. Public: the dashboard route calls this."""
         channel = guild.get_channel(panel_channel_id)
         if not isinstance(channel, discord.TextChannel):
             return None
-
-        current_channel_id, current_message_id = self._panel_ids(guild.id)
-        if (
-            not force_repost
-            and current_message_id
-            and current_channel_id == panel_channel_id
-        ):
-            if await self.panel.refresh(guild.id):
-                return self._panel_ids(guild.id)[1]
-
-        message = await self.panel.place(guild, channel)
+        message = await self.panel.place_or_refresh(guild, channel)
         return message.id if message else None
 
     # ── Listeners ────────────────────────────────────────────────────────────

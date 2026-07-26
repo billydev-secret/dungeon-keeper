@@ -33,6 +33,7 @@ from bot_modules.commands.voice_master_commands import (
     build_panel_view,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.db_utils import get_config_value
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.economy_rentals_service import entitlements
 from bot_modules.services.economy_service import load_econ_settings
@@ -173,18 +174,27 @@ class VoiceMasterCog(commands.Cog):
         Reading the channel from config (rather than storing it alongside the
         message id) means moving the control channel on the dashboard
         automatically relocates the panel on its next repost.
+
+        Reads the two keys directly rather than via ``load_voice_master_config``
+        — that loads nineteen keys, and this runs on the message path.
         """
         with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, guild_id)
-        if not cfg.control_channel_id:
+            channel_id = get_config_value(
+                conn, "voice_master_control_channel_id", "0", guild_id
+            )
+            message_id = get_config_value(
+                conn, "voice_master_panel_message_id", "0", guild_id
+            )
+        try:
+            channel, message = int(channel_id or 0), int(message_id or 0)
+        except ValueError:
             return 0, 0
-        return cfg.control_channel_id, cfg.panel_message_id
+        return (channel, message) if channel else (0, 0)
 
     def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        # channel_id is intentionally ignored: the panel's home is the
+        # configured control channel, so there is nothing separate to store.
         with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn, guild_id, "voice_master_panel_channel_id", str(channel_id)
-            )
             set_voice_master_config_value(
                 conn, guild_id, "voice_master_panel_message_id", str(message_id)
             )
@@ -199,7 +209,21 @@ class VoiceMasterCog(commands.Cog):
     async def _restick_panel(self, message: discord.Message) -> None:
         await self.panel.on_message(message)
 
+    def _panel_guilds(self) -> set[int]:
+        """Guilds with a control channel configured — the only ones whose
+        messages can ever move the panel."""
+        with self.ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT guild_id FROM config"
+                " WHERE key = 'voice_master_control_channel_id'"
+                " AND value NOT IN ('', '0')"
+            ).fetchall()
+        return {int(r[0]) for r in rows}
+
     async def cog_load(self) -> None:
+        # Publish the panel-guild set so the on_message listener rejects the
+        # overwhelming majority of messages with a set lookup, not a DB read.
+        self.panel.set_known_guilds(await asyncio.to_thread(self._panel_guilds))
         # Register persistent panel dropdown classes so they survive restarts.
         for cls in PANEL_DYNAMIC_ITEM_CLASSES:
             self.bot.add_dynamic_items(cls)
@@ -1657,7 +1681,7 @@ class VoiceMasterCog(commands.Cog):
             )
             return
         await interaction.followup.send(
-            f"Panel posted: {msg.jump_url} — it stays at the bottom of the channel.",
+            f"Panel is live: {msg.jump_url} — it stays at the bottom of the channel.",
             ephemeral=True,
         )
 

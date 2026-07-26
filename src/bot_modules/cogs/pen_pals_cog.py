@@ -1029,7 +1029,7 @@ async def _end_session_abnormally(
                 pass
 
     try:
-        await _refresh_panel(bot, db_path, guild_id)
+        await _refresh_panel(bot, guild_id)
     except discord.HTTPException as exc:
         log.warning("pen_pals: panel refresh after abnormal close failed in %d: %s", guild_id, exc)
 
@@ -1215,7 +1215,6 @@ def _build_panel_view() -> discord.ui.View:
 
 async def _refresh_panel(
     bot: discord.Client,
-    db_path: Path,
     guild_id: int,
     *,
     repost: bool = False,
@@ -1228,7 +1227,7 @@ async def _refresh_panel(
     deleted first and left ``channel.send`` unguarded, so a failed send
     permanently orphaned the panel row.
     """
-    cog = getattr(bot, "get_cog", lambda _n: None)("PenPalsCog")
+    cog = cast("PenPalsCog | None", cast("Bot", bot).get_cog("PenPalsCog"))
     if cog is None:  # cog unloaded mid-flight
         return
     if repost:
@@ -1303,7 +1302,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
 
     if partner_id is None:
         await interaction.response.send_message(_QUEUED_MSG_SCHEDULED if scheduled else _QUEUED_MSG_INSTANT, ephemeral=True)
-        await _refresh_panel(interaction.client, db_path, guild_id)
+        await _refresh_panel(interaction.client, guild_id)
         return
 
     # Channel creation is several round-trips — defer so the token survives.
@@ -1326,7 +1325,7 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
         # Only reachable in instant mode: scheduled mode never returns a
         # partner_id from _check above, so _do_pair is never called there.
         await interaction.followup.send(_QUEUED_MSG_INSTANT, ephemeral=True)
-    await _refresh_panel(interaction.client, db_path, guild_id)
+    await _refresh_panel(interaction.client, guild_id)
 
 
 async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None:
@@ -1347,7 +1346,7 @@ async def _handle_leave(interaction: discord.Interaction, db_path: Path) -> None
     removed = await asyncio.to_thread(_remove)
     if removed:
         await interaction.response.send_message("You've left the Pen Pals pool.", ephemeral=True)
-        await _refresh_panel(interaction.client, db_path, guild_id)
+        await _refresh_panel(interaction.client, guild_id)
     else:
         await interaction.response.send_message(
             "❌ You're not in the pool. Use `/penpals status` to check your status.", ephemeral=True
@@ -1678,6 +1677,9 @@ class PenPalsCog(commands.Cog):
                 return {int(r["panel_channel_id"]): int(r["guild_id"]) for r in rows}
 
         self._panel_channels = await asyncio.to_thread(_load_panels)
+        # Publish the panel-guild set: the listener then rejects everything else
+        # with a set lookup, as the old channel-map gate did (no DB read).
+        self.panel.set_known_guilds(set(self._panel_channels.values()))
         self.bot.startup_task_factories.append(lambda: _pen_pals_loop(bot, db_path))
 
     @commands.Cog.listener("on_message")
@@ -1706,7 +1708,7 @@ class PenPalsCog(commands.Cog):
             )
         elif was_pooled:
             try:
-                await _refresh_panel(self.bot, db_path, guild_id)
+                await self.panel.refresh(guild_id)
             except discord.HTTPException as exc:
                 log.warning("pen_pals: panel refresh after member leave failed in %d: %s", guild_id, exc)
 
@@ -1754,7 +1756,8 @@ class PenPalsCog(commands.Cog):
         self._panel_channels = {ch: g for ch, g in self._panel_channels.items() if g != guild_id}
         if new_channel_id:
             self._panel_channels[new_channel_id] = guild_id
-            await _refresh_panel(self.bot, self.ctx.db_path, guild_id, repost=True)
+            await self.repost_panel(guild_id)
+        self.panel.set_known_guilds(set(self._panel_channels.values()))
 
     # ── /penpals join ─────────────────────────────────────────────────
 

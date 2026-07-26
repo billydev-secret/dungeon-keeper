@@ -17,7 +17,6 @@ from bot_modules.economy.guide import (
     GuideNotifyButton,
     GuideView,
     build_guide_embed,
-    should_restick_guide,
 )
 from bot_modules.economy.logic import resolve_notify_toggle
 from bot_modules.services.economy_service import (
@@ -129,53 +128,9 @@ PANEL_CH = 4242
 PANEL_MSG = 9999
 
 
-def test_restick_true_for_member_message_in_panel_channel():
-    assert should_restick_guide(
-        message_channel_id=PANEL_CH,
-        message_id=123,
-        panel_channel_id=PANEL_CH,
-        panel_message_id=PANEL_MSG,
-    )
 
 
-def test_restick_predicate_is_author_agnostic():
-    # The predicate only knows channel/message ids — bot-vs-member filtering
-    # lives in the listener (see test_restick_listener_ignores_bot_messages),
-    # so for a distinct id in the panel channel it always returns True.
-    assert should_restick_guide(
-        message_channel_id=PANEL_CH,
-        message_id=555,
-        panel_channel_id=PANEL_CH,
-        panel_message_id=PANEL_MSG,
-    )
 
-
-def test_restick_false_for_the_panel_itself():
-    # Our own repost must not trigger another repost (infinite loop).
-    assert not should_restick_guide(
-        message_channel_id=PANEL_CH,
-        message_id=PANEL_MSG,
-        panel_channel_id=PANEL_CH,
-        panel_message_id=PANEL_MSG,
-    )
-
-
-def test_restick_false_for_other_channel():
-    assert not should_restick_guide(
-        message_channel_id=PANEL_CH + 1,
-        message_id=123,
-        panel_channel_id=PANEL_CH,
-        panel_message_id=PANEL_MSG,
-    )
-
-
-def test_restick_false_when_no_panel_posted():
-    assert not should_restick_guide(
-        message_channel_id=PANEL_CH,
-        message_id=123,
-        panel_channel_id=0,
-        panel_message_id=0,
-    )
 
 
 # ── settings round-trip ─────────────────────────────────────────────────────
@@ -359,7 +314,7 @@ async def test_post_guide_posts_and_saves_ids(ctx, db):
     assert "Gems" in embed.title
     assert _stored(db) == (CHANNEL_ID, 8888)
     msg = interaction.response.send_message.await_args.args[0]
-    assert "Posted" in msg and interaction.response.send_message.await_args.kwargs[
+    assert "is live" in msg and interaction.response.send_message.await_args.kwargs[
         "ephemeral"
     ]
 
@@ -383,19 +338,16 @@ async def test_post_guide_refreshes_in_place(ctx, db):
     _enable(db, guide_channel_id=CHANNEL_ID, guide_message_id=4444)
     cog = _make_cog(ctx)
     channel = _channel(CHANNEL_ID)
-    old = MagicMock()
-    old.edit = AsyncMock()
-    channel.fetch_message.return_value = old
+    old = MagicMock(edit=AsyncMock(), delete=AsyncMock(), id=4444)
+    channel.get_partial_message = MagicMock(return_value=old)
     interaction = _interaction(_member(admin=True), channel)
 
     await _post_guide(cog, interaction)
 
-    channel.fetch_message.assert_awaited_once_with(4444)
+    # Same channel → edited in place, so the panel doesn't hop to the bottom.
     old.edit.assert_awaited_once()
     channel.send.assert_not_awaited()
     assert _stored(db) == (CHANNEL_ID, 4444)  # ids unchanged
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "Refreshed" in msg
 
 
 @pytest.mark.asyncio
@@ -403,9 +355,9 @@ async def test_post_guide_reposts_when_old_message_gone(ctx, db):
     _enable(db, guide_channel_id=CHANNEL_ID, guide_message_id=4444)
     cog = _make_cog(ctx)
     channel = _channel(CHANNEL_ID)
-    channel.fetch_message.side_effect = discord.NotFound(
-        MagicMock(status=404), "gone"
-    )
+    gone = MagicMock(delete=AsyncMock())
+    gone.edit = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
+    channel.get_partial_message = MagicMock(return_value=gone)
     interaction = _interaction(_member(admin=True), channel)
 
     await _post_guide(cog, interaction)

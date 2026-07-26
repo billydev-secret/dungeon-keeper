@@ -463,13 +463,6 @@ def _quest_section_lines(
 # next message after at most this many seconds.
 _TRIGGER_CACHE_TTL = 60.0
 
-# Guide-panel sticky: how long the cached (channel_id, message_id) of the guide
-# panel is trusted before re-reading it from config on the next message, and how
-# long to wait for the channel to fall quiet before reposting the panel at the
-# bottom. The delay coalesces bursts into a single repost — a busy channel keeps
-# resetting the timer, so the panel only re-sticks once activity pauses.
-_GUIDE_STICKY_CACHE_TTL = 300.0
-_GUIDE_STICKY_DELAY = 6.0
 
 
 @dataclass(frozen=True)
@@ -1625,8 +1618,6 @@ class EconomyCog(commands.Cog):
             load_ids=lambda gid: self._panel_ids(gid, "guide"),
             save_ids=lambda gid, cid, mid: self._save_panel_ids(gid, "guide", cid, mid),
             build=self._build_guide_panel,
-            delay=_GUIDE_STICKY_DELAY,
-            cache_ttl=_GUIDE_STICKY_CACHE_TTL,
         )
         self.leaderboard_panel = StickyPanel(
             "econ leaderboard", bot,
@@ -1635,16 +1626,12 @@ class EconomyCog(commands.Cog):
                 gid, "leaderboard", cid, mid
             ),
             build=self._build_leaderboard_panel,
-            delay=_GUIDE_STICKY_DELAY,
-            cache_ttl=_GUIDE_STICKY_CACHE_TTL,
         )
         self.shop_panel = StickyPanel(
             "econ shop", bot,
             load_ids=lambda gid: self._panel_ids(gid, "shop"),
             save_ids=lambda gid, cid, mid: self._save_panel_ids(gid, "shop", cid, mid),
             build=self._build_shop_panel,
-            delay=_GUIDE_STICKY_DELAY,
-            cache_ttl=_GUIDE_STICKY_CACHE_TTL,
         )
         # Photo Challenge channel id, TTL-cached so the on_message listener
         # costs a dict lookup, not a DB read, for every message in the guild:
@@ -4240,28 +4227,9 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = build_guide_embed(settings, color=accent)
-
-        # Same channel and the old panel is still there → edit in place, so a
-        # refresh after re-branding/re-pricing doesn't hop the panel to the
-        # bottom of the channel.
-        if settings.guide_message_id and settings.guide_channel_id == target.id:
-            try:
-                old = await target.fetch_message(settings.guide_message_id)
-                await old.edit(embed=embed, view=GuideView())
-            except discord.HTTPException:
-                pass  # gone or unreachable — fall through to a fresh post
-            else:
-                await interaction.response.send_message(
-                    f"Refreshed the guide panel in {target.mention}.",
-                    ephemeral=True,
-                )
-                return
-
-        # Moving or reposting → drop the stale panel and post a fresh one at
-        # the bottom (shared with the sticky repost path).
-        message = await self.guide_panel.place(guild, target)
+        # Edits in place when it's already in this channel (a re-brand refresh
+        # shouldn't hop the panel to the bottom), otherwise posts fresh.
+        message = await self.guide_panel.place_or_refresh(guild, target)
         if message is None:
             await interaction.response.send_message(
                 f"❌ I don't have permission to post in {target.mention}.",
@@ -4269,7 +4237,8 @@ class EconomyCog(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            f"Posted the guide panel in {target.mention}.", ephemeral=True
+            f"Guide panel is live in {target.mention}: {message.jump_url}",
+            ephemeral=True,
         )
 
     # ── channel-bottom panels ────────────────────────────────────────────
@@ -4406,49 +4375,7 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        now_ts = time.time()
-
-        def _collect():
-            with self.ctx.open_db() as conn:
-                data = collect_leaderboard_data(conn, guild.id, now_ts)
-                known = get_known_users_bulk(
-                    conn, guild.id, [uid for uid, _ in data.top_earners]
-                )
-            return data, known
-
-        data, known = await asyncio.to_thread(_collect)
-
-        def _name(uid: int) -> str:
-            member = guild.get_member(uid)
-            if member:
-                return member.display_name
-            return known.get(uid) or f"User {uid}"
-
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = build_leaderboard_embed(
-            settings, data, _name, now_ts=now_ts, color=accent
-        )
-
-        # Same channel and the old panel is still there → edit in place.
-        if (
-            settings.leaderboard_message_id
-            and settings.leaderboard_channel_id == target.id
-        ):
-            try:
-                old = await target.fetch_message(settings.leaderboard_message_id)
-                await old.edit(embed=embed, view=QuestBoardView())
-            except discord.HTTPException:
-                pass  # gone or unreachable — fall through to a fresh post
-            else:
-                await interaction.response.send_message(
-                    f"Refreshed the leaderboard panel in {target.mention}.",
-                    ephemeral=True,
-                )
-                return
-
-        # Moving or reposting → drop the stale panel and post a fresh one at the
-        # bottom via the shared placer (also updates the sticky cache).
-        message = await self.leaderboard_panel.place(guild, target)
+        message = await self.leaderboard_panel.place_or_refresh(guild, target)
         if message is None:
             await interaction.response.send_message(
                 f"❌ I don't have permission to post in {target.mention}.",
@@ -4456,8 +4383,8 @@ class EconomyCog(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            f"Posted the leaderboard panel in {target.mention} — it refreshes "
-            "itself live and stays at the bottom of the channel.",
+            f"Leaderboard panel is live in {target.mention}: {message.jump_url}"
+            " — it refreshes itself and stays at the bottom of the channel.",
             ephemeral=True,
         )
 
@@ -4496,26 +4423,7 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        embed = await self._build_shop_panel_embed(guild, settings)
-
-        # Same channel and the old panel is still there → edit in place (the
-        # view is re-sent too, so re-pricing refreshes the button labels).
-        if settings.shop_message_id and settings.shop_channel_id == target.id:
-            try:
-                old = await target.fetch_message(settings.shop_message_id)
-                await old.edit(embed=embed, view=ShopPanelView())
-            except discord.HTTPException:
-                pass  # gone or unreachable — fall through to a fresh post
-            else:
-                await interaction.response.send_message(
-                    f"Refreshed the shop panel in {target.mention}.",
-                    ephemeral=True,
-                )
-                return
-
-        # Moving or reposting → drop the stale panel and post a fresh one at the
-        # bottom via the shared placer (also updates the sticky cache).
-        message = await self.shop_panel.place(guild, target)
+        message = await self.shop_panel.place_or_refresh(guild, target)
         if message is None:
             await interaction.response.send_message(
                 f"❌ I don't have permission to post in {target.mention}.",
@@ -4523,8 +4431,9 @@ class EconomyCog(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            f"Posted the shop panel in {target.mention} — it stays at the "
-            "bottom of the channel. Re-run this after re-pricing to refresh it.",
+            f"Shop panel is live in {target.mention}: {message.jump_url} — it "
+            "stays at the bottom of the channel. Re-run this after re-pricing "
+            "to refresh it.",
             ephemeral=True,
         )
 

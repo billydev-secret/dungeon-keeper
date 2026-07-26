@@ -16,7 +16,7 @@ import pytest
 from bot_modules.core.sticky import (
     PanelContent,
     StickyPanel,
-    should_restick_guide,
+    should_restick,
 )
 
 GUILD = 123
@@ -91,7 +91,7 @@ def _bot(guild=None):
     ],
 )
 def test_should_restick(panel_channel, panel_message, msg_channel, msg_id, expected):
-    assert should_restick_guide(
+    assert should_restick(
         message_channel_id=msg_channel,
         message_id=msg_id,
         panel_channel_id=panel_channel,
@@ -199,17 +199,6 @@ async def test_place_is_serialised_per_guild():
 
 
 @pytest.mark.asyncio
-async def test_after_place_hook_runs_and_cannot_break_placement():
-    channel, sent = _channel()
-    guild = _guild(channel)
-    hook = AsyncMock(side_effect=RuntimeError("sweep failed"))
-    panel = _panel(_bot(guild), _Store(), after_place=hook)
-
-    assert await panel.place(guild, channel) is sent
-    hook.assert_awaited_once_with(channel, MESSAGE)
-
-
-@pytest.mark.asyncio
 async def test_unpost_deletes_and_clears():
     channel, sent = _channel()
     guild = _guild(channel)
@@ -294,7 +283,8 @@ async def test_failed_edit_is_queued_for_retry():
     panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE), signature=("a",))
 
     assert await panel.refresh(GUILD) is False
-    assert GUILD in panel.retry
+    assert panel.take_retries() == {GUILD}
+    assert panel.take_retries() == set()  # drained
     # The signature must stay stale, or the retry would decide nothing changed.
     assert await panel.refresh(GUILD) is False
 

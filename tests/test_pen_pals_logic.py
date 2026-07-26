@@ -1558,7 +1558,7 @@ async def test_refresh_panel_edits_in_place_by_default(sync_db_path):
     bot = MagicMock()
     bot.get_cog.return_value = cog
 
-    await pp._refresh_panel(bot, sync_db_path, GUILD_ID)
+    await pp._refresh_panel(bot, GUILD_ID)
 
     cog.panel.refresh.assert_awaited_once_with(GUILD_ID)
     cog.repost_panel.assert_not_awaited()
@@ -1571,7 +1571,7 @@ async def test_refresh_panel_repost_moves_it_to_the_bottom(sync_db_path):
     bot = MagicMock()
     bot.get_cog.return_value = cog
 
-    await pp._refresh_panel(bot, sync_db_path, GUILD_ID, repost=True)
+    await pp._refresh_panel(bot, GUILD_ID, repost=True)
 
     cog.repost_panel.assert_awaited_once_with(GUILD_ID)
     cog.panel.refresh.assert_not_awaited()
@@ -1580,7 +1580,7 @@ async def test_refresh_panel_repost_moves_it_to_the_bottom(sync_db_path):
 async def test_refresh_panel_noop_when_the_cog_is_unloaded(sync_db_path):
     bot = MagicMock()
     bot.get_cog.return_value = None
-    await pp._refresh_panel(bot, sync_db_path, GUILD_ID)  # must not raise
+    await pp._refresh_panel(bot, GUILD_ID)  # must not raise
 
 
 async def test_panel_ids_are_zero_without_config(sync_db_path):
@@ -1871,18 +1871,20 @@ async def test_end_session_abnormally_second_call_is_noop(sync_db_path, monkeypa
 
 
 async def test_on_member_remove_drops_pooled_member(sync_db_path, monkeypatch):
-    """A member who was only in the pool (no session) is removed on leave."""
-    refresh = AsyncMock()
-    monkeypatch.setattr(pp, "_refresh_panel", refresh)
+    """A member who was only in the pool (no session) is removed on leave, and
+    the panel is refreshed so its pool count is accurate."""
     with open_db(sync_db_path) as conn:
         pp._add_to_pool(conn, GUILD_ID, 7)
 
     ctx = MagicMock(db_path=sync_db_path)
     cog = pp.PenPalsCog(MagicMock(), ctx)
+    # The cog holds its own StickyPanel now, rather than bouncing through the
+    # module-level helper to reach itself.
+    monkeypatch.setattr(cog.panel, "refresh", AsyncMock())
     member = MagicMock(spec=discord.Member, id=7)
     member.guild = MagicMock(id=GUILD_ID)
 
     await cog._on_member_remove(member)
 
     assert _pool_ids(sync_db_path) == []
-    refresh.assert_awaited_once()
+    cog.panel.refresh.assert_awaited_once()

@@ -125,9 +125,10 @@ class StickyPanel:
                  load_ids: Callable[[int], tuple[int, int]],   # sync, run in a thread
                  save_ids: Callable[[int, int, int], None],    # sync, run in a thread
                  build: Callable[[Guild], Awaitable[PanelContent]],
-                 after_place=None, hold=None, hold_poll=15.0, hold_max=600.0,
+                 hold=None, hold_poll=15.0, hold_max=600.0,
                  delay=6.0, cache_ttl=300.0):
     async def place(self, guild, target) -> Message | None   # ignores `hold`
+    async def place_or_refresh(self, guild, target)          # what commands want
     async def unpost(self, guild) -> bool
     async def refresh(self, guild_id) -> bool
     async def on_message(self, message) -> None
@@ -137,7 +138,13 @@ class StickyPanel:
 
 `PanelContent(embed, view, signature=None)` is what `build` returns. Supplying
 a `signature` opts into the unchanged-content gate; omit it and every refresh
-edits. `retry` is a set the owner's loop can drain to re-attempt failed edits.
+edits. `place_or_refresh` is what a "post the panel" command should call — it
+edits in place when the panel is already in the target channel (so re-running
+after a re-brand doesn't hop it to the bottom) and posts fresh otherwise. All
+five command/route call sites use it; none re-derives its own embed. `take_retries()` drains the guilds whose last edit failed, for an owner with a
+periodic loop; owners without one never call it. `set_known_guilds(ids)` is the
+opt-in fast path — every migrated cog now publishes it, so a guild with no panel
+costs a set lookup rather than a DB read on every message.
 
 Each cog holds a `StickyPanel`, forwards `on_message` from a listener and
 `cancel_all()` from `cog_unload`, and says nothing about locks or debouncing.

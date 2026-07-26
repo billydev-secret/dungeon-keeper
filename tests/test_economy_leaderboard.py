@@ -513,16 +513,14 @@ async def test_post_leaderboard_refreshes_in_place(ctx, db):
         )
     cog = _make_cog(ctx)
     channel = _channel(CHANNEL_ID)
-    old = MagicMock()
-    old.edit = AsyncMock()
-    channel.fetch_message.return_value = old
+    old = MagicMock(edit=AsyncMock(), delete=AsyncMock(), id=4444)
+    channel.get_partial_message = MagicMock(return_value=old)
     interaction = fake_interaction(guild=FakeGuild(id=GUILD_ID))
     interaction.user = _admin()
     interaction.channel = channel
 
     await cog.bank_post_leaderboard.callback(cog, interaction, None)  # pyright: ignore[reportCallIssue]
 
-    channel.fetch_message.assert_awaited_once_with(4444)
     old.edit.assert_awaited_once()
     channel.send.assert_not_awaited()
     assert _stored(db) == (CHANNEL_ID, 4444)
@@ -558,7 +556,6 @@ async def test_loop_refresh_edits_panel_in_place(db):
 
     await run_guild_leaderboard(_loop_bot(guild), db, GUILD_ID, NOW)
 
-    channel.fetch_message.assert_awaited_once_with(4444)
     embed = message.edit.await_args.kwargs["embed"]
     top = next(f.value for f in embed.fields if "Top earners" in (f.name or ""))
     assert top is not None and "30" in top

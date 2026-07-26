@@ -26,9 +26,6 @@ import discord
 from bot_modules.economy.leaderboard import _pad
 from bot_modules.economy.logic import resolve_notify_toggle
 from bot_modules.services.economy_service import load_econ_settings
-# Re-exported: the sticky-panel predicate moved to core/sticky.py when a
-# non-economy feature (the todo board) became its fourth caller.
-from bot_modules.core.sticky import should_restick_guide as should_restick_guide
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot

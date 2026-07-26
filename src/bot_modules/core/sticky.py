@@ -52,7 +52,7 @@ DEFAULT_HOLD_POLL = 15.0
 DEFAULT_HOLD_MAX = 600.0
 
 
-def should_restick_guide(
+def should_restick(
     *,
     message_channel_id: int,
     message_id: int,
@@ -105,7 +105,6 @@ class StickyPanel:
 
     Optionally also:
 
-    * ``after_place(channel, message_id)`` — runs once a new panel is live.
     * ``hold(guild_id) -> bool`` — "not yet". While it returns True the restick
       waits, re-checking every ``hold_poll`` seconds up to ``hold_max``. Use it
       when moving the panel would disrupt something in flight (a live betting
@@ -124,7 +123,6 @@ class StickyPanel:
         load_ids: Callable[[int], tuple[int, int]],
         save_ids: Callable[[int, int, int], None],
         build: Callable[[discord.Guild], Awaitable[PanelContent]],
-        after_place: Callable[[discord.TextChannel, int], Awaitable[None]] | None = None,
         hold: Callable[[int], Awaitable[bool]] | None = None,
         hold_poll: float = DEFAULT_HOLD_POLL,
         hold_max: float = DEFAULT_HOLD_MAX,
@@ -136,7 +134,6 @@ class StickyPanel:
         self._load_ids = load_ids
         self._save_ids = save_ids
         self._build = build
-        self._after_place = after_place
         self._hold = hold
         self._hold_poll = hold_poll
         self._hold_max = hold_max
@@ -154,10 +151,20 @@ class StickyPanel:
         # (see set_known_guilds) the listener rejects everything else without
         # a DB read. Until then the TTL cache carries the load.
         self._known: set[int] | None = None
-        #: Guilds whose in-place edit failed; a caller's loop can retry these.
-        self.retry: set[int] = set()
+        # Guilds whose in-place edit failed; drained via take_retries().
+        self._retry: set[int] = set()
 
     # ── state the owning cog can publish ─────────────────────────────────
+
+    def take_retries(self) -> set[int]:
+        """Guilds whose last in-place edit failed, cleared as they're returned.
+
+        A caller with a periodic loop drains this so a transient Discord error
+        doesn't strand a stale panel until the next mutation. Callers without
+        such a loop simply never call it.
+        """
+        pending, self._retry = self._retry, set()
+        return pending
 
     def set_known_guilds(self, guild_ids: set[int]) -> None:
         """Tell the listener which guilds actually have a panel.
@@ -237,11 +244,6 @@ class StickyPanel:
             message_id = message.id
             await asyncio.to_thread(self._save_ids, guild.id, target.id, message_id)
 
-            if self._after_place is not None:
-                try:
-                    await self._after_place(target, message_id)
-                except Exception:
-                    log.exception("%s: after_place hook failed", self.name)
             return message
 
     async def unpost(self, guild: discord.Guild) -> bool:
@@ -257,6 +259,41 @@ class StickyPanel:
             self.forget(guild.id)
             await asyncio.to_thread(self._save_ids, guild.id, 0, 0)
             return bool(channel_id and message_id)
+
+    async def place_or_refresh(
+        self, guild: discord.Guild, target: discord.TextChannel
+    ) -> discord.Message | discord.PartialMessage | None:
+        """What a "post the panel" command actually wants.
+
+        Already in ``target`` → edit in place, so re-running the command after a
+        re-brand or a re-price refreshes the panel without hopping it to the
+        bottom of the channel. Anywhere else, or nowhere yet, or the old message
+        is gone → post fresh and drop the old one.
+
+        Unlike ``refresh`` this edits unconditionally (the operator asked for
+        it, so "nothing changed" still deserves a reply) and works against the
+        channel it was handed rather than re-resolving one from config.
+
+        Returns the live panel, or None if posting failed. An in-place edit
+        returns a *partial* message — ``id`` and ``jump_url``, which is all a
+        command reply needs.
+        """
+        channel_id, message_id = await self.ids(guild.id)
+        if message_id and channel_id == target.id:
+            content = await self._build(guild)
+            try:
+                await target.get_partial_message(message_id).edit(
+                    embed=content.embed, view=content.view
+                )
+            except discord.NotFound:
+                pass  # deleted by hand — fall through to a fresh post
+            except discord.HTTPException:
+                return None
+            else:
+                if content.signature is not None:
+                    self._signatures[guild.id] = content.signature
+                return target.get_partial_message(message_id)
+        return await self.place(guild, target)
 
     async def refresh(self, guild_id: int) -> bool:
         """Edit the panel in place to match current state.
@@ -291,7 +328,7 @@ class StickyPanel:
         except discord.HTTPException:
             # Leave the signature stale and ask any caller-owned loop to retry,
             # so a transient error doesn't strand the panel.
-            self.retry.add(guild_id)
+            self._retry.add(guild_id)
             return False
         if content.signature is not None:
             self._signatures[guild_id] = content.signature
@@ -310,7 +347,7 @@ class StickyPanel:
         if self._known is not None and guild_id not in self._known:
             return
         channel_id, panel_message_id = await self._cached_ids(guild_id)
-        if not should_restick_guide(
+        if not should_restick(
             message_channel_id=message.channel.id,
             message_id=message.id,
             panel_channel_id=channel_id,
@@ -334,14 +371,13 @@ class StickyPanel:
         except asyncio.CancelledError:
             return
         try:
-            if not await self._wait_for_hold(guild_id):
-                return
+            await self._wait_for_hold(guild_id)
             guild = self.bot.get_guild(guild_id)
             if guild is None:
                 return
             # Only ever maintains an existing panel — never creates one, so a
             # guild that has not configured a channel stays untouched.
-            channel_id, message_id = await self.ids(guild_id)
+            channel_id, message_id = await self._cached_ids(guild_id)
             if not message_id:
                 return
             channel = self._channel(guild, channel_id)
@@ -352,15 +388,15 @@ class StickyPanel:
         except Exception:
             log.exception("%s: restick failed for guild %s", self.name, guild_id)
 
-    async def _wait_for_hold(self, guild_id: int) -> bool:
-        """Block while the caller says "not yet". True when clear to proceed.
+    async def _wait_for_hold(self, guild_id: int) -> None:
+        """Block while the caller says "not yet".
 
         Gives up after ``hold_max`` and re-sticks anyway: a hold that never
         clears (a round that never settles, a bug) would otherwise leave the
         panel buried permanently, which is worse than moving it at a bad moment.
         """
         if self._hold is None:
-            return True
+            return
         deadline = time.monotonic() + self._hold_max
         while await self._hold(guild_id):
             if time.monotonic() >= deadline:
@@ -371,9 +407,8 @@ class StickyPanel:
                     self._hold_max,
                     guild_id,
                 )
-                return True
+                return
             await asyncio.sleep(self._hold_poll)
-        return True
 
     # ── bookkeeping ──────────────────────────────────────────────────────
 
@@ -390,7 +425,7 @@ class StickyPanel:
         """Drop cached state for a guild (after an unpost, or a config change)."""
         self._ref.pop(guild_id, None)
         self._signatures.pop(guild_id, None)
-        self.retry.discard(guild_id)
+        self._retry.discard(guild_id)
         if self._known is not None:
             self._known.discard(guild_id)
 

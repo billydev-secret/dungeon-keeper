@@ -89,6 +89,9 @@ log = logging.getLogger("dungeonkeeper.casino")
 # aren't chasing the panel up the channel.
 HUB_ROUND_COOLDOWN_SECONDS = 60
 HUB_HOLD_POLL_SECONDS = 15
+# Ceiling on holding: past this the panel re-sticks even mid-round, so a
+# round that never settles can't bury it forever.
+HUB_HOLD_MAX_SECONDS = 300
 # Floor-ticker repaints coalesce a burst of plays into one hub-panel edit.
 HUB_REPAINT_SECONDS = 8.0
 # Big-bet slots show: pause between each reel stopping (and before the
@@ -401,6 +404,7 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             build=self._build_hub_panel,
             hold=self._hub_hold,
             hold_poll=HUB_HOLD_POLL_SECONDS,
+            hold_max=HUB_HOLD_MAX_SECONDS,
         )
         # guild_id → debounced hub-panel repaint (the floor ticker).
         self._hub_repaints: dict[int, asyncio.Task] = {}
@@ -636,14 +640,18 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             )
 
     def _round_open(self, guild_id: int) -> bool:
-        """Whether any communal round is currently taking bets in the hub channel."""
+        """Whether any communal round is currently taking bets in the hub channel.
+
+        Reads the channel from the warm ``_casino_channels`` map that
+        ``ensure_panel`` maintains, rather than re-loading settings — this runs
+        on a poll while a restick is held.
+        """
+        channel_id = self._casino_channels.get(guild_id)
+        if not channel_id:
+            return False
         with self.ctx.open_db() as conn:
-            settings = svc.load_casino_settings(conn, guild_id)
-            if not settings.channel_id:
-                return False
             return any(
-                ui.live_round(conn, settings.channel_id) is not None
-                for ui in _WINDOW_UIS
+                ui.live_round(conn, channel_id) is not None for ui in _WINDOW_UIS
             )
 
     async def _hub_hold(self, guild_id: int) -> bool:
@@ -732,16 +740,15 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
                 standings,
             )
 
-    async def ensure_panel(
-        self, guild: discord.Guild, *, force_repost: bool = False
-    ) -> None:
+    async def ensure_panel(self, guild: discord.Guild) -> None:
         """Post/refresh the hub panel in the configured casino channel.
 
-        Also the teardown path: an unset channel (or a disabled economy)
-        deletes any panel we previously posted. Called at boot, by config
-        changes (dashboard dispatch), and by the restick debounce with
-        ``force_repost=True`` — delete-and-repost so the panel returns to
-        the bottom of the channel instead of being edited in place.
+        Edits in place when the panel is already in the right channel, so a
+        repaint after a spin never moves it; posts fresh when it has moved or
+        was never posted. Also the teardown path: an unset channel (or a
+        disabled economy) deletes any panel we previously posted. Called at
+        boot and by config changes; the sticky repost goes through
+        ``hub_panel`` directly.
         """
 
         try:
@@ -754,53 +761,23 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         if pot is not None:
             self._last_pot[guild.id] = pot
 
-        async def _delete_stale() -> None:
-            channel = self.bot.get_channel(settings.panel_channel_id)
-            if isinstance(channel, discord.TextChannel):
-                try:
-                    await channel.get_partial_message(
-                        settings.panel_message_id
-                    ).delete()
-                except discord.HTTPException:
-                    pass
-
-        def _save_ids(message_id: int, channel_id: int) -> None:
-            with self.ctx.open_db() as conn:
-                svc.save_casino_settings(
-                    conn, guild.id,
-                    {"panel_message_id": message_id, "panel_channel_id": channel_id},
-                )
-
         self._casino_channels[guild.id] = settings.channel_id
+        # Publish the panel-guild set so the on_message gate stays a dict
+        # lookup rather than a DB read, as it was before the extraction.
+        self.hub_panel.set_known_guilds(
+            {gid for gid, ch in self._casino_channels.items() if ch}
+        )
         if not settings.channel_id or not econ.enabled:
+            # Teardown: an unset channel (or a disabled economy) removes the
+            # panel and clears the stored ids.
             if settings.panel_message_id:
-                await _delete_stale()
-                await asyncio.to_thread(_save_ids, 0, 0)
+                await self.hub_panel.unpost(guild)
             return
 
         channel = guild.get_channel(settings.channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
-        moved = settings.panel_channel_id != channel.id
-        if settings.panel_message_id and not moved and not force_repost:
-            # In place: an edit never moves the panel, so a repaint after a
-            # spin doesn't yank it down the channel.
-            embed = casino_embeds.build_hub_embed(
-                econ, settings, await self._accent(guild), jackpot=pot,
-                ticker=ticker, standings=standings, casino_name=casino_name,
-            )
-            try:
-                await channel.get_partial_message(settings.panel_message_id).edit(
-                    embed=embed, view=build_hub_view(settings),
-                )
-                return
-            except discord.NotFound:
-                pass  # deleted by hand — repost below
-            except discord.HTTPException:
-                return
-        # Moving, reposting, or nothing posted yet → hand it to the shared
-        # placer, which posts before deleting the old one and owns the ids.
-        await self.hub_panel.place(guild, channel)
+        await self.hub_panel.place_or_refresh(guild, channel)
 
     def _schedule_hub_repaint(self, guild_id: int) -> None:
         """Debounced hub-panel repaint: a burst of instant plays becomes

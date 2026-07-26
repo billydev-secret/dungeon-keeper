@@ -38,13 +38,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: Cache TTL for the board's (channel_id, message_id) so the on_message listener
-#: is a dict lookup rather than a DB read on every message.
-_BOARD_CACHE_TTL = 300.0
-
-#: Debounce before re-sticking, so a burst of chat costs one repost, not twenty.
-_RESTICK_DELAY = 6.0
-
 #: How often the background loop spawns due recurring tasks and repaints boards.
 _LOOP_INTERVAL = 60.0
 
@@ -403,8 +396,7 @@ async def todo_board_loop(bot: Bot) -> None:
                 cog.board.set_known_guilds(boards)
                 # Repaint sequentially: these are edits against N different
                 # channels and a 60s cadence gives no reason to burst them.
-                for guild_id in sorted((spawned | cog.board.retry) & boards):
-                    cog.board.retry.discard(guild_id)
+                for guild_id in sorted((spawned | cog.board.take_retries()) & boards):
                     try:
                         await cog.refresh_board(guild_id)
                     except Exception:

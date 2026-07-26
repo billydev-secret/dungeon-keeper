@@ -1246,9 +1246,8 @@ async def test_post_shop_refreshes_in_place_with_view(ctx, db):
     _enable(db, shop_channel_id=777, shop_message_id=4444)
     cog = _make_cog(ctx)
     channel = _panel_channel()
-    old = MagicMock()
-    old.edit = AsyncMock()
-    channel.fetch_message.return_value = old
+    old = MagicMock(edit=AsyncMock(), delete=AsyncMock(), id=4444)
+    channel.get_partial_message = MagicMock(return_value=old)
     interaction = _interaction(_member(admin=True))
     interaction.channel = channel
 
@@ -1258,7 +1257,6 @@ async def test_post_shop_refreshes_in_place_with_view(ctx, db):
     ):
         await cog.bank_post_shop.callback(cog, interaction, None)
 
-    channel.fetch_message.assert_awaited_once_with(4444)
     assert "view" in old.edit.await_args.kwargs  # re-priced labels ride along
     channel.send.assert_not_awaited()
     assert _shop_panel_stored(db) == (777, 4444)
