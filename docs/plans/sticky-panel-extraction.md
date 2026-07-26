@@ -1,19 +1,23 @@
 # Sticky-panel extraction — plan
 
-**Status:** proposed, not started. Filed 2026-07-26 when the todo board became
-the fourth copy of this pattern.
+**Status:** Group A **done** (2026-07-26). Groups B and C below are outstanding.
+
+`bot_modules/core/sticky.py` now holds `StickyPanel` — the shared locks,
+debounce, id cache, post-before-delete placer, signature gate and listener —
+covered by `tests/test_core_sticky.py`. The economy guide / shop / leaderboard
+panels and the todo board all run on it.
 
 ## The problem
 
 Discord has no reorder API, so a panel that must stay at the bottom of a
 channel keeps its place by deleting itself and re-posting whenever a member
-posts beneath it. Four features now implement that identically, each with its
-own per-guild lock map, debounce-task map, TTL cache of
-`(channel_id, message_id)`, `on_message` listener, and delete-and-repost
-placer — roughly 150–165 lines apiece.
+posts beneath it. Before this change, four features implemented that
+identically — each with its own per-guild lock map, debounce-task map, TTL
+cache of `(channel_id, message_id)`, `on_message` listener, and
+delete-and-repost placer, roughly 150–165 lines apiece.
 
-The copies have already **diverged in ways that matter**, which is the real
-argument for extracting:
+The copies had **diverged in ways that mattered**, which was the real argument
+for extracting:
 
 | | economy guide / shop / leaderboard | todo board |
 |---|---|---|
@@ -22,83 +26,104 @@ argument for extracting:
 | Unchanged-content skip | none | `board_signature` gate |
 | Edit / delete calls | `fetch_message()` + `.edit()`/`.delete()` | `get_partial_message()` |
 
-The todo copy is the better one on all four rows, and none of those
-improvements will reach the economy panels on their own. Worse, the "take the
-lock *before* re-reading the stored ids" fix (`docs/reviews/2026-07-23-novel-hunt.md`,
-finding S3) had to be applied three separate times in `economy_cog.py` and was
-then re-derived a fourth time here from a docstring.
+The todo copy was better on all four rows, and none of those improvements would
+have reached the economy panels on their own. Worse, the "take the lock
+*before* re-reading the stored ids" fix
+(`docs/reviews/2026-07-23-novel-hunt.md`, finding S3) had to be applied three
+separate times in `economy_cog.py` and was then re-derived a fourth time in the
+todo board from a docstring.
 
-## In scope — four call sites
+## The full survey — 12 sites
 
-Structurally identical; only "how do I load/save the ids" and "how do I build
-the embed" differ.
+An exhaustive sweep (2026-07-26) found **twelve** places that repost or bump a
+message in response to channel activity, not the four this doc originally
+listed. Grouped by how well they fit a shared abstraction:
 
-- `economy_cog` guide panel — `_place_guide_panel` and friends
-- `economy_cog` shop panel — `_place_shop_panel` and friends
-- `economy_cog` leaderboard panel — `_place_leaderboard_panel` and friends
-- `cogs/todo_cog.py` todo board — `place_board` and friends
+### Group A — migrated ✅
 
-## Explicitly out of family — do **not** force these in
+Structurally identical; only "where the ids live" and "what it looks like"
+differ.
 
-- **Casino hub** (`cogs/casino/cog.py`) — different algorithm, not different
-  parameters: an in-flight guard instead of cancel-and-rearm, a polling loop
-  with `RESTICK_ROUND_HOLD_SECONDS` to avoid moving the panel mid-round, and a
-  `channel.last_message_id` short-circuit instead of `should_restick_guide`.
-- **Guess prompt** (`cogs/guess_cog.py`) — no lock, no TTL cache, no persisted
-  message id, re-reads config per message.
-- **AMA bottom bar** (`cogs/games_ama_cog.py`) — `_suppress_resend` is a
-  per-*game-instance* flag on a live object, not per-guild; it edits an
-  in-memory `self._bottom_msg` rather than ids from a table.
+- `economy_cog` guide panel
+- `economy_cog` shop panel
+- `economy_cog` leaderboard / quest board
+- `cogs/todo_cog.py` todo board
 
-Generalising across these would produce a lowest-common-denominator abstraction
-with hooks nobody else uses.
+All four now construct a `StickyPanel`. The economy panels gained
+post-before-delete, the wider `HTTPException` catch, and single-REST-call
+edits in the process. The economy cog's three `on_message` listeners collapsed
+into one that forwards to all three panels.
 
-## Proposed shape
+### Group B — close, one hook each (outstanding)
+
+| Site | What it needs | What it gains |
+|---|---|---|
+| `whisper_cog` launcher | nothing — it is simply *behind* the family | it has **no debounce and no id cache**, so it does a threaded DB read *and* a full delete+send per message |
+| `confessions_cog` launcher | an `after_place` hook for its component-based duplicate sweep (already implemented on `StickyPanel`) | it has **no throttle at all** and costs ≥5 REST calls per repost, the worst in the codebase; its config reads are **synchronous sqlite on the event loop** |
+| `dm_perms_cog` panel | nothing, if a trailing-edge debounce may replace its leading-edge 2s cooldown — that is a **user-visible timing change** and needs a decision | drops a `history(limit=1)` probe; `set_panel_settings` currently runs sync on the event loop |
+| `pen_pals_cog` panel | nothing | fixes a real bug: `channel.send` is unguarded *after* the old panel is deleted, so a failed send permanently orphans the panel. Also has **no `cog_unload`**, leaking coroutines |
+| `guess_cog` prompt | `StickyPanel` would have to accept `VoiceChannel`/`Thread`, not just `TextChannel` | gains the per-guild lock it currently lacks (manual reposts can race the debounced one) |
+
+Five of these do a config/DB read on the hot path for **every message in the
+guild**. Migrating them is a bigger win than the line count suggests.
+
+### Group C — genuinely out of family (leave alone)
+
+- **Casino hub** — a different *algorithm*: in-flight guard rather than
+  cancel-and-rearm, a polling loop that holds off up to 300s so the panel can't
+  move mid-bet, a `last_message_id` short-circuit instead of the predicate, and
+  `ensure_panel` doubling as repaint *and* teardown. Would need five hooks
+  nobody else uses.
+- **AMA bottom bar** — per-*game-instance* state, not per-guild. The handle is a
+  live `discord.Message` on a `bot.active_views` object, the id lives in a games
+  payload blob, and `_suppress_resend` is set by unrelated rotation flows. There
+  is no `(guild_id) -> (channel_id, message_id)` pair to hand a `load_ids`
+  callback.
+- **Bump-tracker widget** — reposts on a *domain event* (a detected bump), never
+  because it was buried. No burial predicate exists. A refreshing widget that
+  occasionally relocates, not a sticky panel.
+- **Voice Master panel** — manual `/voice-admin post-panel` only. No listener,
+  no repost, and it doesn't delete its predecessor (reposting stacks
+  duplicates — arguably its own small bug).
+
+## The shape that landed
 
 Composition, not a mixin — `economy_cog` owns three panels in one cog, so a
 mixin can't express it.
 
 ```python
 class StickyPanel:
-    def __init__(self, ctx, bot, name, *,
-                 load_ids: Callable[[int], tuple[int, int]],      # sync, run in a thread
-                 save_ids: Callable[[int, int, int], None],
-                 build: Callable[[Guild], Awaitable[tuple[Embed, View]]],
-                 signature: Callable[[int], Awaitable[Hashable]] | None = None,
-                 delay: float = 6.0, ttl: float = 300.0):
+    def __init__(self, name, bot, *,
+                 load_ids: Callable[[int], tuple[int, int]],   # sync, run in a thread
+                 save_ids: Callable[[int, int, int], None],    # sync, run in a thread
+                 build: Callable[[Guild], Awaitable[PanelContent]],
+                 after_place=None, delay=6.0, cache_ttl=300.0):
     async def place(self, guild, target) -> Message | None
     async def unpost(self, guild) -> bool
     async def refresh(self, guild_id) -> bool
     async def on_message(self, message) -> None
+    def set_known_guilds(self, guild_ids) -> None
     def cancel_all(self) -> None
 ```
 
-Each cog holds `self._panel = StickyPanel(...)`, forwards one `on_message`
-listener and `cog_unload`, and keeps `should_restick_guide`
-(`core/sticky.py`) inside the helper.
+`PanelContent(embed, view, signature=None)` is what `build` returns. Supplying
+a `signature` opts into the unchanged-content gate; omit it and every refresh
+edits. `retry` is a set the owner's loop can drain to re-attempt failed edits.
 
-## Expected payoff
+Each cog holds a `StickyPanel`, forwards `on_message` from a listener and
+`cancel_all()` from `cog_unload`, and says nothing about locks or debouncing.
 
-~620 lines across four copies → one ~200-line helper plus ~25 lines of wiring
-each: **roughly −320 lines, and one place to fix the next race** instead of
-four. Every call site inherits post-before-delete, the wider exception catch,
-the signature skip, and single-call edits.
+## What Group A actually saved
 
-## Why not now
+The economy cog lost ~500 lines of panel machinery and three separate
+`on_message` listeners. Beyond the line count, its panels picked up four
+behaviours they did not have and would not have got on their own:
+post-before-delete, `HTTPException` instead of `Forbidden`-only, single-REST-
+call edits, and (where a signature is supplied) skipping no-op edits entirely.
 
-The value is almost entirely inside `economy_cog.py` — a ~5,000-line file with
-an open review docket. Rewriting three of its panels from a todo-board branch
-is exactly the uninvited scope-expansion CLAUDE.md warns against, and it would
-drag the whole economy suite onto the gate for a change that ships no user-
-visible behaviour.
-
-## First step, already done
-
-`should_restick_guide` moved from `bot_modules/economy/guide.py` to
-`bot_modules/core/sticky.py` (re-exported from `guide` so economy call sites
-are untouched). A moderation feature importing the economy package to decide
-whether to re-stick a panel was the wrong dependency, and `core/sticky.py` is
-where the helper above will live.
+**This means Group A is a behaviour change for the economy panels, not a pure
+refactor** — worth verifying on the live server rather than trusting tests
+alone.
 
 ## Related, separately deferred
 

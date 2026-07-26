@@ -268,7 +268,7 @@ async def test_restick_ignores_bot_messages(board_db):
     msg = MagicMock(spec=discord.Message)
     msg.guild = MagicMock(id=123)
     msg.author = MagicMock(bot=True)
-    with patch.object(cog, "_schedule_restick") as sched:
+    with patch.object(cog.board, "schedule_restick") as sched:
         await cog._restick_board(msg)
     sched.assert_not_called()
 
@@ -285,7 +285,7 @@ async def test_restick_arms_on_member_message_in_board_channel(board_db):
     msg.author = MagicMock(bot=False)
     msg.channel = MagicMock(id=555)
     msg.id = 777
-    with patch.object(cog, "_schedule_restick") as sched:
+    with patch.object(cog.board, "schedule_restick") as sched:
         await cog._restick_board(msg)
     sched.assert_called_once_with(123)
 
@@ -302,7 +302,7 @@ async def test_restick_ignores_other_channels(board_db):
     msg.author = MagicMock(bot=False)
     msg.channel = MagicMock(id=999)
     msg.id = 777
-    with patch.object(cog, "_schedule_restick") as sched:
+    with patch.object(cog.board, "schedule_restick") as sched:
         await cog._restick_board(msg)
     sched.assert_not_called()
 
