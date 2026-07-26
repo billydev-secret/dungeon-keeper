@@ -26,6 +26,7 @@ from bot_modules.economy.game_rewards import (
     pay_cah_game_by_score,
     pay_cat_catch,
     pay_game_rewards,
+    resolve_named_scores,
 )
 from bot_modules.games.command_groups import games
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
@@ -46,9 +47,11 @@ def is_mod_or_admin():
 class GamesExternalCog(commands.Cog):
     def __init__(self, bot: "Bot"):
         self.bot = bot
-        # guild_id -> {bot_user_id: (channel_id, kind)}. Warmed on load; kept in
+        # guild_id -> {(bot_user_id, channel_id): kind}. Warmed on load; kept in
         # sync by the config commands so the on_message hot path never hits DB.
-        self._watch: dict[int, dict[int, tuple[int, str]]] = {}
+        # Keyed on the *pair* since migration 135 — keyed on the bot alone, a
+        # bot playing in a second channel was silently ignored there.
+        self._watch: dict[int, dict[tuple[int, int], str]] = {}
 
     @property
     def db(self):
@@ -58,8 +61,8 @@ class GamesExternalCog(commands.Cog):
         try:
             for row in await logic.load_all_watches(self.db):
                 self._watch.setdefault(int(row["guild_id"]), {})[
-                    int(row["bot_user_id"])
-                ] = (int(row["channel_id"]), str(row["kind"]))
+                    (int(row["bot_user_id"]), int(row["channel_id"]))
+                ] = str(row["kind"])
             if self._watch:
                 n = sum(len(v) for v in self._watch.values())
                 log.info(
@@ -71,16 +74,13 @@ class GamesExternalCog(commands.Cog):
 
     # ── collection ────────────────────────────────────────────────────────
     def _watched_kind(self, message: discord.Message) -> str | None:
-        """The parser kind for a message's (channel, bot), or None if unwatched."""
+        """The parser kind for a message's (bot, channel), or None if unwatched."""
         if message.guild is None:
             return None
         watches = self._watch.get(message.guild.id)
         if not watches:
             return None
-        cfg = watches.get(message.author.id)
-        if cfg is None or message.channel.id != cfg[0]:
-            return None
-        return cfg[1]
+        return watches.get((message.author.id, message.channel.id))
 
     async def _capture(self, message: discord.Message, kind: str) -> None:
         try:
@@ -88,17 +88,11 @@ class GamesExternalCog(commands.Cog):
         except Exception:
             log.exception("External game tracking: failed to store message %s", message.id)
             return
-        # Bank first, then pay: the CAH/Connect 4 payouts read the just-banked
-        # window back out; the Cat Bot payout keys off this message's content.
+        # Bank first, then pay: the Gamebot payouts read the just-banked window
+        # back out; the Cat Bot payout keys off this message's content.
         if kind == "gamebot":
-            embeds = [e.to_dict() for e in message.embeds]
-            if parser.is_game_over(embeds):
-                await self._pay_cah_game(message)
-            elif parser.is_terminal(embeds):
-                # Any other *Game over!* from this bot — Connect 4 is the only
-                # other sub-game tracked so far. Adding a third means this
-                # elif needs its own specific check instead of "not CAH".
-                await self._pay_connect4_game(message)
+            if parser.is_terminal([e.to_dict() for e in message.embeds]):
+                await self._pay_gamebot_game(message)
         elif kind == "catbot":
             await self._pay_cat_catch(message)
 
@@ -119,100 +113,160 @@ class GamesExternalCog(commands.Cog):
         if kind is not None:
             await self._capture(after, kind)
 
-    async def _pay_cah_game(self, message: discord.Message) -> None:
-        """Pay a finished Gamebot CAH game proportional to each player's score.
+    async def _game_window(self, message: discord.Message):
+        """The banked messages making up the game this terminal message ends.
 
-        Idempotent: ``claim_payout`` reserves the game (keyed on the Game over!
-        message id) before any credit, so a re-captured edit or a restart never
-        double-pays. Uses ``pay_cah_game_by_score`` — the top scorer (the
-        winner) earns the configured cap, everyone else a ratio of it — but
-        still fires the same party_game/game_win quest triggers a flat payout
-        would.
+        Scoped to the terminal's own channel, so games running concurrently in
+        different channels never see each other's messages.
+        """
+        guild = message.guild
+        assert guild is not None
+        rows = await logic.recent_channel_messages(
+            self.db, guild.id, message.channel.id, message.author.id,
+            message.created_at.isoformat(),
+        )
+        parsed = [{"embeds": json.loads(r["embeds_json"] or "[]")} for r in rows]
+        idx = next(
+            (i for i, r in enumerate(rows) if int(r["message_id"]) == message.id),
+            len(parsed) - 1,
+        )
+        return parser.current_game_window(parsed, idx)
+
+    async def _pay_gamebot_game(self, message: discord.Message) -> None:
+        """Pay a finished Gamebot game — whichever of its sub-games it was.
+
+        The sub-game is identified from the run's **lobby embed**, never from
+        the *Game over!* message: CAH and Anagrams share the identical
+        ``<@id> is the winner!`` wording, so dispatching on the terminal
+        credited every Anagrams game as a one-player CAH game (fixed
+        2026-07-26).
+
+        Parses before claiming, since the claim records which game it was.
+        That's still safe against double-payment — nothing is credited unless
+        ``claim_payout`` wins the race for the *Game over!* message id, so a
+        re-captured edit or a restart can parse twice but pay once.
         """
         guild = message.guild
         if guild is None:
             return
         try:
-            first = await logic.claim_payout(
-                self.db, message.id, guild.id, "gamebot_cah"
-            )
-            if not first:
+            window = await self._game_window(message)
+            game = parser.identify_game(window)
+
+            if parser.is_abandoned(window):
+                # A lobby that timed out with too few players. Gamebot posts a
+                # *Game over!* for it anyway; nobody played, so nobody is paid.
+                # Claimed regardless so it's never reconsidered.
+                await logic.claim_payout(
+                    self.db, message.id, guild.id, "gamebot_abandoned"
+                )
+                await logic.mark_parsed(self.db, message.id, "skip")
+                log.info("Gamebot game %s abandoned (too few players)", message.id)
                 return
-            rows = await logic.recent_channel_messages(
-                self.db, guild.id, message.channel.id, message.author.id,
-                message.created_at.isoformat(),
-            )
-            parsed = [
-                {"embeds": json.loads(r["embeds_json"] or "[]")} for r in rows
-            ]
-            idx = next(
-                (i for i, r in enumerate(rows) if int(r["message_id"]) == message.id),
-                len(parsed) - 1,
-            )
-            scores, winner = parser.extract_cah_game(
-                parser.current_game_window(parsed, idx)
-            )
-            if not scores:
+
+            if game is None:
+                # A Gamebot game we have no parser for (Chess, Poker, …).
+                # Deliberately left *unclaimed* so that teaching the parser a
+                # new sub-game later can replay it; marking it 'skip' keeps it
+                # out of the unparsed backlog meanwhile.
                 await logic.mark_parsed(self.db, message.id, "skip")
                 return
-            await pay_cah_game_by_score(
-                self.bot, guild.id, scores, winner,
-                occurrence=str(message.id),
-            )
-            await logic.mark_parsed(self.db, message.id, "ok")
-            log.info(
-                "CAH payout: guild %s game %s — %d players, winner %s",
-                guild.id, message.id, len(scores), winner,
-            )
-        except Exception:
-            log.exception("CAH payout failed for message %s", message.id)
 
-    async def _pay_connect4_game(self, message: discord.Message) -> None:
+            payer = {
+                parser.GAME_CAH: self._pay_cah_game,
+                parser.GAME_CONNECT4: self._pay_connect4_game,
+                parser.GAME_ANAGRAMS: self._pay_anagrams_game,
+            }[game]
+            await payer(message, window)
+        except Exception:
+            log.exception("Gamebot payout failed for message %s", message.id)
+
+    async def _pay_cah_game(self, message: discord.Message, window) -> None:
+        """Pay a finished Gamebot CAH game proportional to each player's score.
+
+        The top scorer (the winner) earns the configured cap and everyone else
+        a ratio of it, but the same party_game/game_win quest triggers fire as
+        a flat payout would.
+        """
+        guild = message.guild
+        assert guild is not None
+        scores, winner = parser.extract_cah_game(window)
+        if not scores:
+            await logic.mark_parsed(self.db, message.id, "skip")
+            return
+        if not await logic.claim_payout(self.db, message.id, guild.id, "gamebot_cah"):
+            return
+        await pay_cah_game_by_score(
+            self.bot, guild.id, scores, winner, occurrence=str(message.id),
+        )
+        await logic.mark_parsed(self.db, message.id, "ok")
+        log.info(
+            "CAH payout: guild %s game %s — %d players, winner %s",
+            guild.id, message.id, len(scores), winner,
+        )
+
+    async def _pay_connect4_game(self, message: discord.Message, window) -> None:
         """Pay participation + a win bonus for a finished Gamebot Connect 4 game.
 
         Connect 4 has no per-round score to scale by (like CAH does) — it's a
         single win/lose outcome — so this reuses the flat ``pay_game_rewards``
-        faucet instead of a score-proportional one. Idempotent the same way as
-        CAH: ``claim_payout`` reserves the game before any credit.
+        faucet instead of a score-proportional one.
         """
         guild = message.guild
-        if guild is None:
+        assert guild is not None
+        roster, winner = parser.extract_connect4_game(window)
+        if not roster:
+            await logic.mark_parsed(self.db, message.id, "skip")
             return
-        try:
-            first = await logic.claim_payout(
-                self.db, message.id, guild.id, "gamebot_connect4"
-            )
-            if not first:
-                return
-            rows = await logic.recent_channel_messages(
-                self.db, guild.id, message.channel.id, message.author.id,
-                message.created_at.isoformat(),
-            )
-            parsed = [
-                {"embeds": json.loads(r["embeds_json"] or "[]")} for r in rows
-            ]
-            idx = next(
-                (i for i, r in enumerate(rows) if int(r["message_id"]) == message.id),
-                len(parsed) - 1,
-            )
-            roster, winner = parser.extract_connect4_game(
-                parser.current_game_window(parsed, idx)
-            )
-            if not roster:
-                await logic.mark_parsed(self.db, message.id, "skip")
-                return
-            await pay_game_rewards(
-                self.bot, guild.id, sorted(roster),
-                [winner] if winner is not None else [], "connect4",
-                occurrence=str(message.id),
-            )
-            await logic.mark_parsed(self.db, message.id, "ok")
-            log.info(
-                "Connect 4 payout: guild %s game %s — %d players, winner %s",
-                guild.id, message.id, len(roster), winner,
-            )
-        except Exception:
-            log.exception("Connect 4 payout failed for message %s", message.id)
+        if not await logic.claim_payout(
+            self.db, message.id, guild.id, "gamebot_connect4"
+        ):
+            return
+        await pay_game_rewards(
+            self.bot, guild.id, sorted(roster),
+            [winner] if winner is not None else [], "connect4",
+            occurrence=str(message.id),
+        )
+        await logic.mark_parsed(self.db, message.id, "ok")
+        log.info(
+            "Connect 4 payout: guild %s game %s — %d players, winner %s",
+            guild.id, message.id, len(roster), winner,
+        )
+
+    async def _pay_anagrams_game(self, message: discord.Message, window) -> None:
+        """Pay a finished Gamebot Anagrams game proportional to points scored.
+
+        Anagrams' *Scoreboard* names players by **username**, not mention, so
+        they're resolved to members by name the way Cat Bot catches are; a
+        player who has since left or renamed is logged and skipped rather than
+        guessed at. The winner comes from *Game over!* as a mention and is
+        folded in at 0 if the scoreboard somehow missed them.
+        """
+        guild = message.guild
+        assert guild is not None
+        named_scores, winner = parser.extract_anagrams_game(window)
+        scores, unresolved = resolve_named_scores(guild, named_scores)
+        if winner is not None:
+            member = guild.get_member(winner)
+            if member is not None and not member.bot:
+                scores.setdefault(winner, 0)
+        if not scores:
+            await logic.mark_parsed(self.db, message.id, "skip")
+            return
+        if not await logic.claim_payout(
+            self.db, message.id, guild.id, "gamebot_anagrams"
+        ):
+            return
+        await pay_cah_game_by_score(
+            self.bot, guild.id, scores, winner,
+            occurrence=str(message.id), game_key="anagrams",
+        )
+        await logic.mark_parsed(self.db, message.id, "ok")
+        log.info(
+            "Anagrams payout: guild %s game %s — %d players, winner %s%s",
+            guild.id, message.id, len(scores), winner,
+            f", unresolved {unresolved}" if unresolved else "",
+        )
 
     async def _pay_cat_catch(self, message: discord.Message) -> None:
         """Pay a Cat Bot catch: rarity-tiered coins + the cat_catch trigger.
@@ -293,17 +347,29 @@ class GamesExternalCog(commands.Cog):
             self.db, interaction.guild.id, channel.id, bot.id, kind.value,
             interaction.user.id,
         )
-        self._watch.setdefault(interaction.guild.id, {})[bot.id] = (
-            channel.id, kind.value,
-        )
+        self._watch.setdefault(interaction.guild.id, {})[
+            (bot.id, channel.id)
+        ] = kind.value
         log.info(
             "External game tracking enabled by %s: #%s watching bot %s (%s)",
             interaction.user.display_name, channel.name, bot.id, kind.value,
         )
+        others = [
+            int(w["channel_id"])
+            for w in await logic.watch_channels_for_bot(
+                self.db, interaction.guild.id, bot.id
+            )
+            if int(w["channel_id"]) != channel.id
+        ]
+        extra = (
+            f" That's on top of {', '.join(f'<#{c}>' for c in others)} — games "
+            "running in several channels at once each pay out on their own."
+            if others else ""
+        )
         await interaction.response.send_message(
             f"✅ Now banking {bot.mention}'s messages in {channel.mention} as "
-            f"**{kind.name}**. Run `/games track sample` after a game or two to "
-            "confirm the format.",
+            f"**{kind.name}**.{extra} Run `/games track sample` after a game or "
+            "two to confirm the format.",
             ephemeral=True,
         )
 
@@ -323,7 +389,8 @@ class GamesExternalCog(commands.Cog):
         lines = ["**External game tracking**"]
         for w in watches:
             n = await logic.count_messages(
-                self.db, interaction.guild.id, int(w["bot_user_id"])
+                self.db, interaction.guild.id, int(w["bot_user_id"]),
+                int(w["channel_id"]),
             )
             state = "enabled" if w["enabled"] else "paused"
             label = logic.WATCH_KIND_LABELS.get(str(w["kind"]), str(w["kind"]))
@@ -362,7 +429,10 @@ class GamesExternalCog(commands.Cog):
             return
         ok = await logic.set_watch_enabled(self.db, interaction.guild.id, bot_id, False)
         if ok:
-            self._watch.get(interaction.guild.id, {}).pop(bot_id, None)
+            # Pauses the bot in *every* channel it's watched in.
+            watches = self._watch.get(interaction.guild.id, {})
+            for key in [k for k in watches if k[0] == bot_id]:
+                watches.pop(key, None)
         msg = f"⏸️ Paused tracking <@{bot_id}>." if ok else "That bot wasn't being tracked."
         await interaction.response.send_message(msg, ephemeral=True)
 
@@ -386,13 +456,14 @@ class GamesExternalCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        row = await logic.get_watch_for_bot(self.db, interaction.guild.id, bot_id)
-        if row:
-            self._watch.setdefault(interaction.guild.id, {})[bot_id] = (
-                int(row["channel_id"]), str(row["kind"]),
-            )
+        rows = await logic.watch_channels_for_bot(self.db, interaction.guild.id, bot_id)
+        watches = self._watch.setdefault(interaction.guild.id, {})
+        for row in rows:
+            watches[(bot_id, int(row["channel_id"]))] = str(row["kind"])
+        where = ", ".join(f"<#{r['channel_id']}>" for r in rows)
         await interaction.response.send_message(
-            f"▶️ Resumed tracking <@{bot_id}>.", ephemeral=True
+            f"▶️ Resumed tracking <@{bot_id}>{f' in {where}' if where else ''}.",
+            ephemeral=True,
         )
 
     @track.command(name="sample", description="Dump recent bot messages (raw content + embeds) to confirm the format.")

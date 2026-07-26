@@ -4,11 +4,17 @@ Pure functions over the raw ``embeds`` dicts (``embed.to_dict()``) the collector
 banks — no DB, no Discord I/O — so they're trivially testable against real
 ``/games track sample`` dumps and re-runnable on the full history.
 
-Currently: Gamebot, which hosts more than one game in the same watched
-channel — Cards Against Humanity and Connect 4 so far (kind='gamebot' covers
-both; the cog tells them apart per terminal message). Both are a run of
-messages in one channel ending in a *Game over!* embed. Players always render
-as real mentions (``<@id>``), so rosters, scores, and winners are reliable:
+Currently: Gamebot, which hosts many games in the same watched channel —
+Cards Against Humanity, Connect 4 and Anagrams so far (kind='gamebot' covers
+all of them; ``identify_game`` tells them apart). Each is a run of messages in
+one channel that opens with a *"<host> is starting a <Game> game!"* lobby embed
+and closes with a *Game over!* embed.
+
+**Everything here is a pure function of the banked message list** — no game
+registry, nothing tracked while a game is in flight. A finished game is
+reconstructed by scanning *backwards* from its terminal message, which is
+unavoidable: the *Game over!* embed carries only the winner's mention, never
+the roster or the scores.
 
 * CAH — *Current Standings* embeds → each player's running score
   (``<@id>: N``). Later standings supersede earlier ones (the count is
@@ -16,16 +22,22 @@ as real mentions (``<@id>``), so rosters, scores, and winners are reliable:
   matters. *Submission status* embeds (``✅ <@id> Submitted!``) fold in
   players seen before any standings post, at score 0. *Game over!* →
   ``<@id> is the winner!``.
-* Connect 4 — the *"<host> is starting a Connect 4 game!"* embed's
-  **Joined Players** field, and the *Time's up!* recap (``<@id>, <@id> joined
-  the game!``), give the roster. *Game over!* → ``<@id> has won!`` (a draw's
-  exact wording is unconfirmed — no real sample yet — so an unrecognised
-  finish just pays participation, no winner).
+* Connect 4 — roster from the join phase (see ``players_from_join_phase``).
+  *Game over!* → ``<@id> has won!`` (a draw's exact wording is unconfirmed —
+  no real sample yet — so an unrecognised finish just pays participation, no
+  winner).
+* Anagrams — a *Scoreboard* embed whose **field names** carry the scores as
+  ``"<username> - N POINTS"``. Unlike the other two, players are named by
+  Discord *username*, not mention, so the caller resolves them the same way
+  the Cat Bot path does. *Game over!* → ``<@id> is the winner!``.
 
-Both games reuse the same *Game over!* title, so window-bounding (telling two
-back-to-back games apart) is title-only (``is_terminal``); telling *which*
-game a terminal message belongs to is the more specific check (``is_game_over``
-for CAH's "is the winner" phrasing, else it's Connect 4).
+Telling the sub-games apart is done from the **lobby embed**, not the terminal:
+CAH and Anagrams share the *exact* same ``<@id> is the winner!`` phrasing, so a
+terminal message can never distinguish them (it was mis-attributing every
+Anagrams game to CAH until 2026-07-26). The lobby embed names the game
+outright, so ``current_game_window`` stops the backward scan there and
+``identify_game`` reads the type off it. A lobby for a game we don't parse
+(Chess, Poker, …) yields ``None`` rather than a wrong guess, so it pays nobody.
 """
 from __future__ import annotations
 
@@ -39,11 +51,39 @@ _STANDINGS_ENTRY = re.compile(r"<@!?(\d+)>\s*:\s*(\d+)")
 _SUBMITTED = re.compile(r"<@!?(\d+)>\s+Submitted")
 _WINNER = re.compile(r"<@!?(\d+)>\s+is the winner")
 _C4_WON = re.compile(r"<@!?(\d+)>\s+has won")
-_C4_START_MARK = "is starting a Connect 4 game!"
-_C4_RECAP_TITLE = "Time's up!"
-_C4_JOINED_FIELD = "Joined Players"
+_RECAP_TITLE = "Time's up!"
+_JOINED_FIELD = "Joined Players"
+_STANDINGS_TITLE = "Current Standings"
+_SCOREBOARD_TITLE = "Scoreboard"
+# An Anagrams Scoreboard field name: "efficientpanic - 900 POINTS". The trailing
+# "Pangram" field has no score and is skipped by the same pattern.
+_SCORE_FIELD = re.compile(r"^(.+?)\s+-\s+(\d+)\s+POINTS$")
 
 _GAME_OVER_TITLE = "Game over!"
+
+# ── sub-games ────────────────────────────────────────────────────────────────
+#
+# Gamebot's lobby embed — "<host> is starting a <Game> game!" — is the only
+# place a game names itself. Everything downstream (window bounding, payout
+# dispatch) keys off it rather than off the terminal message's wording.
+GAME_CAH = "cah"
+GAME_CONNECT4 = "connect4"
+GAME_ANAGRAMS = "anagrams"
+
+_START_TITLE = re.compile(r"\bis starting an? (.+?) game!", re.IGNORECASE)
+# Gamebot's own game names → our sub-game key. A name that isn't here is a game
+# we don't parse (Chess, Othello, Poker, Survey Says, Wisecracks, …); it still
+# bounds a window, but pays nobody.
+_START_GAMES: dict[str, str] = {
+    "cards against humanity": GAME_CAH,
+    "cards against humanity: family edition": GAME_CAH,
+    "connect 4": GAME_CONNECT4,
+    "anagrams": GAME_ANAGRAMS,
+}
+
+# A lobby that timed out without enough players. Gamebot still posts a *Game
+# over!* for it, but no game was played, so it must pay nobody.
+_ABANDONED_MARK = "Not enough players joined the game!"
 
 
 def _embed_texts(embeds: Sequence[Mapping[str, Any]]):
@@ -59,9 +99,15 @@ def players_from_standings(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
 
 
 def scores_from_standings(embeds: Sequence[Mapping[str, Any]]) -> dict[int, int]:
-    """``{member_id: score}`` from a *Current Standings* embed."""
+    """``{member_id: score}`` from a *Current Standings* embed.
+
+    Gated on the embed title so a stray ``<@id>: N`` elsewhere in a game's
+    chatter can't invent a player or a score.
+    """
     out: dict[int, int] = {}
-    for _title, desc in _embed_texts(embeds):
+    for title, desc in _embed_texts(embeds):
+        if title.strip() != _STANDINGS_TITLE:
+            continue
         for m in _STANDINGS_ENTRY.finditer(desc):
             out[int(m.group(1))] = int(m.group(2))
     return out
@@ -105,23 +151,103 @@ def is_terminal(embeds: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+def is_game_start(embeds: Sequence[Mapping[str, Any]]) -> bool:
+    """True for any Gamebot lobby embed (``<host> is starting a <Game> game!``),
+    including games we don't parse."""
+    return any(_START_TITLE.search(title) for title, _desc in _embed_texts(embeds))
+
+
+def game_from_start(embeds: Sequence[Mapping[str, Any]]) -> str | None:
+    """The sub-game key a lobby embed names, or None.
+
+    None means either "not a lobby embed" or "a Gamebot game we don't parse" —
+    both of which must pay nobody, so the caller doesn't need to tell them
+    apart. Use ``is_game_start`` when the distinction matters.
+    """
+    for title, _desc in _embed_texts(embeds):
+        m = _START_TITLE.search(title)
+        if m:
+            return _START_GAMES.get(m.group(1).strip().lower())
+    return None
+
+
 def current_game_window(
     parsed: Sequence[Mapping[str, Any]], over_index: int
 ) -> list[Mapping[str, Any]]:
-    """Slice one game's messages: from just after the previous *Game over!* up
-    to and including the one at ``over_index``.
+    """Slice one game's messages, ending at the *Game over!* at ``over_index``.
 
-    ``parsed`` is the channel's banked messages oldest-first, each a mapping with
-    an ``embeds`` list. Bounding on the previous game-over (of either game
-    type sharing this channel) keeps a busy channel's back-to-back games from
-    bleeding rosters into each other.
+    ``parsed`` is the channel's banked messages oldest-first, each a mapping
+    with an ``embeds`` list. The scan walks backwards and stops at whichever
+    boundary it meets first:
+
+    * this game's own **lobby embed** (kept — it names the game and carries the
+      joined roster), or
+    * the **previous game's terminal** (excluded), for a game whose lobby has
+      aged out of the banked slice.
+
+    Anchoring on the lobby is what makes a busy channel safe: the window holds
+    exactly one game's messages, so neither rosters nor scores can bleed across
+    games, and ``identify_game`` gets an unambiguous type to dispatch on.
     """
     start = 0
     for i in range(over_index - 1, -1, -1):
-        if is_terminal(parsed[i].get("embeds") or []):
+        embeds = parsed[i].get("embeds") or []
+        if is_game_start(embeds):
+            start = i
+            break
+        if is_terminal(embeds):
             start = i + 1
             break
     return list(parsed[start : over_index + 1])
+
+
+def identify_game(window: Sequence[Mapping[str, Any]]) -> str | None:
+    """Which sub-game a window is, or None if it's one we don't pay out.
+
+    Reads the lobby embed, which names the game outright — the terminal message
+    can't, since CAH and Anagrams share the identical ``<@id> is the winner!``
+    wording. Falls back to the window's shape only when no lobby is present
+    (history truncated before the game began).
+    """
+    for msg in window:
+        embeds = msg.get("embeds") or []
+        if is_game_start(embeds):
+            return game_from_start(embeds)
+    return _infer_game(window)
+
+
+def _infer_game(window: Sequence[Mapping[str, Any]]) -> str | None:
+    """Best-effort type for a lobby-less window, from the embeds it does have."""
+    saw_winner = False
+    for msg in window:
+        embeds = msg.get("embeds") or []
+        for title, _desc in _embed_texts(embeds):
+            if title.strip() == _STANDINGS_TITLE:
+                return GAME_CAH
+            if title.strip() == _SCOREBOARD_TITLE:
+                return GAME_ANAGRAMS
+        if winner_from_connect4_over(embeds) is not None:
+            return GAME_CONNECT4
+        saw_winner = saw_winner or is_game_over(embeds)
+    # Nothing but a bare "<@id> is the winner!" to go on. CAH is by far the
+    # more common of the two games that word it that way, and an Anagrams game
+    # always posts its Scoreboard in the same window (caught above) — so this
+    # only misfires on history truncated to the terminal message itself.
+    return GAME_CAH if saw_winner else None
+
+
+def is_abandoned(window: Sequence[Mapping[str, Any]]) -> bool:
+    """True when the lobby timed out without enough players.
+
+    Gamebot posts a *Game over!* for an abandoned lobby just as it does for a
+    real game, so without this check a game nobody played still pays its
+    would-be roster.
+    """
+    for msg in window:
+        for _title, desc in _embed_texts(msg.get("embeds") or []):
+            if _ABANDONED_MARK in desc:
+                return True
+    return False
 
 
 def extract_cah_game(
@@ -153,22 +279,37 @@ def extract_cah_game(
 # ── Gamebot Connect 4 ─────────────────────────────────────────────────────────
 
 
-def players_from_connect4_start(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
-    """Member ids from the join phase: the **Joined Players** field on the
-    "*host* is starting a Connect 4 game!" embed, and/or the *Time's up!*
-    recap's "``<@id>, <@id> joined the game!``" description — either is
-    sufficient, both list the same roster."""
+def players_from_join_phase(embeds: Sequence[Mapping[str, Any]]) -> set[int]:
+    """Member ids from a game's lobby — shared by every Gamebot sub-game, which
+    all use the identical join phase:
+
+    * the **Joined Players** field on the ``<host> is starting a <Game> game!``
+      embed (plus the host mentioned in its description), and
+    * the *Time's up!* recap's ``<@id>, <@id> joined the game!`` description.
+
+    Both reads are gated on their embed's title. The **Joined Players** field
+    used to be read off *any* embed, so an abandoned Cards Against Humanity
+    lobby fed its roster straight into the Connect 4 payout.
+    """
     out: set[int] = set()
     for e in embeds:
         if not isinstance(e, Mapping):
             continue
         title = str(e.get("title") or "")
-        if _C4_START_MARK in title or title.strip() == _C4_RECAP_TITLE:
-            out.update(int(m) for m in _MENTION.findall(str(e.get("description") or "")))
-        for f in e.get("fields") or []:
-            if isinstance(f, Mapping) and str(f.get("name") or "").strip() == _C4_JOINED_FIELD:
-                out.update(int(m) for m in _MENTION.findall(str(f.get("value") or "")))
+        desc = str(e.get("description") or "")
+        if _START_TITLE.search(title):
+            out.update(int(m) for m in _MENTION.findall(desc))
+            for f in e.get("fields") or []:
+                if isinstance(f, Mapping) and str(f.get("name") or "").strip() == _JOINED_FIELD:
+                    out.update(int(m) for m in _MENTION.findall(str(f.get("value") or "")))
+        elif title.strip() == _RECAP_TITLE and "joined the game" in desc:
+            out.update(int(m) for m in _MENTION.findall(desc))
     return out
+
+
+# Kept as the Connect 4-flavoured name the payout path grew up with; the join
+# phase turned out to be identical across sub-games, so it just delegates.
+players_from_connect4_start = players_from_join_phase
 
 
 def winner_from_connect4_over(embeds: Sequence[Mapping[str, Any]]) -> int | None:
@@ -193,13 +334,64 @@ def extract_connect4_game(
     winner: int | None = None
     for msg in window:
         embeds = msg.get("embeds") or []
-        roster |= players_from_connect4_start(embeds)
+        roster |= players_from_join_phase(embeds)
         w = winner_from_connect4_over(embeds)
         if w is not None:
             winner = w
     if winner is not None:
         roster.add(winner)
     return roster, winner
+
+
+# ── Gamebot Anagrams ─────────────────────────────────────────────────────────
+
+
+def scores_from_scoreboard(embeds: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """``{username: points}`` from an Anagrams *Scoreboard* embed.
+
+    The scores live in the **field names** (``"efficientpanic - 900 POINTS"``),
+    with the words each player found in the value. The trailing *Pangram* field
+    has no score and so doesn't match. Players are named by Discord username —
+    not mention — so the caller resolves them to members by name, exactly as
+    the Cat Bot payout does. Names are markdown-unescaped defensively; unlike
+    Cat Bot's, Gamebot's arrive raw (``dozer_nation``, no backslash).
+    """
+    out: dict[str, int] = {}
+    for e in embeds:
+        if not isinstance(e, Mapping):
+            continue
+        if str(e.get("title") or "").strip() != _SCOREBOARD_TITLE:
+            continue
+        for f in e.get("fields") or []:
+            if not isinstance(f, Mapping):
+                continue
+            m = _SCORE_FIELD.match(str(f.get("name") or "").strip())
+            if m:
+                out[_unescape_markdown(m.group(1).strip())] = int(m.group(2))
+    return out
+
+
+def extract_anagrams_game(
+    window: Sequence[Mapping[str, Any]]
+) -> tuple[dict[str, int], int | None]:
+    """``({username: points}, winner_id)`` for one Anagrams game's window.
+
+    Note the asymmetry, which is Gamebot's not ours: the scoreboard names
+    players by **username** while *Game over!* names the winner by **mention**.
+    The caller resolves the usernames and folds the winner in by id.
+
+    Anagrams reuses CAH's exact ``<@id> is the winner!`` wording, which is why
+    the sub-game has to be identified from the lobby embed rather than here.
+    """
+    scores: dict[str, int] = {}
+    winner: int | None = None
+    for msg in window:
+        embeds = msg.get("embeds") or []
+        scores.update(scores_from_scoreboard(embeds))
+        w = winner_from_game_over(embeds)
+        if w is not None:
+            winner = w
+    return scores, winner
 
 
 # ── Cat Bot (kind='catbot') ──────────────────────────────────────────────────

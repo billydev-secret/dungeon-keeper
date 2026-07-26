@@ -312,18 +312,26 @@ async def pay_cah_game_by_score(
     winner_id: Any,
     *,
     occurrence: str | None = None,
+    game_key: str = "cah",
 ) -> None:
-    """Credit a finished external CAH game proportional to each player's score.
+    """Credit a finished external game proportional to each player's score.
 
-    Replaces the flat participation/win payout for CAH specifically: the top
-    scorer (the *Game over!* winner) earns ``reward_cah_win_max`` coins, and
-    everyone else earns that amount scaled by their score's ratio to the
-    winner's, rounded to the nearest coin — a share that rounds to 0 pays
-    nothing (``apply_credit`` rejects amounts under 1). Still fires the same
-    ``party_game``/``game_win`` quest triggers as ``pay_game_rewards`` so
-    external CAH games keep feeding quests identically; only the coin math
-    changes. Same guarantees as the other faucets: no-op when the economy is
-    off, bots/unresolvable members are dropped, failures logged not raised.
+    Replaces the flat participation/win payout for score-carrying external
+    games: the top scorer (the *Game over!* winner) earns
+    ``reward_cah_win_max`` coins, and everyone else earns that amount scaled by
+    their score's ratio to the winner's, rounded to the nearest coin — a share
+    that rounds to 0 pays nothing (``apply_credit`` rejects amounts under 1).
+    Still fires the same ``party_game``/``game_win`` quest triggers as
+    ``pay_game_rewards`` so external games keep feeding quests identically;
+    only the coin math changes. Same guarantees as the other faucets: no-op
+    when the economy is off, bots/unresolvable members are dropped, failures
+    logged not raised.
+
+    ``game_key`` scopes the quest ``occurrence`` and defaults to CAH, which
+    this started life as. Gamebot Anagrams passes ``"anagrams"`` and shares the
+    same ``reward_cah_win_max`` cap — one dial for "an external game win",
+    since both pay by score ratio and the absolute point scales (5 vs 900)
+    cancel out.
     """
     try:
         guild = bot.get_guild(guild_id)
@@ -388,12 +396,13 @@ async def pay_cah_game_by_score(
                         )
                     except Exception:
                         log.exception(
-                            "CAH score payout failed for user %s (guild %s)", uid, guild_id
+                            "%s score payout failed for user %s (guild %s)",
+                            game_key, uid, guild_id,
                         )
 
         await asyncio.to_thread(_credit)
 
-        scoped = f"cah:{occurrence}" if occurrence is not None else None
+        scoped = f"{game_key}:{occurrence}" if occurrence is not None else None
         await _fire_triggers(
             bot, guild, settings, "party_game", participants, boosters, scoped
         )
@@ -403,6 +412,29 @@ async def pay_cah_game_by_score(
             )
     except Exception:
         log.exception("pay_cah_game_by_score failed for guild %s", guild_id)
+
+
+def resolve_named_scores(
+    guild: discord.Guild, scores: Mapping[str, int]
+) -> tuple[dict[int, int], list[str]]:
+    """Map a ``{username: points}`` scoreboard onto ``{member_id: points}``.
+
+    Gamebot's Anagrams scoreboard names players by Discord username rather than
+    mention, so — exactly like the Cat Bot catch path — they have to be looked
+    up by name. Returns the resolved scores plus the names that matched nobody
+    (left the server, renamed, or a bot), which the caller logs rather than
+    guesses at. On a duplicate display name the higher score wins, so a
+    collision can't silently zero someone out.
+    """
+    resolved: dict[int, int] = {}
+    unresolved: list[str] = []
+    for name, points in scores.items():
+        member = guild.get_member_named(name)
+        if member is None or member.bot:
+            unresolved.append(name)
+            continue
+        resolved[member.id] = max(resolved.get(member.id, 0), int(points))
+    return resolved, unresolved
 
 
 async def _fire_triggers(

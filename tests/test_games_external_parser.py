@@ -319,3 +319,166 @@ def test_spawn_and_bonus_are_not_catches():
     assert parser.parse_cat_catch(_SPAWN) is None
     assert parser.parse_cat_catch(_BONUS) is None
     assert parser.parse_cat_catch("") is None
+
+
+# ── sub-game identification (2026-07-26) ─────────────────────────────────────
+#
+# Gamebot hosts CAH, Connect 4 and Anagrams in the same channel. CAH and
+# Anagrams end with the *identical* "<@id> is the winner!" wording, so the
+# terminal message can never tell them apart — the lobby embed is what names
+# the game, and everything dispatches off that.
+
+def _lobby(game: str, joined: list[int]) -> dict:
+    return {"embeds": [{
+        "title": f"host is starting a {game} game!",
+        "description": 'Click "Join" below to join in the next **120 seconds**.',
+        "fields": [{
+            "name": "Joined Players",
+            "value": ", ".join(f"<@{u}>" for u in joined),
+            "inline": False,
+        }],
+    }]}
+
+
+def _scoreboard(points: dict[str, int]) -> dict:
+    return {"embeds": [{
+        "title": "Scoreboard",
+        "fields": [
+            {"name": f"{name} - {n} POINTS", "value": "WORDS"}
+            for name, n in points.items()
+        ] + [{"name": "Pangram", "value": "The pangram was CLEANUP."}],
+    }]}
+
+
+def _not_enough_players() -> dict:
+    return {"embeds": [
+        {"title": "Time's up!", "description": "Not enough players joined the game!"}
+    ]}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Cards Against Humanity", parser.GAME_CAH),
+        ("Cards Against Humanity: Family Edition", parser.GAME_CAH),
+        ("Connect 4", parser.GAME_CONNECT4),
+        ("Anagrams", parser.GAME_ANAGRAMS),
+        ("Chess", None),          # a real Gamebot game we have no parser for
+        ("Survey Says", None),
+    ],
+)
+def test_game_from_start_reads_the_lobby_embed(name, expected):
+    embeds = _lobby(name, [ALICE])["embeds"]
+    assert parser.is_game_start(embeds) is True
+    assert parser.game_from_start(embeds) == expected
+
+
+def test_is_game_start_ignores_non_lobby_embeds():
+    assert parser.is_game_start(_standings({ALICE: 1})["embeds"]) is False
+    assert parser.game_from_start(_game_over(ALICE)["embeds"]) is None
+
+
+def test_identify_game_tells_anagrams_from_cah():
+    # The regression that mattered: both terminals say "is the winner!", so
+    # without the lobby every Anagrams game was credited as CAH.
+    cah = [_lobby("Cards Against Humanity", [ALICE]), _game_over(ALICE)]
+    ana = [_lobby("Anagrams", [ALICE]), _scoreboard({"alice": 900}), _game_over(ALICE)]
+    assert parser.identify_game(cah) == parser.GAME_CAH
+    assert parser.identify_game(ana) == parser.GAME_ANAGRAMS
+
+
+def test_identify_game_returns_none_for_an_unparsed_game():
+    window = [_lobby("Chess", [ALICE, BOB]),
+              {"embeds": [{"title": "Game over!", "description": "Good game!"}]}]
+    assert parser.identify_game(window) is None
+
+
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        ([_standings({ALICE: 1}), _game_over(ALICE)], parser.GAME_CAH),
+        ([_scoreboard({"alice": 9}), _game_over(ALICE)], parser.GAME_ANAGRAMS),
+        ([_c4_game_over(ALICE)], parser.GAME_CONNECT4),
+        ([_game_over(ALICE)], parser.GAME_CAH),   # bare winner line: assume CAH
+        ([_round_win(ALICE)], None),              # nothing terminal at all
+    ],
+)
+def test_identify_game_falls_back_to_window_shape_without_a_lobby(window, expected):
+    # Only reachable when the banked slice starts after the game began.
+    assert parser.identify_game(window) == expected
+
+
+def test_current_game_window_stops_at_its_own_lobby():
+    # The previous game's standings sit in the same channel with no terminal
+    # between them (an abandoned run). Bounding on the lobby keeps them out.
+    parsed = [
+        _standings({CAROL: 9}),                        # 0: stale, previous run
+        _lobby("Cards Against Humanity", [ALICE, BOB]),  # 1: this game starts
+        _standings({ALICE: 5, BOB: 1}),                # 2
+        _game_over(ALICE),                             # 3
+    ]
+    window = parser.current_game_window(parsed, over_index=3)
+    assert parser.identify_game(window) == parser.GAME_CAH
+    scores, winner = parser.extract_cah_game(window)
+    assert scores == {ALICE: 5, BOB: 1}   # CAROL's 9 is not in this game
+    assert winner == ALICE
+
+
+def test_is_abandoned_flags_a_lobby_that_never_filled():
+    window = [
+        _lobby("Cards Against Humanity", [ALICE, BOB]),
+        _not_enough_players(),
+        {"embeds": [{"title": "Game over!", "description": "To play fun games…"}]},
+    ]
+    assert parser.is_abandoned(window) is True
+    # …and a real game isn't flagged.
+    assert parser.is_abandoned([_standings({ALICE: 1}), _game_over(ALICE)]) is False
+
+
+def test_join_phase_roster_is_gated_on_the_lobby_embed():
+    # The Joined Players field used to be read off *any* embed, so an abandoned
+    # CAH lobby fed its roster straight into the Connect 4 payout. A CAH lobby
+    # is still a lobby (same join phase), but an unrelated embed carrying that
+    # field name is not.
+    assert parser.players_from_join_phase(
+        _lobby("Cards Against Humanity", [ALICE, BOB])["embeds"]
+    ) == {ALICE, BOB}
+    stray = [{"title": "Scoreboard",
+              "fields": [{"name": "Joined Players", "value": f"<@{CAROL}>"}]}]
+    assert parser.players_from_join_phase(stray) == set()
+
+
+def test_times_up_recap_only_counts_when_players_actually_joined():
+    assert parser.players_from_join_phase(_c4_times_up([ALICE, BOB])["embeds"]) == {ALICE, BOB}
+    assert parser.players_from_join_phase(_not_enough_players()["embeds"]) == set()
+
+
+def test_standings_are_gated_on_the_embed_title():
+    # A stray "<@id>: N" in ordinary game chatter must not invent a score.
+    stray = [{"title": "This round's black card", "description": f"<@{ALICE}>: 99"}]
+    assert parser.scores_from_standings(stray) == {}
+
+
+# ── Anagrams ─────────────────────────────────────────────────────────────────
+
+def test_scores_from_scoreboard_reads_points_out_of_field_names():
+    embeds = _scoreboard({"efficientpanic": 900, "ceilruxdealta": 500, "jay": 0})["embeds"]
+    assert parser.scores_from_scoreboard(embeds) == {
+        "efficientpanic": 900, "ceilruxdealta": 500, "jay": 0,
+    }  # the trailing Pangram field carries no score and is skipped
+
+
+def test_extract_anagrams_game_pairs_usernames_with_the_mentioned_winner():
+    window = [
+        _lobby("Anagrams", [ALICE, BOB]),
+        _scoreboard({"alice": 900, "bob": 500}),
+        _game_over(ALICE),
+    ]
+    scores, winner = parser.extract_anagrams_game(window)
+    assert scores == {"alice": 900, "bob": 500}
+    assert winner == ALICE  # by mention, while the scores are by username
+
+
+def test_scoreboard_usernames_are_markdown_unescaped():
+    embeds = _scoreboard({r"dozer\_nation": 100})["embeds"]
+    assert parser.scores_from_scoreboard(embeds) == {"dozer_nation": 100}

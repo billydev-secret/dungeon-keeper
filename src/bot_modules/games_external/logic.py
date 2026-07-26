@@ -17,14 +17,13 @@ import discord
 # parser.py. Ordered for display; the first is the default a bare migration row
 # takes. Labels are what /games track shows.
 #
-# 'gamebot' covers every Gamebot sub-game tracked so far (CAH + Connect 4) —
-# they share one Discord bot account and channel, so they can't be split into
-# separate watches under UNIQUE(guild_id, bot_user_id); the cog tells a
-# terminal message's game type apart per-message instead (parser.is_game_over
-# for CAH, else Connect 4). Renamed from 'gamebot_cah' (2026-07-25) since no
-# rows carried that value yet — a pure rename, no data migration needed.
+# 'gamebot' covers every Gamebot sub-game (CAH, Connect 4, Anagrams) — they
+# share one Discord bot account, and which game a finished run was is read off
+# its lobby embed at parse time (parser.identify_game), not from the watch
+# config. Renamed from 'gamebot_cah' (2026-07-25) since no rows carried that
+# value yet — a pure rename, no data migration needed.
 WATCH_KIND_LABELS: dict[str, str] = {
-    "gamebot": "Gamebot (Cards Against Humanity + Connect 4)",
+    "gamebot": "Gamebot (Cards Against Humanity, Connect 4, Anagrams)",
     "catbot": "Cat Bot",
 }
 VALID_WATCH_KINDS: tuple[str, ...] = tuple(WATCH_KIND_LABELS)
@@ -43,29 +42,51 @@ async def list_watches(db, guild_id: int) -> list[Mapping[str, Any]]:
 async def get_watch_for_bot(
     db, guild_id: int, bot_user_id: int
 ) -> Mapping[str, Any] | None:
-    """The watch row for one (guild, bot), or None."""
+    """The most recently configured watch row for one (guild, bot), or None.
+
+    A bot can now be watched in several channels at once, so this is only for
+    the "pick a representative channel" cases (``/games track sample`` with no
+    explicit channel). Use ``watch_channels_for_bot`` when every channel
+    matters.
+    """
     return await db.fetchone(
         "SELECT id, guild_id, channel_id, bot_user_id, kind, enabled "
-        "FROM games_external_watch WHERE guild_id = ? AND bot_user_id = ?",
+        "FROM games_external_watch WHERE guild_id = ? AND bot_user_id = ? "
+        "ORDER BY enabled DESC, set_at DESC",
         (guild_id, bot_user_id),
     )
+
+
+async def watch_channels_for_bot(
+    db, guild_id: int, bot_user_id: int
+) -> list[Mapping[str, Any]]:
+    """Every channel one bot is watched in for a guild, newest first."""
+    rows = await db.fetchall(
+        "SELECT id, guild_id, channel_id, bot_user_id, kind, enabled "
+        "FROM games_external_watch WHERE guild_id = ? AND bot_user_id = ? "
+        "ORDER BY set_at DESC",
+        (guild_id, bot_user_id),
+    )
+    return list(rows)
 
 
 async def set_watch(
     db, guild_id: int, channel_id: int, bot_user_id: int, kind: str, set_by: int
 ) -> None:
-    """Point a guild's collector at a channel + external bot (enabled).
+    """Watch one (channel, external bot) pair for a guild (enabled).
 
-    Idempotent per (guild, bot): re-running for the same bot repoints its
-    channel/kind rather than adding a duplicate. Different bots coexist.
+    Idempotent per (guild, bot, **channel**): re-running for a pair already
+    watched refreshes its kind rather than adding a duplicate. Pointing the
+    same bot at a *second* channel adds a row instead of moving the first one,
+    so a bot playing in several channels is tracked in all of them at once
+    (migration 135). Different bots coexist as before.
     """
     await db.execute(
         """
         INSERT INTO games_external_watch
             (guild_id, channel_id, bot_user_id, kind, enabled, set_by)
         VALUES (?, ?, ?, ?, 1, ?)
-        ON CONFLICT(guild_id, bot_user_id) DO UPDATE SET
-            channel_id  = excluded.channel_id,
+        ON CONFLICT(guild_id, bot_user_id, channel_id) DO UPDATE SET
             kind        = excluded.kind,
             enabled     = 1,
             set_by      = excluded.set_by,
@@ -76,14 +97,26 @@ async def set_watch(
 
 
 async def set_watch_enabled(
-    db, guild_id: int, bot_user_id: int, enabled: bool
+    db, guild_id: int, bot_user_id: int, enabled: bool, channel_id: int | None = None
 ) -> bool:
-    """Toggle one bot's collection on/off. False if no such watch exists."""
-    cur = await db.execute(
-        "UPDATE games_external_watch SET enabled = ? "
-        "WHERE guild_id = ? AND bot_user_id = ?",
-        (1 if enabled else 0, guild_id, bot_user_id),
-    )
+    """Toggle collection on/off for a bot. False if no such watch exists.
+
+    Without ``channel_id`` this applies to *every* channel the bot is watched
+    in — pausing a chatty bot shouldn't require naming its channels one by one.
+    Pass ``channel_id`` to toggle a single pair.
+    """
+    if channel_id is None:
+        cur = await db.execute(
+            "UPDATE games_external_watch SET enabled = ? "
+            "WHERE guild_id = ? AND bot_user_id = ?",
+            (1 if enabled else 0, guild_id, bot_user_id),
+        )
+    else:
+        cur = await db.execute(
+            "UPDATE games_external_watch SET enabled = ? "
+            "WHERE guild_id = ? AND bot_user_id = ? AND channel_id = ?",
+            (1 if enabled else 0, guild_id, bot_user_id, channel_id),
+        )
     return cur.rowcount > 0
 
 
@@ -171,17 +204,23 @@ async def mark_parsed(db, message_id: int, status: str) -> None:
     )
 
 
-async def count_messages(db, guild_id: int, bot_user_id: int | None = None) -> int:
-    """How many raw messages we've banked for a guild (optionally one bot)."""
-    if bot_user_id is None:
-        r = await db.fetchone(
-            "SELECT COUNT(*) AS n FROM games_external_messages WHERE guild_id = ?",
-            (guild_id,),
-        )
-    else:
-        r = await db.fetchone(
-            "SELECT COUNT(*) AS n FROM games_external_messages "
-            "WHERE guild_id = ? AND author_id = ?",
-            (guild_id, bot_user_id),
-        )
+async def count_messages(
+    db, guild_id: int, bot_user_id: int | None = None, channel_id: int | None = None
+) -> int:
+    """How many raw messages we've banked for a guild, optionally narrowed to
+    one bot and/or one channel.
+
+    ``/games track status`` narrows by both, since a bot watched in several
+    channels has one row per channel and an unscoped count would report the
+    bot's whole total against each of them.
+    """
+    sql = "SELECT COUNT(*) AS n FROM games_external_messages WHERE guild_id = ?"
+    params: list[Any] = [guild_id]
+    if bot_user_id is not None:
+        sql += " AND author_id = ?"
+        params.append(bot_user_id)
+    if channel_id is not None:
+        sql += " AND channel_id = ?"
+        params.append(channel_id)
+    r = await db.fetchone(sql, tuple(params))
     return int(r["n"]) if r else 0

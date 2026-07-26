@@ -299,9 +299,12 @@ to currency.
   scoreboards pay nobody (an everyone-ties-at-0 board must not pay the room). Game
   types with no meaningful winner (story, AMA, MFK, compliment, traditional, WYR by
   design) pay participation only.
-- **External CAH score payout (2026-07-24):** the flat participation/win amounts
-  above do **not** apply to external Gamebot CAH games — `games_external_cog
-  ._pay_cah_game` calls `pay_cah_game_by_score` instead of `pay_game_rewards`.
+- **External score-based payout (2026-07-24):** the flat participation/win amounts
+  above do **not** apply to external Gamebot CAH **or Anagrams** games —
+  `games_external_cog._pay_cah_game` / `._pay_anagrams_game` call
+  `pay_cah_game_by_score` instead of `pay_game_rewards` (Anagrams passing
+  `game_key="anagrams"` and sharing the same cap; its scoreboard names players
+  by username, resolved via `resolve_named_scores`).
   The top scorer (the *Game over!* winner) earns `EconSettings
   .reward_cah_win_max` (default 50) coins; every other player earns that cap
   scaled by their score's ratio to the winner's, rounded to the nearest coin —
@@ -616,7 +619,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
 | `photo_post` | a member posts an image in the configured Photo Challenge channel (the post itself pays — no reactions needed) | `EconomyCog._on_photo_post` (on_message listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_post:<local_day>` (once/day by construction) |
-| `party_game` | party game completes with the member in the roster — **including external games** (a Gamebot Cards Against Humanity game parsed from `/games track`) | `pay_game_rewards` via `game_manager.end_game`, or `pay_cah_game_by_score` via `games_external_cog._pay_cah_game` for CAH (score-proportional coins, same trigger) | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`) |
+| `party_game` | party game completes with the member in the roster — **including external games** (a Gamebot Cards Against Humanity, Anagrams or Connect 4 game parsed from `/games track`) | `pay_game_rewards` via `game_manager.end_game`, or `pay_cah_game_by_score` via `games_external_cog._pay_cah_game` / `._pay_anagrams_game` (score-proportional coins, same trigger) | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`, `party_game:anagrams:…`, `party_game:connect4:…`) |
 | `game_host` | a party game the member hosted completes with **at least one other member** in the roster (empty games pay nothing — the anti-farm gate); party games only, since only `game_manager` passes `host_id` | `pay_game_rewards` via `game_manager.end_game`, host bounty through `award_host_bounty` | `game_host:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |

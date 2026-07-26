@@ -43,13 +43,39 @@ async def test_multiple_bots_coexist_per_guild(gdb):
 
 
 @pytest.mark.asyncio
-async def test_re_watching_same_bot_repoints_not_duplicates(gdb):
+async def test_one_bot_can_be_watched_in_several_channels(gdb):
+    # Migration 135: a watch is a (bot, channel) pair, so pointing the same bot
+    # at a second channel *adds* it rather than moving it off the first. Before
+    # this, every game the bot ran outside its one watched channel was dropped.
     await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
     await logic.set_watch(gdb, GUILD, CHAN_B, GAMEBOT, "gamebot", set_by=9)
 
+    watches = await logic.watch_channels_for_bot(gdb, GUILD, GAMEBOT)
+    assert {int(w["channel_id"]) for w in watches} == {CHAN_A, CHAN_B}
+
+
+@pytest.mark.asyncio
+async def test_re_watching_the_same_channel_updates_in_place(gdb):
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "catbot", set_by=9)
+
     watches = await logic.list_watches(gdb, GUILD)
     assert len(watches) == 1
-    assert watches[0]["channel_id"] == CHAN_B  # repointed
+    assert watches[0]["kind"] == "catbot"  # updated, not duplicated
+
+
+@pytest.mark.asyncio
+async def test_disable_covers_every_channel_a_bot_plays_in(gdb):
+    await logic.set_watch(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", set_by=9)
+    await logic.set_watch(gdb, GUILD, CHAN_B, GAMEBOT, "gamebot", set_by=9)
+
+    assert await logic.set_watch_enabled(gdb, GUILD, GAMEBOT, False) is True
+    assert await logic.load_all_watches(gdb) == []
+
+    # …and a single channel can be toggled on its own.
+    assert await logic.set_watch_enabled(gdb, GUILD, GAMEBOT, True, CHAN_A) is True
+    live = {int(r["channel_id"]) for r in await logic.load_all_watches(gdb)}
+    assert live == {CHAN_A}
 
 
 @pytest.mark.asyncio

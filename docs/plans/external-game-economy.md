@@ -90,6 +90,50 @@ embed's **Joined Players** field / *Time's up!* recap), a win bonus to the
 yet in the banked history) — an unrecognised finish just pays participation,
 no winner, same safe default as CAH's own no-winner case.
 
+**Stage 6 — Anagrams, per-channel watches, and the history replay
+(2026-07-26). SHIPPED.** Auditing the 22 unpaid games in the banked history
+turned up two live mis-classification bugs and one hard cap:
+
+- **Anagrams was being paid as CAH.** Gamebot's third sub-game ends with the
+  *identical* `<@id> is the winner!` wording CAH uses, so `is_game_over`
+  claimed it and `extract_cah_game` — which looks for *Current Standings* —
+  found nothing, paying the winner alone at score 0 and the other players
+  nothing. 3 games in the history. Anagrams keeps its scores in a *Scoreboard*
+  embed's **field names** (`"efficientpanic - 900 POINTS"`), by **username**
+  rather than mention, so `extract_anagrams_game` + `resolve_named_scores`
+  (the `get_member_named` lookup Cat Bot already uses) feed
+  `pay_cah_game_by_score` with `game_key="anagrams"`.
+- **Abandoned lobbies were being paid as Connect 4.** `Not enough players
+  joined the game!` still gets a *Game over!*, and the roster reader picked up
+  the **Joined Players** field off *any* embed — so an abandoned CAH lobby fed
+  the Connect 4 payout. 2 games in the history. Both reads are now gated on
+  their embed title (`players_from_join_phase`, shared by all sub-games since
+  the join phase is identical) and `is_abandoned` skips the game outright.
+- **The root cause of both:** identifying a sub-game from its *terminal*
+  message. Fixed by anchoring `current_game_window` on the game's own **lobby
+  embed** and reading the type off it (`identify_game`). A lobby for a game we
+  don't parse (Chess, Poker, …) returns `None` and pays nobody rather than
+  falling through to a wrong guess. Verified against all 23 terminals in the
+  banked history: every game now classifies correctly, and all 16 real CAH
+  games — including the one paid live on 2026-07-26 — reproduce byte-identical
+  scores and winners to the previous parser.
+
+Separately, **migration 135** widens the watch key from `UNIQUE(guild_id,
+bot_user_id)` to `UNIQUE(guild_id, bot_user_id, channel_id)` and the collector
+cache from `{bot: (channel, kind)}` to `{(bot, channel): kind}`. A bot was
+previously capped at one channel per guild and every game it ran elsewhere was
+silently dropped. Nothing else was needed for concurrency: each payout is
+already a pure function of its own channel's banked history, so games running
+simultaneously in different channels are just independent backward scans, with
+no in-flight state anywhere.
+
+`scripts/replay_gamebot_games.py` replays the backlog through those same
+parser functions — dry run by default, `--apply` to write, claim-before-credit
+so the already-paid game is skipped structurally, and quest triggers on each
+game's own local day (the `backfill_cat_catches.py` shape). On the 2026-07-26
+history: 15 CAH + 3 Anagrams + 2 Connect 4 paid, 2 abandoned lobbies claimed
+but paying nobody, 2,526 coins across 24 members.
+
 ## Notes
 
 - This worktree is behind main (main has migrations 091–096); 097 is safe and
