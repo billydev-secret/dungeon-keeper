@@ -7,10 +7,17 @@ keeps the patch point stable.
 Payouts are TOTAL RETURN on the stake (stake included), floored to whole
 coins; 0 means the stake is simply gone. The paytables are fixed constants,
 not settings: the house edge is design, enforced by the RTP tests, not a
-knob an admin could turn into a coin printer. Coinflip returns 95%, slots
-~93% (see the exact-EV test), roulette is single-zero (~97.3%); blackjack's
-edge comes from the rules (dealer stands all 17, 3:2 naturals, double on
-two cards, no split).
+knob an admin could turn into a coin printer. Coinflip returns 92.5%, slots
+~91.3% (see the exact-EV test), roulette is single-zero (~97.3%);
+blackjack's edge comes from the rules (dealer stands all 17, 3:2 naturals,
+double on two cards, no split).
+
+Coinflip and slots were trimmed ~2 points on 2026-07-26 (from 95% / 93.3%)
+to lean the two tables carrying ~70% of the handle. Both cuts were placed
+where they do not show on a single play — see the constants. Blackjack was
+deliberately left alone: the standard lever there is paying naturals 6:5
+instead of 3:2, which is the one change players recognize on sight and
+resent, and it buys under half a point of blended edge.
 """
 
 from __future__ import annotations
@@ -22,9 +29,21 @@ from typing import NamedTuple
 # ── Coinflip ───────────────────────────────────────────────────────────
 
 COINFLIP_SIDES = ("heads", "tails")
-# ×1.9 total return, expressed as a ratio so payouts stay integer math.
-COINFLIP_MULT_NUM = 19
-COINFLIP_MULT_DEN = 10
+# ×1.85 total return, expressed as a ratio so payouts stay integer math.
+# Was ×1.9 (95% RTP) until 2026-07-26; the extra half-point of edge is
+# invisible on a single flip and still reads as "nearly double or nothing".
+COINFLIP_MULT_NUM = 37
+COINFLIP_MULT_DEN = 20
+# Advertised return for the How It Works embed. Pinned against the exact
+# enumeration by the RTP tests, so the copy can never drift from the
+# paytable it describes — an advertised edge that isn't the real one is the
+# gambling equivalent of a preference that isn't enforced.
+COINFLIP_RTP_PCT = 92.5
+
+
+def mult_text(num: int, den: int) -> str:
+    """A payout ratio as compact player-facing text: 37/20 -> "1.85"."""
+    return f"{num / den:g}"
 
 
 def flip_coin() -> str:
@@ -32,7 +51,7 @@ def flip_coin() -> str:
 
 
 def coinflip_payout(stake: int) -> int:
-    """Total return on a won flip (floor of 1.9× the stake)."""
+    """Total return on a won flip (floor of 1.85× the stake)."""
     return stake * COINFLIP_MULT_NUM // COINFLIP_MULT_DEN
 
 
@@ -59,9 +78,17 @@ SLOT_TRIPLE_PAYOUT: dict[str, int] = {
     SEVEN: 120,
 }
 SLOT_TWO_SEVENS_MULT = 5
-# Pair pays 1.5×, as a ratio for integer math.
-SLOT_PAIR_NUM = 3
-SLOT_PAIR_DEN = 2
+# Pair pays 1.45×, as a ratio for integer math. This one line carries most
+# of the slots edge: a pair lands on 41.4% of spins, so the pair multiplier
+# contributes ~0.60 of the ~0.91 RTP and every other symbol combined
+# contributes the rest. Trimmed from 1.5× on 2026-07-26 — on a 100-coin bet
+# that is 145 back instead of 150, imperceptible per spin, ~2 points of RTP
+# in aggregate. Take slots edge here rather than off the triples: the
+# triples are what players remember, and shaving a jackpot line is felt.
+SLOT_PAIR_NUM = 29
+SLOT_PAIR_DEN = 20
+# Advertised return — pinned to the enumeration by the RTP test, as above.
+SLOTS_RTP_PCT = 91.3
 
 SLOT_TRIPLE_LABELS: dict[str, str] = {
     "🌻": "A row of sunflowers!",

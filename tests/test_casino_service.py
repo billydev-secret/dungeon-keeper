@@ -1457,7 +1457,8 @@ def test_jackpot_feeds_only_on_full_losses(db):
         # a winning spin feeds nothing
         pot = svc.get_jackpot(conn, GUILD)
         r = svc.settle_slots(conn, GUILD, A, 40, ("🌻", "🌻", "🍀"), now=NOW)
-        assert r.payout == 60 and svc.get_jackpot(conn, GUILD) == pot
+        # a pair on 40 pays 40 * 29 // 20 = 58
+        assert r.payout == 58 and svc.get_jackpot(conn, GUILD) == pot
         # cut that floors to zero feeds nothing (3-coin stake, 25% = 0)
         svc.feed_jackpot(conn, GUILD, 3, now=NOW)
         assert svc.get_jackpot(conn, GUILD) == pot
@@ -1785,7 +1786,7 @@ def test_ticker_rows_land_via_instant_settle_paths(db):
     ] == [
         (A, "blackjack", 30, 60),
         (A, "slots", 20, 0),
-        (A, "coinflip", 10, 19),
+        (A, "coinflip", 10, 18),  # 10 * 37 // 20
     ]
 
 
