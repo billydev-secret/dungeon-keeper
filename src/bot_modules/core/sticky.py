@@ -61,10 +61,12 @@ def should_restick(
 ) -> bool:
     """Whether a new message should push a sticky panel back to the bottom.
 
-    Bot messages are filtered out by the caller before we get here
-    (re-sticking under our own repost self-loops), so this predicate only ever
-    sees member activity; the message-id guard below stays as a belt-and-braces
-    skip of the panel itself.
+    Bot messages are filtered out by the caller unless ``restick_on_bot`` is
+    set, so this predicate usually only sees member activity. The message-id
+    guard below skips the panel's own message when the id is already cached —
+    but that is a race against the gateway, so it is an optimisation, not the
+    self-loop protection. The decided check is the already-at-the-bottom test
+    in ``_delayed_restick``.
     """
     if not panel_channel_id or not panel_message_id:
         return False  # no panel posted yet
@@ -113,8 +115,9 @@ class StickyPanel:
     * ``restick_on_bot`` — also re-stick under *bot* messages. Off by default,
       because chasing our own notices is churn and re-sticking under our own
       repost self-loops. Turn it on where the bot is the main thing burying the
-      panel (the casino posts round results into its own hub channel), and rely
-      on the message-id skip to ignore the panel itself.
+      panel (the casino posts round results into its own hub channel). A panel
+      that is already the channel's last message is never re-sticked, so this
+      cannot chase its own repost.
 
     Then, from the cog: ``on_message`` from a listener, and ``cancel_all()``
     from ``cog_unload``.
@@ -236,10 +239,11 @@ class StickyPanel:
                 log.warning("%s: could not post panel in %s", self.name, target.id)
                 return None
 
-            # Record the new id before ANY further await: the gateway event
-            # for our own repost can arrive while we're deleting the old panel,
-            # and the message-id skip in should_restick() is what stops that
-            # becoming a self-loop.
+            # Record the new id before ANY further await, so the gateway event
+            # for our own repost is skipped by should_restick() rather than
+            # arming a pointless debounce. Best-effort only — the event is
+            # often dispatched before send() even returns — so the self-loop
+            # itself is stopped in _delayed_restick(), not here.
             self._remember(guild.id, target.id, message.id)
 
             old_channel = self._channel(guild, old_channel_id)
@@ -393,8 +397,19 @@ class StickyPanel:
             if not message_id:
                 return
             channel = self._channel(guild, channel_id)
-            if channel is not None:
-                await self.place(guild, channel)
+            if channel is None:
+                return
+            # Already at the bottom → nothing to restick. This is what stops a
+            # ``restick_on_bot`` panel chasing its own repost forever: the
+            # message-id skip in should_restick() only works if _remember() wins
+            # a race against the gateway event for that repost, and it usually
+            # loses (the MESSAGE_CREATE frame is dispatched while place() is
+            # still awaiting the HTTP response). Here both paths have converged,
+            # so the check is decided rather than raced. Free, too —
+            # last_message_id is gateway-maintained, not an API call.
+            if channel.last_message_id == message_id:
+                return
+            await self.place(guild, channel)
         except asyncio.CancelledError:
             raise
         except Exception:

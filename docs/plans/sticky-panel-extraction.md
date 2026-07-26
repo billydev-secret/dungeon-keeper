@@ -98,6 +98,43 @@ otherwise bury the panel permanently, which is worse than moving it at an
 awkward moment. It gates the *sticky repost* only; an explicit `place` (an
 admin reposting deliberately) is always honoured.
 
+### `restick_on_bot`, and why the panel must never chase itself
+
+`StickyPanel.on_message` ignores bot authors by default. Casino opts out
+(`restick_on_bot=True`) because the casino is what buries its own hub: round
+results, big-win broadcasts and jackpot celebrations all land in the hub
+channel, and a round settling with nobody typing left the hub — the only entry
+point — stranded above the result.
+
+That opt-in reopens the self-loop the bot filter was preventing, since the
+panel's own repost is itself a bot message in the panel's own channel. The
+first attempt at protection was the message-id skip in `should_restick`, with
+`place()` recording the new id immediately after `send()` so the id would be
+cached before the gateway event for that repost arrived. **That is a race, and
+it usually loses** — the `MESSAGE_CREATE` frame is dispatched while `place()`
+is still awaiting the HTTP response, so the cache still holds the *old* panel
+id and the repost is waved through as if a member had posted.
+
+It shipped and looped in prod: the casino hub reposted itself every ~6 seconds
+(exactly `DEFAULT_DELAY`) in bursts of five to seven, each burst ending only
+when the race happened to be won.
+
+The decided fix is in `_delayed_restick`: **a panel that is already the
+channel's last message is never re-sticked.** Nothing is buried, so there is
+nothing to move. It reads `channel.last_message_id`, which discord.py maintains
+from the gateway, so it costs no API call, and both the cache write and
+`last_message_id` have converged by the time the debounce fires — the check is
+decided rather than raced. The message-id skip stays as a cheap way to avoid
+arming a doomed debounce, but it is an optimisation, not the protection.
+
+The guard applies to every panel, not just the opted-in one: any restick that
+would repost a panel already at the bottom was a wasted delete-and-send.
+
+One accepted edge: if the panel is hand-deleted *while it is the last message*,
+`last_message_id` still points at it and the next restick no-ops. The next
+message in the channel moves `last_message_id` on and the repost heals it —
+and that message is the restick trigger anyway.
+
 ### Group C — genuinely out of family (leave alone)
 
 - ~~**Casino hub**~~ — **migrated** after all, once `StickyPanel` grew the
