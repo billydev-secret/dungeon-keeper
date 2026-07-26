@@ -75,6 +75,14 @@ def test_guide_embed_conversion_line_gated_on_rate():
     on = build_guide_embed(EconSettings(xp_per_coin=15.0))
     on_earning = {f.name: f.value or "" for f in on.fields}["💰 Earning"]
     assert "converts into" in on_earning
+    assert "a day)" not in on_earning  # uncapped: no ceiling promised
+
+    # A ceiling is named, so a heavy day that stops paying isn't a mystery.
+    capped = build_guide_embed(
+        EconSettings(xp_per_coin=15.0, conversion_daily_cap=1200)
+    )
+    capped_earning = {f.name: f.value or "" for f in capped.fields}["💰 Earning"]
+    assert "up to 1,200 a day" in capped_earning
 
 
 def test_guide_embed_offers_notifications_not_channel_access():

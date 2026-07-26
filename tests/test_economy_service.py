@@ -74,6 +74,7 @@ def test_save_load_roundtrip(db):
         "currency_emoji": "💎",
         "booster_multiplier": 2.0,
         "xp_per_coin": 20.0,
+        "conversion_daily_cap": 250,
         "reward_qotd": 42,
     }
     with open_db(db) as conn:
@@ -89,6 +90,7 @@ def test_save_load_roundtrip(db):
     assert settings.currency_emoji == "💎"
     assert settings.booster_multiplier == 2.0
     assert settings.xp_per_coin == 20.0
+    assert settings.conversion_daily_cap == 250  # int-key derivation picks it up
     assert settings.reward_qotd == 42
     # Untouched fields keep defaults.
     assert settings.wallet_name == DEFAULT_ECON_SETTINGS.wallet_name
@@ -661,6 +663,77 @@ def test_process_conversion_booster_ceil(db):
         )
         # 3 coins -> ceil(3 * 1.5) == 5
         assert credited == 5
+
+
+def test_process_conversion_daily_cap_clips_the_mint(db):
+    settings = replace(S_CONV, conversion_daily_cap=3)
+    with open_db(db) as conn:
+        # 150 XP at 15/coin is 10 coins; the ceiling pays 3.
+        credited = process_conversion(
+            conn, settings, GUILD, USER, local_day=DAY, xp=150.0, booster=False
+        )
+        assert credited == 3
+        assert get_balance(conn, GUILD, USER) == 3
+        row = conn.execute(
+            "SELECT coins, remainder FROM econ_conversions "
+            "WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert row["coins"] == 3
+        assert row["remainder"] == pytest.approx(0.0)  # overflow is discarded
+        assert '"capped": 3' in get_ledger(conn, GUILD, USER)[0]["meta"]
+
+
+def test_process_conversion_under_the_cap_is_untouched(db):
+    settings = replace(S_CONV, conversion_daily_cap=100)
+    with open_db(db) as conn:
+        credited = process_conversion(
+            conn, settings, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+        )
+        assert credited == 2  # 31 / 15, nowhere near the ceiling
+        row = conn.execute(
+            "SELECT remainder FROM econ_conversions WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert row["remainder"] == pytest.approx(1.0)  # carry survives
+        assert "capped" not in get_ledger(conn, GUILD, USER)[0]["meta"]
+
+
+def test_process_conversion_cap_discards_rather_than_deferring(db):
+    """A clipped day must not pay itself out the next day.
+
+    The whole point of the ceiling: banking the overflow would only postpone
+    the mint, and the backlog would land in one lump.
+    """
+    settings = replace(S_CONV, conversion_daily_cap=3)
+    with open_db(db) as conn:
+        assert process_conversion(
+            conn, settings, GUILD, USER, local_day=PREV, xp=1_500.0, booster=False
+        ) == 3
+        # A quiet next day earns on its own XP alone — 15 XP, no carry.
+        assert process_conversion(
+            conn, settings, GUILD, USER, local_day=DAY, xp=15.0, booster=False
+        ) == 1
+        assert get_balance(conn, GUILD, USER) == 4
+
+
+def test_process_conversion_cap_is_a_pre_booster_base(db):
+    settings = replace(S_CONV, conversion_daily_cap=3)
+    with open_db(db) as conn:
+        # The ceiling caps the base, then the booster multiplies it, the way
+        # every other faucet rate works.
+        credited = process_conversion(
+            conn, settings, GUILD, USER, local_day=DAY, xp=150.0, booster=True
+        )
+        assert credited == 5  # ceil(3 * 1.5)
+
+
+def test_process_conversion_zero_cap_is_uncapped(db):
+    settings = replace(S_CONV, conversion_daily_cap=0)
+    with open_db(db) as conn:
+        assert process_conversion(
+            conn, settings, GUILD, USER, local_day=DAY, xp=150.0, booster=False
+        ) == 10
 
 
 def test_process_conversion_zero_rate_carries_everything(db):

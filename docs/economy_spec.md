@@ -130,6 +130,19 @@ to currency.
 - **Conversion: `econ_xp_per_coin` XP → 1 currency** (0 = off; a former default
   was 15), rounded down; fractional remainder carries to the next day (stored on
   the conversion row).
+- **Ceiling: `econ_conversion_daily_cap`** (0 = none, the default) caps what one
+  member's XP can mint in a single local day. This is the only faucet without a
+  natural bound — a login fires once, drops have `drops_per_day`, a quest board
+  is finite — so without it the rate is the only brake, and the rate hits a
+  quiet member as hard as the top chatter. Overflow is **discarded, carry
+  included**: a cap that banks the excess is a delay, not a limit, and the
+  backlog would land in one lump the day it lifts. The clip is stored on the
+  conversion row (`coins` holds the paid figure, `remainder` 0) and flagged in
+  the ledger meta as `capped: <cap>`. Like every faucet rate it is a
+  **pre-booster** base — a booster's 1.5× applies on top of the ceiling.
+  Added 2026-07-25 after conversion alone produced 60% of a day's mint
+  ([reviews/2026-07-25-economy-casino-sources-sinks.md](
+  reviews/2026-07-25-economy-casino-sources-sinks.md)).
 - Because the driver skips conversion while the rate is 0, turning the faucet off
   does **not** accumulate a remainder backlog — re-enabling resumes from that day,
   consistent with the no-retroactive-backlog rule (§ outage behaviour), rather than

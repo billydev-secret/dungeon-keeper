@@ -106,9 +106,17 @@ def build_guide_embed(
     # The XP→coin conversion line only holds when the faucet is on (rate > 0);
     # it ships off, so promise it only when a guild has re-enabled it.
     if settings.xp_per_coin > 0:
+        # A ceiling is worth naming: without it a member has no way to know
+        # why a heavy day stopped paying partway through.
+        ceiling = (
+            f" (up to {settings.conversion_daily_cap:,} a day)"
+            if settings.conversion_daily_cap > 0
+            else ""
+        )
         earn_lines.append(
             f"Chatting earns XP all day — each night it converts into {plural} "
-            "automatically. `/bank quests` adds daily and weekly goals on top."
+            f"automatically{ceiling}. `/bank quests` adds daily and weekly "
+            "goals on top."
         )
     else:
         earn_lines.append(

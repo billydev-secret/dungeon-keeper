@@ -67,6 +67,8 @@ class EconomyConfigUpdate(BaseModel):
     transfers_enabled: bool | None = None
     booster_multiplier: float | None = Field(default=None, ge=1.0)
     xp_per_coin: float | None = Field(default=None, ge=0)
+    # 0 = no ceiling on a member's daily XP conversion; see EconSettings.
+    conversion_daily_cap: int | None = Field(default=None, ge=0)
     login_text_base: int | None = Field(default=None, ge=0)
     login_voice_base: int | None = Field(default=None, ge=0)
     streak_bonus_cap: int | None = Field(default=None, ge=0)
