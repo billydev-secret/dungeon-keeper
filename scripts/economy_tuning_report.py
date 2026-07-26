@@ -6,9 +6,16 @@ dials (raffle, voice lease, hoard tax, wager rake) and to judge whether the
 quest faucet needs shaving: balance percentiles, last-full-week income
 percentiles, faucet/sink mix, spender count, and the demurrage what-if grid.
 
+Casino money is **netted**, not double-counted: a stake is not a burn and a
+payout is not income, so the report books only the house hold (handle −
+payouts) as the casino's contribution to the sink, and shows the standing
+jackpot pot beside it — that pot is hold the house is holding for a future
+winner, not currency it destroyed.
+
 Compare runs over time:
 
     python scripts/economy_tuning_report.py                 # human report
+    python scripts/economy_tuning_report.py --days 3        # trailing window
     python scripts/economy_tuning_report.py --save-baseline docs/reviews/economy-baseline-YYYY-MM-DD.json
     python scripts/economy_tuning_report.py --baseline docs/reviews/economy-baseline-2026-07-20.json
 
@@ -31,10 +38,18 @@ MAIN_GUILD = 1469491362444480666
 # inherits the global -7 — keep in sync with the tz_offset config.
 TZ_OFFSET_HOURS = -7.0
 
-# Ledger kinds that are member↔member movement, not real income.
-NON_FAUCET_KINDS = ("transfer_in", "wager_payout", "wager_refund")
+# Ledger kinds that are member↔member movement, not real income. Casino
+# payouts belong here too: a returned bet is the member's own stake coming
+# back, and counting it as a faucet inflated minted by the full handle.
+NON_FAUCET_KINDS = (
+    "transfer_in", "wager_payout", "wager_refund", "casino_payout", "casino_refund",
+)
 # Kinds that actually destroy currency (transfers/wagers move it sideways).
-BURN_KINDS_EXCLUDED = ("transfer_out", "wager_stake")
+# casino_stake is excluded for the mirror-image reason — most of a stake is
+# handed straight back, so booking the whole thing as burn made the casino
+# look like the biggest sink in the economy when its real contribution is
+# the hold (see casino_hold below).
+BURN_KINDS_EXCLUDED = ("transfer_out", "wager_stake", "casino_stake")
 
 DEMURRAGE_FLOORS = (300, 500, 750, 1000)
 DEMURRAGE_RATES = (2, 5, 10)
@@ -58,9 +73,19 @@ def _last_full_week(today: date) -> tuple[str, str]:
     return str(monday_this - timedelta(days=7)), str(monday_this - timedelta(days=1))
 
 
-def collect(conn: sqlite3.Connection, guild_id: int, today: date) -> dict:
+def _trailing_days(today: date, days: int) -> tuple[str, str]:
+    """(first, last) ISO dates of a trailing window ending today (partial)."""
+    return str(today - timedelta(days=days - 1)), str(today)
+
+
+def collect(
+    conn: sqlite3.Connection, guild_id: int, today: date, days: int | None = None
+) -> dict:
     day_expr = f"date(created_at - {-TZ_OFFSET_HOURS}*3600, 'unixepoch')"
-    week_start, week_end = _last_full_week(today)
+    if days:
+        week_start, week_end = _trailing_days(today, days)
+    else:
+        week_start, week_end = _last_full_week(today)
 
     balances = [
         int(r[0])
@@ -130,6 +155,32 @@ def collect(conn: sqlite3.Connection, guild_id: int, today: date) -> dict:
         (guild_id, *BURN_KINDS_EXCLUDED, week_start, week_end),
     ).fetchone()[0]
 
+    # The casino nets to its hold: handle in, payouts back out, the house
+    # keeps the difference. That difference is the only part that is a real
+    # sink — and even it overstates the burn, because jackpot_cut_pct% of
+    # every lost stake is escrowed in the pot and re-minted when someone
+    # lines up three sevens. The pot is a running total (feed_jackpot writes
+    # no ledger row), so it is reported as a standing memo, not windowed.
+    handle, returned = conn.execute(
+        f"SELECT "
+        f"  COALESCE(SUM(CASE WHEN kind = 'casino_stake' THEN -amount END), 0), "
+        f"  COALESCE(SUM(CASE WHEN kind = 'casino_payout' THEN amount END), 0) "
+        f"FROM econ_ledger WHERE guild_id = ? AND {day_expr} BETWEEN ? AND ?",
+        (guild_id, week_start, week_end),
+    ).fetchone()
+    handle, returned = int(handle), int(returned)
+    casino_hold = handle - returned
+    if handle:
+        # Signed: a week where the players came out ahead is a faucet, and
+        # the burn total should say so rather than hiding it.
+        sink_mix["casino_hold"] = casino_hold
+        sink_mix = dict(sorted(sink_mix.items(), key=lambda kv: -kv[1]))
+        burned_week += casino_hold
+    jackpot_row = conn.execute(
+        "SELECT pot FROM casino_jackpot WHERE guild_id = ?", (guild_id,)
+    ).fetchone()
+    jackpot_pot = int(jackpot_row[0]) if jackpot_row else 0
+
     demurrage_grid = []
     for floor in DEMURRAGE_FLOORS:
         row = conn.execute(
@@ -153,6 +204,9 @@ def collect(conn: sqlite3.Connection, guild_id: int, today: date) -> dict:
         "generated": str(today),
         "guild_id": str(guild_id),
         "week": f"{week_start}..{week_end}",
+        # Window length, so a --days run is never silently diffed against a
+        # full-week baseline.
+        "window_days": days or 7,
         "wallets": len(balances),
         "float_total": sum(balances),
         "balance": _percentiles(balances, pcts),
@@ -165,6 +219,10 @@ def collect(conn: sqlite3.Connection, guild_id: int, today: date) -> dict:
         "spenders_week": int(spenders_week),
         "faucet_mix": faucet_mix,
         "sink_mix": sink_mix,
+        "casino_handle": handle,
+        "casino_returned": returned,
+        "casino_hold": casino_hold,
+        "jackpot_pot": jackpot_pot,
         "demurrage_grid": demurrage_grid,
         "hoard_weeks": (
             round(_percentiles(balances, {"p50": 0.5})["p50"] / income_pct["p50"], 1)
@@ -189,9 +247,17 @@ def print_report(stats: dict, baseline: dict | None) -> None:
         prev = b.get(key) if sub is None else (b.get(key) or {}).get(sub)
         print(f"  {label:<28} {_fmt_delta(cur, prev)}")
 
-    print(f"Economy tuning report — guild {stats['guild_id']}, week {stats['week']}")
+    span = stats.get("window_days", 7)
+    label = "week" if span == 7 else f"{span}d"
+    print(f"Economy tuning report — guild {stats['guild_id']}, {label} {stats['week']}")
     if baseline:
         print(f"(deltas vs baseline {baseline.get('generated', '?')})")
+        base_span = baseline.get("window_days", 7)
+        if base_span != span:
+            print(
+                f"  !! baseline covers {base_span} days, this run {span} — "
+                "flow numbers below are NOT comparable"
+            )
     print("\nBalances")
     line("wallets (>0)", "wallets")
     line("total float", "float_total")
@@ -200,7 +266,7 @@ def print_report(stats: dict, baseline: dict | None) -> None:
     print("  top wallets              " + ", ".join(
         f"{w['balance']:,}" for w in stats["top_wallets"][:5]
     ))
-    print("\nLast full week")
+    print("\nLast full week" if span == 7 else f"\nTrailing {span} days")
     line("earners", "weekly_earners")
     for p in ("p50", "p90"):
         line(f"weekly income {p}", "weekly_income", p)
@@ -213,9 +279,23 @@ def print_report(stats: dict, baseline: dict | None) -> None:
     print("\nFaucet mix (week): " + ", ".join(
         f"{k}={v:,}" for k, v in stats["faucet_mix"].items()
     ))
-    print("Sink mix (week):   " + (", ".join(
+    print("Sink mix:          " + (", ".join(
         f"{k}={v:,}" for k, v in stats["sink_mix"].items()
     ) or "(nothing burned)"))
+    if stats.get("casino_handle"):
+        pot = stats.get("jackpot_pot", 0)
+        print("\nCasino (netted, not counted as faucet+sink)")
+        print(f"  handle                       {stats['casino_handle']:,}")
+        print(f"  returned to players          {stats['casino_returned']:,}")
+        print(
+            f"  house hold                   {stats['casino_hold']:,}"
+            f"  ({100 * stats['casino_hold'] / stats['casino_handle']:.1f}% of handle)"
+        )
+        if pot:
+            print(
+                f"  jackpot pot (standing)       {pot:,}"
+                "  — escrowed from past holds, re-minted when it is won"
+            )
     print("\nDemurrage what-if (weekly burn at rate % of excess over floor)")
     print(f"  {'floor':>6} {'hit':>4} {'excess':>8} " + " ".join(
         f"@{r}%".rjust(7) for r in DEMURRAGE_RATES
@@ -231,6 +311,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--guild", type=int, default=MAIN_GUILD)
+    ap.add_argument(
+        "--days",
+        type=int,
+        help="use a trailing N-day window (including today) instead of the "
+             "last full ISO week — the 'what did yesterday's change do' view",
+    )
     ap.add_argument("--baseline", type=Path, help="baseline JSON to diff against")
     ap.add_argument("--save-baseline", type=Path, help="write this run as baseline JSON")
     ap.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -241,7 +327,7 @@ def main() -> None:
     ).date()
     conn = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     try:
-        stats = collect(conn, args.guild, today)
+        stats = collect(conn, args.guild, today, args.days)
     finally:
         conn.close()
 
