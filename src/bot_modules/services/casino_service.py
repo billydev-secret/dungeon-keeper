@@ -76,8 +76,15 @@ class CasinoSettings:
     blackjack_idle_seconds: int = 180
     # Progressive jackpot: a cut of every fully-lost stake feeds one pot;
     # slots triple-7️⃣ wins max(pot, the flat 120×), then the pot reseeds.
+    # The cut is deliberately small (2026-07-25, down from 25): every coin
+    # skimmed is a coin the house did NOT destroy — it is escrowed for one
+    # future winner. At 25% the first day of real traffic parked 5,211
+    # coins (a fifth of the guild's float) in a pot payable to whoever
+    # happens to line up three sevens, while the sink the economy actually
+    # needed went unfilled. 5% still builds a prize worth chasing at any
+    # sane volume; the rest of each lost bet stays burned.
     jackpot_enabled: bool = True
-    jackpot_cut_pct: int = 25
+    jackpot_cut_pct: int = 5
     jackpot_seed: int = 100
     # Instant-game wins paying at least this much get a public broadcast
     # in the casino channel (results themselves render ephemerally).

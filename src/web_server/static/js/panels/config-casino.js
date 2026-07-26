@@ -169,9 +169,11 @@ export function mount(container) {
     ));
     cardJackpot.appendChild(field(
       "Share of Each Losing Bet (percent)",
-      numInput("jackpot_cut_pct", c.jackpot_cut_pct ?? 25, 0, "1", 100),
-      "Between 0 and 100. A bigger share grows the pot faster and lets the " +
-        "casino destroy less currency overall.",
+      numInput("jackpot_cut_pct", c.jackpot_cut_pct ?? 5, 0, "1", 100),
+      "Between 0 and 100; 5 is the default. A bigger share grows the pot " +
+        "faster but destroys less currency — it parks those coins for one " +
+        "future winner instead. Raise it for drama, lower it for a healthier " +
+        "economy.",
     ));
     cardJackpot.appendChild(field(
       "Starting Pot After a Win",

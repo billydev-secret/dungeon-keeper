@@ -122,7 +122,7 @@ All movement goes through `services/casino_service.py`:
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
 | `{game}_enabled` ×9 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
-| `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
+| `jackpot_cut_pct` | 5 | % of each fully-lost stake skimmed into the pot — every skimmed coin is escrowed rather than burned, so this trades sink strength for pot drama (was 25 until 2026-07-25; see [reviews/2026-07-25-economy-casino-sources-sinks.md](reviews/2026-07-25-economy-casino-sources-sinks.md)) |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
 | `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
@@ -285,6 +285,9 @@ caller-supplied.
   posts a standalone gold celebration beside the result. The pot is
   bookkeeping over coins the ledger already burned; paying it re-mints
   that recorded slice (`casino_payout`, `meta.jackpot`, never boosted).
+  **The cut is therefore an anti-sink** — it is the share of the house's
+  take that comes back rather than staying destroyed — which is why it
+  ships at 5%, not a quarter.
 - **Play stats** — `record_play` (same transaction as every settlement;
   never refunds) maintains `casino_member_stats` (lifetime wagered /
   returned / plays / wins / biggest win / signed streak) and the bounded

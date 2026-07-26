@@ -65,6 +65,10 @@ def test_settings_default_dark(tmp_path):
         s = svc.load_casino_settings(conn, GUILD)
     assert s == svc.DEFAULT_CASINO_SETTINGS
     assert s.channel_id == 0  # the master switch ships off
+    # The jackpot cut escrows coins the house would otherwise destroy, so
+    # the shipped share stays small — a quarter of every loss parked a
+    # fifth of the live guild's float in the pot inside one day.
+    assert s.jackpot_cut_pct == 5
 
 
 def test_settings_roundtrip_partial(db):
@@ -1444,6 +1448,7 @@ def test_casino_kinds_economy_accounting_registrations():
 
 def test_jackpot_feeds_only_on_full_losses(db):
     with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
         _fund(conn, A, 1_000)
         # a lost slots spin feeds 25% of the stake
         r = svc.settle_slots(conn, GUILD, A, 40, ("🌻", "🍀", "🐝"), now=NOW)
@@ -1474,7 +1479,7 @@ def test_triple_sevens_takes_pot_with_flat_floor(db):
         _fund(conn, A, 10_000)
         svc.save_casino_settings(conn, GUILD, {"daily_wager_cap": 0, "max_bet": 0})
         # small pot, big bet → the flat 120× floor wins out (pot still resets)
-        svc.feed_jackpot(conn, GUILD, 100, now=NOW)  # pot = seed 100 + 25
+        svc.feed_jackpot(conn, GUILD, 100, now=NOW)  # pot = seed 100 + the cut
         r = svc.settle_slots(conn, GUILD, A, 10, (logic.SEVEN,) * 3, now=NOW)
         assert (r.payout, r.jackpot_won) == (1200, 1200)
         assert svc.get_jackpot(conn, GUILD) == 100  # reseeded
@@ -1489,6 +1494,7 @@ def test_triple_sevens_takes_pot_with_flat_floor(db):
 
 def test_claim_jackpot_is_exactly_once_per_pot(db):
     with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
         svc.feed_jackpot(conn, GUILD, 1_000, now=NOW)  # 100 seed + 250
         assert svc.claim_jackpot(conn, GUILD, A, now=NOW) == 350
         assert svc.claim_jackpot(conn, GUILD, B, now=NOW) == 100  # just the reseed
@@ -1496,6 +1502,7 @@ def test_claim_jackpot_is_exactly_once_per_pot(db):
 
 def test_blackjack_and_roulette_losses_feed_the_pot(db):
     with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
         _fund(conn, A, 1_000)
         hand_id = _deal(conn, stake=40)
         assert svc.settle_blackjack_hand(conn, hand_id, 0, "bust", now=NOW)
@@ -1658,6 +1665,7 @@ def test_daily_cap_status_reports_used_cap_and_reset(db):
 
 def test_instant_results_carry_the_pot_on_losses_only(db):
     with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
         _fund(conn, A, 1_000)
         lost = svc.settle_slots(conn, GUILD, A, 40, ("🌻", "🍀", "🐝"), now=NOW)
         assert lost.fed == 10 and lost.pot_after == 110  # seed 100 + 10
@@ -1670,6 +1678,7 @@ def test_instant_results_carry_the_pot_on_losses_only(db):
 
 def test_blackjack_step_carries_pot_on_a_loss(db):
     with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"jackpot_cut_pct": 25})
         _fund(conn, A, 1_000)
         hand_id = _deal_state(conn, A, 40, [], ["10♠", "7♦"], ["10♥", "8♥"])
         step = svc.resolve_blackjack_action(conn, GUILD, hand_id, A, "stand", now=NOW)
