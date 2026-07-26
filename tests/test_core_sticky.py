@@ -27,6 +27,9 @@ MESSAGE = 666
 def _channel(channel_id: int = CHANNEL, message_id: int = MESSAGE):
     channel = MagicMock(spec=discord.TextChannel)
     channel.id = channel_id
+    # Gateway-maintained; "something else is below the panel" unless a test
+    # says otherwise, so resticks are not skipped by the at-the-bottom guard.
+    channel.last_message_id = None
     sent = MagicMock(spec=discord.Message)
     sent.id = message_id
     sent.edit = AsyncMock()
@@ -486,11 +489,52 @@ async def test_bot_messages_arm_a_restick_when_opted_in():
 
 @pytest.mark.asyncio
 async def test_opted_in_panel_still_skips_its_own_message():
-    """The only thing stopping a self-loop once bot messages count."""
+    """Cheap skip when the id is already cached — an optimisation, not the
+    self-loop protection (that races the gateway; see the two tests below)."""
     panel = _panel(_bot(), _Store(CHANNEL, MESSAGE), restick_on_bot=True)
     with patch.object(panel, "schedule_restick") as sched:
         await panel.on_message(_message(bot=True, message_id=MESSAGE))
     sched.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restick_is_skipped_when_the_panel_is_already_last():
+    """Nothing is buried, so there is nothing to move — and no API call."""
+    channel, _ = _channel()
+    channel.last_message_id = MESSAGE
+    guild = _guild(channel)
+    panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE), delay=0.01)
+    with patch.object(panel, "place", new=AsyncMock()) as place:
+        panel.schedule_restick(GUILD)
+        await asyncio.sleep(0.05)
+    place.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_own_repost_does_not_self_loop_when_the_gateway_wins():
+    """Prod repro: the casino hub reposted itself every ~6s in bursts.
+
+    The MESSAGE_CREATE frame for our own repost is dispatched while place() is
+    still awaiting send(), so _remember() has not run yet and the id cache
+    still holds the *old* panel — should_restick() waves the repost through and
+    arms a restick. That restick must find the panel already at the bottom and
+    do nothing; otherwise each repost arms the next one forever.
+    """
+    channel, sent = _channel()
+    guild = _guild(channel)
+    panel = _panel(_bot(guild), _Store(CHANNEL, 111), restick_on_bot=True, delay=0.01)
+
+    async def _send(*args, **kwargs):
+        channel.last_message_id = MESSAGE  # discord.py updates this first…
+        await panel.on_message(_message(bot=True, message_id=MESSAGE))  # …then dispatches
+        return sent
+
+    channel.send = AsyncMock(side_effect=_send)
+
+    await panel.place(guild, channel)
+    await asyncio.sleep(0.05)  # let the armed restick fire
+
+    assert channel.send.await_count == 1
 
 
 @pytest.mark.asyncio
