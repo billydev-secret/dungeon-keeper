@@ -482,3 +482,162 @@ def test_extract_anagrams_game_pairs_usernames_with_the_mentioned_winner():
 def test_scoreboard_usernames_are_markdown_unescaped():
     embeds = _scoreboard({r"dozer\_nation": 100})["embeds"]
     assert parser.scores_from_scoreboard(embeds) == {"dozer_nation": 100}
+
+
+# ── Wordle (kind='wordle') ───────────────────────────────────────────────────
+#
+# One self-contained daily digest per group: no embeds, no lobby, nothing to
+# scan back for. Scoring is inverted (1/6 is best) and ties on the 👑 line are
+# normal, so there are usually several winners.
+
+def _digest(*lines: str) -> str:
+    return (
+        "**Your group is on a 9 day streak!** 🔥 Here are yesterday's results:\n"
+        + "\n".join(lines)
+    )
+
+
+def test_parse_wordle_results_inverts_the_guess_count():
+    r = parser.parse_wordle_results(
+        _digest(f"👑 1/6: <@{ALICE}>", f"4/6: <@{BOB}>", f"6/6: <@{CAROL}>")
+    )
+    assert r is not None
+    # Fewer guesses must pay more, so 1/6 is the top score and 6/6 the floor.
+    assert r.scores == {ALICE: 6, BOB: 3, CAROL: 1}
+    assert r.winners == frozenset({ALICE})
+
+
+def test_parse_wordle_results_failed_player_scores_zero_but_still_played():
+    r = parser.parse_wordle_results(_digest(f"👑 3/6: <@{ALICE}>", f"X/6: <@{BOB}>"))
+    assert r is not None
+    assert r.scores == {ALICE: 4, BOB: 0}  # BOB is in the roster at 0, not absent
+
+
+def test_parse_wordle_results_supports_tied_winners():
+    # "👑 3/6: <@a> <@b> <@c>" is a real and common shape — everyone on the
+    # crowned line won.
+    r = parser.parse_wordle_results(
+        _digest(f"👑 3/6: <@{ALICE}> <@{BOB}> <@{CAROL}>", "4/6: <@444>")
+    )
+    assert r is not None
+    assert r.winners == frozenset({ALICE, BOB, CAROL})
+    assert r.scores[444] == 3
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("👑 3/6: @Ciccio", {"Ciccio": 4}),
+        ("6/6: @Olivia @UnfeelingFreedom", {"Olivia": 1, "UnfeelingFreedom": 1}),
+        # A display name with a space would be shredded by whitespace splitting.
+        ("4/6: @communal potato", {"communal potato": 3}),
+    ],
+)
+def test_parse_wordle_results_splits_plain_names_on_the_at_sign(line, expected):
+    # Wordle prints some players as bare "@Name" rather than mentioning them;
+    # the caller resolves those by name.
+    r = parser.parse_wordle_results(_digest(line))
+    assert r is not None
+    assert r.named_scores == expected
+
+
+def test_parse_wordle_results_mixes_mentions_and_plain_names_on_one_line():
+    r = parser.parse_wordle_results(_digest(f"👑 4/6: @Ciccio <@{ALICE}> <@{BOB}>"))
+    assert r is not None
+    assert r.scores == {ALICE: 3, BOB: 3}
+    assert r.named_scores == {"Ciccio": 3}
+    assert r.winners == frozenset({ALICE, BOB})
+    assert r.named_winners == frozenset({"Ciccio"})
+
+
+def test_wordle_chatter_is_not_a_digest():
+    assert parser.parse_wordle_results("bigprop03 is playing") is None
+    assert parser.parse_wordle_results("") is None
+    # A digest header with no result lines pays nobody rather than half-parsing.
+    assert parser.parse_wordle_results("Here are yesterday's results:") is None
+
+
+# ── Co-ordle (kind='coordle') ────────────────────────────────────────────────
+
+_COORDLE_EMPTY_ROW = "<:white_square:946958839192891402>" * 6
+
+
+def _coordle_cells(colours: list[str]) -> str:
+    return "".join(
+        f"<:{c}_{w}:94647073314244610{i}>"
+        for i, (c, w) in enumerate(zip(colours, "spirit"))
+    )
+
+
+def _coordle_row(n, colours, uid=None, pts=None, bonus=None) -> str:
+    row = f"**`{n}.`** {_coordle_cells(colours)}"
+    if uid is not None:
+        score = f"**+{pts}" + (f" (+{bonus})" if bonus else "") + "**"
+        row += f" <@!{uid}> {score}"
+    return row
+
+
+def _coordle_board(rows: list[str], ts: int = 1785103200) -> list[dict]:
+    return [{"title": f"Co-ordle for <t:{ts}:f>", "description": "\n".join(rows)}]
+
+
+_MISS = ["gray"] * 6
+_HIT = ["green"] * 6
+
+
+def test_coordle_board_is_recognised_and_keyed_on_its_round():
+    embeds = _coordle_board([_coordle_row(1, _MISS, ALICE, 4)], ts=1785103200)
+    assert parser.is_coordle_board(embeds) is True
+    # Keyed on the round's scheduled time, not a message id: Co-ordle posts a
+    # fresh board message for *every* guess, so a message-keyed payout would
+    # pay the same round once per guess.
+    assert parser.coordle_game_key(embeds) == 1785103200
+    assert parser.is_coordle_board(
+        [{"title": "Co-ordle Leaderboard for `The Golden Meadow`"}]
+    ) is False
+
+
+def test_extract_coordle_sums_the_bonus_into_each_players_points():
+    # "**+1 (+2)**" means the player earned 1+2 — verified against the bot's own
+    # cumulative leaderboard across consecutive snapshots.
+    embeds = _coordle_board([
+        _coordle_row(1, _MISS, ALICE, 1, bonus=2),
+        _coordle_row(2, _MISS, ALICE, 1),
+        _coordle_row(3, _MISS, BOB, 4),
+        _coordle_row(4, _HIT, BOB, 5),
+    ])
+    scores, winner, state = parser.extract_coordle_game(embeds)
+    assert scores == {ALICE: 4, BOB: 9}
+    assert winner == BOB              # whoever played the all-green solving row
+    assert state == parser.COORDLE_SOLVED
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        ([_coordle_row(1, _HIT, ALICE, 5)], parser.COORDLE_SOLVED),
+        # Every row used and never solved.
+        ([_coordle_row(i, _MISS, ALICE, 1) for i in range(1, 8)],
+         parser.COORDLE_EXHAUSTED),
+        # Guesses so far but rows to spare — still running, must not pay.
+        ([_coordle_row(1, _MISS, ALICE, 1), f"**`2.`** {_COORDLE_EMPTY_ROW}"],
+         parser.COORDLE_OPEN),
+        # Nobody has guessed at all.
+        ([f"**`{i}.`** {_COORDLE_EMPTY_ROW}" for i in range(1, 8)],
+         parser.COORDLE_EMPTY),
+    ],
+    ids=["solved", "exhausted", "open", "empty"],
+)
+def test_extract_coordle_reads_finality_off_the_board(rows, expected):
+    # Co-ordle never posts a terminal message, so the board itself is the only
+    # signal that a round is over.
+    _scores, _winner, state = parser.extract_coordle_game(_coordle_board(rows))
+    assert state == expected
+
+
+def test_extract_coordle_unsolved_round_has_no_winner():
+    embeds = _coordle_board([_coordle_row(i, _MISS, ALICE, 1) for i in range(1, 8)])
+    scores, winner, state = parser.extract_coordle_game(embeds)
+    assert winner is None
+    assert state == parser.COORDLE_EXHAUSTED
+    assert scores == {ALICE: 7}

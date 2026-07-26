@@ -479,3 +479,188 @@ async def test_spawn_message_pays_nobody(gdb):
         await cog._pay_cat_catch(_catch_message(spawn, member))
 
     pay.assert_not_awaited()
+
+
+# ── Wordle + Co-ordle (2026-07-26) ───────────────────────────────────────────
+
+WORDLE_BOT, COORDLE_BOT = 1211781489931452447, 1071892566158614608
+DIGEST_ID = 6001
+
+
+def _digest_message(content, guild, mid=DIGEST_ID):
+    return SimpleNamespace(
+        id=mid, guild=guild, channel=SimpleNamespace(id=CHAN),
+        author=SimpleNamespace(id=WORDLE_BOT),
+        created_at=datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc),
+        content=content, embeds=[],
+    )
+
+
+def _members_by_id(*members):
+    """A guild stub resolving by id and by name, like Discord does."""
+    return SimpleNamespace(
+        id=GUILD,
+        get_member=lambda uid: next((m for m in members if m.id == uid), None),
+        get_member_named=lambda n: next(
+            (m for m in members if getattr(m, "name", None) == n), None
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_wordle_digest_pays_by_inverted_score_with_tied_winners(gdb):
+    guild = _members_by_id(
+        SimpleNamespace(id=ALICE, bot=False, name="alice"),
+        SimpleNamespace(id=BOB, bot=False, name="bob"),
+        SimpleNamespace(id=CAROL, bot=False, name="carol"),
+    )
+    content = (
+        "**Your group is on a 9 day streak!** 🔥 Here are yesterday's results:\n"
+        f"👑 3/6: <@{ALICE}> <@{BOB}>\n"
+        f"X/6: <@{CAROL}>"
+    )
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_wordle_results(_digest_message(content, guild))
+        await cog._pay_wordle_results(_digest_message(content, guild))  # replay
+
+    pay.assert_awaited_once()
+    args, kwargs = pay.await_args
+    assert args[2] == {ALICE: 4, BOB: 4, CAROL: 0}  # 3/6 -> 4, X/6 -> 0
+    assert sorted(args[3]) == sorted([ALICE, BOB])  # both crowned players win
+    assert kwargs["game_key"] == "wordle"
+    assert (await _claimed_kinds(gdb))[DIGEST_ID] == "wordle"
+
+
+@pytest.mark.asyncio
+async def test_wordle_resolves_players_it_printed_as_plain_names(gdb):
+    # Wordle mentions some players and prints others as "@Name"; both played.
+    guild = _members_by_id(
+        SimpleNamespace(id=ALICE, bot=False, name="alice"),
+        SimpleNamespace(id=BOB, bot=False, name="Ciccio"),
+    )
+    content = (
+        "Here are yesterday's results:\n"
+        f"👑 4/6: @Ciccio <@{ALICE}>\n"
+    )
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_wordle_results(_digest_message(content, guild))
+
+    args, _ = pay.await_args
+    assert args[2] == {ALICE: 3, BOB: 3}
+    assert sorted(args[3]) == sorted([ALICE, BOB])  # the named player won too
+
+
+@pytest.mark.asyncio
+async def test_wordle_chatter_pays_nobody(gdb):
+    guild = _members_by_id(SimpleNamespace(id=ALICE, bot=False, name="alice"))
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_wordle_results(_digest_message("bigprop03 is playing", guild))
+
+    pay.assert_not_awaited()
+
+
+def _coordle_message(rows, guild, mid, ts=1785103200):
+    embed = {
+        "title": f"Co-ordle for <t:{ts}:f>",
+        "description": "\n".join(rows),
+    }
+    return SimpleNamespace(
+        id=mid, guild=guild, channel=SimpleNamespace(id=CHAN),
+        author=SimpleNamespace(id=COORDLE_BOT),
+        created_at=datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc),
+        content="", embeds=[SimpleNamespace(to_dict=lambda e=embed: e)],
+    )
+
+
+_CO_MISS = "".join(f"<:gray_{c}:9464707331424461{i}>" for i, c in enumerate("spirit"))
+_CO_HIT = "".join(f"<:green_{c}:9464707331424461{i}>" for i, c in enumerate("spirit"))
+_CO_EMPTY = "<:white_square:946958839192891402>" * 6
+
+
+@pytest.mark.asyncio
+async def test_coordle_pays_once_per_round_not_once_per_guess(gdb):
+    # Co-ordle posts a NEW board message for every guess, each showing the whole
+    # round. Keyed on a message id this would pay the same round repeatedly, so
+    # the claim is keyed on the round's scheduled timestamp instead.
+    guild = _members_by_id(
+        SimpleNamespace(id=ALICE, bot=False, name="alice"),
+        SimpleNamespace(id=BOB, bot=False, name="bob"),
+    )
+    rows = [
+        f"**`1.`** {_CO_MISS} <@!{ALICE}> **+1 (+2)**",
+        f"**`2.`** {_CO_HIT} <@!{BOB}> **+5**",
+    ]
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        # Two different board messages, same round — must pay exactly once.
+        await cog._pay_coordle_round(_coordle_message(rows, guild, 7001))
+        await cog._pay_coordle_round(_coordle_message(rows, guild, 7002))
+
+    pay.assert_awaited_once()
+    args, kwargs = pay.await_args
+    assert args[2] == {ALICE: 3, BOB: 5}   # the (+2) bonus folds into ALICE's total
+    assert args[3] == BOB                  # played the solving row
+    assert kwargs["game_key"] == "coordle"
+    assert kwargs["occurrence"] == "1785103200"
+    assert (await _claimed_kinds(gdb))[1785103200] == "coordle"
+
+
+@pytest.mark.asyncio
+async def test_coordle_open_round_pays_nobody_yet(gdb):
+    # Rows still to spare — the round is live, and paying now would settle it
+    # early. There is no terminal message, so the board is the only signal.
+    guild = _members_by_id(SimpleNamespace(id=ALICE, bot=False, name="alice"))
+    rows = [f"**`1.`** {_CO_MISS} <@!{ALICE}> **+1**", f"**`2.`** {_CO_EMPTY}"]
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_coordle_round(_coordle_message(rows, guild, 7003))
+
+    pay.assert_not_awaited()
+    assert await _claimed_kinds(gdb) == {}
+
+
+@pytest.mark.asyncio
+async def test_coordle_exhausted_round_pays_with_no_winner(gdb):
+    guild = _members_by_id(SimpleNamespace(id=ALICE, bot=False, name="alice"))
+    rows = [f"**`{i}.`** {_CO_MISS} <@!{ALICE}> **+1**" for i in range(1, 8)]
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock()
+    ) as pay:
+        await cog._pay_coordle_round(_coordle_message(rows, guild, 7004))
+
+    pay.assert_awaited_once()
+    args, _ = pay.await_args
+    assert args[2] == {ALICE: 7}
+    assert args[3] is None  # never solved -> no win bonus

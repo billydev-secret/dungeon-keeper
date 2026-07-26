@@ -486,3 +486,214 @@ def parse_cat_catch(content: str) -> CatCatch | None:
         coins = rarity_coins(rarity) * (2 if doubled else 1)
         return CatCatch(username=username, rarity=rarity, doubled=doubled, coins=coins)
     return None
+
+
+# ── Wordle (kind='wordle') ───────────────────────────────────────────────────
+#
+# The Wordle bot posts one self-contained daily digest per group — no embeds,
+# no lobby, nothing to scan backwards for:
+#
+#     **Your group is on a 9 day streak!** 🔥 Here are yesterday's results:
+#     👑 3/6: <@490886726076727296>
+#     4/6: <@203866639005908992>
+#     X/6: <@1069501326184153088>
+#
+# 👑 marks the best line, `N/6` is "solved in N guesses" and `X/6` is a fail.
+# A line can carry several players (ties are common), so there are usually
+# several winners. Scoring is **inverted** relative to CAH/Anagrams — fewer
+# guesses is better — so it's flipped to a plain "higher is better" score here
+# and the generic score-proportional payout does the rest.
+#
+# Players the bot couldn't mention render as a bare "@Name" instead, and at
+# least one real case has a space in it ("@communal potato"), which makes the
+# token boundary ambiguous. Those are reported for logging and never guessed
+# at — the same posture as an unresolvable Cat Bot catcher.
+
+WORDLE_MAX_GUESSES = 6
+
+_WORDLE_RESULTS_MARK = "results:"
+_WORDLE_LINE = re.compile(
+    r"^(?P<crown>\U0001F451\s*)?(?P<guesses>[1-6X])/6:\s*(?P<players>.+)$"
+)
+
+
+@dataclass(frozen=True)
+class WordleResults:
+    """One day's group digest. Scores are higher-is-better (a 1/6 scores
+    ``WORDLE_MAX_GUESSES``, a 6/6 scores 1, and a failed X/6 scores 0 — they
+    played, so they're in the roster, they just earn no coins).
+
+    Players come in two flavours because Wordle only mentions some of them:
+    ``scores``/``winners`` are keyed by member id, ``named_scores``/
+    ``named_winners`` by the bare ``@Name`` the bot printed instead. The caller
+    resolves the names against the guild, exactly as the Anagrams and Cat Bot
+    paths do — roughly a fifth of the observed result lines need it.
+    """
+
+    scores: dict[int, int]
+    named_scores: dict[str, int]
+    winners: frozenset[int]
+    named_winners: frozenset[str]
+
+
+def wordle_score(guesses: str) -> int:
+    """Invert a ``N/6`` guess count into a higher-is-better score."""
+    if guesses.upper() == "X":
+        return 0
+    return WORDLE_MAX_GUESSES + 1 - int(guesses)
+
+
+def parse_wordle_results(content: str) -> WordleResults | None:
+    """Parse a Wordle daily digest, or None if this isn't one.
+
+    Only the digest parses — the bot's chatter ("<name> is playing") has no
+    result lines and returns None, so it never pays.
+    """
+    if not content or _WORDLE_RESULTS_MARK not in content:
+        return None
+    scores: dict[int, int] = {}
+    named_scores: dict[str, int] = {}
+    winners: set[int] = set()
+    named_winners: set[str] = set()
+    for line in content.splitlines():
+        m = _WORDLE_LINE.match(line.strip())
+        if not m:
+            continue
+        score = wordle_score(m.group("guesses"))
+        crowned = bool(m.group("crown"))
+        players = m.group("players")
+        for raw in _MENTION.findall(players):
+            uid = int(raw)
+            scores[uid] = score
+            if crowned:
+                winners.add(uid)
+        # Whatever is left once the real mentions are stripped is one or more
+        # players the bot printed as plain text. Split on the '@' rather than on
+        # whitespace: display names can contain spaces ("@communal potato"), so
+        # tokenising would shred them, while several names on one line always
+        # arrive as "@A @B".
+        leftover = _MENTION.sub("", players)
+        for chunk in leftover.split("@")[1:]:
+            name = chunk.strip()
+            if not name:
+                continue
+            named_scores[name] = score
+            if crowned:
+                named_winners.add(name)
+    if not scores and not named_scores:
+        return None
+    return WordleResults(
+        scores=scores,
+        named_scores=named_scores,
+        winners=frozenset(winners),
+        named_winners=frozenset(named_winners),
+    )
+
+
+# ── Co-ordle (kind='coordle') ────────────────────────────────────────────────
+#
+# Co-ordle is a *co-operative* word puzzle: one 6-letter word per hourly round,
+# which the whole channel solves together. Its board embed is titled
+# "Co-ordle for <t:1785103200:f>" and each filled row is one player's guess:
+#
+#     **`1.`** <:green_s:…><:gray_p:…>… <@!1069501326184153088> **+4**
+#     **`2.`** <:white_square:…>×6                       (an unplayed row)
+#
+# Two things make it unlike every other tracked game:
+#
+# * **A new message is posted per guess**, each showing the whole board so far
+#   — so the *last* board of a round is the final one, and the payout can't be
+#   keyed on a message id without paying every guess. It's keyed on the round's
+#   own scheduled timestamp from the title instead (``coordle_game_key``),
+#   which is the round's real identity. Those values (~1.7e9) can't collide
+#   with Discord snowflakes (~1.5e18) in the shared payout ledger.
+# * **There is no terminal message.** "This Co-ordle has ended" is only a
+#   rejection sent to a late guesser, never a broadcast. Finality is read off
+#   the board itself: a row of six greens means solved, and a board with no
+#   unplayed rows left is exhausted. A round that simply times out with rows
+#   to spare stays 'open' and never pays — 16 of 1887 rounds in the observed
+#   history, the accepted cost of having no end-of-round signal to listen for.
+#
+# Scores are the inline ``**+N**``, or ``**+N (+M)**`` where a bonus applies —
+# in which case the player earned **N+M**. Checked against the bot's own
+# cumulative leaderboard across consecutive snapshots: N+M reproduced the
+# leaderboard delta for 79% of player-rounds and N alone for 0.5% (the
+# remainder being rounds clipped by a snapshot boundary or by its top-10 cut).
+
+_COORDLE_TITLE_MARK = "Co-ordle for "
+_COORDLE_GAME_TS = re.compile(r"<t:(\d+):")
+_COORDLE_ROW_MARK = "**`"
+_COORDLE_CELL = re.compile(r"<a?:(green|yellow|gray|white)_(\w+?):\d+>")
+_COORDLE_SCORE = re.compile(
+    r"<@!?(\d+)>\s*\*\*\+(\d+)(?:\s*\(\+(\d+)\))?\*\*"
+)
+
+# Board states. Only the first two are final and therefore payable.
+COORDLE_SOLVED = "solved"
+COORDLE_EXHAUSTED = "exhausted"
+COORDLE_OPEN = "open"
+COORDLE_EMPTY = "empty"
+
+
+def is_coordle_board(embeds: Sequence[Mapping[str, Any]]) -> bool:
+    """True for a Co-ordle round board (not its leaderboard or rules embed)."""
+    return any(
+        title.startswith(_COORDLE_TITLE_MARK) for title, _desc in _embed_texts(embeds)
+    )
+
+
+def coordle_game_key(embeds: Sequence[Mapping[str, Any]]) -> int | None:
+    """The round's scheduled unix timestamp — its stable identity across the
+    many board messages one round posts. Used as the payout ledger key."""
+    for title, _desc in _embed_texts(embeds):
+        if title.startswith(_COORDLE_TITLE_MARK):
+            m = _COORDLE_GAME_TS.search(title)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def extract_coordle_game(
+    embeds: Sequence[Mapping[str, Any]]
+) -> tuple[dict[int, int], int | None, str]:
+    """``({member_id: points}, winner, state)`` from one Co-ordle board.
+
+    ``winner`` is whoever played the solving row — the guess that came back all
+    green — or None if the round wasn't solved. ``state`` is one of the
+    ``COORDLE_*`` constants; only *solved* and *exhausted* are final.
+    """
+    scores: dict[int, int] = {}
+    winner: int | None = None
+    solved = False
+    filled = unplayed = 0
+    for title, desc in _embed_texts(embeds):
+        if not title.startswith(_COORDLE_TITLE_MARK):
+            continue
+        for line in desc.splitlines():
+            if not line.strip().startswith(_COORDLE_ROW_MARK):
+                continue
+            cells = _COORDLE_CELL.findall(line)
+            if not cells:
+                continue
+            if all(colour == "white" and name == "square" for colour, name in cells):
+                unplayed += 1
+                continue
+            filled += 1
+            row_solved = all(colour == "green" for colour, _name in cells)
+            solved = solved or row_solved
+            m = _COORDLE_SCORE.search(line)
+            if m:
+                uid = int(m.group(1))
+                points = int(m.group(2)) + (int(m.group(3)) if m.group(3) else 0)
+                scores[uid] = scores.get(uid, 0) + points
+                if row_solved:
+                    winner = uid
+    if solved:
+        state = COORDLE_SOLVED
+    elif filled == 0:
+        state = COORDLE_EMPTY
+    elif unplayed == 0:
+        state = COORDLE_EXHAUSTED
+    else:
+        state = COORDLE_OPEN
+    return scores, winner, state

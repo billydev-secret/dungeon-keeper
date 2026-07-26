@@ -95,6 +95,10 @@ class GamesExternalCog(commands.Cog):
                 await self._pay_gamebot_game(message)
         elif kind == "catbot":
             await self._pay_cat_catch(message)
+        elif kind == "wordle":
+            await self._pay_wordle_results(message)
+        elif kind == "coordle":
+            await self._pay_coordle_round(message)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -306,6 +310,103 @@ class GamesExternalCog(commands.Cog):
             )
         except Exception:
             log.exception("Cat catch payout failed for message %s", message.id)
+
+    async def _pay_wordle_results(self, message: discord.Message) -> None:
+        """Pay a Wordle daily group digest, proportional to how few guesses
+        each player needed.
+
+        The digest is entirely self-contained — one message, no embeds, no
+        preceding lobby — so unlike the Gamebot games this needs no backward
+        scan at all and is keyed on the digest's own message id. Wordle's
+        scoring is inverted (1/6 is best), so ``parse_wordle_results`` flips it
+        before the shared score-proportional payout sees it. Ties on the 👑
+        line are normal, so every crowned player is a winner.
+        """
+        guild = message.guild
+        if guild is None:
+            return
+        try:
+            results = parser.parse_wordle_results(message.content or "")
+            if results is None:
+                return
+            scores = {
+                uid: score
+                for uid, score in results.scores.items()
+                if (m := guild.get_member(uid)) is not None and not m.bot
+            }
+            winners = set(results.winners)
+            # Players Wordle printed as plain "@Name" instead of mentioning are
+            # resolved by name; a real mention always wins on a collision.
+            by_name, unresolved = resolve_named_scores(guild, results.named_scores)
+            for uid, score in by_name.items():
+                scores.setdefault(uid, score)
+            named_winner_ids, _ = resolve_named_scores(
+                guild, {n: 1 for n in results.named_winners}
+            )
+            winners |= set(named_winner_ids)
+            if not scores:
+                await logic.mark_parsed(self.db, message.id, "skip")
+                return
+            if not await logic.claim_payout(self.db, message.id, guild.id, "wordle"):
+                return
+            await pay_cah_game_by_score(
+                self.bot, guild.id, scores, sorted(winners),
+                occurrence=str(message.id), game_key="wordle",
+            )
+            await logic.mark_parsed(self.db, message.id, "ok")
+            log.info(
+                "Wordle payout: guild %s digest %s — %d players, %d winner(s)%s",
+                guild.id, message.id, len(scores), len(winners),
+                f", unresolved {unresolved}" if unresolved else "",
+            )
+        except Exception:
+            log.exception("Wordle payout failed for message %s", message.id)
+
+    async def _pay_coordle_round(self, message: discord.Message) -> None:
+        """Pay a finished Co-ordle round from its final board.
+
+        Co-ordle posts a **new board message per guess**, each showing the whole
+        round so far, and never posts a terminal message. So this fires on every
+        board, pays only once the board reads as final (solved, or every row
+        used), and claims on the round's own scheduled timestamp rather than a
+        message id — otherwise each guess would look like a separate game. A
+        round that times out with rows to spare stays open and pays nobody;
+        there is no signal that it ended.
+        """
+        guild = message.guild
+        if guild is None:
+            return
+        try:
+            embeds = [e.to_dict() for e in message.embeds]
+            if not parser.is_coordle_board(embeds):
+                return
+            round_key = parser.coordle_game_key(embeds)
+            if round_key is None:
+                return
+            raw_scores, winner, state = parser.extract_coordle_game(embeds)
+            if state not in (parser.COORDLE_SOLVED, parser.COORDLE_EXHAUSTED):
+                return
+            scores = {
+                uid: pts
+                for uid, pts in raw_scores.items()
+                if (m := guild.get_member(uid)) is not None and not m.bot
+            }
+            if not scores:
+                return
+            # Keyed on the round, not this message — see the docstring.
+            if not await logic.claim_payout(self.db, round_key, guild.id, "coordle"):
+                return
+            await pay_cah_game_by_score(
+                self.bot, guild.id, scores, winner,
+                occurrence=str(round_key), game_key="coordle",
+            )
+            await logic.mark_parsed(self.db, message.id, "ok")
+            log.info(
+                "Co-ordle payout: guild %s round %s (%s) — %d players, winner %s",
+                guild.id, round_key, state, len(scores), winner,
+            )
+        except Exception:
+            log.exception("Co-ordle payout failed for message %s", message.id)
 
     # ── config commands: /games track … ───────────────────────────────────
     track = app_commands.Group(
