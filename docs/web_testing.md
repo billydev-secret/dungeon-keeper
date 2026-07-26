@@ -66,7 +66,22 @@ test env makes bot-dependent endpoints return 503 (tolerated — can't happen in
 prod); the SSE log stream and favicon are tolerated; `greeter-response`'s
 no-data report 404 is allowlisted.
 
-Both browser sweeps use a **fresh browser context per panel** and wait for the
+### Picker dropdown — `test_filter_select_dropdown.py`
+`js/filter-select.js` backs the searchable pickers in 43 panels, so it gets its
+own gate rather than riding on whichever panel happens to mount one. Mounts the
+widget straight from the shipped module (no panel data — the bot-less env 503s
+the channel/role fetches) and asserts it is `display: none` until focused, opens
+anchored flush under its input, and stays anchored across a scroll. Each case
+runs twice: once normally, once with `HTMLElement.prototype.showPopover` deleted
+to exercise the no-Popover-API path — the iOS failure where the list had no
+`display` rule of its own and stranded itself hundreds of pixels from its field.
+
+Note the limit of that simulation: deleting the methods does not stop Chromium
+applying `[popover]` UA *styles*, so it reproduces the positioning and
+lost-visibility half of the iOS bug, not an engine that ignores the attribute
+entirely.
+
+The two panel sweeps use a **fresh browser context per panel** and wait for the
 layout to settle before measuring — shared-context state bleed and mid-render
 snapshots otherwise make results flap between runs.
 
