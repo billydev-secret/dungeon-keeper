@@ -410,3 +410,72 @@ async def test_non_text_channels_are_refused():
     guild.get_channel.return_value = MagicMock(spec=discord.VoiceChannel)
     panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE))
     assert await panel.refresh(GUILD) is False
+
+
+# ── hold hook ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hold_defers_the_restick_until_it_clears():
+    """Casino's case: don't move the panel out from under a live round."""
+    channel, _ = _channel()
+    guild = _guild(channel)
+    held = {"value": True}
+
+    async def _hold(_gid):
+        return held["value"]
+
+    panel = _panel(
+        _bot(guild), _Store(CHANNEL, MESSAGE),
+        delay=0.01, hold=_hold, hold_poll=0.01,
+    )
+    with patch.object(panel, "place", new=AsyncMock()) as place:
+        panel.schedule_restick(GUILD)
+        await asyncio.sleep(0.05)
+        place.assert_not_awaited()  # still held
+        held["value"] = False
+        await asyncio.sleep(0.05)
+    place.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_hold_gives_up_after_the_ceiling():
+    """A hold that never clears must not bury the panel forever."""
+    channel, _ = _channel()
+    guild = _guild(channel)
+
+    async def _hold(_gid):
+        return True
+
+    panel = _panel(
+        _bot(guild), _Store(CHANNEL, MESSAGE),
+        delay=0.01, hold=_hold, hold_poll=0.01, hold_max=0.03,
+    )
+    with patch.object(panel, "place", new=AsyncMock()) as place:
+        panel.schedule_restick(GUILD)
+        await asyncio.sleep(0.2)
+    place.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_hold_does_not_gate_an_explicit_place():
+    """An admin reposting deliberately shouldn't wait on a live round."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+
+    async def _hold(_gid):
+        return True
+
+    panel = _panel(_bot(guild), _Store(), hold=_hold)
+    assert await panel.place(guild, channel) is sent
+
+
+@pytest.mark.asyncio
+async def test_no_hold_hook_proceeds_immediately():
+    channel, _ = _channel()
+    guild = _guild(channel)
+    panel = _panel(_bot(guild), _Store(CHANNEL, MESSAGE), delay=0.01)
+    with patch.object(panel, "place", new=AsyncMock()) as place:
+        panel.schedule_restick(GUILD)
+        await asyncio.sleep(0.05)
+    place.assert_awaited_once()

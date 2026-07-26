@@ -16,6 +16,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.utils.question_source import get_ai_config, _pick_least_recently_served
@@ -1212,11 +1213,6 @@ def _build_panel_view() -> discord.ui.View:
     return view
 
 
-# One refresh at a time per guild: concurrent delete+repost calls would each
-# post a panel and orphan all but the last-saved message.
-_panel_refresh_locks: dict[int, asyncio.Lock] = {}
-
-
 async def _refresh_panel(
     bot: discord.Client,
     db_path: Path,
@@ -1224,68 +1220,21 @@ async def _refresh_panel(
     *,
     repost: bool = False,
 ) -> None:
-    """Edit the panel embed in place (or delete+repost when repost=True)."""
-    lock = _panel_refresh_locks.setdefault(guild_id, asyncio.Lock())
-    async with lock:
-        await _refresh_panel_locked(bot, db_path, guild_id, repost=repost)
+    """Edit the panel embed in place, or delete+repost it at the channel bottom.
 
-
-async def _refresh_panel_locked(
-    bot: discord.Client,
-    db_path: Path,
-    guild_id: int,
-    *,
-    repost: bool = False,
-) -> None:
-    def _load():
-        with open_db(db_path) as conn:
-            cfg = _get_config(conn, guild_id)
-            pool_size = len(_get_pool(conn, guild_id))
-            return cfg, pool_size
-
-    cfg, pool_size = await asyncio.to_thread(_load)
-    if cfg is None or not cfg["panel_channel_id"]:
+    Both paths run through the cog's ``StickyPanel`` (``core.sticky``), which
+    owns the per-guild lock, the id bookkeeping and — importantly — posts the
+    replacement *before* deleting the old one. The previous implementation
+    deleted first and left ``channel.send`` unguarded, so a failed send
+    permanently orphaned the panel row.
+    """
+    cog = getattr(bot, "get_cog", lambda _n: None)("PenPalsCog")
+    if cog is None:  # cog unloaded mid-flight
         return
-
-    panel_channel_id = int(cfg["panel_channel_id"])
-    panel_message_id = int(cfg["panel_message_id"] or 0)
-
-    channel = bot.get_channel(panel_channel_id)
-    if not isinstance(channel, discord.TextChannel):
-        return
-    # panel_channel_id is dashboard-supplied and bot.get_channel spans every
-    # guild, so refuse a channel that isn't this guild's.
-    if channel.guild.id != guild_id:
-        return
-
-    guild = bot.get_guild(guild_id)
-    accent = await resolve_accent_color(db_path, guild) if guild else None
-    mode = _normalize_match_mode(cfg["match_mode"] if "match_mode" in cfg.keys() else None)
-    embed = _build_panel_embed(pool_size, color=accent, mode=mode)
-    view = _build_panel_view()
-
-    if not repost and panel_message_id:
-        try:
-            old = await channel.fetch_message(panel_message_id)
-            await old.edit(embed=embed, view=view)
-            return
-        except (discord.NotFound, discord.HTTPException):
-            pass
-
-    if panel_message_id:
-        try:
-            old = await channel.fetch_message(panel_message_id)
-            await old.delete()
-        except (discord.NotFound, discord.HTTPException):
-            pass
-
-    msg = await channel.send(embed=embed, view=view)
-
-    def _save(mid: int = msg.id):
-        with open_db(db_path) as conn:
-            _set_panel_message_id(conn, guild_id, mid)
-
-    await asyncio.to_thread(_save)
+    if repost:
+        await cog.repost_panel(guild_id)
+    else:
+        await cog.panel.refresh(guild_id)
 
 
 # ── Join / leave flows (shared by the panel buttons and slash commands) ──────
@@ -1663,8 +1612,56 @@ class PenPalsCog(commands.Cog):
         self.bot = bot
         self.ctx = ctx
         self._panel_channels: dict[int, int] = {}  # panel_channel_id → guild_id
-        self._panel_repost_pending: set[int] = set()  # guild_ids with a repost queued
+        self.panel = StickyPanel(
+            "pen pals",
+            bot,
+            load_ids=self._panel_ids,
+            save_ids=self._save_panel_ids,
+            build=self._build_panel,
+        )
         super().__init__()
+
+    async def cog_unload(self) -> None:
+        self.panel.cancel_all()
+
+    # ── panel plumbing (core.sticky) ─────────────────────────────────────
+
+    def _panel_ids(self, guild_id: int) -> tuple[int, int]:
+        with open_db(self.ctx.db_path) as conn:
+            cfg = _get_config(conn, guild_id)
+        if cfg is None:
+            return 0, 0
+        return int(cfg["panel_channel_id"] or 0), int(cfg["panel_message_id"] or 0)
+
+    def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        with open_db(self.ctx.db_path) as conn:
+            _set_panel_message_id(conn, guild_id, message_id)
+
+    async def _build_panel(self, guild: discord.Guild) -> PanelContent:
+        def _load():
+            with open_db(self.ctx.db_path) as conn:
+                cfg = _get_config(conn, guild.id)
+                return cfg, len(_get_pool(conn, guild.id))
+
+        cfg, pool_size = await asyncio.to_thread(_load)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        mode = _normalize_match_mode(
+            cfg["match_mode"] if cfg is not None and "match_mode" in cfg.keys() else None
+        )
+        return PanelContent(
+            embed=_build_panel_embed(pool_size, color=accent, mode=mode),
+            view=_build_panel_view(),
+        )
+
+    async def repost_panel(self, guild_id: int) -> None:
+        """Move the panel to the bottom of its configured channel."""
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        channel_id, _ = await self.panel.ids(guild_id)
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if isinstance(channel, discord.TextChannel):
+            await self.panel.place(guild, channel)
 
     async def cog_load(self) -> None:
         bot = self.bot
@@ -1685,24 +1682,7 @@ class PenPalsCog(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _on_message_panel(self, message: discord.Message) -> None:
-        if message.guild is None or message.author.id == self.bot.user.id:  # type: ignore[union-attr]
-            return
-        guild_id = self._panel_channels.get(message.channel.id)
-        if guild_id is None:
-            return
-        # Debounce: a burst of messages triggers a single repost after a short
-        # settle window instead of one delete+send per message.
-        if guild_id in self._panel_repost_pending:
-            return
-        self._panel_repost_pending.add(guild_id)
-        try:
-            await asyncio.sleep(2)
-        finally:
-            self._panel_repost_pending.discard(guild_id)
-        try:
-            await _refresh_panel(self.bot, self.ctx.db_path, guild_id, repost=True)
-        except discord.HTTPException as exc:
-            log.warning("pen_pals: panel repost failed in guild %d: %s", guild_id, exc)
+        await self.panel.on_message(message)
 
     @commands.Cog.listener("on_member_remove")
     async def _on_member_remove(self, member: discord.Member) -> None:

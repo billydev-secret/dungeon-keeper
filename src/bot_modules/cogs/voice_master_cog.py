@@ -29,9 +29,11 @@ from bot_modules.commands.voice_master_commands import (
     post_claim_prompt,
     post_inline_panel,
     post_knock_request,
-    post_panel,
+    build_panel_embed,
+    build_panel_view,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.economy_rentals_service import entitlements
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.moderation import write_audit
@@ -72,6 +74,7 @@ from bot_modules.services.voice_master_service import (
 )
 from bot_modules.services.voice_master_service import (
     delete_profile,
+    set_voice_master_config_value,
     remove_member_from_all_lists,
     trusted_prune_loop,
 )
@@ -141,6 +144,14 @@ class VoiceMasterCog(commands.Cog):
         self._last_create: dict[int, float] = {}
         # owner_id → asyncio.Lock to serialize their own Hub joins
         self._create_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # The owner-control panel stays at the bottom of the control channel.
+        self.panel = StickyPanel(
+            "voice master",
+            bot,
+            load_ids=self._panel_ids,
+            save_ids=self._save_panel_ids,
+            build=self._build_panel,
+        )
         # channel_id → pending empty-grace cleanup task
         self._empty_timers: dict[int, asyncio.Task] = {}
         # channel_id → pending post-grace "owner left, claim me" prompt task
@@ -150,6 +161,43 @@ class VoiceMasterCog(commands.Cog):
         # channel_id → voice_room_host quest already fired this room lifetime
         self._host_quest_fired: set[int] = set()
         super().__init__()
+
+    async def cog_unload(self) -> None:
+        self.panel.cancel_all()
+
+    # ── control panel (core.sticky) ──────────────────────────────────────
+
+    def _panel_ids(self, guild_id: int) -> tuple[int, int]:
+        """The panel lives in the configured control channel.
+
+        Reading the channel from config (rather than storing it alongside the
+        message id) means moving the control channel on the dashboard
+        automatically relocates the panel on its next repost.
+        """
+        with self.ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, guild_id)
+        if not cfg.control_channel_id:
+            return 0, 0
+        return cfg.control_channel_id, cfg.panel_message_id
+
+    def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        with self.ctx.open_db() as conn:
+            set_voice_master_config_value(
+                conn, guild_id, "voice_master_panel_channel_id", str(channel_id)
+            )
+            set_voice_master_config_value(
+                conn, guild_id, "voice_master_panel_message_id", str(message_id)
+            )
+
+    async def _build_panel(self, guild: discord.Guild) -> PanelContent:
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        return PanelContent(
+            embed=build_panel_embed(color=accent), view=build_panel_view()
+        )
+
+    @commands.Cog.listener("on_message")
+    async def _restick_panel(self, message: discord.Message) -> None:
+        await self.panel.on_message(message)
 
     async def cog_load(self) -> None:
         # Register persistent panel dropdown classes so they survive restarts.
@@ -1600,9 +1648,17 @@ class VoiceMasterCog(commands.Cog):
             )
             return
         await interaction.response.defer(ephemeral=True)
-        msg = await post_panel(self.ctx, channel)
+        msg = await self.panel.place(interaction.guild, channel)
+        if msg is None:
+            await interaction.followup.send(
+                "❌ I can't post in the control channel — check my Send Messages "
+                "and Embed Links permissions.",
+                ephemeral=True,
+            )
+            return
         await interaction.followup.send(
-            f"Panel posted: {msg.jump_url}", ephemeral=True
+            f"Panel posted: {msg.jump_url} — it stays at the bottom of the channel.",
+            ephemeral=True,
         )
 
 

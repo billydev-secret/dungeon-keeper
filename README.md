@@ -264,7 +264,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/voice profile show/reset` — Inspect or reset your saved profile
 
 **Voice Master Admin** (mod)
-- `/voice-admin post-panel` — Repost the owner-control panel
+- `/voice-admin post-panel` — Post the owner-control panel (it then stays at the bottom of the control channel on its own)
 - *All other admin controls (hub/category/control-channel/template/name-blocklist settings, inline-panel toggle, force-delete / force-transfer / force-clear-profile, profile inspection) are managed from the web dashboard (`/voice-master/config`, `/voice-master/name-blocklist`, `/voice-master/channels`, `/voice-master/profiles`).*
 
 **Music**

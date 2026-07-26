@@ -1,6 +1,7 @@
 # Sticky-panel extraction — plan
 
-**Status:** Group A **done** (2026-07-26). Groups B and C below are outstanding.
+**Status:** Groups A and B **done** (2026-07-26). Group C stays out by design;
+one group-B site (guess) is still outstanding.
 
 `bot_modules/core/sticky.py` now holds `StickyPanel` — the shared locks,
 debounce, id cache, post-before-delete placer, signature gate and listener —
@@ -54,7 +55,7 @@ post-before-delete, the wider `HTTPException` catch, and single-REST-call
 edits in the process. The economy cog's three `on_message` listeners collapsed
 into one that forwards to all three panels.
 
-### Group B — close, one hook each (outstanding)
+### Group B — migrated ✅ (except guess)
 
 | Site | What it needs | What it gains |
 |---|---|---|
@@ -62,18 +63,46 @@ into one that forwards to all three panels.
 | `confessions_cog` launcher | an `after_place` hook for its component-based duplicate sweep (already implemented on `StickyPanel`) | it has **no throttle at all** and costs ≥5 REST calls per repost, the worst in the codebase; its config reads are **synchronous sqlite on the event loop** |
 | `dm_perms_cog` panel | nothing, if a trailing-edge debounce may replace its leading-edge 2s cooldown — that is a **user-visible timing change** and needs a decision | drops a `history(limit=1)` probe; `set_panel_settings` currently runs sync on the event loop |
 | `pen_pals_cog` panel | nothing | fixes a real bug: `channel.send` is unguarded *after* the old panel is deleted, so a failed send permanently orphans the panel. Also has **no `cog_unload`**, leaking coroutines |
-| `guess_cog` prompt | `StickyPanel` would have to accept `VoiceChannel`/`Thread`, not just `TextChannel` | gains the per-guild lock it currently lacks (manual reposts can race the debounced one) |
+| `guess_cog` prompt | **still outstanding** — `StickyPanel` would have to accept `VoiceChannel`/`Thread`, not just `TextChannel` | would gain the per-guild lock it currently lacks (manual reposts can race the debounced one) |
 
-Five of these do a config/DB read on the hot path for **every message in the
-guild**. Migrating them is a bigger win than the line count suggests.
+`pen_pals`, `dm_perms` and `voice_master` are migrated. `whisper` and
+`confessions` are not yet done and remain the two worst offenders on the hot
+path. `guess` is blocked on widening the channel type.
+
+**Behaviour changes that shipped with these:**
+
+- **dm_perms** moved from a leading-edge 2s cooldown to the shared
+  trailing-edge debounce, so the panel settles after the channel falls quiet
+  rather than jumping on the first message of every burst. Its
+  `history(limit=1)` probe and its sync-on-the-event-loop
+  `set_panel_settings` both went away.
+- **pen_pals** had a real bug: `channel.send` was unguarded *after* the old
+  panel was deleted, so a failed send permanently orphaned the panel row. It
+  also had no `cog_unload`, leaking a coroutine per reload. Both fixed by the
+  migration.
+- **voice_master** was **manual-only** and did not delete its predecessor, so
+  re-running `/voice-admin post-panel` stacked duplicates. It is now sticky and
+  replaces the old panel. Needed a new config key,
+  `voice_master_panel_channel_id`.
+- **casino** kept its hold-off semantics via the new `hold` hook, and the rule
+  changed slightly on request: it now blocks while a round is live **and for
+  60s after one settles** (previously: while live, capped at 300s), so players
+  reading a result aren't chasing the panel up the channel.
+
+### The `hold` hook
+
+Added to `StickyPanel` for casino: an async predicate that answers "not yet".
+While it returns True the restick waits, re-checking every `hold_poll` seconds
+up to `hold_max`, then re-sticks anyway — a hold that never clears would
+otherwise bury the panel permanently, which is worse than moving it at an
+awkward moment. It gates the *sticky repost* only; an explicit `place` (an
+admin reposting deliberately) is always honoured.
 
 ### Group C — genuinely out of family (leave alone)
 
-- **Casino hub** — a different *algorithm*: in-flight guard rather than
-  cancel-and-rearm, a polling loop that holds off up to 300s so the panel can't
-  move mid-bet, a `last_message_id` short-circuit instead of the predicate, and
-  `ensure_panel` doubling as repaint *and* teardown. Would need five hooks
-  nobody else uses.
+- ~~**Casino hub**~~ — **migrated** after all, once `StickyPanel` grew the
+  `hold` hook. Its `ensure_panel` still owns boot, teardown and the in-place
+  repaint; only the *sticky repost* path routes through the shared placer.
 - **AMA bottom bar** — per-*game-instance* state, not per-guild. The handle is a
   live `discord.Message` on a `bot.active_views` object, the id lives in a games
   payload blob, and `_suppress_resend` is set by unrelated rotation flows. There
@@ -82,9 +111,8 @@ guild**. Migrating them is a bigger win than the line count suggests.
 - **Bump-tracker widget** — reposts on a *domain event* (a detected bump), never
   because it was buried. No burial predicate exists. A refreshing widget that
   occasionally relocates, not a sticky panel.
-- **Voice Master panel** — manual `/voice-admin post-panel` only. No listener,
-  no repost, and it doesn't delete its predecessor (reposting stacks
-  duplicates — arguably its own small bug).
+- ~~**Voice Master panel**~~ — **migrated**; it is now automatic and no longer
+  stacks duplicates.
 
 ## The shape that landed
 
@@ -97,8 +125,9 @@ class StickyPanel:
                  load_ids: Callable[[int], tuple[int, int]],   # sync, run in a thread
                  save_ids: Callable[[int, int, int], None],    # sync, run in a thread
                  build: Callable[[Guild], Awaitable[PanelContent]],
-                 after_place=None, delay=6.0, cache_ttl=300.0):
-    async def place(self, guild, target) -> Message | None
+                 after_place=None, hold=None, hold_poll=15.0, hold_max=600.0,
+                 delay=6.0, cache_ttl=300.0):
+    async def place(self, guild, target) -> Message | None   # ignores `hold`
     async def unpost(self, guild) -> bool
     async def refresh(self, guild_id) -> bool
     async def on_message(self, message) -> None
@@ -113,7 +142,7 @@ edits. `retry` is a set the owner's loop can drain to re-attempt failed edits.
 Each cog holds a `StickyPanel`, forwards `on_message` from a listener and
 `cancel_all()` from `cog_unload`, and says nothing about locks or debouncing.
 
-## What Group A actually saved
+## What the migration actually saved
 
 The economy cog lost ~500 lines of panel machinery and three separate
 `on_message` listeners. Beyond the line count, its panels picked up four
@@ -121,9 +150,14 @@ behaviours they did not have and would not have got on their own:
 post-before-delete, `HTTPException` instead of `Forbidden`-only, single-REST-
 call edits, and (where a signature is supplied) skipping no-op edits entirely.
 
-**This means Group A is a behaviour change for the economy panels, not a pure
-refactor** — worth verifying on the live server rather than trusting tests
-alone.
+**This means the migration is a behaviour change for the economy panels, not a
+pure refactor** — worth verifying on the live server rather than trusting tests
+alone. The same applies to every group-B site: see the behaviour-change list
+above.
+
+Nine of the twelve surveyed sites now share one implementation. `whisper` and
+`confessions` are the remaining migratable ones; `guess` needs the channel-type
+widening first.
 
 ## Related, separately deferred
 

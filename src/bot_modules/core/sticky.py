@@ -45,6 +45,12 @@ DEFAULT_CACHE_TTL = 300.0
 #: per message.
 DEFAULT_DELAY = 6.0
 
+#: How often to re-check a ``hold`` predicate, and how long to keep waiting on
+#: one before giving up and re-sticking anyway. Without the ceiling a
+#: never-clearing hold would strand the panel at the top of the channel forever.
+DEFAULT_HOLD_POLL = 15.0
+DEFAULT_HOLD_MAX = 600.0
+
 
 def should_restick_guide(
     *,
@@ -97,6 +103,15 @@ class StickyPanel:
     * ``build(guild) -> PanelContent`` — **async**, called under the per-guild
       lock so it can read whatever it needs consistently.
 
+    Optionally also:
+
+    * ``after_place(channel, message_id)`` — runs once a new panel is live.
+    * ``hold(guild_id) -> bool`` — "not yet". While it returns True the restick
+      waits, re-checking every ``hold_poll`` seconds up to ``hold_max``. Use it
+      when moving the panel would disrupt something in flight (a live betting
+      round, say). It gates the *sticky repost* only; an explicit ``place`` is
+      always honoured.
+
     Then, from the cog: ``on_message`` from a listener, and ``cancel_all()``
     from ``cog_unload``.
     """
@@ -110,6 +125,9 @@ class StickyPanel:
         save_ids: Callable[[int, int, int], None],
         build: Callable[[discord.Guild], Awaitable[PanelContent]],
         after_place: Callable[[discord.TextChannel, int], Awaitable[None]] | None = None,
+        hold: Callable[[int], Awaitable[bool]] | None = None,
+        hold_poll: float = DEFAULT_HOLD_POLL,
+        hold_max: float = DEFAULT_HOLD_MAX,
         delay: float = DEFAULT_DELAY,
         cache_ttl: float = DEFAULT_CACHE_TTL,
     ) -> None:
@@ -119,6 +137,9 @@ class StickyPanel:
         self._save_ids = save_ids
         self._build = build
         self._after_place = after_place
+        self._hold = hold
+        self._hold_poll = hold_poll
+        self._hold_max = hold_max
         self._delay = delay
         self._cache_ttl = cache_ttl
 
@@ -313,6 +334,8 @@ class StickyPanel:
         except asyncio.CancelledError:
             return
         try:
+            if not await self._wait_for_hold(guild_id):
+                return
             guild = self.bot.get_guild(guild_id)
             if guild is None:
                 return
@@ -324,8 +347,33 @@ class StickyPanel:
             channel = self._channel(guild, channel_id)
             if channel is not None:
                 await self.place(guild, channel)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             log.exception("%s: restick failed for guild %s", self.name, guild_id)
+
+    async def _wait_for_hold(self, guild_id: int) -> bool:
+        """Block while the caller says "not yet". True when clear to proceed.
+
+        Gives up after ``hold_max`` and re-sticks anyway: a hold that never
+        clears (a round that never settles, a bug) would otherwise leave the
+        panel buried permanently, which is worse than moving it at a bad moment.
+        """
+        if self._hold is None:
+            return True
+        deadline = time.monotonic() + self._hold_max
+        while await self._hold(guild_id):
+            if time.monotonic() >= deadline:
+                log.info(
+                    "%s: hold did not clear within %.0fs for guild %s; "
+                    "re-sticking anyway",
+                    self.name,
+                    self._hold_max,
+                    guild_id,
+                )
+                return True
+            await asyncio.sleep(self._hold_poll)
+        return True
 
     # ── bookkeeping ──────────────────────────────────────────────────────
 
