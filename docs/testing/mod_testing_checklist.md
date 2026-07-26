@@ -109,7 +109,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 - [ ] **`/bank grant @member amount reason`** — Grant currency with a reason; confirm the balance updates and the ledger is audit-tagged.
 - [ ] **`/bank post-guide [channel]`** — Post the branded guide embed; re-run in the same channel and confirm it edits in place.
-- [ ] **`/bank post-shop [channel]`** — Post the persistent shop panel; confirm any member can click Rent and get an ephemeral reply.
+- [ ] **`/bank post-shop [channel]`** — Post the persistent shop panel; confirm any member can click Rent and get an ephemeral reply, and that chatting in the channel re-sticks the panel to the bottom once the room falls quiet.
 - [ ] **`/bank post-leaderboard [channel]`** — Post the leaderboard panel; confirm it auto-refreshes hourly.
 
 ### Income Sources
