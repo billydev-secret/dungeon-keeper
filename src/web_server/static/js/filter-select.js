@@ -24,50 +24,112 @@ function styleInput(input, placeholder) {
   input.spellcheck = false;
 }
 
+// Does this engine actually implement the Popover API? Assigning
+// `list.popover = "manual"` where it doesn't sets a plain JS expando instead of
+// the content attribute, so the UA's
+// `[popover]:not(:popover-open) { display: none }` rule never applies — which
+// left the list permanently on screen as a stray `position: fixed` box painting
+// over the panel. Visibility is the `.is-open` class's job now (see app.css);
+// this flag only picks the positioning strategy.
+const SUPPORTS_POPOVER =
+  typeof HTMLElement !== "undefined" &&
+  typeof HTMLElement.prototype.showPopover === "function";
+
 // Promote the dropdown list into the browser's top layer via the Popover API
 // and pin it under the input with fixed coordinates. The top layer escapes
 // ancestor overflow clipping, `transform`/`filter` containing blocks, and every
 // z-index stacking context — which is why an absolutely-positioned list used to
 // disappear behind cards and panels. Returns { open, close, isOpen }.
 function attachPopover(input, list) {
-  // "manual" (not "auto"): we drive show/hide from focus/blur ourselves, so we
-  // don't want auto light-dismiss racing with the focus-to-open pattern.
-  list.popover = "manual";
+  // Open state is tracked here rather than read back from `:popover-open`:
+  // `matches()` throws SyntaxError on an engine that doesn't know the
+  // pseudo-class, and that throw took the whole focus handler down with it.
+  let opened = false;
 
-  function position() {
-    const r = input.getBoundingClientRect();
-    list.style.width = r.width + "px";
-    list.style.left = r.left + "px";
-    // Flip above the input when there isn't room below it in the viewport.
-    const h = list.offsetHeight;
-    const below = window.innerHeight - r.bottom;
-    list.style.top = (h > below && r.top > below ? r.top - h : r.bottom) + "px";
+  if (SUPPORTS_POPOVER) {
+    // "manual" (not "auto"): we drive show/hide from focus/blur ourselves, so
+    // we don't want auto light-dismiss racing with the focus-to-open pattern.
+    list.popover = "manual";
+  } else {
+    // Anchored inside `.filter-select` (position: relative) instead. It can be
+    // clipped by an ancestor's overflow — the tradeoff the top layer exists to
+    // avoid — but a clipped list beats one floating loose over the page.
+    list.style.position = "absolute";
   }
 
-  function reposition() { if (list.matches(":popover-open")) position(); }
+  function positionFixed() {
+    const r = input.getBoundingClientRect();
+    // getBoundingClientRect() is layout-viewport relative, but iOS resolves the
+    // top layer against the *visual* viewport — which the on-screen keyboard
+    // shifts without firing a document scroll, stranding the list hundreds of
+    // pixels from its input. Fold that delta in. Both offsets are 0 on an
+    // unzoomed desktop, so this is a no-op there.
+    const vv = window.visualViewport;
+    const dx = vv ? vv.offsetLeft : 0;
+    const dy = vv ? vv.offsetTop : 0;
+    const vh = vv ? vv.height : window.innerHeight;
+    list.style.width = r.width + "px";
+    list.style.left = (r.left - dx) + "px";
+    // Flip above the input when there isn't room below it in the viewport.
+    const h = list.offsetHeight;
+    const below = vh - (r.bottom - dy);
+    const above = r.top - dy;
+    list.style.top =
+      ((h > below && above > below ? r.top - h : r.bottom) - dy) + "px";
+  }
+
+  function positionAnchored() {
+    // Offsets are relative to the `.filter-select` wrapper, so the list tracks
+    // its input through scroll, zoom and keyboard shifts with no math at all.
+    list.style.width = input.offsetWidth + "px";
+    list.style.left = input.offsetLeft + "px";
+    list.style.top = (input.offsetTop + input.offsetHeight) + "px";
+  }
+
+  const position = SUPPORTS_POPOVER ? positionFixed : positionAnchored;
+
+  function reposition() { if (opened) position(); }
+
+  // visualViewport fires where document scroll doesn't: keyboard show/hide and
+  // pinch-zoom on mobile. Without it the list stays put while the page moves.
+  function listen(on) {
+    const fn = on ? "addEventListener" : "removeEventListener";
+    window[fn]("scroll", reposition, true);
+    window[fn]("resize", reposition);
+    if (window.visualViewport) {
+      window.visualViewport[fn]("scroll", reposition);
+      window.visualViewport[fn]("resize", reposition);
+    }
+  }
 
   function open() {
-    if (!list.isConnected || list.matches(":popover-open")) {
-      position();
-      return;
+    if (!list.isConnected) return;
+    if (opened) { position(); return; }
+    opened = true;
+    list.classList.add("is-open");
+    // Guarded: showPopover() throws if the element is already in the top layer,
+    // and an escaping throw here is what used to kill the focus handler.
+    if (SUPPORTS_POPOVER) {
+      try { list.showPopover(); } catch { /* already shown — harmless */ }
     }
-    list.showPopover();
     input.setAttribute("aria-expanded", "true");
     position();
-    window.addEventListener("scroll", reposition, true);
-    window.addEventListener("resize", reposition);
+    listen(true);
   }
 
   function close() {
-    if (!list.matches(":popover-open")) return;
-    list.hidePopover();
+    if (!opened) return;
+    opened = false;
+    if (SUPPORTS_POPOVER) {
+      try { list.hidePopover(); } catch { /* already hidden — harmless */ }
+    }
+    list.classList.remove("is-open");
     input.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-activedescendant");
-    window.removeEventListener("scroll", reposition, true);
-    window.removeEventListener("resize", reposition);
+    listen(false);
   }
 
-  return { open, close, isOpen: () => list.matches(":popover-open") };
+  return { open, close, isOpen: () => opened };
 }
 
 /**

@@ -1381,14 +1381,25 @@ textarea.field-input { resize: vertical; }
   font-size: 13px;
   min-width: 160px;
 }
+/* iOS auto-zooms the page when a focused input's text is under 16px, which
+   shifts the visual viewport out from under every fixed-position dropdown.
+   Sizing up on touch removes the trigger rather than compensating for it. */
+@media (pointer: coarse) {
+  .filter-select-input { font-size: 16px; }
+}
 /* Rendered in the top layer via the Popover API (see js/filter-select.js):
    position/width are set in JS from the input's rect. `inset/margin/padding`
-   reset the UA popover defaults so those JS coordinates win. */
+   reset the UA popover defaults so those JS coordinates win.
+
+   `display` is ours, not the UA's: relying on
+   `[popover]:not(:popover-open) { display: none }` meant that anywhere the
+   Popover API was missing, this fixed-position list was never hidden at all. */
 .filter-select-list {
   position: fixed;
   inset: auto;
   margin: 0;
   padding: 0;
+  display: none;
   max-height: 240px;
   overflow-y: auto;
   background: var(--bg-rail);
@@ -1398,6 +1409,7 @@ textarea.field-input { resize: vertical; }
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   z-index: 1300;
 }
+.filter-select-list.is-open { display: block; }
 .filter-select-item {
   padding: 5px 8px;
   font-size: 13px;
