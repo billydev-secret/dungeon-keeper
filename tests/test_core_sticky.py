@@ -469,3 +469,43 @@ async def test_no_hold_hook_proceeds_immediately():
         panel.schedule_restick(GUILD)
         await asyncio.sleep(0.05)
     place.assert_awaited_once()
+
+
+# ── restick_on_bot ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bot_messages_arm_a_restick_when_opted_in():
+    """Regression: the casino buries its own panel with round results, so
+    filtering bot authors left the hub stranded above them with nobody typing."""
+    panel = _panel(_bot(), _Store(CHANNEL, MESSAGE), restick_on_bot=True)
+    with patch.object(panel, "schedule_restick") as sched:
+        await panel.on_message(_message(bot=True))
+    sched.assert_called_once_with(GUILD)
+
+
+@pytest.mark.asyncio
+async def test_opted_in_panel_still_skips_its_own_message():
+    """The only thing stopping a self-loop once bot messages count."""
+    panel = _panel(_bot(), _Store(CHANNEL, MESSAGE), restick_on_bot=True)
+    with patch.object(panel, "schedule_restick") as sched:
+        await panel.on_message(_message(bot=True, message_id=MESSAGE))
+    sched.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_id_is_cached_before_the_old_panel_is_deleted():
+    """The gateway event for our own repost can land during the delete await;
+    the id must already be recorded or restick_on_bot self-loops."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    panel = _panel(_bot(guild), _Store(CHANNEL, 111), restick_on_bot=True)
+    seen: list[tuple[int, int]] = []
+
+    async def _delete():
+        # Stand in for the gateway event arriving mid-delete.
+        seen.append(await panel._cached_ids(GUILD))
+
+    sent.delete = AsyncMock(side_effect=_delete)
+    await panel.place(guild, channel)
+    assert seen == [(CHANNEL, MESSAGE)]

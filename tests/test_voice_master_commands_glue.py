@@ -1095,10 +1095,11 @@ def test_build_panel_view_has_grouped_selects():
     assert len(all_options) == len(PANEL_BUTTON_ORDER)
 
 
-def test_panel_ids_round_trip_through_config(ctx):
-    """The panel's ids live in config: the control channel is its home, and
-    only the message id is stored (the standalone post_panel helper that wrote
-    it behind the StickyPanel's back is gone)."""
+def test_panel_ids_track_where_the_panel_actually_is(ctx):
+    """Regression: `_panel_ids` briefly returned the *configured* control
+    channel. `place` deletes the old panel through this channel, so on a
+    control-channel change that aimed the delete at the new channel and left
+    the old panel — live buttons and all — stranded in the previous one."""
     from bot_modules.cogs.voice_master_cog import VoiceMasterCog
     from bot_modules.services.voice_master_service import (
         set_voice_master_config_value,
@@ -1107,13 +1108,16 @@ def test_panel_ids_round_trip_through_config(ctx):
     cog = VoiceMasterCog.__new__(VoiceMasterCog)
     cog.ctx = ctx
 
-    assert cog._panel_ids(GUILD) == (0, 0)  # no control channel configured
+    assert cog._panel_ids(GUILD) == (0, 0)  # nothing posted yet
 
+    cog._save_panel_ids(GUILD, 555, 7777)
+    assert cog._panel_ids(GUILD) == (555, 7777)
+
+    # Re-pointing the control channel must NOT move the recorded location.
     with open_db(ctx.db_path) as conn:
         set_voice_master_config_value(
-            conn, GUILD, "voice_master_control_channel_id", "555"
+            conn, GUILD, "voice_master_control_channel_id", "999"
         )
-    cog._save_panel_ids(GUILD, 555, 7777)
     assert cog._panel_ids(GUILD) == (555, 7777)
 
 

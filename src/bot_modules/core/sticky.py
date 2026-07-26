@@ -110,6 +110,11 @@ class StickyPanel:
       when moving the panel would disrupt something in flight (a live betting
       round, say). It gates the *sticky repost* only; an explicit ``place`` is
       always honoured.
+    * ``restick_on_bot`` — also re-stick under *bot* messages. Off by default,
+      because chasing our own notices is churn and re-sticking under our own
+      repost self-loops. Turn it on where the bot is the main thing burying the
+      panel (the casino posts round results into its own hub channel), and rely
+      on the message-id skip to ignore the panel itself.
 
     Then, from the cog: ``on_message`` from a listener, and ``cancel_all()``
     from ``cog_unload``.
@@ -124,6 +129,7 @@ class StickyPanel:
         save_ids: Callable[[int, int, int], None],
         build: Callable[[discord.Guild], Awaitable[PanelContent]],
         hold: Callable[[int], Awaitable[bool]] | None = None,
+        restick_on_bot: bool = False,
         hold_poll: float = DEFAULT_HOLD_POLL,
         hold_max: float = DEFAULT_HOLD_MAX,
         delay: float = DEFAULT_DELAY,
@@ -135,6 +141,7 @@ class StickyPanel:
         self._save_ids = save_ids
         self._build = build
         self._hold = hold
+        self._restick_on_bot = restick_on_bot
         self._hold_poll = hold_poll
         self._hold_max = hold_max
         self._delay = delay
@@ -229,6 +236,12 @@ class StickyPanel:
                 log.warning("%s: could not post panel in %s", self.name, target.id)
                 return None
 
+            # Record the new id before ANY further await: the gateway event
+            # for our own repost can arrive while we're deleting the old panel,
+            # and the message-id skip in should_restick() is what stops that
+            # becoming a self-loop.
+            self._remember(guild.id, target.id, message.id)
+
             old_channel = self._channel(guild, old_channel_id)
             if old_channel is not None and old_message_id:
                 try:
@@ -236,9 +249,6 @@ class StickyPanel:
                 except discord.HTTPException:
                     pass
 
-            # Record the new id before the save await so our own repost's
-            # gateway event is recognised (and skipped) by the listener.
-            self._remember(guild.id, target.id, message.id)
             if content.signature is not None:
                 self._signatures[guild.id] = content.signature
             message_id = message.id
@@ -341,7 +351,9 @@ class StickyPanel:
 
         Call this from the owning cog's ``on_message`` listener.
         """
-        if message.guild is None or message.author.bot:
+        if message.guild is None:
+            return
+        if message.author.bot and not self._restick_on_bot:
             return
         guild_id = message.guild.id
         if self._known is not None and guild_id not in self._known:

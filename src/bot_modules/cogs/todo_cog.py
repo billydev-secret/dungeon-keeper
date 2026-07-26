@@ -70,8 +70,9 @@ class TodoAddModal(discord.ui.Modal, title="Add a Task"):
                 "❌ Task cannot be empty.", ephemeral=True
             )
             return
+        guild_id = interaction.guild.id
         todo_id = await cog.add_todo(
-            interaction.guild.id,
+            guild_id,
             interaction.user.id,
             text,
             description=str(self.notes.value).strip() or None,
@@ -79,6 +80,7 @@ class TodoAddModal(discord.ui.Modal, title="Add a Task"):
         await interaction.response.send_message(
             f"Todo #{todo_id} added: {text}", ephemeral=True
         )
+        await cog.refresh_board(guild_id)
 
 
 class TodoCompleteSelect(discord.ui.Select):
@@ -253,12 +255,12 @@ class TodoCog(commands.Cog):
                 f"❌ Task must be {TASK_MAX_LEN} characters or fewer.", ephemeral=True
             )
             return
-        todo_id = await self.add_todo(
-            interaction.guild.id, interaction.user.id, task
-        )
+        guild_id = interaction.guild.id
+        todo_id = await self.add_todo(guild_id, interaction.user.id, task)
         await interaction.response.send_message(
             f"Todo #{todo_id} added: {task}", ephemeral=True
         )
+        await self.refresh_board(guild_id)
 
     async def add_todo(
         self,
@@ -268,8 +270,14 @@ class TodoCog(commands.Cog):
         *,
         description: str | None = None,
     ) -> int:
-        """Create a task and repaint the board. Shared by `/todo` and the
-        board's Add button so the two can't drift."""
+        """Create a task. Shared by `/todo` and the board's Add button.
+
+        Deliberately does *not* repaint the board: callers must answer the
+        interaction first. A repaint is a REST edit, and under per-channel rate
+        limiting discord.py sleeps until reset — long enough to burn the
+        three-second window and show "This interaction failed" for a task that
+        was in fact saved.
+        """
 
         def _create() -> int:
             with self.ctx.open_db() as conn:
@@ -277,11 +285,7 @@ class TodoCog(commands.Cog):
                     conn, guild_id, user_id, task, description=description
                 )
 
-        todo_id = await asyncio.to_thread(_create)
-        await self.refresh_board(guild_id)
-        return todo_id
-
-    # ── board rendering ──────────────────────────────────────────────────
+        return await asyncio.to_thread(_create)
 
     # ── board plumbing ───────────────────────────────────────────────────
     #

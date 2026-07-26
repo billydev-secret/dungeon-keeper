@@ -43,6 +43,7 @@ class VoiceMasterConfig:
     hub_channel_id: int
     category_id: int
     control_channel_id: int
+    panel_channel_id: int
     panel_message_id: int
     default_name_template: str
     default_user_limit: int
@@ -69,6 +70,7 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "voice_master_hub_channel_id": "0",
     "voice_master_category_id": "0",
     "voice_master_control_channel_id": "0",
+    "voice_master_panel_channel_id": "0",
     "voice_master_panel_message_id": "0",
     "voice_master_default_name_template": DEFAULT_NAME_TEMPLATE,
     "voice_master_default_user_limit": "0",
@@ -119,6 +121,7 @@ def load_voice_master_config(
         hub_channel_id=_parse_int(raw["voice_master_hub_channel_id"], 0),
         category_id=_parse_int(raw["voice_master_category_id"], 0),
         control_channel_id=_parse_int(raw["voice_master_control_channel_id"], 0),
+        panel_channel_id=_parse_int(raw["voice_master_panel_channel_id"], 0),
         panel_message_id=_parse_int(raw["voice_master_panel_message_id"], 0),
         default_name_template=raw["voice_master_default_name_template"]
             or DEFAULT_NAME_TEMPLATE,

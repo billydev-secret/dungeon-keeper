@@ -405,6 +405,11 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
             hold=self._hub_hold,
             hold_poll=HUB_HOLD_POLL_SECONDS,
             hold_max=HUB_HOLD_MAX_SECONDS,
+            # The casino buries its own panel: round results, big-win
+            # broadcasts and jackpot celebrations all land in the hub channel.
+            # Without this a round could settle and leave the hub -- the only
+            # entry point -- stranded above the result with nobody typing.
+            restick_on_bot=True,
         )
         # guild_id → debounced hub-panel repaint (the floor ticker).
         self._hub_repaints: dict[int, asyncio.Task] = {}
@@ -687,7 +692,9 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Keep the hub panel — the casino's only entry point — at the bottom
-        of its channel. Held while a round is open (see ``_hub_hold``)."""
+        of its channel. Held while a round is open and for a cooldown after it
+        settles (see ``_hub_hold``); armed by bot messages too, since round
+        results are what usually bury it."""
         await self.hub_panel.on_message(message)
 
     # ── shared helpers ─────────────────────────────────────────────────

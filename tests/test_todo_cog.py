@@ -348,3 +348,20 @@ async def test_place_board_survives_non_forbidden_errors(board_db):
     with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         assert await cog.place_board(guild, channel) is None
+
+
+@pytest.mark.asyncio
+async def test_todo_answers_the_interaction_before_repainting():
+    """A repaint is a REST edit that can block on a rate limit for longer than
+    Discord's three-second interaction window — respond first."""
+    cog = _cog()
+    interaction = _interaction(_member(mod=True))
+    order: list[str] = []
+    interaction.response.send_message = AsyncMock(
+        side_effect=lambda *a, **k: order.append("reply")
+    )
+    with patch("bot_modules.cogs.todo_cog.create_todo", return_value=7), \
+         patch.object(cog, "refresh_board",
+                      new=AsyncMock(side_effect=lambda _g: order.append("repaint"))):
+        await cog.todo.callback(cog, interaction, "clean up the channels")
+    assert order == ["reply", "repaint"]

@@ -52,6 +52,8 @@ def render_rows(
 
     total = len(rows) if total is None else total
     shown = rows[:limit]
+    if not shown:  # limit <= 0; nothing to render, so nothing to measure
+        return EMPTY_BODY
     # Size the id column to the widest id actually on the board, so ids are
     # padded for alignment but never truncated.
     id_width = max(
@@ -77,7 +79,10 @@ def render_footer(total: int) -> str:
 
 
 def board_signature(
-    rows: Iterable[Mapping[str, Any]], total: int | None = None
+    rows: Iterable[Mapping[str, Any]],
+    total: int | None = None,
+    *,
+    limit: int = MAX_BOARD_ROWS,
 ) -> tuple:
     """A hashable fingerprint of what the board *shows*.
 
@@ -86,10 +91,13 @@ def board_signature(
     ``<t:…:R>`` ticks client-side, so a board whose only change is "2h" becoming
     "3h" needs no edit at all. ``total`` is part of the fingerprint because
     completing a task *below* the visible window still changes the footer.
+
+    Only the first ``limit`` rows count: callers fetch a sentinel row past the
+    visible window to detect overflow, and that row is never rendered.
     """
     shown = tuple(
         (row["id"], _flatten(row["task"]), bool(row.get("recurring_id")))
-        for row in rows
+        for row in list(rows)[:limit]
     )
     return (shown, len(shown) if total is None else total)
 

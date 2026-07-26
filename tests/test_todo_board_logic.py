@@ -184,3 +184,15 @@ def test_option_label_and_description_respect_discord_caps():
 def test_option_description_is_flattened():
     _, desc = complete_option_label(_row(1, "t", description="a\nb"))
     assert desc == "a b"
+
+
+def test_signature_ignores_the_unrendered_sentinel_row():
+    """Callers fetch one row past the visible window to detect overflow; that
+    row is never drawn, so it must not force an edit on its own."""
+    rows = [_row(i, f"Task {i}") for i in range(MAX_BOARD_ROWS + 1)]
+    swapped = rows[:MAX_BOARD_ROWS] + [_row(999, "Different sentinel")]
+    assert board_signature(rows, 40) == board_signature(swapped, 40)
+
+
+def test_render_rows_survives_a_zero_limit():
+    assert render_rows([_row(1, "x")], limit=0) == EMPTY_BODY

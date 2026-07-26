@@ -79,7 +79,7 @@ REQUEST_TIMEOUT_SECONDS = 24 * 60 * 60
 REQUEST_TIMEOUT_LABEL = "24 hours"
 EXPIRY_SWEEP_INTERVAL_SECONDS = 60 * 60  # hourly
 MAX_PENDING_PER_REQUESTER = 5
-MAX_REASON_LENGTH = 250  
+MAX_REASON_LENGTH = 250  # leave headroom under the embed-field char ceiling
 
 
 # ---------------------------------------------------------------------------

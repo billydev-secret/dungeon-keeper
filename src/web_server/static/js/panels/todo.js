@@ -461,6 +461,9 @@ export function mount(container, initialParams = {}) {
         } else {
           await apiPost("/api/todos/recurring", body);
         }
+        // Clears guardForm's dirty flag — without this the panel prompts about
+        // unsaved changes on every navigation until it is remounted.
+        showStatus(status, true, "Saved");
         state.editingRecurringId = null;
         await refreshRecurring();
       } catch (err) {

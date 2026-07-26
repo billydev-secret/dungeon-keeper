@@ -169,32 +169,35 @@ class VoiceMasterCog(commands.Cog):
     # ── control panel (core.sticky) ──────────────────────────────────────
 
     def _panel_ids(self, guild_id: int) -> tuple[int, int]:
-        """The panel lives in the configured control channel.
+        """Where the panel actually **is**, not where it ought to be.
 
-        Reading the channel from config (rather than storing it alongside the
-        message id) means moving the control channel on the dashboard
-        automatically relocates the panel on its next repost.
+        These have to be the live location: ``place`` deletes the old panel via
+        this channel, so returning the *configured* control channel instead
+        would aim the delete at the wrong channel and strand the old panel —
+        buttons and all — wherever it really was. Moving the control channel on
+        the dashboard therefore relocates the panel on the next
+        ``/voice-admin post-panel``, not silently on the next message.
 
         Reads the two keys directly rather than via ``load_voice_master_config``
         — that loads nineteen keys, and this runs on the message path.
         """
         with self.ctx.open_db() as conn:
             channel_id = get_config_value(
-                conn, "voice_master_control_channel_id", "0", guild_id
+                conn, "voice_master_panel_channel_id", "0", guild_id
             )
             message_id = get_config_value(
                 conn, "voice_master_panel_message_id", "0", guild_id
             )
         try:
-            channel, message = int(channel_id or 0), int(message_id or 0)
+            return int(channel_id or 0), int(message_id or 0)
         except ValueError:
             return 0, 0
-        return (channel, message) if channel else (0, 0)
 
     def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
-        # channel_id is intentionally ignored: the panel's home is the
-        # configured control channel, so there is nothing separate to store.
         with self.ctx.open_db() as conn:
+            set_voice_master_config_value(
+                conn, guild_id, "voice_master_panel_channel_id", str(channel_id)
+            )
             set_voice_master_config_value(
                 conn, guild_id, "voice_master_panel_message_id", str(message_id)
             )
@@ -210,12 +213,12 @@ class VoiceMasterCog(commands.Cog):
         await self.panel.on_message(message)
 
     def _panel_guilds(self) -> set[int]:
-        """Guilds with a control channel configured — the only ones whose
-        messages can ever move the panel."""
+        """Guilds with a panel actually posted — the only ones whose messages
+        can move one."""
         with self.ctx.open_db() as conn:
             rows = conn.execute(
                 "SELECT guild_id FROM config"
-                " WHERE key = 'voice_master_control_channel_id'"
+                " WHERE key = 'voice_master_panel_channel_id'"
                 " AND value NOT IN ('', '0')"
             ).fetchall()
         return {int(r[0]) for r in rows}
