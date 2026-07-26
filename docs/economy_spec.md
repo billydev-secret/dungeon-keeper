@@ -1196,12 +1196,13 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   re-pricing/re-branding); pointing at another channel deletes the old panel and
   reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
   dashboard-editable. **Sticky:** an `on_message` listener keeps the panel as the
-  last message in its channel — any message there (member chatter *or* the bot's own
-  economy notices) arms a debounced delete-and-repost (`_GUIDE_STICKY_DELAY`s of
+  last message in its channel — a **member** message there (bot messages are ignored:
+  re-sticking under our own repost self-loops) arms a debounced delete-and-repost (`_GUIDE_STICKY_DELAY`s of
   quiet), so a busy channel re-sticks once activity pauses. The panel skips its own
   repost by id (`should_restick_guide`), and the repost shares `_place_guide_panel`
-  with the command under a per-guild lock. Only the guide panel is sticky — the shop
-  and leaderboard panels are not.
+  with the command under a per-guild lock. All three channel panels (guide, shop,
+  leaderboard) stick to the bottom this way, each with its own ref cache, debounce
+  task, and lock.
 - **Shop panel (shipped):** **`/bank post-shop [channel]`** [mod] posts the
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
@@ -1218,7 +1219,14 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   the personal menu — a repost replaces them. Panel ids persist as
   `econ_shop_channel_id` / `econ_shop_message_id` (guide-panel pattern:
   same-channel repost edits in place — embed **and** view — another channel
-  deletes + reposts). Gifting stays command-only (`/bank gift` needs a
+  deletes + reposts). **Bottom-sticky:** like the guide panel, a member message
+  in the panel's channel arms a debounced repost (`_restick_shop_panel` →
+  `_place_shop_panel`, delete + repost fresh at the bottom, 6 s debounce,
+  per-guild lock), so the one panel members are meant to tap never scrolls away.
+  The repost re-derives gating, icon prices, and accent through
+  `_build_shop_panel_embed` — the same builder the command uses, so a re-stick
+  can't serve a staler panel than `/bank post-shop` would.
+  Gifting stays command-only (`/bank gift` needs a
   target member, which a button can't carry).
 - **Leaderboard panel (shipped, live):** **`/bank post-leaderboard
   [channel]`** [mod] posts a single live status embed — the economy's
