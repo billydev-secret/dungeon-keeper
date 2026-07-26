@@ -125,7 +125,7 @@ export function mount(container) {
             <div class="field">
               <label for="pp-match_cooldown_days">Wait Before Matching Again (days)</label>
               <input type="number" name="match_cooldown_days" id="pp-match_cooldown_days" required min="0" step="1" value="${Math.round((pp.match_cooldown_seconds ?? 2592000) / 86400)}" style="max-width:140px;" />
-              <div class="field-hint">A member isn't paired again until this long after their last chat began. Enter 0 to allow back-to-back chats. Either way nobody is ever in two chats at once, and the same two members are never matched together twice.</div>
+              <div class="field-hint">A member isn't paired again until this long after their last chat <em>ended</em> — it's a rest period between chats, so it doesn't overlap the session above. Enter 0 to allow back-to-back chats. Either way nobody is ever in two chats at once, and the same two members are never matched together twice.</div>
             </div>
 
             <div class="field">

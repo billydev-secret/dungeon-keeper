@@ -17,9 +17,14 @@ Covers:
   member who is already in a chat, a failed pairing).
 - ``_pick_partner`` / ``_past_partners`` / ``_eligible_pool`` — the all-time
   no-repeat gate (never pair the same two twice; wait instead), oldest-first
-  ordering, and the one-chat-at-a-time exclusion.
+  ordering, the one-chat-at-a-time exclusion, and the re-match cooldown's
+  anchor (a session's *close*, not its start).
 - ``_do_round`` — FIFO drain of whoever is left over, odd-one-out, failed
   pairs counted as waiting, the re-match cooldown, and the no-repeat gate.
+
+Cooldown tests build finished sessions with ``_ended_session`` so both ends of
+the chat are explicit — ``_close_session`` stamps ``closed_at`` with *now*,
+which is the value the cooldown actually reads.
 
 Discord objects are ``MagicMock(spec=...)`` so ``isinstance`` checks in the
 cog pass without a gateway connection; the network-facing helpers
@@ -789,6 +794,31 @@ async def test_handle_join_blocks_active_session(sync_db_path):
     assert "already have an active pen pal" in msg
 
 
+def _ended_session(
+    conn,
+    session_id: str,
+    user1_id: int,
+    user2_id: int,
+    *,
+    started_at: float,
+    closed_at: float,
+    guild_id: int = GUILD_ID,
+) -> None:
+    """A finished session whose start *and* end are both explicit.
+
+    ``_close_session`` stamps ``closed_at`` with *now*, which is the value the
+    re-match cooldown reads — so a test that backdates only ``started_at`` and
+    then closes is describing a chat that ended this instant. Cooldown tests
+    have to set both ends.
+    """
+    pp._create_session(conn, session_id, guild_id, 99, user1_id, user2_id, started_at)
+    conn.execute(
+        "UPDATE pen_pals_sessions SET state = 'closed', closed_at = ?, close_reason = 'expired' "
+        "WHERE session_id = ?",
+        (closed_at, session_id),
+    )
+
+
 def _set_cooldown(db_path, seconds: int, guild_id: int = GUILD_ID) -> None:
     with open_db(db_path) as conn:
         pp._set_timers(
@@ -837,10 +867,11 @@ async def test_handle_join_skips_waiting_member_on_cooldown(sync_db_path, monkey
     """The rest period still holds — instant matching can't bypass it."""
     _configure(sync_db_path)
     _set_cooldown(sync_db_path, 172800)
+    now = time.time()
     with open_db(sync_db_path) as conn:
         pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
-        pp._create_session(conn, "recent", GUILD_ID, 99, 2, 3, time.time() - 3600)
-        pp._close_session(conn, "recent", "expired")
+        # 2's chat ended an hour ago — well inside the 2-day cooldown.
+        _ended_session(conn, "recent", 2, 3, started_at=now - 7200, closed_at=now - 3600)
     do_pair = AsyncMock(return_value=True)
     monkeypatch.setattr(pp, "_do_pair", do_pair)
     monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
@@ -854,10 +885,11 @@ async def test_handle_join_skips_waiting_member_on_cooldown(sync_db_path, monkey
 async def test_handle_join_skips_when_joiner_is_on_cooldown(sync_db_path, monkeypatch):
     _configure(sync_db_path)
     _set_cooldown(sync_db_path, 172800)
+    now = time.time()
     with open_db(sync_db_path) as conn:
         pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
-        pp._create_session(conn, "recent", GUILD_ID, 99, 1, 3, time.time() - 3600)
-        pp._close_session(conn, "recent", "expired")
+        # The joiner's own chat ended an hour ago — inside the 2-day cooldown.
+        _ended_session(conn, "recent", 1, 3, started_at=now - 7200, closed_at=now - 3600)
     do_pair = AsyncMock(return_value=True)
     monkeypatch.setattr(pp, "_do_pair", do_pair)
     monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
@@ -964,6 +996,46 @@ def test_eligible_pool_excludes_members_already_in_a_session(sync_db_path):
         assert pp._eligible_pool(conn, GUILD_ID, time.time(), 0) == [1]
 
 
+def test_eligible_pool_cooldown_runs_from_when_the_chat_ended(sync_db_path):
+    """Regression: the cooldown was anchored to ``started_at``.
+
+    That made it tick *during* the session, so a member's real rest was
+    ``cooldown - session_length`` — and a cooldown shorter than the session
+    length was no rest at all. Here the chat ran 3 hours and ended 30 minutes
+    ago under a 1-hour cooldown: still resting, even though 3h has passed
+    since it began.
+    """
+    _configure(sync_db_path)
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        _ended_session(conn, "s", 1, 99, started_at=now - 10800, closed_at=now - 1800)
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+        assert pp._eligible_pool(conn, GUILD_ID, now, 3600) == [2]
+
+
+def test_eligible_pool_frees_a_member_once_the_cooldown_clears_the_close(sync_db_path):
+    """The other side of the same anchor: rest is measured whole, then over."""
+    _configure(sync_db_path)
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        _ended_session(conn, "s", 1, 99, started_at=now - 18000, closed_at=now - 7200)
+        pp._add_to_pool(conn, GUILD_ID, 1, joined_at=100.0)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
+        assert pp._eligible_pool(conn, GUILD_ID, now, 3600) == [1, 2]
+
+
+def test_last_pen_pal_ended_at_falls_back_to_start_for_an_unfinished_session(sync_db_path):
+    """``closed_at`` is NULL while a chat is open, and NULL must not read as
+    "never had a pen pal" — an open session anchors to its own start."""
+    _configure(sync_db_path)
+    now = time.time()
+    with open_db(sync_db_path) as conn:
+        pp._create_session(conn, "open", GUILD_ID, 99, 1, 2, now - 600)
+        assert pp._last_pen_pal_ended_at(conn, GUILD_ID, 1) == pytest.approx(now - 600)
+        assert pp._last_pen_pal_ended_at(conn, GUILD_ID, 3) is None
+
+
 # ── _handle_leave ─────────────────────────────────────────────────────
 
 
@@ -1043,13 +1115,16 @@ async def test_do_round_counts_failed_pairs_as_waiting(sync_db_path, monkeypatch
 
 async def test_do_round_steers_away_from_a_past_partner(sync_db_path, monkeypatch):
     _configure(sync_db_path)
+    now = time.time()
     with open_db(sync_db_path) as conn:
-        # 1 and 2 were paired before — but long enough ago to clear the
-        # month-long cooldown, so all three are eligible and only the no-repeat
-        # gate should steer 1 away from 2. 3 is fresh.
-        old = time.time() - (_COOLDOWN + 86400)
-        pp._create_session(conn, "old", GUILD_ID, 5, 1, 2, old)
-        pp._close_session(conn, "old", "expired")
+        # 1 and 2 were paired before — but their chat *ended* long enough ago to
+        # clear the month-long cooldown, so all three are eligible and only the
+        # no-repeat gate should steer 1 away from 2. 3 is fresh.
+        _ended_session(
+            conn, "old", 1, 2,
+            started_at=now - (_COOLDOWN + 2 * 86400),
+            closed_at=now - (_COOLDOWN + 86400),
+        )
         for i, uid in enumerate([1, 2, 3], start=1):
             pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
 
@@ -1071,17 +1146,20 @@ async def test_do_round_steers_away_from_a_past_partner(sync_db_path, monkeypatc
 async def test_do_round_never_repairs_the_only_two_waiting(sync_db_path, monkeypatch):
     """Regression: a sweep re-paired two members the moment their cooldown lapsed.
 
-    The cooldown runs from the *shared* session's ``started_at``, so both halves
-    of a pair come off it at the same instant and float back into a pool holding
+    The cooldown runs from the *shared* session's close, so both halves of a
+    pair come off it at the same instant and float back into a pool holding
     nobody else. Before the no-repeat gate was hard, ``_pick_partner`` ran out of
     non-past candidates and fell back to the oldest waiter — the same person.
     """
     _configure(sync_db_path)
     _set_cooldown(sync_db_path, 172800)  # 2 days, as the live guild runs it
+    now = time.time()
     with open_db(sync_db_path) as conn:
-        started = time.time() - (172800 + 60)  # cooldown lapsed a minute ago
-        pp._create_session(conn, "yesterday", GUILD_ID, 5, 1, 2, started)
-        pp._close_session(conn, "yesterday", "expired")
+        _ended_session(
+            conn, "yesterday", 1, 2,
+            started_at=now - (172800 + 86400),
+            closed_at=now - (172800 + 60),  # cooldown lapsed a minute ago
+        )
         for i, uid in enumerate([1, 2], start=1):
             pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
 
@@ -1121,10 +1199,13 @@ async def test_do_round_pairs_past_partners_onward_to_fresh_faces(sync_db_path, 
 
 async def test_do_round_skips_members_matched_within_the_month(sync_db_path, monkeypatch):
     _configure(sync_db_path)
+    now = time.time()
     with open_db(sync_db_path) as conn:
-        # 1 was matched a week ago → still cooling down; 2 and 3 are fresh.
-        pp._create_session(conn, "recent", GUILD_ID, 5, 1, 99, time.time() - 7 * 86400)
-        pp._close_session(conn, "recent", "expired")
+        # 1's chat ended six days ago → still cooling down; 2 and 3 are fresh.
+        _ended_session(
+            conn, "recent", 1, 99,
+            started_at=now - 7 * 86400, closed_at=now - 6 * 86400,
+        )
         for i, uid in enumerate([1, 2, 3], start=1):
             pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
 
@@ -1156,10 +1237,13 @@ async def test_do_round_uses_configured_match_cooldown_not_hardcoded_default(syn
             max_question_swaps=pp._MAX_SWAPS, warn_seconds=pp._WARN_SECS,
             question_suppress_seconds=pp._Q_SUPPRESS_SECS,
         )
-        # 1 was matched a week ago — still inside the hardcoded 30-day
+        # 1's chat ended six days ago — still inside the hardcoded 30-day
         # default, but well past the guild's configured 1-hour cooldown.
-        pp._create_session(conn, "recent", GUILD_ID, 5, 1, 99, time.time() - 7 * 86400)
-        pp._close_session(conn, "recent", "expired")
+        now = time.time()
+        _ended_session(
+            conn, "recent", 1, 99,
+            started_at=now - 7 * 86400, closed_at=now - 6 * 86400,
+        )
         for i, uid in enumerate([1, 2, 3], start=1):
             pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
 
@@ -1181,13 +1265,12 @@ async def test_do_round_uses_configured_match_cooldown_not_hardcoded_default(syn
 
 async def test_do_round_eligible_once_cooldown_elapses(sync_db_path, monkeypatch):
     _configure(sync_db_path)
+    now = time.time()
     with open_db(sync_db_path) as conn:
-        # Both last matched just over a month ago → both eligible again.
-        old = time.time() - (_COOLDOWN + 86400)
-        pp._create_session(conn, "a", GUILD_ID, 5, 1, 98, old)
-        pp._close_session(conn, "a", "expired")
-        pp._create_session(conn, "b", GUILD_ID, 6, 2, 97, old)
-        pp._close_session(conn, "b", "expired")
+        # Both chats ended just over a month ago → both eligible again.
+        started, closed = now - (_COOLDOWN + 2 * 86400), now - (_COOLDOWN + 86400)
+        _ended_session(conn, "a", 1, 98, started_at=started, closed_at=closed)
+        _ended_session(conn, "b", 2, 97, started_at=started, closed_at=closed)
         for i, uid in enumerate([1, 2], start=1):
             pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
 

@@ -5,7 +5,7 @@ Members opt in to a pairing pool. How they're paired depends on the guild's **Pa
 - **Instant** — joining pairs immediately when an eligible member is already waiting; otherwise the joiner sits in the pool and is paired the moment the next eligible member joins. The background loop also sweeps each pool every 5 minutes, so anyone who was ineligible at join time is paired within minutes of becoming eligible.
 - **Scheduled** — joining never pairs on the spot; everyone queues, and the whole eligible pool is drawn in one batch once a day at 8:00 AM Eastern (DST-aware).
 
-Each pair gets a private two-person text channel with a conversation-starter from the question bank posted into it, torn down after a configurable session length (default 24 hours). **A member is in at most one pen pal chat at a time**, and is only re-matched once they've had no pen pal for a configurable cooldown (default a month). The goal is low-stakes 1-on-1 connection inside the server. Session length, match cooldown, question-swap cap, close-warning window, and question-suppress window are all configured on the dashboard's Pen Pals → Pairing Mechanics panel; Pairing Mode lives with the rest of the Setup fields.
+Each pair gets a private two-person text channel with a conversation-starter from the question bank posted into it, torn down after a configurable session length (default 24 hours). **A member is in at most one pen pal chat at a time**, and is only re-matched once their last chat has been over for a configurable cooldown (default a month). The goal is low-stakes 1-on-1 connection inside the server. Session length, match cooldown, question-swap cap, close-warning window, and question-suppress window are all configured on the dashboard's Pen Pals → Pairing Mechanics panel; Pairing Mode lives with the rest of the Setup fields.
 
 ## Commands
 
@@ -113,7 +113,7 @@ A manual swap does not reset the 24-hour auto-cadence clock. After the configure
 
 ### Match cooldown
 
-A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month, from the `started_at` of their most recent session — active or closed). It applies to both sides of a match on every path: instant matching (when in that mode) checks the joiner *and* the candidate, and a round — instant mode's sweep or scheduled mode's daily draw — skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule, and not consent: both members must already be in the pool (`/penpals join`), the same population a round draws from. There is no bypass flag; if an override is ever wanted it belongs on the dashboard.
+A member is only eligible for a new pairing once they've had no pen pal for a configurable cooldown (default a month), measured from the moment their most recent chat **ended** — `closed_at`, falling back to `started_at` for a session still open (`_last_pen_pal_ended_at`). The cooldown is rest *between* chats, so it does not tick while a chat is running: a 48-hour cooldown means 48 hours of quiet after the channel closes, whatever the session length. (It was originally anchored to `started_at`, which made real rest `cooldown - session_length` and made any cooldown shorter than the session no rest at all.) It applies to both sides of a match on every path: instant matching (when in that mode) checks the joiner *and* the candidate, and a round — instant mode's sweep or scheduled mode's daily draw — skips ineligible members and leaves them untouched in the pool. They become eligible automatically once the cooldown has passed. Set it to 0 to allow back-to-back chats. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown — but not the one-chat-at-a-time rule, and not consent: both members must already be in the pool (`/penpals join`), the same population a round draws from. There is no bypass flag; if an override is ever wanted it belongs on the dashboard.
 
 ### No-repeat pairing
 
@@ -121,7 +121,7 @@ Both paths share `_pick_partner`: among the *eligible* candidates it takes the o
 
 This is a hard gate, not a preference. When every eligible candidate is a past partner, `_pick_partner` returns `None` and the member stays pooled for a later round; a repeat is deferred until someone new turns up, never forced. The member is left in the pool untouched on both paths — instant matching tells the joiner "You're in the pool!", and a round skips them and moves on.
 
-The cooldown alone cannot deliver this, which is what the original preference-only version missed: the cooldown runs from a session's `started_at`, so **both halves of a pair come off it at the same instant** and float back into a pool that may hold nobody else. The two guild rematches observed in production (2026-07-23 → 2026-07-25, both at cooldown + ~1 minute) were exactly this — the fallback-to-oldest branch handing each member back the person they had just finished with.
+The cooldown alone cannot deliver this, which is what the original preference-only version missed: the cooldown runs from the pair's *shared* session, so **both halves come off it at the same instant** and float back into a pool that may hold nobody else. The two guild rematches observed in production (2026-07-23 → 2026-07-25, both at cooldown + ~1 minute) were exactly this — the fallback-to-oldest branch handing each member back the person they had just finished with.
 
 `/penpals pair <user1> <user2>` remains the admin override and ignores the no-repeat gate, the same way it ignores the cooldown.
 
@@ -187,7 +187,7 @@ Per-guild keys set via the dashboard:
 **Pairing Mechanics** (separate dashboard section):
 
 - **Session length** — how long a matched channel stays open. Default 24 hours.
-- **Re-match cooldown** — how long a member must go without a pen pal before they're eligible again. Default 30 days; 0 allows back-to-back chats.
+- **Re-match cooldown** — how long a member must go without a pen pal, counted from the end of their last chat, before they're eligible again. Default 30 days; 0 allows back-to-back chats.
 - **Max question swaps** — how many times a pair can swap the conversation-starter per session. Default 3.
 - **Close-warning window** — how much session time must remain to post the "closing soon" notice. Default 1 hour.
 - **Question-suppress window** — skip posting a new auto-question if less than this much session time remains. Default 2 hours.

@@ -453,15 +453,24 @@ def _past_partners(conn, guild_id: int, user_id: int) -> set[int]:
     return {r[0] for r in rows}
 
 
-def _last_matched_at(conn, guild_id: int, user_id: int) -> float | None:
-    """When *user_id* was last paired in this guild, or None if never.
+def _last_pen_pal_ended_at(conn, guild_id: int, user_id: int) -> float | None:
+    """When *user_id*'s most recent pen pal chat ended, or None if never.
 
-    Any session (active or closed) counts — the cooldown is about how long
-    since a member last *had* a pen pal, not whether that pairing is still open.
+    The cooldown is a rest period *between* chats, so it is anchored to
+    ``closed_at`` rather than ``started_at``. Anchoring to the start made the
+    cooldown tick while the chat was still running: real rest was
+    ``cooldown - session_length``, and any cooldown shorter than the session
+    was no rest at all. It also made the knob mean something no admin would
+    guess from "wait before matching again".
+
+    An unfinished session has no ``closed_at``, so it falls back to its start:
+    NULL must not read as "never had a pen pal". Callers exclude members with
+    an active session before they get here, so that fallback is a guard, not a
+    path — it matters only for a row left active by a crash mid-teardown.
     """
     row = conn.execute(
         """
-        SELECT MAX(started_at) FROM pen_pals_sessions
+        SELECT MAX(COALESCE(closed_at, started_at)) FROM pen_pals_sessions
         WHERE guild_id = ? AND (user1_id = ? OR user2_id = ?)
         """,
         (guild_id, user_id, user_id),
@@ -482,7 +491,7 @@ def _eligible_pool(conn, guild_id: int, now: float, cooldown_seconds: int) -> li
         for r in _get_pool(conn, guild_id)
         if not _get_active_session(conn, guild_id, r["user_id"])
         and (
-            (last := _last_matched_at(conn, guild_id, r["user_id"])) is None
+            (last := _last_pen_pal_ended_at(conn, guild_id, r["user_id"])) is None
             or now - last >= cooldown_seconds
         )
     ]
@@ -521,8 +530,8 @@ def _pick_partner(candidates: list[int], past: set[int]) -> int | None:
     have been pen pals once are never matched again, and when everyone waiting
     is a past partner the answer is None — both stay pooled for a later round
     rather than being handed the same person back. The cooldown alone can't do
-    this, because it runs from a shared session's ``started_at`` and so expires
-    for both halves of a pair at the same moment, floating them back into an
+    this, because it runs from the *shared* session's end and so expires for
+    both halves of a pair at the same moment, floating them back into an
     otherwise-empty pool together.
     """
     return next((u for u in candidates if u not in past), None)
@@ -535,7 +544,8 @@ def _find_instant_match(conn, guild_id: int, user_id: int) -> int | None:
     now = time.time()
     if _get_active_session(conn, guild_id, user_id):
         return None
-    if (last := _last_matched_at(conn, guild_id, user_id)) is not None and now - last < cooldown:
+    last = _last_pen_pal_ended_at(conn, guild_id, user_id)
+    if last is not None and now - last < cooldown:
         return None
     candidates = [
         u
