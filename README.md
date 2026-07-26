@@ -207,7 +207,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/games help` / `/games support` — Game list and support link
 - *Spicier (NSFW) prompts appear only in channels an admin has marked age-restricted in Discord.*
 - `/games config game-status` / `game-end` — Inspect or force-close the active game (mod)
-- `/games track watch` / `status` / `enable` / `disable` / `sample` — (mod) Track another game bot's results (e.g. Gamebot's CAH/Connect 4/Anagrams, Cat Bot) and pay economy rewards for wins. The same bot can be watched in several channels at once
+- `/games track watch` / `status` / `enable` / `disable` / `sample` — (mod) Track another game bot's results (Gamebot's CAH/Connect 4/Anagrams, Cat Bot, Wordle, Co-ordle) and pay economy rewards for wins. The same bot can be watched in several channels at once
 - *The games channel allowlist and audit-log channel are managed from the web dashboard's Games Config panel.*
 
 **Head-to-Head & Group Games**

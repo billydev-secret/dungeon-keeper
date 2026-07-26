@@ -46,7 +46,7 @@ That is **17 `/games play` commands** (Anonymous AMA's two axes are one command;
 | `/games join [user]` · `/games leave [user]` | Self, or Host/Mod/Game-Host to move others | Add/remove yourself (or, with elevation, someone else) in a running game that has a roster. Open-submission games reply that there's nothing to join |
 | `/games config game-status` | Mod/Admin (Manage Server or Administrator) | Inspect the active game in the current channel |
 | `/games config game-end` | Mod/Admin | Force-close the active game and post a "Game Force-Closed" notice |
-| `/games track watch <channel> <bot> <kind>` | Mod/Admin | Watch a channel + bot and start banking its game-result messages. `kind` (`Gamebot (Cards Against Humanity, Connect 4, Anagrams)` \| `Cat Bot`) selects the parser/payout. Several bots can be tracked per guild, **and the same bot can be watched in several channels at once** — a watch is a `(bot, channel)` pair (migration 135) |
+| `/games track watch <channel> <bot> <kind>` | Mod/Admin | Watch a channel + bot and start banking its game-result messages. `kind` (`Gamebot (Cards Against Humanity, Connect 4, Anagrams)` \| `Cat Bot` \| `Wordle` \| `Co-ordle`) selects the parser/payout. Several bots can be tracked per guild, **and the same bot can be watched in several channels at once** — a watch is a `(bot, channel)` pair (migration 135) |
 | `/games track status` | Mod/Admin | List every tracked `(bot, channel)` pair — its kind, enabled/paused state, and messages banked in that channel |
 | `/games track disable [bot]` · `/games track enable [bot]` | Mod/Admin | Pause / resume banking for one bot across **every** channel it's watched in (data retained while paused). `bot` is optional when only one is tracked |
 | `/games track sample [channel] [bot] [count]` | Mod/Admin | Dump recent bot messages (raw content + embeds) as JSON to confirm the format |
@@ -66,7 +66,25 @@ Per sub-game: **CAH** reconstructs final scores (last *Current Standings* embed,
 
 **`catbot` is also live**: Cat Bot catches are parsed from message content (`{username} cought <:raritycat:…>`, reverse cats un-reversed, "blessed…doubled" ×2), the catcher resolved by username→member (`get_member_named`), and `pay_cat_catch` credits rarity-tiered coins (common 1 → divine 300) plus the `cat_catch` quest trigger — paid once via the same ledger, keyed on the catch message id.
 
-**Replaying unpaid history.** `scripts/replay_gamebot_games.py` (dry run by default, `--apply` to write) replays every finished game with no ledger claim, feeding each through the *same* parser functions the cog calls — so backfill and live payout can't diverge. It claims before crediting, so a game already paid live is skipped structurally rather than by a cutoff, and fires quest triggers on each game's **own local day** so a backlog doesn't land on today's board at once. Same shape as `scripts/backfill_cat_catches.py`.
+**`wordle` is live.** The Wordle bot posts one self-contained daily digest per group — no embeds, no lobby, so unlike every Gamebot game this needs *no backward scan at all* and is keyed on the digest's own message id:
+
+```
+**Your group is on a 9 day streak!** 🔥 Here are yesterday's results:
+👑 3/6: <@490886726076727296> <@83699131368865792>
+4/6: <@203866639005908992>
+X/6: <@1069501326184153088>
+```
+
+Scoring is **inverted** relative to CAH/Anagrams — fewer guesses is better — so `parse_wordle_results` flips it (`1/6` → 6 … `6/6` → 1, `X/6` → 0, which keeps a failed player in the roster for `party_game` while earning no coins) and the shared `pay_cah_game_by_score` does the rest. Ties on the 👑 line are normal, so that function now accepts **several winners**. Wordle mentions only some players and prints the rest as a bare `@Name`; those are split on the `@` (not on whitespace — real display names contain spaces, e.g. `@communal potato`) and resolved with `resolve_named_scores`. In the observed history that recovers 21 of 22 such entries.
+
+**`coordle` is live.** Co-ordle is a *co-operative* hourly word puzzle whose board embed (`Co-ordle for <t:…:f>`) lists each guess with its player and points. Two properties make it unlike everything else:
+
+- **A new board message is posted per guess**, each showing the whole round. So the payout is keyed on the **round's own scheduled timestamp** (`coordle_game_key`), not a message id — keyed on the message it would pay the same round once per guess. Those values (~1.7e9) cannot collide with Discord snowflakes (~1.5e18) in the shared ledger.
+- **There is no terminal message.** `This Co-ordle has ended` is only a rejection sent to a late guesser. Finality is read off the board: six greens in a row means solved, no unplayed rows left means exhausted. A round that simply times out with rows to spare stays open and never pays — 16 of 1,887 observed rounds, the accepted cost of having no end-of-round signal.
+
+Points are the inline `**+N**`, or `**+N (+M)**` where a bonus applies, in which case the player earned **N+M**. That reading was verified against the bot's own cumulative leaderboard across consecutive snapshots: `N+M` reproduced the leaderboard delta for 79% of player-rounds versus 0.5% for `N` alone (the remainder being rounds clipped by a snapshot boundary or its top-10 cut). The leaderboard embed itself is cumulative all-time and is deliberately **not** used for payout — doing so would re-pay every prior round.
+
+**Replaying unpaid history.** `scripts/replay_gamebot_games.py` (dry run by default, `--apply` to write) replays every finished game with no ledger claim, feeding each through the *same* parser functions the cog calls — so backfill and live payout can't diverge. It claims before crediting, so a game already paid live is skipped structurally rather than by a cutoff, and fires quest triggers on each game's **own local day** so a backlog doesn't land on today's board at once. Same shape as `scripts/backfill_cat_catches.py`. **Wordle and Co-ordle have no equivalent replay**: their history predates tracking and sits in the general `messages` table rather than `games_external_messages`, and paying 1,581 historic Co-ordle rounds at once would be a large unplanned coin injection. Both start paying from the moment their watch is configured.
 
 ### Dashboard-managed configuration
 

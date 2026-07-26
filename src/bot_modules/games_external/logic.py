@@ -25,6 +25,8 @@ import discord
 WATCH_KIND_LABELS: dict[str, str] = {
     "gamebot": "Gamebot (Cards Against Humanity, Connect 4, Anagrams)",
     "catbot": "Cat Bot",
+    "wordle": "Wordle (daily group results)",
+    "coordle": "Co-ordle (co-op word puzzle)",
 }
 VALID_WATCH_KINDS: tuple[str, ...] = tuple(WATCH_KIND_LABELS)
 

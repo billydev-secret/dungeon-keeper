@@ -327,10 +327,16 @@ async def pay_cah_game_by_score(
     when the economy is off, bots/unresolvable members are dropped, failures
     logged not raised.
 
+    ``winner_id`` accepts a single id **or a collection of them** — Wordle ties
+    are common (``👑 3/6: <@a> <@b>``), and everyone on the winning line should
+    take the cap and fire ``game_win``. Ids not present in ``scores`` are
+    dropped, so a winner who can't be resolved never creates a phantom payout.
+
     ``game_key`` scopes the quest ``occurrence`` and defaults to CAH, which
-    this started life as. Gamebot Anagrams passes ``"anagrams"`` and shares the
-    same ``reward_cah_win_max`` cap — one dial for "an external game win",
-    since both pay by score ratio and the absolute point scales (5 vs 900)
+    this started life as. Gamebot Anagrams passes ``"anagrams"``, Wordle
+    ``"wordle"``, Co-ordle ``"coordle"`` — all sharing the same
+    ``reward_cah_win_max`` cap, one dial for "an external game win", since they
+    all pay by score *ratio* and the absolute point scales (5 vs 900 vs 6)
     cancel out.
     """
     try:
@@ -363,8 +369,16 @@ async def pay_cah_game_by_score(
             return
 
         participants = sorted(numeric_scores)
-        winner = _coerce(winner_id)
-        winners = {winner} if winner in numeric_scores else set()
+        if winner_id is None or isinstance(winner_id, (str, bytes, int)):
+            raw_winners: list[object] = [winner_id]
+        else:
+            try:
+                raw_winners = list(winner_id)  # type: ignore[arg-type]
+            except TypeError:
+                raw_winners = [winner_id]
+        winners = {
+            w for w in (_coerce(r) for r in raw_winners) if w in numeric_scores
+        }
 
         db_path = bot.ctx.db_path
 

@@ -134,6 +134,37 @@ game's own local day (the `backfill_cat_catches.py` shape). On the 2026-07-26
 history: 15 CAH + 3 Anagrams + 2 Connect 4 paid, 2 abandoned lobbies claimed
 but paying nobody, 2,526 coins across 24 members.
 
+**Stage 7 — Wordle + Co-ordle (2026-07-26). SHIPPED.** Two more external bots,
+both already in the guild and both with enough history in the *general*
+`messages`/`message_embeds` tables to derive their formats without waiting on
+`/games track sample`.
+
+**`wordle`** is the easiest source yet and the only one needing no backward
+scan: one self-contained daily digest, message content only, no embeds and no
+lobby, so it's keyed on the digest's own message id. Its scoring is inverted
+(`1/6` is best), flipped in `parse_wordle_results` to `6…1` with `X/6` → 0 so a
+failed player stays in the roster for `party_game` while earning nothing. Ties
+on the 👑 line are normal — hence `pay_cah_game_by_score` gaining multi-winner
+support. Wordle mentions only some players and prints the rest as a bare
+`@Name`; splitting on the `@` rather than on whitespace preserves display names
+containing spaces (`@communal potato`) and recovers 21 of the 22 such entries in
+the history.
+
+**`coordle`** is the awkward one, and the first tracked game with **no terminal
+message at all**. Co-ordle posts a *new* board message per guess, each showing
+the whole round, so the payout is keyed on the round's own scheduled timestamp
+from the board title rather than any message id — otherwise every guess reads
+as its own game. Finality is inferred from the board (six greens = solved, no
+unplayed rows = exhausted); a round that times out with rows to spare never
+pays, 16 of 1,887 observed. Points are the inline `**+N**` / `**+N (+M)**`,
+summing to N+M — established empirically against the bot's own cumulative
+leaderboard across consecutive snapshots (79% exact vs 0.5% for N alone). The
+leaderboard is cumulative and deliberately unused for payout.
+
+No replay script for either: their history predates tracking and lives in the
+general `messages` table, and 1,581 payable Co-ordle rounds would be a large
+unplanned coin injection. Both begin paying once their watch is configured.
+
 ## Notes
 
 - This worktree is behind main (main has migrations 091–096); 097 is safe and
