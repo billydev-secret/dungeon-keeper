@@ -60,6 +60,19 @@ class EconSettings:
     # later re-enable resumes cleanly from that day rather than dumping a
     # backlog. The mechanism (convert_xp/process_conversion) is retained intact.
     xp_per_coin: float = 0.0
+    # Ceiling on what one member's XP can mint in a single day (0 = none).
+    # Conversion is the only faucet with no natural bound: a login fires once,
+    # drops have drops_per_day, a quest board is finite, but this one scales
+    # linearly with however much XP someone earns — on 2026-07-25 it paid one
+    # member 932 in a day and 60% of the guild's entire mint. Without a
+    # ceiling the rate is the only brake, and the rate hits the quiet member
+    # as hard as the top chatter.
+    #
+    # Coins past the ceiling are DISCARDED, remainder included — a cap that
+    # banks the overflow is a delay, not a limit, and the backlog lands in one
+    # lump the day it lifts. Like every other faucet rate this is a
+    # pre-booster base, so a booster's 1.5x applies on top of the ceiling.
+    conversion_daily_cap: int = 0
     login_text_base: int = 5
     login_voice_base: int = 15
     streak_bonus_cap: int = 10
@@ -877,6 +890,10 @@ def process_conversion(
     Idempotent per (guild, user, local_day) via INSERT OR IGNORE on
     econ_conversions — a replayed day returns 0 with no writes. The
     fractional remainder from the latest prior conversion carries in.
+
+    ``conversion_daily_cap`` (0 = none) clips the day's mint. The clip is
+    recorded on the conversion row and flagged in the ledger meta, and it
+    zeroes the carry — banking the overflow would only postpone it.
     """
     prev = conn.execute(
         """
@@ -888,6 +905,11 @@ def process_conversion(
     ).fetchone()
     carry = float(prev["remainder"]) if prev else 0.0
     coins, remainder = logic.convert_xp(xp, carry, settings.xp_per_coin)
+
+    cap = max(0, int(settings.conversion_daily_cap))
+    clipped = cap > 0 and coins > cap
+    if clipped:
+        coins, remainder = cap, 0.0
 
     cur = conn.execute(
         """
@@ -907,7 +929,11 @@ def process_conversion(
         user_id,
         coins,
         "conversion",
-        meta={"local_day": local_day, "xp": round(xp, 2)},
+        meta=(
+            {"local_day": local_day, "xp": round(xp, 2), "capped": cap}
+            if clipped
+            else {"local_day": local_day, "xp": round(xp, 2)}
+        ),
         booster=booster,
         multiplier=settings.booster_multiplier,
     )

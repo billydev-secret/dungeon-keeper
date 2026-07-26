@@ -99,9 +99,18 @@ All movement goes through `services/casino_service.py`:
   roulette rounds and derby races, so nothing settles into a ghost wallet.
 - House edge is **fixed paytables in `services/casino_logic.py`, not
   settings** — enforced by exact-EV tests (see Testing). RTPs: coinflip
-  95%, slots ≈93.3%, roulette ≈97.3%, blackjack rules-derived, derby
+  92.5%, slots ≈91.3%, roulette ≈97.3%, blackjack rules-derived, derby
   0.90–0.97 per runner (weights × multipliers, pinned per runner so no
-  pick strictly dominates).
+  pick strictly dominates). Coinflip and slots were trimmed ~2 points on
+  2026-07-26 (from 95% / 93.3%) to lean the two tables carrying ~70% of
+  the handle; both cuts sit where a single play can't show them (a
+  1.85× flip still reads as near-double; a pair pays 145 on a 100 bet
+  instead of 150). Blackjack was left at 3:2 deliberately — 6:5 naturals
+  is the one edge change players recognize on sight, and it buys under
+  half a point of blended edge. The **advertised** returns in the How It
+  Works embed come from `COINFLIP_RTP_PCT` / `SLOTS_RTP_PCT`, which the
+  RTP tests pin against the enumeration, so the copy cannot drift from
+  the paytable it describes.
 - The register feed **skips** `casino_stake`/`casino_payout` (results are
   already public in the casino channel, and bet-per-play volume would
   outrun the feed's drain budget and starve other kinds); `casino_refund`
@@ -122,7 +131,7 @@ All movement goes through `services/casino_service.py`:
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
 | `{game}_enabled` ×9 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
-| `jackpot_cut_pct` | 25 | % of each fully-lost stake skimmed into the pot |
+| `jackpot_cut_pct` | 5 | % of each fully-lost stake skimmed into the pot — every skimmed coin is escrowed rather than burned, so this trades sink strength for pot drama (was 25 until 2026-07-25; see [reviews/2026-07-25-economy-casino-sources-sinks.md](reviews/2026-07-25-economy-casino-sources-sinks.md)) |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |
 | `roulette_window_seconds` | 45 | betting window (dashboard bounds 15–600) |
 | `derby_window_seconds` | 60 | derby betting window (bounds 15–600) |
@@ -143,11 +152,13 @@ guild's casino name, which is edited on **Config → Branding**
 ## Games
 
 - **Coinflip** — heads/tails picker → amount modal. Win pays total
-  `stake*19//10` (1.9×).
+  `stake*37//20` (1.85×).
 - **Slots** — one weighted 26-symbol reel × 3 pulls
   (🌻6 🍀5 🐝5 🌾4 🦋3 🍯2 7️⃣1). Precedence triple > two-sevens (5×) >
-  non-seven pair (1.5× floored); triples 6/8/9/12/18/40/**120×** (jackpot
-  embed goes gold).
+  non-seven pair (1.45× floored); triples 6/8/9/12/18/40/**120×** (jackpot
+  embed goes gold). The pair carries the table: it lands on 41.4% of
+  spins and contributes ~0.60 of the ~0.91 RTP, which is why the edge is
+  taken there rather than off the triples players actually remember.
 - **Blackjack** — fresh shuffled deck per hand, dealer stands all 17,
   naturals 3:2 (resolved at deal, either side), double on first two cards
   only (second debit through `take_stake`), no split/insurance. One live
@@ -285,6 +296,9 @@ caller-supplied.
   posts a standalone gold celebration beside the result. The pot is
   bookkeeping over coins the ledger already burned; paying it re-mints
   that recorded slice (`casino_payout`, `meta.jackpot`, never boosted).
+  **The cut is therefore an anti-sink** — it is the share of the house's
+  take that comes back rather than staying destroyed — which is why it
+  ships at 5%, not a quarter.
 - **Play stats** — `record_play` (same transaction as every settlement;
   never refunds) maintains `casino_member_stats` (lifetime wagered /
   returned / plays / wins / biggest win / signed streak) and the bounded

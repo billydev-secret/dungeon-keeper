@@ -25,6 +25,7 @@ const FAUCET_FIELDS = [
   ["host_bounty_cap", "Host bounty attendee cap", 1000],
   ["reward_photo_post", "Entering the photo challenge", 1000000],
   ["xp_per_coin", "XP needed to earn one coin", 100000],
+  ["conversion_daily_cap", "Most one member's XP can earn per day (0 = no limit)", 1000000],
 ];
 const FLOAT_FAUCETS = new Set(["xp_per_coin"]);
 

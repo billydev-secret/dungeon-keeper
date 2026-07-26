@@ -37,7 +37,11 @@ CASINO_TITLE = casino_title()
 _FOOTER = "Play for fun, not for rent."
 
 _GAME_LINES = {
-    "coinflip": "🪙 **Coinflip** — call it in the air; a win pays 1.9× your bet",
+    "coinflip": (
+        "🪙 **Coinflip** — call it in the air; a win pays "
+        f"{logic.mult_text(logic.COINFLIP_MULT_NUM, logic.COINFLIP_MULT_DEN)}× "
+        "your bet"
+    ),
     "slots": "🎰 **Slots** — three spinning reels; pairs pay back, sevens pay big",
     "blackjack": "🃏 **Blackjack** — beat the dealer to 21; naturals pay 3:2",
     "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
@@ -238,7 +242,11 @@ def build_help_embed(
     if settings.coinflip_enabled:
         embed.add_field(
             name="🪙 Coinflip",
-            value="Call heads or tails. Win: **1.9×** (95% return).\n​",
+            value=(
+                "Call heads or tails. Win: "
+                f"**{logic.mult_text(logic.COINFLIP_MULT_NUM, logic.COINFLIP_MULT_DEN)}×** "
+                f"({logic.COINFLIP_RTP_PCT:g}% return).\n​"
+            ),
             inline=False,
         )
     if settings.slots_enabled:
@@ -250,8 +258,9 @@ def build_help_embed(
             name="🎰 Slots",
             value=(
                 f"{triples}\n"
-                f"Two 7️⃣ **{logic.SLOT_TWO_SEVENS_MULT}×** · any pair **1.5×** "
-                "(~93% return)\n​"
+                f"Two 7️⃣ **{logic.SLOT_TWO_SEVENS_MULT}×** · any pair "
+                f"**{logic.mult_text(logic.SLOT_PAIR_NUM, logic.SLOT_PAIR_DEN)}×** "
+                f"(~{logic.SLOTS_RTP_PCT:g}% return)\n​"
             ),
             inline=False,
         )

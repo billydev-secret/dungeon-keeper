@@ -17,15 +17,26 @@ from bot_modules.services import casino_logic as logic
 # ── coinflip ───────────────────────────────────────────────────────────
 
 
-def test_coinflip_pays_1_9x_floored():
-    assert logic.coinflip_payout(100) == 190
-    assert logic.coinflip_payout(5) == 9  # floor(9.5)
+def test_coinflip_pays_1_85x_floored():
+    assert logic.coinflip_payout(100) == 185
+    assert logic.coinflip_payout(5) == 9  # floor(9.25)
 
 
-def test_coinflip_rtp_is_95_percent():
-    # 50% win chance × 1.9 total return.
+def test_coinflip_rtp_is_92_5_percent():
+    # 50% win chance × 1.85 total return.
     stake = 100
-    assert 0.5 * logic.coinflip_payout(stake) / stake == pytest.approx(0.95)
+    assert 0.5 * logic.coinflip_payout(stake) / stake == pytest.approx(0.925)
+
+
+def test_coinflip_advertised_return_matches_the_paytable():
+    """The How It Works embed quotes COINFLIP_RTP_PCT; it must be true.
+
+    An advertised edge that isn't the real one is the gambling equivalent
+    of shipping a preference nobody enforces.
+    """
+    stake = 100
+    actual = 0.5 * logic.coinflip_payout(stake) / stake
+    assert logic.COINFLIP_RTP_PCT == pytest.approx(actual * 100, abs=0.05)
 
 
 def test_flip_coin_uses_module_random(monkeypatch):
@@ -47,15 +58,15 @@ def test_slots_two_sevens_pay_5x_even_with_a_pair_present():
     assert payout == 50
 
 
-def test_slots_pair_pays_1_5x_floored():
+def test_slots_pair_pays_1_45x_floored():
     payout, label = logic.slots_payout(("🌻", "🌻", "🍀"), 5)
-    assert payout == 7  # floor(7.5)
+    assert payout == 7  # floor(7.25)
     assert label == "A matching pair"
 
 
 def test_slots_lone_seven_with_pair_counts_as_pair():
     payout, _ = logic.slots_payout((logic.SEVEN, "🍀", "🍀"), 10)
-    assert payout == 15
+    assert payout == 14  # floor(14.5)
 
 
 def test_slots_no_match_pays_nothing():
@@ -64,17 +75,30 @@ def test_slots_no_match_pays_nothing():
     assert label is None
 
 
-def test_slots_exact_rtp_in_design_band():
-    """Enumerate all 26³ reel outcomes; RTP must sit in [0.90, 0.96]."""
-    stake = 100  # multiple of 2 — the pair payout floors nothing
+def _slots_exact_rtp() -> float:
+    stake = 2000  # a multiple of SLOT_PAIR_DEN — the pair payout floors nothing
     total = 0
     combos = 0
     for reels in itertools.product(logic.SLOT_REEL, repeat=3):
         payout, _ = logic.slots_payout(reels, stake)
         total += payout
         combos += 1
-    rtp = total / (combos * stake)
-    assert 0.90 <= rtp <= 0.96, f"slots RTP drifted to {rtp:.4f}"
+    return total / (combos * stake)
+
+
+def test_slots_exact_rtp_in_design_band():
+    """Enumerate all 26³ reel outcomes; RTP must sit in [0.89, 0.94].
+
+    Band lowered from [0.90, 0.96] on 2026-07-26 with the pair trim (1.5x
+    -> 1.45x); the exact value is 4935/5408 = 0.91254.
+    """
+    rtp = _slots_exact_rtp()
+    assert 0.89 <= rtp <= 0.94, f"slots RTP drifted to {rtp:.4f}"
+
+
+def test_slots_advertised_return_matches_the_paytable():
+    """SLOTS_RTP_PCT is quoted in the How It Works embed; keep it honest."""
+    assert logic.SLOTS_RTP_PCT == pytest.approx(_slots_exact_rtp() * 100, abs=0.05)
 
 
 def test_spin_slots_uses_module_random(monkeypatch):

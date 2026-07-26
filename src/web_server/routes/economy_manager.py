@@ -479,6 +479,7 @@ async def list_income_sources(
                     "reward_cah_win_max": settings.reward_cah_win_max,
                     "reward_photo_post": settings.reward_photo_post,
                     "xp_per_coin": settings.xp_per_coin,
+                    "conversion_daily_cap": settings.conversion_daily_cap,
                 },
             }
 
