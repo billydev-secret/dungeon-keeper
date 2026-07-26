@@ -136,6 +136,21 @@ class GamesExternalCog(commands.Cog):
         )
         return parser.current_game_window(parsed, idx)
 
+    @staticmethod
+    def _lobby_host(guild: discord.Guild, window) -> int | None:
+        """The member who started this game, from its lobby embed.
+
+        Gamebot names the host by username in the lobby title, so it resolves
+        the same way Anagrams' scoreboard does. External games passed no host
+        at all before 2026-07-26 and so never paid the host bounty that native
+        party games have always paid.
+        """
+        name = parser.host_from_window(window)
+        if not name:
+            return None
+        member = guild.get_member_named(name)
+        return None if member is None or member.bot else member.id
+
     async def _pay_gamebot_game(self, message: discord.Message) -> None:
         """Pay a finished Gamebot game — whichever of its sub-games it was.
 
@@ -181,11 +196,11 @@ class GamesExternalCog(commands.Cog):
                 parser.GAME_CONNECT4: self._pay_connect4_game,
                 parser.GAME_ANAGRAMS: self._pay_anagrams_game,
             }[game]
-            await payer(message, window)
+            await payer(message, window, self._lobby_host(guild, window))
         except Exception:
             log.exception("Gamebot payout failed for message %s", message.id)
 
-    async def _pay_cah_game(self, message: discord.Message, window) -> None:
+    async def _pay_cah_game(self, message, window, host_id=None) -> None:
         """Pay a finished Gamebot CAH game proportional to each player's score.
 
         The top scorer (the winner) earns the configured cap and everyone else
@@ -202,6 +217,7 @@ class GamesExternalCog(commands.Cog):
             return
         await pay_cah_game_by_score(
             self.bot, guild.id, scores, winner, occurrence=str(message.id),
+            host_id=host_id,
         )
         await logic.mark_parsed(self.db, message.id, "ok")
         log.info(
@@ -209,7 +225,7 @@ class GamesExternalCog(commands.Cog):
             guild.id, message.id, len(scores), winner,
         )
 
-    async def _pay_connect4_game(self, message: discord.Message, window) -> None:
+    async def _pay_connect4_game(self, message, window, host_id=None) -> None:
         """Pay participation + a win bonus for a finished Gamebot Connect 4 game.
 
         Connect 4 has no per-round score to scale by (like CAH does) — it's a
@@ -229,7 +245,7 @@ class GamesExternalCog(commands.Cog):
         await pay_game_rewards(
             self.bot, guild.id, sorted(roster),
             [winner] if winner is not None else [], "connect4",
-            occurrence=str(message.id),
+            occurrence=str(message.id), host_id=host_id,
         )
         await logic.mark_parsed(self.db, message.id, "ok")
         log.info(
@@ -237,7 +253,7 @@ class GamesExternalCog(commands.Cog):
             guild.id, message.id, len(roster), winner,
         )
 
-    async def _pay_anagrams_game(self, message: discord.Message, window) -> None:
+    async def _pay_anagrams_game(self, message, window, host_id=None) -> None:
         """Pay a finished Gamebot Anagrams game proportional to points scored.
 
         Anagrams' *Scoreboard* names players by **username**, not mention, so
@@ -263,7 +279,7 @@ class GamesExternalCog(commands.Cog):
             return
         await pay_cah_game_by_score(
             self.bot, guild.id, scores, winner,
-            occurrence=str(message.id), game_key="anagrams",
+            occurrence=str(message.id), game_key="anagrams", host_id=host_id,
         )
         await logic.mark_parsed(self.db, message.id, "ok")
         log.info(

@@ -71,6 +71,9 @@ GAME_CONNECT4 = "connect4"
 GAME_ANAGRAMS = "anagrams"
 
 _START_TITLE = re.compile(r"\bis starting an? (.+?) game!", re.IGNORECASE)
+# Same title, read from the front: everything before "is starting" is the host's
+# username (which can contain dots, underscores and spaces).
+_START_HOST = re.compile(r"^(?P<host>.+?)\s+is starting an? .+ game!\s*$", re.IGNORECASE)
 # Gamebot's own game names → our sub-game key. A name that isn't here is a game
 # we don't parse (Chess, Othello, Poker, Survey Says, Wisecracks, …); it still
 # bounds a window, but pays nobody.
@@ -155,6 +158,32 @@ def is_game_start(embeds: Sequence[Mapping[str, Any]]) -> bool:
     """True for any Gamebot lobby embed (``<host> is starting a <Game> game!``),
     including games we don't parse."""
     return any(_START_TITLE.search(title) for title, _desc in _embed_texts(embeds))
+
+
+def host_from_lobby(embeds: Sequence[Mapping[str, Any]]) -> str | None:
+    """The host's Discord **username** from a Gamebot lobby embed title.
+
+    Gamebot names whoever started the game in the lobby title itself
+    ("efficientpanic is starting a Cards Against Humanity game!") — by
+    username, not mention, so the caller resolves it by name the way the
+    Anagrams and Cat Bot paths do. This is the only place an external game
+    identifies its host, which is why external games paid no host bounty at
+    all until 2026-07-26.
+    """
+    for title, _desc in _embed_texts(embeds):
+        m = _START_HOST.match(title.strip())
+        if m:
+            return _unescape_markdown(m.group("host").strip())
+    return None
+
+
+def host_from_window(window: Sequence[Mapping[str, Any]]) -> str | None:
+    """The host username for a whole game window, from its lobby embed."""
+    for msg in window:
+        host = host_from_lobby(msg.get("embeds") or [])
+        if host:
+            return host
+    return None
 
 
 def game_from_start(embeds: Sequence[Mapping[str, Any]]) -> str | None:

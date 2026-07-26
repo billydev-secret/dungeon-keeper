@@ -165,6 +165,33 @@ No replay script for either: their history predates tracking and lives in the
 general `messages` table, and 1,581 payable Co-ordle rounds would be a large
 unplanned coin injection. Both begin paying once their watch is configured.
 
+**Stage 8 — host bounty for external games (2026-07-26). SHIPPED.** Native
+party games have always paid their host, but neither external payout path
+passed a `host_id`, so every Gamebot game ever tracked paid its players and
+nothing to whoever started it. Gamebot does name the host — in the lobby
+embed's title, by username — so `parser.host_from_lobby` reads it and the cog
+resolves it with `get_member_named`, the same lookup Anagrams and Cat Bot use.
+
+The bounty logic itself is unchanged, just lifted out of `pay_game_rewards`
+into a shared `pay_host_bounty` that both faucets call, so external and native
+games pay hosting on identical terms — including the anti-farm gate (`joiners`
+excludes the host, so a game nobody else joined pays nothing, which is also
+what makes an abandoned lobby pay its would-be host nothing).
+
+`scripts/backfill_gamebot_hosting.py` replays the backlog: 23 games, 2,300
+coins flat across 5 hosts, both abandoned lobbies correctly gated out. It is
+deliberately **independent of** `replay_gamebot_games.py` — that one pays
+participation/win and keys off `games_external_payouts`, which can't be reused
+here (it's keyed on the Game-over message id, and a game whose participation is
+already paid still owes its host). Idempotency instead comes from a `meta.game`
+stamp on each `game_host` ledger row. Booster status has to be supplied with
+`--boosters`: it lives only on the gateway (`member.premium_since`) and is
+recorded nowhere in the DB, so an offline script cannot look it up and the safe
+default is to credit everyone flat.
+
+Worth noting for whoever runs it: hosting is heavily concentrated — one member
+hosted 17 of the 23 games, so ~74% of the payout goes to them.
+
 ## Notes
 
 - This worktree is behind main (main has migrations 091–096); 097 is safe and
