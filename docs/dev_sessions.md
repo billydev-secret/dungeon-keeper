@@ -79,6 +79,16 @@ passing: anything in CLAUDE.md (the worker loads it), or a finding you haven't
 verified — a confident wrong steer costs more than no briefing, because the worker
 has no reason to doubt it.
 
+Two instructions belong at the end of every briefing:
+
+- **Ask clarifying questions immediately, one at a time, before planning.** Not
+  batched into a finished plan, and never assumed past — a plan built on a guess
+  wastes the session, and the question is cheapest while the context is still loaded.
+- **Plan before coding on anything complex** — investigate, come back with the
+  approach and its open questions, wait. Small unambiguous fixes can just be done.
+  This is a suggestion the briefing makes, not a permission gate; `--permission-mode
+  plan` is there if you want it enforced for a particular session.
+
 ## Auto mode is the default
 
 Workers launch with `--permission-mode auto`. A session you drive from a phone should
@@ -142,6 +152,20 @@ is created anyway and the warning says the staleness check couldn't run.
 
 `WINDOW: live` means a tmux window by that name still exists. A session with no live
 window is an abandoned worktree — either attach a new `claude` to it or tear it down.
+
+`STATE` reads the worker's own pane:
+
+| | |
+|---|---|
+| `WAITING` | blocked on **you** — a question, a plan, a permission prompt |
+| `working` | actively running |
+| `idle` | at an empty prompt, nothing running |
+
+Anything waiting is also called out under the table, because the whole point is that a
+blocked worker and a thinking one look identical until you look. The detection reads
+Claude Code's footer and dialog text, and checks the dialog markers *first*: a pane can
+hold both "esc to interrupt" and a question when one interrupts a run, and reading that
+as "working" is exactly how a stalled worker goes unnoticed.
 
 ## Shipping
 

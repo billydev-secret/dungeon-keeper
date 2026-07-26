@@ -31,8 +31,16 @@ Do exactly this, stopping with a clear message on any problem:
    Keep it to what a competent colleague couldn't get from the repo in five minutes.
    Don't restate CLAUDE.md — the worker loads it. Don't invent findings you haven't
    verified. If you're unsure whether something is true, say so in the briefing or
-   leave it out; a confident wrong steer is worse than no briefing. End with what you
-   want done first, and say so plainly if it's "investigate, don't edit yet".
+   leave it out; a confident wrong steer is worse than no briefing.
+
+   Every briefing ends with two standing instructions:
+
+   - **Ask clarifying questions immediately, one at a time, before planning.** Don't
+     batch them into a finished plan and don't assume past an unknown — a plan built
+     on a guess wastes the whole session. Ask when the answer would change the work.
+   - **For anything complex, plan before touching code**: investigate, then come back
+     with the approach and its open questions, and wait. Small, unambiguous fixes can
+     just be done. This is a judgement call, not a gate — say which one you mean.
 
    With no such context, spawn it bare — the launcher does the parsing,
    normalization, and every guard:

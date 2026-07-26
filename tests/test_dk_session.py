@@ -238,6 +238,45 @@ def test_no_staleness_warning_when_prod_is_current():
     assert dk_session.staleness_warning(0) is None
 
 
+# ── worker state ─────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "pane",
+    [
+        "Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel",
+        "Do you want to proceed?",
+        "❯ 1. Yes, I trust this folder",
+    ],
+)
+def test_a_worker_showing_a_dialog_is_waiting(pane):
+    """A blocked worker must never read as 'working' — that's how it goes unseen."""
+    assert dk_session.session_state(pane) == "waiting"
+
+
+def test_a_running_worker_is_working():
+    pane = "⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents"
+    assert dk_session.session_state(pane) == "working"
+
+
+def test_a_worker_at_an_empty_prompt_is_idle():
+    pane = "⏸ manual mode on · install gh for PR status · ← for agents"
+    assert dk_session.session_state(pane) == "idle"
+
+
+def test_a_question_during_a_run_reads_as_waiting():
+    """Both markers present — the dialog wins, because a human is blocking it."""
+    pane = (
+        "● Running the backfill…\n"
+        "esc to interrupt\n"
+        "Do you want to proceed?\n"
+    )
+    assert dk_session.session_state(pane) == "waiting"
+
+
+def test_state_detection_is_case_insensitive():
+    assert dk_session.session_state("ENTER TO SELECT") == "waiting"
+
+
 # ── worktree listing ─────────────────────────────────────────────────────
 
 def test_parse_worktrees_reads_paths_and_branches():

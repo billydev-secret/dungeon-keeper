@@ -144,6 +144,35 @@ def new_window_args(name: str, path: Path, model: str | None,
     ]
 
 
+# Footer/dialog markers Claude Code paints in a pane. Checked against the last
+# lines of `tmux capture-pane`, most-specific first: a worker showing a choice
+# dialog is blocked on a human, which a bare "is it running" check reads as
+# working — the exact confusion that makes a stalled worker invisible.
+_WAITING_MARKS = (
+    "enter to select",       # AskUserQuestion / plan approval / any choice list
+    "do you want to",        # permission prompt
+    "1. yes",                # trust prompt and other numbered confirms
+)
+_WORKING_MARK = "esc to interrupt"
+
+
+def session_state(pane: str) -> str:
+    """'waiting' | 'working' | 'idle' for a worker, from its pane text.
+
+    'waiting' means blocked on *you* — a question, a plan, a permission prompt.
+    'idle' means sitting at an empty prompt with nothing running, which needs
+    you too but isn't blocking anything. Order matters: the dialog markers are
+    checked before the running marker, since a pane can hold both when a
+    question interrupts a run.
+    """
+    tail = pane.lower()
+    if any(m in tail for m in _WAITING_MARKS):
+        return "waiting"
+    if _WORKING_MARK in tail:
+        return "working"
+    return "idle"
+
+
 def worktree_add_args(main_repo: Path, name: str, path: Path) -> list[str]:
     """The `git worktree add` invocation for a new session.
 
@@ -332,18 +361,29 @@ def cmd_list(args: argparse.Namespace) -> int:
         is_main = path == main_repo
         dirty = run(["git", "-C", str(path), "status", "--porcelain", "-uno"],
                     check=False).stdout.strip()
+        live = path.name in windows
+        state = "-"
+        if live:
+            pane = run(["tmux", "capture-pane", "-p", "-S", "-12",
+                        "-t", path.name], check=False)
+            state = session_state(pane.stdout) if pane.returncode == 0 else "?"
         rows.append((
             "(prod)" if is_main else path.name,
             wt["branch"] or "?",
             "dirty" if dirty else "clean",
-            "live" if path.name in windows else "-",
+            "live" if live else "-",
+            state.upper() if state == "waiting" else state,
         ))
 
     width = max([len("SESSION"), *(len(r[0]) for r in rows)])
     bwidth = max([len("BRANCH"), *(len(r[1]) for r in rows)])
-    print(f"{'SESSION'.ljust(width)}  {'BRANCH'.ljust(bwidth)}  TREE   WINDOW")
-    for name, branch, dirty, live in rows:
-        print(f"{name.ljust(width)}  {branch.ljust(bwidth)}  {dirty.ljust(5)}  {live}")
+    print(f"{'SESSION'.ljust(width)}  {'BRANCH'.ljust(bwidth)}  TREE   WINDOW  STATE")
+    for name, branch, dirty, live, state in rows:
+        print(f"{name.ljust(width)}  {branch.ljust(bwidth)}  "
+              f"{dirty.ljust(5)}  {live.ljust(6)}  {state}")
+    waiting = [r[0] for r in rows if r[4] == "WAITING"]
+    if waiting:
+        print(f"\n{len(waiting)} waiting on you: {', '.join(waiting)}")
     return 0
 
 
