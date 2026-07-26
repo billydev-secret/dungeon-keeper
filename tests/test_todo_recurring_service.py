@@ -418,8 +418,9 @@ def test_run_now_spawns_immediately(db):
 
     assert result is not None and result.status == "spawned"
     assert len(rows) == 1
-    # Still scheduled for its normal slot afterwards.
+    # The configured schedule is untouched — "add one now" is not "reschedule".
     assert task.next_run_at == _epoch(2026, 7, 26, 9, 0)
+    assert task.last_status == "spawned"
 
 
 def test_run_now_respects_skip_if_pending(db):
@@ -435,7 +436,10 @@ def test_run_now_respects_skip_if_pending(db):
         assert len(pending_todos(conn, GUILD)) == 1
 
 
-def test_run_now_unpauses(db):
+def test_run_now_leaves_a_paused_entry_paused(db):
+    """Regression: "Run now" used to force status='active'. A mod who paused
+    an entry for the holidays and then added one instance by hand would have
+    silently resumed the daily schedule."""
     now = _epoch(2026, 7, 26, 8, 0)
     with open_db(db) as conn:
         rid = create_recurring(
@@ -445,7 +449,32 @@ def test_run_now_unpauses(db):
         set_status(conn, rid, GUILD, "paused", now_ts=now)
         result = run_now(conn, rid, GUILD, now_ts=now)
         assert result is not None and result.status == "spawned"
-        assert get_recurring(conn, rid, GUILD).status == "active"
+        assert len(pending_todos(conn, GUILD)) == 1
+        assert get_recurring(conn, rid, GUILD).status == "paused"
+
+
+def test_run_now_does_not_touch_other_guilds(db):
+    """Regression: run_now delegated to the guild-blind spawn_due with the
+    *requesting* guild's UTC offset, so one guild's button press spawned other
+    guilds' due chores and rewrote their next_run_at to the wrong wall clock."""
+    now = _epoch(2026, 7, 26, 12, 0)
+    with open_db(db) as conn:
+        mine = create_recurring(
+            conn, GUILD, task="Mine", recurrence="daily",
+            time_of_day=540, now_ts=now,
+        )
+        # Another guild with a chore that is already due, on a +10 offset.
+        theirs = create_recurring(
+            conn, 999, task="Theirs", recurrence="daily",
+            time_of_day=540, offset_hours=10.0, now_ts=now - 86400,
+        )
+        before = get_recurring(conn, theirs, 999).next_run_at
+
+        run_now(conn, mine, GUILD, now_ts=now, offset_hours=-5.0)
+
+        assert [r["task"] for r in pending_todos(conn, GUILD)] == ["Mine"]
+        assert pending_todos(conn, 999) == []
+        assert get_recurring(conn, theirs, 999).next_run_at == before
 
 
 def test_run_now_missing_returns_none(db):

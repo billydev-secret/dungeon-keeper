@@ -56,6 +56,15 @@ A single message the bot keeps at the **bottom of a configured channel**.
   unchanged — ages tick client-side, so "2h → 3h" costs no API call.
 - **Self-healing.** If the board message is deleted by hand, the next refresh
   re-posts it rather than going quietly dead.
+- **Post before delete.** The replacement is sent *first*, then the old board
+  removed. Deleting first would destroy a working board whenever the new
+  channel turns out to be unpostable — and if the target is the old channel
+  there'd be nothing left to heal from. Any `HTTPException` (not just
+  `Forbidden`) leaves the existing board untouched and surfaces a 400.
+- **Text channels only.** The picker filters `/api/meta/channels` down to text
+  channels: `guild.get_channel()` can't resolve a thread, so offering one would
+  400 on a channel the UI had just listed, and a thread can archive out from
+  under a board that lives by delete-and-repost.
 
 The view is a static-`custom_id` persistent view (`todo_board_add`,
 `todo_board_complete`) re-registered in `cog_load`, so buttons survive restarts.
@@ -81,8 +90,13 @@ Definitions live on the dashboard and materialise a normal todo row when due.
   the next future one, so three days of downtime spawns one row on boot.
 - **Resume** recomputes `next_run_at` from now, so a long pause doesn't come
   back and immediately fire a stale slot.
-- **Run now** routes through the same due-window the loop uses, so
-  skip-if-pending and the advance behave identically to a natural fire.
+- **Run now** adds one instance immediately and changes nothing else: not the
+  entry's `status`, not its `next_run_at`. Skip-if-pending still applies, so
+  pressing it twice can't stack duplicates. It deliberately does *not* go
+  through `spawn_due` — that scans every guild, so driving it from one guild's
+  request would spawn other guilds' due chores and rewrite their `next_run_at`
+  with the requesting guild's UTC offset. Leaving `status` alone likewise means
+  "add one now" can't quietly un-pause an entry paused for the holidays.
 - **Delete** stops the repeat but leaves any already-spawned row on the list —
   that's real outstanding work, and silently removing a task a mod is part-way
   through would be worse than orphaning it.

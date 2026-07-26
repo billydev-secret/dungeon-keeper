@@ -328,3 +328,23 @@ def test_moderator_can_manage_recurring(mod_client):
     """Recurring entries are worklist curation — mods, not just admins."""
     assert _make(mod_client).status_code == 200
     assert mod_client.get("/api/todos/recurring").status_code == 200
+
+
+def test_run_now_does_not_resume_a_paused_entry(authed_client):
+    """Adding one instance by hand must not silently restart the schedule."""
+    rid = _make(authed_client).json()["id"]
+    authed_client.post(f"/api/todos/recurring/{rid}/pause")
+    resp = authed_client.post(f"/api/todos/recurring/{rid}/run-now")
+    assert resp.status_code == 200
+    assert resp.json()["spawned"] is True
+    item = authed_client.get("/api/todos/recurring").json()["items"][0]
+    assert item["status"] == "paused"
+    assert authed_client.get("/api/todos").json()["pending_count"] == 1
+
+
+def test_run_now_leaves_the_schedule_alone(authed_client):
+    rid = _make(authed_client).json()["id"]
+    before = authed_client.get("/api/todos/recurring").json()["items"][0]["next_run_at"]
+    authed_client.post(f"/api/todos/recurring/{rid}/run-now")
+    after = authed_client.get("/api/todos/recurring").json()["items"][0]["next_run_at"]
+    assert after == before

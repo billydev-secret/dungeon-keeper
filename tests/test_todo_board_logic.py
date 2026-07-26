@@ -96,6 +96,17 @@ def test_columns_align_across_varied_id_widths():
     assert len({len(c) for c in cells}) == 1
 
 
+def test_wide_ids_are_never_truncated():
+    """Regression: the id is the handle a mod reads off the board to talk about
+    a task. A fixed 5-wide column rendered #10042 as "#100…", which could
+    collide with a different real id — the column grows instead."""
+    body = render_rows([_row(10042, "Post QOTD"), _row(7, "Short")])
+    assert "#10042" in body
+    assert "#100…" not in body
+    cells = [line.split("`")[1] for line in body.splitlines()]
+    assert len({len(c) for c in cells}) == 1
+
+
 # ── render_footer ─────────────────────────────────────────────────────
 
 

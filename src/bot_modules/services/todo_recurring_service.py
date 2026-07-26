@@ -330,27 +330,47 @@ def spawn_due(
     past *all* missed occurrences to the next future slot. So a bot that was
     down for three days spawns one row on boot, not three.
     """
-    results: list[SpawnResult] = []
-    for task in due_recurring(conn, now_ts):
-        offset = offset_hours_for(task.guild_id)
-        if has_open_instance(conn, task.id):
-            status = "skipped_pending"
-            todo_id = None
-        else:
-            todo_id = create_todo(
-                conn,
-                task.guild_id,
-                task.created_by,
-                task.task,
-                description=task.description,
-                recurring_id=task.id,
-                now_ts=now_ts,
-            )
-            status = "spawned"
+    return [
+        _spawn_one(
+            conn, task, now_ts=now_ts, offset_hours=offset_hours_for(task.guild_id)
+        )
+        for task in due_recurring(conn, now_ts)
+    ]
 
+
+def _spawn_one(
+    conn: sqlite3.Connection,
+    task: RecurringTask,
+    *,
+    now_ts: float,
+    offset_hours: float,
+    advance: bool = True,
+) -> SpawnResult:
+    """Materialise one definition, honouring skip-if-pending.
+
+    ``advance`` rewrites ``next_run_at`` past this occurrence — true for a
+    natural fire, false for a manual "Run now", which must not disturb the
+    schedule the mod configured.
+    """
+    if has_open_instance(conn, task.id):
+        status = "skipped_pending"
+        todo_id = None
+    else:
+        todo_id = create_todo(
+            conn,
+            task.guild_id,
+            task.created_by,
+            task.task,
+            description=task.description,
+            recurring_id=task.id,
+            now_ts=now_ts,
+        )
+        status = "spawned"
+
+    if advance:
         next_run = compute_next_run(
             now_utc=now_ts,
-            offset_hours=offset,
+            offset_hours=offset_hours,
             recurrence=task.recurrence,
             time_of_day_min=task.time_of_day,
             recur_days=list(task.recur_days),
@@ -361,15 +381,18 @@ def spawn_due(
             " WHERE id = ?",
             (next_run, now_ts, status, task.id),
         )
-        results.append(
-            SpawnResult(
-                recurring_id=task.id,
-                guild_id=task.guild_id,
-                status=status,
-                todo_id=todo_id,
-            )
+    else:
+        conn.execute(
+            "UPDATE todo_recurring SET last_run_at = ?, last_status = ? WHERE id = ?",
+            (now_ts, status, task.id),
         )
-    return results
+
+    return SpawnResult(
+        recurring_id=task.id,
+        guild_id=task.guild_id,
+        status=status,
+        todo_id=todo_id,
+    )
 
 
 def run_now(
@@ -380,24 +403,25 @@ def run_now(
     now_ts: float,
     offset_hours: float = 0.0,
 ) -> SpawnResult | None:
-    """Force a definition due immediately (dashboard "Run now").
+    """Add one instance of a definition immediately (dashboard "Run now").
 
-    Deliberately routed through the same due-window the loop uses rather than
-    inserting directly, so skip-if-pending and the ``next_run_at`` advance
-    behave identically to a natural fire.
+    Deliberately narrow: it touches **only this definition**, and changes
+    neither its ``status`` nor its ``next_run_at``. Skip-if-pending still
+    applies, so pressing it twice can't stack duplicates.
+
+    It does not go through ``spawn_due``: that scans every guild, so driving it
+    from one guild's request would spawn other guilds' due tasks *and* rewrite
+    their ``next_run_at`` using the requesting guild's UTC offset — silently
+    moving another server's daily chore to the wrong wall-clock time. Leaving
+    ``status`` alone likewise means "add one now" can't quietly un-pause an
+    entry a mod paused for the holidays.
     """
     task = get_recurring(conn, recurring_id, guild_id)
     if task is None:
         return None
-    conn.execute(
-        "UPDATE todo_recurring SET next_run_at = ?, status = 'active' WHERE id = ?",
-        (now_ts, recurring_id),
+    return _spawn_one(
+        conn, task, now_ts=now_ts, offset_hours=offset_hours, advance=False
     )
-    spawned = spawn_due(conn, now_ts=now_ts, offset_hours_for=lambda _gid: offset_hours)
-    for result in spawned:
-        if result.recurring_id == recurring_id:
-            return result
-    return None
 
 
 def describe_cadence(task: RecurringTask) -> str:

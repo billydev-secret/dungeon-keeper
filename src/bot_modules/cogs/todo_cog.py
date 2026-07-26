@@ -304,10 +304,10 @@ class TodoCog(commands.Cog):
     async def place_board(
         self, guild: discord.Guild, target: discord.TextChannel
     ) -> discord.Message | None:
-        """Delete the old board (if any) and post a fresh one at the bottom of
-        ``target``, persisting the new ids. Returns None when posting is
-        forbidden. Serialised per guild so a dashboard post and a sticky repost
-        can't race into two boards.
+        """Post a fresh board at the bottom of ``target`` and remove the old
+        one, persisting the new ids. Returns None when posting fails, leaving
+        any existing board untouched. Serialised per guild so a dashboard post
+        and a sticky repost can't race into two boards.
         """
         lock = self._board_locks.setdefault(guild.id, asyncio.Lock())
         async with lock:
@@ -323,6 +323,16 @@ class TodoCog(commands.Cog):
             (old_channel_id, old_message_id), rows = await asyncio.to_thread(_load)
             embed = await self.build_board_embed(guild, rows)
 
+            # Post the replacement BEFORE removing the old one. Deleting first
+            # would destroy a working board when the new channel turns out to
+            # be unpostable (no Send Messages, embed rejected, transient 5xx) —
+            # and if the target *is* the old channel there'd be nothing left to
+            # heal from. Worst case here is two boards for a moment.
+            try:
+                message = await target.send(embed=embed, view=TodoBoardView())
+            except discord.HTTPException:
+                return None
+
             if old_channel_id and old_message_id:
                 old_channel = guild.get_channel(old_channel_id)
                 if isinstance(old_channel, discord.TextChannel):
@@ -331,11 +341,6 @@ class TodoCog(commands.Cog):
                         await old.delete()
                     except discord.HTTPException:
                         pass
-
-            try:
-                message = await target.send(embed=embed, view=TodoBoardView())
-            except discord.Forbidden:
-                return None
 
             # Record the new id before the DB-save await so our own repost's
             # gateway event is recognised (and skipped) by the sticky listener.
@@ -418,8 +423,7 @@ class TodoCog(commands.Cog):
         except discord.NotFound:
             # The board was deleted out from under us — re-post it so the
             # feature heals itself rather than going quietly dead.
-            await self.place_board(guild, channel)
-            return True
+            return await self.place_board(guild, channel) is not None
         except discord.HTTPException:
             return False
         self._board_sig[guild_id] = signature

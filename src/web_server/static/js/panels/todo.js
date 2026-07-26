@@ -323,6 +323,10 @@ export function mount(container, initialParams = {}) {
   function renderBoard() {
     const board = state.board || { posted: false, channel_id: "0" };
     const locked = !state.canManageBoard;
+    // Keep a half-made selection across re-renders — refresh() also runs when
+    // a task is added or completed, and resetting the picker under the admin
+    // then reports "Pick a channel first" on a channel they had just chosen.
+    const selected = boardPicker?.getValue?.() ?? String(board.channel_id || "0");
     const where = board.posted && board.jump_url
       ? `Posted — <a href="${esc(board.jump_url)}" target="_blank" rel="noopener noreferrer"
            style="color:var(--accent,#5af)">jump to the board ↗</a>`
@@ -348,7 +352,7 @@ export function mount(container, initialParams = {}) {
     const picker = mountChannelPicker(
       boardBody.querySelector('[data-picker="board-channel"]'),
       state.channels,
-      String(board.channel_id || "0"),
+      selected,
       { label: "Board Channel" }
     );
     if (locked) {
@@ -387,6 +391,9 @@ export function mount(container, initialParams = {}) {
       showStatus(status, false, err.message);
     } finally {
       state.busy = false;
+      // The success path re-renders this button away; the error path doesn't,
+      // so re-enable or a failed post leaves it dead until a page reload.
+      btn.disabled = false;
     }
   });
 
@@ -607,7 +614,11 @@ export function mount(container, initialParams = {}) {
     // Channels first: the board card can't render its picker without them, and
     // a channel-load failure shouldn't block the task list from appearing.
     try {
-      state.channels = await loadChannels();
+      // Text channels only. /api/meta/channels also returns threads, but the
+      // board lives by delete-and-repost and a thread can archive out from
+      // under it — and guild.get_channel() doesn't resolve threads anyway, so
+      // offering one would just 400 with "That channel doesn't exist here."
+      state.channels = (await loadChannels()).filter((c) => c.type === "text");
     } catch {
       state.channels = [];
     }

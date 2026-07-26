@@ -16,7 +16,11 @@ MAX_BOARD_ROWS = 15
 
 #: Column width for the task cell, chosen so a row still fits on mobile.
 _TASK_WIDTH = 42
-_ID_WIDTH = 5
+
+#: Floor for the id column. It grows to fit the widest id on the board — the id
+#: is the handle a mod reads off the board to talk about a task, so it is never
+#: clipped (a truncated "#100…" could collide with a different real id).
+_MIN_ID_WIDTH = 5
 
 RECURRING_MARKER = "🔁"
 
@@ -54,10 +58,17 @@ def render_rows(rows: Sequence[Mapping[str, Any]], *, limit: int = MAX_BOARD_ROW
     if not rows:
         return EMPTY_BODY
 
+    shown = rows[:limit]
+    # Size the id column to the widest id actually on the board, so ids are
+    # padded for alignment but never truncated.
+    id_width = max(
+        _MIN_ID_WIDTH, max(len(f"#{row['id']}") for row in shown) + 1
+    )
+
     lines: list[str] = []
-    for row in rows[:limit]:
+    for row in shown:
         marker = f" {RECURRING_MARKER}" if row.get("recurring_id") else ""
-        cell = f"{_pad('#' + str(row['id']), _ID_WIDTH)}{_pad(_flatten(row['task']), _TASK_WIDTH)}"
+        cell = f"{f'#{row['id']}':<{id_width}}{_pad(_flatten(row['task']), _TASK_WIDTH)}"
         lines.append(f"`{cell}`{marker} {_rel(row['created_at'])}")
 
     hidden = len(rows) - limit

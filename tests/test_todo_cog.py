@@ -303,3 +303,46 @@ async def test_restick_ignores_other_channels(board_db):
     with patch.object(cog, "_schedule_restick") as sched:
         await cog._restick_board(msg)
     sched.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_place_board_keeps_the_old_one_when_posting_fails(board_db):
+    """Regression: the old board was deleted before the new post was attempted,
+    so moving to a channel the bot can't post in destroyed a working board and
+    left the DB pointing at a dead message."""
+    channel, _ = _fake_channel()
+    old = MagicMock(spec=discord.Message)
+    old.delete = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=old)
+    channel.send = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "no perms")
+    )
+    guild = _fake_guild(channel)
+    cog = _board_cog(board_db, guild)
+    with open_db(board_db) as conn:
+        save_board(conn, 123, 555, 111)
+
+    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+               new=AsyncMock(return_value=discord.Color.blurple())):
+        assert await cog.place_board(guild, channel) is None
+
+    old.delete.assert_not_awaited()
+    with open_db(board_db) as conn:
+        board = get_board(conn, 123)
+    assert (board.channel_id, board.message_id) == (555, 111)
+
+
+@pytest.mark.asyncio
+async def test_place_board_survives_non_forbidden_errors(board_db):
+    """Only Forbidden was caught, so a rate-limit or 50035 escaped the cog and
+    surfaced as an unhandled 500 from the dashboard route."""
+    channel, _ = _fake_channel()
+    channel.send = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=500), "boom")
+    )
+    guild = _fake_guild(channel)
+    cog = _board_cog(board_db, guild)
+
+    with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
+               new=AsyncMock(return_value=discord.Color.blurple())):
+        assert await cog.place_board(guild, channel) is None
