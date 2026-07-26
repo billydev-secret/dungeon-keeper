@@ -20,7 +20,22 @@ Argument shape — an optional leading model alias, then the feature name as pro
 Do exactly this, stopping with a clear message on any problem:
 
 1. If `$ARGUMENTS` is empty, ask the user for a feature name and stop.
-2. Run it — the launcher does the parsing, normalization, and every guard:
+2. **Brief the worker.** If this conversation already holds context the new session
+   would otherwise have to re-derive — what the bug actually is, which commits
+   touched the area, a sibling session working the same file, a wrong assumption to
+   avoid — write it to a file and pass `--brief-file`. It becomes the worker's
+   opening prompt, so it starts informed instead of starting cold:
+
+       python3 scripts/dk_session.py new $ARGUMENTS --brief-file <path>
+
+   Keep it to what a competent colleague couldn't get from the repo in five minutes.
+   Don't restate CLAUDE.md — the worker loads it. Don't invent findings you haven't
+   verified. If you're unsure whether something is true, say so in the briefing or
+   leave it out; a confident wrong steer is worse than no briefing. End with what you
+   want done first, and say so plainly if it's "investigate, don't edit yet".
+
+   With no such context, spawn it bare — the launcher does the parsing,
+   normalization, and every guard:
 
        python3 scripts/dk_session.py new $ARGUMENTS
 

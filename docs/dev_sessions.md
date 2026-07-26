@@ -60,6 +60,25 @@ name as everything else.
 
 Pass `--no-remote-control` to `dk_session.py new` for a local-only session.
 
+## Briefing a worker at launch
+
+`--brief "text"` or `--brief-file <path>` hands the new session an opening prompt, so
+it starts with the context the spawning session already has instead of re-deriving it:
+
+    python scripts/dk_session.py new opus sticky panel reposting \
+      --brief-file /tmp/brief.md
+
+The text is appended as `claude`'s trailing positional argument — its first prompt —
+after every flag, and shell-quoted, so newlines, backticks and apostrophes in prose
+survive intact. The worker begins work immediately on launch; a briefing that ends
+"investigate and report, don't edit yet" is how to spawn one that thinks first.
+
+Worth passing: the actual diagnosis behind a bug, the commits that touched the area,
+a sibling session live in the same file, an assumption already ruled out. Not worth
+passing: anything in CLAUDE.md (the worker loads it), or a finding you haven't
+verified — a confident wrong steer costs more than no briefing, because the worker
+has no reason to doubt it.
+
 ## Auto mode is the default
 
 Workers launch with `--permission-mode auto`. A session you drive from a phone should

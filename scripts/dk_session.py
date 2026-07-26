@@ -101,7 +101,8 @@ def worktree_path(main_repo: Path, name: str) -> Path:
 
 def claude_command(model: str | None, name: str | None = None,
                    remote: bool = True,
-                   permission_mode: str | None = DEFAULT_PERMISSION_MODE) -> str:
+                   permission_mode: str | None = DEFAULT_PERMISSION_MODE,
+                   brief: str | None = None) -> str:
     """Shell line for the window: run claude, then keep the window alive.
 
     Remote Control is on by default and named after the feature. The name has
@@ -121,18 +122,25 @@ def claude_command(model: str | None, name: str | None = None,
             cmd += f" {shlex.quote(name)}"
     if permission_mode:
         cmd += f" --permission-mode {shlex.quote(permission_mode)}"
+    if brief:
+        # Trailing positional: claude treats it as the session's first prompt,
+        # so the worker starts with its context already in hand instead of
+        # waiting to be told what it is. shlex.quote survives newlines and
+        # quotes, which a hand-written briefing will contain.
+        cmd += f" {shlex.quote(brief)}"
     return f"{cmd}; exec $SHELL"
 
 
 def new_window_args(name: str, path: Path, model: str | None,
                     remote: bool = True,
-                    permission_mode: str | None = DEFAULT_PERMISSION_MODE) -> list[str]:
+                    permission_mode: str | None = DEFAULT_PERMISSION_MODE,
+                    brief: str | None = None) -> list[str]:
     return [
         "tmux", "new-window",
         "-d",
         "-n", name,
         "-c", str(path),
-        claude_command(model, name, remote, permission_mode),
+        claude_command(model, name, remote, permission_mode, brief),
     ]
 
 
@@ -291,14 +299,24 @@ def cmd_new(args: argparse.Namespace) -> int:
         print("window: skipped (--no-window)")
         return 0
 
+    brief = args.brief
+    if args.brief_file:
+        try:
+            brief = Path(args.brief_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            die(f"could not read --brief-file: {exc}")
+
     run(new_window_args(
         name, path, model,
         remote=not args.no_remote_control,
         permission_mode=args.permission_mode,
+        brief=brief,
     ))
     label = model or "default model"
     remote = "remote control off" if args.no_remote_control else f"remote: {name}"
     print(f"window:   {name}  ({label}, {remote}, {args.permission_mode} mode)")
+    if brief:
+        print(f"briefed:  {len(brief)} chars delivered as the opening prompt")
     print(f"attach:   tmux select-window -t {name}")
     return 0
 
@@ -378,6 +396,13 @@ def main(argv: list[str] | None = None) -> int:
         "--permission-mode", choices=PERMISSION_MODES,
         default=DEFAULT_PERMISSION_MODE,
         help=f"worker permission mode (default: {DEFAULT_PERMISSION_MODE})",
+    )
+    brief_group = p_new.add_mutually_exclusive_group()
+    brief_group.add_argument(
+        "--brief", help="opening prompt handed to the worker at launch",
+    )
+    brief_group.add_argument(
+        "--brief-file", help="read the opening prompt from a file (better for long briefings)",
     )
     p_new.set_defaults(func=cmd_new)
 

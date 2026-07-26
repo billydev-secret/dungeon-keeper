@@ -8,6 +8,7 @@ all have to agree — so each transform gets a case. The subprocess plumbing
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -146,6 +147,42 @@ def test_default_permission_mode_is_not_bypass():
     """auto still runs calls past the classifier; bypass would not."""
     assert dk_session.DEFAULT_PERMISSION_MODE == "auto"
     assert dk_session.DEFAULT_PERMISSION_MODE in dk_session.PERMISSION_MODES
+
+
+def test_no_brief_leaves_the_worker_idle():
+    """Without a briefing the command ends at its flags — no stray positional."""
+    cmd = dk_session.claude_command("opus", "casino-derby")
+    assert cmd.endswith("--permission-mode auto; exec $SHELL")
+
+
+def test_brief_is_appended_as_the_opening_prompt():
+    cmd = dk_session.claude_command("opus", "casino-derby", brief="fix the parser")
+    assert "'fix the parser'" in cmd
+    # Must come after every flag, or claude reads it as a flag's value.
+    assert cmd.index("fix the parser") > cmd.index("--permission-mode")
+
+
+@pytest.mark.parametrize(
+    "brief",
+    [
+        "it's a quote",                      # apostrophe
+        'say "hello"',                       # double quotes
+        "line one\nline two",                # newlines — briefings are multi-line
+        "back\\slash and $VAR and `cmd`",    # shell metacharacters
+    ],
+)
+def test_brief_survives_shell_quoting(brief):
+    """A briefing is prose; it must not be able to break out into the shell."""
+    cmd = dk_session.claude_command("opus", "x", brief=brief)
+    tail = cmd[: -len("; exec $SHELL")]
+    assert shlex.split(tail)[-1] == brief
+
+
+def test_new_window_args_carries_the_brief():
+    args = dk_session.new_window_args(
+        "casino-derby", Path("/tmp/wt"), "opus", brief="ship the fix"
+    )
+    assert "'ship the fix'" in args[-1]
 
 
 def test_new_window_args_names_window_after_branch():
