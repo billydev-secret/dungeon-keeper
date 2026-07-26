@@ -57,18 +57,10 @@ class RecurringTask:
     created_at: float = 0.0
 
 
-def _parse_days(raw) -> tuple[int, ...]:
-    """Weekday set from stored JSON — tolerant of nulls and junk."""
-    if not raw:
-        return ()
-    try:
-        parsed = json.loads(raw)
-    except (TypeError, ValueError):
-        return ()
-    if not isinstance(parsed, list):
-        return ()
+def normalize_days(days: Iterable | None) -> tuple[int, ...]:
+    """Clean a weekday set: dedup, sort, drop anything outside Mon=0..Sun=6."""
     out: set[int] = set()
-    for item in parsed:
+    for item in days or ():
         try:
             day = int(item)
         except (TypeError, ValueError):
@@ -78,9 +70,15 @@ def _parse_days(raw) -> tuple[int, ...]:
     return tuple(sorted(out))
 
 
-def normalize_days(days: Iterable | None) -> tuple[int, ...]:
-    """Clean a caller-supplied weekday set (dedup, sort, drop out-of-range)."""
-    return _parse_days(json.dumps(list(days))) if days else ()
+def _parse_days(raw) -> tuple[int, ...]:
+    """Weekday set from stored JSON — tolerant of nulls and junk."""
+    if not raw:
+        return ()
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    return normalize_days(parsed) if isinstance(parsed, list) else ()
 
 
 def _row_to_task(row: sqlite3.Row) -> RecurringTask:

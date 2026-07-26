@@ -141,12 +141,15 @@ def _fake_guild(channel):
 
 
 def _fake_channel():
+    """A channel whose partial-message handle is the same mock `send` returns,
+    so a test can assert on edits and deletes through one object."""
     channel = MagicMock(spec=discord.TextChannel)
     channel.id = 555
     message = MagicMock(spec=discord.Message)
     message.id = 666
     message.edit = AsyncMock()
-    channel.fetch_message = AsyncMock(return_value=message)
+    message.delete = AsyncMock()
+    channel.get_partial_message = MagicMock(return_value=message)
     channel.send = AsyncMock(return_value=message)
     return channel, message
 
@@ -161,7 +164,7 @@ async def test_refresh_noop_without_a_posted_board(board_db):
     channel, _ = _fake_channel()
     cog = _board_cog(board_db, _fake_guild(channel))
     assert await cog.refresh_board(123) is False
-    channel.fetch_message.assert_not_awaited()
+    channel.get_partial_message.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -191,9 +194,11 @@ async def test_refresh_edits_then_skips_when_unchanged(board_db):
 async def test_refresh_reposts_when_the_board_was_deleted(board_db):
     """A board deleted by hand heals itself instead of going quietly dead."""
     channel, _ = _fake_channel()
-    channel.fetch_message = AsyncMock(
-        side_effect=discord.NotFound(MagicMock(status=404), "gone")
-    )
+    gone = MagicMock()
+    gone.edit = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
+    # The self-heal path reposts, which also deletes the (already gone) old one.
+    gone.delete = AsyncMock()
+    channel.get_partial_message = MagicMock(return_value=gone)
     cog = _board_cog(board_db, _fake_guild(channel))
     with open_db(board_db) as conn:
         save_board(conn, 123, 555, 666)
@@ -229,9 +234,6 @@ async def test_place_board_persists_ids_and_renders_tasks(board_db):
 async def test_place_board_deletes_the_previous_one(board_db):
     """Delete-and-repost is how the board stays last; the old one must go."""
     channel, message = _fake_channel()
-    old = MagicMock(spec=discord.Message)
-    old.delete = AsyncMock()
-    channel.fetch_message = AsyncMock(return_value=old)
     guild = _fake_guild(channel)
     cog = _board_cog(board_db, guild)
     with open_db(board_db) as conn:
@@ -240,13 +242,13 @@ async def test_place_board_deletes_the_previous_one(board_db):
     with patch("bot_modules.cogs.todo_cog.resolve_accent_color",
                new=AsyncMock(return_value=discord.Color.blurple())):
         await cog.place_board(guild, channel)
-    old.delete.assert_awaited_once()
+    channel.get_partial_message.assert_called_once_with(111)
+    message.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_unpost_board_clears_placement(board_db):
     channel, message = _fake_channel()
-    message.delete = AsyncMock()
     guild = _fake_guild(channel)
     cog = _board_cog(board_db, guild)
     with open_db(board_db) as conn:

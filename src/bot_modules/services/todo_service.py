@@ -80,27 +80,31 @@ def list_todos(
     ).fetchall()
 
 
+#: The only columns the board and its Complete picker actually read. Selecting
+#: the full row would haul up to 200 × (500-char task + 1000-char description)
+#: out of SQLite every refresh to render fifteen short lines.
+_BOARD_COLS = "id, task, description, created_at, recurring_id"
+
+
 def pending_todos(
     conn: sqlite3.Connection, guild_id: int, *, limit: int = LIST_LIMIT
 ) -> list[sqlite3.Row]:
     """Outstanding todos, **oldest first** — the board's reading order, so the
     task that has been waiting longest sits at the top."""
     return conn.execute(
-        f"SELECT {_TODO_COLS} FROM todos"
+        f"SELECT {_BOARD_COLS} FROM todos"
         f" WHERE guild_id = ? AND completed_at IS NULL"
         f" ORDER BY created_at ASC LIMIT ?",
         (guild_id, int(limit)),
     ).fetchall()
 
 
-def get_todo(
-    conn: sqlite3.Connection, todo_id: int, guild_id: int
-) -> sqlite3.Row | None:
-    """One todo, scoped to its guild (never trust a bare id from a request)."""
+def pending_count(conn: sqlite3.Connection, guild_id: int) -> int:
+    """How many todos are outstanding, uncapped by any list limit."""
     return conn.execute(
-        f"SELECT {_TODO_COLS} FROM todos WHERE id = ? AND guild_id = ?",
-        (todo_id, guild_id),
-    ).fetchone()
+        "SELECT COUNT(*) FROM todos WHERE guild_id = ? AND completed_at IS NULL",
+        (guild_id,),
+    ).fetchone()[0]
 
 
 def complete_todo(

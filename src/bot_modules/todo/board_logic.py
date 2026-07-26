@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
+from bot_modules.services.embeds import pad_cell, rel_ts
+
 #: How many pending tasks the board lists before it defers to the dashboard.
 #: Discord caps a description at 4096 chars; this keeps us far under it and
 #: keeps the board glanceable rather than a wall.
@@ -27,37 +29,28 @@ RECURRING_MARKER = "🔁"
 EMPTY_BODY = "Nothing pending — the list is clear. ✨"
 
 
-def _rel(ts: float) -> str:
-    """A Discord relative timestamp — ticks live in every client."""
-    return f"<t:{int(ts)}:R>"
-
-
-def _pad(text: str, width: int) -> str:
-    """Clip + left-pad a table cell for a fixed-width inline-code column.
-
-    Columns align by wrapping cells in backticks (monospace) and padding to
-    width — code blocks would align too, but they swallow the `<t:…:R>`
-    timestamps, which must stay live.
-    """
-    if len(text) > width:
-        text = text[: width - 1] + "…"
-    return text.ljust(width)
-
-
 def _flatten(text: str) -> str:
     """Collapse a task onto one line so a pasted multi-line task can't break the grid."""
     return " ".join(str(text or "").split())
 
 
-def render_rows(rows: Sequence[Mapping[str, Any]], *, limit: int = MAX_BOARD_ROWS) -> str:
+def render_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    total: int | None = None,
+    limit: int = MAX_BOARD_ROWS,
+) -> str:
     """The board body: one padded monospace cell per task, age outside the span.
 
     ``rows`` are pending todos oldest-first (see ``todo_service.pending_todos``),
-    so the longest-waiting task sits at the top where it nags.
+    so the longest-waiting task sits at the top where it nags. ``total`` is how
+    many are pending overall — the caller fetches only a screenful, so it can't
+    be inferred from ``len(rows)``.
     """
     if not rows:
         return EMPTY_BODY
 
+    total = len(rows) if total is None else total
     shown = rows[:limit]
     # Size the id column to the widest id actually on the board, so ids are
     # padded for alignment but never truncated.
@@ -68,33 +61,37 @@ def render_rows(rows: Sequence[Mapping[str, Any]], *, limit: int = MAX_BOARD_ROW
     lines: list[str] = []
     for row in shown:
         marker = f" {RECURRING_MARKER}" if row.get("recurring_id") else ""
-        cell = f"{f'#{row['id']}':<{id_width}}{_pad(_flatten(row['task']), _TASK_WIDTH)}"
-        lines.append(f"`{cell}`{marker} {_rel(row['created_at'])}")
+        ident = f"#{row['id']}".ljust(id_width)
+        cell = ident + pad_cell(_flatten(row["task"]), _TASK_WIDTH)
+        lines.append(f"`{cell}`{marker} {rel_ts(row['created_at'])}")
 
-    hidden = len(rows) - limit
+    hidden = total - len(shown)
     if hidden > 0:
         lines.append(f"\n…and **{hidden}** more on the dashboard.")
     return "\n".join(lines)
 
 
-def render_footer(rows: Sequence[Mapping[str, Any]]) -> str:
-    pending = len(rows)
-    noun = "task" if pending == 1 else "tasks"
-    return f"{pending} pending {noun} · updates automatically"
+def render_footer(total: int) -> str:
+    noun = "task" if total == 1 else "tasks"
+    return f"{total} pending {noun} · updates automatically"
 
 
-def board_signature(rows: Iterable[Mapping[str, Any]]) -> tuple:
+def board_signature(
+    rows: Iterable[Mapping[str, Any]], total: int | None = None
+) -> tuple:
     """A hashable fingerprint of what the board *shows*.
 
     The refresh loop compares this against the last edit and skips the API call
     when nothing changed. Deliberately excludes ``created_at`` age text —
     ``<t:…:R>`` ticks client-side, so a board whose only change is "2h" becoming
-    "3h" needs no edit at all.
+    "3h" needs no edit at all. ``total`` is part of the fingerprint because
+    completing a task *below* the visible window still changes the footer.
     """
-    return tuple(
+    shown = tuple(
         (row["id"], _flatten(row["task"]), bool(row.get("recurring_id")))
         for row in rows
     )
+    return (shown, len(shown) if total is None else total)
 
 
 def complete_option_label(row: Mapping[str, Any]) -> tuple[str, str]:

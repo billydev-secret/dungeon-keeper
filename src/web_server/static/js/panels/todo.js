@@ -2,7 +2,7 @@ import { api, apiPost, apiPut, apiDelete, esc, fmtTs, fmtAge } from "../api.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { syncHash } from "../report-helpers.js";
-import { loadChannels, mountChannelPicker, showStatus } from "../config-helpers.js";
+import { guardForm, loadChannels, mountChannelPicker, showStatus } from "../config-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -320,6 +320,8 @@ export function mount(container, initialParams = {}) {
 
   // ── board card ──────────────────────────────────────────────────────
 
+  let boardPicker = null;
+
   function renderBoard() {
     const board = state.board || { posted: false, channel_id: "0" };
     const locked = !state.canManageBoard;
@@ -349,7 +351,7 @@ export function mount(container, initialParams = {}) {
         ${locked ? "Only administrators can post or move the board." : where}
       </div>`;
 
-    const picker = mountChannelPicker(
+    boardPicker = mountChannelPicker(
       boardBody.querySelector('[data-picker="board-channel"]'),
       state.channels,
       selected,
@@ -358,10 +360,7 @@ export function mount(container, initialParams = {}) {
     if (locked) {
       boardBody.querySelectorAll("input,select,button").forEach((el) => { el.disabled = true; });
     }
-    return picker;
   }
-
-  let boardPicker = null;
 
   boardBody.addEventListener("click", async (e) => {
     const btn = e.target.closest("button[data-act]");
@@ -433,6 +432,10 @@ export function mount(container, initialParams = {}) {
         e.target.value === "weekly" ? "" : "none";
     });
 
+    // Unsaved-edits guard, same as every other config form — a half-filled
+    // recurring task shouldn't vanish on a sidebar click.
+    guardForm(form);
+
     form.querySelector("[data-rec-cancel]")?.addEventListener("click", () => {
       state.editingRecurringId = null;
       renderRecurring();
@@ -503,13 +506,13 @@ export function mount(container, initialParams = {}) {
         await apiPost(`/api/todos/recurring/${id}/${action}`, {});
       } else if (act === "run-now") {
         const res = await apiPost(`/api/todos/recurring/${id}/run-now`, {});
+        const already = res?.spawned === false;
         toast(
-          res?.spawned === false
-            ? "Already on the list — nothing new added."
-            : "Added to the list.",
-          res?.spawned === false ? "info" : "success"
+          already ? "Already on the list — nothing new added." : "Added to the list.",
+          already ? "info" : "success"
         );
-        await refresh();
+        await Promise.all([refresh(), refreshRecurring()]);
+        return;
       }
       await refreshRecurring();
     } catch (err) {
@@ -547,7 +550,7 @@ export function mount(container, initialParams = {}) {
       state.canManageBoard = !!data.can_manage_board;
       renderStats();
       render();
-      boardPicker = renderBoard();
+      renderBoard();
     } catch (err) {
       listEl.innerHTML = renderError(`Couldn't load the todo list — ${err.message}. Reload the page to try again.`);
       detailEl.innerHTML = "";
@@ -560,7 +563,6 @@ export function mount(container, initialParams = {}) {
     if (!task) return;
     addBtn.disabled = true;
     addStatus.textContent = "";
-    addStatus.style.color = "";
     try {
       await apiPost("/api/todos", { task });
       addInput.value = "";
@@ -570,8 +572,7 @@ export function mount(container, initialParams = {}) {
       });
       await refresh();
     } catch (err) {
-      addStatus.textContent = `Couldn't add that task — ${err.message}`;
-      addStatus.style.color = "var(--red, #e55)";
+      showStatus(addStatus, false, `Couldn't add that task — ${err.message}`);
     } finally {
       addBtn.disabled = false;
     }

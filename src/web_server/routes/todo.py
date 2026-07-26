@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+import discord
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
@@ -14,7 +15,6 @@ from bot_modules.services.todo_recurring_service import (
     create_recurring,
     delete_recurring,
     describe_cadence,
-    get_recurring,
     list_recurring,
     run_now,
     set_status,
@@ -60,7 +60,7 @@ class RecurringBody(BaseModel):
     recur_days: list[int] = []
 
 
-def _recurring_dict(task, *, tz_offset: float) -> dict:
+def _recurring_dict(task) -> dict:
     return {
         "id": task.id,
         "task": task.task,
@@ -240,7 +240,9 @@ async def set_board(
         return {"ok": True, "posted": False}
 
     channel = guild.get_channel(channel_id)
-    if channel is None or not hasattr(channel, "send"):
+    if not isinstance(channel, discord.TextChannel):
+        # Threads and voice channels are filtered out of the picker; a duck-type
+        # check here would admit types place_board is not typed to accept.
         raise HTTPException(status_code=400, detail="That channel doesn't exist here.")
 
     message = await cog.place_board(guild, channel)
@@ -263,7 +265,7 @@ async def list_recurring_endpoint(request: Request, _: AuthenticatedUser = _MOD)
     def _q():
         with ctx.open_db() as conn:
             tz = get_tz_offset_hours(conn, guild_id)
-            items = [_recurring_dict(t, tz_offset=tz) for t in list_recurring(conn, guild_id)]
+            items = [_recurring_dict(t) for t in list_recurring(conn, guild_id)]
         return {"items": items, "tz_offset_hours": tz}
 
     return await run_query(_q)
@@ -354,56 +356,72 @@ async def delete_recurring_endpoint(
     return {"ok": True}
 
 
-@router.post("/todos/recurring/{recurring_id}/{action}")
-async def recurring_action(
-    request: Request,
-    recurring_id: int,
-    action: str,
-    _: AuthenticatedUser = _MOD,
-):
-    if action not in ("pause", "resume", "run-now"):
-        raise HTTPException(status_code=404, detail="Unknown action.")
+_NOT_FOUND = "That recurring task no longer exists."
 
+
+async def _set_recurring_status(request: Request, recurring_id: int, status: str):
+    """Shared body for pause/resume — the only thing that differs is the status."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
     def _q():
-        # "Run now" reads (is the last instance still open?) then writes, so it
-        # takes the write lock up front — otherwise it and the background
-        # spawner could both act on the same snapshot and insert two copies.
-        opener = open_db_immediate(ctx.db_path) if action == "run-now" else ctx.open_db()
-        with opener as conn:
-            tz = get_tz_offset_hours(conn, guild_id)
-            if action == "run-now":
-                if get_recurring(conn, recurring_id, guild_id) is None:
-                    return None
-                result = run_now(
-                    conn,
-                    recurring_id,
-                    guild_id,
-                    now_ts=time.time(),
-                    offset_hours=tz,
-                )
-                return {"spawned": result.status == "spawned" if result else False}
-            ok = set_status(
+        with ctx.open_db() as conn:
+            return set_status(
                 conn,
                 recurring_id,
                 guild_id,
-                "paused" if action == "pause" else "active",
-                offset_hours=tz,
+                status,
+                offset_hours=get_tz_offset_hours(conn, guild_id),
                 now_ts=time.time(),
             )
-            return {"ok": True} if ok else None
+
+    if not await run_query(_q):
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    return {"ok": True}
+
+
+@router.post("/todos/recurring/{recurring_id}/pause")
+async def pause_recurring(
+    request: Request, recurring_id: int, _: AuthenticatedUser = _MOD
+):
+    return await _set_recurring_status(request, recurring_id, "paused")
+
+
+@router.post("/todos/recurring/{recurring_id}/resume")
+async def resume_recurring(
+    request: Request, recurring_id: int, _: AuthenticatedUser = _MOD
+):
+    return await _set_recurring_status(request, recurring_id, "active")
+
+
+@router.post("/todos/recurring/{recurring_id}/run-now")
+async def run_recurring_now(
+    request: Request, recurring_id: int, _: AuthenticatedUser = _MOD
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        # Read-then-write (is the last instance still open?), so take the write
+        # lock up front — otherwise this and the background spawner could act
+        # on the same snapshot and insert two copies.
+        with open_db_immediate(ctx.db_path) as conn:
+            return run_now(
+                conn,
+                recurring_id,
+                guild_id,
+                now_ts=time.time(),
+                offset_hours=get_tz_offset_hours(conn, guild_id),
+            )
 
     result = await run_query(_q)
     if result is None:
-        raise HTTPException(status_code=404, detail="That recurring task no longer exists.")
-    if action == "run-now":
-        await _refresh_board(ctx, guild_id)
-        if not result["spawned"]:
-            return {
-                "ok": True,
-                "spawned": False,
-                "detail": "That task is already on the list — nothing new added.",
-            }
-    return {"ok": True, **result}
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    await _refresh_board(ctx, guild_id)
+    if result.status != "spawned":
+        return {
+            "ok": True,
+            "spawned": False,
+            "detail": "That task is already on the list — nothing new added.",
+        }
+    return {"ok": True, "spawned": True}

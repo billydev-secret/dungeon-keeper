@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -63,7 +65,9 @@ def _attach_bot(fake_ctx, *, channel=True, perm_bits=0x8):
     guild = MagicMock()
     guild.id = GUILD
     guild.get_member.return_value = member
-    target = MagicMock() if channel else None
+    # spec'd as TextChannel: the route isinstance-checks it, matching what
+    # place_board is annotated to accept.
+    target = MagicMock(spec=discord.TextChannel) if channel else None
     if target is not None:
         target.id = 555
         target.send = AsyncMock()

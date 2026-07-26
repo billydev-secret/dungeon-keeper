@@ -36,6 +36,7 @@ from bot_modules.services.economy_quests_service import (
     spotlight_kind,
 )
 from bot_modules.services.economy_service import load_econ_settings
+from bot_modules.services.embeds import pad_cell, rel_ts
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -109,21 +110,11 @@ def community_progress_bar(current: int, target: int, width: int = 12) -> str:
     return f"{bar} {current:,}/{target:,}"
 
 
-def _rel(ts: float) -> str:
-    """A Discord relative timestamp — ticks live in every client."""
-    return f"<t:{int(ts)}:R>"
-
-
-def _pad(text: str, width: int) -> str:
-    """Clip + left-pad a table cell for a fixed-width inline-code column.
-
-    Sections align their columns by wrapping cells in backticks (monospace)
-    and padding to the column width — code blocks would align too, but they
-    swallow bold and `<t:…:R>` timestamps, which must stay live.
-    """
-    if len(text) > width:
-        text = text[: width - 1] + "…"
-    return text.ljust(width)
+# Shared monospace-table helpers (docs/embed_style_guide.md names them).
+# Aliased to the historical private names so the ~20 call sites below and the
+# modules that import them from here keep working.
+_pad = pad_cell
+_rel = rel_ts
 
 
 @dataclass(frozen=True)

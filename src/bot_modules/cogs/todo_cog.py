@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import defaultdict
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -10,10 +11,10 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db_immediate
-from bot_modules.economy.guide import should_restick_guide
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
+from bot_modules.core.sticky import should_restick_guide
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
-from bot_modules.services.todo_recurring_service import spawn_due
+from bot_modules.services.todo_recurring_service import due_recurring, spawn_due
 from bot_modules.services.todo_service import (
     TASK_MAX_LEN,
     clear_board,
@@ -21,6 +22,7 @@ from bot_modules.services.todo_service import (
     create_todo,
     get_board,
     guilds_with_board,
+    pending_count,
     pending_todos,
     save_board,
 )
@@ -47,7 +49,6 @@ _RESTICK_DELAY = 6.0
 #: How often the background loop spawns due recurring tasks and repaints boards.
 _LOOP_INTERVAL = 60.0
 
-_MOD_ONLY_MSG = "❌ Only moderators can manage the todo list."
 
 
 class TodoAddModal(discord.ui.Modal, title="Add a Task"):
@@ -77,21 +78,15 @@ class TodoAddModal(discord.ui.Modal, title="Add a Task"):
                 "❌ Task cannot be empty.", ephemeral=True
             )
             return
-        description = str(self.notes.value).strip() or None
-        guild_id = interaction.guild.id
-        user_id = interaction.user.id
-
-        def _create() -> int:
-            with cog.ctx.open_db() as conn:
-                return create_todo(
-                    conn, guild_id, user_id, text, description=description
-                )
-
-        todo_id = await asyncio.to_thread(_create)
-        await interaction.response.send_message(
-            f"Added todo #{todo_id}: {text}", ephemeral=True
+        todo_id = await cog.add_todo(
+            interaction.guild.id,
+            interaction.user.id,
+            text,
+            description=str(self.notes.value).strip() or None,
         )
-        await cog.refresh_board(guild_id)
+        await interaction.response.send_message(
+            f"Todo #{todo_id} added: {text}", ephemeral=True
+        )
 
 
 class TodoCompleteSelect(discord.ui.Select):
@@ -210,13 +205,18 @@ async def _unavailable(interaction: discord.Interaction) -> None:
     )
 
 
-async def _require_mod(interaction: discord.Interaction) -> bool:
-    """Board buttons are moderator-only, matching `/todo` and the web routes."""
+async def _require_mod(
+    interaction: discord.Interaction, action: str = "manage the todo list"
+) -> bool:
+    """The one moderator gate for every Discord surface of the todo list —
+    `/todo` and both board buttons. The web routes enforce the same tier."""
     user = interaction.user
     if not isinstance(user, discord.Member) or not has_mod_or_admin_permissions(
         user.guild_permissions
     ):
-        await interaction.response.send_message(_MOD_ONLY_MSG, ephemeral=True)
+        await interaction.response.send_message(
+            f"❌ Only moderators can {action}.", ephemeral=True
+        )
         return False
     return True
 
@@ -227,8 +227,17 @@ class TodoCog(commands.Cog):
         self.ctx = ctx
         # guild → (monotonic expiry, channel_id, message_id)
         self._board_ref: dict[int, tuple[float, int, int]] = {}
-        self._board_locks: dict[int, asyncio.Lock] = {}
+        # defaultdict, not setdefault: the latter builds a throwaway Lock on
+        # every placement call just to discard it.
+        self._board_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._restick_tasks: dict[int, asyncio.Task[None]] = {}
+        # Guilds that actually have a board, republished each tick. Lets the
+        # on_message listener reject the common case with a set lookup.
+        self._boards: set[int] = set()
+        self._boards_known = False
+        # Guilds whose in-place edit failed; the loop retries these next tick
+        # so a transient Discord error doesn't strand a stale board.
+        self._retry_refresh: set[int] = set()
         # guild → signature of what the board last rendered, so an unchanged
         # board costs no API call.
         self._board_sig: dict[int, tuple] = {}
@@ -252,12 +261,7 @@ class TodoCog(commands.Cog):
             return
         # The todo list is a mod worklist, curated from the dashboard — only
         # moderators may add to it (the web endpoints are mod-gated too).
-        if not isinstance(
-            interaction.user, discord.Member
-        ) or not has_mod_or_admin_permissions(interaction.user.guild_permissions):
-            await interaction.response.send_message(
-                "❌ Only moderators can add to the todo list.", ephemeral=True
-            )
+        if not await _require_mod(interaction, "add to the todo list"):
             return
         task = task.strip()
         if not task:
@@ -268,36 +272,79 @@ class TodoCog(commands.Cog):
                 f"❌ Task must be {TASK_MAX_LEN} characters or fewer.", ephemeral=True
             )
             return
-        guild_id = interaction.guild.id
-        user_id = interaction.user.id
-
-        def _do_create_todo():
-            with self.ctx.open_db() as conn:
-                return create_todo(conn, guild_id, user_id, task)
-
-        todo_id = await asyncio.to_thread(_do_create_todo)
+        todo_id = await self.add_todo(
+            interaction.guild.id, interaction.user.id, task
+        )
         await interaction.response.send_message(
             f"Todo #{todo_id} added: {task}", ephemeral=True
         )
+
+    async def add_todo(
+        self,
+        guild_id: int,
+        user_id: int,
+        task: str,
+        *,
+        description: str | None = None,
+    ) -> int:
+        """Create a task and repaint the board. Shared by `/todo` and the
+        board's Add button so the two can't drift."""
+
+        def _create() -> int:
+            with self.ctx.open_db() as conn:
+                return create_todo(
+                    conn, guild_id, user_id, task, description=description
+                )
+
+        todo_id = await asyncio.to_thread(_create)
         await self.refresh_board(guild_id)
+        return todo_id
 
     # ── board rendering ──────────────────────────────────────────────────
 
     async def build_board_embed(
-        self, guild: discord.Guild, rows: list[dict]
+        self, guild: discord.Guild, rows: list[dict], total: int
     ) -> discord.Embed:
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = discord.Embed(
             title="📋 Server Todo",
-            description=render_rows(rows, limit=MAX_BOARD_ROWS),
+            description=render_rows(rows, total=total),
             color=accent,
         )
-        embed.set_footer(text=render_footer(rows))
+        embed.set_footer(text=render_footer(total))
         return embed
 
-    def _load_pending(self, guild_id: int) -> list[dict]:
+    # ── board state reads ────────────────────────────────────────────────
+    #
+    # Every placement/refresh path needs the stored ids, and most also need the
+    # rows to render. These two helpers are the only places that know how that
+    # is loaded, so the storage shape lives in one spot rather than five.
+
+    def _read_ids(self, guild_id: int) -> tuple[int, int]:
         with self.ctx.open_db() as conn:
-            return [dict(r) for r in pending_todos(conn, guild_id)]
+            board = get_board(conn, guild_id)
+        return board.channel_id, board.message_id
+
+    def _read_board(self, guild_id: int) -> tuple[tuple[int, int], list[dict], int]:
+        with self.ctx.open_db() as conn:
+            board = get_board(conn, guild_id)
+            # One screenful plus a sentinel: enough to render and to know the
+            # list overflows, without hauling every pending row.
+            rows = [
+                dict(r)
+                for r in pending_todos(conn, guild_id, limit=MAX_BOARD_ROWS + 1)
+            ]
+            total = pending_count(conn, guild_id)
+        return (board.channel_id, board.message_id), rows, total
+
+    async def _board_ids(self, guild_id: int) -> tuple[int, int]:
+        return await asyncio.to_thread(self._read_ids, guild_id)
+
+    def _resolve_channel(
+        self, guild: discord.Guild, channel_id: int
+    ) -> discord.TextChannel | None:
+        channel = guild.get_channel(channel_id) if channel_id else None
+        return channel if isinstance(channel, discord.TextChannel) else None
 
     # ── placement + sticky repost ────────────────────────────────────────
 
@@ -309,19 +356,14 @@ class TodoCog(commands.Cog):
         any existing board untouched. Serialised per guild so a dashboard post
         and a sticky repost can't race into two boards.
         """
-        lock = self._board_locks.setdefault(guild.id, asyncio.Lock())
-        async with lock:
+        async with self._board_locks[guild.id]:
             # Re-read the stored ids INSIDE the lock — a caller's pre-lock
             # snapshot can be stale after a racing post, and deleting it would
             # orphan the current live board.
-            def _load() -> tuple[tuple[int, int], list[dict]]:
-                with self.ctx.open_db() as conn:
-                    board = get_board(conn, guild.id)
-                    rows = [dict(r) for r in pending_todos(conn, guild.id)]
-                return (board.channel_id, board.message_id), rows
-
-            (old_channel_id, old_message_id), rows = await asyncio.to_thread(_load)
-            embed = await self.build_board_embed(guild, rows)
+            (old_channel_id, old_message_id), rows, total = await asyncio.to_thread(
+                self._read_board, guild.id
+            )
+            embed = await self.build_board_embed(guild, rows, total)
 
             # Post the replacement BEFORE removing the old one. Deleting first
             # would destroy a working board when the new channel turns out to
@@ -333,14 +375,12 @@ class TodoCog(commands.Cog):
             except discord.HTTPException:
                 return None
 
-            if old_channel_id and old_message_id:
-                old_channel = guild.get_channel(old_channel_id)
-                if isinstance(old_channel, discord.TextChannel):
-                    try:
-                        old = await old_channel.fetch_message(old_message_id)
-                        await old.delete()
-                    except discord.HTTPException:
-                        pass
+            old_channel = self._resolve_channel(guild, old_channel_id)
+            if old_channel is not None and old_message_id:
+                try:
+                    await old_channel.get_partial_message(old_message_id).delete()
+                except discord.HTTPException:
+                    pass
 
             # Record the new id before the DB-save await so our own repost's
             # gateway event is recognised (and skipped) by the sticky listener.
@@ -349,37 +389,31 @@ class TodoCog(commands.Cog):
                 target.id,
                 message.id,
             )
-            self._board_sig[guild.id] = board_signature(rows)
+            self._board_sig[guild.id] = board_signature(rows, total)
+            self._boards.add(guild.id)
+            message_id = message.id
 
             def _save() -> None:
                 with self.ctx.open_db() as conn:
-                    save_board(conn, guild.id, target.id, message.id)
+                    save_board(conn, guild.id, target.id, message_id)
 
             await asyncio.to_thread(_save)
             return message
 
     async def unpost_board(self, guild: discord.Guild) -> bool:
         """Delete the board and forget its placement. True if one was removed."""
-        lock = self._board_locks.setdefault(guild.id, asyncio.Lock())
-        async with lock:
-
-            def _load() -> tuple[int, int]:
-                with self.ctx.open_db() as conn:
-                    board = get_board(conn, guild.id)
-                return board.channel_id, board.message_id
-
-            channel_id, message_id = await asyncio.to_thread(_load)
-            if channel_id and message_id:
-                channel = guild.get_channel(channel_id)
-                if isinstance(channel, discord.TextChannel):
-                    try:
-                        message = await channel.fetch_message(message_id)
-                        await message.delete()
-                    except discord.HTTPException:
-                        pass
+        async with self._board_locks[guild.id]:
+            channel_id, message_id = await self._board_ids(guild.id)
+            channel = self._resolve_channel(guild, channel_id)
+            if channel is not None and message_id:
+                try:
+                    await channel.get_partial_message(message_id).delete()
+                except discord.HTTPException:
+                    pass
 
             self._board_ref.pop(guild.id, None)
             self._board_sig.pop(guild.id, None)
+            self._boards.discard(guild.id)
 
             def _clear() -> None:
                 with self.ctx.open_db() as conn:
@@ -399,32 +433,32 @@ class TodoCog(commands.Cog):
         if guild is None:
             return False
 
-        def _load() -> tuple[tuple[int, int], list[dict]]:
-            with self.ctx.open_db() as conn:
-                board = get_board(conn, guild_id)
-                rows = [dict(r) for r in pending_todos(conn, guild_id)]
-            return (board.channel_id, board.message_id), rows
-
-        (channel_id, message_id), rows = await asyncio.to_thread(_load)
+        (channel_id, message_id), rows, total = await asyncio.to_thread(
+            self._read_board, guild_id
+        )
         if not channel_id or not message_id:
             return False
 
-        signature = board_signature(rows)
+        signature = board_signature(rows, total)
         if self._board_sig.get(guild_id) == signature:
             return False
 
-        channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
+        channel = self._resolve_channel(guild, channel_id)
+        if channel is None:
             return False
-        embed = await self.build_board_embed(guild, rows)
+        embed = await self.build_board_embed(guild, rows, total)
         try:
-            message = await channel.fetch_message(message_id)
-            await message.edit(embed=embed, view=TodoBoardView())
+            await channel.get_partial_message(message_id).edit(
+                embed=embed, view=TodoBoardView()
+            )
         except discord.NotFound:
             # The board was deleted out from under us — re-post it so the
             # feature heals itself rather than going quietly dead.
             return await self.place_board(guild, channel) is not None
         except discord.HTTPException:
+            # Leave the signature stale and ask the loop to try again, so a
+            # transient error doesn't strand the board until the next mutation.
+            self._retry_refresh.add(guild_id)
             return False
         self._board_sig[guild_id] = signature
         return True
@@ -436,12 +470,17 @@ class TodoCog(commands.Cog):
         if message.guild is None or message.author.bot:
             return
         guild_id = message.guild.id
-        channel_id, message_id = await self._board_panel_ref(guild_id)
+        # Fast path: the loop publishes which guilds actually have a board, so
+        # the overwhelming majority of messages cost one set lookup and no I/O.
+        # Falls through to the cached read until the first tick populates it.
+        if self._boards_known and guild_id not in self._boards:
+            return
+        channel_id, board_message_id = await self._board_panel_ref(guild_id)
         if not should_restick_guide(
             message_channel_id=message.channel.id,
             message_id=message.id,
             panel_channel_id=channel_id,
-            panel_message_id=message_id,
+            panel_message_id=board_message_id,
         ):
             return
         self._schedule_restick(guild_id)
@@ -452,13 +491,7 @@ class TodoCog(commands.Cog):
         now = time.monotonic()
         if entry is not None and entry[0] > now:
             return entry[1], entry[2]
-
-        def _load() -> tuple[int, int]:
-            with self.ctx.open_db() as conn:
-                board = get_board(conn, guild_id)
-            return board.channel_id, board.message_id
-
-        channel_id, message_id = await asyncio.to_thread(_load)
+        channel_id, message_id = await self._board_ids(guild_id)
         self._board_ref[guild_id] = (now + _BOARD_CACHE_TTL, channel_id, message_id)
         return channel_id, message_id
 
@@ -471,75 +504,81 @@ class TodoCog(commands.Cog):
         )
 
     async def _delayed_restick(self, guild_id: int) -> None:
+        """After the debounce, move an already-posted board back to the bottom.
+
+        Only ever maintains an existing board — it never creates one, so a
+        guild that has not configured a board channel stays untouched.
+        """
         try:
             await asyncio.sleep(_RESTICK_DELAY)
         except asyncio.CancelledError:
             return
         try:
-            await self._restick_now(guild_id)
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+            channel_id, message_id = await self._board_ids(guild_id)
+            if not message_id:
+                return
+            channel = self._resolve_channel(guild, channel_id)
+            if channel is not None:
+                await self.place_board(guild, channel)
         except Exception:
             log.exception("todo board restick failed for guild %s", guild_id)
 
-    async def _restick_now(self, guild_id: int) -> None:
-        """Move an already-posted board back to the channel bottom.
+def _tick(ctx) -> tuple[set[int], set[int]]:
+    """One scheduler pass: spawn what is due, report what needs repainting.
 
-        Only ever maintains an existing board — it never creates one, so a guild
-        that has not configured a board channel stays untouched.
-        """
-        guild = self.bot.get_guild(guild_id)
-        if guild is None:
-            return
+    Returns ``(guilds_with_a_board, guilds_that_gained_a_task)``. Runs in a
+    worker thread — all of it is blocking sqlite.
+    """
+    now = time.time()
+    # Probe on a plain (deferred) transaction first. spawn_due is a
+    # read-then-write, so it needs BEGIN IMMEDIATE to keep skip-if-pending
+    # honest against a racing "Run now" — but taking the global write lock
+    # every 60s when nothing is due would make every other writer queue behind
+    # a no-op. Escalate only on a hit; the escalated transaction re-reads under
+    # the lock, so the race the lock guards is still covered.
+    with open_db(ctx.db_path) as conn:
+        due = bool(due_recurring(conn, now))
+        boards = set(guilds_with_board(conn))
+    if not due:
+        return boards, set()
 
-        def _load() -> tuple[int, int]:
-            with self.ctx.open_db() as conn:
-                board = get_board(conn, guild_id)
-            return board.channel_id, board.message_id
-
-        channel_id, message_id = await asyncio.to_thread(_load)
-        if not channel_id or not message_id:
-            return
-        channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            return
-        await self.place_board(guild, channel)
+    with open_db_immediate(ctx.db_path) as conn:
+        spawned = spawn_due(
+            conn,
+            now_ts=now,
+            offset_hours_for=lambda gid: get_tz_offset_hours(conn, gid),
+        )
+        boards = set(guilds_with_board(conn))
+    return boards, {r.guild_id for r in spawned if r.status == "spawned"}
 
 
 async def todo_board_loop(bot: Bot) -> None:
-    """Spawn due recurring tasks, then repaint any board whose content changed.
+    """Spawn due recurring tasks, then repaint the boards that changed.
 
-    This is also what picks up dashboard-side edits — the web routes and the bot
-    share a process, but a route mutation has no gateway event to react to.
+    Every user-facing mutation (`/todo`, the board buttons, the dashboard)
+    repaints the board itself, so on a quiet tick there is nothing to do. The
+    two things this loop owes a repaint are tasks it just spawned and edits a
+    previous tick failed to apply — anything else would be N pointless DB reads
+    and signature comparisons per minute, forever.
     """
     await bot.wait_until_ready()
     ctx = bot.ctx
     while not bot.is_closed():
         try:
-            def _tick() -> list[int]:
-                now = time.time()
-                # BEGIN IMMEDIATE: spawn_due reads (is the last instance still
-                # open?) and then writes. A racing "Run now" from the dashboard
-                # on a deferred transaction could read the same "nothing open"
-                # snapshot and insert a second copy, defeating skip-if-pending.
-                with open_db_immediate(ctx.db_path) as conn:
-                    offsets: dict[int, float] = {}
-
-                    def _offset_for(guild_id: int) -> float:
-                        if guild_id not in offsets:
-                            offsets[guild_id] = get_tz_offset_hours(conn, guild_id)
-                        return offsets[guild_id]
-
-                    # Spawning is guild-wide: a recurring task is due whether or
-                    # not that guild has posted a board.
-                    spawn_due(conn, now_ts=now, offset_hours_for=_offset_for)
-                    # Then refresh every board, not only guilds that spawned —
-                    # tasks also arrive from the dashboard and from `/todo`.
-                    # refresh_board() no-ops when nothing actually changed.
-                    return sorted(guilds_with_board(conn))
-
-            guild_ids = await asyncio.to_thread(_tick)
+            boards, spawned = await asyncio.to_thread(_tick, ctx)
             cog = cast("TodoCog | None", bot.get_cog("TodoCog"))
             if cog is not None:
-                for guild_id in guild_ids:
+                # Publish the board set so the on_message listener can reject
+                # boardless guilds without touching the DB.
+                cog._boards = boards
+                cog._boards_known = True
+                # Repaint sequentially: these are edits against N different
+                # channels and a 60s cadence gives no reason to burst them.
+                for guild_id in sorted((spawned | cog._retry_refresh) & boards):
+                    cog._retry_refresh.discard(guild_id)
                     try:
                         await cog.refresh_board(guild_id)
                     except Exception:

@@ -10,9 +10,9 @@ from bot_modules.services.todo_service import (
     complete_todo,
     create_todo,
     get_board,
-    get_todo,
     guilds_with_board,
     list_todos,
+    pending_count,
     pending_todos,
     save_board,
 )
@@ -20,6 +20,12 @@ from tests.db_template import migrated_db
 
 GUILD = 123
 USER = 9001
+
+
+def _read(conn, todo_id):
+    """Read one row back. `get_todo` used to exist for this but had no
+    production caller, so the test owns its own read-back."""
+    return next(r for r in list_todos(conn, GUILD) if r["id"] == todo_id)
 
 
 @pytest.fixture
@@ -151,7 +157,7 @@ def test_complete_records_who_and_when(db):
     with open_db(db) as conn:
         todo_id = create_todo(conn, GUILD, USER, "Do it")
         assert complete_todo(conn, todo_id, GUILD, 4242, now_ts=555.0)
-        row = get_todo(conn, todo_id, GUILD)
+        row = _read(conn, todo_id)
     assert row["completed_at"] == 555.0
     assert row["completed_by"] == 4242
 
@@ -162,7 +168,7 @@ def test_complete_is_idempotent(db):
         todo_id = create_todo(conn, GUILD, USER, "Do it")
         assert complete_todo(conn, todo_id, GUILD, USER, now_ts=100.0)
         assert not complete_todo(conn, todo_id, GUILD, 999, now_ts=200.0)
-        row = get_todo(conn, todo_id, GUILD)
+        row = _read(conn, todo_id)
     assert row["completed_at"] == 100.0
     assert row["completed_by"] == USER
 
@@ -171,7 +177,7 @@ def test_complete_rejects_other_guilds(db):
     with open_db(db) as conn:
         todo_id = create_todo(conn, GUILD, USER, "Mine")
         assert not complete_todo(conn, todo_id, 999, USER)
-        assert get_todo(conn, todo_id, GUILD)["completed_at"] is None
+        assert _read(conn, todo_id)["completed_at"] is None
 
 
 def test_complete_missing_returns_false(db):
@@ -179,11 +185,16 @@ def test_complete_missing_returns_false(db):
         assert not complete_todo(conn, 4242, GUILD, USER)
 
 
-def test_get_todo_scoped_by_guild(db):
+def test_pending_count_is_scoped_and_uncapped_by_the_list_limit(db):
+    """The board footer counts every outstanding task, not just the page it
+    renders, so the count query is separate from the row query."""
     with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Mine")
-        assert get_todo(conn, todo_id, GUILD) is not None
-        assert get_todo(conn, todo_id, 999) is None
+        for i in range(25):
+            create_todo(conn, GUILD, USER, f"Task {i}")
+        create_todo(conn, 999, USER, "Theirs")
+        assert pending_count(conn, GUILD) == 25
+        assert len(pending_todos(conn, GUILD, limit=16)) == 16
+        assert pending_count(conn, 999) == 1
 
 
 def test_completed_rows_leave_the_pending_list(db):

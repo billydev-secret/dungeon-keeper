@@ -96,3 +96,24 @@ def footer_emoji(emoji: str, fallback: str = "") -> str:
     ``docs/embed_style_guide.md`` → Footers.
     """
     return fallback if _CUSTOM_EMOJI_RE.fullmatch((emoji or "").strip()) else emoji
+
+
+# ──────────────────────────────────────────────────────────────────
+# Monospace table helpers
+# ──────────────────────────────────────────────────────────────────
+def pad_cell(text: str, width: int) -> str:
+    """Clip + left-pad a table cell for a fixed-width inline-code column.
+
+    Sections align their columns by wrapping cells in backticks (monospace)
+    and padding to the column width — code blocks would align too, but they
+    swallow bold and ``<t:…:R>`` timestamps, which must stay live. See
+    ``docs/embed_style_guide.md`` → Monospace tables, which names this helper.
+    """
+    if len(text) > width:
+        text = text[: width - 1] + "…"
+    return text.ljust(width)
+
+
+def rel_ts(ts: float) -> str:
+    """A Discord relative timestamp — ticks live in every client."""
+    return f"<t:{int(ts)}:R>"

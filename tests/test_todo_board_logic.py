@@ -85,6 +85,17 @@ def test_overflow_defers_to_the_dashboard():
     assert f"Task {MAX_BOARD_ROWS + 2}" not in body
 
 
+def test_overflow_counts_rows_the_caller_never_fetched():
+    """The board fetches one screenful plus a sentinel, so the true pending
+    count arrives separately — the note must reflect it, not len(rows)."""
+    rows = [_row(i, f"Task {i}") for i in range(MAX_BOARD_ROWS + 1)]
+    assert "and **85** more" in render_rows(rows, total=100)
+
+
+def test_footer_is_not_capped_by_the_fetched_page():
+    assert render_footer(100).startswith("100 pending tasks")
+
+
 def test_exactly_at_the_cap_has_no_overflow_note():
     rows = [_row(i, f"Task {i}") for i in range(MAX_BOARD_ROWS)]
     assert "more on the dashboard" not in render_rows(rows)
@@ -115,8 +126,7 @@ def test_wide_ids_are_never_truncated():
     [(0, "0 pending tasks"), (1, "1 pending task"), (5, "5 pending tasks")],
 )
 def test_footer_counts_and_pluralizes(count, expected):
-    footer = render_footer([_row(i, "x") for i in range(count)])
-    assert footer.startswith(expected)
+    assert render_footer(count).startswith(expected)
 
 
 # ── board_signature ───────────────────────────────────────────────────
@@ -146,6 +156,12 @@ def test_signature_changes_when_the_board_would_look_different(changed):
 
 def test_signature_is_hashable():
     assert isinstance(hash(board_signature([_row(1, "x")])), int)
+
+
+def test_signature_tracks_the_total_below_the_visible_window():
+    """Completing a task the board never showed still changes the footer."""
+    rows = [_row(i, f"Task {i}") for i in range(MAX_BOARD_ROWS)]
+    assert board_signature(rows, 40) != board_signature(rows, 39)
 
 
 # ── complete_option_label ─────────────────────────────────────────────
