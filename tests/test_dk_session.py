@@ -149,10 +149,13 @@ def test_default_permission_mode_is_not_bypass():
 
 
 def test_new_window_args_names_window_after_branch():
-    args = dk_session.new_window_args("casino-derby", Path("/tmp/wt"), "opus")
+    # Compare against str(path), not a literal: the suite also runs on the
+    # Windows remote runner, where str(Path("/tmp/wt")) is "\\tmp\\wt".
+    wt = Path("/tmp/wt")
+    args = dk_session.new_window_args("casino-derby", wt, "opus")
     assert args[:3] == ["tmux", "new-window", "-d"]
     assert "-n" in args and args[args.index("-n") + 1] == "casino-derby"
-    assert args[args.index("-c") + 1] == "/tmp/wt"
+    assert args[args.index("-c") + 1] == str(wt)
 
 
 def test_new_window_passes_the_name_through_to_remote_control():
