@@ -100,7 +100,7 @@ Menus act on the channel the clicker currently owns; if they don't own one, the 
 
 The panel appears in two places:
 
-1. **Control channel** — one persistent copy, posted via `/voice-admin post-panel` (the message id is saved to config so it can be reposted). Requires the control channel to be configured first ("No control channel set. Configure it in the web dashboard first.").
+1. **Control channel** — one persistent copy, posted via `/voice-admin post-panel`. Requires the control channel to be configured first ("No control channel set. Configure it in the web dashboard first."). Since 2026-07-26 the panel is **sticky**: it runs on `core.sticky.StickyPanel`, so member activity in the control channel debounces a delete-and-repost that returns it to the bottom, and re-running the command replaces the old panel rather than stacking a second one (it previously did neither). Ids live in `voice_master_panel_channel_id` / `voice_master_panel_message_id`.
 2. **Inline** — a copy is auto-posted into each new channel's side chat on create (config `voice_master_post_inline_panel`, default on), so owners have the controls where they are.
 
 ### How-to guide

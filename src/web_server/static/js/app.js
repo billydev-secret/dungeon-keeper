@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 import { toast } from "./ui.js";
-import { HELP_GROUPS, HELP_EXTRA_PAGES } from "./panels/help-sections.js?v=24";
+import { HELP_GROUPS, HELP_EXTRA_PAGES } from "./panels/help-sections.js?v=25";
 
 
 // The Help nav is generated from help-sections.js (single source shared with
@@ -101,7 +101,7 @@ const SECTIONS = [
   {
     id: "moderation", label: "Moderation", perms: ["moderator"], icon: "⚖",
     items: [
-      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js", keywords: "tasks" },
+      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js", keywords: "tasks board recurring chores qotd reminders", help: "help-todo" },
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js", help: "help-jail" },
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },

@@ -1095,26 +1095,30 @@ def test_build_panel_view_has_grouped_selects():
     assert len(all_options) == len(PANEL_BUTTON_ORDER)
 
 
-@pytest.mark.asyncio
-async def test_post_panel_writes_message_id_to_config(ctx):
-    from bot_modules.commands.voice_master_commands import post_panel
+def test_panel_ids_track_where_the_panel_actually_is(ctx):
+    """Regression: `_panel_ids` briefly returned the *configured* control
+    channel. `place` deletes the old panel through this channel, so on a
+    control-channel change that aimed the delete at the new channel and left
+    the old panel — live buttons and all — stranded in the previous one."""
+    from bot_modules.cogs.voice_master_cog import VoiceMasterCog
+    from bot_modules.services.voice_master_service import (
+        set_voice_master_config_value,
+    )
 
-    text_channel = MagicMock(spec=discord.TextChannel)
-    text_channel.guild = MagicMock()
-    text_channel.guild.id = GUILD
-    sent = MagicMock()
-    sent.id = 7777
-    text_channel.send = AsyncMock(return_value=sent)
-    msg = await post_panel(ctx, text_channel)
-    assert msg is sent
+    cog = VoiceMasterCog.__new__(VoiceMasterCog)
+    cog.ctx = ctx
+
+    assert cog._panel_ids(GUILD) == (0, 0)  # nothing posted yet
+
+    cog._save_panel_ids(GUILD, 555, 7777)
+    assert cog._panel_ids(GUILD) == (555, 7777)
+
+    # Re-pointing the control channel must NOT move the recorded location.
     with open_db(ctx.db_path) as conn:
-        cur = conn.execute(
-            "SELECT value FROM config WHERE key=?",
-            ("voice_master_panel_message_id",),
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_control_channel_id", "999"
         )
-        row = cur.fetchone()
-    assert row is not None
-    assert row[0] == "7777"
+    assert cog._panel_ids(GUILD) == (555, 7777)
 
 
 # ── post_knock_request branches ───────────────────────────────────────────

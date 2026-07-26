@@ -37,7 +37,6 @@ from bot_modules.services.voice_master_service import (
     lock_status_text,
     record_edit_in_db,
     set_owner,
-    set_voice_master_config_value,
     try_dm,
     update_profile_field,
 )
@@ -2025,30 +2024,6 @@ async def post_knock_request(
         return True
     except (discord.Forbidden, discord.HTTPException):
         return False
-
-
-async def post_panel(
-    ctx: "AppContext", channel: discord.TextChannel
-) -> discord.Message:
-    """Post (or repost) the persistent panel into the given text channel."""
-    accent = await resolve_accent_color(ctx.db_path, channel.guild)
-    embed = build_panel_embed(color=accent)
-    view = build_panel_view()
-    msg = await channel.send(embed=embed, view=view)
-    _panel_guild_id = channel.guild.id
-    _panel_msg_id = msg.id
-
-    def _save_panel():
-        with ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn,
-                _panel_guild_id,
-                "voice_master_panel_message_id",
-                str(_panel_msg_id),
-            )
-
-    await asyncio.to_thread(_save_panel)
-    return msg
 
 
 def build_inline_panel_embed(

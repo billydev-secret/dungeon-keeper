@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import discord
@@ -13,6 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.dm_perms.embeds import (
     build_acceptance_embed,
     build_denial_embed_for_requester,
@@ -80,7 +80,6 @@ REQUEST_TIMEOUT_LABEL = "24 hours"
 EXPIRY_SWEEP_INTERVAL_SECONDS = 60 * 60  # hourly
 MAX_PENDING_PER_REQUESTER = 5
 MAX_REASON_LENGTH = 250  # leave headroom under the embed-field char ceiling
-PANEL_BUMP_COOLDOWN_SECONDS = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -578,8 +577,13 @@ class DmPermsCog(commands.Cog):
         # Per-guild mode→role-id overrides ({"open"/"ask"/"closed": id}).
         # Loaded at cog_load; the web config route pokes this cache on save.
         self.mode_role_ids: dict[int, dict[str, int]] = {}
-        self._panel_locks: dict[int, asyncio.Lock] = {}
-        self._panel_bump_guards: dict[int, float] = {}
+        self.panel = StickyPanel(
+            "dm perms",
+            bot,
+            load_ids=self._panel_ids,
+            save_ids=self._save_panel_ids,
+            build=self._build_panel,
+        )
         self._expiry_task: Optional[asyncio.Task[None]] = None
         super().__init__()
 
@@ -600,6 +604,7 @@ class DmPermsCog(commands.Cog):
         self.request_channels = loaded["request_channels"]
         self.panel_settings = loaded["panel_settings"]
         self.mode_role_ids = loaded["mode_role_ids"]
+        self._publish_panel_guilds()
 
         # Persistent views: clicks on DM consent buttons across ALL DMs route
         # to this single instance, which recovers per-request state from the DB.
@@ -615,6 +620,7 @@ class DmPermsCog(commands.Cog):
         if self._expiry_task is not None:
             self._expiry_task.cancel()
             self._expiry_task = None
+        self.panel.cancel_all()
 
     # ── Background tasks ─────────────────────────────────────────────────────
 
@@ -698,11 +704,6 @@ class DmPermsCog(commands.Cog):
 
     def _has_pending_request(self, guild_id: int, a: int, b: int) -> bool:
         return (a, b) in self.dm_requests.get(guild_id, {})
-
-    def _get_panel_lock(self, guild_id: int) -> asyncio.Lock:
-        if guild_id not in self._panel_locks:
-            self._panel_locks[guild_id] = asyncio.Lock()
-        return self._panel_locks[guild_id]
 
     def _mode_roles_for(self, guild_id: int) -> dict[str, int]:
         """The guild's configured mode→role-id overrides (empty dict if none)."""
@@ -838,80 +839,66 @@ class DmPermsCog(commands.Cog):
             f"📨 Request sent to {user.display_name} via DM!", ephemeral=True
         )
 
-    async def _ensure_panel(
-        self, guild: discord.Guild, panel_channel_id: int, *, force_repost: bool = False
-    ) -> Optional[int]:
-        async with self._get_panel_lock(guild.id):
-            channel = guild.get_channel(panel_channel_id)
-            if not isinstance(channel, discord.TextChannel):
-                return None
+    # ── request panel (core.sticky) ──────────────────────────────────────
 
-            accent = await resolve_accent_color(self.ctx.db_path, guild)
-            role_names = self._mode_role_names_for(guild)
-            settings = self.panel_settings.get(guild.id, {})
-            old_msg_id = settings.get("panel_message_id")
+    def _panel_ids(self, guild_id: int) -> tuple[int, int]:
+        settings = self.panel_settings.get(guild_id) or {}
+        return (
+            int(settings.get("panel_channel_id") or 0),
+            int(settings.get("panel_message_id") or 0),
+        )
 
-            if force_repost and old_msg_id:
-                try:
-                    latest = None
-                    async for msg in channel.history(limit=1):
-                        latest = msg
-                    if latest and latest.id == old_msg_id:
-                        force_repost = False
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
+    def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        self.panel_settings[guild_id] = {
+            "panel_channel_id": channel_id or None,
+            "panel_message_id": message_id or None,
+        }
+        set_panel_settings(self.ctx.db_path, guild_id, channel_id, message_id)
+        self._publish_panel_guilds()
 
-            if old_msg_id and not force_repost:
-                try:
-                    existing = await channel.fetch_message(old_msg_id)
-                    await existing.edit(embed=build_panel_embed(color=accent, role_names=role_names), view=DmRequestPanelView(self))
-                    return existing.id
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
-
-            try:
-                new_msg = await channel.send(embed=build_panel_embed(color=accent, role_names=role_names), view=DmRequestPanelView(self))
-            except (discord.Forbidden, discord.HTTPException):
-                return None
-
-            if old_msg_id and old_msg_id != new_msg.id:
-                try:
-                    old = await channel.fetch_message(old_msg_id)
-                    await old.delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
-
-            self.panel_settings[guild.id] = {
-                "panel_channel_id": panel_channel_id,
-                "panel_message_id": new_msg.id,
+    def _publish_panel_guilds(self) -> None:
+        """Keep the listener's fast path in sync with the in-memory settings, so
+        a guild with no panel costs a set lookup rather than a DB read."""
+        self.panel.set_known_guilds(
+            {
+                gid
+                for gid, s in self.panel_settings.items()
+                if s and s.get("panel_channel_id")
             }
-            set_panel_settings(self.ctx.db_path, guild.id, panel_channel_id, new_msg.id)
-            return new_msg.id
+        )
+
+    async def _build_panel(self, guild: discord.Guild) -> PanelContent:
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        return PanelContent(
+            embed=build_panel_embed(
+                color=accent, role_names=self._mode_role_names_for(guild)
+            ),
+            view=DmRequestPanelView(self),
+        )
+
+    async def post_panel(
+        self, guild: discord.Guild, panel_channel_id: int
+    ) -> Optional[int]:
+        """Post the request panel (or refresh it in place if it's already
+        there). Returns the live message id, or None if the channel is
+        unusable. Public: the dashboard route calls this."""
+        channel = guild.get_channel(panel_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return None
+        message = await self.panel.place_or_refresh(guild, channel)
+        return message.id if message else None
 
     # ── Listeners ────────────────────────────────────────────────────────────
 
     @commands.Cog.listener("on_message")
     async def _on_message_panel_bump(self, message: discord.Message) -> None:
-        if not message.guild or message.author.bot:
-            return
-        settings = self.panel_settings.get(message.guild.id)
-        if not isinstance(settings, dict):
-            return
-        panel_channel_id = settings.get("panel_channel_id")
-        panel_message_id = settings.get("panel_message_id")
-        if panel_channel_id is None:
-            return
-        if message.channel.id != panel_channel_id:
-            return
-        if panel_message_id is not None and message.id == panel_message_id:
-            return
+        """Keep the panel at the bottom of its channel.
 
-        now = time.monotonic()
-        last = self._panel_bump_guards.get(message.guild.id)
-        if last is not None and (now - last) < PANEL_BUMP_COOLDOWN_SECONDS:
-            return
-        self._panel_bump_guards[message.guild.id] = now
-        await self._ensure_panel(message.guild, panel_channel_id, force_repost=True)
+        Trailing-edge: a burst of chat settles into one repost once the channel
+        falls quiet, rather than the panel jumping on the first message of every
+        burst (the old leading-edge cooldown).
+        """
+        await self.panel.on_message(message)
 
     @commands.Cog.listener("on_member_update")
     async def _on_member_update_dm_roles(

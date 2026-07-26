@@ -3588,7 +3588,7 @@ async def post_dms_panel(
             f"{', '.join(missing)}",
         )
 
-    message_id = await cog._ensure_panel(guild, channel_id, force_repost=True)
+    message_id = await cog.post_panel(guild, channel_id)
     if message_id is None:
         raise HTTPException(
             502, f"Discord rejected the post in #{channel.name} — panel was not posted"

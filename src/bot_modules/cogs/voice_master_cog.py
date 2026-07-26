@@ -29,9 +29,12 @@ from bot_modules.commands.voice_master_commands import (
     post_claim_prompt,
     post_inline_panel,
     post_knock_request,
-    post_panel,
+    build_panel_embed,
+    build_panel_view,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.db_utils import get_config_value
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.economy_rentals_service import entitlements
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.moderation import write_audit
@@ -72,6 +75,7 @@ from bot_modules.services.voice_master_service import (
 )
 from bot_modules.services.voice_master_service import (
     delete_profile,
+    set_voice_master_config_value,
     remove_member_from_all_lists,
     trusted_prune_loop,
 )
@@ -141,6 +145,14 @@ class VoiceMasterCog(commands.Cog):
         self._last_create: dict[int, float] = {}
         # owner_id → asyncio.Lock to serialize their own Hub joins
         self._create_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # The owner-control panel stays at the bottom of the control channel.
+        self.panel = StickyPanel(
+            "voice master",
+            bot,
+            load_ids=self._panel_ids,
+            save_ids=self._save_panel_ids,
+            build=self._build_panel,
+        )
         # channel_id → pending empty-grace cleanup task
         self._empty_timers: dict[int, asyncio.Task] = {}
         # channel_id → pending post-grace "owner left, claim me" prompt task
@@ -151,7 +163,70 @@ class VoiceMasterCog(commands.Cog):
         self._host_quest_fired: set[int] = set()
         super().__init__()
 
+    async def cog_unload(self) -> None:
+        self.panel.cancel_all()
+
+    # ── control panel (core.sticky) ──────────────────────────────────────
+
+    def _panel_ids(self, guild_id: int) -> tuple[int, int]:
+        """Where the panel actually **is**, not where it ought to be.
+
+        These have to be the live location: ``place`` deletes the old panel via
+        this channel, so returning the *configured* control channel instead
+        would aim the delete at the wrong channel and strand the old panel —
+        buttons and all — wherever it really was. Moving the control channel on
+        the dashboard therefore relocates the panel on the next
+        ``/voice-admin post-panel``, not silently on the next message.
+
+        Reads the two keys directly rather than via ``load_voice_master_config``
+        — that loads nineteen keys, and this runs on the message path.
+        """
+        with self.ctx.open_db() as conn:
+            channel_id = get_config_value(
+                conn, "voice_master_panel_channel_id", "0", guild_id
+            )
+            message_id = get_config_value(
+                conn, "voice_master_panel_message_id", "0", guild_id
+            )
+        try:
+            return int(channel_id or 0), int(message_id or 0)
+        except ValueError:
+            return 0, 0
+
+    def _save_panel_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        with self.ctx.open_db() as conn:
+            set_voice_master_config_value(
+                conn, guild_id, "voice_master_panel_channel_id", str(channel_id)
+            )
+            set_voice_master_config_value(
+                conn, guild_id, "voice_master_panel_message_id", str(message_id)
+            )
+
+    async def _build_panel(self, guild: discord.Guild) -> PanelContent:
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        return PanelContent(
+            embed=build_panel_embed(color=accent), view=build_panel_view()
+        )
+
+    @commands.Cog.listener("on_message")
+    async def _restick_panel(self, message: discord.Message) -> None:
+        await self.panel.on_message(message)
+
+    def _panel_guilds(self) -> set[int]:
+        """Guilds with a panel actually posted — the only ones whose messages
+        can move one."""
+        with self.ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT guild_id FROM config"
+                " WHERE key = 'voice_master_panel_channel_id'"
+                " AND value NOT IN ('', '0')"
+            ).fetchall()
+        return {int(r[0]) for r in rows}
+
     async def cog_load(self) -> None:
+        # Publish the panel-guild set so the on_message listener rejects the
+        # overwhelming majority of messages with a set lookup, not a DB read.
+        self.panel.set_known_guilds(await asyncio.to_thread(self._panel_guilds))
         # Register persistent panel dropdown classes so they survive restarts.
         for cls in PANEL_DYNAMIC_ITEM_CLASSES:
             self.bot.add_dynamic_items(cls)
@@ -1600,9 +1675,17 @@ class VoiceMasterCog(commands.Cog):
             )
             return
         await interaction.response.defer(ephemeral=True)
-        msg = await post_panel(self.ctx, channel)
+        msg = await self.panel.place(interaction.guild, channel)
+        if msg is None:
+            await interaction.followup.send(
+                "❌ I can't post in the control channel — check my Send Messages "
+                "and Embed Links permissions.",
+                ephemeral=True,
+            )
+            return
         await interaction.followup.send(
-            f"Panel posted: {msg.jump_url}", ephemeral=True
+            f"Panel is live: {msg.jump_url} — it stays at the bottom of the channel.",
+            ephemeral=True,
         )
 
 

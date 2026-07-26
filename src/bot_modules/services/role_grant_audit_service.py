@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Protocol
 
 import discord
+from bot_modules.services.embeds import rel_ts
 
 log = logging.getLogger("dungeonkeeper.grant_audit")
 
@@ -496,8 +497,7 @@ _CARD_KEYS = (
 )
 
 
-def _rel(ts: float) -> str:
-    return f"<t:{int(ts)}:R>"
+_rel = rel_ts  # shared helper; see docs/embed_style_guide.md
 
 
 def build_grant_audit_embed(

@@ -1112,7 +1112,7 @@ def _dms_panel_guild(fake_ctx, *, perms=None, channel=None):
     from unittest.mock import AsyncMock, MagicMock
 
     cog = MagicMock()
-    cog._ensure_panel = AsyncMock(return_value=88888)
+    cog.post_panel = AsyncMock(return_value=88888)
     cog.panel_settings = {}
 
     guild = MagicMock()
@@ -1136,8 +1136,8 @@ def _dms_panel_guild(fake_ctx, *, perms=None, channel=None):
     return cog, guild
 
 
-def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fake_ctx):
-    """Happy path: cog._ensure_panel(guild, channel_id, force_repost=True) is
+def test_dms_post_panel_invokes_post_panel_and_persists_ids(authed_client, fake_ctx):
+    """Happy path: cog.post_panel(guild, channel_id) is
     awaited; the returned message_id is persisted via set_panel_settings; and
     the cog's in-memory panel_settings dict is updated."""
     cog, guild = _dms_panel_guild(fake_ctx)
@@ -1146,7 +1146,7 @@ def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fak
         "/api/config/dms/post-panel", json={"channel_id": "5000"}
     )
     assert resp.status_code == 200
-    cog._ensure_panel.assert_awaited_once_with(guild, 5000, force_repost=True)
+    cog.post_panel.assert_awaited_once_with(guild, 5000)
     # In-memory cache
     assert cog.panel_settings[fake_ctx.guild_id] == {
         "panel_channel_id": 5000,
@@ -1170,7 +1170,7 @@ def test_dms_post_panel_400_when_channel_not_text(authed_client, fake_ctx):
         "/api/config/dms/post-panel", json={"channel_id": "5000"}
     )
     assert resp.status_code == 400
-    cog._ensure_panel.assert_not_awaited()
+    cog.post_panel.assert_not_awaited()
 
 
 def test_dms_post_panel_400_names_missing_permissions(authed_client, fake_ctx):
@@ -1190,15 +1190,15 @@ def test_dms_post_panel_400_names_missing_permissions(authed_client, fake_ctx):
     assert "Send Messages" in detail
     assert "Embed Links" in detail
     assert "View Channel" not in detail
-    cog._ensure_panel.assert_not_awaited()
+    cog.post_panel.assert_not_awaited()
     assert cog.panel_settings == {}
 
 
 def test_dms_post_panel_502_when_discord_rejects_send(authed_client, fake_ctx):
-    """Perms look fine but the actual send still fails (_ensure_panel → None):
+    """Perms look fine but the actual send still fails (post_panel → None):
     the route must report an error instead of a false success."""
     cog, guild = _dms_panel_guild(fake_ctx)
-    cog._ensure_panel.return_value = None
+    cog.post_panel.return_value = None
 
     resp = authed_client.post(
         "/api/config/dms/post-panel", json={"channel_id": "5000"}

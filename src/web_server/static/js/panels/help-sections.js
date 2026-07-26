@@ -60,6 +60,7 @@ export const HELP_GROUPS = [
     { page: "help-analytics",   anchor: "analytics",   label: "Analytics & Watch List" },
     { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation Tools" },
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
+    { page: "help-todo",        anchor: "todo",        label: "Todo List & Board" },
   ]},
   { heading: "Server Admin", items: [
     { page: "help-setup",          anchor: "setup",             label: "Setup & Permissions" },

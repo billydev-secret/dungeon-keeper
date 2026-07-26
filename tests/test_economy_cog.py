@@ -1,7 +1,6 @@
 """Cog-level tests for /bank — wallet view, mod grant matrix, and /bank quests."""
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from pathlib import Path
@@ -1247,9 +1246,8 @@ async def test_post_shop_refreshes_in_place_with_view(ctx, db):
     _enable(db, shop_channel_id=777, shop_message_id=4444)
     cog = _make_cog(ctx)
     channel = _panel_channel()
-    old = MagicMock()
-    old.edit = AsyncMock()
-    channel.fetch_message.return_value = old
+    old = MagicMock(edit=AsyncMock(), delete=AsyncMock(), id=4444)
+    channel.get_partial_message = MagicMock(return_value=old)
     interaction = _interaction(_member(admin=True))
     interaction.channel = channel
 
@@ -1259,7 +1257,6 @@ async def test_post_shop_refreshes_in_place_with_view(ctx, db):
     ):
         await cog.bank_post_shop.callback(cog, interaction, None)
 
-    channel.fetch_message.assert_awaited_once_with(4444)
     assert "view" in old.edit.await_args.kwargs  # re-priced labels ride along
     channel.send.assert_not_awaited()
     assert _shop_panel_stored(db) == (777, 4444)
@@ -1291,117 +1288,27 @@ def _shop_listener_msg(*, author_bot: bool, channel_id: int, message_id: int):
     return m
 
 
+# The shop panel's sticky machinery is core.sticky.StickyPanel, covered
+# generically by tests/test_core_sticky.py (debounce, bot-message skip,
+# post-before-delete, never-create-on-restick). What remains economy-specific
+# is which settings fields it reads and the disabled-economy gate.
+
+
 @pytest.mark.asyncio
-async def test_restick_shop_now_reposts_panel_and_updates_ids(ctx, db):
-    _enable(db, shop_channel_id=777, shop_message_id=4444)
+async def test_shop_panel_ids_read_the_shop_fields(ctx, db):
+    _enable(db, shop_channel_id=111, shop_message_id=4444)
     cog = _make_cog(ctx)
-    channel = _panel_channel()
-    old = MagicMock()
-    old.delete = AsyncMock()
-    channel.fetch_message = AsyncMock(return_value=old)
-    cog.bot.get_guild = MagicMock(
-        return_value=FakeGuild(id=GUILD_ID, channels={777: channel})
-    )
-
-    with patch(
-        "bot_modules.cogs.economy_cog.feature_gate_ok",
-        new=AsyncMock(return_value=True),
-    ):
-        await cog._restick_shop_now(GUILD_ID)
-
-    old.delete.assert_awaited_once()  # stale panel dropped
-    kwargs = channel.send.await_args.kwargs  # fresh panel at the bottom
-    assert "Perk Shop" in kwargs["embed"].title
-    assert {str(b.custom_id) for b in kwargs["view"].children} == {"econ_shop_open"}
-    assert _shop_panel_stored(db) == (777, 8888)  # new id persisted
-    # In-memory cache updated so the listener skips our own repost.
-    assert cog._shop_ref[GUILD_ID][1:] == (777, 8888)
+    assert cog._panel_ids(GUILD_ID, "shop") == (111, 4444)
 
 
 @pytest.mark.asyncio
-async def test_restick_shop_now_noop_without_existing_panel(ctx, db):
-    _enable(db, shop_channel_id=777)  # no shop_message_id → nothing posted
-    cog = _make_cog(ctx)
-    channel = _panel_channel()
-    cog.bot.get_guild = MagicMock(
-        return_value=FakeGuild(id=GUILD_ID, channels={777: channel})
-    )
-
-    await cog._restick_shop_now(GUILD_ID)
-
-    channel.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_restick_shop_now_noop_when_economy_disabled(ctx, db):
+async def test_shop_panel_ids_are_zero_when_the_economy_is_disabled(ctx, db):
+    """A disabled economy reads as "no panel", so the shop never re-sticks."""
+    _enable(db, shop_channel_id=111, shop_message_id=4444)
     with open_db(db) as conn:
-        save_econ_settings(
-            conn,
-            GUILD_ID,
-            {"enabled": False, "shop_channel_id": 777, "shop_message_id": 4444},
-        )
+        save_econ_settings(conn, GUILD_ID, {"enabled": "0"})
     cog = _make_cog(ctx)
-    channel = _panel_channel()
-    cog.bot.get_guild = MagicMock(
-        return_value=FakeGuild(id=GUILD_ID, channels={777: channel})
-    )
-
-    await cog._restick_shop_now(GUILD_ID)
-
-    channel.send.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_shop_restick_listener_ignores_bot_messages(ctx, db):
-    # Panel posted and cached, so _shop_panel_ref is a pure cache hit.
-    cog = _make_cog(ctx)
-    cog._shop_ref[GUILD_ID] = (time.monotonic() + 300, 777, 4444)
-    cog._schedule_shop_restick = MagicMock()
-
-    # Our own repost / economy notices must not arm another repost.
-    await cog._restick_shop_panel(
-        _shop_listener_msg(author_bot=True, channel_id=777, message_id=555)
-    )
-    cog._schedule_shop_restick.assert_not_called()
-
-    # Nor does chatter in some other channel.
-    await cog._restick_shop_panel(
-        _shop_listener_msg(author_bot=False, channel_id=778, message_id=555)
-    )
-    cog._schedule_shop_restick.assert_not_called()
-
-    # A member message in the panel channel re-sticks.
-    await cog._restick_shop_panel(
-        _shop_listener_msg(author_bot=False, channel_id=777, message_id=555)
-    )
-    cog._schedule_shop_restick.assert_called_once_with(GUILD_ID)
-
-
-@pytest.mark.asyncio
-async def test_shop_restick_listener_noop_without_panel(ctx, db):
-    _enable(db)  # economy on, but no shop panel posted
-    cog = _make_cog(ctx)
-    cog._schedule_shop_restick = MagicMock()
-
-    await cog._restick_shop_panel(
-        _shop_listener_msg(author_bot=False, channel_id=777, message_id=555)
-    )
-
-    cog._schedule_shop_restick.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_schedule_shop_restick_cancels_pending_repost(ctx, db):
-    cog = _make_cog(ctx)
-    cog._schedule_shop_restick(GUILD_ID)
-    first = cog._shop_restick_tasks[GUILD_ID]
-    cog._schedule_shop_restick(GUILD_ID)
-    second = cog._shop_restick_tasks[GUILD_ID]
-
-    assert first is not second  # re-armed, not stacked
-    second.cancel()
-    await asyncio.gather(first, second, return_exceptions=True)
-    assert first.cancelled()
+    assert cog._panel_ids(GUILD_ID, "shop") == (0, 0)
 
 
 def _panel_button_interaction(ctx, cog=None, *, member_id: int = 500) -> MagicMock:

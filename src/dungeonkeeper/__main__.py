@@ -39,6 +39,7 @@ from bot_modules.services.role_grant_audit_service import grant_audit_card_loop
 from bot_modules.announcements.buttons import AnnouncementRoleButton
 from bot_modules.chat_revive.actions import ReviveOptInButton
 from bot_modules.services.chat_revive_loop import chat_revive_loop
+from bot_modules.cogs.todo_cog import todo_board_loop
 from bot_modules.services.economy_boost_reconcile import reconcile_boosters
 from bot_modules.services.economy_drops_loop import (
     DropClaimButton,
@@ -368,6 +369,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: bulk_cleanup_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
+
+    bot.startup_task_factories.append(lambda: todo_board_loop(bot))
 
     bot.startup_task_factories.append(lambda: announcements_loop(bot, db_path))
 

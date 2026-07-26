@@ -998,7 +998,7 @@
     <table>
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>/voice-admin post-panel</code></td><td>Repost the global voice control panel buttons</td></tr>
+        <tr><td><code>/voice-admin post-panel</code></td><td>Post the global voice control panel. It then keeps itself at the bottom of the control channel as people chat — you only need to run this once, or to move it after changing the control channel.</td></tr>
       </tbody>
     </table>
 
@@ -1638,9 +1638,43 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
+         TODO LIST & BOARD
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="todo" class="section-break"><span class="section-num">21</span> Todo List &amp; Board</h2>
+    <p>A shared worklist for the mod team. Tasks can be added from Discord or from the dashboard, and everything lands in the same list. It is moderator-only end to end — members never see it unless you post the board in a channel they can read.</p>
+
+    <h3 id="todo-board">The Discord board</h3>
+    <p>The board is a single message the bot keeps at the <strong>bottom of a channel</strong>. It lists every pending task oldest-first, so whatever has been waiting longest sits at the top. It carries two buttons:</p>
+    <ul>
+      <li><strong>➕ Add Task</strong> — opens a small form for the task and optional notes.</li>
+      <li><strong>✅ Complete</strong> — shows a private picker of pending tasks; tick one or several off at once.</li>
+    </ul>
+    <p>Both buttons are moderator-only. Anyone else who clicks gets a private "moderators only" reply and nothing changes.</p>
+    <p>The board updates itself. Adding or completing a task anywhere — the buttons, <code>/todo</code>, or the dashboard — is reflected within about a minute, and immediately when the action came from Discord. When people chat in the channel, the board deletes itself and re-posts underneath so it never scrolls out of sight. Tasks marked 🔁 came from a recurring entry.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Posted from the <a href="/">web dashboard</a></strong>
+        <p>Pick a channel on the <a href="/#/mod-todo">Todo List</a> panel and press <strong>Post Board</strong>. Posting or moving the board is an <em>administrator</em> action; managing the tasks and recurring entries on it only needs moderator. Removing the board deletes the message but keeps every task.</p>
+      </div>
+    </div>
+
+    <h3 id="todo-recurring">Recurring tasks</h3>
+    <p>Recurring entries put a chore on the list on a schedule — "Post QOTD" every morning at 09:00, "Photo challenge prompt" every Monday. Set them up on the dashboard panel with a daily or weekly cadence and a time of day (server local time).</p>
+    <p>These are <strong>reminders, not automation</strong>. When one comes due the bot adds the task to the list; a moderator then does the thing and ticks it off. The bot does not post the QOTD or the photo prompt for you.</p>
+    <p>If the previous copy of a recurring task is still sitting on the list, no duplicate is added — a chore nobody got to all week shows up as one increasingly old task rather than seven identical ones. Each entry can be paused, edited, deleted, or fired immediately with <strong>Run now</strong> — which adds one instance there and then without touching the schedule or un-pausing a paused entry. Deleting an entry stops it repeating but leaves any copy already on the list, since that is real outstanding work.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/todo task:&lt;text&gt;</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Add a task to the shared server todo list. Server only; 500 characters max.</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
          (legacy section anchor preserved) SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">21</span> Setup &amp; Permissions</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">22</span> Setup &amp; Permissions</h2>
 
     <h3 id="permissions">Permission Levels</h3>
     <p>Most commands require one of these roles or Discord permissions:</p>
@@ -1690,7 +1724,7 @@
     <!-- ══════════════════════════════════════════════════════════
          22. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="server-ops" class="section-break"><span class="section-num">22</span> Server Upkeep</h2>
+    <h2 id="server-ops" class="section-break"><span class="section-num">23</span> Server Upkeep</h2>
     <p>Ongoing housekeeping and community upkeep: scheduled cleanup, automatic threading, listing-site bump reminders, member tagging, unanswered-greeting alerts, lull-reviving questions, and channel hiding. The background schedulers run continuously; most configuration lives on the web dashboard.</p>
 
     <h3 id="auto-delete">Auto-Delete</h3>
@@ -1830,7 +1864,7 @@
     <!-- ══════════════════════════════════════════════════════════
          23. CONTENT & COMMS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="content-comms" class="section-break"><span class="section-num">23</span> Content &amp; Comms</h2>
+    <h2 id="content-comms" class="section-break"><span class="section-num">24</span> Content &amp; Comms</h2>
     <p>Bot-maintained content and outbound messaging: self-assign role menus, dashboard-authored documents posted into channels, and scheduled announcements. All three are built on the dashboard and post persistent messages that keep working across bot restarts.</p>
 
     <h3 id="role-menus">Role Menus</h3>
@@ -1887,7 +1921,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="network-analytics" class="section-break"><span class="section-num">24</span> Network Analytics</h2>
+    <h2 id="network-analytics" class="section-break"><span class="section-num">25</span> Network Analytics</h2>
     <p>Interactive graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
 
     <div class="callout callout-info">
@@ -1901,7 +1935,7 @@
     <!-- ══════════════════════════════════════════════════════════
          24. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">25</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">26</span> Configuration Reference</h2>
     <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
     <div class="callout callout-info">
@@ -1964,7 +1998,7 @@
     <!-- ══════════════════════════════════════════════════════════
          25. QA TRACKER
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="qa-tracker" class="section-break"><span class="section-num">26</span> QA Tracker</h2>
+    <h2 id="qa-tracker" class="section-break"><span class="section-num">27</span> QA Tracker</h2>
     <p>A volunteer testing crew for the bot itself. Each new change lands as a <strong>QA card</strong> in the testing channel — an embed carrying the test checklist with <strong>Pass / Fail / Blocked</strong> buttons. Members holding the configured QA-crew role click a verdict (Fail requires a "what went wrong" note, which lands in the card's thread); the first Pass turns the card green as verified. Your first verdict on a test pays <a href="#economy">economy</a> currency instantly, up to a daily cap — re-clicking updates your verdict without re-paying. Until an admin configures the QA-crew role, the buttons are admins-only. A card that's stayed verified (green) for 10 minutes is automatically deleted from the channel to keep the queue tidy — the verdicts and payouts stay on record, just the message goes.</p>
 
     <div class="callout callout-info">
@@ -1978,7 +2012,7 @@
     <!-- ══════════════════════════════════════════════════════════
          26. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">27</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">28</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">
