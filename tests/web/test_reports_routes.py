@@ -38,47 +38,6 @@ def _seed_xp(db_path, guild_id=123):
         conn.commit()
 
 
-# ── role-growth ───────────────────────────────────────────────────────
-
-
-def test_role_growth_shape(open_client):
-    resp = open_client.get("/api/reports/role-growth")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "labels" in data
-    assert "series" in data
-    assert "resolution" in data
-
-
-# ── message-cadence ───────────────────────────────────────────────────
-
-
-def test_message_cadence_shape(open_client):
-    resp = open_client.get("/api/reports/message-cadence")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "buckets" in data
-    assert "resolution" in data
-
-
-def test_message_cadence_with_data(open_client, fake_ctx):
-    invalidate_report_cache()
-    _seed_messages(fake_ctx.db_path, fake_ctx.guild_id)
-    resp = open_client.get("/api/reports/message-cadence")
-    assert resp.status_code == 200
-
-
-# ── message-rate ──────────────────────────────────────────────────────
-
-
-def test_message_rate_shape(open_client):
-    resp = open_client.get("/api/reports/message-rate")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "buckets" in data
-    assert "avg_per_day" in data
-
-
 # ── xp-leaderboard ────────────────────────────────────────────────────
 
 
@@ -128,7 +87,6 @@ def test_quality_score_shape(open_client):
 
 _SMOKE_ENDPOINTS = [
     "/api/reports/interaction-graph",
-    "/api/reports/interaction-heatmap",
     "/api/reports/one-sided-attention",
 ]
 
@@ -177,7 +135,7 @@ def test_reports_require_auth(fake_ctx):
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     app = create_app(fake_ctx, auth=auth)
     client = TestClient(app, raise_server_exceptions=False)
-    resp = client.get("/api/reports/role-growth")
+    resp = client.get("/api/reports/xp-leaderboard")
     assert resp.status_code in (401, 403)
     client.close()
 

@@ -536,7 +536,6 @@ def main() -> None:
                     ) -> None:
                         from bot_modules.services.health_metrics import (
                             compute_channel_health,
-                            compute_churn_risk,
                             compute_cohort_retention,
                             compute_dau_mau,
                             compute_gini,
@@ -580,8 +579,6 @@ def main() -> None:
                                 conn, gid, join_times=_recent_joins
                             )
                             set_cached(conn, gid, "cohort_retention", data)
-                            data = compute_churn_risk(conn, gid)
-                            set_cached(conn, gid, "churn_risk", data)
                             data = compute_mod_workload(conn, gid, mod_ids=_mod_ids)
                             set_cached(conn, gid, "mod_workload", data)
 
@@ -644,15 +641,6 @@ def main() -> None:
 
                         with open_db(db_path) as conn:
                             for fn, name, params, kwargs in [
-                                (reports_data.get_role_growth_data,
-                                 "role-growth", {"resolution": "week", "roles": None},
-                                 {"resolution": "week", "role_filter": None, "utc_offset_hours": tz}),
-                                (reports_data.get_message_cadence_data,
-                                 "message-cadence", {"resolution": "hour", "channel_id": None},
-                                 {"resolution": "hour", "utc_offset_hours": tz, "channel_id": None}),
-                                (reports_data.get_message_rate_data,
-                                 "message-rate", {"days": 30},
-                                 {"days": 30, "utc_offset_hours": tz}),
                                 (reports_data.get_activity_data,
                                  "activity",
                                  {"resolution": "day", "mode": "xp", "user_id": None,
@@ -674,22 +662,9 @@ def main() -> None:
                                 (reports_data.get_xp_leaderboard_data,
                                  "xp-leaderboard", {"days": None},
                                  {"days": None}),
-                                (reports_data.get_reaction_analytics_data,
-                                 "reaction-analytics", {"days": None},
-                                 {"days": None}),
-                                (reports_data.get_message_rate_drops_data,
-                                 "message-rate-drops", {"period_days": 2, "min_previous": 100},
-                                 {"period_days": 2, "min_previous": 100}),
-                                (reports_data.get_burst_ranking_data,
-                                 "burst-ranking", {"min_sessions": 3, "days": None},
-                                 {"min_sessions": 3, "days": None}),
                                 (reports_data.get_channel_comparison_data,
                                  "channel-comparison", {"days": 1},
                                  {"days": 1}),
-                                (reports_data.get_animated_heatmap_data,
-                                 "interaction-heatmap",
-                                 {"resolution": "week", "days": 90, "top_n": 20},
-                                 {"resolution": "week", "days": 90, "top_n": 20}),
                             ]:
                                 try:
                                     _put(name, params, fn(conn, gid, **kwargs))
@@ -783,12 +758,6 @@ def main() -> None:
             await asyncio.gather(*bot.startup_tasks, return_exceptions=True)
         log.info("Background tasks cancelled")
 
-        try:
-            from bot_modules.services.interaction_graph import _layout_executor
-
-            _layout_executor.shutdown(wait=False)
-        except (ImportError, AttributeError):
-            pass
 
         try:
             await asyncio.wait_for(

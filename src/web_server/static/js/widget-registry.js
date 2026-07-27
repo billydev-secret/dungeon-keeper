@@ -14,7 +14,7 @@ const WIDGETS = [
   { id: "home-users",       label: "Most Active Users (1h)",  category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "activity" },
   { id: "home-returned",    label: "Returned After Break",    category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "retention" },
   { id: "home-starters",    label: "Conversation Starters",   category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "interaction-graph" },
-  { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "connection-graph" },
+  { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "interaction-graph" },
   { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "health-channel-health" },
   { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: ["admin"], source: "home", wide: true,  nav: "mod-audit" },
 
@@ -24,14 +24,12 @@ const WIDGETS = [
   { id: "health-heatmap",          label: "Activity Heatmap",    category: "Health", perms: ["admin"], source: "health", tileKey: "heatmap",          wide: false, nav: "health-heatmap",         needsNames: false },
   { id: "health-gini",             label: "Participation Gini",  category: "Health", perms: ["admin"], source: "health", tileKey: "gini",             wide: false, nav: "health-gini",            needsNames: false },
   { id: "health-channel-health",   label: "Channel Health",      category: "Health", perms: ["admin"], source: "health", tileKey: "channel_health",   wide: false, nav: "health-channel-health",  needsNames: true  },
-  { id: "health-social-graph",     label: "Social Graph",        category: "Health", perms: ["admin"], source: "health", tileKey: "social_graph",     wide: false, nav: "connection-graph",       needsNames: false },
+  { id: "health-social-graph",     label: "Social Graph",        category: "Health", perms: ["admin"], source: "health", tileKey: "social_graph",     wide: false, nav: "interaction-graph",      needsNames: false },
   { id: "health-sentiment",        label: "Sentiment & Tone",    category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment",        wide: false, nav: "health-sentiment",       needsNames: true  },
   { id: "health-newcomer-funnel",  label: "Newcomer Funnel",     category: "Health", perms: ["admin"], source: "health", tileKey: "newcomer_funnel",  wide: false, nav: "health-newcomer-funnel", needsNames: false },
   { id: "health-cohort-retention", label: "Cohort Retention",    category: "Health", perms: ["admin"], source: "health", tileKey: "cohort_retention", wide: false, nav: "health-cohort-retention",needsNames: false },
-  { id: "health-churn-risk",       label: "Churn Risk",          category: "Health", perms: ["admin"], source: "health", tileKey: "churn_risk",       wide: false, nav: "health-churn-risk",      needsNames: false },
   { id: "health-mod-workload",     label: "Mod Workload",        category: "Health", perms: ["admin"], source: "health", tileKey: "mod_workload",     wide: false, nav: "health-mod-workload",    needsNames: true  },
-  { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment-feed", needsNames: true,  maxRows: 4 },
-  { id: "health-message-feed",   label: "Message Feed",         category: "Health", perms: ["admin"], source: "health", tileKey: "message_feed",    wide: true,  nav: "health-message-feed",  needsNames: true,  maxRows: 4 },
+  { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment",      needsNames: true,  maxRows: 4 },
 
   // ── Economy tiles ────────────────────────────────────────────────
   { id: "economy-metrics",       label: "Economy",             category: "Health", perms: ["admin"], source: "economy", wide: false, nav: "economy-config" },
@@ -96,10 +94,8 @@ const TILE_LOADERS = {
   "health-sentiment":       () => import("./tiles/sentiment.js"),
   "health-newcomer-funnel": () => import("./tiles/newcomer-funnel.js"),
   "health-cohort-retention":() => import("./tiles/cohort-retention.js"),
-  "health-churn-risk":      () => import("./tiles/churn-risk.js"),
   "health-mod-workload":    () => import("./tiles/mod-workload.js"),
   "health-sentiment-feed": () => import("./tiles/sentiment-feed.js"),
-  "health-message-feed":  () => import("./tiles/message-feed.js"),
   "economy-metrics":        () => import("./tiles/economy-metrics.js"),
   "setup-suggestions":      () => import("./tiles/setup-suggestions.js"),
 };

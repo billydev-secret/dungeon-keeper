@@ -54,21 +54,6 @@ class ChannelMeta(BaseModel):
 # ── Role growth ──────────────────────────────────────────────────────────
 
 
-class RoleGrowthSeries(BaseModel):
-    role: str
-    counts: list[int]
-
-
-class RoleGrowthResponse(BaseModel):
-    resolution: str
-    window_label: str
-    labels: list[str]
-    series: list[RoleGrowthSeries]
-
-
-# ── Message cadence ──────────────────────────────────────────────────────
-
-
 class CadenceBucketSchema(BaseModel):
     label: str
     min_gap: float
@@ -76,16 +61,6 @@ class CadenceBucketSchema(BaseModel):
     median_gap: float
     p80_gap: float
     max_gap: float
-
-
-class MessageCadenceResponse(BaseModel):
-    resolution: str
-    window_label: str
-    channel_id: str | None = None
-    buckets: list[CadenceBucketSchema]
-
-
-# ── Join times ───────────────────────────────────────────────────────────
 
 
 class JoinTimesResponse(BaseModel):
@@ -112,16 +87,6 @@ class NsfwGenderResponse(BaseModel):
 
 
 # ── Message rate ─────────────────────────────────────────────────────────
-
-
-class MessageRateResponse(BaseModel):
-    days: int
-    tz_label: str
-    buckets: list[int]
-    avg_per_day: list[float]
-
-
-# ── Greeter response ────────────────────────────────────────────────────
 
 
 class ResponseBucketSchema(BaseModel):
@@ -429,16 +394,6 @@ class ReactionUserRowSchema(BaseModel):
     received: int
 
 
-class ReactionAnalyticsResponse(BaseModel):
-    top_emoji: list[EmojiRowSchema]
-    top_givers: list[ReactionUserRowSchema]
-    top_receivers: list[ReactionUserRowSchema]
-    total_reactions: int
-
-
-# ── Message rate drops ─────────────────────────────────────────────────
-
-
 class RateDropEntrySchema(BaseModel):
     user_id: str
     user_name: str = ""
@@ -448,17 +403,6 @@ class RateDropEntrySchema(BaseModel):
     adjusted_drop_pct: float
 
 
-class MessageRateDropsResponse(BaseModel):
-    period_days: int
-    server_prev: int
-    server_recent: int
-    server_drop_pct: float
-    entries: list[RateDropEntrySchema]
-
-
-# ── Burst ranking ──────────────────────────────────────────────────────
-
-
 class BurstEntrySchema(BaseModel):
     user_id: str
     user_name: str = ""
@@ -466,13 +410,6 @@ class BurstEntrySchema(BaseModel):
     post_avg: float
     increase: float
     sessions: int
-
-
-class BurstRankingResponse(BaseModel):
-    entries: list[BurstEntrySchema]
-
-
-# ── Channel comparison ─────────────────────────────────────────────────
 
 
 class ChannelRowSchema(BaseModel):
@@ -752,95 +689,6 @@ class ModerationStatsResponse(BaseModel):
 # ── Animated interaction heatmap ────────────────────────────────────────
 
 
-class AnimatedHeatmapUser(BaseModel):
-    user_id: str
-    user_name: str = ""
-
-
-class AnimatedHeatmapFrame(BaseModel):
-    label: str
-    matrix: list[list[int]]
-
-
-class AnimatedHeatmapResponse(BaseModel):
-    resolution: str
-    window_label: str
-    users: list[AnimatedHeatmapUser]
-    frames: list[AnimatedHeatmapFrame]
-    global_max: int
-
-
-# ── Dropoff ─────────────────────────────────────────────────────────────
-
-
-class DropoffEntrySchema(BaseModel):
-    user_id: str
-    user_name: str = ""
-    msgs_prev: int
-    msgs_recent: int
-    drop_pct: float
-    channels_recent: int
-    replies_recent: int
-    initiations_recent: int
-    avg_msg_len_recent: float
-    deep_convos_recent: int
-    first_activity_day: int | None = None
-    server_msgs_prev: int
-    server_msgs_recent: int
-
-
-class DropoffResponse(BaseModel):
-    entries: list[DropoffEntrySchema]
-    period_label: str
-
-
-# ── Session burst (per-member) ─────────────────────────────────────────
-
-
-class SessionBurstResponse(BaseModel):
-    user_id: str
-    user_name: str = ""
-    pre_bins: list[float]
-    post_bins: list[float]
-    sessions: int
-    pre_avg: float
-    post_avg: float
-    overall_rate: float
-    pre_window_minutes: int
-    post_window_minutes: int
-    bin_minutes: int
-
-
-# ── XP level review (any level) ────────────────────────────────────────
-
-
-class XpLevelReviewMember(BaseModel):
-    user_id: str
-    display_name: str = ""
-    days: float
-
-
-class XpLevelReviewBucket(BaseModel):
-    label: str
-    count: int
-
-
-class XpLevelReviewResponse(BaseModel):
-    level: int
-    window_label: str
-    count: int
-    mean_days: float
-    median_days: float
-    stddev_days: float
-    mode_days: int
-    xp_required: float
-    histogram: list[XpLevelReviewBucket]
-    members: list[XpLevelReviewMember]
-
-
-# ── Chilling effect ────────────────────────────────────────────────────
-
-
 class ChillingVictim(BaseModel):
     user_id: str
     user_name: str = ""
@@ -864,17 +712,6 @@ class ChillingPersonRanked(BaseModel):
     silence_count: int
     total_victims: int
     sample_events: list[ChillingEvent]
-
-
-class ChillingEffectResponse(BaseModel):
-    lookback_days: int
-    channel_id: str | None = None
-    channel_count: int
-    total_events: int
-    ranked: list[ChillingPersonRanked]
-
-
-# ── Member list reports ────────────────────────────────────────────────
 
 
 class MemberRowSchema(BaseModel):

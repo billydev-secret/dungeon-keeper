@@ -440,84 +440,8 @@ def test_compute_cohort_retention_basic(db_conn):
     assert out["latest_cohort_size"] >= 1
 
 
-# ── compute_user_churn_score (single-user signal coverage) ───────────
 
 
-def test_compute_user_churn_score_quiet_user_is_declining(db_conn):
-    now = 1_700_000_000.0
-    # No activity at all → frequency (30%) + channels (25%) + reciprocity (20%)
-    # all max out = 75. Sentiment and gap signals stay at 0 (no messages to
-    # measure), so the tier lands in the 50-79 ``declining`` band.
-    out = hm.compute_user_churn_score(db_conn, GUILD, user_id=42, now=now)
-    assert out["score"] == 75
-    assert out["tier"] == "declining"
-    assert out["last_seen"] == 0.0
-    assert out["signals"]["frequency"] == 100
-    assert out["signals"]["channels"] == 100
-    assert out["signals"]["reciprocity"] == 100
-
-
-def test_compute_user_churn_score_active_user_is_clear(db_conn):
-    now = 1_700_000_000.0
-    # Steady activity in last 7d AND prior 7d, multiple channels
-    for d in range(6):
-        ts = int(now - d * 86400 - 60)
-        _seed_message(db_conn, mid=100 + d, cid=100 + (d % 2), aid=1, ts=ts)
-        _seed_interaction(db_conn, frm=2, to=1, ts=ts)
-    # Inbound interactions in both windows
-    for d in range(8, 14):
-        ts = int(now - d * 86400)
-        _seed_message(db_conn, mid=200 + d, cid=100, aid=1, ts=ts)
-        _seed_interaction(db_conn, frm=2, to=1, ts=ts)
-    db_conn.commit()
-    out = hm.compute_user_churn_score(db_conn, GUILD, user_id=1, now=now)
-    assert out["score"] < 50
-    assert out["tier"] in ("clear", "watch")
-
-
-def test_compute_user_churn_score_declining_user(db_conn):
-    now = 1_700_000_000.0
-    # Lots of activity in prev 7d window, almost none in last 7d → freq_decline
-    for d in range(8, 14):
-        ts = int(now - d * 86400)
-        _seed_message(db_conn, mid=100 + d, cid=100, aid=1, ts=ts)
-    # One tiny message last 7d
-    _seed_message(db_conn, mid=200, cid=100, aid=1, ts=int(now - 3 * 86400))
-    db_conn.commit()
-    out = hm.compute_user_churn_score(db_conn, GUILD, user_id=1, now=now)
-    # Score should be elevated by frequency decline + channel narrow
-    assert out["score"] >= 30
-    assert out["signals"]["frequency"] > 0
-
-
-# ── compute_churn_risk (guild-wide aggregate) ────────────────────────
-
-
-def test_compute_churn_risk_empty_db(db_conn):
-    out = hm.compute_churn_risk(db_conn, GUILD, now=1_700_000_000.0)
-    assert out["at_risk_count"] == 0
-    assert out["badge"] == "clear"
-    assert out["risk_distribution"] == [0] * 10
-
-
-def test_compute_churn_risk_classifies_at_risk_users(db_conn):
-    now = 1_700_000_000.0
-    # User 1: declining
-    _seed_known_user(db_conn, 1)
-    _seed_known_user(db_conn, 2)
-    # Heavy prior 7d activity, very light recent → big freq_decline
-    for d in range(8, 14):
-        _seed_message(db_conn, mid=100 + d, cid=100, aid=1, ts=int(now - d * 86400))
-    _seed_message(db_conn, mid=300, cid=100, aid=1, ts=int(now - 3 * 86400))
-    # User 2: bot — should be excluded
-    _seed_known_user(db_conn, 2, is_bot=1)
-    _seed_message(db_conn, mid=500, cid=100, aid=2, ts=int(now - 60))
-    db_conn.commit()
-    out = hm.compute_churn_risk(db_conn, GUILD, now=now)
-    # User 1 should appear in at_risk list, user 2 (bot) should not
-    user_ids = [r["user_id"] for r in out["at_risk"]]
-    assert "1" in user_ids
-    assert "2" not in user_ids
 
 
 # ── compute_mod_workload ─────────────────────────────────────────────

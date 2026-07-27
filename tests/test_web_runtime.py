@@ -51,9 +51,9 @@ def clear_report_cache():
 
 
 def test_invalidate_report_cache_scopes_to_matching_entries():
-    store_report_result("role-growth", 1, {"resolution": "week"}, {"ok": 1})
-    store_report_result("role-growth", 2, {"resolution": "week"}, {"ok": 2})
-    store_report_result("message-rate", 1, {"days": 30}, {"ok": 3})
+    store_report_result("xp-leaderboard", 1, {"days": None}, {"ok": 1})
+    store_report_result("xp-leaderboard", 2, {"days": None}, {"ok": 2})
+    store_report_result("channel-comparison", 1, {"days": 30}, {"ok": 3})
 
     removed = invalidate_report_cache(guild_id=1)
 

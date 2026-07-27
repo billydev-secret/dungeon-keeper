@@ -18,17 +18,10 @@ from typing import Literal, TypedDict
 
 from bot_modules.services.activity_graphs import (
     Resolution,
-    _BUCKET_BUILDERS,
-    _strftime_expr,
-    query_burst_ranking,
     query_dropoff_profiles,
     query_message_activity,
-    query_message_cadence,
     query_message_histogram,
-    query_message_rate_10min,
-    query_message_rate_drops,
     query_nsfw_gender_activity,
-    query_role_growth,
     query_xp_activity_with_breakdown,
     query_xp_histogram_with_breakdown,
 )
@@ -125,36 +118,6 @@ class RoleGrowthData(TypedDict):
     series: list[RoleGrowthSeries]
 
 
-def get_role_growth_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Resolution,
-    role_filter: set[str] | None,
-    utc_offset_hours: float = 0,
-) -> RoleGrowthData:
-    labels, role_counts = query_role_growth(
-        conn, guild_id, resolution, utc_offset_hours=utc_offset_hours
-    )
-
-    if role_filter is not None:
-        role_counts = {
-            name: counts
-            for name, counts in role_counts.items()
-            if name.lower() in role_filter
-        }
-
-    series: list[RoleGrowthSeries] = [
-        {"role": name, "counts": counts} for name, counts in role_counts.items()
-    ]
-
-    return {
-        "resolution": resolution,
-        "window_label": _WINDOW_LABELS.get(resolution, resolution),
-        "labels": labels,
-        "series": series,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Message cadence
 # ---------------------------------------------------------------------------
@@ -174,38 +137,6 @@ class MessageCadenceData(TypedDict):
     window_label: str
     channel_id: str | None
     buckets: list[CadenceBucketDict]
-
-
-def get_message_cadence_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Resolution,
-    utc_offset_hours: float,
-    channel_id: int | None,
-) -> MessageCadenceData:
-    buckets = query_message_cadence(
-        conn,
-        guild_id,
-        resolution,
-        utc_offset_hours=utc_offset_hours,
-        channel_id=channel_id,
-    )
-    return {
-        "resolution": resolution,
-        "window_label": _WINDOW_LABELS.get(resolution, resolution),
-        "channel_id": str(channel_id) if channel_id else None,
-        "buckets": [
-            {
-                "label": b.label,
-                "min_gap": b.min_gap,
-                "p20_gap": b.p20_gap,
-                "median_gap": b.median_gap,
-                "p80_gap": b.p80_gap,
-                "max_gap": b.max_gap,
-            }
-            for b in buckets
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -306,30 +237,6 @@ class MessageRateData(TypedDict):
     tz_label: str
     buckets: list[int]
     avg_per_day: list[float]
-
-
-def get_message_rate_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    days: int,
-    utc_offset_hours: float,
-    *,
-    channel_id: int | None = None,
-) -> MessageRateData:
-    counts = query_message_rate_10min(
-        conn,
-        guild_id,
-        days,
-        utc_offset_hours=utc_offset_hours,
-        channel_id=channel_id,
-    )
-    tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
-    return {
-        "days": days,
-        "tz_label": tz_label,
-        "buckets": counts,
-        "avg_per_day": [c / days for c in counts],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1406,97 +1313,6 @@ class ReactionAnalyticsData(TypedDict):
     total_reactions: int
 
 
-def get_reaction_analytics_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    days: int | None = None,
-    limit: int = 20,
-) -> ReactionAnalyticsData:
-    now = int(datetime.now(timezone.utc).timestamp())
-
-    cutoff_clause = ""
-    params: list[object] = [guild_id]
-    if days is not None:
-        cutoff_clause = "AND ts >= ?"
-        params.append(now - days * 86400)
-
-    # Top emoji — use message_reactions counts, filtered to messages
-    # in this guild (and optionally time window) via the messages table.
-    emoji_cutoff = ""
-    emoji_params: list[object] = [guild_id]
-    if days is not None:
-        emoji_cutoff = "AND m.ts >= ?"
-        emoji_params.append(now - days * 86400)
-    emoji_rows = conn.execute(
-        f"""
-        SELECT mr.emoji, SUM(mr.count) AS cnt
-        FROM message_reactions mr
-        JOIN messages m ON m.message_id = mr.message_id
-        WHERE m.guild_id = ? {emoji_cutoff}
-        GROUP BY mr.emoji
-        ORDER BY cnt DESC
-        LIMIT ?
-        """,
-        [*emoji_params, limit],
-    ).fetchall()
-    top_emoji: list[EmojiRow] = [
-        {"emoji": str(r[0]), "total_count": int(r[1])} for r in emoji_rows
-    ]
-
-    # Top givers
-    giver_rows = conn.execute(
-        f"""
-        SELECT reactor_id, COUNT(*) AS cnt
-        FROM reaction_log
-        WHERE guild_id = ? {cutoff_clause}
-        GROUP BY reactor_id
-        ORDER BY cnt DESC
-        LIMIT ?
-        """,
-        [*params, limit],
-    ).fetchall()
-
-    # Top receivers
-    receiver_rows = conn.execute(
-        f"""
-        SELECT author_id, COUNT(*) AS cnt
-        FROM reaction_log
-        WHERE guild_id = ? {cutoff_clause}
-        GROUP BY author_id
-        ORDER BY cnt DESC
-        LIMIT ?
-        """,
-        [*params, limit],
-    ).fetchall()
-
-    # Total reactions from message_reactions (accurate aggregate counts)
-    total_row = conn.execute(
-        f"""
-        SELECT COALESCE(SUM(mr.count), 0)
-        FROM message_reactions mr
-        JOIN messages m ON m.message_id = mr.message_id
-        WHERE m.guild_id = ? {emoji_cutoff}
-        """,
-        emoji_params,
-    ).fetchone()
-
-    top_givers: list[ReactionUserRow] = [
-        {"user_id": str(r[0]), "user_name": "", "given": int(r[1]), "received": 0}
-        for r in giver_rows
-    ]
-    top_receivers: list[ReactionUserRow] = [
-        {"user_id": str(r[0]), "user_name": "", "given": 0, "received": int(r[1])}
-        for r in receiver_rows
-    ]
-
-    return {
-        "top_emoji": top_emoji,
-        "top_givers": top_givers,
-        "top_receivers": top_receivers,
-        "total_reactions": int(total_row[0]) if total_row else 0,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Message rate drops
 # ---------------------------------------------------------------------------
@@ -1519,68 +1335,6 @@ class MessageRateDropsData(TypedDict):
     entries: list[RateDropEntry]
 
 
-def get_message_rate_drops_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    period_days: int = 14,
-    min_previous: int = 5,
-    limit: int = 25,
-) -> MessageRateDropsData:
-    period_seconds = period_days * 86400
-    now = int(datetime.now(timezone.utc).timestamp())
-    mid = now - int(period_seconds)
-    start = mid - int(period_seconds)
-
-    # Server-wide totals for normalization
-    srv_row = conn.execute(
-        """
-        SELECT
-            SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END),
-            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END)
-        FROM processed_messages
-        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
-        """,
-        [mid, mid, guild_id, start, now],
-    ).fetchone()
-    server_prev = int(srv_row[0] or 0) if srv_row else 0
-    server_recent = int(srv_row[1] or 0) if srv_row else 0
-    server_ratio = server_recent / max(server_prev, 1)
-    server_drop_pct = round((1 - server_ratio) * 100, 1)
-
-    drops = query_message_rate_drops(
-        conn,
-        guild_id,
-        period_seconds,
-        min_previous=min_previous,
-        limit=limit,
-    )
-
-    entries: list[RateDropEntry] = []
-    for user_id, prev_count, recent_count in drops:
-        drop_pct = round((1 - recent_count / max(prev_count, 1)) * 100, 1)
-        # Adjusted: what we'd expect if user followed server trend
-        expected = prev_count * server_ratio
-        adjusted = round((1 - recent_count / max(expected, 1)) * 100, 1)
-        entries.append(
-            {
-                "user_id": str(user_id),
-                "user_name": "",
-                "prev_count": prev_count,
-                "recent_count": recent_count,
-                "drop_pct": drop_pct,
-                "adjusted_drop_pct": adjusted,
-            }
-        )
-
-    return {
-        "period_days": period_days,
-        "server_prev": server_prev,
-        "server_recent": server_recent,
-        "server_drop_pct": server_drop_pct,
-        "entries": entries,
-    }
-
-
 # ---------------------------------------------------------------------------
 # Burst ranking
 # ---------------------------------------------------------------------------
@@ -1597,31 +1351,6 @@ class BurstEntry(TypedDict):
 
 class BurstRankingData(TypedDict):
     entries: list[BurstEntry]
-
-
-def get_burst_ranking_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    min_sessions: int = 3,
-    days: int | None = None,
-    limit: int = 25,
-) -> BurstRankingData:
-    results = query_burst_ranking(conn, guild_id, min_sessions=min_sessions, days=days)
-
-    entries: list[BurstEntry] = []
-    for user_id, pre_avg, post_avg, n_sessions in results[:limit]:
-        entries.append(
-            {
-                "user_id": str(user_id),
-                "user_name": "",
-                "pre_avg": round(pre_avg, 2),
-                "post_avg": round(post_avg, 2),
-                "increase": round(post_avg - pre_avg, 2),
-                "sessions": n_sessions,
-            }
-        )
-
-    return {"entries": entries}
 
 
 # ---------------------------------------------------------------------------
@@ -1758,124 +1487,6 @@ def get_channel_comparison_data(
 # ---------------------------------------------------------------------------
 # Animated interaction heatmap
 # ---------------------------------------------------------------------------
-
-
-def get_animated_heatmap_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Literal["day", "week"] = "week",
-    days: int = 90,
-    top_n: int = 20,
-) -> dict:
-    """Return time-bucketed interaction matrices for animation.
-
-    Each frame contains an NxN symmetric matrix of interaction weights for a
-    fixed set of top-N users (by cumulative volume over the entire window).
-    """
-    import time
-
-    now = datetime.now(timezone.utc)
-    days = max(7, min(days, 365))
-    top_n = max(5, min(top_n, 40))
-    since_ts = int(time.time()) - days * 86400
-
-    # --- Stage 1: stable user set (top N by total volume) ---
-    # Exclude bots here; stage 2 filters edges to this set, so it inherits the
-    # exclusion and never renders a member↔bot cell.
-    user_rows = conn.execute(
-        f"""
-        SELECT user_id FROM (
-            SELECT from_user_id AS user_id, COUNT(*) AS w
-            FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
-              AND {_EXCLUDE_BOT_ENDPOINTS}
-            GROUP BY from_user_id
-            UNION ALL
-            SELECT to_user_id AS user_id, COUNT(*) AS w
-            FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
-              AND {_EXCLUDE_BOT_ENDPOINTS}
-            GROUP BY to_user_id
-        )
-        GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
-        """,
-        (
-            guild_id, since_ts, guild_id, guild_id,
-            guild_id, since_ts, guild_id, guild_id,
-            top_n,
-        ),
-    ).fetchall()
-
-    ordered_uids = [int(r[0]) for r in user_rows]
-    n = len(ordered_uids)
-    if n == 0:
-        return {
-            "resolution": resolution,
-            "window_label": f"Last {days} Days",
-            "users": [],
-            "frames": [],
-            "global_max": 0,
-        }
-
-    uid_index = {uid: i for i, uid in enumerate(ordered_uids)}
-    placeholders = ",".join("?" * n)
-
-    # --- Stage 2: time-bucketed edges ---
-    bucket_builder = _BUCKET_BUILDERS[resolution]
-    buckets, bucket_since = bucket_builder(now)
-    effective_since = max(since_ts, int(bucket_since))
-
-    bucket_expr = _strftime_expr(resolution, col="ts", since_ts=effective_since)
-
-    rows = conn.execute(
-        f"""
-        SELECT {bucket_expr} AS bucket,
-               from_user_id, to_user_id, COUNT(*) AS weight
-        FROM user_interactions_log
-        WHERE guild_id = ? AND ts >= ?
-          AND from_user_id IN ({placeholders})
-          AND to_user_id   IN ({placeholders})
-        GROUP BY bucket, from_user_id, to_user_id
-        """,
-        (guild_id, effective_since, *ordered_uids, *ordered_uids),
-    ).fetchall()
-
-    # Build per-bucket symmetric matrices
-    bucket_key_set = {key for key, _label in buckets}
-    frames_dict: dict[str, list[list[int]]] = {}
-    for key, _label in buckets:
-        frames_dict[key] = [[0] * n for _ in range(n)]
-
-    global_max = 0
-    for r in rows:
-        bk, uid_a, uid_b, w = str(r[0]), int(r[1]), int(r[2]), int(r[3])
-        if bk not in bucket_key_set or uid_a == uid_b:
-            continue
-        i, j = uid_index.get(uid_a), uid_index.get(uid_b)
-        if i is None or j is None:
-            continue
-        lo, hi = min(i, j), max(i, j)
-        frames_dict[bk][lo][hi] += w
-        frames_dict[bk][hi][lo] += w
-        val = frames_dict[bk][lo][hi]
-        if val > global_max:
-            global_max = val
-
-    # Assemble ordered frames
-    frames = []
-    for key, label in buckets:
-        frames.append({"label": label, "matrix": frames_dict[key]})
-
-    users = [{"user_id": str(uid), "user_name": ""} for uid in ordered_uids]
-
-    return {
-        "resolution": resolution,
-        "window_label": f"Last {days} Days",
-        "users": users,
-        "frames": frames,
-        "global_max": global_max,
-    }
-
-
-# ── One-sided (unreciprocated) attention ───────────────────────────────
 
 
 def get_one_sided_attention_data(
