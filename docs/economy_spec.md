@@ -329,6 +329,9 @@ to currency.
 - **Host bounty (2026-07-23, dark by default):** the member who *ran* a party
   game earns `host_bounty_per_joiner` per attendee who joined, capped at
   `host_bounty_cap` attendees (defaults 0 / 5 — the 0 rate ships it dark).
+  Either box accepts 0 on Automatic Payments and either 0 turns the bounty off,
+  matching `host_bounty_amount`, which pays nothing on a non-positive rate *or*
+  cap. (The route demanded `ge=1` on the cap until 2026-07-27.)
   `pay_game_rewards` takes an optional `host_id` and pays only when at least
   one member *other than the host* joined — attendees exclude the host, so a
   host talking to themselves earns nothing and there is no farm in starting an
