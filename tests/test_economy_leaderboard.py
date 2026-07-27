@@ -12,6 +12,7 @@ from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy import live_signal
 from bot_modules.economy.leaderboard import (
     CommunityGoal,
+    BOARD_HEADING,
     FeedLine,
     LeaderboardData,
     Pulse,
@@ -263,7 +264,7 @@ def test_embed_community_bar_and_states():
         quests=[],
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
-    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    goals = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
     assert goals is not None
     assert community_progress_bar(50, 100) in goals
     assert "✅ paid out" in goals
@@ -290,8 +291,49 @@ def test_embed_community_goals_separated_by_blank_line():
         quests=[],
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
-    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    goals = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
     assert "today\n\n**Talk It Out**" in goals
+
+
+def test_embed_board_keeps_goals_above_the_cadence_summary():
+    # One heading, both bodies, goals first — the merge (#83), not a swap.
+    data = LeaderboardData(
+        top_earners=[],
+        community=[CommunityGoal("Group goal", 5, 10, completed=False, settled=False)],
+        quests=[QuestLine("daily", "Chatter", 5, 0)],
+    )
+    embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
+    board = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
+    assert board.index("**Group goal**") < board.index("`Daily")
+    assert sum(1 for f in embed.fields if f.name.startswith("📋")) == 1
+
+
+def test_embed_board_spills_into_a_cont_field_past_the_char_cap():
+    # Two sections merged into one field doubles the overrun risk. Discord
+    # rejects the whole embed past 1024 chars in a value, so the blocks pack
+    # into "… (cont.)" fields instead of being silently dropped or truncated.
+    data = LeaderboardData(
+        top_earners=[],
+        community=[
+            CommunityGoal(
+                f"Goal number {i} with a long enough title to eat budget",
+                i, 100, completed=False, settled=False, auto=True,
+                kind_flavor="a flavor line that also takes up meaningful room",
+                contributors=12, today_delta=340,
+            )
+            for i in range(8)
+        ],
+        quests=[QuestLine("daily", "Chatter", 5, 0)],
+    )
+    embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
+    board_fields = [f for f in embed.fields if f.name.startswith(BOARD_HEADING)]
+    assert len(board_fields) > 1
+    assert board_fields[0].name == BOARD_HEADING
+    assert board_fields[1].name == f"{BOARD_HEADING} (cont.)"
+    assert all(len(f.value or "") <= 1024 for f in embed.fields)
+    # Nothing is lost in the split: every goal still appears somewhere.
+    joined = "".join(f.value or "" for f in board_fields)
+    assert all(f"Goal number {i} " in joined for i in range(8))
 
 
 def test_community_progress_bar_marks_tier_regions():
@@ -316,7 +358,7 @@ def test_embed_goal_title_shows_kind_flavor():
         quests=[],
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
-    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    goals = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
     assert "**Server Buzz** — *every word keeps the fire crackling*" in goals
     assert "**Manual goal**\n" in goals  # no dangling "—" without flavor
 
@@ -333,13 +375,13 @@ def test_embed_sections_stack_full_width():
         EconSettings(), data, _names({}), now_ts=NOW
     )
     layout = [(f.name, f.inline) for f in embed.fields]
+    # Community goals and the cadence board share one heading, and the trailing
+    # "/bank quests … /bank wallet …" explainer is gone — both are buttons now.
     assert layout == [
         ("📡 Today's pulse", False),
         (f"🏆 Top earners (last {ROLLING_DAYS} days)", False),
-        ("🎯 Community goals — everyone gets paid when we hit them", False),
-        ("📋 Quest board", False),
+        (BOARD_HEADING, False),
         ("📰 Live feed — today", False),
-        ("​", False),
     ]
     # (glyph-led section headings; see build_leaderboard_embed)
     # Breathing room: the description and every field but the last end in a
@@ -364,7 +406,7 @@ def test_embed_quest_board_summarizes_per_cadence():
     embed = build_leaderboard_embed(
         settings, LeaderboardData([], [], quests), _names({}), now_ts=NOW
     )
-    board = next(f.value for f in embed.fields if f.name == "📋 Quest board")
+    board = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
     assert board is not None
     assert "`Daily    3 yours · pool 14` 🪙 5–40 each" in board
     # A pool smaller than the configured size clamps to the pool.
@@ -373,7 +415,8 @@ def test_embed_quest_board_summarizes_per_cadence():
     assert "Monthly" not in board
     # No individual titles leak into the summary.
     assert "Quest 0" not in board and "Solo weekly" not in board
-    assert "reshuffle each reset" in board and "/bank quests" in board
+    # Points at the panel's button, not the command the explainer used to name.
+    assert "reshuffle each reset" in board and "Show My Quests" in board
 
 
 def test_embed_quest_board_omits_event_quests():
@@ -386,23 +429,25 @@ def test_embed_quest_board_omits_event_quests():
     embed = build_leaderboard_embed(
         EconSettings(), LeaderboardData([], [], quests), _names({}), now_ts=NOW
     )
-    board = next(f.value for f in embed.fields if f.name == "📋 Quest board")
+    board = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
     assert board is not None
     assert "Anytime" not in board
     assert "Secret Santa" not in board
 
 
-def test_embed_empty_states_and_personal_blurb():
+def test_embed_empty_states_and_drops_the_command_explainer():
     embed = build_leaderboard_embed(
         EconSettings(), LeaderboardData([], [], []), _names({}), now_ts=NOW
     )
     fields = {f.name: f.value or "" for f in embed.fields}
     assert "be the first" in fields[f"🏆 Top earners (last {ROLLING_DAYS} days)"]
-    assert "No quests running" in fields["📋 Quest board"]
-    assert not any("Community goals" in (n or "") for n in fields)
-    personal = fields["​"]
-    assert "/bank quests" in personal and "/bank wallet" in personal
-    assert "only you" in personal
+    assert "No quests running" in fields[BOARD_HEADING]
+    # Goals get no heading of their own any more — they share the board's.
+    assert not any(n == "🎯 Community goals" for n in fields)
+    # The trailing "/bank quests … /bank wallet …" field is gone: the panel's
+    # buttons are the affordance now, so no zero-width-named field at all.
+    assert "​" not in fields
+    assert not any("/bank wallet" in v for v in fields.values())
 
 
 # ── settings round-trip ─────────────────────────────────────────────────────
@@ -636,7 +681,7 @@ def test_embed_auto_goal_tier_marker():
         quests=[],
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
-    goals = next(f.value for f in embed.fields if "Community goals" in (f.name or ""))
+    goals = next(f.value for f in embed.fields if f.name == BOARD_HEADING)
     assert goals is not None
     assert "🏁 tier 2/3 secured" in goals
 
@@ -711,7 +756,7 @@ def test_embed_community_pace_crowd_and_deadline():
         _names({}),
         now_ts=NOW,
     )
-    goals = _fields(embed)["🎯 Community goals — everyone gets paid when we hit them"]
+    goals = _fields(embed)[BOARD_HEADING]
     assert "🏁 tier 1/3 secured" in goals
     assert "👥 4 contributing" in goals and "+12 today" in goals
     assert f"ends <t:{int(NOW + 5000)}:R>" in goals
@@ -727,7 +772,7 @@ def test_embed_spotlight_gets_countdown():
         week_roll_ts=NOW + 7200,
     )
     embed = build_leaderboard_embed(EconSettings(), data, _names({}), now_ts=NOW)
-    board = _fields(embed)["📋 Quest board"]
+    board = _fields(embed)[BOARD_HEADING]
     assert f"pays **double** — until <t:{int(NOW + 7200)}:R>!" in board
     # The banner names the doubled kind; the summary no longer lists titles.
     assert "Chatter" not in board

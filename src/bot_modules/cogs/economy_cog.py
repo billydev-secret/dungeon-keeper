@@ -1677,6 +1677,15 @@ class EconomyCog(commands.Cog):
 
     @bank.command(name="wallet", description="Check your balance and recent activity.")
     async def bank_wallet(self, interaction: discord.Interaction) -> None:
+        await self.send_wallet_panel(interaction)
+
+    async def send_wallet_panel(self, interaction: discord.Interaction) -> None:
+        """The member's private balance + activity view.
+
+        Shared by the ``/bank wallet`` command and the leaderboard panel's
+        "Wallet" button, so both open the exact same ephemeral embed (mirrors
+        ``send_quests_panel``).
+        """
         assert interaction.guild is not None
         guild = interaction.guild
         guild_id = guild.id

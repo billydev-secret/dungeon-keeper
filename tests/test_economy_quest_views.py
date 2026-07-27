@@ -24,6 +24,8 @@ from bot_modules.economy.quest_views import (
     QuestDetailSelect,
     QuestSignoffView,
     ShowMyQuestsButton,
+    WALLET_CUSTOM_ID,
+    WalletButton,
     can_manage_economy,
     render_signoff_card_embed,
 )
@@ -259,9 +261,41 @@ def test_quest_board_view_is_persistent_and_stable():
     """A fixed custom_id + no timeout is what lets clicks route after a restart."""
     view = QuestBoardView()
     assert view.timeout is None
+    # Both buttons, in panel order — Wallet replaced the embed's trailing
+    # "/bank quests … /bank wallet …" explainer field.
     assert [getattr(c, "custom_id", None) for c in view.children] == [
-        QUEST_BOARD_CUSTOM_ID
+        QUEST_BOARD_CUSTOM_ID,
+        WALLET_CUSTOM_ID,
     ]
+
+
+@pytest.mark.asyncio
+async def test_wallet_button_routes_to_the_cog_panel():
+    """The button opens the same ephemeral view /bank wallet does."""
+    cog = MagicMock()
+    cog.send_wallet_panel = AsyncMock()
+    bot = MagicMock()
+    bot.get_cog = MagicMock(return_value=cog)
+    interaction = _button_interaction(bot, user=_member())
+
+    await WalletButton().callback(interaction)
+
+    bot.get_cog.assert_called_once_with("EconomyCog")
+    cog.send_wallet_panel.assert_awaited_once_with(interaction)
+    interaction.response.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wallet_button_is_never_a_dead_button():
+    """With the cog unloaded mid-restart the click still answers, not hangs."""
+    bot = MagicMock()
+    bot.get_cog = MagicMock(return_value=None)
+    interaction = _button_interaction(bot, user=_member())
+
+    await WalletButton().callback(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    assert interaction.response.send_message.await_args.kwargs.get("ephemeral") is True
 
 
 @pytest.mark.asyncio

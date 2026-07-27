@@ -235,6 +235,22 @@ def test_put_rejects_unknown_field(authed_client):
     assert resp.status_code == 422
 
 
+def test_put_accepts_zero_host_bounty_cap(authed_client, fake_ctx):
+    """0 is a legal cap — economy.logic.host_bounty_amount reads a non-positive
+    cap as "pays nothing", which is how the bounty ships dark. The route used to
+    demand ge=1 and 422 the one row in Automatic Payments that couldn't be
+    switched off from the page that owns it."""
+    resp = authed_client.put("/api/economy/config", json={"host_bounty_cap": 0})
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).host_bounty_cap == 0
+
+
+def test_put_rejects_negative_host_bounty_cap(authed_client):
+    resp = authed_client.put("/api/economy/config", json={"host_bounty_cap": -1})
+    assert resp.status_code == 422
+
+
 def test_put_rejects_booster_multiplier_below_one(authed_client):
     resp = authed_client.put(
         "/api/economy/config", json={"booster_multiplier": 0.5}

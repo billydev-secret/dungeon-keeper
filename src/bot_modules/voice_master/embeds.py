@@ -131,9 +131,9 @@ def build_panel_embed(color: "discord.Color | None" = None) -> discord.Embed:
             "Join the Hub voice channel to spin up your own room.\n"
             "Use the menus below to manage **the channel you currently own**.\n\n"
             "Set **who can see and join** in one pick:\n"
-            "🔓 **Open** · 🔞 **NSFW — open** (age-gated) · "
-            "🔒 **NSFW — locked** (age-gated, hidden, invite-only) · "
-            "🎭 **Spectator** (age-gated audience).\n"
+            "🔓 **Open** · 🔞 **NSFW — open** · "
+            "🔒 **NSFW — locked** (NSFW, hidden, invite-only) · "
+            "🎭 **Spectator** (NSFW audience).\n"
             "People you invite can always get in, even when locked.\n"
         ),
         color=color,
@@ -193,9 +193,9 @@ def build_howto_embed(
         name="🔑 Who can get in",
         value=(
             "Pick one **access** state:\n"
-            "🔓 **Open** — all welcome · 🔞 **NSFW — open** — age-gated but open\n"
-            "🔒 **NSFW — locked** — age-gated, hidden, others must knock\n"
-            "🎭 **Spectator** — age-gated audience: join muted, read-only\n"
+            "🔓 **Open** — all welcome · 🔞 **NSFW — open** — NSFW, but open\n"
+            "🔒 **NSFW — locked** — NSFW, hidden, others must knock\n"
+            "🎭 **Spectator** — NSFW audience: join muted, read-only\n"
             "👋 **Invite** someone in · 🚫 **Kick** someone out · "
             "🔔 **Knock** to ask into a locked room"
         ),

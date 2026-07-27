@@ -329,6 +329,9 @@ to currency.
 - **Host bounty (2026-07-23, dark by default):** the member who *ran* a party
   game earns `host_bounty_per_joiner` per attendee who joined, capped at
   `host_bounty_cap` attendees (defaults 0 / 5 — the 0 rate ships it dark).
+  Either box accepts 0 on Automatic Payments and either 0 turns the bounty off,
+  matching `host_bounty_amount`, which pays nothing on a non-positive rate *or*
+  cap. (The route demanded `ge=1` on the cap until 2026-07-27.)
   `pay_game_rewards` takes an optional `host_id` and pays only when at least
   one member *other than the host* joined — attendees exclude the host, so a
   host talking to themselves earns nothing and there is no farm in starting an
@@ -1304,12 +1307,23 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   feed** — today's paid completions
   aggregated per quest (title × count + latest relative timestamp, max 5
   lines, plus a full-board-bonus count; titles and counts only, never member
-  names, per the 2026-07-18 ticker decision); and a blurb pointing members
-  at `/quests` + `/bank wallet` for their own numbers. The panel carries a
-  persistent **Show my quests** button (`econ:show_my_quests`, a static-id
-  `QuestBoardView` re-registered at cog load and re-attached on every
-  repaint) that opens the same ephemeral panel as `/bank quests` — the
-  members' door from the anonymous board into their own personal draw.
+  names, per the 2026-07-18 ticker decision).
+  **Goals and the board share one heading** (`BOARD_HEADING`, "📋 Quest board
+  & community goals", 2026-07-27): two adjacent headings read as two competing
+  boards when both answer "what is there to do". Goals lead, the cadence
+  summary follows, and because one field now carries both bodies, blocks pack
+  into "… (cont.)" fields past Discord's 1024-char value cap (`_pack_board`,
+  the `quest_digest._pack` pattern) instead of 400ing the embed.
+  The panel carries two persistent buttons in a static-id `QuestBoardView`
+  (re-registered at cog load, re-attached on every repaint): **Show my quests**
+  (`econ:show_my_quests`) opening the same ephemeral panel as `/bank quests` —
+  the members' door from the anonymous board into their own personal draw —
+  and **Wallet** (`econ:show_my_wallet`) opening the same view as `/bank
+  wallet` via the shared `send_wallet_panel`. The buttons replaced a trailing
+  field that spelled out both commands in prose (2026-07-27): the affordance
+  belongs under the embed, not in its field budget. With that field gone,
+  whichever section lands last sheds its own trailing zero-width spacer, which
+  the explainer used to absorb.
   Sections stack
   full-width, each heading given breathing room by a zero-width blank
   line ending the previous section's value (and the description); each body is a small table — fixed-width inline-code cells

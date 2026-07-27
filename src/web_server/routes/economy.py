@@ -82,9 +82,12 @@ class EconomyConfigUpdate(BaseModel):
     reward_game_win: int | None = Field(default=None, ge=0)
     reward_cah_win_max: int | None = Field(default=None, ge=0)
     # Host bounty: per-attendee payout to a party game's host, capped at
-    # host_bounty_cap attendees. 0 rate ships it dark.
+    # host_bounty_cap attendees. A 0 in *either* box ships it dark —
+    # economy.logic.host_bounty_amount pays nothing on a non-positive rate or
+    # cap, so the route matches the service rather than 422ing the one row on
+    # Automatic Payments that couldn't be zeroed.
     host_bounty_per_joiner: int | None = Field(default=None, ge=0)
-    host_bounty_cap: int | None = Field(default=None, ge=1)
+    host_bounty_cap: int | None = Field(default=None, ge=0)
     # Coin Drops. The channel picker is the toggle (0 = off). Cadence is an
     # average — the loop jitters each gap; 48/day (one per ~30 min) is
     # already spammy, so the cap is a guard-rail, not a target.

@@ -463,6 +463,43 @@ def _pulse_lines(data: LeaderboardData, emoji: str, plural: str) -> str:
     return "\n".join(lines)
 
 
+# One heading over both the community goals and the per-cadence board.
+BOARD_HEADING = "📋 Quest board & community goals"
+
+# Discord caps an embed field value at 1024 chars, and _add_section appends a
+# 2-char zero-width spacer to every value. Merging two former sections into one
+# field doubles the overrun risk, so blocks pack into "… (cont.)" fields the way
+# quest_digest._pack does for the login digest.
+_FIELD_LIMIT = 1024
+_SPACER_LEN = 2  # "\n​"
+
+
+def _pack_board(heading: str, blocks: list[str]) -> list[tuple[str, str]]:
+    """Group ``blocks`` into (name, value) fields, "… (cont.)" on overflow.
+
+    A single block longer than the limit is passed through rather than cut —
+    every block here is already length-bounded by its own builder, so clipping
+    mid-goal would lose more than it saves.
+    """
+    limit = _FIELD_LIMIT - _SPACER_LEN
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    length = 0
+    for block in blocks:
+        added = (2 if current else 0) + len(block)  # 2 = "\n\n" separator
+        if current and length + added > limit:
+            chunks.append(current)
+            current, length, added = [], 0, len(block)
+        current.append(block)
+        length += added
+    if current:
+        chunks.append(current)
+    return [
+        (heading if i == 0 else f"{heading} (cont.)", "\n\n".join(chunk))
+        for i, chunk in enumerate(chunks)
+    ]
+
+
 def _community_block(g: CommunityGoal) -> str:
     """One goal's lines: title + flavor, a tier-region bar, then detail."""
     if g.settled:
@@ -567,11 +604,13 @@ def build_leaderboard_embed(
         f"🏆 Top earners (last {ROLLING_DAYS} days)", "\n".join(earner_lines)
     )
 
+    # Community goals and the per-cadence quest board are one section: both
+    # answer "what is there to do", and two adjacent headings made the panel
+    # read as two competing boards. Goals lead (they're shared and time-boxed),
+    # the personal-board summary follows.
+    board_blocks: list[str] = []
     if data.community:
-        _add_section(
-            "🎯 Community goals — everyone gets paid when we hit them",
-            "\n\n".join(_community_block(g) for g in data.community),
-        )
+        board_blocks.extend(_community_block(g) for g in data.community)
 
     if data.quests:
         quest_lines = []
@@ -625,14 +664,16 @@ def build_leaderboard_embed(
         if body:
             quest_lines.extend(body)
             quest_lines.append(
-                "Boards reshuffle each reset — `/bank quests` shows yours."
+                "Boards reshuffle each reset — **Show My Quests** below shows yours."
             )
         board = "\n".join(quest_lines)
-        if not board:
-            board = "No quests running right now — check back soon."
-    else:
-        board = "No quests running right now — check back soon."
-    _add_section("📋 Quest board", board)
+        if board:
+            board_blocks.append(board)
+    if not data.quests:
+        board_blocks.append("No quests running right now — check back soon.")
+
+    for name, value in _pack_board(BOARD_HEADING, board_blocks):
+        _add_section(name, value)
 
     _add_section("📰 Live feed — today", _feed_lines(data))
 
@@ -653,15 +694,21 @@ def build_leaderboard_embed(
         table_lines.append("Resets with the week — the tables are waiting.")
         _add_section("🎰 Night at the Tables", "\n".join(table_lines))
 
-    embed.add_field(
-        name="​",
-        value=(
-            "`/bank quests` shows your own quest progress and claims, and "
-            f"`/bank wallet` your {plural} balance and recent earnings — "
-            "both are private, only you see the reply."
-        ),
-        inline=False,
-    )
+    # No trailing "/bank quests … /bank wallet …" explainer: both are buttons
+    # under the panel now (QuestBoardView), so the field budget goes to content.
+    #
+    # That explainer used to be the one field _add_section didn't build, which
+    # is what kept the trailing zero-width spacer off the last field. With it
+    # gone, whichever section lands last has to shed its own spacer, or the
+    # embed ends on a blank line (docs/embed_style_guide.md).
+    if embed.fields:
+        last = embed.fields[-1]
+        embed.set_field_at(
+            len(embed.fields) - 1,
+            name=last.name,
+            value=(last.value or "").removesuffix("\n​"),
+            inline=False,
+        )
 
     embed.set_footer(text="⚡ Live — updates within ~2 min of activity")
     embed.timestamp = datetime.fromtimestamp(now_ts, tz=timezone.utc)
