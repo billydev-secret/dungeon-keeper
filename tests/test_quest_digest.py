@@ -145,3 +145,18 @@ def test_oversized_group_splits_into_legal_fields():
     assert any(n.endswith("(cont.)") for n, _ in daily)
     for _, value in daily:
         assert len(value) <= qd.FIELD_LIMIT
+
+
+def test_weekly_community_goals_sort_before_the_monthly_goal():
+    # Near-term first: the weekly community goals lead, the month-long goal
+    # anchors the foot — mirroring the /bank quests board's section order.
+    quests = [
+        {"title": "Month Goal", "qtype": "monthly", "state": "community",
+         "current": 1, "target": 10},
+        {"title": "Week Goal", "qtype": "community", "state": "community",
+         "current": 1, "target": 10},
+    ]
+    headings = [name for name, _ in digest_sections(quests, gains=[])]
+    assert headings.index("🌍 Community Goals") < headings.index(
+        "🗓️ Monthly Quests"
+    )

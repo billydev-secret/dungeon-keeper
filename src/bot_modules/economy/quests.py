@@ -59,6 +59,19 @@ SETUP_QUEST_KINDS = frozenset(
 # smaller N) spaces repeats further apart.
 PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2}
 
+# Ceiling on how many pending setup quests may be pinned onto one board
+# (further capped to the board size). The excess isn't dropped — the pinned
+# subset rotates through the pending set with the same per-user window walk
+# as the draw itself, so every pending setup quest still surfaces within
+# ~ceil(pending / cap) periods. Pinning shipped unbounded (2026-07-23) on
+# the theory that a swamped board "converts to normal within days"; live
+# data three days later said otherwise — 121 of 149 active members had all
+# four setups pending, so every daily board was 100% pins and the random
+# roll was invisible. The cap keeps the nudge without erasing the board;
+# rotation answers the original objection to capping (ranking pins meant
+# the last one would reach nobody).
+MAX_SETUP_PINS = 2
+
 # Game/module triggers a quest can be auto-completed by (label = how the
 # dashboard describes it). On an *event* quest the trigger pays per
 # occurrence (period "<kind>:<occurrence>", no time gate); on a daily/weekly
@@ -120,6 +133,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "role_pick": "Pick your roles from a role menu",
     "confession_reply": "Reply to a confession",
     "shop_purchase": "Make your first shop purchase",
+    "daily_complete": "Complete daily quests",
 }
 
 # Warm one-liners for the leaderboard's community-goals block, shown in
@@ -183,6 +197,7 @@ TRIGGER_FLAVOR: dict[str, str] = {
     "role_pick": "fly your colors",
     "confession_reply": "someone needed to hear that",
     "shop_purchase": "treat yourself — you've earned it",
+    "daily_complete": "a little every day goes a long way",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -242,6 +257,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "role_pick": "Self-assigning a role via a role menu or an announcement role button. One-time setup quest (the bio_set pattern): claims once ever, drops off the board once done. Event cadence: once ever.",
     "confession_reply": "Posting an anonymous reply to someone ELSE's confession (replying to your own never fires). Credited privately like `confession` — no channel noise. Event cadence: once per reply — use daily/weekly with a target count.",
     "shop_purchase": "Making a shop purchase: perk rental, streak shield, emoji or QOTD sponsorship, raffle tickets (automatic renewal billing never fires). One-time setup quest teaching the earn→spend loop. Event cadence: once ever.",
+    "daily_complete": "Any of the member's daily quests paying out — occurrences are the (quest, day) of the completed daily, so a weekly counted quest reads 'complete N dailies this week' with a progress bar. The board meta-quest: dailies are the check-offs, this is the progression. Not allowed on daily cadence (a daily that completes itself).",
 }
 
 

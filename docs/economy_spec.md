@@ -676,6 +676,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `role_pick` | member self-assigns a role via a role menu **grant** (removals never fire) or an announcement role button grant. Setup kind (see below) | `role_menus/views._apply_outcome` + `announcements/buttons._apply` | `role_pick:set` (once ever) |
 | `confession_reply` | member posts an anonymous reply to someone ELSE's confession (OP self-replies never fire; both thread and channel reply paths). Same privacy contract as `confession` — silent claim, no channel noise | `confessions_cog.ReplyModal.on_submit` → `_fire_confession_trigger(kind="confession_reply")` | `confession_reply:<reply_message_id>` — use daily/weekly with a target count |
 | `shop_purchase` | member makes a voluntary shop purchase: perk rent (voucher-covered counts — the quest rewards shop engagement, not the spend), streak shield, emoji sponsorship, QOTD sponsorship, raffle tickets. Renewal billing (`bill_rental`) deliberately never fires. Setup kind (see below) | each purchase service beside its `apply_debit` | `shop_purchase:set` (once ever) |
+| `daily_complete` | any of the member's **daily** quests reaching 'paid' (instant claim or approved sign-off; setup-quest claims count, their tick stamped to the current guild-local day). The board meta-kind: dailies are check-offs, a weekly counted `daily_complete` quest is the progression bar over them ("complete N dailies this week"). Rejected on daily cadence (`_check_trigger_config`) and refused by the fire hook — a daily can't tick itself. The nested fire's outcomes aren't returned to the outer caller, so a weekly completing this way pays without a cog announcement (register feed + board/digest still show it) | `_fire_daily_completion` in `claim_quest` + `resolve_claim` | `daily_complete:<daily_quest_id>:<daily_period>` |
 
 **One-time setup kinds** (`SETUP_QUEST_KINDS`): `bio_set`, `birthday_set`,
 `role_pick`, `shop_purchase`. Board-cadence quests on these kinds claim once
@@ -683,9 +684,24 @@ ever on a constant period (occurrence `set`), pay on completion even when not
 drawn on the member's board, and drop off the board once the underlying thing
 is done (`_setup_underlying_done`: bio row / birthday row / any
 `role_menu_grants` grant row / any `econ_ledger` row with a purchase kind —
-`PURCHASE_LEDGER_KINDS`). Known soft edge: announcement-button grants aren't
-recorded in `role_menu_grants`, so those pickers stay board-visible until the
-paid-claim backstop catches them.
+`PURCHASE_LEDGER_KINDS` — or an `econ_setup_marks` row, below). Known soft
+edge: announcement-button grants aren't recorded in `role_menu_grants`, so
+those pickers stay board-visible until the paid-claim backstop catches them.
+
+**Externally-detected completion** (`econ_setup_marks`, migration 134,
+2026-07-26): some completing actions happen where the bot has no table of
+record — picking roles through Discord's native onboarding ("Channels &
+Roles → Customize") assigns roles with no bot event, so those members looked
+forever-pending and `role_pick` stayed pinned to their boards (live data:
+148 of 149 active members). The economy loop's hourly sweep
+(`_sync_setup_marks`) fetches `guild.onboarding()`, and any non-bot member
+holding one of the onboarding-offered roles gets a
+`(guild, user, 'role_pick')` mark via `sweep_setup_marks`. A mark clears the
+quest from the board exactly like the feature-table checks but **never
+pays** — detection is not the member acting on the quest, and the first
+sweep over a guild full of long-standing pickers would otherwise mass-mint.
+A marked member who later picks via a role menu or announcement button still
+earns the once-ever claim through the normal trigger.
 
 **Kind activity ledger.** Every `fire_trigger_quests` call — before the
 income-source switch and the personal-board filter — bumps
@@ -770,21 +786,28 @@ special-cases make a once-in-a-lifetime action fit a daily cadence:
   won't swap a member into a setup quest they've completed, and setup quests
   are excluded from the clear-the-board set-bonus requirement (a member
   shouldn't have to do their once-ever bio to earn today's daily set bonus).
-- **Pinned until done (2026-07-23).** A *pending* setup quest no longer waits
-  for a lucky draw: `_pin_pending_setup` forces every not-yet-done setup quest
-  in the frozen pool onto the board, evicting ordinary draws (highest quest id
-  first) to hold the configured board size. The nudge was previously a lottery
-  — with a 20-quest daily pool and a 3-slot board the shop-purchase quest
-  reached **9 members in ten days** — and onboarding shouldn't depend on the
-  dice. Deliberately **unbounded**: the board size is a floor for ordinary
-  content, not a ceiling on pins, so a member with four pending setup quests
-  and a 3-slot board sees four setup quests and no ordinary ones. Swamping a
-  newcomer's first boards is the intended trade, since each clears in one
-  action and then never returns, so the board converts to normal within days.
-  Capping pins at the board size was tried and rejected: it forces the pins to
-  be ranked against each other, and on live data (2026-07-23) *all 101* members
-  who had never made a purchase were also pending an earlier setup quest — a
-  capped board would have shown the First Purchase nudge to nobody.
+- **Pinned until done (2026-07-23; capped 2026-07-26).** A *pending* setup
+  quest no longer waits for a lucky draw: `_pin_pending_setup` pins
+  not-yet-done setup quests onto the board ahead of ordinary draws, evicting
+  ordinary content (highest quest id first) to hold the configured board
+  size. The nudge was previously a lottery — with a 20-quest daily pool and
+  a 3-slot board the shop-purchase quest reached **9 members in ten days** —
+  and onboarding shouldn't depend on the dice.
+
+  Pins are capped at **`quests.MAX_SETUP_PINS` (2) per board** (further
+  capped to the board size), and the pinned subset **rotates**: it is drawn
+  from the pending set with the same per-user window walk as the board
+  itself (`assigned_quest_ids` on the period index), so every pending setup
+  quest surfaces within ~ceil(pending / 2) periods. Pending setups outside
+  the day's pin window are held off the board entirely (a setup quest pays
+  on completion regardless of the draw, so board presence isn't needed to
+  earn it). History: pinning shipped unbounded on the theory that a swamped
+  board "converts to normal within days", after a *ranked* cap was rejected
+  (it would show the lowest-priority nudge to nobody). Three days of live
+  data settled it — 121 of 149 active members had all four setups pending,
+  every 3-slot daily board was 100% pins, and the random roll was invisible.
+  Rotation delivers what ranking couldn't: a cap where every nudge still
+  reaches everyone.
 
   Ordering matters: pins resolve **before** reroll overrides, so a member can
   still pay to push a pinned quest off their board — honouring an explicit
@@ -914,6 +937,14 @@ fragments mid-period.
   **double** on quest claims (`spotlight_kind`: deterministic sha256 over
   (guild, week) across the distinct kinds with an active non-community
   quest; `None` under 2 kinds — rotation needs something to rotate).
+  Candidates are narrowed to kinds **enough members can actually earn**
+  that week (`_reachable_spotlight_kinds`, 2026-07-26): event kinds reach
+  everyone; board kinds must land on ≥25% of 30-day-active members'
+  simulated boards (weekly + all seven dailies, pins and done-drops
+  included — computed against the live pools without freezing snapshots).
+  Skipped when it would leave <2 candidates or there are no active members
+  to measure. Without it a dead pick is possible — 2026-W31 would have
+  spotlit a kind on zero boards, every daily slot being setup-pinned.
   Applied in `_credit_reward` (meta `spotlight: true` on the ledger row);
   surfaced on `/quests` (⚡ tags + banner), the leaderboard embed, the flip
   announcement, and the live tracker. A sign-off approved after the week

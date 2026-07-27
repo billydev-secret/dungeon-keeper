@@ -18,8 +18,12 @@ export function mount(container) {
     // Working copy of the step list; rows re-render from this.
     let steps = (c.steps || []).map((s) => ({ ...s }));
 
+    // One wrapper child for #panel-root (a flex ROW): two sibling .panel
+    // elements would sit side-by-side at half width on every viewport —
+    // the wrapper stacks them and owns the scroll instead.
     container.innerHTML = `
-      <div class="panel">
+      <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:16px; overflow-y:auto;">
+      <div class="panel" style="flex:none; overflow-y:visible;">
         <header>
           <h2>Intake Cards</h2>
           <div class="subtitle">Per-newcomer welcome checklist posted to greeter chat — the open cards are your intake queue</div>
@@ -53,7 +57,7 @@ export function mount(container) {
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
-      <div class="panel" style="margin-top:16px;">
+      <div class="panel" style="flex:none; overflow-y:visible;">
         <header>
           <h2>Procedure Reference</h2>
           <div class="subtitle">The #welcome-procedure content, bot-synced — edit here, the channel updates itself. Questions render one message each for one-tap copy-paste.</div>
@@ -74,6 +78,7 @@ export function mount(container) {
           <div><button type="submit" class="btn btn-primary">Save &amp; sync channel</button><span data-ref-status></span></div>
         </form>
       </div>
+      </div>
     `;
 
     const stepsHost = container.querySelector("[data-steps]");
@@ -84,8 +89,8 @@ export function mount(container) {
       stepsHost.innerHTML = steps
         .map(
           (s, i) => `
-        <div class="row wrap" data-step-row data-key="${esc(s.key || "")}" style="gap:6px; align-items:center; margin-bottom:6px;">
-          <input type="text" data-step-label value="${esc(s.label)}" maxlength="80" placeholder="Step label" style="flex:2; min-width:10rem;" />
+        <div data-step-row data-key="${esc(s.key || "")}" style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:6px;">
+          <input type="text" data-step-label value="${esc(s.label)}" maxlength="80" placeholder="Step label" style="flex:2; min-width:15rem;" />
           <select data-step-auto style="flex:2; min-width:10rem;">
             ${AUTO_KINDS.map(([v, t]) => `<option value="${v}" ${v === (s.auto || "") ? "selected" : ""}>${t}</option>`).join("")}
           </select>

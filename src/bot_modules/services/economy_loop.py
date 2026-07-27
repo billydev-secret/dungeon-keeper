@@ -128,6 +128,7 @@ from bot_modules.services.economy_quests_service import (
     settle_community_quest,
     settle_community_weekly,
     snapshot_community_progress,
+    sweep_setup_marks,
 )
 from bot_modules.services.economy_metrics_service import compute_weekly_rollup
 from bot_modules.services.economy_rentals_service import (
@@ -1605,6 +1606,58 @@ async def register_loop(bot: discord.Client, db_path: Path) -> None:
             log.exception("Economy register: tick failed.")
 
 
+async def _sync_setup_marks(
+    bot: discord.Client, db_path: Path, guild: discord.Guild
+) -> None:
+    """Mark members who completed a setup action Discord-side, hourly.
+
+    Today's only detector: roles picked through Discord's native onboarding
+    ("Channels & Roles → Customize"), which assigns roles with no bot event
+    and no ``role_menu_grants`` row — those members would otherwise look
+    forever-pending and carry the role_pick quest (and its board pin)
+    indefinitely. Any non-bot member holding one of the guild's
+    onboarding-offered roles is marked done for ``role_pick`` — board
+    visibility only, never a payout (see ``sweep_setup_marks``).
+    """
+
+    def _enabled() -> bool:
+        with open_db(db_path) as conn:
+            return load_econ_settings(conn, guild.id).enabled
+
+    if not await asyncio.to_thread(_enabled):
+        return
+    try:
+        onboarding = await guild.onboarding()
+    except discord.HTTPException:
+        return  # onboarding unreadable this tick — retry next hour
+    role_ids: set[int] = set()
+    for prompt in onboarding.prompts:
+        for option in prompt.options:
+            role_ids.update(option.role_ids)
+    if not role_ids:
+        return
+    holders = [
+        member.id
+        for member in guild.members
+        if not member.bot and any(r.id in role_ids for r in member.roles)
+    ]
+    if not holders:
+        return
+
+    def _mark() -> int:
+        with open_db(db_path) as conn:
+            return sweep_setup_marks(conn, guild.id, "role_pick", holders)
+
+    new = await asyncio.to_thread(_mark)
+    if new:
+        log.info(
+            "Setup-mark sweep: %d member(s) newly marked role_pick-done "
+            "in guild %s.",
+            new,
+            guild.id,
+        )
+
+
 async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
     """One hourly tick: global claim expiry (+ DMs), then per-guild rolls.
 
@@ -1661,6 +1714,15 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             raise
         except Exception:
             log.exception("Economy loop: unhandled error for guild %s.", guild.id)
+
+        try:
+            await _sync_setup_marks(bot, db_path, guild)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: setup-mark sweep failed for guild %s.", guild.id
+            )
 
         # Separate transaction: a day-roll failure must not swallow refunds
         # members are owed, and vice versa. Both lists are (re)set before the

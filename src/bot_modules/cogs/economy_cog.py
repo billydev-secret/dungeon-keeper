@@ -371,7 +371,9 @@ _CADENCE_LABEL = {
 }
 _QUEST_SECTIONS = (
     ("🧍 Your quests", ("daily", "weekly")),
-    ("🌐 Community goals", ("monthly", "community")),
+    # Weekly community goals lead, the slower monthly goal anchors the foot —
+    # same near-term-first order as the member's own board above.
+    ("🌐 Community goals", ("community", "monthly")),
 )
 
 

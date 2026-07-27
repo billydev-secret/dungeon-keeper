@@ -39,8 +39,10 @@ MOVERS_HEADING = "📈 Biggest Movers Yesterday"
 GROUP_ORDER: list[tuple[str, str]] = [
     ("daily", "🎯 Daily Quests"),
     ("weekly", "📅 Weekly Quests"),
-    ("monthly", "🗓️ Monthly Quests"),
+    # Weekly community goals before the monthly goal — near-term first,
+    # matching the /bank quests board's community section.
     ("community", "🌍 Community Goals"),
+    ("monthly", "🗓️ Monthly Quests"),
 ]
 
 # Light context for a quest that carries no description of its own, so every

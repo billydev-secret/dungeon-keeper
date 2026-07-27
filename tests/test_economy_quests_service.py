@@ -3142,21 +3142,50 @@ def test_pin_eviction_never_splits_a_locked_pair(db):
             assert by_id[q] in board, f"pair split: {q} without its partner"
 
 
-def test_every_pending_setup_quest_is_pinned_even_past_the_board_size(db):
-    # Regression on the live shape: 4 setup quests against a smaller board. A
-    # cap would rank them against each other and the last one — First Purchase,
-    # the whole reason pinning exists — would reach nobody, because on live
-    # data every member pending a purchase was also pending an earlier setup.
+def test_setup_pins_cap_at_two_and_rotate_through_the_pending_set(db):
+    # Cap regression (2026-07-26): four pending setups used to pin all at
+    # once — on live data 121 of 149 members saw zero randomly-rolled
+    # dailies. Now at most MAX_SETUP_PINS pin per day, the pinned pair
+    # rotates so every pending setup (First Purchase included — the old
+    # objection to capping) still surfaces within two days, and a board
+    # bigger than the cap always keeps ordinary content.
+    settings = EconSettings(
+        enabled=True, quest_board_daily=3,
+        quest_set_bonus_daily=0, quest_set_bonus_weekly=0,
+    )
+    with open_db(db) as conn:
+        ordinary = set(_fill_daily_pool(conn))
+        setups = {
+            _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+            for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase")
+        }
+        seen: set[int] = set()
+        for day in ("2026-07-12", "2026-07-13"):
+            board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+            pins = board & setups
+            assert len(pins) == 2  # capped, never the whole pending set
+            assert board & ordinary  # the random roll stays visible
+            assert len(board) == settings.quest_board_daily
+            seen |= pins
+        assert seen == setups  # rotation reaches every pending setup
+
+
+def test_setup_pins_never_exceed_the_board_size(db):
+    # A 1-slot board pins at most 1 setup quest — the cap is itself capped
+    # to the board size, so pins can't grow the board.
+    settings = EconSettings(
+        enabled=True, quest_board_daily=1,
+        quest_set_bonus_daily=0, quest_set_bonus_weekly=0,
+    )
     with open_db(db) as conn:
         _fill_daily_pool(conn)
         setups = {
-            kind: _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+            _make(conn, qtype="daily", trigger_kind=kind, reward=10)
             for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase")
         }
-        assert len(setups) > SETTINGS.quest_board_daily  # the interesting case
-        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", SETTINGS)
-        assert board == set(setups.values())  # all pinned, no ordinary draws
-        assert setups["shop_purchase"] in board
+        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", settings)
+        assert len(board) == 1
+        assert board <= setups  # the slot goes to a pin while any are pending
 
 
 def test_pinned_setup_quest_stops_being_pinned_once_done(db):
@@ -3364,3 +3393,316 @@ def test_load_member_quest_board_surfaces_trigger_channel_id(db):
         by_id = {e["id"]: e for e in board}
         assert by_id[scoped]["trigger_channel_id"] == 123456
         assert by_id[server_wide]["trigger_channel_id"] is None
+
+
+# ── externally-detected setup completion (econ_setup_marks) ───────────────
+# Roles picked through Discord's native onboarding ("Channels & Roles →
+# Customize") assign roles with no bot event and no role_menu_grants row.
+# The hourly sweep records those members in econ_setup_marks; a mark clears
+# the quest from the board like the feature-table checks do, but never pays.
+
+
+def _mark_role_pickers(conn, *user_ids):
+    from bot_modules.services.economy_quests_service import sweep_setup_marks
+
+    return sweep_setup_marks(conn, GUILD, "role_pick", user_ids)
+
+
+def test_sweep_setup_marks_counts_only_new_rows(db):
+    with open_db(db) as conn:
+        assert _mark_role_pickers(conn, USER, USER_2) == 2
+        assert _mark_role_pickers(conn, USER, USER_2) == 0  # idempotent replay
+        assert _mark_role_pickers(conn, USER, 1003) == 1  # only the newcomer
+
+
+def test_sweep_setup_marks_rejects_unknown_kind(db):
+    from bot_modules.services.economy_quests_service import sweep_setup_marks
+
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="unknown setup kind"):
+            sweep_setup_marks(conn, GUILD, "message_sent", [USER])
+
+
+def test_onboarding_marked_member_drops_role_pick_off_board_unpaid(db):
+    # Bug-fix-first (2026-07-26 review): 148 of 149 active members looked
+    # role_pick-pending because their picks happened in Discord's onboarding,
+    # so the quest stayed pinned to every board forever. A mark must clear
+    # the quest AND its pin — without minting the reward.
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setup = _make(conn, qtype="daily", trigger_kind="role_pick", reward=25)
+        day = "2026-07-12"
+        assert setup in assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        _mark_role_pickers(conn, USER)
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", day, SETTINGS
+        )
+        # Visibility only: no claim row, no coins.
+        assert get_balance(conn, GUILD, USER) == 0
+        assert (
+            conn.execute(
+                "SELECT 1 FROM econ_quest_claims WHERE quest_id = ? AND user_id = ?",
+                (setup, USER),
+            ).fetchone()
+            is None
+        )
+        # An unmarked member keeps seeing (and being pinned) the quest.
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER_2, "daily", day, SETTINGS
+        )
+
+
+def test_marked_member_still_gets_paid_on_a_real_pick(db):
+    # The mark hides the quest; the completing action (a menu or announcement
+    # button grant firing the trigger) still pays its once-ever claim.
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="role_pick", reward=25)
+        _mark_role_pickers(conn, USER)
+        fired = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "role_pick", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        assert [int(q["id"]) for q, _ in fired] == [setup]
+        assert get_balance(conn, GUILD, USER) == 25
+
+
+# ── spotlight reach filter ────────────────────────────────────────────────
+# A spotlight kind must be claimable by enough members to matter; a kind on
+# zero boards makes the flip announcement advertise a double nobody can earn.
+
+
+def _mark_active(conn, *user_ids):
+    now = time.time()
+    for uid in user_ids:
+        conn.execute(
+            "INSERT OR REPLACE INTO member_activity "
+            "(guild_id, user_id, last_channel_id, last_message_id, "
+            "last_message_at) VALUES (?, ?, 1, 1, ?)",
+            (GUILD, uid, now),
+        )
+
+
+def test_spotlight_skips_kinds_no_board_can_reach(db):
+    # Bug-fix-first: the 2026-W31 live shape — every daily slot pinned by
+    # pending setup quests, so an ordinary daily kind lands on zero boards.
+    # Weeks whose unfiltered hash pick would have chosen the dead kind must
+    # now choose something else; the pinned setup kinds and event kinds
+    # (no board gate) stay eligible.
+    import hashlib
+
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _mark_active(conn, USER, USER_2, 1003, 1004)
+        for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase"):
+            _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="event", trigger_kind="photo_post")
+        _make(conn, qtype="event", trigger_kind="cat_catch")
+        kinds = sorted(
+            [
+                "bio_set", "birthday_set", "cat_catch", "message_sent",
+                "photo_post", "role_pick", "shop_purchase",
+            ]
+        )
+        dead_weeks = [
+            wk
+            for wk in (f"2026-W{w:02d}" for w in range(1, 53))
+            if kinds[
+                int(hashlib.sha256(f"{GUILD}:{wk}".encode()).hexdigest(), 16)
+                % len(kinds)
+            ]
+            == "message_sent"
+        ]
+        assert dead_weeks  # sanity: the old pick WOULD have hit the dead kind
+        for wk in dead_weeks:
+            assert spotlight_kind(conn, GUILD, wk) != "message_sent"
+
+
+def test_spotlight_reach_filter_never_narrows_below_two(db):
+    # One event kind + one unreachable board kind: filtering would leave a
+    # single candidate — no rotation at all — so the full list is used
+    # instead of pinning a permanent 2× on the lone reachable kind.
+    from bot_modules.services.economy_quests_service import spotlight_kind
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        _mark_active(conn, USER, USER_2)
+        save_econ_settings(
+            conn, GUILD, {"quest_board_daily": 0, "quest_board_weekly": 0}
+        )
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="event", trigger_kind="photo_post")
+        assert spotlight_kind(conn, GUILD, "2026-W30") in {
+            "message_sent", "photo_post",
+        }
+
+
+def test_spotlight_reach_estimate_freezes_no_snapshots(db):
+    # The estimator walks the week's future daily boards — it must never
+    # freeze those periods' pool snapshots, or dashboard edits would stop
+    # surfacing at each real daily roll.
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _mark_active(conn, USER)
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="daily", trigger_kind="reaction_given")
+        spotlight_kind(conn, GUILD, "2026-W30")
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM econ_quest_pool_snapshots"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_spotlight_unmeasurable_guild_keeps_old_behavior(db):
+    # No 30-day-active members → nothing to measure → the filter must not
+    # veto anything (a fresh guild still gets a spotlight).
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="daily", trigger_kind="reaction_given")
+        assert spotlight_kind(conn, GUILD, "2026-W30") in {
+            "message_sent", "reaction_given",
+        }
+
+
+# ── daily_complete: the weekly progression over your dailies ──────────────
+# Dailies are the check-offs; a weekly daily_complete counted quest is the
+# progression over them ("complete N dailies this week", with a bar). Every
+# paid daily claim ticks it once, keyed to the completed daily's (id, period).
+
+
+def test_completing_dailies_advances_the_weekly_meta_quest(db):
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", trigger_kind="voice_session", reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=3, reward=40, title="Weekly Momentum",
+        )
+        for i, day in enumerate(("2026-07-13", "2026-07-14", "2026-07-15"), 1):
+            fired = fire_trigger_quests(
+                conn, SETTINGS, GUILD, "voice_session", USER,
+                local_day=day, occurrence=f"vc:{day}", booster=False,
+            )
+            assert [int(q["id"]) for q, _ in fired] == [daily]
+            assert get_progress(conn, meta, USER, "2026-W29") == i
+        # The third completion crossed the target: the weekly paid itself.
+        # (Two active kinds switch the ⚡ spotlight on, doubling whichever
+        # kind the week's hash picked — fold it into the expectation.)
+        from bot_modules.services.economy_quests_service import spotlight_kind
+
+        spot = spotlight_kind(conn, GUILD, "2026-W29")
+        daily_pay = 20 if spot == "voice_session" else 10
+        weekly_pay = 80 if spot == "daily_complete" else 40
+        assert get_balance(conn, GUILD, USER) == 3 * daily_pay + weekly_pay
+
+
+def test_daily_completion_ticks_once_per_daily_per_day(db):
+    # A replayed fire of the same daily's day is a claim collision — the
+    # meta never re-counts it.
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="voice_session")
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=5, reward=40,
+        )
+        day = "2026-07-13"
+        for occ in ("a", "b"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "voice_session", USER,
+                local_day=day, occurrence=occ, booster=False,
+            )
+        assert get_progress(conn, meta, USER, "2026-W29") == 1
+
+
+def test_setup_quest_completion_counts_toward_the_weekly_meta(db):
+    # A setup claim IS completing a daily-cadence quest; its once-ever
+    # "kind:set" period has no calendar day, so the tick stamps to today.
+    from bot_modules.economy.logic import local_day_for
+    from bot_modules.economy.quests import iso_week_for
+
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "bio_set", USER,
+            local_day="2026-07-13", occurrence="set", booster=False,
+        )
+        this_week = iso_week_for(local_day_for(time.time(), 0.0))
+        assert get_progress(conn, meta, USER, this_week) == 1
+
+
+def test_daily_complete_rejected_on_daily_cadence(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="weekly"):
+            _make(conn, qtype="daily", trigger_kind="daily_complete")
+
+
+def test_sign_off_approval_ticks_the_meta(db):
+    # The other place a claim reaches 'paid': a manager approving a
+    # sign-off daily counts it toward the week too.
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", signoff=1, reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        outcome = claim_quest(
+            conn, SETTINGS, GUILD, daily, USER, period="2026-07-13", booster=False
+        )
+        assert outcome.state == "pending"
+        assert get_progress(conn, meta, USER, "2026-W29") == 0  # not yet paid
+        resolve_claim(
+            conn, SETTINGS, outcome.claim_id,
+            approve=True, resolver_id=MANAGER, booster=False,
+        )
+        assert get_progress(conn, meta, USER, "2026-W29") == 1
+
+
+def test_meta_progress_renders_as_a_bar(db):
+    # The board surfaces the meta quest through the ordinary counted-quest
+    # machinery: progress_current / progress_target drive the bar.
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="voice_session", reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "voice_session", USER,
+            local_day="2026-07-13", occurrence="vc", booster=False,
+        )
+        board = load_member_quest_board(conn, SETTINGS, GUILD, USER, "2026-07-13")
+        entry = next(e for e in board if e["id"] == meta)
+        assert entry["progress_current"] == 1
+        assert entry["progress_target"] == 4
+
+
+def test_daily_completion_only_feeds_a_meta_on_the_members_board(db):
+    # The meta quest is board-gated like any weekly: a member whose weekly
+    # draw missed it accrues nothing.
+    with open_db(db) as conn:
+        for _ in range(20):
+            _make(conn, qtype="weekly", trigger_kind="message_sent", target_count=2)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        _make(conn, qtype="daily", trigger_kind="voice_session", reward=10)
+        day = "2026-07-13"
+        off_board_user = next(
+            uid for uid in range(2000, 2400)
+            if meta not in assigned_board_ids(conn, GUILD, uid, "weekly", day, SETTINGS)
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "voice_session", off_board_user,
+            local_day=day, occurrence="vc", booster=False,
+        )
+        assert get_progress(conn, meta, off_board_user, "2026-W29") == 0
