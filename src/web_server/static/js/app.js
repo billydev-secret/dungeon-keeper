@@ -77,10 +77,7 @@ const SECTIONS = [
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
       ]},
       { heading: "Member Lists", items: [
-        { id: "list-role",            label: "List Role",            module: "./panels/list-role.js" },
-        { id: "inactive-role",        label: "Inactive Role Members", module: "./panels/inactive-role.js", keywords: "inactive role report", related: ["config-prune"] },
-        { id: "inactive",             label: "Inactive Members",     module: "./panels/inactive.js", keywords: "inactive members report", related: ["config-inactive"] },
-        { id: "oldest-sfw",           label: "Oldest SFW",           module: "./panels/oldest-sfw.js" },
+        { id: "inactive-report",      label: "Inactive Report",      module: "./panels/inactive-report.js", keywords: "inactive members role list oldest sfw report", related: ["config-inactive", "config-prune"] },
         { id: "birthday-calendar",    label: "Birthday Calendar",    module: "./panels/birthday-calendar.js", keywords: "birthdays report", related: ["config-birthday"] },
       ]},
     ],
@@ -135,8 +132,8 @@ const SECTIONS = [
         { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true, related: ["birthday-calendar"] },
         { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
         { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"], keywords: "caps limits gambling blackouts", help: "help-wellness" },
-        { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune inactive role removal", related: ["inactive-role"] },
-        { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true, keywords: "inactive purge kick sweep", related: ["inactive"] },
+        { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune inactive role removal", related: ["inactive-report"] },
+        { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true, keywords: "inactive purge kick sweep", related: ["inactive-report"] },
       ]},
       { heading: "Moderation & Safety", items: [
         { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true, help: "help-moderation" },

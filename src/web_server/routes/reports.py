@@ -29,15 +29,12 @@ from web_server.schemas import (
     ChannelComparisonResponse,
     GrantAuditResponse,
     GreeterResponseResponse,
+    InactiveReportResponse,
     IntakeReportResponse,
-    InactiveResponse,
-    InactiveRoleResponse,
     InteractionGraphResponse,
     InviteEffectivenessResponse,
     JoinTimesResponse,
-    ListRoleResponse,
     NsfwGenderResponse,
-    OldestSfwResponse,
     OneSidedAttentionResponse,
     QualityScoreResponse,
     RetentionResponse,
@@ -59,7 +56,7 @@ async def clear_cache(
     return {"cleared": removed}
 
 
-# ── Role growth ──────────────────────────────────────────────────────────
+# ── Join times ───────────────────────────────────────────────────────────
 
 
 @router.get("/join-times", response_model=JoinTimesResponse)
@@ -213,7 +210,7 @@ async def nsfw_gender(
     )
 
 
-# ── Message rate ─────────────────────────────────────────────────────────
+# ── Intake report ────────────────────────────────────────────────────────
 
 
 @router.get("/intake-report", response_model=IntakeReportResponse)
@@ -890,117 +887,31 @@ async def time_to_level_5(
     return result
 
 
-# ── Animated interaction heatmap ──────────────────────────────────────────
+# ── Inactive report (merged member lists) ─────────────────────────────────
 
 
-def _activity_to_row(uid: int, display_name: str, activity, now_ts: float) -> dict:
-    last_ts: float | None = activity.created_at if activity else None
-    return {
-        "user_id": str(uid),
-        "display_name": display_name,
-        "last_message_ts": last_ts,
-        "last_message_channel_id": str(activity.channel_id) if activity else None,
-        "days_since_last": (
-            round((now_ts - last_ts) / 86400.0, 1) if last_ts else None
-        ),
-    }
-
-
-@router.get("/list-role", response_model=ListRoleResponse)
-async def list_role(
+@router.get("/inactive-report", response_model=InactiveReportResponse)
+async def inactive_report(
     request: Request,
-    role_id: str,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    import time as _time
-
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-    if guild is None:
-        raise HTTPException(503, "Guild not available")
-
-    role = guild.get_role(int(role_id))
-    if role is None:
-        raise HTTPException(404, "Role not found")
-
-    members_sorted = sorted(role.members, key=lambda m: m.display_name.lower())
-    member_ids = [m.id for m in members_sorted]
-
-    def _q():
-        with ctx.open_db() as conn:
-            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
-
-    activities = await run_query(_q)
-    now_ts = _time.time()
-    rows = [_activity_to_row(m.id, m.display_name, activities.get(m.id), now_ts) for m in members_sorted]
-
-    return {
-        "role_id": role_id,
-        "role_name": role.name,
-        "total": len(rows),
-        "members": rows,
-    }
-
-
-@router.get("/inactive-role", response_model=InactiveRoleResponse)
-async def inactive_role(
-    request: Request,
-    role_id: str,
     days: int = 7,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    import time as _time
-
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-    if guild is None:
-        raise HTTPException(503, "Guild not available")
-
-    role = guild.get_role(int(role_id))
-    if role is None:
-        raise HTTPException(404, "Role not found")
-
-    days = max(1, min(365, days))
-    cutoff_ts = _time.time() - days * 86400
-    members_sorted = sorted(role.members, key=lambda m: m.display_name.lower())
-    member_ids = [m.id for m in members_sorted]
-
-    def _q():
-        with ctx.open_db() as conn:
-            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
-
-    activities = await run_query(_q)
-    now_ts = _time.time()
-
-    inactive = []
-    for m in members_sorted:
-        a = activities.get(m.id)
-        if a is None or a.created_at < cutoff_ts:
-            inactive.append(_activity_to_row(m.id, m.display_name, a, now_ts))
-
-    return {
-        "role_id": role_id,
-        "role_name": role.name,
-        "days": days,
-        "total": len(member_ids),
-        "inactive_count": len(inactive),
-        "tracking_coverage": len(activities),
-        "members": inactive,
-    }
-
-
-@router.get("/inactive", response_model=InactiveResponse)
-async def inactive(
-    request: Request,
-    period_seconds: int = 7 * 86400,
+    role_id: str | None = None,
+    role_mode: Literal["with", "without"] = "with",
     channel_id: str | None = None,
+    limit: int = 500,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
+    """One member list over last-activity data: everyone / role holders /
+    role non-holders, idle at least *days* (0 = list the whole scope),
+    oldest activity first."""
     import time as _time
+
+    from bot_modules.core.xp_system import get_member_last_activity_map
+    from bot_modules.services.inactive_report_service import (
+        MemberScope,
+        build_inactive_report,
+        channel_activity_map,
+        scope_members,
+    )
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1009,63 +920,48 @@ async def inactive(
     if guild is None:
         raise HTTPException(503, "Guild not available")
 
-    period_seconds = max(60, min(365 * 86400, period_seconds))
-    cutoff_ts = _time.time() - period_seconds
+    role = None
+    if role_id:
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise HTTPException(404, "Role not found")
 
-    members_all = [m for m in guild.members if not m.bot]
-    member_ids = [m.id for m in members_all]
+    days = max(0, min(365, days))
+    limit = max(1, min(2000, limit))
     ch_id_int: int | None = int(channel_id) if channel_id else None
 
-    def _q():
-        from bot_modules.core.xp_system import MemberActivity
+    members = [
+        MemberScope(
+            user_id=m.id,
+            display_name=m.display_name,
+            is_bot=m.bot,
+            role_ids=tuple(r.id for r in m.roles),
+        )
+        for m in guild.members
+    ]
+    scoped = scope_members(
+        members, role_id=role.id if role else None, role_mode=role_mode
+    )
+    member_ids = [m.user_id for m in scoped]
 
+    def _q():
         with ctx.open_db() as conn:
             if ch_id_int is not None:
-                if not member_ids:
-                    return {}
-                act_map: dict[int, MemberActivity] = {}
-                batch_size = 800
-                for i in range(0, len(member_ids), batch_size):
-                    batch = member_ids[i : i + batch_size]
-                    placeholders = ",".join("?" for _ in batch)
-                    rows = conn.execute(
-                        f"""
-                        SELECT user_id, channel_id, message_id, MAX(created_at) AS created_at
-                        FROM xp_events
-                        WHERE guild_id = ? AND channel_id = ? AND user_id IN ({placeholders})
-                        GROUP BY user_id
-                        """,
-                        [guild_id, ch_id_int, *batch],
-                    ).fetchall()
-                    for row in rows:
-                        uid = int(row["user_id"])
-                        act_map[uid] = MemberActivity(
-                            user_id=uid,
-                            channel_id=int(row["channel_id"]),
-                            message_id=int(row["message_id"] or 0),
-                            created_at=float(row["created_at"]),
-                        )
-                return act_map
-            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+                return channel_activity_map(conn, guild_id, member_ids, ch_id_int)
+            return get_member_last_activity_map(conn, guild_id, member_ids)
 
     activities = await run_query(_q)
-    now_ts = _time.time()
-    rows = []
-    for m in members_all:
-        a = activities.get(m.id)
-        if a is None or a.created_at < cutoff_ts:
-            rows.append(_activity_to_row(m.id, m.display_name, a, now_ts))
-    rows.sort(key=lambda r: r["last_message_ts"] or 0)
-
-    days = period_seconds / 86400.0
-    label = f"{days:.0f}d" if days >= 1 else f"{period_seconds // 3600}h"
+    report = build_inactive_report(
+        scoped, activities, now_ts=_time.time(), days=days, limit=limit
+    )
 
     return {
-        "period_seconds": period_seconds,
-        "period_label": label,
+        "days": days,
+        "role_id": role_id,
+        "role_name": role.name if role else None,
+        "role_mode": role_mode,
         "channel_id": channel_id,
-        "total": len(rows),
-        "members": rows,
+        **report,
     }
 
 
@@ -1126,52 +1022,3 @@ async def grant_audit(
     }
 
 
-@router.get("/oldest-sfw", response_model=OldestSfwResponse)
-async def oldest_sfw(
-    request: Request,
-    count: int = 10,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    import time as _time
-
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-    if guild is None:
-        raise HTTPException(503, "Guild not available")
-
-    count = max(1, min(100, count))
-
-    nsfw_cfg = ctx.guild_config(guild_id).grant_roles.get("nsfw")
-    nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
-    nsfw_role = guild.get_role(int(nsfw_role_id)) if nsfw_role_id else None
-
-    def _compute():
-        sfw_members = [
-            m for m in guild.members
-            if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
-        ]
-        member_ids = [m.id for m in sfw_members]
-        with ctx.open_db() as conn:
-            activities = ctx.get_member_last_activity_map(conn, guild_id, member_ids)
-        now_ts = _time.time()
-        sorted_members = sorted(
-            sfw_members,
-            key=lambda m: activities[m.id].created_at if m.id in activities else 0,
-        )
-        top = sorted_members[:count]
-        rows = [
-            _activity_to_row(m.id, m.display_name, activities.get(m.id), now_ts)
-            for m in top
-        ]
-        return {
-            "nsfw_role_id": str(nsfw_role.id) if nsfw_role else None,
-            "nsfw_role_name": nsfw_role.name if nsfw_role else "",
-            "sfw_total": len(sfw_members),
-            "members": rows,
-        }
-
-    return await cached_run_query(
-        "oldest-sfw", guild_id, {"count": count}, _compute, ttl=300
-    )

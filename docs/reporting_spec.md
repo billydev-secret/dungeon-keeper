@@ -27,7 +27,7 @@ Day-bucketed charts roll over at the guild's local 6 am, not midnight. Names on 
 Tiles group into a few areas:
 
 - **Activity** — channel comparisons, top voice users, generic activity (messages or XP) with user/channel/bot exclusions. (The finer-grained message-rate/cadence/burst experiments were removed in the 2026-07 reports cleanup.)
-- **Membership health** — join-time histogram, cohort retention, NSFW-channel activity grouped by recorded gender, members inactive ≥ N days, the oldest members without the NSFW role, activity drop-off profiles.
+- **Membership health** — join-time histogram, cohort retention, NSFW-channel activity grouped by recorded gender, activity drop-off profiles, and the merged **Inactive Report** (one member list over last-activity data: scoped to everyone / role holders / role non-holders, filtered by idle days — 0 lists the whole scope oldest-first — optionally measured within one channel; logic in `inactive_report_service.py`).
 - **Greeter performance** — greeter response time and missed joins, derived from the configured greeter chat channel and welcome / leave audit.
 - **XP** — top-N leaderboard for a window, days-to-level-5 histogram, and a generalised days-to-level-N report (level 2–100). Source data is owned by [[xp-spec]].
 - **Interaction graph** — force-directed network of replies and mentions. Any interaction touching a bot on either endpoint is excluded, so a member replying to a bot never reads as a one-sided relationship — the exclusion is applied in the queries (`get_interaction_graph_data`) so the interaction-graph tables and the Health **Social Graph** metrics share it. Recorded bots (see State) still have their raw interactions logged; they're just filtered out at report time.

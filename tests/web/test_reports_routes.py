@@ -241,6 +241,45 @@ def test_grant_audit_no_guild_503(open_client):
     assert resp.status_code == 503
 
 
+# ── inactive-report ───────────────────────────────────────────────────
+
+
+def test_inactive_report_no_guild_503(open_client):
+    resp = open_client.get("/api/reports/inactive-report")
+    assert resp.status_code == 503
+
+
+def test_inactive_report_role_scope_wiring(open_client, fake_ctx):
+    """Route glue: live members + role scope reach the service, ids come back
+    as strings, and the role filter actually excludes non-holders."""
+    role_id = 555
+    role = _FakeRole(role_id)
+    holder = _FakeMember(3001, "Holder", roles=[role])
+    outsider = _FakeMember(3002, "Outsider")
+    role.members = [holder]
+    guild = _FakeGuild(role, [holder, outsider])
+    guild.members = [holder, outsider]
+    fake_ctx.bot = _FakeBot(guild)
+
+    resp = open_client.get(f"/api/reports/inactive-report?role_id={role_id}&days=0")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["role_name"] == "NSFW"
+    assert [r["user_id"] for r in data["members"]] == ["3001"]
+    assert data["total_scoped"] == 1
+
+    resp = open_client.get(
+        f"/api/reports/inactive-report?role_id={role_id}&role_mode=without&days=0"
+    )
+    assert [r["user_id"] for r in resp.json()["members"]] == ["3002"]
+
+
+def test_inactive_report_unknown_role_404(open_client, fake_ctx):
+    fake_ctx.bot = _FakeBot(_FakeGuild(_FakeRole(555), []))
+    resp = open_client.get("/api/reports/inactive-report?role_id=999")
+    assert resp.status_code == 404
+
+
 # ── intake-report ─────────────────────────────────────────────────────
 
 

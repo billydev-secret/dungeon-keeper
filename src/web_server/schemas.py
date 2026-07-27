@@ -722,35 +722,15 @@ class MemberRowSchema(BaseModel):
     days_since_last: float | None = None
 
 
-class ListRoleResponse(BaseModel):
-    role_id: str
-    role_name: str = ""
-    total: int
-    members: list[MemberRowSchema]
-
-
-class InactiveRoleResponse(BaseModel):
-    role_id: str
-    role_name: str = ""
+class InactiveReportResponse(BaseModel):
     days: int
-    total: int
-    inactive_count: int
-    tracking_coverage: int
-    members: list[MemberRowSchema]
-
-
-class InactiveResponse(BaseModel):
-    period_seconds: int
-    period_label: str
+    role_id: str | None = None
+    role_name: str | None = None
+    role_mode: str = "with"
     channel_id: str | None = None
+    total_scoped: int
+    tracking_coverage: int
     total: int
-    members: list[MemberRowSchema]
-
-
-class OldestSfwResponse(BaseModel):
-    nsfw_role_id: str | None = None
-    nsfw_role_name: str = ""
-    sfw_total: int
     members: list[MemberRowSchema]
 
 
