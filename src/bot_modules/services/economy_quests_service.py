@@ -679,8 +679,9 @@ def _pin_pending_setup(
     pool_ids: set[int],
     n: int,
     pairs: dict[int, int],
+    index: int,
 ) -> set[int]:
-    """Force every not-yet-done one-time setup quest onto a member's board.
+    """Pin the member's rotating share of pending setup quests onto a board.
 
     Setup quests teach the loop (write a bio, set a birthday, pick a role, make
     a first purchase) but they used to reach a member only if the random draw
@@ -689,15 +690,18 @@ def _pin_pending_setup(
     members in ten days. Onboarding shouldn't be a dice roll, so pending setup
     quests are *pinned*: they take slots ahead of ordinary draws until done.
 
-    Deliberately unbounded — a member with four pending setup quests and a
-    3-slot board sees four setup quests and no ordinary ones. Swamping a
-    newcomer's first few boards is the intended trade: they clear in one action
-    each and then never return (``_drop_completed_setup``), so the board
-    converts to normal within days. Capping pins at the board size is worse
-    than it sounds — the pins would have to be ranked against each other, and
-    on live data *every* member pending a purchase was also pending an earlier
-    setup quest, so a capped board would show the First Purchase nudge to
-    nobody at all.
+    At most ``quests.MAX_SETUP_PINS`` per board (and never more than the board
+    size): pinning shipped unbounded, and three days of live data showed 121
+    of 149 members with all four setups pending — every 3-slot daily board was
+    100% pins and the random roll was invisible. The pinned subset is drawn
+    from the pending set with the same per-user window walk as the board
+    itself (``assigned_quest_ids`` on ``index``), so it rotates: every pending
+    setup quest still surfaces within ~ceil(pending / cap) periods, which
+    answers the original objection to capping (a *ranked* cap would show the
+    lowest-priority nudge to nobody). Pending setup quests outside today's
+    pin window are held off the board entirely — the cap is a ceiling on
+    setup content, and their claim path doesn't need board presence (a setup
+    quest pays on completion regardless of the draw).
 
     Eviction keeps the lowest ordinary quest ids — stable within a period, so a
     member's board doesn't churn between calls — but never splits a locked pair
@@ -715,14 +719,10 @@ def _pin_pending_setup(
     )
     if not pending:
         return board
-    pinned = set(pending)
-    # Ordinary draws fill whatever the pins leave — possibly nothing. The board
-    # size is a floor for ordinary content, not a ceiling on pins: capping here
-    # would rank the setup quests against each other, and the lowest-priority
-    # one (First Purchase, the whole reason pinning exists) would never be seen
-    # until the other three cleared.
+    cap = min(quests.MAX_SETUP_PINS, n)
+    pinned = set(quests.assigned_quest_ids(pending, user_id, index, cap))
     slots = max(0, n - len(pinned))
-    return pinned | _keep_ordinary_units(board - pinned, pairs, slots)
+    return pinned | _keep_ordinary_units(board - set(pending), pairs, slots)
 
 
 def _frozen_board_pool(
@@ -838,7 +838,7 @@ def assigned_board_ids(
     # reroll a pin and watch it land straight back.
     board = _drop_completed_setup(conn, guild_id, user_id, board)
     board = _pin_pending_setup(
-        conn, guild_id, user_id, board, pool_set, n, quests.pair_map(tagged)
+        conn, guild_id, user_id, board, pool_set, n, quests.pair_map(tagged), idx
     )
     for row in conn.execute(
         "SELECT from_quest_id, to_quest_id FROM econ_board_overrides "
@@ -1134,8 +1134,14 @@ def _reachable_spotlight_kinds(
                 )
                 board -= done
                 if pending:
-                    slots = max(0, n - len(pending))
-                    board = pending | _keep_ordinary_units(
+                    cap = min(quests.MAX_SETUP_PINS, n)
+                    pinned = set(
+                        quests.assigned_quest_ids(
+                            sorted(pending), user_id, idx, cap
+                        )
+                    )
+                    slots = max(0, n - len(pinned))
+                    board = pinned | _keep_ordinary_units(
                         board - pending, pairs, slots
                     )
                 seen |= board

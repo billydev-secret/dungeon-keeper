@@ -3142,21 +3142,50 @@ def test_pin_eviction_never_splits_a_locked_pair(db):
             assert by_id[q] in board, f"pair split: {q} without its partner"
 
 
-def test_every_pending_setup_quest_is_pinned_even_past_the_board_size(db):
-    # Regression on the live shape: 4 setup quests against a smaller board. A
-    # cap would rank them against each other and the last one — First Purchase,
-    # the whole reason pinning exists — would reach nobody, because on live
-    # data every member pending a purchase was also pending an earlier setup.
+def test_setup_pins_cap_at_two_and_rotate_through_the_pending_set(db):
+    # Cap regression (2026-07-26): four pending setups used to pin all at
+    # once — on live data 121 of 149 members saw zero randomly-rolled
+    # dailies. Now at most MAX_SETUP_PINS pin per day, the pinned pair
+    # rotates so every pending setup (First Purchase included — the old
+    # objection to capping) still surfaces within two days, and a board
+    # bigger than the cap always keeps ordinary content.
+    settings = EconSettings(
+        enabled=True, quest_board_daily=3,
+        quest_set_bonus_daily=0, quest_set_bonus_weekly=0,
+    )
+    with open_db(db) as conn:
+        ordinary = set(_fill_daily_pool(conn))
+        setups = {
+            _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+            for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase")
+        }
+        seen: set[int] = set()
+        for day in ("2026-07-12", "2026-07-13"):
+            board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+            pins = board & setups
+            assert len(pins) == 2  # capped, never the whole pending set
+            assert board & ordinary  # the random roll stays visible
+            assert len(board) == settings.quest_board_daily
+            seen |= pins
+        assert seen == setups  # rotation reaches every pending setup
+
+
+def test_setup_pins_never_exceed_the_board_size(db):
+    # A 1-slot board pins at most 1 setup quest — the cap is itself capped
+    # to the board size, so pins can't grow the board.
+    settings = EconSettings(
+        enabled=True, quest_board_daily=1,
+        quest_set_bonus_daily=0, quest_set_bonus_weekly=0,
+    )
     with open_db(db) as conn:
         _fill_daily_pool(conn)
         setups = {
-            kind: _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+            _make(conn, qtype="daily", trigger_kind=kind, reward=10)
             for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase")
         }
-        assert len(setups) > SETTINGS.quest_board_daily  # the interesting case
-        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", SETTINGS)
-        assert board == set(setups.values())  # all pinned, no ordinary draws
-        assert setups["shop_purchase"] in board
+        board = assigned_board_ids(conn, GUILD, USER, "daily", "2026-07-12", settings)
+        assert len(board) == 1
+        assert board <= setups  # the slot goes to a pin while any are pending
 
 
 def test_pinned_setup_quest_stops_being_pinned_once_done(db):

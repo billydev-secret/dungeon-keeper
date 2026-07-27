@@ -59,6 +59,19 @@ SETUP_QUEST_KINDS = frozenset(
 # smaller N) spaces repeats further apart.
 PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2}
 
+# Ceiling on how many pending setup quests may be pinned onto one board
+# (further capped to the board size). The excess isn't dropped — the pinned
+# subset rotates through the pending set with the same per-user window walk
+# as the draw itself, so every pending setup quest still surfaces within
+# ~ceil(pending / cap) periods. Pinning shipped unbounded (2026-07-23) on
+# the theory that a swamped board "converts to normal within days"; live
+# data three days later said otherwise — 121 of 149 active members had all
+# four setups pending, so every daily board was 100% pins and the random
+# roll was invisible. The cap keeps the nudge without erasing the board;
+# rotation answers the original objection to capping (ranking pins meant
+# the last one would reach nobody).
+MAX_SETUP_PINS = 2
+
 # Game/module triggers a quest can be auto-completed by (label = how the
 # dashboard describes it). On an *event* quest the trigger pays per
 # occurrence (period "<kind>:<occurrence>", no time gate); on a daily/weekly
