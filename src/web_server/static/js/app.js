@@ -152,7 +152,7 @@ const SECTIONS = [
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
       ]},
       { heading: "Voice", items: [
-        { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice" },
+        { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels" },
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [

@@ -259,24 +259,31 @@ def _mk_getter(module: str, func: str, kind: str) -> Callable:
 # Feature settings that live in their own tables (not the shared config KV).
 # Each getter is (conn, guild_id, db_path) -> dataclass|Row|dict|list|None.
 # Failures are isolated per feature, so a bad loader just drops that section.
-_FEATURE_LOADERS: list[tuple[str, Callable]] = [
-    ("Economy", _mk_getter("bot_modules.services.economy_service", "load_econ_settings", "conn")),
-    ("XP", _mk_getter("bot_modules.core.xp_system", "load_xp_settings", "conn")),
-    ("QA rewards", _mk_getter("bot_modules.services.qa_service", "load_qa_settings", "conn")),
-    ("Voice Master", _mk_getter("bot_modules.services.voice_master_service", "load_voice_master_config", "conn")),
-    ("Wellness", _mk_getter("bot_modules.services.wellness_service", "get_wellness_config", "conn")),
-    ("Chat Revive", _mk_getter("bot_modules.services.chat_revive_service", "get_guild_config", "conn")),
-    ("Starboard", _mk_getter("bot_modules.services.starboard_service", "get_starboard_config", "conn")),
-    ("DM permissions", _mk_getter("bot_modules.services.dm_perms_service", "get_dms_config_with_conn", "conn")),
-    ("Whisper", _mk_getter("bot_modules.services.whisper_repo", "get_whisper_config", "conn")),
-    ("Guess", _mk_getter("bot_modules.services.guess_repo", "get_guess_config", "conn")),
-    ("Confessions", _mk_getter("bot_modules.services.confessions_service", "get_config_conn", "conn")),
-    ("Grant roles", _mk_getter("bot_modules.core.db_utils", "get_grant_roles", "conn")),
-    ("Booster roles", _mk_getter("bot_modules.services.booster_roles", "get_booster_roles", "conn")),
-    ("Auto-delete", _mk_getter("bot_modules.services.auto_delete_service", "list_auto_delete_rules_for_guild_with_conn", "conn")),
-    ("Auto-react", _mk_getter("bot_modules.services.auto_react_service", "list_auto_react_rules_for_guild_with_conn", "conn")),
-    ("Voice transcription", _mk_getter("bot_modules.services.voice_transcription_service", "get_config", "conn")),
-    ("Inactivity prune", _mk_getter("bot_modules.services.inactivity_prune_service", "get_prune_rule", "dbpath")),
+# (slug, display label, getter). The slug is a **stable key**, not a derived
+# one: it has to match ``settings_registry.Feature.slug`` for the union in
+# :func:`fetch_feature_settings` to hold, while the label is member-visible copy
+# that gets renamed. Deriving the slug from the label meant a copy edit could
+# split the union silently — renaming "Voice Master" to "Voice Control" on
+# 2026-07-27 moved this loader's key to ``voice_control`` while the registry
+# stayed on ``voice_master``, so neither name returned both sections.
+_FEATURE_LOADERS: list[tuple[str, str, Callable]] = [
+    ("economy", "Economy", _mk_getter("bot_modules.services.economy_service", "load_econ_settings", "conn")),
+    ("xp", "XP", _mk_getter("bot_modules.core.xp_system", "load_xp_settings", "conn")),
+    ("qa_rewards", "QA rewards", _mk_getter("bot_modules.services.qa_service", "load_qa_settings", "conn")),
+    ("voice_master", "Voice Control", _mk_getter("bot_modules.services.voice_master_service", "load_voice_master_config", "conn")),
+    ("wellness", "Wellness", _mk_getter("bot_modules.services.wellness_service", "get_wellness_config", "conn")),
+    ("chat_revive", "Chat Revive", _mk_getter("bot_modules.services.chat_revive_service", "get_guild_config", "conn")),
+    ("starboard", "Starboard", _mk_getter("bot_modules.services.starboard_service", "get_starboard_config", "conn")),
+    ("dm_permissions", "DM permissions", _mk_getter("bot_modules.services.dm_perms_service", "get_dms_config_with_conn", "conn")),
+    ("whisper", "Whisper", _mk_getter("bot_modules.services.whisper_repo", "get_whisper_config", "conn")),
+    ("guess", "Guess", _mk_getter("bot_modules.services.guess_repo", "get_guess_config", "conn")),
+    ("confessions", "Confessions", _mk_getter("bot_modules.services.confessions_service", "get_config_conn", "conn")),
+    ("grant_roles", "Grant roles", _mk_getter("bot_modules.core.db_utils", "get_grant_roles", "conn")),
+    ("booster_roles", "Booster roles", _mk_getter("bot_modules.services.booster_roles", "get_booster_roles", "conn")),
+    ("auto_delete", "Auto-delete", _mk_getter("bot_modules.services.auto_delete_service", "list_auto_delete_rules_for_guild_with_conn", "conn")),
+    ("auto_react", "Auto-react", _mk_getter("bot_modules.services.auto_react_service", "list_auto_react_rules_for_guild_with_conn", "conn")),
+    ("voice_transcription", "Voice transcription", _mk_getter("bot_modules.services.voice_transcription_service", "get_config", "conn")),
+    ("inactivity_prune", "Inactivity prune", _mk_getter("bot_modules.services.inactivity_prune_service", "get_prune_rule", "dbpath")),
 ]
 
 
@@ -285,7 +292,16 @@ def _slugify(label: str) -> str:
 
 
 _FEATURES_BY_SLUG: dict[str, tuple[str, Callable]] = {
-    _slugify(label): (label, getter) for label, getter in _FEATURE_LOADERS
+    slug: (label, getter) for slug, label, getter in _FEATURE_LOADERS
+}
+
+# The model sees display labels in the summary but has to call the tool with a
+# slug, so accept what a label slugifies to as well. Keeps "voice_control"
+# working now that the label and the key intentionally disagree.
+_SLUG_ALIASES: dict[str, str] = {
+    _slugify(label): slug
+    for slug, label, _ in _FEATURE_LOADERS
+    if _slugify(label) != slug
 }
 
 # KV-backed features described in the settings registry (greeting watch,
@@ -316,6 +332,7 @@ def fetch_feature_settings(
     if not _can_see_config(member):
         return "Not available: only server admins can view server settings."
     slug = _slugify(feature or "")
+    slug = _SLUG_ALIASES.get(slug, slug)
     try:
         with open_db(db_path) as conn:
             if slug == "general":
@@ -379,7 +396,7 @@ def build_config_summary(conn, guild, member: discord.Member | None, db_path=Non
     """A secret-filtered, name-resolved view of the guild's settings across features.
 
     Only returned to admins. Combines the shared `config` KV table with each
-    feature's own settings loader (economy, wellness, voice master, …). Values
+    feature's own settings loader (economy, wellness, voice control, …). Values
     are shown as raw `field = value` lines so the model reads them directly.
     """
     if not _can_see_config(member):
@@ -391,7 +408,7 @@ def build_config_summary(conn, guild, member: discord.Member | None, db_path=Non
         sections.append(kv)
 
     total = len(kv)
-    for label, getter in _FEATURE_LOADERS:
+    for _slug, label, getter in _FEATURE_LOADERS:
         if total > _CONFIG_MAX_CHARS:
             break
         try:

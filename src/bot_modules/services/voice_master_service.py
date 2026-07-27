@@ -1,4 +1,4 @@
-"""Voice Master service layer — pure DB CRUD and business helpers.
+"""Voice Control service layer — pure DB CRUD and business helpers.
 
 Schema lives in ``migrations/005_voice_master.sql``. All functions here take a
 sqlite3 Connection (matching ``db_utils.open_db``) and are sync. Discord-side
@@ -106,7 +106,7 @@ def _parse_bool(raw: str) -> bool:
 def load_voice_master_config(
     conn: sqlite3.Connection, guild_id: int
 ) -> VoiceMasterConfig:
-    """Load the full per-guild Voice Master config in one shot."""
+    """Load the full per-guild Voice Control config in one shot."""
     from bot_modules.core.db_utils import get_config_value as _get  # avoid cycle at module import
 
     raw: dict[str, str] = {
@@ -148,7 +148,7 @@ def set_voice_master_config_value(
 ) -> None:
     """Upsert a single voice_master_* config key for the given guild."""
     if key not in _CONFIG_DEFAULTS:
-        raise ValueError(f"unknown voice master config key: {key}")
+        raise ValueError(f"unknown voice control config key: {key}")
     from bot_modules.core.db_utils import set_config_value as _set
 
     _set(conn, key, value, guild_id)

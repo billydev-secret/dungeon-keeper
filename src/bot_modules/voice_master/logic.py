@@ -1,4 +1,4 @@
-"""Pure decision and formatting logic for the Voice Master cog.
+"""Pure decision and formatting logic for the Voice Control cog.
 
 Everything here takes plain Python primitives and returns plain values or
 small dataclasses — no DB access, no Discord network calls, no Discord
@@ -273,7 +273,7 @@ def plan_initial_overwrites(
     blocked_ids: list[int],
     present_member_ids: set[int],
 ) -> OverwritePlan:
-    """Build an overwrite plan for a freshly-created Voice Master channel.
+    """Build an overwrite plan for a freshly-created Voice Control channel.
 
     ``present_member_ids`` is the guild's current member roster (or any
     superset). Trust/block ids not in this set are returned in the plan's

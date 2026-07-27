@@ -16,7 +16,7 @@ SQLite-backed. Tests in `tests/`.
   opting in, customizing your own perks, a mod running QOTD). Prefer one
   ephemeral panel with buttons/modals over a sprawl of subcommands.
 - **Collapse controls.** One dial with a few states beats several overlapping
-  toggles (see Voice Master's access dial). Consistent button shapes/sizes;
+  toggles (see Voice Control's access dial). Consistent button shapes/sizes;
   if a config page feels jumbled, reorganize it rather than appending.
 - **Safety & privacy defaults:** NSFW gates on `channel.is_nsfw()` (Discord's
   own age-gate), never a bot-side toggle. Store minimal data — message

@@ -23,7 +23,7 @@ const PRICE_FIELDS = [
     hint: "Discord's fixed holographic shimmer — a separate, pricier tier than the two-color gradient. There is nothing to pick; renting it is the whole perk. Your server needs Discord's enhanced role colors feature for it to show up at all.",
   }],
   ["price_voice_style", "Voice Room Lease, Per Week", {
-    hint: "Weekly rent for the Voice Master rename and user-limit controls. 0 (the default) leaves those controls free for everyone. Setting a price is what launches this as a paid perk, so tell members before you do.",
+    hint: "Weekly rent for the Voice Control rename and user-limit controls. 0 (the default) leaves those controls free for everyone. Setting a price is what launches this as a paid perk, so tell members before you do.",
   }],
 ];
 

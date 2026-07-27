@@ -3,7 +3,7 @@
 One branded embed summarising how members earn and spend the guild's currency,
 posted (and refreshed in place) by ``/bank post-guide``. The panel's channel and
 message ids live in the ``econ_`` config (``guide_channel_id`` /
-``guide_message_id``, same pattern as Voice Master's persistent panel) so a
+``guide_message_id``, same pattern as Voice Control's persistent panel) so a
 repost replaces the old panel instead of stacking duplicates.
 
 The panel also carries the economy's one member-facing self-service control: a

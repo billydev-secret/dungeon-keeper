@@ -12,7 +12,7 @@ const SAVEABLE_FIELDS = [
 ];
 
 export function mount(container) {
-  container.innerHTML = `<div class="panel"><div class="empty">Loading Voice Master configuration…</div></div>`;
+  container.innerHTML = `<div class="panel"><div class="empty">Loading Voice Control configuration…</div></div>`;
 
   (async () => {
     let cfg, channels, roles;
@@ -46,7 +46,7 @@ export function mount(container) {
     container.innerHTML = `
       <div class="panel">
         <header>
-          <h2>Voice Master</h2>
+          <h2>Voice Control</h2>
           <div class="subtitle">Member-owned voice channels created by joining the Hub</div>
         </header>
         <form class="form form-cards" data-form>
@@ -55,7 +55,7 @@ export function mount(container) {
             <div class="field">
               <label>Hub Channel</label>
               <span data-picker="hub_channel_id"></span>
-              <div class="field-hint">The voice channel members join to spin up their own room. "(unset)" turns Voice Master off.</div>
+              <div class="field-hint">The voice channel members join to spin up their own room. "(unset)" turns Voice Control off.</div>
             </div>
             <div class="field">
               <label>Target Category</label>
@@ -139,7 +139,7 @@ export function mount(container) {
           <div class="field">
             <label>Guide Channel</label>
             <span data-picker="howto_channel_id"></span>
-            <div class="field-hint">Posts a member-facing "how Voice Master works" embed here (e.g. in your lobby). Safe to re-run anytime.</div>
+            <div class="field-hint">Posts a member-facing "how Voice Control works" embed here (e.g. in your lobby). Safe to re-run anytime.</div>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn">Post Guide</button>

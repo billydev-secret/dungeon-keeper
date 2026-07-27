@@ -414,8 +414,8 @@ def test_build_config_summary_includes_feature_sections_and_isolates_failures(mo
         raise RuntimeError("loader exploded")
 
     monkeypatch.setattr(ac, "_FEATURE_LOADERS", [
-        ("Economy", lambda conn, gid, db: FakeEconSettings(0, 0, 250, "gold", True, "x")),
-        ("Broken", _boom),  # must be skipped, not crash the whole summary
+        ("economy", "Economy", lambda conn, gid, db: FakeEconSettings(0, 0, 250, "gold", True, "x")),
+        ("broken", "Broken", _boom),  # must be skipped, not crash the whole summary
     ])
     s = ac.build_config_summary(conn, guild, admin, "db")
     assert "[General]" in s and "welcome_enabled = on" in s  # KV still there
@@ -482,15 +482,53 @@ def test_fetch_settings_merges_loader_and_registry_sections(monkeypatch):
     conn = _conn_with_config([("voice_master_hub_channel_id", "10")])
     _patch_settings_db(monkeypatch, conn)
     monkeypatch.setattr(ac, "_FEATURES_BY_SLUG", {
-        "voice_master": ("Voice Master", lambda conn, gid, db: {"max_rooms": 3}),
+        "voice_master": ("Voice Control", lambda conn, gid, db: {"max_rooms": 3}),
     })
     guild = FakeGuild(1, [FakeChannel(10, "hub")])
     admin = FakeMember(1, perms=FakeGuildPerms(administrator=True))
     out = ac.fetch_feature_settings(guild, admin, "db", "voice_master")
-    assert "[Voice Master]" in out and "max_rooms = 3" in out
+    assert "[Voice Control]" in out and "max_rooms = 3" in out
     assert "voice_master_hub_channel_id = #hub" in out
     # Panel-only knobs are named so the model answers honestly about them.
     assert "dashboard-only" in out
+    # The model reads the display label off the summary, so calling by that
+    # name has to land on the same union rather than "Unknown feature".
+    by_label = ac.fetch_feature_settings(guild, admin, "db", "Voice Control")
+    assert by_label == out
+
+
+def test_loader_slugs_are_stable_keys_not_derived_from_labels():
+    """A display rename must not move a loader's lookup slug.
+
+    ``fetch_feature_settings`` only returns both sections while a loader and a
+    ``settings_registry`` Feature agree on one slug. Renaming the label "Voice
+    Master" → "Voice Control" broke exactly this once: the loader's derived key
+    moved to ``voice_control`` while the registry stayed on ``voice_master``, so
+    neither name returned the union and ``FEATURE_KEYS`` advertised the feature
+    twice. This test reads the real tables — the merge test above monkeypatches
+    them, so it cannot catch the drift.
+    """
+    assert "voice_master" in ac._FEATURES_BY_SLUG
+    assert "voice_master" in ac._REGISTRY_BY_SLUG
+
+    slugs = [slug for slug, _, _ in ac._FEATURE_LOADERS]
+    assert len(slugs) == len(set(slugs)), "loader slugs must be unique"
+    assert all(t in ac._FEATURES_BY_SLUG for t in ac._SLUG_ALIASES.values())
+
+    # Wherever a label no longer slugifies to its own key, an alias keeps the
+    # name the model sees callable.
+    for slug, label, _ in ac._FEATURE_LOADERS:
+        derived = ac._slugify(label)
+        if derived != slug:
+            assert ac._SLUG_ALIASES[derived] == slug
+
+    # Every feature key we advertise resolves to at least one real section.
+    for key in ac.FEATURE_KEYS:
+        assert (
+            key == "general"
+            or key in ac._FEATURES_BY_SLUG
+            or key in ac._REGISTRY_BY_SLUG
+        )
 
 
 def test_fetch_settings_requires_admin(monkeypatch):

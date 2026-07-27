@@ -1129,7 +1129,7 @@ def compute_mod_workload(
     ).fetchall():
         mod_channel_ids.add(r["channel_id"])
 
-    # Voice Master actions are self-service (a mod using their own voice
+    # Voice Control actions are self-service (a mod using their own voice
     # channel), not moderation work — excluded from workload everywhere below.
     _not_vm = " AND action NOT LIKE 'vm_%'"
 

@@ -48,7 +48,7 @@ export const HELP_GROUPS = [
     { page: "help-privacy",   anchor: "privacy",       label: "Data Erasure" },
   ]},
   { heading: "Voice & Music", items: [
-    { page: "help-voice", anchor: "voice",     label: "Voice Master" },
+    { page: "help-voice", anchor: "voice",     label: "Voice Control" },
     { page: "help-music", anchor: "music",     label: "Music" },
     { page: "help-247",   anchor: "music-247", label: "24/7 Mode" },
   ]},

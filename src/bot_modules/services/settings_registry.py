@@ -336,8 +336,8 @@ FEATURES: tuple[Feature, ...] = (
     ),
     Feature(
         slug="voice_master",
-        label="Voice Master",
-        panel="Config → Voice Master",
+        label="Voice Control",
+        panel="Config → Voice Control",
         blurb="Members get their own temporary voice channel by joining a hub.",
         settings=(
             _ch("voice_master_hub_channel_id", "Hub voice channel", required=True,

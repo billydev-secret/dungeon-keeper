@@ -1,4 +1,4 @@
-"""Embed builders for the Voice Master cog.
+"""Embed builders for the Voice Control cog.
 
 These functions take primitive arguments and return new ``discord.Embed``
 objects. None of them perform IO. The cog used to build identical embeds
@@ -41,7 +41,7 @@ def build_profile_show_embed(
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(
-        title="👤 Your Voice Master Profile",
+        title="👤 Your Voice Control Profile",
         color=color,
     )
     embed.add_field(
@@ -74,11 +74,11 @@ def build_admin_audit_mirror_embed(
     """Embed posted to mod-log for any web admin force-* action.
 
     ``action`` is the short label (e.g. ``"force-delete"``); the title
-    prefixes with ``Voice Master —`` so the audit feed groups our
+    prefixes with ``Voice Control —`` so the audit feed groups our
     actions visually with other domain entries.
     """
     embed = discord.Embed(
-        title=f"🛡️ Voice Master — {action}",
+        title=f"🛡️ Voice Control — {action}",
         description=summary,
         color=discord.Color.orange(),
     )
@@ -122,11 +122,11 @@ def build_claim_done_embed(
 
 
 def build_panel_embed(color: "discord.Color | None" = None) -> discord.Embed:
-    """Embed for the persistent control-channel Voice Master panel."""
+    """Embed for the persistent control-channel Voice Control panel."""
     if color is None:
         color = discord.Color.blurple()
     embed = discord.Embed(
-        title="🎛️ Voice Master Controls",
+        title="🎛️ Voice Control Panel",
         description=(
             "Join the Hub voice channel to spin up your own room.\n"
             "Use the menus below to manage **the channel you currently own**.\n\n"

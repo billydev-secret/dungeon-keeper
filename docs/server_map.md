@@ -90,7 +90,7 @@ purpose in the bot's feature specs (see `docs/INDEX.md`).
 | Channel | Notes |
 |---|---|
 | events (voice) | Scheduled voice events. |
-| Join To Create (voice) | Voice Master hub — join to spin up your own personal voice channel. |
+| Join To Create (voice) | Voice Control hub — join to spin up your own personal voice channel. |
 | voice-how-to | How to use Join To Create rooms — make your own channel, control who gets in. |
 
 ### Admin *(staff-only)*

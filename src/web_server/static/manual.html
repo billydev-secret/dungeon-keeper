@@ -474,7 +474,7 @@
         <tr><td><strong><a href="#pen-pals">Pen Pals</a></strong></td><td>Opt-in pool that pairs members into private 2-person channels with a conversation starter; channels retire automatically after a configurable session length.</td></tr>
         <tr><td><strong><a href="#community">Community &amp; XP</a></strong></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). Leave-of-absence system. Starboard.</td></tr>
         <tr><td><strong><a href="#economy">Economy &amp; Perk Shop</a></strong></td><td>Per-server currency earned from activity — daily logins, quests, games, QOTD — spent on weekly-renewing role perks (color, name, icon, gradient, holographic) and gifts.</td></tr>
-        <tr><td><strong><a href="#voice">Voice Master</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
+        <tr><td><strong><a href="#voice">Voice Control</a></strong></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
         <tr><td><strong><a href="#music">Music</a></strong></td><td>YouTube/Spotify playback in voice channels. 24/7 mode with autoplay.</td></tr>
         <tr><td><strong><a href="#wellness">Wellness</a></strong></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong><a href="#dm-perms">DM Permissions</a></strong></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
@@ -902,7 +902,7 @@
         <tr><td><code>/bank mute</code></td><td>Toggle the economy's DM notifications for yourself</td></tr>
         <tr><td><em>Shop button:</em> 🛡️ Shield</td><td>One-shot streak insurance from <code>/bank shop</code> — hold one; it burns automatically to save a login streak that a missed day would otherwise reset</td></tr>
         <tr><td><em>Shop button:</em> 🎟️ Tickets</td><td>When the weekly raffle is running, buy up to the weekly cap of tickets from <code>/bank shop</code>. Drawn at the week roll — the winner is announced by name and their next weekly perk payment is free</td></tr>
-        <tr><td><em>Shop button:</em> 🎙️ Voice</td><td>Where the server has priced it, renaming and sizing your Voice Master channel is a weekly lease — rent (or gift) <strong>Voice Style</strong> from <code>/bank shop</code>; your saved name and limit apply while it's active</td></tr>
+        <tr><td><em>Shop button:</em> 🎙️ Voice</td><td>Where the server has priced it, renaming and sizing your Voice Control channel is a weekly lease — rent (or gift) <strong>Voice Style</strong> from <code>/bank shop</code>; your saved name and limit apply while it's active</td></tr>
         <tr><td><em>Weekly:</em> 🐉 Hoard tax</td><td>Where the server has turned it on, wallets above a protected floor lose a small percent of the <em>excess</em> at each weekly roll (never anything below the floor). Collections show in the register feed like any other transaction — spending, gifting, and playing keep your balance working instead</td></tr>
       </tbody>
     </table>
@@ -980,8 +980,8 @@
     <!-- ══════════════════════════════════════════════════════════
          11. VOICE CHANNELS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="voice" class="section-break"><span class="section-num">11</span> Voice Master</h2>
-    <p>Voice Master is the personal voice-channel system. Members join a configured <em>hub</em> voice channel and the bot spins up a channel of their own. They have full control over it; mods and admins have override tools.</p>
+    <h2 id="voice" class="section-break"><span class="section-num">11</span> Voice Control</h2>
+    <p>Voice Control is the personal voice-channel system. Members join a configured <em>hub</em> voice channel and the bot spins up a channel of their own. They have full control over it; mods and admins have override tools.</p>
 
     <h3 id="voice-user">Member / Channel Owner Commands</h3>
     <table>
@@ -1005,7 +1005,7 @@
     </table>
 
     <h3 id="voice-admin">Admin Override Commands</h3>
-    <p>Configuration and admin overrides (hub channel, category, name blocklist, numeric tunables, inline panel auto-post, force-delete, force-transfer, force-clear-profile) live on the <strong>Voice Master</strong> panel in the <a href="/">web dashboard</a>. The panel also has a <strong>Post Guide</strong> button that drops a member-facing "how Voice Master works" embed into a channel of your choice (e.g. your lobby) — re-run it anytime. One slash command remains for in-Discord use:</p>
+    <p>Configuration and admin overrides (hub channel, category, name blocklist, numeric tunables, inline panel auto-post, force-delete, force-transfer, force-clear-profile) live on the <strong>Voice Control</strong> panel in the <a href="/">web dashboard</a>. The panel also has a <strong>Post Guide</strong> button that drops a member-facing "how Voice Control works" embed into a channel of your choice (e.g. your lobby) — re-run it anytime. One slash command remains for in-Discord use:</p>
     <table>
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
@@ -1724,7 +1724,7 @@
       <li><strong><a href="/#/config-roles">Config → Roles → Role Grants</a></strong> — configure which community roles can be handed out with <code>/grant</code> and who can grant them.</li>
       <li><strong><a href="/#/config-xp">Config → Members → XP &amp; Leveling</a></strong> — set the Level-5 milestone role, XP announcement channels, and any channels excluded from XP.</li>
       <li><strong><a href="/#/config-welcome">Config → Members → Welcome &amp; Leave</a></strong> — customize the join / leave embeds and preview them against your own profile before publishing.</li>
-      <li><strong><a href="/#/config-voice-master">Config → Voice → Voice Master</a></strong> — set the hub channel and default category so members can create personal voice channels by joining the hub.</li>
+      <li><strong><a href="/#/config-voice-master">Config → Voice → Voice Control</a></strong> — set the hub channel and default category so members can create personal voice channels by joining the hub.</li>
       <li><strong><a href="/#/config-starboard">Config → Channels &amp; Messages → Starboard</a></strong> — set the channel, threshold, and emoji to enable the highlight reposting feature.</li>
       <li>Optionally enable <a href="/#/config-guess">Guess Who</a>, <a href="/#/config-whisper">Whisper</a>, or <a href="/#/config-confessions">Confessions</a> from their panels in the Games section, and allowlist game channels on <a href="/#/games-config">Games → Global Config</a> for <a href="#games">Games Night</a>.</li>
     </ol>
@@ -1988,7 +1988,7 @@
         <tr><td><strong><a href="/#/config-quote-border">Quote Tool</a></strong></td><td>Custom border image for <a href="#quote-cards">quote cards</a></td></tr>
         <tr><td><strong><a href="/#/config-needle">Auto-Thread</a></strong></td><td>Channels with automatic thread creation</td></tr>
         <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list</td></tr>
-        <tr><td><strong><a href="/#/config-voice-master">Voice Master</a></strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
+        <tr><td><strong><a href="/#/config-voice-master">Voice Control</a></strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
         <tr><td><strong><a href="/#/config-voice-transcription">Voice Transcription</a></strong></td><td>Auto-transcribe Discord voice notes in chosen channels. Privacy note: clips are transcribed locally on the bot's own hardware — audio never leaves the server</td></tr>
         <tr><td><strong><a href="/#/role-menus">Role Menus</a></strong></td><td>Build and post <a href="#role-menus">self-assign role menus</a> (modes, roles, channel, re-sync)</td></tr>
         <tr><td><strong><a href="/#/docs">Docs</a></strong></td><td>Author the documents posted into channels via <a href="#docs"><code>/docs</code></a></td></tr>

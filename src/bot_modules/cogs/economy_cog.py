@@ -1293,7 +1293,7 @@ async def _rent_perk_flow(
 
     if perk == "voice_style":
         # No personal role to project and no customise modal — the perk's
-        # controls ARE Voice Master's rename/limit, live again from now on.
+        # controls ARE Voice Control's rename/limit, live again from now on.
         await interaction.response.send_message(
             "Rented **Voice Style**! Renaming and sizing your voice channel "
             "are unlocked — your saved name and limit apply the next time "
