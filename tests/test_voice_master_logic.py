@@ -1,4 +1,4 @@
-"""Tests for the extracted Voice Master pure-logic modules.
+"""Tests for the extracted Voice Control pure-logic modules.
 
 Covers ``bot_modules/voice_master/logic.py`` (validation, decisions,
 formatting, planning) and ``bot_modules/voice_master/embeds.py`` (embed
@@ -1021,7 +1021,7 @@ def test_build_admin_audit_mirror_embed_prefixes_action_in_title():
         actor_id=42,
     )
     assert embed.title is not None
-    assert "Voice Master" in embed.title
+    assert "Voice Control" in embed.title
     assert "force-delete" in embed.title
 
 
@@ -1592,7 +1592,7 @@ def test_build_panel_embed_title_and_color():
     embed = build_panel_embed()
     assert isinstance(embed, discord.Embed)
     assert embed.title is not None
-    assert "Voice Master" in embed.title
+    assert "Voice Control" in embed.title
     assert embed.color == discord.Color.blurple()
 
 

@@ -471,7 +471,7 @@ def test_compute_mod_workload_counts_audit_and_messages(db_conn):
 
 
 def test_compute_mod_workload_excludes_voice_master_self_service(db_conn):
-    """A mod using their own Voice Master channel isn't moderation work."""
+    """A mod using their own Voice Control channel isn't moderation work."""
     now = 1_700_000_000.0
     _seed_audit(db_conn, action="kick", actor=10, ts=now - 60)
     _seed_audit(db_conn, action="vm_channel_create", actor=10, ts=now - 90)

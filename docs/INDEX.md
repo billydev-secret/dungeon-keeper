@@ -62,7 +62,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo: `/todo`, the sticky Discord board (Add/Complete buttons, auto-updating, bottom-stuck) and dashboard-configured recurring reminder tasks. Corrected 2026-07-26 — the "Add to Todo" context menu it used to document does not exist in the code |
 | [watch_spec.md](watch_spec.md) | Watch list: `/watch add\|remove\|list` relays a watched member's posts to the mod's DMs, AI-filtered to flagged posts when the local model is up (fail-open on AI error) |
-| [voice_master_spec.md](voice_master_spec.md) | Voice Master (hubs, profiles, trust/block) |
+| [voice_master_spec.md](voice_master_spec.md) | Voice Control (hubs, profiles, trust/block) |
 | [voice_transcription_spec.md](voice_transcription_spec.md) | Voice-clip transcription listener (faster_whisper) — distinct from whisper_spec.md |
 | [whisper_spec.md](whisper_spec.md) | Whisper (anon send, 3-guess reveal) |
 | [xp_spec.md](xp_spec.md) | XP system (sources, leveling, leaderboard) |
@@ -131,6 +131,7 @@ feature and also appear in the Design table above.
 | [plans/role-menus.md](plans/role-menus.md) | Self-assign role menus + Oracle builder | Built 2026-07-14 |
 | [plans/timed-announcements.md](plans/timed-announcements.md) | Dashboard-queued announcements + role buttons | Built 2026-07-19/20 |
 | [plans/typed-bot-refactor.md](plans/typed-bot-refactor.md) | Typed `Bot`/`GameRuntime` — kill the monkey-patched registries | Implemented 2026-07-02 |
+| [plans/voice-control-identifier-rename.md](plans/voice-control-identifier-rename.md) | Renaming the internal `voice_master` identifiers (config keys, 5 tables, files, routes) to match the shipped "Voice Control" display name | **Not started, deliberately deferred** 2026-07-27 — display rename shipped; this half risks silently resetting 17 live config rows for no user-visible gain |
 
 ## Testing checklists (`docs/testing/`)
 

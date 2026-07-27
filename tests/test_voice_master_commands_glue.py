@@ -1066,7 +1066,7 @@ def test_build_panel_embed_delegates_to_pure_helper():
     embed = build_panel_embed()
     assert isinstance(embed, discord.Embed)
     assert embed.title is not None
-    assert "Voice Master" in embed.title
+    assert "Voice Control" in embed.title
 
 
 def test_build_inline_panel_embed_delegates(owner_member):

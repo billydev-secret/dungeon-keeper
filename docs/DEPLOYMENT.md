@@ -86,7 +86,7 @@ uv pip compile requirements-dev.txt -o requirements-dev.lock --universal -p 3.14
    `/invite` requests):
    - Manage Roles, Manage Channels, Manage Nicknames, Manage Messages
    - Manage Threads, Create Public Threads, Send Messages in Threads
-   - Move Members, Connect, Speak _(Voice Master + music)_
+   - Move Members, Connect, Speak _(Voice Control + music)_
    - View Channels, Send Messages, Embed Links, Attach Files,
      Read Message History, Add Reactions, Use External Emojis
 

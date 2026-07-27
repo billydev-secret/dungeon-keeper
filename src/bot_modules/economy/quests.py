@@ -229,7 +229,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "quote": "Turning someone's message into a quote card with the make-it-a-quote role (the quoter who invokes it is credited). Event cadence: once per quoted message — mildly farmable, so use daily/weekly with a target count.",
     "chat_revive": "Responding to a Chat Revive prompt while the lull window is open (the reply the revive service counts as an answer). Event cadence: once per prompt.",
     "bump": "Bumping the server on a listing site (the member who ran the bump command is credited). Event cadence: once per bump — bump cooldowns are the natural rate limit.",
-    "voice_room_host": "Your Voice Master room reaching 2+ other members at once (bots and you excluded). Fires once per room lifetime, on the crossing. Event cadence: once per room.",
+    "voice_room_host": "Your Voice Control room reaching 2+ other members at once (bots and you excluded). Fires once per room lifetime, on the crossing. Event cadence: once per room.",
     "pen_pal_complete": "A Pen Pals session you were in reaching its natural end — both members fire; sessions that end early don't. Event cadence: once per session.",
     "whisper_guess": "Correctly guessing who sent you an anonymous whisper. Event cadence: once per whisper.",
     "guess_win": "Winning a Guess Who round. Event cadence: once per round.",

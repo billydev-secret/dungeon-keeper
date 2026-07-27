@@ -1,4 +1,4 @@
-"""Cog/interaction tests for Voice Master.
+"""Cog/interaction tests for Voice Control.
 
 Covers the apply-helpers and the resolution / edit-budget gating, with the
 Discord side mocked. Pure-function logic is covered by
@@ -101,7 +101,7 @@ def _wire_interaction(ctx, *, user_id: int = OWNER) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_voice_state_update_noop_for_unconfigured_guild(ctx):
-    """A voice-state update in a guild with no Voice Master config must never
+    """A voice-state update in a guild with no Voice Control config must never
     create a channel. Guards the ``cfg.hub_channel_id == 0`` early-return that
     lets the cog run safely across all guilds after the home-gate removal.
     """

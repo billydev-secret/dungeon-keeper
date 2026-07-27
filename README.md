@@ -23,7 +23,7 @@ get slash commands and button panels, admins get 60+ config pages.
 - **Reports** — Member, role, and engagement reports live in the dashboard, and an approved leave-of-absence list keeps those members from being flagged inactive.
 
 ### Voice & music
-- **Voice Master** — Join a hub channel to instantly spawn your own voice room, then lock, hide, rename, limit, invite, kick, transfer, or claim it. Profiles persist trust lists, blocks, and knock-to-join.
+- **Voice Control** — Join a hub channel to instantly spawn your own voice room, then lock, hide, rename, limit, invite, kick, transfer, or claim it. Profiles persist trust lists, blocks, and knock-to-join.
 - **Music** — YouTube and Spotify playback via Lavalink with a persistent now-playing card and queue. Mod-only 24/7 mode parks the bot in a channel and auto-queues from a playlist when idle.
 
 ### Party games

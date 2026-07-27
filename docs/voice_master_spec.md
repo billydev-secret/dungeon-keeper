@@ -1,4 +1,9 @@
-# Voice Master — Feature Spec
+# Voice Control — Feature Spec
+
+> Renamed from "Voice Master" on 2026-07-27 (display text only). The code still
+> uses `voice_master` identifiers — this file, the module, the tables, and the
+> config keys keep that name on purpose; see
+> [plans/voice-control-identifier-rename.md](plans/voice-control-identifier-rename.md).
 
 Members create personal voice channels on demand by joining a designated **Hub** channel. The bot creates a new channel in the configured category, applies the member's saved profile (or defaults), moves them in, and marks them as owner. Channels are deleted automatically when empty.
 
@@ -37,7 +42,7 @@ A configured voice channel acts as the **Hub** (e.g. "+ Create Voice"). When a m
 
 If the member already owns a live channel, joining the Hub moves them back into it instead of creating another. A Hub join inside the create cooldown, or past the max-channels-per-member cap, silently disconnects them from the Hub (no message — mid-event DMs are unreliable).
 
-On create the bot also: marks the channel age-gated (`nsfw=True`) when the profile's access state is anything but open, sets the access-state status line, posts the inline control panel into the channel's side chat (if enabled), DMs the owner about anything skipped, and arms the empty-grace timer (so an orphaned channel gets cleaned up even if the move-in failed).
+On create the bot also: marks the channel NSFW (`nsfw=True`) when the profile's access state is anything but open, sets the access-state status line, posts the inline control panel into the channel's side chat (if enabled), DMs the owner about anything skipped, and arms the empty-grace timer (so an orphaned channel gets cleaned up even if the move-in failed).
 
 ### The access dial (`/voice access`)
 
@@ -82,11 +87,11 @@ Both lists are capped (default 25 each); adding past the cap evicts the oldest e
 
 ### Knock (`/voice knock <channel>`)
 
-Anyone can knock on a managed channel to ask its owner in. The knock is **delivered privately**: the bot DMs the owner an embed with owner-only **Accept** / **Deny** buttons (buttons live for one hour). This keeps the knock — who's asking to join whose locked room — out of public view. If the owner's DMs are closed, it **falls back** to posting the same embed (mentioning the owner) into the configured control channel, so a knock is never silently lost. Because a DM interaction has no guild, the buttons resolve the channel and requester from the bot cache by guild id, not from `interaction.guild`. Accept grants the requester View + Connect (plus speaker perms if the room is spectating), DMs them a jump link, and is audit-logged as `vm_invite` with `via: knock`. Rejections the knocker sees: channel not managed by Voice Master; "You already own that channel."; owner no longer in the server (pointed at `/voice claim`); knock undeliverable (owner's DMs closed and no control-channel fallback).
+Anyone can knock on a managed channel to ask its owner in. The knock is **delivered privately**: the bot DMs the owner an embed with owner-only **Accept** / **Deny** buttons (buttons live for one hour). This keeps the knock — who's asking to join whose locked room — out of public view. If the owner's DMs are closed, it **falls back** to posting the same embed (mentioning the owner) into the configured control channel, so a knock is never silently lost. Because a DM interaction has no guild, the buttons resolve the channel and requester from the bot cache by guild id, not from `interaction.guild`. Accept grants the requester View + Connect (plus speaker perms if the room is spectating), DMs them a jump link, and is audit-logged as `vm_invite` with `via: knock`. Rejections the knocker sees: channel not managed by Voice Control; "You already own that channel."; owner no longer in the server (pointed at `/voice claim`); knock undeliverable (owner's DMs closed and no control-channel fallback).
 
 ### Sleep-kick (`/voice sleepkick <hours>`)
 
-A personal self-disconnect timer: after `hours` (any value >0 up to 24, fractions allowed) the bot disconnects you from whatever voice channel you're in — a no-op if you've already left voice. `0` cancels a pending timer ("Sleep-kick cancelled." / "No active sleep-kick to cancel."). One timer per member per guild; setting a new one replaces the old. Timers are in-memory only and do not survive a bot restart. Not tied to Voice Master channels or ownership — it works in any voice channel.
+A personal self-disconnect timer: after `hours` (any value >0 up to 24, fractions allowed) the bot disconnects you from whatever voice channel you're in — a no-op if you've already left voice. `0` cancels a pending timer ("Sleep-kick cancelled." / "No active sleep-kick to cancel."). One timer per member per guild; setting a new one replaces the old. Timers are in-memory only and do not survive a bot restart. Not tied to Voice Control channels or ownership — it works in any voice channel.
 
 ### Persistent panel
 
@@ -105,7 +110,7 @@ The panel appears in two places:
 
 ### How-to guide
 
-Admins can post a member-facing how-it-works embed into any text channel (e.g. a lobby) from the web dashboard's Voice Master panel — pick a channel and click **Post guide**. The embed explains the Hub-to-create flow, the four access states, invite/kick/knock, and the side-chat panel; it mentions the configured Hub channel when one is set, and falls back to plain text otherwise. It's a one-shot post (re-run anytime), separate from the persistent control panel, and posting is audit-logged (`vm_post_howto`).
+Admins can post a member-facing how-it-works embed into any text channel (e.g. a lobby) from the web dashboard's Voice Control panel — pick a channel and click **Post guide**. The embed explains the Hub-to-create flow, the four access states, invite/kick/knock, and the side-chat panel; it mentions the configured Hub channel when one is set, and falls back to plain text otherwise. It's a one-shot post (re-run anytime), separate from the persistent control panel, and posting is audit-logged (`vm_post_howto`).
 
 ### Ownership and the grace period
 
@@ -155,7 +160,7 @@ If the target category has hit Discord's 50-channel cap, the bot creates the cha
 | Trusted/blocked member left the server | Skipped on apply; owner's post-create DM counts them; profile view shows counts only |
 | Category hit Discord's 50-channel cap | Channel silently created outside the category (warning logged; no user message) |
 | Channel creation fails outright | No message — member stays in the Hub; failure logged |
-| Hub or category was deleted by an admin | Feature disables; admins alerted in the mod-log channel (the alert points them at the Voice Master → Config dashboard panel to reconfigure); nothing auto-recreates |
+| Hub or category was deleted by an admin | Feature disables; admins alerted in the mod-log channel (the alert points them at the Voice Control → Config dashboard panel to reconfigure); nothing auto-recreates |
 | `/voice-admin post-panel` without a control channel | "No control channel set. Configure it in the web dashboard first." |
 
 ## Non-goals

@@ -7,7 +7,12 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from tests.db_template import migrated_db
 from bot_modules.services.voice_master_service import (
+    ACCESS_LOCKED,
+    ACCESS_NSFW,
+    ACCESS_OPEN,
+    ACCESS_SPECTATE,
     DEFAULT_NAME_TEMPLATE,
+    access_status_text,
     EDIT_WINDOW_S,
     ReconciliationPlan,
     VoiceMasterConfig,
@@ -791,3 +796,27 @@ def test_load_config_handles_garbage_int_values(db):
         set_config_value(conn, "voice_master_create_cooldown_s", "not-a-number", GUILD)
         cfg = load_voice_master_config(conn, GUILD)
     assert cfg.create_cooldown_s == 30  # fell back to default
+
+
+# ── Access status lines (member-visible channel status) ───────────────
+
+
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        (ACCESS_OPEN, "👋 All welcome"),
+        (ACCESS_NSFW, "🔞 NSFW · all welcome"),
+        (ACCESS_LOCKED, "🔒 NSFW · ask to join"),
+        (ACCESS_SPECTATE, "🎭 NSFW · spectators welcome"),
+        ("nonsense", "👋 All welcome"),  # unknown mode falls back to open
+    ],
+)
+def test_access_status_text_per_mode(mode, expected):
+    """These strings are what members read on the channel itself.
+
+    Every state but open must say NSFW, because that state also flips the
+    channel's Discord NSFW flag — the status line is the only place a member
+    who didn't set it sees that. Pinned here because the whole set was
+    rewritten (from "Age-gated ·") with nothing asserting on it.
+    """
+    assert access_status_text(mode=mode) == expected

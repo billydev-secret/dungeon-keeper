@@ -203,7 +203,7 @@ Check items off as you go. If something behaves differently than described, note
 
 ## Voice
 
-### Voice Master
+### Voice Control
 
 - [ ] **Hub join → channel creation** — Join the configured Hub; confirm a new channel is created, your saved profile applies, and you're owner.
 - [ ] **`/voice access <state>`** — Cycle open→nsfw→locked→spectate; confirm the NSFW flag, status line, and permission shape change each time.

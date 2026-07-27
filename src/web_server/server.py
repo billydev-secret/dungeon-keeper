@@ -305,7 +305,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         admin_backfill_routes.router, prefix="/api/admin", tags=["admin-backfill"]
     )
 
-    # ── Voice Master admin ──────────────────────────────────────────
+    # ── Voice Control admin ──────────────────────────────────────────
     from web_server.routes import voice_master as voice_master_routes
 
     app.include_router(voice_master_routes.router, prefix="/api", tags=["voice-master"])

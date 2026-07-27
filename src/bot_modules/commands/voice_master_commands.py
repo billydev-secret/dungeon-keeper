@@ -1,4 +1,4 @@
-"""Voice Master — persistent panel buttons, modals, helpers."""
+"""Voice Control — persistent panel buttons, modals, helpers."""
 
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ async def _resolve_owned_channel(
     if ctx is None or interaction.guild is None:
         await _ephemeral(
             interaction,
-            "Voice Master isn't configured here.",
+            "Voice Control isn't configured here.",
         )
         return None
 
@@ -272,7 +272,7 @@ async def _sync_lock_member_overwrites(
                 await channel.set_permissions(
                     member,
                     overwrite=overwrite,
-                    reason="Voice Master: keep text-chat access while locked",
+                    reason="Voice Control: keep text-chat access while locked",
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -313,7 +313,7 @@ async def _sync_lock_member_overwrites(
             await channel.set_permissions(
                 overwrite_members[uid],
                 overwrite=None,
-                reason="Voice Master: drop transient lock grant on unlock",
+                reason="Voice Control: drop transient lock grant on unlock",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -356,7 +356,7 @@ async def _sync_hidden_member_overwrites(
                 await channel.set_permissions(
                     member,
                     overwrite=overwrite,
-                    reason="Voice Master: keep text-chat access while hidden",
+                    reason="Voice Control: keep text-chat access while hidden",
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -401,7 +401,7 @@ async def _sync_hidden_member_overwrites(
             await channel.set_permissions(
                 member,
                 overwrite=None if overwrite.is_empty() else overwrite,
-                reason="Voice Master: drop transient hide grant on unhide",
+                reason="Voice Control: drop transient hide grant on unhide",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -418,7 +418,7 @@ async def _apply_access_state(
 
     The states — ``open`` / ``nsfw`` / ``locked`` / ``spectate`` — collapse the
     old lock, hide and spectator toggles into one control. Every state but
-    ``open`` is age-gated; ``locked`` also hides the channel (View + Connect
+    ``open`` is marked NSFW; ``locked`` also hides the channel (View + Connect
     denied to ``@everyone``); ``spectate`` opens a muted read-only audience.
     Whatever primitive each state needs — the lock/hide per-member text-chat
     grants, the spectator setup/teardown — is composed here, then the nsfw flag,
@@ -451,7 +451,7 @@ async def _apply_access_state(
                 ctx, channel, row, gate_role=gate_role
             )
         # Locked is the only state that touches @everyone: it denies both View
-        # and Connect (age-gated + hidden). open/nsfw clear both back to inherit.
+        # and Connect (NSFW + hidden). open/nsfw clear both back to inherit.
         want_locked = state == ACCESS_LOCKED
         was_locked = current == "lock"
         everyone = channel.guild.default_role
@@ -462,7 +462,7 @@ async def _apply_access_state(
             await channel.set_permissions(
                 everyone,
                 overwrite=None if overwrite.is_empty() else overwrite,
-                reason=f"Voice Master: access → {state}",
+                reason=f"Voice Control: access → {state}",
             )
         except (discord.Forbidden, discord.HTTPException):
             await _ephemeral(interaction, "Couldn't update channel permissions.")
@@ -481,7 +481,7 @@ async def _apply_access_state(
             await _sync_hidden_member_overwrites(ctx, channel, row, hidden=False)
             await _sync_lock_member_overwrites(ctx, channel, row, locked=False)
 
-    # Age gate + status line in one edit — every state but open is age-gated.
+    # NSFW flag + status line in one edit — every state but open is NSFW.
     # Status rides a separate endpoint from the name edit (no name rate limit),
     # and a cosmetic failure here must not undo the overwrites above.
     status_mode = {
@@ -494,7 +494,7 @@ async def _apply_access_state(
         await channel.edit(
             nsfw=state != ACCESS_OPEN,
             status=access_status_text(mode=status_mode),
-            reason=f"Voice Master: access marker → {state}",
+            reason=f"Voice Control: access marker → {state}",
         )
     except (discord.Forbidden, discord.HTTPException):
         pass
@@ -618,7 +618,7 @@ async def _teardown_spectator_overwrites(
     try:
         await channel.set_permissions(
             everyone, overwrite=everyone_ow,
-            reason="Voice Master: clear spectator audience deny",
+            reason="Voice Control: clear spectator audience deny",
         )
     except (discord.Forbidden, discord.HTTPException):
         pass
@@ -626,7 +626,7 @@ async def _teardown_spectator_overwrites(
         try:
             await channel.set_permissions(
                 gate_role, overwrite=None,
-                reason="Voice Master: clear spectator gate-role overwrite",
+                reason="Voice Control: clear spectator gate-role overwrite",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -671,7 +671,7 @@ async def _teardown_spectator_overwrites(
             try:
                 await channel.set_permissions(
                     member, overwrite=None,
-                    reason="Voice Master: drop transient spectator grant",
+                    reason="Voice Control: drop transient spectator grant",
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -682,7 +682,7 @@ async def _teardown_spectator_overwrites(
             try:
                 await channel.set_permissions(
                     member, overwrite=ow,
-                    reason="Voice Master: reset spectator speaker grant",
+                    reason="Voice Control: reset spectator speaker grant",
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -718,7 +718,7 @@ async def _setup_spectator_overwrites(
         try:
             await channel.set_permissions(
                 everyone, overwrite=everyone_ow,
-                reason="Voice Master: clear lock before spectate",
+                reason="Voice Control: clear lock before spectate",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -737,7 +737,7 @@ async def _setup_spectator_overwrites(
     try:
         await channel.set_permissions(
             everyone, overwrite=everyone_ow,
-            reason="Voice Master: enable spectator mode",
+            reason="Voice Control: enable spectator mode",
         )
     except (discord.Forbidden, discord.HTTPException):
         pass
@@ -748,7 +748,7 @@ async def _setup_spectator_overwrites(
         try:
             await channel.set_permissions(
                 gate_role, overwrite=gate_ow,
-                reason="Voice Master: spectator gate role",
+                reason="Voice Control: spectator gate role",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -763,7 +763,7 @@ async def _setup_spectator_overwrites(
         try:
             await channel.set_permissions(
                 owner, overwrite=owner_ow,
-                reason="Voice Master: owner speaks while spectating",
+                reason="Voice Control: owner speaks while spectating",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -783,7 +783,7 @@ async def _setup_spectator_overwrites(
         try:
             await channel.set_permissions(
                 member, overwrite=mem_ow,
-                reason="Voice Master: speaker present at spectate enable",
+                reason="Voice Control: speaker present at spectate enable",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -857,7 +857,7 @@ async def _apply_rename(
     await _defer_if_needed(interaction)
     try:
         await channel.edit(
-            name=new_name, reason="Voice Master: rename by owner"
+            name=new_name, reason="Voice Control: rename by owner"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't rename the channel.")
@@ -902,7 +902,7 @@ async def _reset_channel_overwrites(
         await channel.edit(
             overwrites=new_overwrites,
             status=lock_status_text(locked=False),
-            reason="Voice Master: reset by owner",
+            reason="Voice Control: reset by owner",
         )
         return True
     except (discord.Forbidden, discord.HTTPException):
@@ -981,7 +981,7 @@ async def _apply_transfer(
     _grant_speaker_if_spectating(ctx, channel, overwrite)
     try:
         await channel.set_permissions(
-            new_owner, overwrite=overwrite, reason="Voice Master: ownership transfer"
+            new_owner, overwrite=overwrite, reason="Voice Control: ownership transfer"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update channel permissions.")
@@ -1035,7 +1035,7 @@ async def _apply_invite(
     _grant_speaker_if_spectating(ctx, channel, overwrite)
     try:
         await channel.set_permissions(
-            target, overwrite=overwrite, reason="Voice Master: invite by owner"
+            target, overwrite=overwrite, reason="Voice Control: invite by owner"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update channel permissions.")
@@ -1121,7 +1121,7 @@ async def _apply_kick(
     overwrite.connect = False
     try:
         await channel.set_permissions(
-            target, overwrite=overwrite, reason="Voice Master: kick by owner"
+            target, overwrite=overwrite, reason="Voice Control: kick by owner"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update channel permissions.")
@@ -1130,7 +1130,7 @@ async def _apply_kick(
     # Disconnect them if they're currently in the channel.
     if target.voice and target.voice.channel and target.voice.channel.id == channel.id:
         try:
-            await target.move_to(None, reason="Voice Master: kicked by owner")
+            await target.move_to(None, reason="Voice Control: kicked by owner")
         except (discord.Forbidden, discord.HTTPException):
             pass
 
@@ -1196,7 +1196,7 @@ async def _apply_limit(
     await _defer_if_needed(interaction)
     try:
         await channel.edit(
-            user_limit=new_limit, reason="Voice Master: limit by owner"
+            user_limit=new_limit, reason="Voice Control: limit by owner"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update the user limit.")
@@ -1721,7 +1721,7 @@ async def _handle_claim_button(
 
     cfg, row = await asyncio.to_thread(_fetch_claim_state)
     if row is None:
-        await _ephemeral(interaction, "This channel isn't managed by Voice Master.")
+        await _ephemeral(interaction, "This channel isn't managed by Voice Control.")
         return
     owner = guild.get_member(row.owner_id)
     decision = classify_claim_attempt(
@@ -1743,7 +1743,7 @@ async def _handle_claim_button(
     _grant_speaker_if_spectating(ctx, channel, overwrite)
     try:
         await channel.set_permissions(
-            member, overwrite=overwrite, reason="Voice Master: claim (button)"
+            member, overwrite=overwrite, reason="Voice Control: claim (button)"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't grant you ownership permissions.")
@@ -1802,7 +1802,7 @@ class _ClaimButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         ctx = getattr(interaction.client, "ctx", None)
         if ctx is None:
-            await _ephemeral(interaction, "Voice Master is unavailable right now.")
+            await _ephemeral(interaction, "Voice Control is unavailable right now.")
             return
         await _handle_claim_button(ctx, interaction, self._channel_id)
 
@@ -1915,7 +1915,7 @@ class _KnockResponseView(discord.ui.View):
             _grant_speaker_if_spectating(ctx, channel, overwrite)
         try:
             await channel.set_permissions(
-                requester, overwrite=overwrite, reason="Voice Master: knock accepted"
+                requester, overwrite=overwrite, reason="Voice Control: knock accepted"
             )
         except (discord.Forbidden, discord.HTTPException):
             await _ephemeral(interaction, "Couldn't update channel permissions.")

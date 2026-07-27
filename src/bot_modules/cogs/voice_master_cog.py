@@ -1,4 +1,4 @@
-"""Voice Master — member-owned voice channels created by joining a Hub."""
+"""Voice Control — member-owned voice channels created by joining a Hub."""
 
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ class VoiceMasterCog(commands.Cog):
     )
     voice_admin = app_commands.Group(
         name="voice-admin",
-        description="Voice Master admin configuration.",
+        description="Voice Control admin configuration.",
         default_permissions=discord.Permissions(administrator=True),
     )
 
@@ -147,7 +147,7 @@ class VoiceMasterCog(commands.Cog):
         self._create_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         # The owner-control panel stays at the bottom of the control channel.
         self.panel = StickyPanel(
-            "voice master",
+            "voice control",
             bot,
             load_ids=self._panel_ids,
             save_ids=self._save_panel_ids,
@@ -295,7 +295,7 @@ class VoiceMasterCog(commands.Cog):
             ch = guild.get_channel(cid)
             if isinstance(ch, discord.VoiceChannel):
                 try:
-                    await ch.delete(reason="Voice Master: empty on reconcile")
+                    await ch.delete(reason="Voice Control: empty on reconcile")
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception("voice_master: failed to delete channel %d", cid)
 
@@ -389,8 +389,8 @@ class VoiceMasterCog(commands.Cog):
             )
             await self._notify_admins(
                 channel.guild,
-                "⚠️ Voice Master Hub channel was deleted. "
-                "Reconfigure it in the Voice Master → Config dashboard panel.",
+                "⚠️ Voice Control Hub channel was deleted. "
+                "Reconfigure it in the Voice Control → Config dashboard panel.",
             )
         elif channel.id == cfg.category_id:
             log.error(
@@ -399,8 +399,8 @@ class VoiceMasterCog(commands.Cog):
             )
             await self._notify_admins(
                 channel.guild,
-                "⚠️ Voice Master target category was deleted. "
-                "Reconfigure it in the Voice Master → Config dashboard panel.",
+                "⚠️ Voice Control target category was deleted. "
+                "Reconfigure it in the Voice Control → Config dashboard panel.",
             )
         elif channel.id == cfg.control_channel_id:
             log.warning(
@@ -470,7 +470,7 @@ class VoiceMasterCog(commands.Cog):
                     await ch.set_permissions(
                         new_owner,
                         overwrite=overwrite,
-                        reason="Voice Master: previous owner left server",
+                        reason="Voice Control: previous owner left server",
                     )
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception(
@@ -494,7 +494,7 @@ class VoiceMasterCog(commands.Cog):
             else:
                 # Empty — delete it now.
                 try:
-                    await ch.delete(reason="Voice Master: owner left server, channel empty")
+                    await ch.delete(reason="Voice Control: owner left server, channel empty")
                 except (discord.Forbidden, discord.HTTPException):
                     log.exception("voice_master: failed to delete %d", cid)
 
@@ -722,7 +722,7 @@ class VoiceMasterCog(commands.Cog):
             self._empty_timers.pop(channel.id, None)
             return  # someone returned during the grace period
         try:
-            await live.delete(reason="Voice Master: empty after grace period")
+            await live.delete(reason="Voice Control: empty after grace period")
         except (discord.Forbidden, discord.HTTPException):
             log.exception("voice_master: failed to delete empty channel %d", channel.id)
             return
@@ -768,7 +768,7 @@ class VoiceMasterCog(commands.Cog):
                     with self._suppress_voice_errors():
                         await member.move_to(
                             live,
-                            reason="Voice Master: returning to existing channel",
+                            reason="Voice Control: returning to existing channel",
                         )
                     return
                 # Stale DB row — clean it up so the cap check below is accurate.
@@ -787,7 +787,7 @@ class VoiceMasterCog(commands.Cog):
             ):
                 # Boot them out of the Hub silently — can't DM mid-event reliably.
                 with self._suppress_voice_errors():
-                    await member.move_to(None, reason="Voice Master: create cooldown")
+                    await member.move_to(None, reason="Voice Control: create cooldown")
                 return
             self._last_create[member.id] = now
 
@@ -827,7 +827,7 @@ class VoiceMasterCog(commands.Cog):
             if cap_exceeded:
                 with self._suppress_voice_errors():
                     await member.move_to(
-                        None, reason="Voice Master: max channels reached"
+                        None, reason="Voice Control: max channels reached"
                     )
                 return
 
@@ -878,8 +878,8 @@ class VoiceMasterCog(commands.Cog):
                 create_kwargs["user_limit"] = limit
             if bitrate > 0:
                 create_kwargs["bitrate"] = bitrate
-            # Every access state but plain "open" is age-gated (mirrors
-            # _apply_access_state), so carry Discord's age gate at creation.
+            # Every access state but plain "open" is marked NSFW (mirrors
+            # _apply_access_state), so carry Discord's NSFW flag at creation.
             initial_state = profile_access_state(profile)
             if initial_state != ACCESS_OPEN:
                 create_kwargs["nsfw"] = True
@@ -923,7 +923,7 @@ class VoiceMasterCog(commands.Cog):
             await asyncio.to_thread(_insert_channel)
 
             try:
-                await member.move_to(channel, reason="Voice Master: own channel ready")
+                await member.move_to(channel, reason="Voice Control: own channel ready")
             except (discord.Forbidden, discord.HTTPException):
                 # Member disconnected before we could move them; the empty-grace
                 # timer below will clean up the orphaned channel.
@@ -944,7 +944,7 @@ class VoiceMasterCog(commands.Cog):
                 }[initial_state]
                 await channel.edit(
                     status=access_status_text(mode=status_mode),
-                    reason="Voice Master: initial access-state status",
+                    reason="Voice Control: initial access-state status",
                 )
 
             # Drop the control panel into the new channel's text chat so the
@@ -1187,7 +1187,7 @@ class VoiceMasterCog(commands.Cog):
 
         cfg, row = await asyncio.to_thread(_fetch_claim_data)
         if row is None:
-            await _ephemeral(interaction, "❌ This channel isn't managed by Voice Master.")
+            await _ephemeral(interaction, "❌ This channel isn't managed by Voice Control.")
             return
         owner = member.guild.get_member(row.owner_id)
         decision = classify_claim_attempt(
@@ -1216,7 +1216,7 @@ class VoiceMasterCog(commands.Cog):
         _grant_speaker_if_spectating(self.ctx, channel, overwrite)
         try:
             await channel.set_permissions(
-                member, overwrite=overwrite, reason="Voice Master: claim"
+                member, overwrite=overwrite, reason="Voice Control: claim"
             )
         except (discord.Forbidden, discord.HTTPException):
             await _ephemeral(interaction, "❌ Couldn't grant you ownership permissions.")
@@ -1298,7 +1298,7 @@ class VoiceMasterCog(commands.Cog):
         if member is None or member.voice is None or member.voice.channel is None:
             return
         try:
-            await member.move_to(None, reason="Voice Master: sleep-kick timer expired")
+            await member.move_to(None, reason="Voice Control: sleep-kick timer expired")
         except (discord.Forbidden, discord.HTTPException):
             log.warning("voice_master: sleepkick failed for member %d in guild %d", user_id, guild_id)
 
@@ -1479,7 +1479,7 @@ class VoiceMasterCog(commands.Cog):
         row = await asyncio.to_thread(_fetch_knock_row)
         if row is None:
             await _ephemeral(
-                interaction, "❌ That channel isn't managed by Voice Master."
+                interaction, "❌ That channel isn't managed by Voice Control."
             )
             return
         if row.owner_id == interaction.user.id:
@@ -1628,7 +1628,7 @@ class VoiceMasterCog(commands.Cog):
         if row is None:
             await _ephemeral(
                 interaction,
-                "❌ This channel isn't managed by Voice Master.",
+                "❌ This channel isn't managed by Voice Control.",
             )
             return
         owner = interaction.guild.get_member(row.owner_id) if interaction.guild else None

@@ -143,11 +143,11 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ## Voice, Social & Content Config
 
-### Voice Master
+### Voice Control
 
 - [ ] **`/voice-admin post-panel`** — With a configured control channel, post (or repost) the persistent control panel.
-- [ ] **Voice Master how-to guide post (dashboard)** — Post the member-facing how-it-works embed into a channel.
-- [ ] **Voice Master web config** — Configure Hub, target category, control channel, and spectator gate role; confirm a subsequent Hub join reflects the new settings.
+- [ ] **Voice Control how-to guide post (dashboard)** — Post the member-facing how-it-works embed into a channel.
+- [ ] **Voice Control web config** — Configure Hub, target category, control channel, and spectator gate role; confirm a subsequent Hub join reflects the new settings.
 
 ### Role Menus
 

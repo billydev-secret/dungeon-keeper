@@ -11,7 +11,7 @@ Scope comes from ``settings_registry``: a key is proposable only if it is listed
 there *and* flagged ``writable``. That is a deliberate narrowing of the old rule
 ("any non-secret key that already has a row"), which let the model reach keys
 nobody had vetted — including ``admin_role_ids`` and ``message_storage_level``.
-Feature-table settings (economy prices, voice master dials, …) have their own
+Feature-table settings (economy prices, voice control dials, …) have their own
 validated dashboard panels and stay read-only to the model.
 
 The registry also removes the old requirement that the key already exist. Shape

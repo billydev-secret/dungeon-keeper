@@ -276,7 +276,7 @@ Which embed slot does which job:
   ("📝 Submit Fills"). Confirm flows keep the "Yes, …" comma form, recased
   ("Yes, End Game"). Cancel is plain **"Cancel"** — no ✕/✗ glyph.
 - Consistent button **shapes/sizes**; collapse overlapping toggles into one
-  multi-state dial rather than several buttons (see Voice Master's access dial).
+  multi-state dial rather than several buttons (see Voice Control's access dial).
 - Modal titles: Title Case. Modal field labels are **terse noun phrases with a
   parenthetical hint**: "Reason (optional)", "User limit (0–99, 0 = no cap)".
 - Select placeholders: imperative **"Pick …" + unicode ellipsis**
@@ -351,7 +351,7 @@ Which embed slot does which job:
   variants → shared constant.
 - "guild" in member-facing errors (`xp_cog.py:209`, `guess_cog.py:1805`).
 - `█░`/bracket/pipe progress bars → `▰▱`.
-- Separator strays: `·` in titles (voice master), double-spaced `•` footers.
+- Separator strays: `·` in titles (voice control), double-spaced `•` footers.
 - `footer_emoji()` adoption outside economy/starboard.
 - Pagination wording variants; ASCII `...` placeholders; "Select" placeholders.
 - One `colour=` kwarg; one "You do not have permission…" uncontracted string.

@@ -1,4 +1,4 @@
-"""Voice Master admin endpoints — config, channels, profile inspection."""
+"""Voice Control admin endpoints — config, channels, profile inspection."""
 
 from __future__ import annotations
 
@@ -231,7 +231,7 @@ async def post_howto(
     payload: PostHowtoPayload,
     user: AuthenticatedUser = Depends(require_perms({"admin"})),
 ) -> dict[str, Any]:
-    """Post the member-facing Voice Master how-to embed into a chosen channel.
+    """Post the member-facing Voice Control how-to embed into a chosen channel.
 
     Needs the live bot to send the message; returns 503 when it's offline,
     matching the other dashboard 'post to channel' actions.
@@ -404,7 +404,7 @@ async def force_delete(
 
     row = await run_query(_row_q)
     if row is None:
-        raise HTTPException(404, "Channel not tracked by Voice Master")
+        raise HTTPException(404, "Channel not tracked by Voice Control")
 
     ch = guild.get_channel(channel_id)
     if not isinstance(ch, discord.VoiceChannel):
@@ -418,7 +418,7 @@ async def force_delete(
 
     channel_name = ch.name
     try:
-        await ch.delete(reason=f"Voice Master: web admin force-delete by {user.user_id}")
+        await ch.delete(reason=f"Voice Control: web admin force-delete by {user.user_id}")
     except (discord.Forbidden, discord.HTTPException) as e:
         raise HTTPException(500, f"Discord error: {e}")
 
@@ -477,7 +477,7 @@ async def force_transfer(
 
     row = await run_query(_row_q)
     if row is None:
-        raise HTTPException(404, "Channel not tracked by Voice Master")
+        raise HTTPException(404, "Channel not tracked by Voice Control")
 
     overwrite = ch.overwrites_for(new_owner)
     overwrite.connect = True
@@ -486,7 +486,7 @@ async def force_transfer(
         await ch.set_permissions(
             new_owner,
             overwrite=overwrite,
-            reason=f"Voice Master: web admin force-transfer by {user.user_id}",
+            reason=f"Voice Control: web admin force-transfer by {user.user_id}",
         )
     except (discord.Forbidden, discord.HTTPException) as e:
         raise HTTPException(500, f"Discord error: {e}")

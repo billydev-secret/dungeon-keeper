@@ -196,7 +196,7 @@ class EconSettings:
     # the gradient as the top cosmetic tier; like the gradient it needs the
     # guild's ENHANCED_ROLE_COLORS feature to actually render.
     price_role_holographic: int = 300
-    # Voice-style lease (sinks round 3, stage 3): Voice Master rename + user
+    # Voice-style lease (sinks round 3, stage 3): Voice Control rename + user
     # limit become leased while this is > 0 AND the economy is enabled. The
     # 0 default is the dark launch — controls stay free until an admin prices
     # the lease on the Sinks page (suggested ≈ 30). Distinct from

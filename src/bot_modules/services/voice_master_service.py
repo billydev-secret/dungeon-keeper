@@ -1,4 +1,4 @@
-"""Voice Master service layer — pure DB CRUD and business helpers.
+"""Voice Control service layer — pure DB CRUD and business helpers.
 
 Schema lives in ``migrations/005_voice_master.sql``. All functions here take a
 sqlite3 Connection (matching ``db_utils.open_db``) and are sync. Discord-side
@@ -106,7 +106,7 @@ def _parse_bool(raw: str) -> bool:
 def load_voice_master_config(
     conn: sqlite3.Connection, guild_id: int
 ) -> VoiceMasterConfig:
-    """Load the full per-guild Voice Master config in one shot."""
+    """Load the full per-guild Voice Control config in one shot."""
     from bot_modules.core.db_utils import get_config_value as _get  # avoid cycle at module import
 
     raw: dict[str, str] = {
@@ -148,7 +148,7 @@ def set_voice_master_config_value(
 ) -> None:
     """Upsert a single voice_master_* config key for the given guild."""
     if key not in _CONFIG_DEFAULTS:
-        raise ValueError(f"unknown voice master config key: {key}")
+        raise ValueError(f"unknown voice control config key: {key}")
     from bot_modules.core.db_utils import set_config_value as _set
 
     _set(conn, key, value, guild_id)
@@ -165,7 +165,7 @@ class VoiceProfile:
 
     ``locked``/``hidden``/``spectator``/``age_gated`` together encode the
     owner's single access-state dial (see :func:`profile_access_state`):
-    ``locked`` always implies ``hidden`` and age-gating, ``spectator`` implies
+    ``locked`` always implies ``hidden`` and the NSFW flag, ``spectator`` implies
     age-gating, and ``age_gated`` on its own is the "NSFW but open" state.
     """
     saved_name: str | None
@@ -880,7 +880,7 @@ def profile_access_state(profile: VoiceProfile) -> str:
     """Collapse a saved profile's flags to its single access state.
 
     Precedence matches the states' semantics and tolerates legacy rows: a
-    spectator profile is spectator; a locked profile is the age-gated locked
+    spectator profile is spectator; a locked profile is the NSFW locked
     state (old ``locked`` rows predate the ``age_gated`` column but locking now
     always implies age-gating); ``age_gated`` alone is the NSFW-open state.
     Legacy hidden-only profiles (``hidden`` without ``locked``) fall through to
@@ -898,8 +898,8 @@ def profile_access_state(profile: VoiceProfile) -> str:
 def access_state_profile_flags(state: str) -> dict[str, bool]:
     """The saved-profile flag values for an access state.
 
-    Locked implies hidden + age-gated; spectator implies age-gated; NSFW-open is
-    age-gated only; open clears everything.
+    Locked implies hidden + NSFW; spectator implies NSFW; NSFW-open sets the
+    NSFW flag only; open clears everything.
     """
     return {
         "locked": state == ACCESS_LOCKED,

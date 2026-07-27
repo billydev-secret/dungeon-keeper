@@ -28,10 +28,10 @@ class InviteCog(commands.Cog):
         # channel-overwrite based), so those mod perms are deliberately absent.
         perms = discord.Permissions(
             manage_roles=True,  # jail, xp, whisper, guess, wellness, dm_perms, booster
-            manage_channels=True,  # jail/setup channels, Voice Master temp channels
+            manage_channels=True,  # jail/setup channels, Voice Control temp channels
             manage_nicknames=True,  # duels, pressure_cooker, quickdraw
             manage_messages=True,  # purge, auto-delete, post monitoring, pins
-            move_members=True,  # Voice Master move/disconnect
+            move_members=True,  # Voice Control move/disconnect
             connect=True,  # music cog joins voice
             speak=True,  # music cog streams audio
             create_public_threads=True,  # confessions, needle, risky_roll
