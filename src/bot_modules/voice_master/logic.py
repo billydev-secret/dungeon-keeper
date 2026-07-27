@@ -925,26 +925,25 @@ def format_access_result(*, state: str, gated: bool = False) -> str:
     """
     if state == ACCESS_LOCKED:
         return (
-            "Access set to **NSFW — locked**: age-gated, hidden from the list, "
-            "and invite-only. People you invite can still see and join."
+            "Access set to **NSFW — locked**: hidden from the list and "
+            "invite-only. People you invite can still see and join."
         )
     if state == ACCESS_SPECTATE:
         if gated:
             return (
-                "Access set to **Spectator** (gated, age-gated): role-holders "
+                "Access set to **Spectator** (NSFW, gated): role-holders "
                 "join muted, no camera, read-only in chat. Others can't join. "
                 "Invite people to let them speak."
             )
         return (
-            "Access set to **Spectator** (age-gated): anyone can join muted, no "
+            "Access set to **Spectator** (NSFW): anyone can join muted, no "
             "camera, read-only in chat. Invite people to let them speak."
         )
     if state == ACCESS_NSFW:
         return (
-            "Access set to **NSFW — open**: age-gated, but anyone can still see "
-            "and join."
+            "Access set to **NSFW — open**: anyone can still see and join."
         )
-    return "Access set to **Open**: anyone can see and join, no age gate."
+    return "Access set to **Open**: anyone can see and join, not marked NSFW."
 
 
 def format_rename_result(*, new_name: str) -> str:
@@ -1162,15 +1161,15 @@ _PANEL_BUTTON_META: dict[str, PanelButtonMeta] = {
     ),
     ACCESS_NSFW: PanelButtonMeta(
         ACCESS_NSFW, "NSFW — open", "🔞",
-        "Age-gated, but anyone can see and join.",
+        "Marked NSFW, but anyone can see and join.",
     ),
     ACCESS_LOCKED: PanelButtonMeta(
         ACCESS_LOCKED, "NSFW — locked", "🔒",
-        "Age-gated, hidden, invite-only.",
+        "NSFW, hidden, invite-only.",
     ),
     ACCESS_SPECTATE: PanelButtonMeta(
         ACCESS_SPECTATE, "Spectator", "🎭",
-        "Age-gated audience: join muted, read-only.",
+        "NSFW audience: join muted, read-only.",
     ),
     "rename":      PanelButtonMeta("rename",      "Rename",      "✏️"),
     "limit":       PanelButtonMeta("limit",       "Limit",       "🔢"),

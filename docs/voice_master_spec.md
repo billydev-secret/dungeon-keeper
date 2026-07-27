@@ -41,14 +41,14 @@ On create the bot also: marks the channel age-gated (`nsfw=True`) when the profi
 
 ### The access dial (`/voice access`)
 
-One 4-state dial replaces the old separate lock/hide toggles. **Every state except open is age-gated** (the channel's Discord NSFW flag is set; open clears it). Each state also writes a matching voice-channel *status* line (a separate endpoint, immune to the rename rate limit):
+One 4-state dial replaces the old separate lock/hide toggles. **Every state except open sets the channel's Discord NSFW flag** (open clears it) — which is also Discord's own age gate, though no member-facing copy says "age-gated" any more (2026-07-27, #81: the server is 21+, so the age framing named a gate nobody is on the wrong side of; the `age_gated` profile column and the mechanism keep their names). `tests/test_voice_master_logic.py::test_access_copy_says_nsfw_not_age_gated` holds the copy to it. Each state also writes a matching voice-channel *status* line (a separate endpoint, immune to the rename rate limit):
 
 | State | Who can see / join | Status line |
 |---|---|---|
-| 🔓 `open` | Anyone can see and join; no age gate | "👋 All welcome" |
-| 🔞 `nsfw` | Age-gated, but anyone can see and join | "🔞 Age-gated · all welcome" |
-| 🔒 `locked` | Age-gated, **hidden from the channel list and invite-only**: `@everyone` is denied both View Channel and Connect. Invited/trusted members can still see and join; others can `/voice knock` | "🔒 Age-gated · ask to join" |
-| 🎭 `spectate` | Age-gated muted audience: joiners can listen but `speak`, `stream` (camera/Go Live) and both `send_messages` perms are denied. With a **spectator gate role** configured, `@everyone` is denied Connect and only role-holders may join (as the muted audience) | "🎭 Age-gated · spectators welcome" |
+| 🔓 `open` | Anyone can see and join; not marked NSFW | "👋 All welcome" |
+| 🔞 `nsfw` | Marked NSFW, but anyone can see and join | "🔞 NSFW · all welcome" |
+| 🔒 `locked` | NSFW, **hidden from the channel list and invite-only**: `@everyone` is denied both View Channel and Connect. Invited/trusted members can still see and join; others can `/voice knock` | "🔒 NSFW · ask to join" |
+| 🎭 `spectate` | NSFW muted audience: joiners can listen but `speak`, `stream` (camera/Go Live) and both `send_messages` perms are denied. With a **spectator gate role** configured, `@everyone` is denied Connect and only role-holders may join (as the muted audience) | "🎭 NSFW · spectators welcome" |
 
 Details:
 

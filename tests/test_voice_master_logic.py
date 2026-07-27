@@ -41,6 +41,7 @@ from bot_modules.voice_master.logic import (
     build_transfer_picker_plan,
     classify_access_mode,
     classify_claim_attempt,
+    format_access_result,
     format_block_add_result,
     format_blocked_list,
     format_edit_rate_limit_error,
@@ -1508,6 +1509,42 @@ def test_panel_button_meta_known_action():
     assert meta.label == "NSFW — locked"
     assert meta.emoji == "🔒"
     assert meta.description  # access states carry a description line
+
+
+def test_access_copy_says_nsfw_not_age_gated():
+    """The dial is named for what members call it (#81).
+
+    The server is 21+, so "age-gate" described a gate nobody is on the wrong
+    side of. Every member-facing surface of the access dial — the four panel
+    button descriptions, the confirmation replies, and the voice status lines
+    — reads NSFW. The mechanism is untouched: `access_state_flags` still sets
+    `age_gated` on every state but open, which is what carries Discord's own
+    flag, and that is asserted separately.
+    """
+    from bot_modules.services.voice_master_service import (
+        LOCKED_STATUS_TEXT,
+        NSFW_STATUS_TEXT,
+        OPEN_STATUS_TEXT,
+        SPECTATE_STATUS_TEXT,
+    )
+
+    surfaces = [m.description for m in all_panel_button_metas() if m.description]
+    surfaces += [
+        format_access_result(state=s)
+        for s in ("open", "nsfw", "locked", "spectate")
+    ]
+    surfaces.append(format_access_result(state="spectate", gated=True))
+    surfaces += [
+        OPEN_STATUS_TEXT, NSFW_STATUS_TEXT, LOCKED_STATUS_TEXT, SPECTATE_STATUS_TEXT,
+    ]
+    for text in surfaces:
+        assert "age-gat" not in text.lower(), text
+        assert "age gate" not in text.lower(), text
+    # And the states that *are* NSFW still say so, rather than going silent.
+    for state in ("nsfw", "locked", "spectate"):
+        assert "NSFW" in format_access_result(state=state)
+    for text in (NSFW_STATUS_TEXT, LOCKED_STATUS_TEXT, SPECTATE_STATUS_TEXT):
+        assert "NSFW" in text
 
 
 def test_panel_button_meta_unknown_action_returns_none():

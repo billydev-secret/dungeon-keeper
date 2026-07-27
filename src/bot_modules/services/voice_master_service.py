@@ -826,10 +826,15 @@ def decorate_channel_name(
 # rate-limit bucket from the name's brutal 2-per-10-minutes limit — so it can be
 # toggled freely on every lock/unlock.
 
+# Member-facing copy says "NSFW", not "age-gated" (2026-07-27): the server is
+# 21+ throughout, so the age framing described a gate nobody is on the wrong
+# side of, while NSFW is what members actually call the rooms. The mechanism is
+# unchanged — every state but open still sets Discord's own NSFW flag, and the
+# ``age_gated`` column keeps its name.
 OPEN_STATUS_TEXT: str = "👋 All welcome"
-NSFW_STATUS_TEXT: str = "🔞 Age-gated · all welcome"
-LOCKED_STATUS_TEXT: str = "🔒 Age-gated · ask to join"
-SPECTATE_STATUS_TEXT: str = "🎭 Age-gated · spectators welcome"
+NSFW_STATUS_TEXT: str = "🔞 NSFW · all welcome"
+LOCKED_STATUS_TEXT: str = "🔒 NSFW · ask to join"
+SPECTATE_STATUS_TEXT: str = "🎭 NSFW · spectators welcome"
 
 
 def lock_status_text(*, locked: bool) -> str:

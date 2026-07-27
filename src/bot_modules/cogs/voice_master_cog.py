@@ -1055,14 +1055,14 @@ class VoiceMasterCog(commands.Cog):
         state=[
             app_commands.Choice(name="🔓 Open — anyone can see and join", value=ACCESS_OPEN),
             app_commands.Choice(
-                name="🔞 NSFW — age-gated, but open", value=ACCESS_NSFW
+                name="🔞 NSFW — open to anyone", value=ACCESS_NSFW
             ),
             app_commands.Choice(
-                name="🔒 NSFW locked — age-gated, hidden, invite-only",
+                name="🔒 NSFW locked — hidden, invite-only",
                 value=ACCESS_LOCKED,
             ),
             app_commands.Choice(
-                name="🎭 Spectator — age-gated muted audience", value=ACCESS_SPECTATE
+                name="🎭 Spectator — NSFW muted audience", value=ACCESS_SPECTATE
             ),
         ]
     )
