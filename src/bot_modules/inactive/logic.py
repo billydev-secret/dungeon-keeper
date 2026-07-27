@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from bot_modules.services.moderation import compute_roles_to_snapshot
+
 
 @dataclass(frozen=True)
 class SweepCandidate:
@@ -26,7 +28,7 @@ def select_sweep_candidates(
     now: float,
     threshold_seconds: float,
     exclude_ids: set[int],
-    cap: int,
+    cap: int | None,
 ) -> tuple[list[SweepCandidate], int]:
     """Decide which members should be swept into the inactive channel.
 
@@ -38,13 +40,14 @@ def select_sweep_candidates(
 
     A member is a candidate when ``now - last_seen >= threshold_seconds``.
     Results are sorted most-idle-first (so the cap keeps the stalest members)
-    and truncated to ``cap``.
+    and truncated to ``cap``. ``cap=None`` means no truncation — the dashboard's
+    dry run lists every eligible member rather than one run's worth.
 
     Returns ``(candidates, overflow)`` where ``overflow`` is how many eligible
     members were dropped by the cap — the caller surfaces this so a silent
     truncation never reads as "swept everyone".
     """
-    if threshold_seconds <= 0 or cap <= 0:
+    if threshold_seconds <= 0 or (cap is not None and cap <= 0):
         return [], 0
 
     eligible: list[SweepCandidate] = []
@@ -60,9 +63,134 @@ def select_sweep_candidates(
     # Most-idle first, tie-break on user_id for a deterministic order.
     eligible.sort(key=lambda c: (-c.idle_seconds, c.user_id))
 
-    if len(eligible) <= cap:
+    if cap is None or len(eligible) <= cap:
         return eligible, 0
     return eligible[:cap], len(eligible) - cap
+
+
+def roles_to_strip(
+    member_role_ids: list[int], *, default_role_id: int, inactive_role_id: int
+) -> list[int]:
+    """Return the role IDs an inactive hold takes off a member.
+
+    Callers pass only the member's **unmanaged** roles — an integration owns the
+    managed ones, so the bot can neither strip them nor put them back.
+    ``@everyone`` and ``@Inactive`` drop out here (neither is strippable, and
+    re-adding ``@Inactive`` on release would re-apply the hold).
+
+    This exists so ``apply_inactive`` and the dashboard's dry-run preview can't
+    disagree about what a sweep costs a member: a preview built on its own copy
+    of this rule would drift the moment either side changed.
+    """
+    return compute_roles_to_snapshot(
+        member_role_ids,
+        default_role_id=default_role_id,
+        jailed_role_id=inactive_role_id,
+    )
+
+
+@dataclass(frozen=True)
+class PreviewRole:
+    """One of a member's roles, flattened out of ``discord.Role``."""
+
+    role_id: int
+    name: str
+    managed: bool  # integration-controlled; the bot can neither strip nor restore it
+    position: int
+
+
+@dataclass(frozen=True)
+class PreviewMember:
+    """A sweep candidate's Discord state, flattened for pure processing."""
+
+    display_name: str
+    roles: list[PreviewRole]
+
+
+@dataclass(frozen=True)
+class SweepPreviewRow:
+    """What one sweep candidate would lose, for the dashboard's dry run."""
+
+    user_id: int
+    display_name: str
+    idle_seconds: float
+    last_seen: float
+    has_tracked_messages: bool
+    removed_role_names: list[str]
+    kept_managed_role_names: list[str]
+
+
+def build_sweep_preview(
+    *,
+    candidates: list[SweepCandidate],
+    members: dict[int, PreviewMember],
+    default_role_id: int,
+    inactive_role_id: int,
+    bot_top_role_position: int,
+    tracked_user_ids: set[int],
+) -> tuple[list[SweepPreviewRow], list[SweepPreviewRow]]:
+    """Split sweep candidates into ``(sweepable, blocked_by_hierarchy)``.
+
+    The role lists come from :func:`roles_to_strip`, the same function
+    ``apply_inactive`` snapshots with, so the preview cannot promise a role that
+    would in fact survive. A member whose every role is managed is still swept,
+    they just lose nothing but their channel access, so they keep a row with an
+    empty removal list.
+
+    ``blocked_by_hierarchy`` holds candidates with a role to strip that sits at
+    or above the bot's top role: the sweep would select them and then fail on
+    ``Forbidden``, counting the failure silently. They're reported apart so the
+    sweepable count is one the caller can trust. Managed roles are ignored for
+    this too — they are never stripped, so one outranking the bot blocks nothing.
+
+    ``tracked_user_ids`` is who has any message history at all. A member outside
+    it was aged from their join date alone — the weakest possible evidence of
+    inactivity — and is marked so the dashboard can say so rather than showing a
+    confident "last seen" that is really just "joined".
+
+    Candidates with no entry in ``members`` (left the guild between selection and
+    render) are dropped from both lists.
+    """
+    sweepable: list[SweepPreviewRow] = []
+    blocked: list[SweepPreviewRow] = []
+
+    for candidate in candidates:
+        member = members.get(candidate.user_id)
+        if member is None:
+            continue
+
+        strippable = [r for r in member.roles if not r.managed]
+        removed = set(
+            roles_to_strip(
+                [r.role_id for r in strippable],
+                default_role_id=default_role_id,
+                inactive_role_id=inactive_role_id,
+            )
+        )
+
+        row = SweepPreviewRow(
+            user_id=candidate.user_id,
+            display_name=member.display_name,
+            idle_seconds=candidate.idle_seconds,
+            last_seen=candidate.last_seen,
+            has_tracked_messages=candidate.user_id in tracked_user_ids,
+            removed_role_names=[r.name for r in strippable if r.role_id in removed],
+            kept_managed_role_names=[r.name for r in member.roles if r.managed],
+        )
+
+        # Only the roles that would actually be stripped can fail on hierarchy.
+        # A member's *top* role is the wrong yardstick: it may be a managed role
+        # (booster, Twitch sync, another bot's role) sitting above the bot, which
+        # the sweep never touches and which doesn't stop it removing the roles
+        # below. Judging by top role would file such a member under "would fail"
+        # and drop them from the count of who a sweep really moves.
+        strip_positions = [r.position for r in strippable if r.role_id in removed]
+        if strip_positions and max(strip_positions) >= bot_top_role_position:
+            blocked.append(row)
+        else:
+            sweepable.append(row)
+
+    return sweepable, blocked
 
 
 def stale_inactive_channel_id(

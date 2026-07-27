@@ -227,7 +227,17 @@ def test_no_panel_overflows(dashboard, browser):
     assert not failures, "Responsive layout faults:\n" + "\n".join(failures)
 
 
-# ── interaction scenario: the editor the original bug lived in ──────────────────
+# ── interaction scenarios: states a plain page load never reaches ───────────────
+
+
+def _assert_fits(res, label: str) -> None:
+    """Fail with the same fault description the panel sweep uses."""
+    faults = []
+    if res["viewport"]:
+        faults.append("off-screen — " + _describe(res["viewport"]))
+    if res["clipped"]:
+        faults.append("clipped — " + _describe(res["clipped"]))
+    assert not faults, f"{label} overflows on phone:\n" + "\n".join(faults)
 
 def test_announcement_button_editor_fits_on_phone(dashboard, browser):
     """Open the announcement editor and add role-button rows — the exact flow
@@ -248,9 +258,83 @@ def test_announcement_button_editor_fits_on_phone(dashboard, browser):
         res = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
         context.close()
-    faults = []
-    if res["viewport"]:
-        faults.append("off-screen — " + _describe(res["viewport"]))
-    if res["clipped"]:
-        faults.append("clipped — " + _describe(res["clipped"]))
-    assert not faults, "Announcement button editor overflows on phone:\n" + "\n".join(faults)
+    _assert_fits(res, "Announcement button editor")
+
+
+_SWEEP_PREVIEW_STUB = {
+    "threshold_days": 30,
+    "sweep_cap": 2,
+    "inactive_channel_configured": False,
+    "eligible_count": 2,
+    "blocked_count": 1,
+    "members": [
+        {
+            "user_id": "1234567890123456789",
+            "display_name": "a-fairly-long-display-name",
+            "days_idle": 412.5,
+            "last_seen_ts": 1700000000,
+            "has_tracked_messages": False,
+            "removed_role_count": 4,
+            "removed_role_names": [
+                "Verified Member", "Event Volunteer", "Screenshot Enjoyer", "Book Club",
+            ],
+            "kept_managed_role_names": ["Server Booster"],
+        },
+        {
+            "user_id": "2234567890123456789",
+            "display_name": "quiet",
+            "days_idle": 40.0,
+            "last_seen_ts": 1700000000,
+            "has_tracked_messages": True,
+            "removed_role_count": 0,
+            "removed_role_names": [],
+            "kept_managed_role_names": [],
+        },
+    ],
+    "blocked": [
+        {
+            "user_id": "3234567890123456789",
+            "display_name": "outranks-the-bot",
+            "days_idle": 99.0,
+            "last_seen_ts": 1700000000,
+            "has_tracked_messages": True,
+            "removed_role_count": 1,
+            "removed_role_names": ["Staff"],
+            "kept_managed_role_names": [],
+        },
+    ],
+}
+
+
+def test_inactive_sweep_preview_fits_on_phone(dashboard, browser):
+    """The sweep preview's tables only exist after "Check Now" is pressed.
+
+    A page load shows an empty card, so the widest thing this panel renders —
+    two tables with an action column, plus an expanded role list — is invisible
+    to the plain sweep. The API is stubbed because member data comes from the
+    gateway, which the test dashboard has no connection to.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/config/inactive/preview",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_SWEEP_PREVIEW_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/config-inactive")
+        page.wait_for_timeout(400)
+        page.click("[data-preview-btn]")
+        page.wait_for_selector(".prune-preview-table")
+        # Expand a role list — the detail row is the widest content on the page.
+        page.click("[data-toggle-roles]")
+        _settle(page)
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    finally:
+        context.close()
+    _assert_fits(res, "Inactive sweep preview")

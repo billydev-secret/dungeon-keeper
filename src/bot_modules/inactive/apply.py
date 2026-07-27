@@ -29,12 +29,13 @@ from bot_modules.core.db_utils import get_config_value
 from bot_modules.inactive.store import (
     create_inactive,
     get_active_inactive,
+    is_sweep_exempt,
     reactivate_inactive,
 )
 from bot_modules.services.embeds import MOD_INFO, MOD_SUCCESS
+from bot_modules.inactive.logic import roles_to_strip
 from bot_modules.services.moderation import (
     compute_roles_to_restore,
-    compute_roles_to_snapshot,
     write_audit,
 )
 
@@ -46,6 +47,7 @@ InactiveErrorKind = Literal[
     "admin_target",       # target holds admin
     "mod_target",         # target is mod, actor is not admin
     "already_inactive",   # active inactive row exists for target
+    "exempt_target",      # target is exempt from inactivity holds
     "no_role_perms",      # missing Manage Roles when creating @Inactive
     "no_member_perms",    # missing perms to edit target's roles
 ]
@@ -74,7 +76,16 @@ def check_inactive_preconditions(
 
     Same moderation policy as jailing: never a bot, never yourself, never an
     admin, and only an admin may move a fellow moderator. Also refuses if the
-    member is already held inactive (idempotency).
+    member is already held inactive (idempotency) or has been exempted from
+    inactivity holds on the dashboard.
+
+    The exemption check here is what makes an exemption absolute: every entry
+    path — ``/inactive mark``, ``/inactive sweep``, the background loop — reaches
+    it, because :func:`apply_inactive` runs these preconditions itself. The
+    sweeps *also* drop exempt members from their exclusion set upstream, so an
+    exemption keeps them out of the selection entirely rather than selecting
+    them and refusing one by one; this is the backstop that holds when nothing
+    filtered first. A moderator with a real reason lifts the exemption first.
     """
     if target.bot:
         return InactiveOutcome(
@@ -114,6 +125,15 @@ def check_inactive_preconditions(
                 ok=False,
                 error_kind="already_inactive",
                 error_message=f"❌ {target} is already in the inactive channel.",
+            )
+        if is_sweep_exempt(conn, guild.id, target.id):
+            return InactiveOutcome(
+                ok=False,
+                error_kind="exempt_target",
+                error_message=(
+                    f"❌ {target} is exempt from inactivity holds. Lift the exemption "
+                    f"on the dashboard's **Inactive Sweep** panel first."
+                ),
             )
 
     return None
@@ -224,10 +244,10 @@ async def apply_inactive(
 
     # Snapshot everything except @everyone and the Inactive role itself. Exclude
     # managed roles (integrations control them and the bot can't restore them).
-    stored_roles = compute_roles_to_snapshot(
+    stored_roles = roles_to_strip(
         [r.id for r in target.roles if not r.managed],
         default_role_id=guild.default_role.id,
-        jailed_role_id=role.id,
+        inactive_role_id=role.id,
     )
 
     removable = [

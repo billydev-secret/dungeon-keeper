@@ -735,6 +735,172 @@ def test_post_bot_identity_400_on_bad_avatar_url(ctx, make_client):
     assert resp.status_code == 400
 
 
+# ── Inactive-sweep dry-run preview + exemptions ───────────────────────────────
+#
+# The preview exists so an admin can see the cost of switching the auto-sweep on
+# before switching it on. It is only worth anything if it agrees with the sweep,
+# so these pin the parts the route itself owns: the 503 when member state isn't
+# available, string-safe snowflakes, the hierarchy split, and the unsaved
+# threshold override.
+
+
+def _sweep_role(role_id: int, name: str, *, managed: bool = False, position: int = 1):
+    return SimpleNamespace(id=role_id, name=name, managed=managed, position=position)
+
+
+def _sweep_member(member_id: int, roles, *, joined_days_ago=400):
+    import datetime as _dt
+
+    return SimpleNamespace(
+        id=member_id,
+        bot=False,
+        display_name=f"member{member_id}",
+        roles=roles,
+        joined_at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=joined_days_ago),
+        guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+    )
+
+
+def _sweep_guild(ctx, members, *, bot_top_position: int = 10):
+    everyone = _sweep_role(0, "@everyone", position=0)
+    by_id = {m.id: m for m in members}
+    return SimpleNamespace(
+        id=ctx.guild_id,
+        owner_id=1,
+        members=members,
+        default_role=everyone,
+        me=SimpleNamespace(top_role=SimpleNamespace(position=bot_top_position)),
+        get_member=lambda uid: by_id.get(int(uid)),
+    )
+
+
+def test_inactive_preview_requires_a_connected_bot(ctx, make_client):
+    # Member and role state is gateway state — without it there is nothing
+    # truthful to show, so the route refuses rather than rendering an empty list.
+    ctx.bot = None
+    client = make_client()
+    resp = client.post("/api/config/inactive/preview", json={"threshold_days": 30})
+    assert resp.status_code == 503
+
+
+def test_inactive_preview_lists_members_and_what_they_would_lose(ctx, make_client):
+    big_id = 1234567890123456789  # > 2^53: must survive as a string
+    member = _sweep_member(
+        big_id,
+        [
+            _sweep_role(0, "@everyone", position=0),
+            _sweep_role(11, "Member"),
+            _sweep_role(12, "Server Booster", managed=True),
+        ],
+    )
+    guild = _sweep_guild(ctx, [member])
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    resp = client.post("/api/config/inactive/preview", json={"threshold_days": 30})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["eligible_count"] == 1
+    assert data["blocked_count"] == 0
+    row = data["members"][0]
+    assert row["user_id"] == str(big_id)  # never a bare JSON number
+    assert str(big_id) in resp.text and str(big_id + 1) not in resp.text
+    # @everyone is not strippable and the managed role can't be restored, so
+    # neither is promised — only the real role is listed as lost.
+    assert row["removed_role_names"] == ["Member"]
+    assert row["kept_managed_role_names"] == ["Server Booster"]
+    assert row["removed_role_count"] == 1
+    assert row["has_tracked_messages"] is False  # aged from join date alone
+    assert data["sweep_cap"] == 25
+    assert data["inactive_channel_configured"] is False
+
+
+def test_inactive_preview_separates_members_the_bot_cannot_strip(ctx, make_client):
+    ok = _sweep_member(5, [_sweep_role(11, "Member", position=1)])
+    outranking = _sweep_member(6, [_sweep_role(12, "Staff", position=99)])
+    guild = _sweep_guild(ctx, [ok, outranking], bot_top_position=10)
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    data = client.post("/api/config/inactive/preview", json={"threshold_days": 30}).json()
+
+    assert [r["user_id"] for r in data["members"]] == ["5"]
+    assert [r["user_id"] for r in data["blocked"]] == ["6"]
+    # The headline count excludes the member the sweep would fail on.
+    assert data["eligible_count"] == 1
+    assert data["blocked_count"] == 1
+
+
+def test_inactive_preview_refuses_when_the_bot_member_is_uncached(ctx, make_client):
+    """No `guild.me` means no role position to compare against.
+
+    Defaulting it would file every candidate under "the bot can't strip them"
+    and report nobody as sweepable — a confidently wrong answer.
+    """
+    guild = _sweep_guild(ctx, [_sweep_member(5, [_sweep_role(11, "Member")])])
+    guild.me = None
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    resp = client.post("/api/config/inactive/preview", json={"threshold_days": 30})
+    assert resp.status_code == 503
+
+
+def test_inactive_preview_note_uses_the_cap_on_screen(ctx, make_client):
+    """The panel sends the typed cap so its note can't contradict the field."""
+    guild = _sweep_guild(ctx, [_sweep_member(5, [_sweep_role(11, "Member")])])
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    typed = client.post(
+        "/api/config/inactive/preview", json={"threshold_days": 30, "sweep_cap": 5}
+    ).json()
+    saved = client.post("/api/config/inactive/preview", json={"threshold_days": 30}).json()
+
+    assert typed["sweep_cap"] == 5
+    assert saved["sweep_cap"] == 25  # falls back to the stored setting
+
+
+def test_inactive_preview_uses_the_unsaved_threshold(ctx, make_client):
+    member = _sweep_member(5, [_sweep_role(11, "Member")], joined_days_ago=45)
+    guild = _sweep_guild(ctx, [member])
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    strict = client.post("/api/config/inactive/preview", json={"threshold_days": 90}).json()
+    loose = client.post("/api/config/inactive/preview", json={"threshold_days": 10}).json()
+
+    assert strict["eligible_count"] == 0
+    assert strict["threshold_days"] == 90
+    assert loose["eligible_count"] == 1
+
+
+def test_inactive_preview_skips_exempt_members(ctx, make_client):
+    spared = _sweep_member(5, [_sweep_role(11, "Member")])
+    other = _sweep_member(6, [_sweep_role(11, "Member")])
+    guild = _sweep_guild(ctx, [spared, other])
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    assert client.put("/api/config/inactive/exemptions/5").status_code == 200
+    data = client.post("/api/config/inactive/preview", json={"threshold_days": 30}).json()
+
+    assert [r["user_id"] for r in data["members"]] == ["6"]
+
+
+def test_inactive_exemptions_round_trip_through_config(ctx, make_client):
+    big_id = 1234567890123456789
+    client = make_client()
+
+    assert client.put(f"/api/config/inactive/exemptions/{big_id}").status_code == 200
+    section = client.get("/api/config").json()["inactive"]
+    assert [e["id"] for e in section["exemptions"]] == [str(big_id)]
+
+    assert client.delete(f"/api/config/inactive/exemptions/{big_id}").status_code == 200
+    assert client.get("/api/config").json()["inactive"]["exemptions"] == []
+
+
 # ── auth backend selection fails closed (deep-review #5) ──────────────────────
 
 from web_server.server import _auto_detect_auth  # noqa: E402

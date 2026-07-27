@@ -41,11 +41,12 @@ from bot_modules.inactive.apply import (
     ensure_inactive_role,
     reactivate_member,
 )
-from bot_modules.inactive.logic import (
-    select_sweep_candidates,
-    stale_inactive_channel_id,
+from bot_modules.inactive.logic import stale_inactive_channel_id
+from bot_modules.inactive.sweep_service import (
+    auto_sweep_enabled,
+    compute_candidates,
+    read_inactive_channel_id,
 )
-from bot_modules.inactive.store import active_inactive_user_ids
 from bot_modules.services.embeds import MOD_INFO
 
 if TYPE_CHECKING:
@@ -53,99 +54,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.inactive")
 
-_DEFAULT_THRESHOLD_DAYS = 30
-_DEFAULT_CAP = 25
 _SWEEP_INTERVAL_SECONDS = 6 * 3600  # background loop cadence
 
-
-# ── Config helpers ────────────────────────────────────────────────────
-
-
-def _read_int(ctx: AppContext, key: str, default: int, guild_id: int) -> int:
-    with ctx.open_db() as conn:
-        raw = get_config_value(conn, key, str(default), guild_id)
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _threshold_days(ctx: AppContext, guild_id: int) -> int:
-    return max(1, _read_int(ctx, "inactive_threshold_days", _DEFAULT_THRESHOLD_DAYS, guild_id))
-
-
-def _sweep_cap(ctx: AppContext, guild_id: int) -> int:
-    return max(1, _read_int(ctx, "inactive_sweep_cap", _DEFAULT_CAP, guild_id))
-
-
-def _auto_enabled(ctx: AppContext, guild_id: int) -> bool:
-    return _read_int(ctx, "inactive_auto_sweep", 0, guild_id) == 1
-
-
-def _inactive_channel_id(ctx: AppContext, guild_id: int) -> int:
-    return _read_int(ctx, "inactive_channel_id", 0, guild_id)
-
-
-# ── Sweep candidate gathering (Discord + DB, impure) ─────────────────
-
-
-def _gather_last_seen(conn, guild_id: int) -> dict[int, float]:
-    """Return ``user_id -> last message timestamp`` for a guild."""
-    rows = conn.execute(
-        "SELECT user_id, MAX(created_at) AS last FROM processed_messages "
-        "WHERE guild_id = ? GROUP BY user_id",
-        (guild_id,),
-    ).fetchall()
-    return {r["user_id"]: r["last"] for r in rows if r["last"] is not None}
-
-
-async def _compute_candidates(ctx: AppContext, guild: discord.Guild):
-    """Return ``(candidates, overflow, threshold_days)`` for the guild.
-
-    Builds the per-member last-seen map (most recent of last-message / join so a
-    fresh member who hasn't posted isn't treated as ancient) and the exclusion
-    set (bots, owner, mods, admins, already-inactive), then delegates the actual
-    selection to the pure :func:`select_sweep_candidates`.
-    """
-    guild_id = guild.id
-    threshold_days = _threshold_days(ctx, guild_id)
-    cap = _sweep_cap(ctx, guild_id)
-
-    def _fetch() -> tuple[dict[int, float], set[int]]:
-        with ctx.open_db() as conn:
-            return _gather_last_seen(conn, guild_id), active_inactive_user_ids(conn, guild_id)
-
-    msg_last_seen, already_inactive = await asyncio.to_thread(_fetch)
-    cfg = ctx.guild_config(guild_id)
-
-    last_seen: dict[int, float] = {}
-    exclude: set[int] = set(already_inactive)
-    for m in guild.members:
-        if (
-            m.bot
-            or m.id == guild.owner_id
-            or m.guild_permissions.administrator
-            or m.guild_permissions.manage_guild
-            or cfg.member_is_mod(m)
-            or cfg.member_is_admin(m)
-        ):
-            exclude.add(m.id)
-            continue
-        if m.joined_at is None:
-            # No cached join time — don't risk sweeping a member we can't age.
-            continue
-        joined_ts = m.joined_at.timestamp()
-        last_seen[m.id] = max(msg_last_seen.get(m.id, 0.0), joined_ts)
-
-    now = discord.utils.utcnow().timestamp()
-    candidates, overflow = select_sweep_candidates(
-        last_seen=last_seen,
-        now=now,
-        threshold_seconds=threshold_days * 86400,
-        exclude_ids=exclude,
-        cap=cap,
-    )
-    return candidates, overflow, threshold_days
+# Candidate gathering and the config readers live in inactive/sweep_service.py
+# so the dashboard's dry-run preview selects from exactly the same rules this
+# cog sweeps by.
 
 
 # ── Cog ───────────────────────────────────────────────────────────────
@@ -187,7 +100,7 @@ class InactiveCog(commands.Cog):
             await interaction.response.send_message("❌ Mod only.", ephemeral=True)
             return
 
-        if not _inactive_channel_id(ctx, guild.id):
+        if not read_inactive_channel_id(ctx, guild.id):
             await interaction.response.send_message(
                 "❌ No inactive channel is set up yet. Run `/inactive panel` first so "
                 "moved members have somewhere to land.",
@@ -347,7 +260,7 @@ class InactiveCog(commands.Cog):
             await interaction.response.send_message("❌ Admin only.", ephemeral=True)
             return
 
-        if not _inactive_channel_id(ctx, guild.id):
+        if not read_inactive_channel_id(ctx, guild.id):
             await interaction.response.send_message(
                 "❌ No inactive channel is set up yet. Run `/inactive panel` first.",
                 ephemeral=True,
@@ -355,7 +268,10 @@ class InactiveCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        candidates, overflow, threshold_days = await _compute_candidates(ctx, guild)
+        selection = await compute_candidates(ctx, guild)
+        candidates = selection.candidates
+        overflow = selection.overflow
+        threshold_days = selection.threshold_days
 
         if not candidates:
             await interaction.followup.send(
@@ -429,12 +345,13 @@ async def inactive_sweep_loop(bot: discord.Client, ctx: AppContext) -> None:
             if (
                 guild is not None
                 and guild.me is not None
-                and _auto_enabled(ctx, guild.id)
-                and _inactive_channel_id(ctx, guild.id)
+                and auto_sweep_enabled(ctx, guild.id)
+                and read_inactive_channel_id(ctx, guild.id)
             ):
-                candidates, overflow, _ = await _compute_candidates(ctx, guild)
+                selection = await compute_candidates(ctx, guild)
+                overflow = selection.overflow
                 moved = 0
-                for c in candidates:
+                for c in selection.candidates:
                     target = guild.get_member(c.user_id)
                     if target is None:
                         continue

@@ -560,13 +560,23 @@ def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
 # ── Inactive-sweep config helper ────────────────────────────────────────
 
 
-def _inactive_section(conn, guild_id: int) -> dict:
+def _inactive_section(conn, guild_id: int, guild) -> dict:
+    from bot_modules.inactive.store import list_sweep_exemptions
+
+    exemptions = [
+        {
+            "id": str(row["user_id"]),
+            "name": _lookup_member_name(row["user_id"], guild, conn, guild_id),
+        }
+        for row in list_sweep_exemptions(conn, guild_id)
+    ]
     return {
         "threshold_days": _int_val(
             conn, "inactive_threshold_days", 30, guild_id=guild_id
         ),
         "auto_sweep": _bool_val(conn, "inactive_auto_sweep", guild_id=guild_id),
         "sweep_cap": _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
+        "exemptions": exemptions,
     }
 
 
@@ -1156,7 +1166,7 @@ async def get_config(
                 "casino": _casino_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
                 "rules_watch": _rules_watch_section(conn, guild_id, ctx.db_path),
-                "inactive": _inactive_section(conn, guild_id),
+                "inactive": _inactive_section(conn, guild_id, prune_guild),
                 "games_pressure": _duel_game_section(conn, guild_id, "pressure"),
                 "games_quickdraw": _duel_game_section(conn, guild_id, "quickdraw"),
                 "games_hot_potato": _duel_game_section(conn, guild_id, "hot_potato"),
@@ -2079,6 +2089,170 @@ async def update_inactive(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.put("/config/inactive/exemptions/{user_id}")
+async def add_inactive_exemption(
+    user_id: str,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Exempt a member from inactivity holds — both sweeps and `/inactive mark`."""
+    from bot_modules.inactive.store import add_sweep_exemption
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    added_by = user.user_id
+
+    def _q():
+        with ctx.open_db() as conn:
+            add_sweep_exemption(
+                conn, guild_id=guild_id, user_id=int(user_id), added_by=added_by
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/inactive/exemptions/{user_id}")
+async def delete_inactive_exemption(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    from bot_modules.inactive.store import remove_sweep_exemption
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            remove_sweep_exemption(conn, guild_id, int(user_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class InactivePreviewRequest(BaseModel):
+    threshold_days: int | None = None
+    sweep_cap: int | None = None
+
+
+@router.post("/config/inactive/preview")
+async def preview_inactive_sweep(
+    request: Request,
+    body: InactivePreviewRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Return who the sweep would move right now, and what they'd lose.
+
+    A dry run: nothing is written and no role is created. Selection runs through
+    the very same ``compute_candidates`` the real sweeps use, so the listing
+    can't drift from what enabling the auto-sweep would actually do — only the
+    cap differs, because this lists every eligible member rather than one run's
+    worth, and reports the cap separately so the panel can say how many of them a
+    single run would reach.
+
+    ``threshold_days`` and ``sweep_cap`` override the saved settings so unsaved
+    values can be tried before committing to them. The threshold changes who is
+    selected; the cap only changes the "one run reaches N of these" note, since
+    the listing is deliberately uncapped.
+    """
+    from bot_modules.inactive.logic import PreviewMember, PreviewRole, build_sweep_preview
+    from bot_modules.inactive.sweep_service import compute_candidates
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    # Member and role state is gateway state, not DB state — without the bot
+    # connected there is nothing truthful to show.
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    # Without the bot's own member object there is no role position to compare
+    # against, and defaulting it would file every candidate under "the bot can't
+    # strip them" — a confidently wrong report is worse than refusing.
+    bot_member = guild.me
+    if bot_member is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    threshold_days = body.threshold_days
+    if threshold_days is not None:
+        threshold_days = max(1, min(3650, threshold_days))
+    cap_override = body.sweep_cap
+    if cap_override is not None:
+        cap_override = max(1, min(200, cap_override))
+
+    selection = await compute_candidates(
+        ctx, guild, threshold_days=threshold_days, cap=None
+    )
+
+    members: dict[int, PreviewMember] = {}
+    for candidate in selection.candidates:
+        m = guild.get_member(candidate.user_id)
+        if m is None:
+            continue
+        members[m.id] = PreviewMember(
+            display_name=m.display_name,
+            roles=[PreviewRole(r.id, r.name, r.managed, r.position) for r in m.roles],
+        )
+
+    # The @Inactive role id is read plainly rather than through
+    # apply.ensure_inactive_role: a preview must never create a role as a side
+    # effect of being looked at.
+    def _read_settings() -> tuple[int, int]:
+        with ctx.open_db() as conn:
+            return (
+                _int_val(conn, "inactive_role_id", guild_id=guild_id),
+                _int_val(conn, "inactive_channel_id", guild_id=guild_id),
+            )
+
+    inactive_role_id, channel_id = await run_query(_read_settings)
+
+    sweepable, blocked = build_sweep_preview(
+        candidates=selection.candidates,
+        members=members,
+        default_role_id=guild.default_role.id,
+        inactive_role_id=inactive_role_id,
+        bot_top_role_position=bot_member.top_role.position,
+        tracked_user_ids=selection.tracked_user_ids,
+    )
+
+    def _row(row) -> dict:
+        return {
+            "user_id": str(row.user_id),
+            "display_name": row.display_name,
+            "days_idle": round(row.idle_seconds / 86400.0, 1),
+            "last_seen_ts": row.last_seen,
+            "has_tracked_messages": row.has_tracked_messages,
+            "removed_role_count": len(row.removed_role_names),
+            "removed_role_names": row.removed_role_names,
+            "kept_managed_role_names": row.kept_managed_role_names,
+        }
+
+    # How many of the listed members one run actually reaches. The cap applies to
+    # the whole most-idle-first candidate list *before* anyone is set aside as
+    # unstrippable, so this can't be derived from the sweepable count alone —
+    # comparing that against the cap would over-promise whenever the top of the
+    # list contains members the bot is outranked by.
+    cap = cap_override if cap_override is not None else selection.saved_cap
+    sweepable_ids = {r.user_id for r in sweepable}
+    first_run_reach = sum(
+        1 for c in selection.candidates[:cap] if c.user_id in sweepable_ids
+    )
+
+    return {
+        "threshold_days": selection.threshold_days,
+        "sweep_cap": cap,
+        "first_run_reach": first_run_reach,
+        "inactive_channel_configured": bool(channel_id),
+        "eligible_count": len(sweepable),
+        "blocked_count": len(blocked),
+        "members": [_row(r) for r in sweepable],
+        "blocked": [_row(r) for r in blocked],
+    }
 
 
 # ── Duel/group-games config writes ──────────────────────────────────────
