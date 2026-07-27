@@ -11,6 +11,10 @@ from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.game_start_ping_service import (
+    extract_start_epoch,
+    resolve_start_epoch,
+)
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
@@ -86,6 +90,9 @@ class MFKView(discord.ui.View):
             names,
             labels=self.labels,
             color=color,
+            # Re-read from the payload, not the view: the countdown must
+            # survive a restart that rebuilt this view from the DB.
+            start_at=extract_start_epoch(payload),
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(
@@ -187,8 +194,14 @@ class MFKCog(commands.Cog):
     @app_commands.command(name="mfk", description="Start a Marry, Fornicate, Kiss game!")
     @app_commands.describe(
         options='Custom categories (comma-separated, exactly 3). e.g. "Cruise, Wedding, Vacation"',
+        start_in="Show a lobby countdown — game starts in this many minutes (host still closes the pool)",
     )
-    async def mfk(self, interaction: discord.Interaction, options: str | None = None):
+    async def mfk(
+        self,
+        interaction: discord.Interaction,
+        options: str | None = None,
+        start_in: app_commands.Range[int, 1, 60] | None = None,
+    ):
         log.info("%s used /games play mfk in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
@@ -209,7 +222,7 @@ class MFKCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"options": options},
+            options={"options": options, "start_in": start_in},
         )
         await finish_launch_response(interaction, game_id)
 
@@ -224,20 +237,24 @@ class MFKCog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         labels, _ = parse_labels(options.get("options"))
+        start_epoch = resolve_start_epoch(options)
 
+        payload: dict = {"labels": labels or DEFAULT_LABELS}
+        if start_epoch:
+            payload["start_epoch"] = start_epoch
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "mfk",
             state="joining",
-            payload={"labels": labels or DEFAULT_LABELS},
+            payload=payload,
         )
 
         log.info("Game %s (mfk) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         guild = getattr(channel, "guild", None)
         color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_lobby_embed(host_name, [], labels=labels, color=color)
+        embed = build_lobby_embed(host_name, [], labels=labels, color=color, start_at=start_epoch)
         view = MFKView(game_id, host_id, self.db, self.bot, labels=labels)
         self.bot.active_views[game_id] = view
 

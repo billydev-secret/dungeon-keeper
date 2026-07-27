@@ -13,12 +13,14 @@ from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     get_game_payload,
     modify_payload,
     end_game,
@@ -224,6 +226,9 @@ class StoryJoinView(discord.ui.View):
                 )
 
         payload["host_id"] = interaction.user.id
+        # The row must stop reading as an open lobby — the start-ping sweep
+        # polls state='joining' and a story outlives its countdown.
+        await update_game_state(self.db, self.game_id, "playing")
         await self.cog._run_story(interaction, self.game_id, payload, interaction.channel)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="story_htp")
@@ -245,6 +250,7 @@ class StoryCog(commands.Cog):
         max_sentences="Total sentences in the story (max 30)",
         visibility="blind = only see previous sentence, full = see whole story",
         starter="Opening sentence (blank = use default)",
+        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start Story)",
     )
     @app_commands.choices(
         visibility=[
@@ -258,6 +264,7 @@ class StoryCog(commands.Cog):
         max_sentences: int = 10,
         visibility: str = "blind",
         starter: str = "",
+        start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info("%s used /games play story in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
@@ -277,6 +284,7 @@ class StoryCog(commands.Cog):
                 "max_sentences": max_sentences,
                 "visibility": visibility,
                 "starter": starter,
+                "start_in": start_in,
             },
         )
         await finish_launch_response(interaction, game_id)
@@ -296,20 +304,24 @@ class StoryCog(commands.Cog):
         if visibility not in ("blind", "full"):
             visibility = "blind"
         starter = options.get("starter", "")
+        start_epoch = resolve_start_epoch(options)
 
+        payload = {
+            "max_sentences": max_sentences,
+            "visibility": visibility,
+            "starter": starter,
+            "players": [],
+            "sentences": [],
+        }
+        if start_epoch:
+            payload["start_epoch"] = start_epoch
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "story",
             state="joining",
-            payload={
-                "max_sentences": max_sentences,
-                "visibility": visibility,
-                "starter": starter,
-                "players": [],
-                "sentences": [],
-            },
+            payload=payload,
         )
 
         guild = getattr(channel, "guild", None)
@@ -319,6 +331,7 @@ class StoryCog(commands.Cog):
             visibility=visibility,
             max_sentences=max_sentences,
             color=color,
+            start_at=start_epoch,
         )
 
         log.info("Game %s (story) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))

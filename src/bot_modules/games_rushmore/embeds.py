@@ -83,6 +83,7 @@ def build_join_embed(
     topic: str | None = None,
     mode: str = "snake",
     color: discord.Color | None = None,
+    start_at: int | None = None,
 ) -> discord.Embed:
     """Lobby embed shown while players are joining.
 
@@ -91,6 +92,10 @@ def build_join_embed(
     button exists but live games showed nobody presses it, so the rules
     ride in the embed itself. ``mode`` flips the line between snake
     ("when it's your turn") and blitz ("everyone picks at once").
+
+    ``start_at`` is an optional UTC epoch shown as a live Discord relative
+    timestamp — the host's advertised start time. The host still presses
+    Start Draft; the countdown is advertising, not automation.
     """
     title = f"{GAME_ICONS['rushmore']} Mt. Rushmore Draft"
     desc = f"Hosted by: **{discord.utils.escape_markdown(host_name)}**"
@@ -115,6 +120,8 @@ def build_join_embed(
         title=title, description=desc,
         color=color or discord.Color(PHASE_JOINING),
     )
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{start_at}:R>", inline=True)
     pool_str = ", ".join(player_names) if player_names else "(nobody yet)"
     embed.add_field(
         name=f"Players ({len(player_names)})", value=pool_str, inline=False,

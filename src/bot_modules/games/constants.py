@@ -102,6 +102,27 @@ SCHEDULABLE_GAME_TYPES = [
     'legitlibs', 'risky_roll',
 ]
 
+# ── Lobby registry ──────────────────────────────────────────────────────────
+# Party games that open a join lobby and wait for a human to press the start
+# button. Only these support the `start_in` countdown and the "time to start"
+# host nudge — the other party games post their first prompt the instant the
+# command runs, so there's no button for a countdown to point at.
+LOBBY_GAME_TYPES = frozenset({
+    'clapback', 'compliment', 'mfk', 'mlt', 'rushmore', 'story',
+})
+
+# The literal label on each lobby game's start button, so the host nudge can
+# name the button they're actually looking at. Keys must match
+# LOBBY_GAME_TYPES (tested in tests/test_game_start_ping_service.py).
+LOBBY_START_BUTTON = {
+    'clapback': 'Start',
+    'compliment': 'Close & Generate',
+    'mfk': 'Close & Assign',
+    'mlt': 'Start',
+    'rushmore': 'Start Draft',
+    'story': 'Start Story',
+}
+
 # Some schedulable types are display variants of a base game — they share the
 # question bank, history rows, and the base game's enable/disable toggle. Map a
 # variant to its base so a single games-config toggle governs both. Used by the

@@ -18,19 +18,19 @@ All party games launch with `/games play <slug>`. Params below are the actual sl
 | Truth or Dare Card | `/games play ffa_banner kind:[truth\|dare\|random] tags:[csv] prompt:[str]` | Everyone | Card-only variant of FFA — just posts a prompt card for open chat, no interactive state |
 | Photo Challenge | *(no command — standalone)* | — | **Moved out of the games menu + shared scheduler.** Now a standalone dashboard feature (**Photo Challenge** nav → Setup & Schedule): one dedicated channel, its own recurring schedule, a ping role, an enabled toggle. Auto-posts a photo-prompt card on schedule; members post their shots in the channel. Prompts come from the shared bank (`game_type='photo'`); a member's image post in the channel pays the economy `photo_post` faucet on the post itself (no reaction threshold). Config/schedule via `/api/photo-challenge` |
 | Truth or Dare | `/games play traditional single_choice:[bool]` | Everyone | SFW/NSFW Truth & Dare opt-in pools; `single_choice:true` makes each player pick exactly one category (radio-style) |
-| Spin the Compliment | `/games play compliment` | Everyone | Derangement-paired giver → receiver |
-| Marry, Fornicate, Kiss | `/games play mfk options:[csv]` | Everyone | `options:` overrides the three default labels |
+| Spin the Compliment | `/games play compliment start_in:[1-60]` | Everyone | Derangement-paired giver → receiver |
+| Marry, Fornicate, Kiss | `/games play mfk options:[csv] start_in:[1-60]` | Everyone | `options:` overrides the three default labels |
 | Would You Rather | `/games play wyr question:[a\|b] tags:[csv]` | Everyone | Multi-round; `question` seeds an opening `a \| b`, else pulled from the bank |
 | Never Have I Ever | `/games play nhie question:[str] lives:[0-10] tags:[csv]` | Everyone | Lives mode (default 3); `lives:0` disables elimination |
-| Most Likely To | `/games play mlt question:[str] tags:[csv]` | Everyone | 3-player minimum, 25-player max (the per-round vote select caps at 25 options); self-votes allowed |
+| Most Likely To | `/games play mlt question:[str] tags:[csv] start_in:[1-60]` | Everyone | 3-player minimum, 25-player max (the per-round vote select caps at 25 options); self-votes allowed |
 | Two Truths & a Lie | `/games play twotruths prompt:[str]` | Everyone | Statements shuffled at display time; resubmit allowed until your round is revealed; optional per-round vote timer (dashboard `vote_timer`, 0 = host advances) |
 | Hot Takes | `/games play hottakes` | Everyone | Anonymous submissions; 5-step temperature vote |
-| Story Builder | `/games play story max_sentences:[≤30] visibility:[blind\|full] starter:[str]` | Everyone | Default 10 sentences, default blind |
+| Story Builder | `/games play story max_sentences:[≤30] visibility:[blind\|full] starter:[str] start_in:[1-60]` | Everyone | Default 10 sentences, default blind |
 | Anonymous AMA | `/games play ama mode:[unfiltered\|screened] format:[hot_seat\|panel]` | Everyone | Two independent axes (see below); long-running; nightly 24h sweep cleans up |
 | Fantasies & Dealbreakers | `/games play fantasies` | Everyone | Anonymous submit + Same / Not-for-me vote, multi-round |
 | Name Your Price | `/games play price source:[host\|players\|ai\|bank\|both]` | Everyone | $ prices, reveal sorted; round/timer knobs live on the lobby buttons, not slash args |
-| Mt. Rushmore Draft | `/games play rushmore topic:[str] source:[host\|ai\|bank] mode:[snake\|blitz]` | Everyone | 4 rounds, no duplicates; snake (turn-by-turn) or blitz (everyone picks at once, first-come wins dupes); 60s post-draft backfill for skipped slots |
-| Clapback | `/games play clapback start_in:[1-60]` | Everyone | Head-to-head matchups; `start_in` shows a lobby countdown (host still clicks Start). Unanimous winners get a CLAPBACK bonus |
+| Mt. Rushmore Draft | `/games play rushmore topic:[str] source:[host\|ai\|bank] mode:[snake\|blitz] start_in:[1-60]` | Everyone | 4 rounds, no duplicates; snake (turn-by-turn) or blitz (everyone picks at once, first-come wins dupes); 60s post-draft backfill for skipped slots |
+| Clapback | `/games play clapback start_in:[1-60]` | Everyone | Head-to-head matchups; unanimous winners get a CLAPBACK bonus |
 | LegitLibs | `/games play legitlibs mode:[classic\|quiplash] tier:[1-4] template_id:[str] tag:[str]` | Everyone | Mad-Libs template fill; tiers 1 Flirty / 2 Spicy / 3 Filthy / 4 Unhinged, default tier 2 |
 
 That is **17 `/games play` commands** (Anonymous AMA's two axes are one command; Photo Challenge is standalone with no command). `ffa_banner` is a card-only variant of FFA, so counting distinct games it is 16 plus the banner variant.
@@ -134,6 +134,14 @@ AMA carries a per-question lifecycle (pending → answered / passed / rejected /
 ### LegitLibs
 
 `legitlibs` runs a Mad-Libs-style template fill in one of **two** modes. **Classic** fills blanks one at a time round-robin, with a volunteer rescue path when a player times out. **Quiplash** has every player fill in parallel and reveals one filled version per player at the end. Templates are **per-guild** (`legitlibs_templates.guild_id`, migration 124): a guild draws its own templates plus the shared **global pool** (`guild_id = 0`), and an admin can promote a template to the pool — or claim it back to the server — from the dashboard (per-row *Make global* / *Make server-only*; the starter pack ships global). Templates are picked by tier (1 Flirty → 4 Unhinged, default 2) with optional tag filtering, and the picker avoids the five most-recently-used templates per guild. Each channel has a `max_tier` cap (dashboard-managed); requesting a higher tier silently downgrades and warns the user ephemerally. Per-blank fill prompts and example text are resolved through a fallback chain (most specific → bare part-of-speech) so even an under-specified template still renders a useful modal.
+
+### Start countdown + host nudge
+
+Six games open a join lobby and wait for a human to press the start button — **Clapback, Spin the Compliment, Marry-Fornicate-Kiss, Most Likely To, Mt. Rushmore Draft, Story Builder** (`LOBBY_GAME_TYPES` in `games/constants.py`). Only these take `start_in:[1-60]`. Three more games — Two Truths & a Lie, Hot Takes and LegitLibs — also open a lobby and wait on a host press, but were left out of this round and take no `start_in` (see `docs/plans/game-start-countdown.md`); every remaining party game posts its first prompt the instant the command runs, so it has nothing to count down to. `start_in` stamps a `start_epoch` in the game payload and renders it as a live Discord relative timestamp in an **⏰ Starting** field on the lobby embed, refreshed on every join/leave edit. It is **advertising, not automation** — the game does not auto-start, and the host still presses the button.
+
+When the advertised moment arrives, `game_start_ping_service` posts a nudge in the game's channel mentioning the host by name and by button (`⏰ @host — time to start **Mt. Rushmore Draft**! Hit **Start Draft** when everyone's in.`), allow-listing only that one user. A **dashboard-scheduled** lobby game gets the same nudge the moment its lobby lands, aimed at whoever created the schedule — otherwise a scheduled lobby sits there with nobody aware a press is pending. Scheduled lobby-less games are never nudged; they self-run.
+
+The nudge is driven by a 15-second poll over open lobbies rather than a per-lobby timer, so it survives a restart: a bot that was down across the start time nudges late on its next sweep instead of never. A game started early, cancelled, or timed out leaves the `joining` state and drops out of the sweep, so a running game never gets a "time to start". Each lobby is nudged at most once (`start_ping_sent`), and a lobby whose channel has become unreachable is marked rather than retried every tick.
 
 ### Meta surfaces
 

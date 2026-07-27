@@ -25,6 +25,7 @@ from bot_modules.games.utils.game_manager import (
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     get_game_payload,
     modify_payload,
     end_game,
@@ -33,6 +34,7 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
     get_clapback_prompt,
@@ -258,6 +260,10 @@ class ClapbackJoinView(discord.ui.View):
         # fewest-byes-first rotation in create_matchups.
         payload["bye_history"] = []
         await update_game_payload(self.db, self.game_id, payload)
+        # The row must stop reading as an open lobby: the start-ping sweep polls
+        # state='joining', and clapback rounds outlive a 10-minute countdown, so
+        # leaving it would nudge "time to start" mid-game.
+        await update_game_state(self.db, self.game_id, "playing")
 
         try:
             await self.cog._run_game(self.game_id, channel, payload)
@@ -614,8 +620,9 @@ class ClapbackCog(commands.Cog):
             int(options.get("timer", game_opts.get("timer", 120))),
             int(options.get("vote_timer", game_opts.get("vote_timer", 40))),
         )
-        start_in_min = options.get("start_in")
-        start_epoch = int(time.time()) + int(start_in_min) * 60 if start_in_min else None
+        # Stays under `config` (the lobby view's timeout and the embed both read
+        # it there); the ping service's accessor knows to look for it.
+        start_epoch = resolve_start_epoch(options)
         # Normalize tags to a list — the dashboard/scheduler store a
         # comma-separated string, an explicit options value may be a list.
         tags_cfg = options.get("tags", game_opts.get("tags", ""))

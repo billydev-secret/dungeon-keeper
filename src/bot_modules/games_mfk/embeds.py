@@ -36,6 +36,7 @@ def build_lobby_embed(
     participants: list[str],
     labels: list[str] | None = None,
     color: "discord.Color | None" = None,
+    start_at: int | None = None,
 ) -> discord.Embed:
     """Build the lobby embed shown while players are joining.
 
@@ -45,6 +46,10 @@ def build_lobby_embed(
 
     ``labels`` overrides the default categories — when supplied, both
     the title and the "Categories" field swap to the host's choices.
+
+    ``start_at`` is an optional UTC epoch shown as a live Discord relative
+    timestamp — the host's advertised start time. The host still presses the
+    button; the countdown is advertising, not automation.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -60,6 +65,8 @@ def build_lobby_embed(
         value=" · ".join(f"**{lbl}**" for lbl in labels),
         inline=True,
     )
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{start_at}:R>", inline=True)
     pool_str = ", ".join(participants) if participants else "—"
     embed.add_field(
         name=f"Pool ({len(participants)})", value=pool_str, inline=False

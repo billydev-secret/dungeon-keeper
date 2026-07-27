@@ -25,12 +25,21 @@ import discord
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 
 
-def build_lobby_embed(host_name: str, participants: list[str], color: "discord.Color | None" = None) -> discord.Embed:
+def build_lobby_embed(
+    host_name: str,
+    participants: list[str],
+    color: "discord.Color | None" = None,
+    start_at: int | None = None,
+) -> discord.Embed:
     """Build the lobby embed shown while players are joining.
 
     ``participants`` is a list of pre-resolved display names (the cog
     runs the resolution against the guild before calling). Empty list
     renders as ``"—"`` so the field always has a value.
+
+    ``start_at`` is an optional UTC epoch shown as a live Discord relative
+    timestamp — the host's advertised start time. The host still presses the
+    button; the countdown is advertising, not automation.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -39,6 +48,8 @@ def build_lobby_embed(host_name: str, participants: list[str], color: "discord.C
         color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{start_at}:R>", inline=True)
     pool_str = ", ".join(participants) if participants else "—"
     embed.add_field(
         name=f"Pool ({len(participants)})", value=pool_str, inline=False

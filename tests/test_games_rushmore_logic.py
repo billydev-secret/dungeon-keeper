@@ -888,3 +888,15 @@ def test_winner_embed_color_override_still_honored():
         all_results=[("Alice", 3)], color=_ACCENT,
     )
     assert embed.color == _ACCENT
+
+def test_lobby_embed_renders_the_start_countdown():
+    # start_in advertises a start time as a live Discord relative timestamp;
+    # the host still presses the button.
+    embed = build_join_embed("Alice", [], topic=None, start_at=1_700_000_000)
+    field = next(f for f in embed.fields if f.name == "⏰ Starting")
+    assert field.value == "<t:1700000000:R>"
+
+
+def test_lobby_embed_omits_the_countdown_when_none_was_set():
+    embed = build_join_embed("Alice", [], topic=None)
+    assert all(f.name != "⏰ Starting" for f in embed.fields)

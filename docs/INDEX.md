@@ -119,6 +119,7 @@ feature and also appear in the Design table above.
 | [plans/economy-engagement-review.md](plans/economy-engagement-review.md) | Sources/sinks audit on 10 days of live data + engagement research: 9.3% absorption, 13 lifetime spenders, cold multiplayer. Cohort test shows tenure doesn't explain the spend gap; setup-quest reach does, partly | Proposal — nothing built; re-measure at 4/8 weeks |
 | [plans/external-game-economy.md](plans/external-game-economy.md) | External-bot payouts (Gamebot CAH + Cat Bot) via multi-watch collector | Stages 1–3 shipped |
 | [plans/frontend-consolidation.md](plans/frontend-consolidation.md) | Dashboard JS: one fetch core, one `esc`, shared tab strips/states | Implemented 2026-07-02 |
+| [plans/game-start-countdown.md](plans/game-start-countdown.md) | `start_in` lobby countdown on the six lobby games + "time to start" host nudge (manual and scheduled) | Built 2026-07-27 |
 | [plans/game-config-knobs.md](plans/game-config-knobs.md) | Hardcoded game cooldowns/caps → per-guild dashboard settings | Done |
 | [plans/game-ux-round-2026-07-20.md](plans/game-ux-round-2026-07-20.md) | TTL join bug, Rushmore UX, winner payouts (from live-transcript review) | Shipped 2026-07-20 (2a0d4c1) |
 | [plans/live-leaderboard.md](plans/live-leaderboard.md) | Live economy leaderboard: pulse, pace, anonymous feed | Built 2026-07-18 |

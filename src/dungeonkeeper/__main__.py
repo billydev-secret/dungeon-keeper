@@ -19,6 +19,7 @@ from bot_modules.core.db_utils import get_tz_offset_hours, migrate_grant_roles, 
 from bot_modules.services.announcements_service import announcements_loop
 from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
+from bot_modules.services.game_start_ping_service import game_start_ping_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.intake_loop import intake_loop
@@ -369,6 +370,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: bulk_cleanup_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
+
+    bot.startup_task_factories.append(lambda: game_start_ping_loop(bot))
 
     bot.startup_task_factories.append(lambda: todo_board_loop(bot))
 
