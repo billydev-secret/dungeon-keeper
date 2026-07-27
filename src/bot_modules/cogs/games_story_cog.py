@@ -20,6 +20,7 @@ from bot_modules.games.utils.game_manager import (
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     get_game_payload,
     modify_payload,
     end_game,
@@ -225,6 +226,9 @@ class StoryJoinView(discord.ui.View):
                 )
 
         payload["host_id"] = interaction.user.id
+        # The row must stop reading as an open lobby — the start-ping sweep
+        # polls state='joining' and a story outlives its countdown.
+        await update_game_state(self.db, self.game_id, "playing")
         await self.cog._run_story(interaction, self.game_id, payload, interaction.channel)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="story_htp")

@@ -23,6 +23,7 @@ from bot_modules.games.utils.game_manager import (
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     modify_payload,
     get_game_payload,
     end_game,
@@ -171,6 +172,10 @@ class MLTJoinView(discord.ui.View):
                     f"👑 **Most Likely To is starting!** {' '.join(mentions)} — get ready!",
                     delete_after=15,
                 )
+
+        # The row must stop reading as an open lobby — the start-ping sweep
+        # polls state='joining' and a game outlives its countdown.
+        await update_game_state(self.db, self.game_id, "playing")
 
         await self.cog._run_round(
             interaction=interaction,

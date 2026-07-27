@@ -25,6 +25,7 @@ from bot_modules.games.utils.game_manager import (
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     get_game_payload,
     modify_payload,
     end_game,
@@ -259,6 +260,10 @@ class ClapbackJoinView(discord.ui.View):
         # fewest-byes-first rotation in create_matchups.
         payload["bye_history"] = []
         await update_game_payload(self.db, self.game_id, payload)
+        # The row must stop reading as an open lobby: the start-ping sweep polls
+        # state='joining', and clapback rounds outlive a 10-minute countdown, so
+        # leaving it would nudge "time to start" mid-game.
+        await update_game_state(self.db, self.game_id, "playing")
 
         try:
             await self.cog._run_game(self.game_id, channel, payload)

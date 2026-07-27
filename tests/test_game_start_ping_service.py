@@ -6,6 +6,7 @@ channel-unreachable and send-failure paths, over a real schema + GamesDb.
 """
 
 import asyncio
+import json
 
 
 import discord
@@ -293,6 +294,10 @@ async def test_process_lobby_reads_clapback_nested_config(sync_db_path):
 async def test_loop_skips_started_games_and_non_lobby_types(sync_db_path, monkeypatch):
     # The sweep's WHERE clause is the guard that keeps a running game — or a
     # game with no start button at all — from getting a "time to start" nudge.
+    # 'playing' is only a real value because every lobby game's start handler
+    # now writes it; clapback/mlt/story used to sit in 'joining' for their whole
+    # run, so this guard passed here while doing nothing in prod. The handlers
+    # are pinned in tests/cogs/test_games_lobby_start_state.py.
     db = GamesDb(sync_db_path)
     chan = _Chan()
     bot = _Bot(db, {CHAN: chan})
@@ -334,3 +339,35 @@ async def test_loop_survives_a_malformed_payload(sync_db_path, monkeypatch):
 
 async def _noop_sleep(_seconds):
     return None
+
+
+async def test_mark_start_ping_sent_preserves_concurrent_payload_writes(sync_db_path):
+    # Targeted json_set, not read-modify-write: the lobby's own writers (mlt
+    # join/leave, story, clapback) mutate the payload without taking
+    # payload_lock, so a read-modify-write here could drop one of them.
+    db = GamesDb(sync_db_path)
+    gid = await _make_lobby(db, payload={"start_epoch": NOW - 5, "players": [1]})
+
+    # Simulate a join landing between a would-be read and write.
+    payload = await get_game_payload(db, gid)
+    payload["players"] = [1, 2, 3]
+    await db.execute(
+        "UPDATE games_active_games SET payload = ? WHERE game_id = ?",
+        (json.dumps(payload), gid),
+    )
+    await svc.mark_start_ping_sent(db, gid)
+
+    after = await get_game_payload(db, gid)
+    assert after["start_ping_sent"] is True
+    assert after["players"] == [1, 2, 3]      # the join survived
+    assert after["start_epoch"] == NOW - 5    # and so did the countdown
+
+
+async def test_mark_start_ping_sent_survives_a_corrupt_payload(sync_db_path):
+    db = GamesDb(sync_db_path)
+    gid = await _make_lobby(db, payload={})
+    await db.execute(
+        "UPDATE games_active_games SET payload = ? WHERE game_id = ?",
+        ("{not json", gid),
+    )
+    await svc.mark_start_ping_sent(db, gid)  # must not raise

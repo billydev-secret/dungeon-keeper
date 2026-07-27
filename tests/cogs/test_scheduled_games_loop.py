@@ -370,3 +370,34 @@ async def test_failed_launch_is_not_nudged(sync_db_path):
     assert not any("<@2001>" in (s or "") for s in bot._channels[CHAN].sends)
     after = await _row(db, row["id"])
     assert after["last_status"] == "error"
+
+
+async def test_scheduled_lobby_nudge_is_recorded_so_the_sweep_wont_repeat_it(sync_db_path):
+    # A schedule whose stored options carry start_in also stamps a start_epoch
+    # on the launched game, which the poll loop would nudge for a second time.
+    # POST /api/scheduled-games takes a free-form options dict, so this is
+    # reachable even though the dashboard UI exposes no start_in.
+    from bot_modules.games.utils.game_manager import create_game, get_game_payload
+    from bot_modules.services import game_start_ping_service as ping_svc
+
+    db = GamesDb(sync_db_path)
+    holder = {}
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        gid = await create_game(
+            db, CHAN, host_id, "clapback", state="joining",
+            payload={"start_epoch": ping_svc.resolve_start_epoch(options, now=NOW)},
+        )
+        holder["gid"] = gid
+        return gid
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"clapback": fake_launch})
+    row = await _insert(
+        db, game_type="clapback", created_by=2001, options='{"start_in": 10}'
+    )
+
+    await svc._process_due(bot, db, row, NOW)
+
+    payload = await get_game_payload(db, holder["gid"])
+    assert payload["start_ping_sent"] is True
+    assert ping_svc.start_ping_due(payload, NOW + 999) is False

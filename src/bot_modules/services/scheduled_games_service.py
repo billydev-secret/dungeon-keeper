@@ -30,7 +30,10 @@ from bot_modules.games.utils.game_manager import (
     get_active_game,
     resolve_name,
 )
-from bot_modules.services.game_start_ping_service import send_start_ping
+from bot_modules.services.game_start_ping_service import (
+    mark_start_ping_sent,
+    send_start_ping,
+)
 
 log = logging.getLogger(__name__)
 
@@ -356,6 +359,10 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         # scheduled it, right after the lobby so the nudge sits next to the
         # button. Lobby-less games self-run, so they get nothing.
         if game_type in LOBBY_GAME_TYPES:
+            # Record it against the launched game before sending: a schedule
+            # whose stored options carry `start_in` also stamps a start_epoch,
+            # which the poll loop would otherwise nudge for a second time.
+            await mark_start_ping_sent(games_db, gid)
             await send_start_ping(channel, game_type, row["created_by"])
     else:
         await games_db.execute(

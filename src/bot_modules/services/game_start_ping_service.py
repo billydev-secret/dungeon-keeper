@@ -42,7 +42,6 @@ import time
 import discord
 
 from bot_modules.games.constants import GAME_NAMES, LOBBY_GAME_TYPES, LOBBY_START_BUTTON
-from bot_modules.games.utils.game_manager import modify_payload
 
 log = logging.getLogger(__name__)
 
@@ -170,12 +169,26 @@ async def send_start_ping(channel, game_type: str, host_id: int) -> bool:
         return False
 
 
-async def _mark_sent(db, game_id: str) -> None:
-    """Flag the nudge as delivered so the next tick skips this lobby."""
-    def _set(payload):
-        payload["start_ping_sent"] = True
+async def mark_start_ping_sent(db, game_id: str) -> None:
+    """Flag the nudge as delivered so the next tick skips this lobby.
 
-    await modify_payload(db, game_id, _set)
+    A targeted ``json_set``, deliberately **not** a read-modify-write. Several
+    lobby writers (mlt join/leave, story, clapback) mutate the payload without
+    taking ``payload_lock``, so a read-modify-write here could interleave with a
+    join and either lose that join or lose this flag — the latter costing a
+    duplicate nudge 15s later. One UPDATE touching one key can't lose either.
+    """
+    try:
+        await db.execute(
+            "UPDATE games_active_games "
+            "SET payload = json_set(payload, '$.start_ping_sent', json('true')) "
+            "WHERE game_id = ?",
+            (game_id,),
+        )
+    except Exception:
+        # Malformed payload JSON — json_set refuses it. The nudge is already
+        # sent (or unsendable); log rather than let the sweep retry forever.
+        log.warning("start ping: could not flag game %s as nudged", game_id, exc_info=True)
 
 
 async def _resolve_channel(bot, channel_id: int):
@@ -199,12 +212,12 @@ async def _process_lobby(bot, db, row, now: float) -> None:
         # Unreachable channel is terminal for this lobby — mark it sent so we
         # don't re-attempt every tick for the life of the lobby.
         log.warning("start ping: channel %s unreachable for game %s", row["channel_id"], game_id)
-        await _mark_sent(db, game_id)
+        await mark_start_ping_sent(db, game_id)
         return
 
     # Claim before sending: a send that succeeds but whose flag write is lost
     # would double-ping on the next tick, which is the louder failure.
-    await _mark_sent(db, game_id)
+    await mark_start_ping_sent(db, game_id)
     await send_start_ping(channel, row["game_type"], int(row["host_id"]))
 
 

@@ -147,3 +147,16 @@ changes.
   15s for the life of the lobby.
 - **Clapback's lobby timeout** already stretches past `start_epoch`; the other
   five use persistent (`timeout=None`) views, so there's nothing to extend.
+
+## Follow-up: three more lobby games
+
+A post-ship review found the "six lobby games" premise incomplete. **Two Truths
+& a Lie** (`Start Guessing`), **Hot Takes** (`Start Voting`) and **LegitLibs**
+(`Start`) also open and wait on a host press, so they'd benefit from both the
+countdown and the nudge — a *scheduled* TTL or Hot Takes lobby still sits with
+nobody told a press is pending, which is exactly what the scheduler nudge was
+added to fix. They were left out because the scope Ben approved was framed
+around a six-game list. Adding them is mechanical: a `LOBBY_GAME_TYPES` entry, a
+`LOBBY_START_BUTTON` label, `start_in` on the cog, `start_at` on the lobby
+embed, and — for TTL and Hot Takes, which never leave `state='joining'` — the
+same start-handler state transition clapback/mlt/story needed. Ben's call.
