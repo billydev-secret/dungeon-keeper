@@ -91,13 +91,6 @@ class GuessGuess:
 
 
 @dataclass
-class GuessOptin:
-    user_id: int
-    guild_id: int
-    opted_in_at: float
-
-
-@dataclass
 class PipelineResult:
     candidates: list[Detection]
     crops: list[bytes] = field(default_factory=list)

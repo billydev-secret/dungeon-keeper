@@ -9,26 +9,21 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.guess_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
-    delete_optin,
     get_active_rounds_for_guild,
     get_all_active_round_ids,
-    get_all_optins_for_guild,
     get_guesses_for_round,
     get_last_guess_by_user_for_round,
-    get_optin,
     get_reusable_rounds,
     get_round,
     get_guess_config,
     insert_guess,
     insert_round,
-    is_opted_in,
     mark_round_solved,
     set_round_answer_optout,
     set_round_reroll_count,
     set_guess_config_value,
     soft_delete_round,
     update_round_message,
-    upsert_optin,
 )
 
 GUILD = 9001
@@ -161,39 +156,18 @@ def test_get_last_guess_by_user(sync_db_path: Path):
     assert last.id == g2
 
 
-def test_upsert_and_get_optin(sync_db_path: Path):
+def test_guess_optins_table_is_gone(sync_db_path: Path):
+    """The dead guess_optins table is dropped by migration 136.
+
+    Guess eligibility comes from Discord role membership, never from a table.
+    This guards against the table (and its unused CRUD layer) being
+    reintroduced as a second, silently-unenforced source of consent truth.
+    """
     with open_db(sync_db_path) as conn:
-        upsert_optin(conn, USER_A, GUILD)
-        optin = get_optin(conn, USER_A, GUILD)
-    assert optin is not None
-    assert optin.user_id == USER_A
-
-
-def test_is_opted_in_true_and_false(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        upsert_optin(conn, USER_A, GUILD)
-        assert is_opted_in(conn, USER_A, GUILD) is True
-        assert is_opted_in(conn, USER_B, GUILD) is False
-
-
-def test_delete_optin(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        upsert_optin(conn, USER_A, GUILD)
-        assert delete_optin(conn, USER_A, GUILD) is True
-        assert is_opted_in(conn, USER_A, GUILD) is False
-
-
-def test_delete_optin_nonexistent_returns_false(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        assert delete_optin(conn, 9999, GUILD) is False
-
-
-def test_get_all_optins_for_guild(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        upsert_optin(conn, USER_A, GUILD)
-        upsert_optin(conn, USER_B, GUILD)
-        optins = get_all_optins_for_guild(conn, GUILD)
-    assert {o.user_id for o in optins} == {USER_A, USER_B}
+        names = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()}
+    assert "guess_optins" not in names
 
 
 def test_update_round_message(sync_db_path: Path):

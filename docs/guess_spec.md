@@ -120,7 +120,9 @@ On a **correct first solve**, the bot edits the round's message: the original im
 
 ## Stored data
 
-Rounds (one row per submission with crop / answer / solver / counts), guesses (one row per guess attempt), and an audit log (submit / delete / solve / guess-cap events) per guild. There's also a `guess_optins` table with full CRUD support in `guess_repo.py` (insert/delete/get/list-by-guild, keyed on user + guild with an `opted_in_at` timestamp) — but it's currently **dead**: nothing in the cog or web server calls it. `/guess optin` only grants the Discord role; eligibility is derived live from role membership (`guess_role.members`), not from this table.
+Rounds (one row per submission with crop / answer / solver / counts), guesses (one row per guess attempt), and an audit log (submit / delete / solve / guess-cap events) per guild.
+
+**There is no opt-in table.** Eligibility — who may submit, and who is pickable as an answer — is derived live from Discord role membership (`guess_role.members`), and that is the single source of truth. A `guess_optins` table (`veil_optins` before migration 020) used to exist with a full CRUD layer in `guess_repo.py`, but nothing in the cog or web server ever called it; it was empty in production and was dropped in migration 136 along with its dead functions. Deriving eligibility from the role is what makes a mod removing the role take effect immediately, and it's why the `answer_optout` round flag (see "Consent and opt-in") is the only persisted consent state.
 
 Filesystem cache: original submissions live in a per-round file on disk **only until first correct solve**, at which point the file is deleted and the path cleared. Crops live on disk for the round's lifetime and are deleted on round deletion. The Discord CDN URL of the posted crop is the canonical reference if the local cache is missing.
 

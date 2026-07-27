@@ -10,7 +10,6 @@ from bot_modules.services.guess_models import (
     GuessAuditEvent,
     GuessConfig,
     GuessGuess,
-    GuessOptin,
     GuessRound,
 )
 
@@ -282,48 +281,6 @@ def get_last_guess_by_user_for_round(
         (round_id, guesser_id),
     ).fetchone()
     return _row_to_guess(row) if row else None
-
-
-def _row_to_optin(row: sqlite3.Row) -> GuessOptin:
-    return GuessOptin(user_id=row["user_id"], guild_id=row["guild_id"], opted_in_at=row["opted_in_at"])
-
-
-def upsert_optin(conn: sqlite3.Connection, user_id: int, guild_id: int) -> None:
-    conn.execute(
-        """
-        INSERT INTO guess_optins (user_id, guild_id, opted_in_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id, guild_id) DO UPDATE SET opted_in_at = excluded.opted_in_at
-        """,
-        (user_id, guild_id, time.time()),
-    )
-
-
-def delete_optin(conn: sqlite3.Connection, user_id: int, guild_id: int) -> bool:
-    cur = conn.execute(
-        "DELETE FROM guess_optins WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)
-    )
-    return (cur.rowcount or 0) > 0
-
-
-def get_optin(conn: sqlite3.Connection, user_id: int, guild_id: int) -> GuessOptin | None:
-    row = conn.execute(
-        "SELECT * FROM guess_optins WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)
-    ).fetchone()
-    return _row_to_optin(row) if row else None
-
-
-def is_opted_in(conn: sqlite3.Connection, user_id: int, guild_id: int) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM guess_optins WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)
-    ).fetchone() is not None
-
-
-def get_all_optins_for_guild(conn: sqlite3.Connection, guild_id: int) -> list[GuessOptin]:
-    rows = conn.execute(
-        "SELECT * FROM guess_optins WHERE guild_id = ? ORDER BY opted_in_at ASC", (guild_id,)
-    ).fetchall()
-    return [_row_to_optin(r) for r in rows]
 
 
 def count_user_guesses_for_round(
