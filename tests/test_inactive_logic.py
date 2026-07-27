@@ -7,7 +7,13 @@ exclusions, and the safety cap.
 
 from __future__ import annotations
 
+import pytest
+
 from bot_modules.inactive.logic import (
+    PreviewMember,
+    PreviewRole,
+    SweepCandidate,
+    build_sweep_preview,
     select_sweep_candidates,
     stale_inactive_channel_id,
 )
@@ -83,6 +89,149 @@ def test_idle_seconds_is_computed():
 
 def test_empty_input():
     assert _sweep({}) == ([], 0)
+
+
+# ── Dashboard dry-run preview ────────────────────────────────────────
+#
+# The preview tells an admin what enabling the sweep would cost. Getting the
+# role list wrong here is worse than showing nothing: it would promise roles
+# that survive, or hide ones that don't.
+
+DEFAULT_ROLE_ID = 0  # @everyone
+INACTIVE_ROLE_ID = 555
+BOT_TOP_POSITION = 10
+
+
+def _candidate(user_id: int, *, idle_days: float = 40.0) -> SweepCandidate:
+    return SweepCandidate(
+        user_id=user_id,
+        last_seen=NOW - idle_days * DAY,
+        idle_seconds=idle_days * DAY,
+    )
+
+
+def _preview_member(user_id: int, roles, *, top_position: int = 1) -> PreviewMember:
+    return PreviewMember(
+        user_id=user_id,
+        display_name=f"u{user_id}",
+        top_role_position=top_position,
+        roles=[PreviewRole(*r) for r in roles],
+    )
+
+
+def _preview(members, *, candidates=None, tracked=None, bot_position=BOT_TOP_POSITION):
+    by_id = {m.user_id: m for m in members}
+    return build_sweep_preview(
+        candidates=candidates or [_candidate(uid) for uid in by_id],
+        members=by_id,
+        default_role_id=DEFAULT_ROLE_ID,
+        inactive_role_id=INACTIVE_ROLE_ID,
+        bot_top_role_position=bot_position,
+        tracked_user_ids=tracked if tracked is not None else set(by_id),
+    )
+
+
+@pytest.mark.parametrize(
+    ("roles", "expected_removed", "expected_kept"),
+    [
+        pytest.param(
+            [(11, "Member", False), (12, "Artist", False)],
+            ["Member", "Artist"],
+            [],
+            id="plain-roles-all-removed",
+        ),
+        pytest.param(
+            [(11, "Member", False), (12, "Server Booster", True)],
+            ["Member"],
+            ["Server Booster"],
+            id="managed-role-kept",
+        ),
+        pytest.param(
+            [(DEFAULT_ROLE_ID, "@everyone", False), (11, "Member", False)],
+            ["Member"],
+            [],
+            id="everyone-never-listed",
+        ),
+        pytest.param(
+            [(INACTIVE_ROLE_ID, "Inactive", False), (11, "Member", False)],
+            ["Member"],
+            [],
+            id="inactive-role-never-listed",
+        ),
+        pytest.param(
+            [(DEFAULT_ROLE_ID, "@everyone", False), (12, "Twitch Sub", True)],
+            [],
+            ["Twitch Sub"],
+            id="only-managed-roles-loses-nothing",
+        ),
+    ],
+)
+def test_preview_role_lists_mirror_the_strip(roles, expected_removed, expected_kept):
+    sweepable, blocked = _preview([_preview_member(1, roles)])
+    assert blocked == []
+    assert [r.removed_role_names for r in sweepable] == [expected_removed]
+    assert [r.kept_managed_role_names for r in sweepable] == [expected_kept]
+
+
+def test_member_with_only_managed_roles_is_still_swept():
+    # They lose no roles but still get moved and given @Inactive, so dropping
+    # them from the listing would under-report the sweep.
+    sweepable, _ = _preview([_preview_member(1, [(12, "Server Booster", True)])])
+    assert [r.user_id for r in sweepable] == [1]
+    assert sweepable[0].removed_role_ids == []
+
+
+def test_members_above_the_bot_are_reported_as_blocked():
+    """The sweep would select these and then fail silently on Forbidden."""
+    sweepable, blocked = _preview(
+        [
+            _preview_member(1, [(11, "Member", False)], top_position=1),
+            _preview_member(2, [(12, "Staff", False)], top_position=99),
+        ]
+    )
+    assert [r.user_id for r in sweepable] == [1]
+    assert [r.user_id for r in blocked] == [2]
+
+
+def test_member_level_with_the_bot_is_blocked():
+    # Discord refuses role edits on an equal top role, not just a higher one.
+    sweepable, blocked = _preview(
+        [_preview_member(1, [(11, "Member", False)], top_position=BOT_TOP_POSITION)]
+    )
+    assert sweepable == []
+    assert [r.user_id for r in blocked] == [1]
+
+
+def test_untracked_members_are_flagged():
+    """No message history means they were aged from their join date alone."""
+    sweepable, _ = _preview(
+        [
+            _preview_member(1, [(11, "Member", False)]),
+            _preview_member(2, [(11, "Member", False)]),
+        ],
+        tracked={1},
+    )
+    assert {r.user_id: r.has_tracked_messages for r in sweepable} == {1: True, 2: False}
+
+
+def test_preview_preserves_most_idle_first_order():
+    members = [_preview_member(uid, [(11, "Member", False)]) for uid in (1, 2, 3)]
+    candidates = [
+        _candidate(1, idle_days=40),
+        _candidate(2, idle_days=90),
+        _candidate(3, idle_days=50),
+    ]
+    # Ordering is the selector's job; the preview must not resort it.
+    sweepable, _ = _preview(members, candidates=[candidates[1], candidates[2], candidates[0]])
+    assert [r.user_id for r in sweepable] == [2, 3, 1]
+    assert sweepable[0].idle_seconds == 90 * DAY
+
+
+def test_candidate_who_left_the_guild_is_dropped():
+    # Selection and render are separate round-trips; a member can vanish between.
+    sweepable, blocked = _preview([], candidates=[_candidate(404)])
+    assert sweepable == []
+    assert blocked == []
 
 
 # ── Stale inactive-channel decision (/inactive panel re-point) ───────

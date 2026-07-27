@@ -24,9 +24,13 @@ from bot_modules.inactive.apply import (
 )
 from bot_modules.inactive.store import (
     active_inactive_user_ids,
+    add_sweep_exemption,
     create_inactive,
     get_active_inactive,
+    list_sweep_exemptions,
     reactivate_inactive,
+    remove_sweep_exemption,
+    sweep_exempt_user_ids,
 )
 from tests.db_template import migrated_db
 
@@ -144,6 +148,49 @@ def test_precheck_rejects_already_inactive(tmp_path):
         )
     result = check_inactive_preconditions(ctx, guild, _member(5), _member(2))
     assert result is not None and result.error_kind == "already_inactive"
+
+
+def test_precheck_rejects_exempt_target(tmp_path):
+    """An exemption is absolute — it has to stop a targeted /inactive mark too.
+
+    The sweeps skip exempt members via the exclusion set, but that path never
+    runs for a moderator naming one member, so the guard lives here as well.
+    """
+    ctx = _make_ctx(tmp_path / "e2.db")
+    guild = _guild()
+    with ctx.open_db() as conn:
+        add_sweep_exemption(conn, guild_id=guild.id, user_id=5, added_by=2)
+    result = check_inactive_preconditions(ctx, guild, _member(5), _member(2))
+    assert result is not None and result.error_kind == "exempt_target"
+
+
+def test_precheck_allows_target_exempt_in_another_guild(tmp_path):
+    """Exemptions are per-guild — one guild's must not shield another's member."""
+    ctx = _make_ctx(tmp_path / "e3.db")
+    guild = _guild()
+    with ctx.open_db() as conn:
+        add_sweep_exemption(conn, guild_id=guild.id + 1, user_id=5, added_by=2)
+    assert check_inactive_preconditions(ctx, guild, _member(5), _member(2)) is None
+
+
+def test_lifting_exemption_restores_markability(tmp_path):
+    ctx = _make_ctx(tmp_path / "e4.db")
+    guild = _guild()
+    with ctx.open_db() as conn:
+        add_sweep_exemption(conn, guild_id=guild.id, user_id=5, added_by=2)
+        assert remove_sweep_exemption(conn, guild.id, 5) is True
+        # Lifting a non-exemption reports it rather than pretending it worked.
+        assert remove_sweep_exemption(conn, guild.id, 5) is False
+    assert check_inactive_preconditions(ctx, guild, _member(5), _member(2)) is None
+
+
+def test_exemption_add_is_idempotent(tmp_path):
+    ctx = _make_ctx(tmp_path / "e5.db")
+    with ctx.open_db() as conn:
+        add_sweep_exemption(conn, guild_id=100, user_id=5, added_by=2)
+        add_sweep_exemption(conn, guild_id=100, user_id=5, added_by=3)
+        assert sweep_exempt_user_ids(conn, 100) == {5}
+        assert [r["added_by"] for r in list_sweep_exemptions(conn, 100)] == [3]
 
 
 def test_precheck_ok_returns_none(tmp_path):

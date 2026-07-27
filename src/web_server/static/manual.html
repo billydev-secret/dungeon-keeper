@@ -1762,7 +1762,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/inactive mark user:@member [reason]</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod — Moderate Members</span></span>
-      <span class="cmd-desc">Snapshot and strip the member's roles, apply <code>@Inactive</code>, and move them to the inactive channel. Never a bot, never yourself, never an admin — only admins may move a moderator.</span>
+      <span class="cmd-desc">Snapshot and strip the member's roles, apply <code>@Inactive</code>, and move them to the inactive channel. Never a bot, never yourself, never an admin — only admins may move a moderator. Members exempted on the dashboard are refused too; lift the exemption there first.</span>
     </div>
 
     <div class="cmd-block">
@@ -1782,6 +1782,13 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/">web dashboard</a></strong>
         <p>The Inactive Sweep panel sets the idle-day threshold, the per-run cap, and whether the sweep also runs automatically every 6 hours. The retired <code>/inactive config</code> command is no longer needed.</p>
+        <p><strong>Who Would Be Swept Right Now</strong> — press <em>Check Now</em> for a dry run against the settings on the page (including a threshold you have typed but not saved). It lists every eligible member, most idle first, with the roles each would lose; click the role count to see them by name. Nothing is moved and no roles change. Because it selects through exactly the same code the real sweep uses, the listing is what a sweep would actually do — with three things called out that the sweep itself never says out loud:</p>
+        <ul>
+          <li>the per-run cap, so you can see how many of the listed members one run would actually reach and how many wait for the next;</li>
+          <li><strong>Would Fail — Bot Outranked</strong>, members whose highest role sits at or above the bot's. A sweep picks them up and then silently fails to strip them; move the bot's role above theirs to fix it;</li>
+          <li><em>no tracked messages</em>, shown in place of a last-seen date for members with no message history at all. They are aged from their join date alone, so a long-standing member who was active before the bot started tracking looks identical to one who never spoke.</li>
+        </ul>
+        <p><strong>Never Sweep These Members</strong> — exempt individual members from inactivity holds. An exemption is absolute: both sweeps skip them, and <code>/inactive mark</code> refuses them, so it can't be undone by accident from Discord. Bots, the owner, admins and moderators are already protected and don't need listing. You can exempt someone straight from a preview row with <em>Never Sweep</em>.</p>
       </div>
     </div>
 
@@ -1961,7 +1968,7 @@
         <tr><td><strong><a href="/#/config-moderation">Moderation</a></strong></td><td>Jail category, ticket category, policy channels, warning thresholds</td></tr>
         <tr><td><strong><a href="/#/config-policy-tickets">Policy Ticket Settings</a></strong></td><td>Mod-team voting channel and rules engine</td></tr>
         <tr><td><strong><a href="/#/config-prune">Auto-Remove Role (Inactive)</a></strong></td><td>Inactivity pruning threshold, exemptions, and next-run preview</td></tr>
-        <tr><td><strong><a href="/#/config-inactive">Inactive Sweep</a></strong></td><td>Idle-day threshold, per-run cap, and automatic-sweep toggle for the shared <a href="#inactive">Inactive Members</a> channel</td></tr>
+        <tr><td><strong><a href="/#/config-inactive">Inactive Sweep</a></strong></td><td>Idle-day threshold, per-run cap, automatic-sweep toggle, per-member exemptions, and a dry-run listing of who would be swept right now, for the shared <a href="#inactive">Inactive Members</a> channel</td></tr>
         <tr><td><strong><a href="/#/config-rules-watch">Rules Watch</a></strong></td><td>Enable/disable passive monitoring and set the immediate-alert channel</td></tr>
         <tr><td><strong><a href="/#/config-spoiler">Spoiler Guard</a></strong></td><td>Channels requiring image spoiler tags, roles exempt from spoiler enforcement</td></tr>
         <tr><td><strong><a href="/#/config-auto-role">Auto-Role</a></strong></td><td>Roles applied automatically on join</td></tr>

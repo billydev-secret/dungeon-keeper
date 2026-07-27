@@ -560,13 +560,25 @@ def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
 # ── Inactive-sweep config helper ────────────────────────────────────────
 
 
-def _inactive_section(conn, guild_id: int) -> dict:
+def _inactive_section(conn, guild_id: int, guild=None) -> dict:
+    from bot_modules.inactive.store import list_sweep_exemptions
+
+    exemptions = [
+        {
+            "id": str(row["user_id"]),
+            "name": _lookup_member_name(row["user_id"], guild, conn, guild_id),
+            "added_at": row["added_at"],
+        }
+        for row in list_sweep_exemptions(conn, guild_id)
+    ]
     return {
         "threshold_days": _int_val(
             conn, "inactive_threshold_days", 30, guild_id=guild_id
         ),
         "auto_sweep": _bool_val(conn, "inactive_auto_sweep", guild_id=guild_id),
         "sweep_cap": _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
+        "channel_id": str(_int_val(conn, "inactive_channel_id", guild_id=guild_id)),
+        "exemptions": exemptions,
     }
 
 
@@ -1156,7 +1168,7 @@ async def get_config(
                 "casino": _casino_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
                 "rules_watch": _rules_watch_section(conn, guild_id, ctx.db_path),
-                "inactive": _inactive_section(conn, guild_id),
+                "inactive": _inactive_section(conn, guild_id, prune_guild),
                 "games_pressure": _duel_game_section(conn, guild_id, "pressure"),
                 "games_quickdraw": _duel_game_section(conn, guild_id, "quickdraw"),
                 "games_hot_potato": _duel_game_section(conn, guild_id, "hot_potato"),
@@ -2079,6 +2091,144 @@ async def update_inactive(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.put("/config/inactive/exemptions/{user_id}")
+async def add_inactive_exemption(
+    user_id: str,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Exempt a member from inactivity holds — both sweeps and `/inactive mark`."""
+    from bot_modules.inactive.store import add_sweep_exemption
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    added_by = user.user_id
+
+    def _q():
+        with ctx.open_db() as conn:
+            add_sweep_exemption(
+                conn, guild_id=guild_id, user_id=int(user_id), added_by=added_by
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/inactive/exemptions/{user_id}")
+async def delete_inactive_exemption(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    from bot_modules.inactive.store import remove_sweep_exemption
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            remove_sweep_exemption(conn, guild_id, int(user_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class InactivePreviewRequest(BaseModel):
+    threshold_days: int | None = None
+
+
+@router.post("/config/inactive/preview")
+async def preview_inactive_sweep(
+    request: Request,
+    body: InactivePreviewRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Return who the sweep would move right now, and what they'd lose.
+
+    A dry run: nothing is written and no role is created. Selection runs through
+    the very same ``compute_candidates`` the real sweeps use, so the listing
+    can't drift from what enabling the auto-sweep would actually do — only the
+    cap differs, because this lists every eligible member rather than one run's
+    worth, and reports the saved cap separately so the panel can say how many of
+    them a single run would reach.
+
+    ``threshold_days`` overrides the saved setting so an unsaved value can be
+    tried before committing to it.
+    """
+    from bot_modules.inactive.logic import PreviewMember, PreviewRole, build_sweep_preview
+    from bot_modules.inactive.sweep_service import (
+        UNCAPPED,
+        compute_candidates,
+        read_inactive_channel_id,
+        read_inactive_role_id,
+        read_sweep_cap,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    # Member and role state is gateway state, not DB state — without the bot
+    # connected there is nothing truthful to show.
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    threshold_days = body.threshold_days
+    if threshold_days is not None:
+        threshold_days = max(1, min(3650, threshold_days))
+
+    selection = await compute_candidates(
+        ctx, guild, threshold_days=threshold_days, cap=UNCAPPED
+    )
+
+    bot_member = guild.me
+    bot_top_position = bot_member.top_role.position if bot_member is not None else 0
+
+    members: dict[int, PreviewMember] = {}
+    for candidate in selection.candidates:
+        m = guild.get_member(candidate.user_id)
+        if m is None:
+            continue
+        members[m.id] = PreviewMember(
+            user_id=m.id,
+            display_name=m.display_name,
+            top_role_position=m.top_role.position,
+            roles=[PreviewRole(r.id, r.name, r.managed) for r in m.roles],
+        )
+
+    sweepable, blocked = build_sweep_preview(
+        candidates=selection.candidates,
+        members=members,
+        default_role_id=guild.default_role.id,
+        inactive_role_id=read_inactive_role_id(ctx, guild_id),
+        bot_top_role_position=bot_top_position,
+        tracked_user_ids=selection.tracked_user_ids,
+    )
+
+    def _row(row) -> dict:
+        return {
+            "user_id": str(row.user_id),
+            "display_name": row.display_name,
+            "days_idle": round(row.idle_seconds / 86400.0, 1),
+            "last_seen_ts": row.last_seen,
+            "has_tracked_messages": row.has_tracked_messages,
+            "removed_role_count": len(row.removed_role_ids),
+            "removed_role_names": row.removed_role_names,
+            "kept_managed_role_names": row.kept_managed_role_names,
+        }
+
+    return {
+        "threshold_days": selection.threshold_days,
+        "sweep_cap": read_sweep_cap(ctx, guild_id),
+        "inactive_channel_configured": bool(read_inactive_channel_id(ctx, guild_id)),
+        "eligible_count": len(sweepable),
+        "blocked_count": len(blocked),
+        "members": [_row(r) for r in sweepable],
+        "blocked": [_row(r) for r in blocked],
+    }
 
 
 # ── Duel/group-games config writes ──────────────────────────────────────

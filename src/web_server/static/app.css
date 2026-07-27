@@ -1463,7 +1463,9 @@ textarea.field-input { resize: vertical; }
   color: var(--ink);
 }
 
-/* ── Inactivity prune panel ──────────────────────────────────────────── */
+/* ── Inactivity prune + inactive-sweep panels ────────────────────────── */
+/* Both panels list "who would be affected if this ran now", so they share the
+   chip and preview-table styling rather than growing a second dialect. */
 
 .exempt-chips {
   display: flex;
@@ -1515,6 +1517,33 @@ textarea.field-input { resize: vertical; }
 }
 .prune-preview-table tbody tr:hover {
   background: var(--bg-card-hover);
+}
+
+/* The sweep preview's tables carry an action column and wrap to five columns;
+   on a phone they scroll inside themselves rather than shoving the page
+   sideways. */
+.preview-table-scroll {
+  overflow-x: auto;
+}
+
+/* Per-member role detail in the sweep preview: a count that expands in place,
+   so a table of dozens of members stays scannable. */
+.roles-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--gold-solid);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.roles-toggle:hover {
+  text-decoration: underline;
+}
+.sweep-roles-detail td {
+  color: var(--ink-dim);
+  font-size: 12px;
+  padding-top: 0;
 }
 
 /* ── Moderation panels ─────────────────────────────────────────────── */
