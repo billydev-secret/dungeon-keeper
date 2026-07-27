@@ -934,9 +934,43 @@ class ShowMyQuestsButton(discord.ui.Button):
         await cog.send_quests_panel(interaction)  # type: ignore[attr-defined]
 
 
+WALLET_CUSTOM_ID = "econ:show_my_wallet"
+
+
+class WalletButton(discord.ui.Button):
+    """Persistent "Wallet" button on the leaderboard/quest-board panel.
+
+    Replaces the panel's old trailing "`/bank quests` … `/bank wallet` …"
+    explainer field: the two things it pointed at are now the two buttons under
+    the embed, so the panel spends its field budget on content instead of on
+    telling members which commands to type. Carries no id — the ephemeral reply
+    holds all per-member state.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="Wallet",
+            emoji="💰",
+            style=discord.ButtonStyle.secondary,
+            custom_id=WALLET_CUSTOM_ID,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = cast("Bot", interaction.client)
+        cog = bot.get_cog("EconomyCog")
+        if cog is None:  # cog unloaded mid-restart — never a dead button
+            await interaction.response.send_message(
+                "❌ Your wallet is unavailable right now — try again in a moment.",
+                ephemeral=True,
+            )
+            return
+        await cog.send_wallet_panel(interaction)  # type: ignore[attr-defined]
+
+
 class QuestBoardView(discord.ui.View):
     """The persistent view attached to the leaderboard/quest-board panel."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(ShowMyQuestsButton())
+        self.add_item(WalletButton())
