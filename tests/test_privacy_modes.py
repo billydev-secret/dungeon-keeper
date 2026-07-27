@@ -290,6 +290,61 @@ async def test_no_mode_touches_the_database(_wired) -> None:
     assert calls["db_opened"] == [], "deletion must not touch server-side data in any mode"
 
 
+def test_progress_cards_take_an_accent_and_fall_back_without_one() -> None:
+    """The scan/delete cards were a module-level blurple constant with no accent
+    path at all — the one privacy surface ignoring the guild's branding (#76).
+    The final summary stays green: there the color is semantic ("complete").
+    """
+    import discord
+
+    accent = discord.Color(0x5A32A8)
+    assert privacy_cog._scan_embed(1, 4, 2, accent).color == accent
+    assert privacy_cog._delete_embed(1, 4, accent).color == accent
+    assert privacy_cog._scan_embed(1, 4, 2).color == privacy_cog._PROGRESS_FALLBACK
+    assert privacy_cog._delete_embed(1, 4).color == privacy_cog._PROGRESS_FALLBACK
+    assert privacy_cog._summary_embed("done").color == privacy_cog._DONE_COLOR
+
+
+async def test_the_accent_reaches_the_rendered_progress_card(monkeypatch, _wired) -> None:
+    """Wiring: the accent handed to _run_deletion lands on the card the member
+    actually sees. It is passed in rather than resolved here because reading the
+    branding config would open the DB, which test_no_mode_touches_the_database
+    forbids for a deletion run.
+    """
+    import discord
+
+    calls, ctx = _wired
+    accent = discord.Color(0x5A32A8)
+    seen: list[discord.Embed] = []
+
+    async def _find_with_progress(guild, user_id, *, on_progress=None, predicate=None):
+        calls["scanned_with"].append(predicate)
+        if on_progress:
+            await on_progress(1, 1, 1)  # done == total, so the throttle lets it through
+        return [(11, 22)]
+
+    class _CapturingReporter:
+        def __init__(self, interaction):
+            pass
+
+        async def update(self, embed):
+            seen.append(embed)
+
+    monkeypatch.setattr(privacy_cog, "find_user_messages", _find_with_progress)
+    monkeypatch.setattr(privacy_cog, "_ProgressReporter", _CapturingReporter)
+
+    guild = MagicMock()
+    guild.id = 1
+    await privacy_cog._run_deletion(
+        ctx, guild, 42, MagicMock(), mode=MODE_ALL, accent=accent
+    )
+
+    progress = [e for e in seen if e.title == privacy_cog._PROGRESS_TITLE]
+    assert progress, "no progress card was rendered"
+    assert all(c.color == accent for c in progress)
+    assert calls["db_opened"] == [], "rendering the accent must not open the DB"
+
+
 async def test_scrub_passes_a_predicate_and_full_mode_does_not(_wired) -> None:
     """The filter has to reach the scan: without it every message is collected."""
     calls, ctx = _wired

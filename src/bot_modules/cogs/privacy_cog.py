@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
@@ -226,27 +227,34 @@ async def _delete_discord_messages(
 
 
 # Progress card colors: in-flight vs. finished.
-_PROGRESS_COLOR = discord.Color.blurple()
+# The progress cards take the guild's branding accent (#76); this is only the
+# fallback for a context with no resolvable guild. _DONE_COLOR stays green on
+# purpose — there the color is semantic ("complete"), not decoration.
+_PROGRESS_FALLBACK = discord.Color.blurple()
 _DONE_COLOR = discord.Color.green()
 
 _PROGRESS_TITLE = "Deleting your messages"
 
 
-def _scan_embed(done: int, total: int, found: int) -> discord.Embed:
+def _scan_embed(
+    done: int, total: int, found: int, color: "discord.Color | None" = None
+) -> discord.Embed:
     """The in-progress scan card — status line plus a channel progress bar."""
     return discord.Embed(
         title=_PROGRESS_TITLE,
         description=f"{render_scan_status(done, total, found)}\n{render_progress_bar(done, total)}",
-        color=_PROGRESS_COLOR,
+        color=color or _PROGRESS_FALLBACK,
     )
 
 
-def _delete_embed(done: int, total: int) -> discord.Embed:
+def _delete_embed(
+    done: int, total: int, color: "discord.Color | None" = None
+) -> discord.Embed:
     """The in-progress delete card — a message progress bar."""
     return discord.Embed(
         title=_PROGRESS_TITLE,
         description=f"Deleting…\n{render_progress_bar(done, total)}",
-        color=_PROGRESS_COLOR,
+        color=color or _PROGRESS_FALLBACK,
     )
 
 
@@ -315,11 +323,17 @@ async def _run_deletion(
     original_interaction: discord.Interaction,
     *,
     mode: str = MODE_ALL,
+    accent: "discord.Color | None" = None,
 ) -> None:
     # Every mode only clears the member's *Discord* messages; nothing on the
     # server side is touched. XP, activity, profile, and the bot's own copy of
     # the messages are retained for moderation — the modes differ only in which
     # Discord messages (all / images / text) are removed.
+    #
+    # ``accent`` arrives already resolved from the command layer rather than
+    # being looked up here: reading the branding config would open the DB, and
+    # this function's guarantee — asserted in tests — is that a deletion run
+    # never touches server-side data at all.
 
     # One reporter for the whole run — it holds the single message everything
     # edits, so scan, delete, and summary share one card and one notification.
@@ -337,7 +351,7 @@ async def _run_deletion(
         if should_throttle(last_scan_update, now, done=done, total=total, interval=2.0):
             return
         last_scan_update = now
-        await reporter.update(_scan_embed(done, total, found))
+        await reporter.update(_scan_embed(done, total, found, accent))
 
     msg_rows = await find_user_messages(
         guild,
@@ -368,7 +382,7 @@ async def _run_deletion(
         if should_throttle(last_delete_update, now, done=done, total=total, interval=1.5):
             return
         last_delete_update = now
-        await reporter.update(_delete_embed(done, total))
+        await reporter.update(_delete_embed(done, total, accent))
 
     discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
         guild, user_id, msg_rows, on_progress=_delete_progress
@@ -455,6 +469,7 @@ class PrivacyCog(commands.Cog):
                 interaction.user.id,
                 interaction,
                 mode=mode_value,
+                accent=await resolve_accent_color(self.ctx.db_path, interaction.guild),
             )
         finally:
             self._active_deletions.discard(interaction.user.id)
@@ -526,6 +541,7 @@ class PrivacyCog(commands.Cog):
                 member.id,
                 interaction,
                 mode=mode_value,
+                accent=await resolve_accent_color(self.ctx.db_path, interaction.guild),
             )
         finally:
             self._active_deletions.discard(member.id)

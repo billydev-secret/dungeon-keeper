@@ -44,7 +44,7 @@ def _build_cog_pages(
     bot: "Bot", color: "discord.Color | None" = None
 ) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
-    page_color = color if color is not None else discord.Color.greyple()
+    page_color = color if color is not None else _NO_ACCENT_FALLBACK
     for cog in sorted(bot.cogs.values(), key=lambda c: c.qualified_name.lower()):
         cmds = _get_cog_commands(cog)
         if not cmds:
@@ -63,26 +63,33 @@ def _build_cog_pages(
     return pages
 
 
-_SECTION_META: dict[str, tuple[str, discord.Color]] = {
-    "General": ("🌿", discord.Color.from_str("#5865F2")),
-    "Economy": ("🪙", discord.Color.from_str("#DAA520")),
-    "Role Grants": ("🎭", discord.Color.from_str("#57F287")),
-    "XP Grant": ("⭐", discord.Color.from_str("#FEE75C")),
-    "Moderation": ("🛡️", discord.Color.from_str("#ED4245")),
-    "Voice": ("🔊", discord.Color.from_str("#2ECC71")),
-    "Music": ("🎵", discord.Color.from_str("#E74C3C")),
-    "Whisper": ("🤫", discord.Color.from_str("#E67E22")),
-    "Image Guessing Games": ("🎭", discord.Color.from_str("#9B59B6")),
-    "Games Night": ("🎲", discord.Color.from_str("#F1C40F")),
+# Section glyphs. These used to carry a per-section color each (Economy gold,
+# Moderation red, …), but a page's color is the guild's branding accent, not a
+# decorative label — the emoji is what tells the sections apart. Dropped
+# 2026-07-27 (#76).
+_SECTION_EMOJI: dict[str, str] = {
+    "General": "🌿",
+    "Economy": "🪙",
+    "Role Grants": "🎭",
+    "XP Grant": "⭐",
+    "Moderation": "🛡️",
+    "Voice": "🔊",
+    "Music": "🎵",
+    "Whisper": "🤫",
+    "Image Guessing Games": "🎭",
+    "Games Night": "🎲",
 }
+
+# Used only where no guild is in scope to resolve an accent from (a DM), so
+# there is nothing to brand against — one color for every page, never a palette.
+_NO_ACCENT_FALLBACK = discord.Color.blurple()
 
 
 def _page(name: str, body: str) -> discord.Embed:
-    emoji, color = _SECTION_META.get(name, ("📖", discord.Color.blurple()))
     return discord.Embed(
-        title=f"{emoji}  {name}",
+        title=f"{_SECTION_EMOJI.get(name, '📖')}  {name}",
         description=body,
-        color=color,
+        color=_NO_ACCENT_FALLBACK,
     )
 
 
@@ -339,9 +346,8 @@ def _build_help_pages(
         )
     )
 
-    # Collapse the decorative per-section colors to the shared guild accent
-    # when one is available; the per-section palette in ``_page`` stays as the
-    # fallback for contexts without a resolvable guild (e.g. DMs).
+    # Every page wears the guild's branding accent. Without a guild to resolve
+    # one from, they all share ``_NO_ACCENT_FALLBACK`` instead.
     if color is not None:
         for page in pages:
             page.color = color
