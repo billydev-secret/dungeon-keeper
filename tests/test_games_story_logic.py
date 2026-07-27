@@ -561,3 +561,15 @@ async def test_reveal_story_pays_joined_players(monkeypatch, sync_db_path):
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [1, 2, 3]
     assert call.kwargs["bot"] is bot
+
+def test_lobby_embed_renders_the_start_countdown():
+    # start_in advertises a start time as a live Discord relative timestamp;
+    # the host still presses the button.
+    embed = build_lobby_embed(host_name="Alice", visibility="blind", max_sentences=10, start_at=1_700_000_000)
+    field = next(f for f in embed.fields if f.name == "⏰ Starting")
+    assert field.value == "<t:1700000000:R>"
+
+
+def test_lobby_embed_omits_the_countdown_when_none_was_set():
+    embed = build_lobby_embed(host_name="Alice", visibility="blind", max_sentences=10)
+    assert all(f.name != "⏰ Starting" for f in embed.fields)

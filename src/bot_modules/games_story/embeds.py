@@ -23,12 +23,19 @@ NameResolver = Callable[[int], str]
 def build_lobby_embed(
     host_name: str, visibility: str, max_sentences: int,
     color: "discord.Color | None" = None,
+    start_at: int | None = None,
 ) -> discord.Embed:
     """Build the ``/story`` join-lobby embed.
 
     Players field starts at 0 / "—"; the join button updates it in
     place by editing field index 0. Host + mode summary fields are
     static for the life of the lobby.
+
+    ``start_at`` is an optional UTC epoch shown as a live Discord relative
+    timestamp — the host's advertised start time. It is appended **last** so
+    the Writers field stays at index 0 for the join button's in-place edit.
+    The host still presses Start Story; the countdown is advertising, not
+    automation.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -44,6 +51,8 @@ def build_lobby_embed(
         value=f"{visibility} | {max_sentences} sentences",
         inline=True,
     )
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{start_at}:R>", inline=True)
     embed.set_footer(text=f"{GAME_ICONS['story']} Story Builder")
     return embed
 

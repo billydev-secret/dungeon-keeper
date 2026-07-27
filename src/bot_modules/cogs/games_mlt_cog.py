@@ -7,6 +7,10 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.game_start_ping_service import (
+    extract_start_epoch,
+    resolve_start_epoch,
+)
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -105,6 +109,9 @@ class MLTJoinView(discord.ui.View):
             host_member.display_name if host_member else "Host",
             names,
             color=self.accent,
+            # Re-read from the payload, not the view: the countdown must
+            # survive a restart that rebuilt this view from the DB.
+            start_at=extract_start_epoch(payload),
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've joined the pool!", ephemeral=True)
@@ -125,6 +132,9 @@ class MLTJoinView(discord.ui.View):
             host_member.display_name if host_member else "Host",
             names,
             color=self.accent,
+            # Re-read from the payload, not the view: the countdown must
+            # survive a restart that rebuilt this view from the DB.
+            start_at=extract_start_epoch(payload),
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've left the pool.", ephemeral=True)
@@ -367,12 +377,14 @@ class MLTCog(commands.Cog):
     @app_commands.describe(
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
+        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
     )
     async def mlt(
         self,
         interaction: discord.Interaction,
         question: str = "",
         tags: str = "",
+        start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info("%s used /games play mlt in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
@@ -401,7 +413,7 @@ class MLTCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"question": question, "tags": tag_list},
+            options={"question": question, "tags": tag_list, "start_in": start_in},
         )
         await finish_launch_response(interaction, game_id)
 
@@ -416,18 +428,22 @@ class MLTCog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         question = options.get("question", "")
+        start_epoch = resolve_start_epoch(options)
+        payload = {"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [], "tags": options.get("tags") or []}
+        if start_epoch:
+            payload["start_epoch"] = start_epoch
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "mlt",
             state="joining",
-            payload={"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [], "tags": options.get("tags") or []},
+            payload=payload,
         )
 
         log.info("Game %s (mlt) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         accent = await self._resolve_accent(getattr(channel, "guild", None))
-        embed = build_join_embed(host_name, [], color=accent)
+        embed = build_join_embed(host_name, [], color=accent, start_at=start_epoch)
         view = MLTJoinView(game_id, host_id, self.db, self.bot, self, accent=accent)
         self.bot.active_views[game_id] = view
 

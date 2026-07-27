@@ -25,6 +25,10 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.game_start_ping_service import (
+    extract_start_epoch,
+    resolve_start_epoch,
+)
 from bot_modules.games_compliment.embeds import (
     build_lobby_embed,
     build_pairings_embed,
@@ -77,6 +81,9 @@ class ComplimentView(discord.ui.View):
             host_member.display_name if host_member else "Host",
             names,
             color=color,
+            # Re-read from the payload, not the view: the countdown must
+            # survive a restart that rebuilt this view from the DB.
+            start_at=extract_start_epoch(payload),
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(
@@ -172,7 +179,14 @@ class ComplimentCog(commands.Cog):
         log.info("compliment: re-registered %d active ComplimentView(s)", len(rows))
 
     @app_commands.command(name="compliment", description="Start Spin the Compliment — random anonymous pairing!")
-    async def compliment(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        start_in="Show a lobby countdown — game starts in this many minutes (host still closes the pool)",
+    )
+    async def compliment(
+        self,
+        interaction: discord.Interaction,
+        start_in: app_commands.Range[int, 1, 60] | None = None,
+    ):
         log.info("%s used /games play compliment in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
@@ -187,7 +201,7 @@ class ComplimentCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={},
+            options={"start_in": start_in},
         )
         await finish_launch_response(interaction, game_id)
 
@@ -201,18 +215,20 @@ class ComplimentCog(commands.Cog):
         options: dict,
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        start_epoch = resolve_start_epoch(options)
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "compliment",
             state="joining",
+            payload={"start_epoch": start_epoch} if start_epoch else None,
         )
 
         log.info("Game %s (compliment) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         guild = getattr(channel, "guild", None)
         color = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_lobby_embed(host_name, [], color=color)
+        embed = build_lobby_embed(host_name, [], color=color, start_at=start_epoch)
         view = ComplimentView(game_id, host_id, self.db, self.bot)
         self.bot.active_views[game_id] = view
 

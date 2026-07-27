@@ -42,6 +42,7 @@ def build_join_embed(
     host_name: str,
     players: list[str],
     color: discord.Color | None = None,
+    start_at: int | None = None,
 ) -> discord.Embed:
     """Build the lobby embed shown above the Join/Leave/Start buttons.
 
@@ -53,12 +54,18 @@ def build_join_embed(
     ``color`` is the guild accent (resolved once by the cog); when
     ``None`` it falls back to the phase color so the builder stays usable
     with no guild.
+
+    ``start_at`` is an optional UTC epoch shown as a live Discord relative
+    timestamp — the host's advertised start time. The host still presses
+    Start; the countdown is advertising, not automation.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['mlt']} Most Likely To",
         color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Host", value=host_name, inline=True)
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{start_at}:R>", inline=True)
     embed.add_field(
         name=f"Players ({len(players)})",
         value=", ".join(players) if players else "—",

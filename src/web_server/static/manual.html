@@ -539,6 +539,16 @@
       </tbody>
     </table>
 
+    <div class="callout callout-info">
+      <span class="callout-icon">⏰</span>
+      <div class="callout-body">
+        <strong>Give people time to show up: <code>start_in:</code></strong>
+        <p>Six games open a lobby and wait for you to press start — <strong>Clapback</strong>, <strong>Spin the Compliment</strong>, <strong>Marry, Fornicate, Kiss</strong>, <strong>Most Likely To</strong>, <strong>Mt. Rushmore Draft</strong> and <strong>Story Builder</strong>. Add <code>start_in:</code> (1–60 minutes) when you open one and the lobby shows a live countdown, so people know when to be there — e.g. <code>/games play rushmore start_in:15</code>.</p>
+        <p>The game does <em>not</em> start by itself. When the countdown runs out the bot posts a message in the channel tagging you, so you don't have to watch the clock — you still press the button when everyone's in. Games that aren't on that list begin the moment you run the command, so they have no <code>start_in:</code>.</p>
+        <p>Scheduled games work the same way: if an admin has one of those six on a schedule, the bot tags whoever set it up as soon as the lobby appears, since someone still has to start it.</p>
+      </div>
+    </div>
+
     <h3 id="games-duels">Duels &amp; Group Games</h3>
     <p>Real-time button games built on the same framework — duels are 1-v-1 challenges, group games run an open lobby then eliminate players each round. All <span class="perm perm-all">Everyone</span>.</p>
     <table>

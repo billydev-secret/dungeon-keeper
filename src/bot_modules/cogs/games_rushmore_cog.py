@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.services.game_start_ping_service import (
+    extract_start_epoch,
+    resolve_start_epoch,
+)
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
@@ -246,7 +250,12 @@ class RushmoreJoinView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _add)
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
-        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode, color=self.accent)
+        embed = build_join_embed(
+            self.host_name, names, self.topic, mode=self.mode, color=self.accent,
+            # Re-read from the payload, not the view: the countdown must
+            # survive a restart that rebuilt this view from the DB.
+            start_at=extract_start_epoch(payload),
+        )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've joined!", ephemeral=True)
 
@@ -261,7 +270,12 @@ class RushmoreJoinView(discord.ui.View):
         payload = await modify_payload(self.db, self.game_id, _remove)
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
-        embed = build_join_embed(self.host_name, names, self.topic, mode=self.mode, color=self.accent)
+        embed = build_join_embed(
+            self.host_name, names, self.topic, mode=self.mode, color=self.accent,
+            # Re-read from the payload, not the view: the countdown must
+            # survive a restart that rebuilt this view from the DB.
+            start_at=extract_start_epoch(payload),
+        )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("You've left.", ephemeral=True)
 
@@ -718,6 +732,7 @@ class RushmoreCog(commands.Cog):
         topic="The topic (leave blank for AI/bank/manual entry)",
         source="Where topics come from",
         mode="Snake draft (turns) or blitz (everyone picks at once)",
+        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start Draft)",
     )
     @app_commands.choices(
         source=[
@@ -736,6 +751,7 @@ class RushmoreCog(commands.Cog):
         topic: str = "",
         source: str = "host",
         mode: str = "",
+        start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info(
             "%s used /games play rushmore in #%s",
@@ -753,7 +769,7 @@ class RushmoreCog(commands.Cog):
             return
 
         await interaction.response.defer()
-        options: dict = {"topic": topic, "source": source}
+        options: dict = {"topic": topic, "source": source, "start_in": start_in}
         if mode:
             options["mode"] = mode
         game_id = await self.launch(
@@ -792,13 +808,17 @@ class RushmoreCog(commands.Cog):
             "mode": mode, "tags": options.get("tags") or [],
         }
 
+        start_epoch = resolve_start_epoch(options)
+        payload = {"settings": settings, "players": [], "topic": topic}
+        if start_epoch:
+            payload["start_epoch"] = start_epoch
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "rushmore",
             state="joining",
-            payload={"settings": settings, "players": [], "topic": topic},
+            payload=payload,
         )
         log.info("Game %s (rushmore) created by host %s", game_id, host_id)
 
@@ -811,7 +831,7 @@ class RushmoreCog(commands.Cog):
             topic, source, self.db, self.bot, self, mode=mode,
             accent=accent,
         )
-        embed = build_join_embed(host_name, [], topic, mode=mode, color=accent)
+        embed = build_join_embed(host_name, [], topic, mode=mode, color=accent, start_at=start_epoch)
         try:
             msg = await channel.send(embed=embed, view=join_view)
         except discord.Forbidden:
