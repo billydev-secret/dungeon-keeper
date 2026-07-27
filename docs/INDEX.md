@@ -27,6 +27,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [booster_roles_spec.md](booster_roles_spec.md) | Booster cosmetic roles: swatch-synced gradient color roles, persistent claim buttons (boosters only, mutually exclusive), dashboard panel posting |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
 | [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders); dashboard panel shipped 2026-07-23 — before that the routes existed with no UI and live guilds were configured by hand |
+| [clapback_spec.md](clapback_spec.md) | Clapback head-to-head comedy game: bracketing rules (3-player round-robin, fewest-byes-first rotation, duplicate-answer avoidance) and scoring (vote %, CLAPBACK bonus, bye = the round's average). Complements the suite-wide `games_system_spec.md` |
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |

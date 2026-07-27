@@ -8,9 +8,10 @@ the message, persisting via ``modify_payload``) stays in the cog.
 High-leverage pieces:
 
 * :func:`create_matchups` — pairs submitted answers head-to-head,
-  handling 3-player round-robin, odd-count byes (with last-bye memory),
-  and duplicate-answer avoidance. ``rng`` is injected so tests can pin
-  the order.
+  handling 3-player round-robin, odd-count byes (fewest-byes-first
+  rotation), and duplicate-answer avoidance. ``rng`` is injected so
+  tests can pin the order.
+* :func:`calculate_bye_award` — what sitting out a round is worth.
 * :func:`calculate_matchup_score` — counts votes and returns scores,
   winner, and the clapback (unanimous, 2+ votes) flag for a single
   matchup.
@@ -49,23 +50,35 @@ AI_USER_PROMPT: str = (
 
 def create_matchups(
     answers: dict[str, str],
-    last_bye_id: Any = None,
+    bye_history: list[Any] | None = None,
     rng: random.Random | None = None,
 ) -> tuple[list[dict[str, Any]], Any]:
     """Pair submitted answers for head-to-head voting.
 
-    Returns ``(matchups, bye_player_id)``. Each answer appears in
-    exactly one matchup. With an odd number of players, the bye goes to
-    someone other than ``last_bye_id`` when possible. Duplicate answers
-    are avoided by retrying up to 10 shuffles; if every attempt has a
-    duplicate pair, the last attempt is returned anyway.
+    Returns ``(matchups, bye_player_id)``. Every submitter appears in
+    the result exactly once — either in a pair or as the bye.
 
-    ID typing note: ``last_bye_id`` and the returned bye id match the
-    type of ``answers`` dict keys (strings in production, since the
-    cog stores user ids as ``str(uid)``).
+    Bye rotation: ``bye_history`` is every bye handed out this game, in
+    order (the same id can appear more than once in a long game). The
+    bye goes to whoever among *this round's* submitters has had the
+    fewest so far, picked at random within that tied group. So nobody
+    sits out twice until everyone has sat out once, and the rule keeps
+    cycling correctly on the second lap. Counting — rather than
+    remembering only the previous bye — is what makes it hold up when
+    the set of submitters changes from round to round, which it does
+    whenever someone misses the submit window.
+
+    ID typing note: ids in ``bye_history`` and the returned bye id
+    match the type of ``answers`` dict keys (strings in production,
+    since the cog stores user ids as ``str(uid)``).
 
     Special case: with exactly 3 players the function returns the full
     round-robin (3 pairs) so the round has real action.
+
+    Duplicate answers: up to 10 shuffles are tried and the pairing with
+    the fewest same-answer pairs wins. Every attempt is a *complete*
+    pairing, so an unavoidable duplicate costs a repeated answer in one
+    matchup, never a player dropped from the round.
 
     ``rng`` is injected so tests can pin the shuffle order; defaults to
     the module-level :mod:`random` in production.
@@ -86,44 +99,60 @@ def create_matchups(
         return pairs, None
 
     if len(player_ids) % 2 == 1:
-        # Pick bye — prefer someone who hasn't had one recently
-        if last_bye_id and last_bye_id in player_ids:
-            # last_bye got it recently, pick anyone else
-            candidates = [p for p in player_ids if p != last_bye_id]
-            bye_player = candidates[-1]
-        else:
-            bye_player = player_ids[-1]
+        # Fewest byes so far wins the bye. player_ids is already
+        # shuffled, so min() picking the first of a tied group is a
+        # random choice among everyone equally overdue.
+        history = list(bye_history or [])
+        bye_player = min(player_ids, key=history.count)
         player_ids.remove(bye_player)
 
-    # Try to avoid same-answer pairings via simple retry
-    best_matchups: list[dict[str, Any]] | None = None
+    # Same-answer pairings are ugly to vote on, so shuffle a few times
+    # and keep the least-duplicated complete pairing we saw.
+    best_matchups: list[dict[str, Any]] = []
+    best_dupes: int | None = None
     for _ in range(10):
         chooser.shuffle(player_ids)
         pairs = []
-        bad = False
+        dupes = 0
         for i in range(0, len(player_ids), 2):
             a, b = player_ids[i], player_ids[i + 1]
             if answers[str(a)].strip().lower() == answers[str(b)].strip().lower():
-                bad = True
-                break
+                dupes += 1
             pairs.append({
                 "pair": [a, b],
                 "votes": {},
                 "winner": None,
             })
-        if not bad:
+        if dupes == 0:
+            return pairs, bye_player
+        if best_dupes is None or dupes < best_dupes:
+            best_dupes = dupes
             best_matchups = pairs
-            break
-        if best_matchups is None:
-            best_matchups = pairs
-    # If all attempts had duplicates (or produced no pairs), force-pair anyway
-    if not best_matchups and len(player_ids) >= 2:
-        best_matchups = [
-            {"pair": [player_ids[i], player_ids[i + 1]], "votes": {}, "winner": None}
-            for i in range(0, len(player_ids), 2)
-        ]
 
-    return best_matchups or [], bye_player
+    return best_matchups, bye_player
+
+
+def calculate_bye_award(
+    round_points: list[int] | None,
+    default: int = 50,
+) -> int:
+    """Points for sitting out a round — the field's average that round.
+
+    ``round_points`` is every point value the players who actually
+    competed earned this round (one entry per contestant per matchup,
+    clapback bonuses included). The bye player gets the mean, rounded,
+    so sitting out neither punishes nor rewards them relative to the
+    room. ``default`` covers the degenerate case where a round somehow
+    resolved no matchups at all.
+
+    Deliberately independent of the bye player's own history: a bye is
+    a scheduling accident, not a performance, so it shouldn't compound
+    a lead or a deficit.
+    """
+    values = list(round_points or [])
+    if not values:
+        return default
+    return round(sum(values) / len(values))
 
 
 def calculate_matchup_score(
