@@ -125,8 +125,11 @@ join path identical to today. Reference sync is separately dark until
 - **Blocks** are dashboard-edited, ordered per guild: `kind ∈ text |
   questions`, optional title, body. A questions block's body is one question
   per line.
-- **Rendering:** text block → one message; questions block → an optional
-  bold header message + **one message per question**.
+- **Rendering:** an optional bold header message per block, then the
+  content — text block → one message; questions block → **one message per
+  question**. The title is never inlined above the body: Copy Text takes
+  the whole message, and text blocks are mostly canned messages a greeter
+  pastes.
 - **Sync on save:** a differ (pure logic, unit-tested) compares the rendered
   message list against the stored mapping and emits minimal operations —
   edit changed messages in place (ids stable when only wording changes),
@@ -157,8 +160,10 @@ join path identical to today. Reference sync is separately dark until
   mapping.
 - Config keys (→ typed `GuildConfig` fields): `intake_enabled`,
   `intake_channel_id` (0 = fallback to `greeter_chat_channel_id`),
-  `intake_steps` (JSON list `{key, label, auto, role_id?}`),
-  `intake_completion_code`, `intake_stale_hours`,
+  `intake_steps` (JSON list `{key, label, auto, role_id?, code?}` — a
+  step's `code` ticks that step alone; absent on configs written before
+  step codes, hence optional), `intake_completion_code` (closes the whole
+  card), `intake_stale_hours`,
   `intake_reference_channel_id`. Reuses existing `greeter_role_id`,
   `unverified_role_id`.
 

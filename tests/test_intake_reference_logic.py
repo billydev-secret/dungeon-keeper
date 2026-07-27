@@ -76,18 +76,41 @@ def test_validate_blocks_strict_and_canonical():
 def test_render_questions_one_message_per_line():
     messages = ref.render_blocks(ref.parse_blocks(json.dumps(BLOCKS)))
     assert messages == [
-        "**How intake works**\nGreet them.\nBe kind.",
+        "**How intake works**",
+        "Greet them.\nBe kind.",
         "**SFW questions**",
         "Q one?",
         "Q two?",
     ]
 
 
-def test_render_questions_without_title_has_no_header():
-    blocks = ref.parse_blocks(
-        json.dumps([{"kind": "questions", "title": "", "body": "Only q?"}])
-    )
-    assert ref.render_blocks(blocks) == ["Only q?"]
+def test_render_title_is_its_own_message_so_the_body_copies_clean():
+    # Most text blocks are canned messages a greeter copy-pastes, and
+    # Discord's Copy Text takes the whole message — a heading sharing the
+    # message means trimming it off every paste.
+    blocks = [ref.Block("text", "Example Greeting", "Hi, welcome!")]
+    assert ref.render_blocks(blocks) == ["**Example Greeting**", "Hi, welcome!"]
+
+
+@pytest.mark.parametrize(
+    ("block", "expected"),
+    [
+        pytest.param(
+            ref.Block("questions", "", "Only q?"), ["Only q?"], id="questions-no-title"
+        ),
+        pytest.param(
+            ref.Block("text", "", "Just body"), ["Just body"], id="text-no-title"
+        ),
+        # validate_blocks allows a title with no body (a bare section heading).
+        pytest.param(
+            ref.Block("text", "Heading only", "  "),
+            ["**Heading only**"],
+            id="text-no-body",
+        ),
+    ],
+)
+def test_render_omits_the_half_that_is_empty(block, expected):
+    assert ref.render_blocks([block]) == expected
 
 
 def test_render_chunks_long_text_on_paragraphs():

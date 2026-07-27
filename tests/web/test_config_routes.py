@@ -1584,6 +1584,61 @@ def test_update_intake_rejects_bad_steps(authed_client):
     ).status_code == 422
 
 
+def test_update_intake_roundtrips_step_codes(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/intake", json={
+        "completion_code": "DK-DONE",
+        "steps": [
+            {"key": "", "label": "SFW questions", "code": "  DK-SFW  "},
+            {"key": "", "label": "NSFW questions", "code": "DK-NSFW"},
+            {"key": "", "label": "Greeted", "auto": "greeted"},
+        ],
+    })
+    assert resp.status_code == 200
+    intake = authed_client.get("/api/config").json()["intake"]
+    assert [s["code"] for s in intake["steps"]] == ["DK-SFW", "DK-NSFW", ""]
+
+    from bot_modules.services import intake_service as svc
+    with open_db(fake_ctx.db_path) as conn:
+        assert [s.code for s in svc.step_config(conn, fake_ctx.guild_id)] == [
+            "DK-SFW", "DK-NSFW", "",
+        ]
+
+
+def test_update_intake_rejects_codes_that_contain_each_other(authed_client, fake_ctx):
+    # Codes match by containment, so posting "DK-SFW-DONE" would silently tick
+    # a "DK-SFW" step too.
+    resp = authed_client.put("/api/config/intake", json={
+        "steps": [
+            {"key": "", "label": "SFW questions", "code": "DK-SFW"},
+            {"key": "", "label": "SFW wrap-up", "code": "dk-sfw-done"},
+        ],
+    })
+    assert resp.status_code == 422
+    assert "SFW wrap-up" in resp.json()["detail"]
+    # Nothing was written — the reject lands before any config write.
+    from bot_modules.services import intake_service as svc
+    with open_db(fake_ctx.db_path) as conn:
+        assert svc.step_config(conn, fake_ctx.guild_id) == list(svc.DEFAULT_STEPS)
+
+    # A step code clashing with the guild-wide completion code is rejected too,
+    # whether the completion code arrives in the same request…
+    assert authed_client.put("/api/config/intake", json={
+        "completion_code": "DK",
+        "steps": [{"key": "", "label": "SFW", "code": "DK-SFW"}],
+    }).status_code == 422
+    # …or is already stored from an earlier save.
+    assert authed_client.put(
+        "/api/config/intake", json={"completion_code": "DK"}
+    ).status_code == 200
+    assert authed_client.put("/api/config/intake", json={
+        "steps": [{"key": "", "label": "SFW", "code": "DK-SFW"}],
+    }).status_code == 422
+    # An over-long code is rejected rather than silently truncated.
+    assert authed_client.put("/api/config/intake", json={
+        "steps": [{"key": "", "label": "SFW", "code": "x" * 81}],
+    }).status_code == 422
+
+
 def test_update_intake_dedupes_generated_keys(authed_client):
     resp = authed_client.put("/api/config/intake", json={
         "steps": [

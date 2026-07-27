@@ -41,7 +41,7 @@ export function mount(container) {
           <div class="field">
             <label>Completion code</label>
             <input type="text" name="completion_code" value="${esc(c.completion_code)}" maxlength="80" placeholder="e.g. DK-7734" />
-            <div class="field-hint">When a greeter or mod posts a message containing this code and @mentioning the newcomer (any channel), their card completes — unticked steps are marked skipped. Put the code in your ending welcome message. Empty = code detection off.</div>
+            <div class="field-hint">When a greeter or mod posts a message containing this code and @mentioning (or replying to) the newcomer — any channel — their card <strong>completes</strong>, and any unticked steps are marked skipped. Put it in your ending welcome message. Empty = off. For ticking one step rather than closing the card, use a per-step code below.</div>
           </div>
           <div class="field">
             <label>Stale nudge after (hours)</label>
@@ -53,6 +53,7 @@ export function mount(container) {
             <div data-steps></div>
             <button type="button" class="btn" data-add-step>+ Add step</button>
             <div class="field-hint">Snapshotted onto each card when it posts — editing here never changes cards already in flight. Auto steps tick themselves; “role gained” fires on /grant or a manual role add of the chosen role.</div>
+            <div class="field-hint"><strong>Step code</strong> (optional): a phrase that ticks just this step when a greeter or mod posts it while @mentioning or replying to the newcomer, from any channel. Put one in each canned message over in Procedure Reference — pasting the message then ticks its step, no card button needed. A <code>-#</code> subtext line keeps it out of the newcomer’s way. Codes match anywhere in the message and are case-insensitive, so no code may contain another (or the completion code above).</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
@@ -97,6 +98,7 @@ export function mount(container) {
           <select data-step-role style="flex:2; min-width:10rem; ${s.auto === "role_gained" ? "" : "display:none;"}">
             ${roleSelect(roles, s.role_id)}
           </select>
+          <input type="text" data-step-code value="${esc(s.code || "")}" maxlength="80" placeholder="Step code (optional)" style="flex:2; min-width:10rem;" />
           <span style="white-space:nowrap;">
             <button type="button" class="btn" data-up ${i === 0 ? "disabled" : ""}>↑</button>
             <button type="button" class="btn" data-down ${i === steps.length - 1 ? "disabled" : ""}>↓</button>
@@ -113,6 +115,7 @@ export function mount(container) {
         steps[i].label = row.querySelector("[data-step-label]").value;
         steps[i].auto = row.querySelector("[data-step-auto]").value;
         steps[i].role_id = row.querySelector("[data-step-role]").value || "0";
+        steps[i].code = row.querySelector("[data-step-code]").value;
       });
     };
 
@@ -145,7 +148,7 @@ export function mount(container) {
 
     container.querySelector("[data-add-step]").addEventListener("click", () => {
       syncSteps();
-      steps.push({ key: "", label: "", auto: "", role_id: "0" });
+      steps.push({ key: "", label: "", auto: "", role_id: "0", code: "" });
       renderSteps();
       const rows = stepsHost.querySelectorAll("[data-step-label]");
       rows[rows.length - 1]?.focus();
@@ -289,6 +292,7 @@ export function mount(container) {
             label: s.label.trim(),
             auto: s.auto || "",
             role_id: s.role_id || "0",
+            code: (s.code || "").trim(),
           })),
         });
         showStatus(status, true, "Saved");
