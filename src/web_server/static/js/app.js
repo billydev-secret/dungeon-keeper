@@ -49,10 +49,9 @@ const SECTIONS = [
       ]},
       { heading: "General", items: [
         { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
-        { id: "health-channel-health",  label: "Channel Health",     module: "./panels/health-channel-health.js" },
         { id: "health-composite-score", label: "Health Score",       module: "./panels/health-composite-score.js", keywords: "overview composite" },
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
-        { id: "channel-comparison",   label: "Channel Comparison",    module: "./panels/channel-comparison.js" },
+        { id: "channels",             label: "Channels",             module: "./panels/channels.js", keywords: "channel health comparison staleness" },
       ]},
       { heading: "Engagement", items: [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js", keywords: "daily monthly active users" },

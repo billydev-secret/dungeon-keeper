@@ -26,7 +26,7 @@ Day-bucketed charts roll over at the guild's local 6 am, not midnight. Names on 
 
 Tiles group into a few areas:
 
-- **Activity** — channel comparisons, top voice users, generic activity (messages or XP) with user/channel/bot exclusions. (The finer-grained message-rate/cadence/burst experiments were removed in the 2026-07 reports cleanup.)
+- **Activity** — the merged **Channels** panel (per-channel health status/score over 30 days plus a windowed comparison of messages / XP / sentiment / trend — both `/api/health/channel-health` and `/api/reports/channel-comparison` feed it), top voice users, generic activity (messages or XP) with user/channel/bot exclusions. (The finer-grained message-rate/cadence/burst experiments were removed in the 2026-07 reports cleanup.)
 - **Membership health** — join-time histogram, cohort retention, NSFW-channel activity grouped by recorded gender, activity drop-off profiles, and the merged **Inactive Report** (one member list over last-activity data: scoped to everyone / role holders / role non-holders, filtered by idle days — 0 lists the whole scope oldest-first — optionally measured within one channel; logic in `inactive_report_service.py`).
 - **Greeter performance** — greeter response time and missed joins, derived from the configured greeter chat channel and welcome / leave audit.
 - **XP** — top-N leaderboard for a window, days-to-level-5 histogram, and a generalised days-to-level-N report (level 2–100). Source data is owned by [[xp-spec]].

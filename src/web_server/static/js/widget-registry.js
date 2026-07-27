@@ -10,12 +10,12 @@ const WIDGETS = [
   { id: "home-joins",       label: "Recent Joins",            category: "Home", perms: [], source: "home", wide: false, nav: "join-times" },
   { id: "home-moderation",  label: "Moderation",              category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "mod-jails" },
   { id: "home-voice",       label: "In Voice Now",            category: "Home", perms: [], source: "home", wide: false, nav: "voice-activity" },
-  { id: "home-channels",    label: "Hottest Channels (1h)",   category: "Home", perms: [], source: "home", wide: false, nav: "channel-comparison" },
+  { id: "home-channels",    label: "Hottest Channels (1h)",   category: "Home", perms: [], source: "home", wide: false, nav: "channels" },
   { id: "home-users",       label: "Most Active Users (1h)",  category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "activity" },
   { id: "home-returned",    label: "Returned After Break",    category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "retention" },
   { id: "home-starters",    label: "Conversation Starters",   category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "interaction-graph" },
   { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "interaction-graph" },
-  { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "health-channel-health" },
+  { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "channels" },
   { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: ["admin"], source: "home", wide: true,  nav: "mod-audit" },
 
   // ── Health tiles ─────────────────────────────────────────────────
@@ -23,7 +23,7 @@ const WIDGETS = [
   { id: "health-dau-mau",          label: "DAU/MAU Stickiness",  category: "Health", perms: ["admin"], source: "health", tileKey: "dau_mau",          wide: false, nav: "health-dau-mau",         needsNames: false },
   { id: "health-heatmap",          label: "Activity Heatmap",    category: "Health", perms: ["admin"], source: "health", tileKey: "heatmap",          wide: false, nav: "health-heatmap",         needsNames: false },
   { id: "health-gini",             label: "Participation Gini",  category: "Health", perms: ["admin"], source: "health", tileKey: "gini",             wide: false, nav: "health-gini",            needsNames: false },
-  { id: "health-channel-health",   label: "Channel Health",      category: "Health", perms: ["admin"], source: "health", tileKey: "channel_health",   wide: false, nav: "health-channel-health",  needsNames: true  },
+  { id: "health-channel-health",   label: "Channel Health",      category: "Health", perms: ["admin"], source: "health", tileKey: "channel_health",   wide: false, nav: "channels",               needsNames: true  },
   { id: "health-social-graph",     label: "Social Graph",        category: "Health", perms: ["admin"], source: "health", tileKey: "social_graph",     wide: false, nav: "interaction-graph",      needsNames: false },
   { id: "health-sentiment",        label: "Sentiment & Tone",    category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment",        wide: false, nav: "health-sentiment",       needsNames: true  },
   { id: "health-newcomer-funnel",  label: "Newcomer Funnel",     category: "Health", perms: ["admin"], source: "health", tileKey: "newcomer_funnel",  wide: false, nav: "health-newcomer-funnel", needsNames: false },
