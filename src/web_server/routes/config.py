@@ -4074,10 +4074,12 @@ async def update_guess_config(
             400, f"crop_difficulty must be one of {sorted(_GUESS_VALID_DIFFICULTIES)}"
         )
 
-    # Guess only posts in age-gated channels (parity with the retired
-    # /guess setup command). "0" is the "(disabled)" sentinel and skips the
-    # channel checks. Best-effort otherwise: enforced when the bot can resolve
-    # the channel; skipped when the cache can't see it.
+    # Guess accepts SFW and NSFW submissions alike, so the channel is not
+    # required to be age-gated — placement is a moderator call, matching the
+    # runtime, which has had no is_nsfw() recheck since 47ca6a5. Only the
+    # channel's existence is validated. "0" is the "(disabled)" sentinel and
+    # skips the check; resolution is best-effort and skipped when the bot's
+    # cache can't see the guild.
     if body.channel_id and body.channel_id != "0":
         try:
             new_channel_id = int(body.channel_id)
@@ -4085,15 +4087,8 @@ async def update_guess_config(
             raise HTTPException(400, "channel_id must be a numeric channel ID")
         bot = getattr(ctx, "bot", None)
         guild = bot.get_guild(guild_id) if bot else None
-        if guild is not None:
-            channel = guild.get_channel(new_channel_id)
-            if channel is None:
-                raise HTTPException(400, "Channel not found in this guild")
-            if not getattr(channel, "is_nsfw", lambda: False)():
-                raise HTTPException(
-                    400,
-                    "Guess only posts in age-gated channels — enable the channel's NSFW flag first",
-                )
+        if guild is not None and guild.get_channel(new_channel_id) is None:
+            raise HTTPException(400, "Channel not found in this guild")
 
     def _q():
         from bot_modules.services.guess_repo import set_guess_config_value

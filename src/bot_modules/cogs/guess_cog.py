@@ -1,4 +1,4 @@
-"""Guess cog — NSFW guessing game (Phase 2)."""
+"""Guess cog — the guess-the-member image game (Phase 2)."""
 from __future__ import annotations
 
 import asyncio
@@ -1053,8 +1053,8 @@ PROMPT_REPOST_DELAY_SEC = 2.0
 
 _PROMPT_HOW_TO_PLAY = (
     "**How Guess works**\n"
-    "Members of the Guess pool submit anonymized NSFW images. Everyone else "
-    "guesses who's in the photo.\n"
+    "Members of the Guess pool submit anonymized images — SFW or NSFW. "
+    "Everyone else guesses who's in the photo.\n"
     "\n"
     "• **Submit:** `/guess submit` with an image. The bot crops it and you "
     "pick a crop, then post it anonymously.\n"
@@ -1280,7 +1280,7 @@ def _prompt_embed(color: "discord.Color | None" = None) -> discord.Embed:
     return discord.Embed(
         title="🎭 Guess",
         description=(
-            "Submit anonymized NSFW images for everyone to guess. "
+            "Submit anonymized images — SFW or NSFW — for everyone to guess. "
             "Click below to play.\n\n"
             "📎 To upload a photo directly, use `/guess submit`."
         ),
@@ -1590,7 +1590,7 @@ class GuessCog(commands.Cog):
 
     @guess.command(name="submit", description="Submit an image to start a Guess round.")
     @app_commands.describe(
-        image="The NSFW image to submit",
+        image="The image to submit (SFW or NSFW)",
     )
     async def guess_submit(
         self,

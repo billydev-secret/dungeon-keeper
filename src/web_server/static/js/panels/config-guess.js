@@ -39,7 +39,7 @@ export function mount(container) {
       <div class="panel">
         <header>
           <h2>Guess Who</h2>
-          <div class="subtitle">A guessing game built from cropped member-submitted images, for adults-only channels</div>
+          <div class="subtitle">A guessing game built from cropped member-submitted images</div>
         </header>
         ${renderMetaWarning()}
         <form class="form form-cards" data-form>
@@ -49,9 +49,11 @@ export function mount(container) {
               <label>Game Channel</label>
               <span data-picker="channel_id"></span>
               <div class="field-hint">Rounds are posted here. The game does nothing
-                until this is set — "(disabled)" turns it off. The channel must be
-                marked age-restricted in Discord; Dungeon Keeper refuses to post
-                anywhere else.</div>
+                until this is set — "(disabled)" turns it off. Submissions may be
+                SFW or NSFW, and the bot posts whatever it is given here, so pick a
+                channel that suits what your members submit — mark it age-restricted
+                in Discord if NSFW submissions are expected. Enforcement is left to
+                your moderators.</div>
             </div>
             <div class="field">
               <label>Required Role</label>

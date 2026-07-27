@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from starlette.testclient import TestClient
 
 from bot_modules.core.db_utils import open_db
@@ -1362,7 +1363,13 @@ def test_welcome_preview_falls_back_to_stored_values(authed_client, fake_ctx):
     assert "UNSAVED LEAVE" in body["leave"]["description"]
 
 
-# ── PUT /api/config/guess — NSFW channel guard ─────────────────────────
+# ── PUT /api/config/guess — channel selection ──────────────────────────
+#
+# Guess accepts SFW and NSFW submissions alike, so the channel is NOT required
+# to be age-gated: the age-gate check that used to live here was removed with
+# SFW support, and placement is a moderator call. The runtime has had no
+# is_nsfw() recheck since 47ca6a5, so this route was the last holdout. Only the
+# channel's existence is still validated.
 
 
 def _attach_guess_bot(fake_ctx, *, nsfw: bool):
@@ -1375,19 +1382,14 @@ def _attach_guess_bot(fake_ctx, *, nsfw: bool):
     fake_ctx.bot = bot
 
 
-def test_update_guess_channel_rejects_non_nsfw_channel(authed_client, fake_ctx):
-    _attach_guess_bot(fake_ctx, nsfw=False)
+@pytest.mark.parametrize("nsfw", [True, False], ids=["age_gated", "sfw"])
+def test_update_guess_channel_saves_regardless_of_age_gate(authed_client, fake_ctx, nsfw):
+    """Both an age-gated and a plain SFW channel save.
 
-    resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
-    assert resp.status_code == 400
-    assert "age-gated" in resp.json()["detail"]
-    with open_db(fake_ctx.db_path) as conn:
-        from bot_modules.core.db_utils import get_config_value
-        assert get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id) == "0"
-
-
-def test_update_guess_channel_accepts_nsfw_channel(authed_client, fake_ctx):
-    _attach_guess_bot(fake_ctx, nsfw=True)
+    The SFW row is the regression: it returned 400 "Guess only posts in
+    age-gated channels" before SFW submissions were supported.
+    """
+    _attach_guess_bot(fake_ctx, nsfw=nsfw)
 
     resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
     assert resp.status_code == 200
@@ -1397,11 +1399,9 @@ def test_update_guess_channel_accepts_nsfw_channel(authed_client, fake_ctx):
         assert get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id) == "555"
 
 
-def test_update_guess_channel_disabled_sentinel_saves_without_nsfw_check(
-    authed_client, fake_ctx
-):
+def test_update_guess_channel_disabled_sentinel_saves(authed_client, fake_ctx):
     # "0" is the "(disabled)" option; it must persist without tripping the
-    # channel-not-found / NSFW gate that a real channel id would.
+    # channel-not-found lookup that a real channel id would.
     _attach_guess_bot(fake_ctx, nsfw=False)
 
     resp = authed_client.put("/api/config/guess", json={"channel_id": "0"})
