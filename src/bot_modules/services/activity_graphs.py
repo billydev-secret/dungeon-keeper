@@ -9,7 +9,6 @@ import sqlite3
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import groupby
 from pathlib import Path
 from typing import Literal
 
@@ -18,8 +17,7 @@ from typing import Literal
 # temp dir on every boot, rebuilding the font cache each time. Point it at this
 # repo-local dir (the unit's only ReadWritePath) BEFORE importing matplotlib,
 # which resolves the path at import time. setdefault so an explicit
-# MPLCONFIGDIR still wins. Mirrored in interaction_graph.py — whichever module
-# is imported first wins, so both must set it.
+# MPLCONFIGDIR still wins.
 os.environ.setdefault(
     "MPLCONFIGDIR",
     str(Path(__file__).resolve().parents[3] / ".cache" / "matplotlib"),
@@ -608,55 +606,6 @@ def query_xp_histogram_with_breakdown(
 # ---------------------------------------------------------------------------
 
 
-def query_message_rate_drops(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    period_seconds: float,
-    *,
-    channel_id: int | None = None,
-    min_previous: int = 5,
-    limit: int = 10,
-) -> list[tuple[int, int, int]]:
-    """Compare per-user message counts across two consecutive equal-length windows.
-
-    The full window spans ``2 * period_seconds`` ending now.  The midpoint divides
-    it into a *previous* half and a *recent* half.
-
-    Returns a list of ``(user_id, previous_count, recent_count)`` sorted by
-    largest absolute drop, restricted to users whose previous count is at least
-    ``min_previous`` and whose recent count is lower than their previous count.
-    """
-    now = int(datetime.now(timezone.utc).timestamp())
-    mid = now - int(period_seconds)
-    start = mid - int(period_seconds)
-
-    channel_clause = "AND channel_id = ? " if channel_id is not None else ""
-
-    params: list[object] = [mid, mid, guild_id, start, now]
-    if channel_id is not None:
-        params.append(channel_id)
-    params.extend([min_previous, limit])
-
-    rows = conn.execute(
-        f"""
-        SELECT
-            user_id,
-            SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END) AS prev_count,
-            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS recent_count
-        FROM processed_messages
-        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
-        {channel_clause}
-        GROUP BY user_id
-        HAVING prev_count >= ? AND prev_count > recent_count
-        ORDER BY (prev_count - recent_count) DESC
-        LIMIT ?
-        """,
-        params,
-    ).fetchall()
-
-    return [(int(r[0]), int(r[1]), int(r[2])) for r in rows]
-
-
 # ---------------------------------------------------------------------------
 # Enriched dropoff profiles
 # ---------------------------------------------------------------------------
@@ -736,6 +685,55 @@ class DropoffProfile:
     # Server-wide baseline (same for all profiles in a batch)
     server_msgs_prev: int
     server_msgs_recent: int
+
+
+def query_message_rate_drops(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    period_seconds: float,
+    *,
+    channel_id: int | None = None,
+    min_previous: int = 5,
+    limit: int = 10,
+) -> list[tuple[int, int, int]]:
+    """Compare per-user message counts across two consecutive equal-length windows.
+
+    The full window spans ``2 * period_seconds`` ending now.  The midpoint divides
+    it into a *previous* half and a *recent* half.
+
+    Returns a list of ``(user_id, previous_count, recent_count)`` sorted by
+    largest absolute drop, restricted to users whose previous count is at least
+    ``min_previous`` and whose recent count is lower than their previous count.
+    """
+    now = int(datetime.now(timezone.utc).timestamp())
+    mid = now - int(period_seconds)
+    start = mid - int(period_seconds)
+
+    channel_clause = "AND channel_id = ? " if channel_id is not None else ""
+
+    params: list[object] = [mid, mid, guild_id, start, now]
+    if channel_id is not None:
+        params.append(channel_id)
+    params.extend([min_previous, limit])
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            user_id,
+            SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END) AS prev_count,
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS recent_count
+        FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+        {channel_clause}
+        GROUP BY user_id
+        HAVING prev_count >= ? AND prev_count > recent_count
+        ORDER BY (prev_count - recent_count) DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+    return [(int(r[0]), int(r[1]), int(r[2])) for r in rows]
 
 
 def query_dropoff_profiles(
@@ -1429,134 +1427,6 @@ _ROLE_COLORS = [
 ]
 
 
-def query_role_growth(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Resolution,
-    utc_offset_hours: float = 0,
-) -> tuple[list[str], dict[str, list[int]]]:
-    """
-    Query net role membership counts per time bucket.
-
-    Returns (labels, {role_name: [net_count_per_bucket]}).
-    The net count tracks grants minus removals, including events before the
-    window start as a baseline.
-    """
-    now = datetime.now(timezone.utc)
-    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
-    offset_secs = int(utc_offset_hours * 3600)
-    bucket_expr = _strftime_expr(
-        resolution, col="granted_at", since_ts=since_ts, utc_offset_secs=offset_secs
-    )
-
-    # Net role count (grants minus removals) before the window — per-role baselines
-    baseline_rows = conn.execute(
-        """
-        SELECT role_name,
-               SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS cnt
-        FROM role_events
-        WHERE guild_id = ? AND granted_at < ?
-        GROUP BY role_name
-        """,
-        (guild_id, since_ts),
-    ).fetchall()
-    baselines: dict[str, int] = {str(r[0]): max(0, int(r[1])) for r in baseline_rows}
-
-    # Net changes within the window, grouped by role and time bucket
-    window_rows = conn.execute(
-        f"""
-        SELECT role_name, {bucket_expr} AS bucket,
-               SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS cnt
-        FROM role_events
-        WHERE guild_id = ? AND granted_at >= ?
-        GROUP BY role_name, bucket
-        """,
-        (guild_id, since_ts),
-    ).fetchall()
-
-    deltas_by_role: dict[str, dict[str, int]] = {}
-    for r in window_rows:
-        role, bucket, cnt = str(r[0]), str(r[1]), int(r[2])
-        deltas_by_role.setdefault(role, {})[bucket] = cnt
-
-    all_roles = sorted(set(list(baselines.keys()) + list(deltas_by_role.keys())))
-    labels = [label for _, label in bucket_sequence]
-
-    role_counts: dict[str, list[int]] = {}
-    for role in all_roles:
-        running = baselines.get(role, 0)
-        counts: list[int] = []
-        for key, _ in bucket_sequence:
-            running += deltas_by_role.get(role, {}).get(key, 0)
-            counts.append(max(0, running))
-        role_counts[role] = counts
-
-    return labels, role_counts
-
-
-def render_role_growth_chart(
-    labels: list[str],
-    role_counts: dict[str, list[int]],
-    title: str,
-) -> bytes:
-    """Render a net role membership line chart as PNG bytes."""
-    n = len(labels)
-    fig_width = max(9, n * 0.42)
-
-    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    x = list(range(n))
-    for i, (role_name, counts) in enumerate(role_counts.items()):
-        color = _ROLE_COLORS[i % len(_ROLE_COLORS)]
-        ax.plot(
-            x,
-            counts,
-            color=color,
-            linewidth=2,
-            marker="o",
-            markersize=3,
-            label=role_name,
-            zorder=2,
-        )
-
-    max_visible = 20
-    if n > max_visible:
-        step = max(1, n // max_visible)
-        tick_positions = list(range(0, n, step))
-        tick_labels_visible = [labels[i] for i in tick_positions]
-    else:
-        tick_positions = x
-        tick_labels_visible = labels
-
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(
-        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
-    )
-    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
-    ax.tick_params(length=0)
-
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.set_axisbelow(True)
-    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax.set_ylabel("Members", color=_TEXT, fontsize=9)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    if role_counts:
-        ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
-
-
 # ---------------------------------------------------------------------------
 # Session burst profile
 # ---------------------------------------------------------------------------
@@ -1567,423 +1437,9 @@ _POST_WINDOW_MINUTES = 60
 _BIN_MINUTES = 2
 
 
-def query_session_burst(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
-) -> tuple[list[list[float]], list[list[float]], float]:
-    """
-    Find all session starts for a user and compute per-bin server message counts.
-
-    A session starts when the user's first message follows a gap of ≥20 minutes.
-    For each session, **all guild messages** are counted in 2-minute bins covering:
-      - the 20 minutes before session start  (pre-bins)
-      - the 60 minutes after session start   (post-bins)
-
-    Returns:
-        pre_sessions  – list of sessions, each a list of _PRE_WINDOW_MINUTES//_BIN_MINUTES counts
-        post_sessions – list of sessions, each a list of _POST_WINDOW_MINUTES//_BIN_MINUTES counts
-        overall_rate  – server messages per _BIN_MINUTES across the guild's full recorded history
-    """
-    # User timestamps — used only to detect session starts
-    user_rows = conn.execute(
-        """
-        SELECT created_at FROM processed_messages
-        WHERE guild_id = ? AND user_id = ?
-        ORDER BY created_at
-        """,
-        (guild_id, user_id),
-    ).fetchall()
-
-    user_ts = [float(r[0]) for r in user_rows]
-    if len(user_ts) < 2:
-        return [], [], 0.0
-
-    pre_bins_count = _PRE_WINDOW_MINUTES // _BIN_MINUTES
-    post_bins_count = _POST_WINDOW_MINUTES // _BIN_MINUTES
-    bin_secs = _BIN_MINUTES * 60
-    pre_secs = _PRE_WINDOW_MINUTES * 60
-    post_secs = _POST_WINDOW_MINUTES * 60
-
-    # Find session starts (gap ≥ 20 min before this user message)
-    session_starts: list[float] = [user_ts[0]]
-    for i in range(1, len(user_ts)):
-        if user_ts[i] - user_ts[i - 1] >= _IDLE_THRESHOLD_SECONDS:
-            session_starts.append(user_ts[i])
-
-    # Fetch all guild messages in the window that covers all sessions
-    window_lo = min(session_starts) - pre_secs
-    window_hi = max(session_starts) + post_secs
-    guild_rows = conn.execute(
-        """
-        SELECT created_at FROM processed_messages
-        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
-        ORDER BY created_at
-        """,
-        (guild_id, window_lo, window_hi),
-    ).fetchall()
-    guild_ts = [float(r[0]) for r in guild_rows]
-
-    pre_sessions: list[list[float]] = []
-    post_sessions: list[list[float]] = []
-
-    for start_ts in session_starts:
-        # Pre-window: guild messages in [start_ts - pre_secs, start_ts)
-        pre_bins: list[float] = [0.0] * pre_bins_count
-        lo = bisect.bisect_left(guild_ts, start_ts - pre_secs)
-        hi = bisect.bisect_left(guild_ts, start_ts)
-        for ts in guild_ts[lo:hi]:
-            offset = ts - (start_ts - pre_secs)
-            bin_i = int(offset // bin_secs)
-            if 0 <= bin_i < pre_bins_count:
-                pre_bins[bin_i] += 1
-        pre_sessions.append(pre_bins)
-
-        # Post-window: guild messages in [start_ts, start_ts + post_secs)
-        post_bins: list[float] = [0.0] * post_bins_count
-        lo = bisect.bisect_left(guild_ts, start_ts)
-        for ts in guild_ts[lo:]:
-            offset = ts - start_ts
-            if offset >= post_secs:
-                break
-            bin_i = int(offset // bin_secs)
-            if 0 <= bin_i < post_bins_count:
-                post_bins[bin_i] += 1
-        post_sessions.append(post_bins)
-
-    # Overall rate: total guild messages over the full recorded guild history
-    total_row = conn.execute(
-        "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM processed_messages WHERE guild_id = ?",
-        (guild_id,),
-    ).fetchone()
-    total_count = int(total_row[0]) if total_row and total_row[0] else 0
-    if total_count > 1:
-        total_mins = (float(total_row[2]) - float(total_row[1])) / 60.0
-        total_bins = max(1.0, total_mins / _BIN_MINUTES)
-        overall_rate = total_count / total_bins
-    else:
-        overall_rate = 0.0
-
-    return pre_sessions, post_sessions, overall_rate
-
-
-def render_session_burst_chart(
-    pre_sessions: list[list[float]],
-    post_sessions: list[list[float]],
-    overall_rate: float,
-    user_display_name: str,
-) -> bytes:
-    """Render the average session burst profile as PNG bytes."""
-    n_pre = _PRE_WINDOW_MINUTES // _BIN_MINUTES
-    n_post = _POST_WINDOW_MINUTES // _BIN_MINUTES
-    n_sessions = len(post_sessions)
-
-    def _mean_bins(sessions: list[list[float]]) -> list[float]:
-        if not sessions:
-            return []
-        n = len(sessions[0])
-        return [sum(s[i] for s in sessions) / n_sessions for i in range(n)]
-
-    mean_pre = _mean_bins(pre_sessions)
-    mean_post = _mean_bins(post_sessions)
-
-    # X positions: pre bins are negative, post bins are positive
-    x_pre = [
-        (-_PRE_WINDOW_MINUTES + i * _BIN_MINUTES + _BIN_MINUTES / 2)
-        for i in range(n_pre)
-    ]
-    x_post = [(i * _BIN_MINUTES + _BIN_MINUTES / 2) for i in range(n_post)]
-
-    fig_width = max(11, (n_pre + n_post) * 0.45)
-    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    # Pre-session bars (muted color)
-    ax.bar(
-        x_pre,
-        mean_pre,
-        width=_BIN_MINUTES * 0.85,
-        color="#4e5058",
-        zorder=2,
-        label="Server activity (pre)",
-    )
-    # Post-session bars
-    ax.bar(
-        x_post,
-        mean_post,
-        width=_BIN_MINUTES * 0.85,
-        color=_BAR,
-        zorder=2,
-        label="Server activity (post)",
-    )
-
-    # Individual session lines (faint), capped at 20 to keep the chart readable
-    if n_sessions <= 20:
-        for pre, post in zip(pre_sessions, post_sessions):
-            ax.plot(x_pre, pre, color="#4e5058", linewidth=0.6, alpha=0.4, zorder=1)
-            ax.plot(x_post, post, color=_BAR, linewidth=0.6, alpha=0.4, zorder=1)
-
-    # Overall average rate reference line
-    ax.axhline(
-        overall_rate,
-        color="#fee75c",
-        linewidth=1.5,
-        linestyle="--",
-        label=f"Server avg ({overall_rate:.2f} msg / {_BIN_MINUTES}min)",
-        zorder=3,
-    )
-
-    # Session-start marker
-    ax.axvline(
-        0,
-        color=_BAR_ACCENT,
-        linewidth=2,
-        linestyle="-",
-        label="Session start",
-        zorder=4,
-    )
-
-    # Shade the pre-window to make it visually distinct
-    ax.axvspan(-_PRE_WINDOW_MINUTES, 0, alpha=0.06, color=_TEXT, zorder=0)
-
-    ax.set_xlabel("Minutes relative to session start", color=_TEXT, fontsize=9)
-    ax.set_ylabel(f"Server messages per {_BIN_MINUTES} min", color=_TEXT, fontsize=9)
-    ax.set_title(
-        f"{user_display_name} — Session Burst Profile  ·  {n_sessions} session{'s' if n_sessions != 1 else ''}",
-        color=_TEXT,
-        fontsize=13,
-        pad=10,
-    )
-
-    ax.tick_params(axis="both", colors=_TEXT, labelsize=8, length=0)
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    ax.set_axisbelow(True)
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
-
-
 # ---------------------------------------------------------------------------
 # Burst ranking — highest / lowest burst increase across all users
 # ---------------------------------------------------------------------------
-
-
-def query_burst_ranking(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    min_sessions: int = 3,
-    days: int | None = None,
-) -> list[tuple[int, float, float, int]]:
-    """
-    Compute the session burst increase for every user in the guild.
-
-    For each user, "increase" = mean post-session msg rate minus mean pre-session
-    msg rate (both in messages per _BIN_MINUTES-minute bin, averaged over all
-    sessions and all bins in the window).
-
-    Returns a list of (user_id, pre_avg, post_avg, n_sessions) sorted by
-    (post_avg - pre_avg) descending.  Only users with at least *min_sessions*
-    sessions are included.
-    """
-    cutoff_clause = ""
-    params: list[object] = [guild_id]
-    if days is not None:
-        import time as _time
-
-        cutoff_ts = _time.time() - days * 86400
-        cutoff_clause = "AND created_at >= ?"
-        params.append(cutoff_ts)
-
-    rows = conn.execute(
-        f"""
-        SELECT user_id, created_at FROM processed_messages
-        WHERE guild_id = ? {cutoff_clause}
-        ORDER BY user_id, created_at
-        """,
-        params,
-    ).fetchall()
-
-    user_ts_map: dict[int, list[float]] = {}
-    for uid, grp in groupby(rows, key=lambda r: r[0]):
-        ts_list = [float(r[1]) for r in grp]
-        if len(ts_list) >= 2:
-            user_ts_map[int(uid)] = ts_list
-
-    if not user_ts_map:
-        return []
-
-    guild_rows = conn.execute(
-        f"SELECT created_at FROM processed_messages WHERE guild_id = ? {cutoff_clause} ORDER BY created_at",
-        params,
-    ).fetchall()
-    guild_ts = [float(r[0]) for r in guild_rows]
-
-    bin_secs = _BIN_MINUTES * 60
-    pre_secs = _PRE_WINDOW_MINUTES * 60
-    post_secs = _POST_WINDOW_MINUTES * 60
-    pre_bins_count = _PRE_WINDOW_MINUTES // _BIN_MINUTES
-    post_bins_count = _POST_WINDOW_MINUTES // _BIN_MINUTES
-
-    results: list[tuple[int, float, float, int]] = []
-
-    for user_id, user_ts in user_ts_map.items():
-        session_starts: list[float] = [user_ts[0]]
-        for i in range(1, len(user_ts)):
-            if user_ts[i] - user_ts[i - 1] >= _IDLE_THRESHOLD_SECONDS:
-                session_starts.append(user_ts[i])
-
-        if len(session_starts) < min_sessions:
-            continue
-
-        pre_sum = [0.0] * pre_bins_count
-        post_sum = [0.0] * post_bins_count
-
-        for start_ts in session_starts:
-            lo = bisect.bisect_left(guild_ts, start_ts - pre_secs)
-            hi = bisect.bisect_left(guild_ts, start_ts)
-            for ts in guild_ts[lo:hi]:
-                offset = ts - (start_ts - pre_secs)
-                bin_i = int(offset // bin_secs)
-                if 0 <= bin_i < pre_bins_count:
-                    pre_sum[bin_i] += 1
-
-            lo = bisect.bisect_left(guild_ts, start_ts)
-            for ts in guild_ts[lo:]:
-                offset = ts - start_ts
-                if offset >= post_secs:
-                    break
-                bin_i = int(offset // bin_secs)
-                if 0 <= bin_i < post_bins_count:
-                    post_sum[bin_i] += 1
-
-        n = len(session_starts)
-        pre_avg = sum(pre_sum) / (pre_bins_count * n)
-        post_avg = sum(post_sum) / (post_bins_count * n)
-        results.append((user_id, pre_avg, post_avg, n))
-
-    results.sort(key=lambda r: r[2] - r[1], reverse=True)
-    return results
-
-
-def render_burst_ranking_chart(
-    entries: list[tuple[str, float, float, int]],
-    limit: int,
-    guild_name: str,
-) -> bytes:
-    """
-    Render a horizontal bar chart showing the top and bottom *limit* users
-    by burst increase (post_avg - pre_avg).
-
-    entries: list of (display_name, pre_avg, post_avg, n_sessions)
-             sorted highest-increase first.
-    """
-    if not entries:
-        raise ValueError("No entries to render.")
-
-    top = entries[:limit]
-    bottom = entries[-limit:] if len(entries) > limit else []
-
-    names: list[str] = []
-    values: list[float] = []
-    colors: list[str] = []
-    n_sessions_list: list[int] = []
-
-    for name, pre, post, n in reversed(top):
-        names.append(name)
-        values.append(post - pre)
-        colors.append(_BAR)
-        n_sessions_list.append(n)
-
-    if bottom:
-        for name, pre, post, n in reversed(bottom):
-            names.append(name)
-            values.append(post - pre)
-            colors.append(_BAR_ACCENT)
-            n_sessions_list.append(n)
-
-    fig_height = max(4.5, len(names) * 0.45 + 1.5)
-    fig, ax = plt.subplots(figsize=(9, fig_height))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    y = list(range(len(names)))
-    bars = ax.barh(y, values, color=colors, height=0.7, zorder=2)
-
-    val_range = (
-        (max(values) - min(values))
-        if len(values) > 1
-        else (abs(values[0]) if values else 1.0)
-    )
-    nudge = val_range * 0.012 or 0.01
-
-    for bar, n in zip(bars, n_sessions_list):
-        width = bar.get_width()
-        x_pos = width + nudge if width >= 0 else width - nudge
-        ax.text(
-            x_pos,
-            bar.get_y() + bar.get_height() / 2,
-            f"{n}s",
-            va="center",
-            ha="left" if width >= 0 else "right",
-            color=_TEXT,
-            fontsize=7,
-        )
-
-    ax.axvline(0, color=_GRID, linewidth=1, zorder=3)
-
-    ax.set_yticks(y)
-    ax.set_yticklabels(names, color=_TEXT, fontsize=9)
-    ax.set_xlabel(
-        f"Burst increase (msg / {_BIN_MINUTES} min, post - pre session avg)",
-        color=_TEXT,
-        fontsize=9,
-    )
-    ax.set_title(
-        f"{guild_name} - Session Burst Ranking",
-        color=_TEXT,
-        fontsize=13,
-        pad=10,
-    )
-    ax.tick_params(axis="x", colors=_TEXT, labelsize=8, length=0)
-    ax.tick_params(axis="y", length=0)
-    ax.xaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.set_axisbelow(True)
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    from matplotlib.patches import Patch
-
-    legend_handles = [Patch(color=_BAR, label=f"Top {limit} highest burst")]
-    if bottom:
-        legend_handles.append(
-            Patch(color=_BAR_ACCENT, label=f"Bottom {limit} lowest burst")
-        )
-    ax.legend(
-        handles=legend_handles,
-        facecolor=_BG,
-        edgecolor=_GRID,
-        labelcolor=_TEXT,
-        fontsize=9,
-    )
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
 
 
 # ---------------------------------------------------------------------------
@@ -1999,271 +1455,6 @@ class CadenceBucket:
     median_gap: float  # body mid
     p80_gap: float  # body high (close)
     max_gap: float  # wick high
-
-
-def query_message_cadence(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Resolution,
-    utc_offset_hours: float = 0,
-    channel_id: int | None = None,
-) -> list[CadenceBucket]:
-    """Compute per-bucket inter-message time statistics.
-
-    Returns a list of CadenceBucket with average, mode, and 80th-percentile
-    gap durations (in minutes) between consecutive messages.
-    """
-    now = datetime.now(timezone.utc)
-    offset_secs = int(utc_offset_hours * 3600)
-
-    # hour_of_day / day_of_week: aggregate across all history into fixed bins
-    if resolution in ("hour_of_day", "day_of_week"):
-        params: list[object] = [guild_id]
-        channel_clause = ""
-        if channel_id is not None:
-            channel_clause = " AND channel_id = ?"
-            params.append(channel_id)
-
-        rows = conn.execute(
-            f"SELECT ts FROM messages WHERE guild_id = ?{channel_clause} ORDER BY ts",
-            params,
-        ).fetchall()
-        if not rows:
-            return []
-
-        if resolution == "hour_of_day":
-            labels_list, n_bins = _HOD_LABELS, 24
-        else:
-            labels_list, n_bins = _DOW_LABELS, 7
-
-        gap_buckets: dict[int, list[float]] = {i: [] for i in range(n_bins)}
-        prev_ts = int(rows[0]["ts"])
-        for row in rows[1:]:
-            cur_ts = int(row["ts"])
-            gap_sec = cur_ts - prev_ts
-            prev_ts = cur_ts
-            if gap_sec <= 0:
-                continue
-            dt = datetime.fromtimestamp(cur_ts + offset_secs, tz=timezone.utc)
-            if resolution == "hour_of_day":
-                idx = dt.hour
-            else:
-                idx = (dt.weekday() + 1) % 7  # Mon=0 -> Sun=0,Mon=1,...,Sat=6
-            gap_buckets[idx].append(gap_sec / 60.0)
-
-        results: list[CadenceBucket] = []
-        for i in range(n_bins):
-            gaps = gap_buckets[i]
-            if not gaps:
-                results.append(
-                    CadenceBucket(
-                        label=labels_list[i],
-                        min_gap=0,
-                        p20_gap=0,
-                        median_gap=0,
-                        p80_gap=0,
-                        max_gap=0,
-                    )
-                )
-                continue
-            sg = sorted(gaps)
-            results.append(
-                CadenceBucket(
-                    label=labels_list[i],
-                    min_gap=sg[0],
-                    p20_gap=sg[int(len(sg) * 0.2)],
-                    median_gap=float(statistics.median(sg)),
-                    p80_gap=sg[int(len(sg) * 0.8)],
-                    max_gap=sg[-1],
-                )
-            )
-        return results
-
-    # Time-series resolutions
-    if resolution == "day":
-        buckets, start_ts = _day_buckets(now, utc_offset_hours)
-    elif resolution == "week":
-        buckets, start_ts = _week_buckets(now, utc_offset_hours)
-    elif resolution == "month":
-        buckets, start_ts = _month_buckets(now, utc_offset_hours)
-    elif resolution == "hour":
-        buckets, start_ts = _hour_buckets(now, utc_offset_hours)
-    else:
-        buckets, start_ts = _day_buckets(now, utc_offset_hours)
-
-    params2: list[object] = [guild_id, int(start_ts)]
-    channel_clause2 = ""
-    if channel_id is not None:
-        channel_clause2 = " AND channel_id = ?"
-        params2.append(channel_id)
-
-    rows = conn.execute(
-        f"SELECT ts FROM messages WHERE guild_id = ? AND ts >= ?{channel_clause2} "
-        "ORDER BY ts",
-        params2,
-    ).fetchall()
-
-    if not rows:
-        return []
-
-    timestamps = [int(r["ts"]) for r in rows]
-
-    n_buckets = len(buckets)
-    end_ts = datetime.now(timezone.utc).timestamp()
-    span = end_ts - start_ts
-    bucket_size = span / n_buckets
-    bucket_boundaries = [start_ts + bucket_size * i for i in range(n_buckets)]
-
-    ts_gap_buckets: dict[int, list[float]] = {i: [] for i in range(n_buckets)}
-    for j in range(1, len(timestamps)):
-        gap_sec = timestamps[j] - timestamps[j - 1]
-        if gap_sec <= 0:
-            continue
-        idx = bisect.bisect_right(bucket_boundaries, timestamps[j]) - 1
-        idx = max(0, min(idx, n_buckets - 1))
-        ts_gap_buckets[idx].append(gap_sec / 60.0)
-
-    results2: list[CadenceBucket] = []
-    for i, (_key, label) in enumerate(buckets):
-        gaps = ts_gap_buckets[i]
-        if not gaps:
-            results2.append(
-                CadenceBucket(
-                    label=label,
-                    min_gap=0,
-                    p20_gap=0,
-                    median_gap=0,
-                    p80_gap=0,
-                    max_gap=0,
-                )
-            )
-            continue
-
-        sg = sorted(gaps)
-        results2.append(
-            CadenceBucket(
-                label=label,
-                min_gap=sg[0],
-                p20_gap=sg[int(len(sg) * 0.2)],
-                median_gap=float(statistics.median(sg)),
-                p80_gap=sg[int(len(sg) * 0.8)],
-                max_gap=sg[-1],
-            )
-        )
-
-    return results2
-
-
-def render_message_cadence_chart(
-    buckets: list[CadenceBucket],
-    title: str,
-) -> bytes:
-    """Render a candlestick chart of inter-message gap times.
-
-    Each candle:
-      wick  = min → max gap
-      body  = p20 → p80 gap
-      tick  = median
-    Green body when median decreased vs prior bucket, pink when increased.
-    """
-    labels = [b.label for b in buckets]
-    n = len(labels)
-    fig_width = max(9, n * 0.5)
-    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    body_width = 0.5
-    wick_color = "#72767d"
-    color_down = "#57f287"  # green — median decreased (faster chat)
-    color_up = "#eb459e"  # pink — median increased (slower chat)
-
-    prev_median = None
-    for i, b in enumerate(buckets):
-        if b.max_gap == 0:
-            prev_median = None
-            continue
-
-        # Wick: min to max
-        ax.plot([i, i], [b.min_gap, b.max_gap], color=wick_color, linewidth=1, zorder=2)
-
-        # Body color: green if median went down, pink if up
-        if prev_median is not None and b.median_gap <= prev_median:
-            color = color_down
-        else:
-            color = color_up
-
-        # Body: p20 to p80
-        body_bottom = b.p20_gap
-        body_height = b.p80_gap - b.p20_gap
-        ax.bar(
-            i,
-            body_height,
-            bottom=body_bottom,
-            width=body_width,
-            color=color,
-            edgecolor=color,
-            linewidth=0.5,
-            zorder=3,
-        )
-
-        # Median tick
-        ax.plot(
-            [i - body_width / 2, i + body_width / 2],
-            [b.median_gap, b.median_gap],
-            color=_TEXT,
-            linewidth=1.5,
-            zorder=4,
-        )
-
-        prev_median = b.median_gap
-
-    max_visible = 20
-    x = list(range(n))
-    if n > max_visible:
-        step = max(1, n // max_visible)
-        tick_positions = list(range(0, n, step))
-        tick_labels_visible = [labels[i] for i in tick_positions]
-    else:
-        tick_positions = x
-        tick_labels_visible = labels
-
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(
-        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
-    )
-    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
-    ax.tick_params(length=0)
-
-    ax.set_yscale("log")
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.set_axisbelow(True)
-    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax.set_ylabel("Minutes between messages (log)", color=_TEXT, fontsize=9)
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    from matplotlib.patches import Patch
-
-    legend_handles = [
-        Patch(color=color_down, label="Median \u2193 (faster)"),
-        Patch(color=color_up, label="Median \u2191 (slower)"),
-    ]
-    ax.legend(
-        handles=legend_handles,
-        facecolor=_BG,
-        edgecolor=_GRID,
-        labelcolor=_TEXT,
-        fontsize=9,
-    )
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
 
 
 # ---------------------------------------------------------------------------
@@ -2693,83 +1884,3 @@ def render_greeter_response_chart(
 # ---------------------------------------------------------------------------
 
 
-def query_message_rate_10min(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    days: int,
-    *,
-    utc_offset_hours: float = 0,
-    channel_id: int | None = None,
-) -> list[int]:
-    """Aggregate message counts from the last *days* days into 144 ten-minute
-    time-of-day buckets.
-
-    Returns counts_per_bucket. Bucket 0 = 00:00-00:10 (in the configured
-    timezone), bucket 143 = 23:50-24:00.
-    """
-    since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
-
-    offset_secs = int(utc_offset_hours * 3600)
-    shifted = f"(created_at + {offset_secs})" if offset_secs else "created_at"
-    # 10-min bucket = (hour * 6) + (minute // 10), 0..143
-    bucket_expr = (
-        f"(CAST(strftime('%H', datetime({shifted}, 'unixepoch')) AS INTEGER) * 6 "
-        f"+ CAST(strftime('%M', datetime({shifted}, 'unixepoch')) AS INTEGER) / 10)"
-    )
-    channel_clause = "AND channel_id = ? " if channel_id is not None else ""
-    params: tuple = (guild_id, since_ts, channel_id) if channel_id is not None else (guild_id, since_ts)
-
-    rows = conn.execute(
-        f"""
-        SELECT {bucket_expr} AS bucket, COUNT(*) AS msg_count
-        FROM processed_messages
-        WHERE guild_id = ? AND created_at >= ? {channel_clause}
-        GROUP BY bucket
-        """,
-        params,
-    ).fetchall()
-
-    counts_by_bucket = {int(row[0]): int(row[1]) for row in rows}
-    return [counts_by_bucket.get(i, 0) for i in range(144)]
-
-
-def render_message_rate_chart(
-    counts: list[int],
-    days_in_window: int,
-    title: str,
-) -> bytes:
-    """Render a 144-bucket bar chart of messages per 10 minutes (averaged per day)."""
-    n = len(counts)
-    # Average per day so the y-axis is comparable across windows
-    avg = [c / days_in_window for c in counts]
-
-    fig, ax = plt.subplots(figsize=(13, 4.5))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    x = list(range(n))
-    ax.bar(x, avg, color=_BAR, width=0.95, zorder=2)
-
-    # Tick every 2 hours = every 12 buckets
-    tick_positions = list(range(0, n, 12))
-    tick_labels = [f"{(i // 6):02d}:00" for i in tick_positions]
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels, color=_TEXT, fontsize=8)
-    ax.set_xlim(-0.5, n - 0.5)
-    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
-    ax.tick_params(length=0)
-
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.set_axisbelow(True)
-    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax.set_ylabel("Messages / 10 min (avg / day)", color=_TEXT, fontsize=9)
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()

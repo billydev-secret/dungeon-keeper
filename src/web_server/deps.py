@@ -47,7 +47,7 @@ async def cached_run_query(
 ) -> T:
     """Like ``run_query`` but returns a cached result if one exists and is fresh.
 
-    *name* is a short label for the report (e.g. ``"role-growth"``).
+    *name* is a short label for the report (e.g. ``"xp-leaderboard"``).
     *params* is a dict of the query-specific parameters used for cache keying.
     """
     key = _make_cache_key(name, guild_id, params)
@@ -144,7 +144,7 @@ async def run_query(fn: Callable[..., T], *args, **kwargs) -> T:
 
         def _q():
             with ctx.open_db() as conn:
-                return reports_data.get_role_growth_data(conn, ...)
+                return reports_data.get_xp_leaderboard_data(conn, ...)
         data = await run_query(_q)
     """
     return await asyncio.to_thread(fn, *args, **kwargs)

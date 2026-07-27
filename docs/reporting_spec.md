@@ -14,26 +14,25 @@ Reporting is the analytics backbone of the dashboard. A handful of small service
 | Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behavior |
 | Cache clear | Web | Admin | Drop every cached report payload for the active guild |
 
-The bot needs **Manage Server** to read invite codes for attribution. When missing, invite attribution silently degrades to "no inviter detected" — no other report is blocked.
+The bot needs **Manage Server** to read invite codes for attribution. When missing, invite attribution degrades to "no inviter detected" and **logs a warning on every refresh and every unattributed join** — no other report is blocked. The collector (2026-07 rework, `invite_tracker.py`) diffs cached invite snapshots on each join: it drains join bursts one use at a time, attributes consumed single-use invites via their disappearance (Discord deletes them before the use count is ever observable), and keeps the cache current through `on_invite_create` / `on_invite_delete`. Attribution misses (vanity URL joins, diff races) are logged, never silent.
 
 ## Behavior
 
 ### Dashboard report tiles
 
-Every report is admin-only, GET-only (cache clear is the single POST), and read through a per-route cache keyed by guild + parameters. Most tiles use a 60-second TTL; heavier tiles that scan the message archive (quality score, time-to-level, interaction heatmap, dropoff, chilling-effect) use 5 to 10 minutes. An hourly background warmer additionally precomputes the default-parameter view of the heavy tiles (including the quality score) so a cold page load rarely pays the compute; non-default parameter combinations still compute on demand. The cache only invalidates on TTL expiry or explicit clear — there are no realtime pushes.
+Every report is admin-only, GET-only (cache clear is the single POST), and read through a per-route cache keyed by guild + parameters. Most tiles use a 60-second TTL; heavier tiles that scan the message archive (quality score, time-to-level, activity drop-off) use 5 to 10 minutes. An hourly background warmer additionally precomputes the default-parameter view of the heavy tiles (including the quality score) so a cold page load rarely pays the compute; non-default parameter combinations still compute on demand. The cache only invalidates on TTL expiry or explicit clear — there are no realtime pushes.
 
 Day-bucketed charts roll over at the guild's local 6 am, not midnight. Names on every row are resolved live from the guild cache when the bot is online and fall back to the historical name archive when offline; some tiles (role listings, guild-wide inactivity) return a service-unavailable error when the bot is offline since they depend on live role membership.
 
 Tiles group into a few areas:
 
-- **Activity** — message rate, message cadence by hour/day/week, role-growth, channel comparisons, top voice users, reaction givers/receivers, burst sessions, session-burst around a single member, generic activity (messages or XP) with user/channel/bot exclusions.
-- **Membership health** — join-time histogram, cohort retention, NSFW-channel activity grouped by recorded gender, members inactive ≥ N days, the oldest members without the NSFW role, message-rate-drops, dropoff.
+- **Activity** — the merged **Channels** panel (per-channel health status/score over 30 days plus a windowed comparison of messages / XP / sentiment / trend — both `/api/health/channel-health` and `/api/reports/channel-comparison` feed it), top voice users, generic activity (messages or XP) with user/channel/bot exclusions. (The finer-grained message-rate/cadence/burst experiments were removed in the 2026-07 reports cleanup.)
+- **Membership health** — join-time histogram, cohort retention, NSFW-channel activity grouped by recorded gender, activity drop-off profiles, and the merged **Inactive Report** (one member list over last-activity data: scoped to everyone / role holders / role non-holders, filtered by idle days — 0 lists the whole scope oldest-first — optionally measured within one channel; logic in `inactive_report_service.py`).
 - **Greeter performance** — greeter response time and missed joins, derived from the configured greeter chat channel and welcome / leave audit.
 - **XP** — top-N leaderboard for a window, days-to-level-5 histogram, and a generalised days-to-level-N report (level 2–100). Source data is owned by [[xp-spec]].
-- **Interaction graph** — force-directed network of replies and mentions, plus an animated adjacency-matrix heatmap by day or week. Any interaction touching a bot on either endpoint is excluded, so a member replying to a bot never reads as a one-sided relationship — the exclusion is applied in the queries (`query_connection_web`, `get_interaction_graph_data`) so the connection web, the interaction-graph tables, and the Health **Social Graph** metrics all share it. Recorded bots (see State) still have their raw interactions logged; they're just filtered out at report time.
+- **Interaction graph** — force-directed network of replies and mentions. Any interaction touching a bot on either endpoint is excluded, so a member replying to a bot never reads as a one-sided relationship — the exclusion is applied in the queries (`get_interaction_graph_data`) so the interaction-graph tables and the Health **Social Graph** metrics share it. Recorded bots (see State) still have their raw interactions logged; they're just filtered out at report time.
 - **Invite effectiveness** — per-inviter table of active invitees joined through them.
 - **Quality score** — the Member Quality Score table (described below).
-- **Chilling effect** — members whose arrival in a channel correlates with others going quiet.
 - **One-Sided Attention** — lopsided, unreciprocated attention between member pairs, for moderator review (described below).
 
 ### Message Review

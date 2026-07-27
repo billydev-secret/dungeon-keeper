@@ -435,9 +435,9 @@ def test_config_edits_work_for_non_primary_guild(ctx, make_client):
 
 
 def test_reports_cache_clear_endpoint_scopes_to_active_guild(ctx, make_client):
-    store_report_result("role-growth", 999, {"resolution": "week"}, {"ok": 1})
-    store_report_result("message-rate", 999, {"days": 30}, {"ok": 2})
-    store_report_result("role-growth", 123, {"resolution": "week"}, {"ok": 3})
+    store_report_result("xp-leaderboard", 999, {"days": None}, {"ok": 1})
+    store_report_result("channel-comparison", 999, {"days": 30}, {"ok": 2})
+    store_report_result("xp-leaderboard", 123, {"days": None}, {"ok": 3})
     client = make_client(auth_mode="discord", active_guild_id=999)
 
     response = client.post("/api/reports/cache/clear")
@@ -445,60 +445,6 @@ def test_reports_cache_clear_endpoint_scopes_to_active_guild(ctx, make_client):
     assert response.status_code == 200
     assert response.json() == {"cleared": 2}
     assert invalidate_report_cache() == 1
-
-
-def test_role_growth_endpoint_caches_results_and_parses_roles(ctx, make_client):
-    # tz is now read per-guild fresh from the DB, not the ctx flat.
-    with open_db(ctx.db_path) as conn:
-        set_config_value(conn, "tz_offset_hours", "3.5", ctx.guild_id)
-    client = make_client()
-    payload = {
-        "resolution": "month",
-        "window_label": "Last 3 Months",
-        "labels": ["Jan", "Feb"],
-        "series": [{"role": "alpha", "counts": [1, 2]}],
-    }
-
-    with patch(
-        "web_server.routes.reports.reports_data.get_role_growth_data",
-        return_value=payload,
-    ) as mock_role_growth:
-        first = client.get("/api/reports/role-growth?resolution=month&roles=alpha, beta,,")
-        second = client.get("/api/reports/role-growth?resolution=month&roles=alpha, beta,,")
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json() == payload
-    assert second.json() == payload
-    assert mock_role_growth.call_count == 1
-    args, kwargs = mock_role_growth.call_args
-    assert args[1] == ctx.guild_id
-    assert args[2] == "month"
-    assert args[3] == {"alpha", "beta"}
-    assert kwargs["utc_offset_hours"] == 3.5
-
-
-def test_message_rate_clamps_days_before_query(ctx, make_client):
-    client = make_client()
-    payload = {
-        "days": 365,
-        "tz_label": "UTC",
-        "buckets": list(range(7)),
-        "avg_per_day": [1.0] * 7,
-    }
-
-    with patch(
-        "web_server.routes.reports.reports_data.get_message_rate_data",
-        return_value=payload,
-    ) as mock_message_rate:
-        response = client.get("/api/reports/message-rate?days=9999")
-
-    assert response.status_code == 200
-    assert response.json() == payload
-    args, _kwargs = mock_message_rate.call_args
-    assert args[1] == ctx.guild_id
-    assert args[2] == 365
-    assert args[3] == 0.0
 
 
 def test_channel_comparison_resolves_names_from_guild_and_db(ctx, make_client):

@@ -7,7 +7,7 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.interaction_graph import init_interaction_tables, record_interactions
 from bot_modules.services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
-from bot_modules.services.reports_data import get_animated_heatmap_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_one_sided_attention_data
+from bot_modules.services.reports_data import get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_one_sided_attention_data
 from tests.db_template import migrated_db
 
 
@@ -156,23 +156,6 @@ def test_interaction_graph_excludes_bots_windowed(ig_conn):
     data = get_interaction_graph_data(ig_conn, guild_id=1, days=7)
     node_ids = {n["user_id"] for n in data["nodes"]}
     assert node_ids == {"1", "2"}
-
-
-def test_animated_heatmap_excludes_bots(ig_conn):
-    """The stable top-N user set for the heatmap never includes a bot."""
-    import time as _t
-
-    now = int(_t.time())
-    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
-    # Bot 99 is heavily interacted with — would top the volume ranking if kept.
-    for i in range(5):
-        record_interactions(
-            ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], ts=now, message_id=100 + i
-        )
-    _mark_bot(ig_conn, 1, 99)
-
-    data = get_animated_heatmap_data(ig_conn, guild_id=1, days=30)
-    assert "99" not in {u["user_id"] for u in data["users"]}
 
 
 def test_one_sided_attention_report_excludes_bots(ig_conn):

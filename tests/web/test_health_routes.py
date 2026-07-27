@@ -10,7 +10,7 @@ _SMOKE_ENDPOINTS = [
     "/api/health/dau-mau",
     "/api/health/composite-score",
     "/api/health/newcomer-funnel",
-    "/api/health/churn-risk",
+    "/api/health/gini",
     "/api/health/mod-workload",
 ]
 

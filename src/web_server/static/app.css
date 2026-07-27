@@ -503,6 +503,10 @@ a { text-decoration: none; }
   min-height: 0;
   min-width: 0;
   display: flex;
+  /* Column, not row: renderPanelMeta prepends a meta-bar sibling above the
+     panel, and in a row it sat BESIDE the panel instead — squeezing every
+     related-linked panel (0-width at phone with two links). */
+  flex-direction: column;
 }
 
 .panel {

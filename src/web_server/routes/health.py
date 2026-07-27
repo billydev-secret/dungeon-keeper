@@ -7,14 +7,13 @@ Each ``GET /api/health/{tile}`` endpoint returns full deep-dive data.
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, Literal, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services.health_metrics import (
     compute_channel_health,
-    compute_churn_risk,
     compute_cohort_retention,
     compute_composite_health,
     compute_dau_mau,
@@ -284,74 +283,6 @@ async def health_tiles(
                         "negative_24h": neg_count,
                     }
 
-                if _want("message_feed"):
-                    cutoff_24h = time.time() - 86400
-                    mf_rows = conn.execute(
-                        """SELECT m.message_id, m.channel_id, m.author_id,
-                                  substr(m.content, 1, 120) AS content,
-                                  COALESCE(m.sentiment, 0) AS sentiment,
-                                  m.reply_to_id, m.ts,
-                                  COALESCE(rx.reaction_total, 0) AS reaction_count,
-                                  COALESCE(rp.reply_count, 0) AS reply_count
-                           FROM messages m
-                           LEFT JOIN (
-                               SELECT message_id, SUM(count) AS reaction_total
-                               FROM message_reactions GROUP BY message_id
-                           ) rx ON rx.message_id = m.message_id
-                           LEFT JOIN (
-                               SELECT reply_to_id, COUNT(*) AS reply_count
-                               FROM messages
-                               WHERE reply_to_id IS NOT NULL AND guild_id = ?
-                               GROUP BY reply_to_id
-                           ) rp ON rp.reply_to_id = m.message_id
-                           WHERE m.guild_id = ? AND m.ts >= ?
-                           ORDER BY m.ts DESC
-                           LIMIT 8""",
-                        (guild_id, guild_id, cutoff_24h),
-                    ).fetchall()
-                    total_24h = conn.execute(
-                        "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ?",
-                        (guild_id, cutoff_24h),
-                    ).fetchone()[0]
-                    high_eng = conn.execute(
-                        """SELECT COUNT(*) FROM (
-                               SELECT m.message_id
-                               FROM messages m
-                               LEFT JOIN (
-                                   SELECT message_id, SUM(count) AS reaction_total
-                                   FROM message_reactions GROUP BY message_id
-                               ) rx ON rx.message_id = m.message_id
-                               LEFT JOIN (
-                                   SELECT reply_to_id, COUNT(*) AS reply_count
-                                   FROM messages
-                                   WHERE reply_to_id IS NOT NULL AND guild_id = ?
-                                   GROUP BY reply_to_id
-                               ) rp ON rp.reply_to_id = m.message_id
-                               WHERE m.guild_id = ? AND m.ts >= ?
-                                 AND (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) >= 3
-                           )""",
-                        (guild_id, guild_id, cutoff_24h),
-                    ).fetchone()[0]
-                    tiles["message_feed"] = {
-                        "messages": [
-                            {
-                                "message_id": str(r["message_id"]),
-                                "channel_id": str(r["channel_id"]),
-                                "author_id": str(r["author_id"]),
-                                "content": r["content"],
-                                "sentiment": r["sentiment"],
-                                "is_reply": bool(r["reply_to_id"]),
-                                "engagement": r["reaction_count"] + r["reply_count"],
-                                "reaction_count": r["reaction_count"],
-                                "reply_count": r["reply_count"],
-                                "ts": r["ts"],
-                            }
-                            for r in mf_rows
-                        ],
-                        "total_24h": total_24h,
-                        "high_engagement_24h": high_eng,
-                    }
-
             # --- Admin-only tiles ---
             if is_admin:
                 if _want("gini"):
@@ -487,18 +418,6 @@ async def health_tiles(
                         "latest_cohort_size": cached["latest_cohort_size"],
                     }
 
-                if _want("churn_risk"):
-                    cached = get_cached(conn, guild_id, "churn_risk")
-                    if cached is None:
-                        cached = compute_churn_risk(conn, guild_id)
-                        set_cached(conn, guild_id, "churn_risk", cached)
-                    tiles["churn_risk"] = {
-                        "at_risk_count": cached["at_risk_count"],
-                        "badge": cached["badge"],
-                        "critical": cached["critical"],
-                        "declining": cached["declining"],
-                        "watch": cached["watch"],
-                    }
 
                 if _want("composite"):
                     # Composite depends on other tiles being cached — compute
@@ -558,9 +477,6 @@ async def health_tiles(
             if "sentiment_feed" in tiles:
                 for msg in tiles["sentiment_feed"].get("messages", []):
                     ch_ids.add(int(msg["channel_id"]))
-            if "message_feed" in tiles:
-                for msg in tiles["message_feed"].get("messages", []):
-                    ch_ids.add(int(msg["channel_id"]))
             if "sentiment" in tiles:
                 for msg in tiles["sentiment"].get("outliers", {}).get("top", []):
                     ch_ids.add(int(msg["channel_id"]))
@@ -579,9 +495,6 @@ async def health_tiles(
                     mod_user_ids.add(int(m["user_id"]))
             if "sentiment_feed" in tiles:
                 for msg in tiles["sentiment_feed"].get("messages", []):
-                    mod_user_ids.add(int(msg["author_id"]))
-            if "message_feed" in tiles:
-                for msg in tiles["message_feed"].get("messages", []):
                     mod_user_ids.add(int(msg["author_id"]))
             if "sentiment" in tiles:
                 for msg in tiles["sentiment"].get("outliers", {}).get("top", []):
@@ -827,149 +740,6 @@ async def health_sentiment_feed(
     return await run_query(_q)
 
 
-@router.get("/health/message-feed")
-async def health_message_feed(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-    sentiment_min: float = Query(-1.0, ge=-1.0, le=1.0),
-    sentiment_max: float = Query(1.0, ge=-1.0, le=1.0),
-    engagement_min: int = Query(0, ge=0),
-    replies: Literal["all", "replies", "originals"] = "all",
-    connections_min: int = Query(0, ge=0),
-    hours: int = Query(168, ge=1, le=720),
-    offset: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-
-    def _q():
-        with ctx.open_db() as conn:
-            min_ts = time.time() - hours * 3600
-
-            # Build optional connections subquery
-            conn_join = ""
-            conn_select = "0 AS connections"
-            conn_where = ""
-            params: list[object] = []
-
-            if connections_min > 0:
-                conn_join = """
-                    LEFT JOIN (
-                        SELECT from_user_id AS user_id,
-                               COUNT(DISTINCT to_user_id) AS connection_count
-                        FROM user_interactions
-                        WHERE guild_id = ?
-                        GROUP BY from_user_id
-                    ) cn ON cn.user_id = m.author_id
-                """
-                conn_select = "COALESCE(cn.connection_count, 0) AS connections"
-                conn_where = f"AND COALESCE(cn.connection_count, 0) >= {int(connections_min)}"
-                params.append(guild_id)
-
-            reply_where = ""
-            if replies == "replies":
-                reply_where = "AND m.reply_to_id IS NOT NULL"
-            elif replies == "originals":
-                reply_where = "AND m.reply_to_id IS NULL"
-
-            base_sql = f"""
-                FROM messages m
-                LEFT JOIN (
-                    SELECT message_id, SUM(count) AS reaction_total
-                    FROM message_reactions GROUP BY message_id
-                ) rx ON rx.message_id = m.message_id
-                LEFT JOIN (
-                    SELECT reply_to_id, COUNT(*) AS reply_count
-                    FROM messages
-                    WHERE reply_to_id IS NOT NULL AND guild_id = ?
-                    GROUP BY reply_to_id
-                ) rp ON rp.reply_to_id = m.message_id
-                {conn_join}
-                WHERE m.guild_id = ?
-                  AND m.ts >= ?
-                  AND COALESCE(m.sentiment, 0) BETWEEN ? AND ?
-                  AND (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) >= ?
-                  {reply_where}
-                  {conn_where}
-            """
-
-            # Params order: [connections_min params...], guild_id (reply sub), guild_id, min_ts, sentiment_min, sentiment_max, engagement_min
-            base_params = [
-                *params,
-                guild_id,
-                guild_id,
-                min_ts,
-                sentiment_min,
-                sentiment_max,
-                engagement_min,
-            ]
-
-            total = conn.execute(
-                f"SELECT COUNT(*) {base_sql}", base_params
-            ).fetchone()[0]
-
-            rows = conn.execute(
-                f"""SELECT m.message_id, m.channel_id, m.author_id,
-                           m.content,
-                           COALESCE(m.sentiment, 0) AS sentiment,
-                           m.emotion,
-                           m.reply_to_id, m.ts,
-                           COALESCE(rx.reaction_total, 0) AS reaction_count,
-                           COALESCE(rp.reply_count, 0) AS reply_count,
-                           {conn_select}
-                    {base_sql}
-                    ORDER BY (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) DESC, m.ts DESC
-                    LIMIT ? OFFSET ?""",
-                [*base_params, limit, offset],
-            ).fetchall()
-
-            # Resolve names
-            ch_ids = {int(r["channel_id"]) for r in rows}
-            user_ids = {int(r["author_id"]) for r in rows}
-            ch_names = (
-                _resolve_channel_names(conn, guild, guild_id, ch_ids)
-                if ch_ids
-                else {}
-            )
-            u_names = (
-                _resolve_user_names(conn, guild, guild_id, user_ids)
-                if user_ids
-                else {}
-            )
-
-            messages = [
-                {
-                    "message_id": str(r["message_id"]),
-                    "channel_id": str(r["channel_id"]),
-                    "author_id": str(r["author_id"]),
-                    "content": r["content"] or "",
-                    "sentiment": r["sentiment"],
-                    "emotion": r["emotion"] or "",
-                    "is_reply": bool(r["reply_to_id"]),
-                    "engagement": r["reaction_count"] + r["reply_count"],
-                    "reaction_count": r["reaction_count"],
-                    "reply_count": r["reply_count"],
-                    "connections": r["connections"],
-                    "channel_name": ch_names.get(int(r["channel_id"]), ""),
-                    "author_name": u_names.get(int(r["author_id"]), ""),
-                    "ts": r["ts"],
-                }
-                for r in rows
-            ]
-
-            return {
-                "messages": messages,
-                "total": total,
-                "offset": offset,
-                "limit": limit,
-            }
-
-    return await run_query(_q)
-
-
 @router.get("/health/newcomer-funnel")
 async def health_newcomer_funnel(
     request: Request,
@@ -1010,28 +780,6 @@ async def health_cohort_retention(
                 guild_id,
                 join_times=extras["recent_joins"],
             )
-
-    return await run_query(_q)
-
-
-@router.get("/health/churn-risk")
-async def health_churn_risk(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-
-    def _q():
-        with ctx.open_db() as conn:
-            data = compute_churn_risk(conn, guild_id)
-            user_ids = {int(r["user_id"]) for r in data["at_risk"]}
-            names = _resolve_user_names(conn, guild, guild_id, user_ids)
-            for r in data["at_risk"]:
-                r["user_name"] = names.get(int(r["user_id"]), "")
-            return data
 
     return await run_query(_q)
 

@@ -32,7 +32,13 @@ from bot_modules.services.greeting_watch_service import (
 )
 from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.voice_follow import record_voice_follow
-from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
+from bot_modules.services.invite_tracker import (
+    cache_invite_create,
+    cache_invite_delete,
+    detect_inviter,
+    record_invite,
+    refresh_invite_cache,
+)
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import promotion_review_service as promo_review
 from bot_modules.services.message_store import (
@@ -1651,6 +1657,16 @@ class EventsCog(commands.Cog):
                     )
                 except discord.HTTPException as exc:
                     log.error("auto_role: failed to assign roles to %s: %s", member, exc)
+
+    @commands.Cog.listener()
+    async def on_invite_create(self, invite: discord.Invite) -> None:
+        if invite.guild is not None:
+            cache_invite_create(invite.guild.id, invite)
+
+    @commands.Cog.listener()
+    async def on_invite_delete(self, invite: discord.Invite) -> None:
+        if invite.guild is not None:
+            cache_invite_delete(invite.guild.id, invite.code)
 
     @commands.Cog.listener()
     async def on_member_ban(

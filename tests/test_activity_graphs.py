@@ -14,7 +14,6 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.activity_graphs import (
-    CadenceBucket,
     DropoffProfile,
     _append_exclusions,
     _BUCKET_BUILDERS,
@@ -26,32 +25,22 @@ from bot_modules.services.activity_graphs import (
     _strftime_expr,
     _week_buckets,
     _WINDOW_LABELS,
-    query_burst_ranking,
     query_dropoff_profiles,
     query_greeter_response_times,
     query_message_activity,
-    query_message_cadence,
     query_message_histogram,
-    query_message_rate_10min,
     query_message_rate_drops,
     query_nsfw_gender_activity,
-    query_role_growth,
-    query_session_burst,
     query_xp_activity,
     query_xp_activity_with_breakdown,
     query_xp_histogram,
     query_xp_histogram_with_breakdown,
     render_activity_chart,
-    render_burst_ranking_chart,
     render_greeter_response_chart,
     render_join_histogram,
     render_level_histogram,
-    render_message_cadence_chart,
-    render_message_rate_chart,
     render_nsfw_gender_chart,
     render_nsfw_gender_line_chart,
-    render_role_growth_chart,
-    render_session_burst_chart,
 )
 from tests.db_template import migrated_db
 
@@ -536,158 +525,13 @@ def test_query_dropoff_profiles_returns_rich_metadata(db_conn):
 # ── query_role_growth ────────────────────────────────────────────────
 
 
-def test_query_role_growth_empty(db_conn):
-    labels, role_counts = query_role_growth(db_conn, guild_id=10, resolution="day")
-    assert len(labels) == 30
-    assert role_counts == {}
-
-
-def test_query_role_growth_tracks_net_grants(db_conn):
-    """Two grants - one removal = net +1 inside the window."""
-    now_ts = datetime.now(timezone.utc).timestamp() - 60
-    for action, ts in [("grant", now_ts), ("grant", now_ts - 30), ("remove", now_ts - 15)]:
-        db_conn.execute(
-            "INSERT INTO role_events (guild_id, user_id, role_name, action, granted_at)"
-            " VALUES (?,?,?,?,?)",
-            (10, 1, "Booster", action, ts),
-        )
-    db_conn.commit()
-    _, role_counts = query_role_growth(db_conn, guild_id=10, resolution="day")
-    assert "Booster" in role_counts
-    assert role_counts["Booster"][-1] == 1
-
-
-def test_query_role_growth_uses_baseline_before_window(db_conn):
-    """Pre-window grants form a positive baseline."""
-    # 60 days ago — before the 30-day window
-    old_ts = datetime.now(timezone.utc).timestamp() - 60 * 86400
-    for _ in range(3):
-        db_conn.execute(
-            "INSERT INTO role_events (guild_id, user_id, role_name, action, granted_at)"
-            " VALUES (?,?,?,?,?)",
-            (10, 1, "OG", "grant", old_ts),
-        )
-    db_conn.commit()
-    _, role_counts = query_role_growth(db_conn, guild_id=10, resolution="day")
-    assert role_counts["OG"][0] == 3  # baseline carried forward
-    assert role_counts["OG"][-1] == 3
-
-
 # ── query_session_burst ──────────────────────────────────────────────
-
-
-def test_query_session_burst_returns_zero_if_too_few_messages(db_conn):
-    now_ts = datetime.now(timezone.utc).timestamp()
-    _seed_processed(db_conn, rows=[(1, 100, 7, now_ts)])  # only 1 msg
-    db_conn.commit()
-    pre, post, rate = query_session_burst(db_conn, guild_id=10, user_id=7)
-    assert pre == []
-    assert post == []
-    assert rate == 0.0
-
-
-def test_query_session_burst_segments_sessions(db_conn):
-    """Two user messages with a >20min gap → two session starts."""
-    base_ts = datetime.now(timezone.utc).timestamp() - 7200
-    rows = [
-        (1, 100, 7, base_ts),
-        (2, 100, 7, base_ts + 60),       # part of session 1
-        (3, 100, 7, base_ts + 30 * 60),  # >20min gap → session 2
-    ]
-    _seed_processed(db_conn, rows=rows)
-    db_conn.commit()
-    pre, post, rate = query_session_burst(db_conn, guild_id=10, user_id=7)
-    # 2 sessions detected
-    assert len(pre) == 2
-    assert len(post) == 2
-    # Bin counts per session match the configured window sizes
-    assert len(pre[0]) == 10  # 20 min / 2 min
-    assert len(post[0]) == 30  # 60 min / 2 min
-    assert rate >= 0.0
 
 
 # ── query_burst_ranking ──────────────────────────────────────────────
 
 
-def test_query_burst_ranking_empty(db_conn):
-    assert query_burst_ranking(db_conn, guild_id=10) == []
-
-
-def test_query_burst_ranking_requires_min_sessions(db_conn):
-    base_ts = datetime.now(timezone.utc).timestamp() - 3600
-    _seed_processed(db_conn, rows=[(1, 100, 7, base_ts), (2, 100, 7, base_ts + 60)])
-    db_conn.commit()
-    # Only 1 session detected → below default min_sessions=3
-    assert query_burst_ranking(db_conn, guild_id=10) == []
-
-
-def test_query_burst_ranking_with_days_cutoff_returns_recent_only(db_conn):
-    """Old data outside the days window is ignored."""
-    very_old = datetime.now(timezone.utc).timestamp() - 365 * 86400
-    rows = [(i, 100, 7, very_old + i) for i in range(5)]
-    _seed_processed(db_conn, rows=rows)
-    db_conn.commit()
-    # cutoff of 1 day excludes everything
-    results = query_burst_ranking(db_conn, guild_id=10, days=1)
-    assert results == []
-
-
 # ── query_message_cadence ────────────────────────────────────────────
-
-
-def test_query_message_cadence_empty(db_conn):
-    out = query_message_cadence(db_conn, guild_id=10, resolution="day")
-    # No messages → empty list
-    assert out == []
-
-
-def test_query_message_cadence_hour_of_day_returns_24_buckets_on_empty(db_conn):
-    # When there are no messages it returns [] but with one message → fixed bin set
-    ts = int(datetime(2026, 5, 31, 11, 0, tzinfo=timezone.utc).timestamp())
-    _seed_messages(
-        db_conn,
-        rows=[
-            (1, 100, 7, ts, None, "hi"),
-            (2, 100, 7, ts + 600, None, "ho"),
-        ],
-    )
-    db_conn.commit()
-    buckets = query_message_cadence(
-        db_conn, guild_id=10, resolution="hour_of_day"
-    )
-    assert len(buckets) == 24
-    assert all(isinstance(b, CadenceBucket) for b in buckets)
-    # The bucket at hour 11 must have a non-zero gap (600s / 60 = 10 minutes)
-    assert buckets[11].median_gap > 0
-
-
-def test_query_message_cadence_day_of_week_returns_7_buckets(db_conn):
-    ts = int(datetime(2026, 5, 31, 11, 0, tzinfo=timezone.utc).timestamp())
-    _seed_messages(
-        db_conn,
-        rows=[(1, 100, 7, ts, None, "a"), (2, 100, 7, ts + 60, None, "b")],
-    )
-    db_conn.commit()
-    buckets = query_message_cadence(
-        db_conn, guild_id=10, resolution="day_of_week"
-    )
-    assert len(buckets) == 7
-
-
-def test_query_message_cadence_day_resolution_returns_30_buckets(db_conn):
-    now_ts = int(datetime.now(timezone.utc).timestamp() - 60)
-    _seed_messages(
-        db_conn,
-        rows=[
-            (1, 100, 7, now_ts, None, "a"),
-            (2, 100, 7, now_ts + 60, None, "b"),
-        ],
-    )
-    db_conn.commit()
-    buckets = query_message_cadence(
-        db_conn, guild_id=10, resolution="day"
-    )
-    assert len(buckets) == 30
 
 
 # ── query_nsfw_gender_activity ───────────────────────────────────────
@@ -795,34 +639,6 @@ def test_query_greeter_response_times_computes_deltas(db_conn):
 # ── query_message_rate_10min ─────────────────────────────────────────
 
 
-def test_query_message_rate_10min_returns_144_buckets(db_conn):
-    counts = query_message_rate_10min(db_conn, guild_id=10, days=7)
-    assert len(counts) == 144
-    assert counts == [0] * 144
-
-
-def test_query_message_rate_10min_counts_messages(db_conn):
-    ts = int(datetime(2026, 5, 31, 9, 5, tzinfo=timezone.utc).timestamp())
-    _seed_processed(db_conn, rows=[(1, 100, 7, ts), (2, 100, 7, ts + 60)])
-    db_conn.commit()
-    counts = query_message_rate_10min(db_conn, guild_id=10, days=365)
-    # 09:05 → bucket = 9*6 + 0 = 54
-    assert counts[54] == 2
-
-
-def test_query_message_rate_10min_channel_filter(db_conn):
-    ts = int(datetime(2026, 5, 31, 9, 5, tzinfo=timezone.utc).timestamp())
-    _seed_processed(
-        db_conn,
-        rows=[(1, 100, 7, ts), (2, 200, 7, ts)],
-    )
-    db_conn.commit()
-    counts = query_message_rate_10min(
-        db_conn, guild_id=10, days=365, channel_id=100
-    )
-    assert counts[54] == 1
-
-
 # ── Render functions (smoke tests for PNG output) ────────────────────
 
 
@@ -870,91 +686,6 @@ def test_render_level_histogram_returns_png():
         stddev_s=float(86400),
         modal_days=3,
     )
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_role_growth_chart_returns_png():
-    labels = ["a", "b", "c"]
-    role_counts = {"Mod": [1, 2, 3], "Booster": [0, 1, 1]}
-    out = render_role_growth_chart(labels, role_counts, "Roles")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_role_growth_chart_many_labels_thins_ticks():
-    labels = [f"d{i}" for i in range(40)]
-    role_counts = {"R": [i for i in range(40)]}
-    out = render_role_growth_chart(labels, role_counts, "Roles")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_role_growth_chart_empty_dict_still_returns_png():
-    out = render_role_growth_chart(["a", "b"], {}, "Roles")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_session_burst_chart_returns_png():
-    # 10 pre-bins, 30 post-bins per spec
-    pre = [[1.0] * 10 for _ in range(2)]
-    post = [[2.0] * 30 for _ in range(2)]
-    out = render_session_burst_chart(pre, post, overall_rate=1.5, user_display_name="Alice")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_session_burst_chart_handles_many_sessions():
-    """>20 sessions should suppress individual lines but still render."""
-    pre = [[1.0] * 10 for _ in range(25)]
-    post = [[2.0] * 30 for _ in range(25)]
-    out = render_session_burst_chart(pre, post, overall_rate=0.0, user_display_name="X")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_burst_ranking_chart_returns_png():
-    entries = [
-        ("Alice", 1.0, 3.0, 5),
-        ("Bob", 0.5, 1.0, 4),
-        ("Carol", 0.4, 0.6, 4),
-    ]
-    out = render_burst_ranking_chart(entries, limit=2, guild_name="Guild")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_burst_ranking_chart_raises_on_empty():
-    with pytest.raises(ValueError):
-        render_burst_ranking_chart([], limit=5, guild_name="X")
-
-
-def test_render_burst_ranking_chart_handles_single_entry():
-    out = render_burst_ranking_chart(
-        [("solo", 0.0, 1.0, 5)], limit=10, guild_name="G"
-    )
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_message_cadence_chart_returns_png():
-    buckets = [
-        CadenceBucket(label=f"B{i}", min_gap=1, p20_gap=2, median_gap=3, p80_gap=4, max_gap=5)
-        for i in range(5)
-    ]
-    out = render_message_cadence_chart(buckets, "Cadence")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_message_cadence_chart_zero_buckets_skipped():
-    """Buckets with max_gap=0 are skipped but the render still emits PNG."""
-    buckets = [
-        CadenceBucket(label="empty", min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0),
-        CadenceBucket(label="full", min_gap=1, p20_gap=2, median_gap=3, p80_gap=4, max_gap=5),
-    ]
-    out = render_message_cadence_chart(buckets, "Cadence")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_message_cadence_chart_many_labels_thins_ticks():
-    buckets = [
-        CadenceBucket(label=f"L{i}", min_gap=1, p20_gap=2, median_gap=3 + (i % 2), p80_gap=4, max_gap=5)
-        for i in range(40)
-    ]
-    out = render_message_cadence_chart(buckets, "Cadence")
     assert out[:8] == PNG_MAGIC
 
 
@@ -1017,12 +748,6 @@ def test_render_greeter_response_chart_returns_png():
 
 def test_render_greeter_response_chart_empty_returns_png():
     out = render_greeter_response_chart([], "Greeter")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_message_rate_chart_returns_png():
-    counts = [i % 5 for i in range(144)]
-    out = render_message_rate_chart(counts, days_in_window=7, title="Rate")
     assert out[:8] == PNG_MAGIC
 
 
