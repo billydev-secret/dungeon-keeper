@@ -553,3 +553,67 @@ async def test_new_id_is_cached_before_the_old_panel_is_deleted():
     sent.delete = AsyncMock(side_effect=_delete)
     await panel.place(guild, channel)
     assert seen == [(CHANNEL, MESSAGE)]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_debounce_cannot_abandon_a_placement():
+    """Prod repro (casino hub, 2026-07-26): one panel every 6s for hours,
+    surviving a restart.
+
+    schedule_restick() cancel-and-rearms, and the task it cancels is the one
+    running place(), parked in send(). Discord has taken the message by then,
+    so the panel posts — but _remember(), the old-panel delete and the id save
+    never run. The stored id stays frozen on a dead message, so the next
+    restick's at-the-bottom guard compares against *that*, sees a mismatch, and
+    posts again: a loop nothing downstream can break, because every iteration
+    destroys the evidence the guard needs.
+    """
+    channel, sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, 111)
+    panel = _panel(_bot(guild), store, restick_on_bot=True, delay=0.01)
+
+    async def _send(*_args, **_kwargs):
+        # discord.py sets last_message_id and dispatches MESSAGE_CREATE while
+        # we are still awaiting the HTTP response…
+        channel.last_message_id = MESSAGE
+        await panel.on_message(_message(bot=True, message_id=MESSAGE))
+        # …so the restick that event arms lands its cancel here, mid-send.
+        await asyncio.sleep(0)
+        return sent
+
+    channel.send = AsyncMock(side_effect=_send)
+
+    panel.schedule_restick(GUILD)
+    await asyncio.sleep(0.1)
+    panel.cancel_all()
+
+    assert store.ids == (CHANNEL, MESSAGE)  # recorded despite the cancel
+    sent.delete.assert_awaited_once()  # and the old panel really went
+    assert channel.send.await_count == 1  # no runaway repost
+
+
+@pytest.mark.asyncio
+async def test_a_queued_restick_sees_the_placement_it_waited_on():
+    """Two resticks in flight must not stack two panels.
+
+    The second passed the cached-id pre-check before the first placement
+    finished, then blocked on the per-guild lock. Re-deciding under the lock —
+    against ids read there — is what turns it into a no-op.
+    """
+    channel, sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, 111)
+    panel = _panel(_bot(guild), store)
+
+    async def _send(*_args, **_kwargs):
+        channel.last_message_id = MESSAGE
+        return sent
+
+    channel.send = AsyncMock(side_effect=_send)
+
+    await asyncio.gather(
+        panel.place(guild, channel, only_if_buried=True),
+        panel.place(guild, channel, only_if_buried=True),
+    )
+    assert channel.send.await_count == 1
