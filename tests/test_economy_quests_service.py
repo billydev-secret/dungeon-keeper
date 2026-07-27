@@ -3568,3 +3568,141 @@ def test_spotlight_unmeasurable_guild_keeps_old_behavior(db):
         assert spotlight_kind(conn, GUILD, "2026-W30") in {
             "message_sent", "reaction_given",
         }
+
+
+# ── daily_complete: the weekly progression over your dailies ──────────────
+# Dailies are the check-offs; a weekly daily_complete counted quest is the
+# progression over them ("complete N dailies this week", with a bar). Every
+# paid daily claim ticks it once, keyed to the completed daily's (id, period).
+
+
+def test_completing_dailies_advances_the_weekly_meta_quest(db):
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", trigger_kind="voice_session", reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=3, reward=40, title="Weekly Momentum",
+        )
+        for i, day in enumerate(("2026-07-13", "2026-07-14", "2026-07-15"), 1):
+            fired = fire_trigger_quests(
+                conn, SETTINGS, GUILD, "voice_session", USER,
+                local_day=day, occurrence=f"vc:{day}", booster=False,
+            )
+            assert [int(q["id"]) for q, _ in fired] == [daily]
+            assert get_progress(conn, meta, USER, "2026-W29") == i
+        # The third completion crossed the target: the weekly paid itself.
+        # (Two active kinds switch the ⚡ spotlight on, doubling whichever
+        # kind the week's hash picked — fold it into the expectation.)
+        from bot_modules.services.economy_quests_service import spotlight_kind
+
+        spot = spotlight_kind(conn, GUILD, "2026-W29")
+        daily_pay = 20 if spot == "voice_session" else 10
+        weekly_pay = 80 if spot == "daily_complete" else 40
+        assert get_balance(conn, GUILD, USER) == 3 * daily_pay + weekly_pay
+
+
+def test_daily_completion_ticks_once_per_daily_per_day(db):
+    # A replayed fire of the same daily's day is a claim collision — the
+    # meta never re-counts it.
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="voice_session")
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=5, reward=40,
+        )
+        day = "2026-07-13"
+        for occ in ("a", "b"):
+            fire_trigger_quests(
+                conn, SETTINGS, GUILD, "voice_session", USER,
+                local_day=day, occurrence=occ, booster=False,
+            )
+        assert get_progress(conn, meta, USER, "2026-W29") == 1
+
+
+def test_setup_quest_completion_counts_toward_the_weekly_meta(db):
+    # A setup claim IS completing a daily-cadence quest; its once-ever
+    # "kind:set" period has no calendar day, so the tick stamps to today.
+    from bot_modules.economy.logic import local_day_for
+    from bot_modules.economy.quests import iso_week_for
+
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="bio_set", reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "bio_set", USER,
+            local_day="2026-07-13", occurrence="set", booster=False,
+        )
+        this_week = iso_week_for(local_day_for(time.time(), 0.0))
+        assert get_progress(conn, meta, USER, this_week) == 1
+
+
+def test_daily_complete_rejected_on_daily_cadence(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="weekly"):
+            _make(conn, qtype="daily", trigger_kind="daily_complete")
+
+
+def test_sign_off_approval_ticks_the_meta(db):
+    # The other place a claim reaches 'paid': a manager approving a
+    # sign-off daily counts it toward the week too.
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", signoff=1, reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        outcome = claim_quest(
+            conn, SETTINGS, GUILD, daily, USER, period="2026-07-13", booster=False
+        )
+        assert outcome.state == "pending"
+        assert get_progress(conn, meta, USER, "2026-W29") == 0  # not yet paid
+        resolve_claim(
+            conn, SETTINGS, outcome.claim_id,
+            approve=True, resolver_id=MANAGER, booster=False,
+        )
+        assert get_progress(conn, meta, USER, "2026-W29") == 1
+
+
+def test_meta_progress_renders_as_a_bar(db):
+    # The board surfaces the meta quest through the ordinary counted-quest
+    # machinery: progress_current / progress_target drive the bar.
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="voice_session", reward=10)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "voice_session", USER,
+            local_day="2026-07-13", occurrence="vc", booster=False,
+        )
+        board = load_member_quest_board(conn, SETTINGS, GUILD, USER, "2026-07-13")
+        entry = next(e for e in board if e["id"] == meta)
+        assert entry["progress_current"] == 1
+        assert entry["progress_target"] == 4
+
+
+def test_daily_completion_only_feeds_a_meta_on_the_members_board(db):
+    # The meta quest is board-gated like any weekly: a member whose weekly
+    # draw missed it accrues nothing.
+    with open_db(db) as conn:
+        for _ in range(20):
+            _make(conn, qtype="weekly", trigger_kind="message_sent", target_count=2)
+        meta = _make(
+            conn, qtype="weekly", trigger_kind="daily_complete",
+            target_count=4, reward=40,
+        )
+        _make(conn, qtype="daily", trigger_kind="voice_session", reward=10)
+        day = "2026-07-13"
+        off_board_user = next(
+            uid for uid in range(2000, 2400)
+            if meta not in assigned_board_ids(conn, GUILD, uid, "weekly", day, SETTINGS)
+        )
+        fire_trigger_quests(
+            conn, SETTINGS, GUILD, "voice_session", off_board_user,
+            local_day=day, occurrence="vc", booster=False,
+        )
+        assert get_progress(conn, meta, off_board_user, "2026-W29") == 0

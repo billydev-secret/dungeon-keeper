@@ -133,6 +133,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "role_pick": "Pick your roles from a role menu",
     "confession_reply": "Reply to a confession",
     "shop_purchase": "Make your first shop purchase",
+    "daily_complete": "Complete daily quests",
 }
 
 # Warm one-liners for the leaderboard's community-goals block, shown in
@@ -196,6 +197,7 @@ TRIGGER_FLAVOR: dict[str, str] = {
     "role_pick": "fly your colors",
     "confession_reply": "someone needed to hear that",
     "shop_purchase": "treat yourself — you've earned it",
+    "daily_complete": "a little every day goes a long way",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -255,6 +257,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "role_pick": "Self-assigning a role via a role menu or an announcement role button. One-time setup quest (the bio_set pattern): claims once ever, drops off the board once done. Event cadence: once ever.",
     "confession_reply": "Posting an anonymous reply to someone ELSE's confession (replying to your own never fires). Credited privately like `confession` — no channel noise. Event cadence: once per reply — use daily/weekly with a target count.",
     "shop_purchase": "Making a shop purchase: perk rental, streak shield, emoji or QOTD sponsorship, raffle tickets (automatic renewal billing never fires). One-time setup quest teaching the earn→spend loop. Event cadence: once ever.",
+    "daily_complete": "Any of the member's daily quests paying out — occurrences are the (quest, day) of the completed daily, so a weekly counted quest reads 'complete N dailies this week' with a progress bar. The board meta-quest: dailies are the check-offs, this is the progression. Not allowed on daily cadence (a daily that completes itself).",
 }
 
 

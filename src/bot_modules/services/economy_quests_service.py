@@ -235,6 +235,13 @@ def _check_trigger_config(
     """
     if trigger_kind and trigger_kind not in quests.TRIGGER_KINDS:
         raise ValueError(f"unknown trigger kind: {trigger_kind!r}")
+    if trigger_kind == "daily_complete" and qtype == "daily":
+        # A daily that fires on completing dailies would tick itself (the
+        # fire hook also refuses, but reject the config outright).
+        raise ValueError(
+            "daily_complete is the weekly progression over your dailies — "
+            "put it on a weekly (or community/monthly) quest"
+        )
     if qtype == "event":
         if not trigger_kind:
             raise ValueError("event quests need a trigger kind")
@@ -1769,6 +1776,55 @@ def fire_trigger_inline(
         return []
 
 
+def _fire_daily_completion(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    quest: sqlite3.Row,
+    period: str,
+    booster: bool,
+) -> None:
+    """One paid daily claim = one tick of the ``daily_complete`` meta kind.
+
+    Dailies are the check-offs; a weekly ``daily_complete`` counted quest is
+    the progression over them ("complete N dailies this week", rendered with
+    the ordinary progress bar). Called from the two places a claim reaches
+    'paid' (instant ``claim_quest`` and sign-off approval in
+    ``resolve_claim``); the occurrence is the completed daily's
+    ``(quest_id, period)``, so a replayed fire can't double-count. Setup
+    quests count too — their once-ever claim IS completing a daily-cadence
+    quest — but their ``kind:set`` period carries no calendar day, so the
+    tick stamps to today.
+
+    No recursion: only daily-cadence claims fire, the meta quest is
+    weekly/monthly/community by construction (``_check_trigger_config``
+    rejects daily), and a claimed quest that is itself ``daily_complete``-
+    triggered is refused here as a second guard. Outcomes of the nested fire
+    aren't returned to the outer caller, so a weekly that completes this way
+    pays without a cog announcement — the register feed narrates the credit
+    and the board/digest/live panel show it done.
+    """
+    if str(quest["qtype"]) != "daily":
+        return
+    if str(quest["trigger_kind"] or "") == "daily_complete":
+        return
+    if ":" in period:
+        local_day = local_day_for(time.time(), get_tz_offset_hours(conn, guild_id))
+    else:
+        local_day = period
+    fire_trigger_quests(
+        conn,
+        settings,
+        guild_id,
+        "daily_complete",
+        user_id,
+        local_day=local_day,
+        occurrence=f"{int(quest['id'])}:{period}",
+        booster=booster,
+    )
+
+
 def fire_trigger_quests(
     conn: sqlite3.Connection,
     settings: EconSettings,
@@ -2123,6 +2179,9 @@ def claim_quest(
     maybe_pay_set_bonus(
         conn, settings, guild_id, user_id, str(quest["qtype"]), period
     )
+    _fire_daily_completion(
+        conn, settings, guild_id, user_id, quest, period, booster
+    )
     return ClaimOutcome(state="paid", claim_id=claim_id, paid=paid)
 
 
@@ -2253,6 +2312,10 @@ def resolve_claim(
     maybe_pay_set_bonus(
         conn, settings, int(claim["guild_id"]), user_id,
         str(quest["qtype"]), str(claim["period"]),
+    )
+    _fire_daily_completion(
+        conn, settings, int(claim["guild_id"]), user_id, quest,
+        str(claim["period"]), booster,
     )
     return ClaimResolution(
         user_id=user_id, quest_id=quest_id, paid=paid, deny_reason=None
