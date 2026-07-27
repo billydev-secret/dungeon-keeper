@@ -33,6 +33,7 @@ from bot_modules.games_clapback.logic import (
     AI_USER_PROMPT,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    calculate_bye_award,
     calculate_matchup_score,
     clamp_config_values,
     create_matchups,
@@ -134,28 +135,74 @@ def test_create_matchups_odd_count_picks_bye():
     assert str(bye) not in flat
 
 
-def test_create_matchups_odd_count_avoids_last_bye_when_possible():
-    """When last_bye_id matches a player id in the answers dict, that player
-    shouldn't be picked again. Note: answers keys are strings, so the cog
-    passes the bye id through as the same str that appears in answer keys."""
+def test_create_matchups_odd_count_skips_players_who_already_had_a_bye():
+    """Anyone already in bye_history is passed over while a player with
+    zero byes is still available. Note: answers keys are strings, so the
+    cog passes bye ids through as the same str the answer keys use."""
     answers = {str(i): f"answer{i}" for i in range(1, 6)}
-    last_bye = "3"  # matches the string keys in answers
-    # Run several times — bye should never be "3" since other candidates exist
     for seed in range(10):
-        pairs, bye = create_matchups(
-            answers, last_bye_id=last_bye, rng=random.Random(seed)
+        _, bye = create_matchups(
+            answers, bye_history=["3"], rng=random.Random(seed)
         )
-        assert bye != last_bye
+        assert bye != "3"
 
 
-def test_create_matchups_odd_count_falls_back_when_last_bye_not_in_players():
+def test_create_matchups_odd_count_ignores_bye_history_for_absent_players():
+    """A bye id that isn't among this round's submitters constrains
+    nothing — everyone present is equally overdue."""
     answers = {str(i): f"answer{i}" for i in range(1, 6)}
-    pairs, bye = create_matchups(
-        answers, last_bye_id=999, rng=random.Random(0)
-    )
-    # last_bye not in players → falls through to "anyone goes" path.
-    # answers dict keys are strings, so bye preserves that type.
+    _, bye = create_matchups(answers, bye_history=[999], rng=random.Random(0))
     assert bye in ["1", "2", "3", "4", "5"]
+
+
+def test_create_matchups_everyone_byes_once_before_anyone_byes_twice():
+    """The whole point of the rotation: across five odd rounds with a
+    stable roster, five distinct players sit out — no repeats."""
+    answers = {str(i): f"answer{i}" for i in range(1, 6)}
+    history: list[str] = []
+    for round_num in range(5):
+        _, bye = create_matchups(
+            answers, bye_history=history, rng=random.Random(round_num)
+        )
+        history.append(bye)
+    assert sorted(history) == ["1", "2", "3", "4", "5"]
+
+
+def test_create_matchups_second_lap_reuses_players_with_fewest_byes():
+    """Once everyone has one bye, round six starts a fresh lap rather
+    than deadlocking or favouring whoever sat out first."""
+    answers = {str(i): f"answer{i}" for i in range(1, 6)}
+    history = ["1", "2", "3", "4", "5", "1", "2"]
+    # 3, 4 and 5 are tied on one bye each; 1 and 2 have two.
+    for seed in range(10):
+        _, bye = create_matchups(
+            answers, bye_history=history, rng=random.Random(seed)
+        )
+        assert bye in ["3", "4", "5"]
+
+
+def test_create_matchups_rotation_survives_a_changing_submitter_set():
+    """Counting byes (rather than remembering only the last one) is what
+    makes the rule hold when someone misses the submit window: player 5
+    skips round two, and still doesn't get a second bye in round three."""
+    full = {str(i): f"answer{i}" for i in range(1, 6)}
+    without_two = {k: v for k, v in full.items() if k != "2"}
+
+    history: list[str] = []
+    _, bye1 = create_matchups(full, bye_history=history, rng=random.Random(1))
+    history.append(bye1)
+    # Round two has an even count without player 2's answer, so no bye.
+    _, bye2 = create_matchups(without_two, bye_history=history, rng=random.Random(2))
+    assert bye2 is None
+    _, bye3 = create_matchups(full, bye_history=history, rng=random.Random(3))
+    assert bye3 != bye1
+
+
+def test_create_matchups_no_bye_history_treats_everyone_equally():
+    answers = {str(i): f"answer{i}" for i in range(1, 6)}
+    seen = {create_matchups(answers, rng=random.Random(s))[1] for s in range(25)}
+    # With nobody constrained, the bye shouldn't be pinned to one player.
+    assert len(seen) > 1
 
 
 # ── create_matchups: duplicate-answer avoidance ─────────────────────
@@ -201,6 +248,82 @@ def test_create_matchups_strips_and_lowercases_for_dup_check():
                 paired_dups += 1
     # At least some seeds should find the non-dup pairing
     assert paired_dups < 20
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_create_matchups_never_drops_a_player_when_dupes_are_unavoidable(seed):
+    """Regression: four identical answers among six players means every
+    shuffle collides. The retry loop used to keep the *partial* pair list
+    built before it broke out, so four of six players silently vanished
+    from the round. Every submitter must be pairable or the bye."""
+    answers = {
+        "1": "same", "2": "same", "3": "same",
+        "4": "same", "5": "x", "6": "y",
+    }
+    pairs, bye = create_matchups(answers, rng=random.Random(seed))
+    assert bye is None  # even count
+    flat = sorted(str(pid) for p in pairs for pid in p["pair"])
+    assert flat == ["1", "2", "3", "4", "5", "6"]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_create_matchups_odd_count_pairs_everyone_but_the_bye(seed):
+    """Same guarantee with a bye in play: 7 submitters → 3 matchups
+    covering the 6 non-bye players, even with unavoidable duplicates."""
+    answers = {str(i): "same" for i in range(1, 6)} | {"6": "x", "7": "y"}
+    pairs, bye = create_matchups(answers, rng=random.Random(seed))
+    flat = sorted(str(pid) for p in pairs for pid in p["pair"])
+    assert len(flat) == 6
+    assert str(bye) not in flat
+    assert sorted(flat + [str(bye)]) == [str(i) for i in range(1, 8)]
+
+
+def test_create_matchups_minimises_duplicate_pairs_it_cannot_avoid():
+    """When some duplication is forced, the chosen pairing should carry
+    the fewest same-answer matchups, not merely the first one tried."""
+    answers = {
+        "1": "same", "2": "same", "3": "same",
+        "4": "same", "5": "x", "6": "y",
+    }
+    for seed in range(20):
+        pairs, _ = create_matchups(answers, rng=random.Random(seed))
+        dupes = sum(
+            1 for p in pairs
+            if answers[str(p["pair"][0])] == answers[str(p["pair"][1])]
+        )
+        # Best possible here is 1: pair two "same" players together and
+        # spend the other two against x and y.
+        assert dupes == 1
+
+
+# ── calculate_bye_award ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "round_points,expected",
+    [
+        pytest.param([60, 40, 75, 25], 50, id="balanced-field-averages-50"),
+        pytest.param([100, 0], 50, id="two-player-blowout"),
+        pytest.param([125, 0, 80, 20], 56, id="clapback-bonus-lifts-the-mean"),
+        pytest.param([33, 67, 50], 50, id="rounds-to-nearest-int"),
+        pytest.param([70, 30, 70, 30, 60], 52, id="odd-count-rounds-down"),
+        pytest.param([], 50, id="no-matchups-falls-back-to-default"),
+        pytest.param(None, 50, id="none-falls-back-to-default"),
+    ],
+)
+def test_calculate_bye_award(round_points, expected):
+    assert calculate_bye_award(round_points) == expected
+
+
+def test_calculate_bye_award_honours_a_custom_default():
+    assert calculate_bye_award([], default=0) == 0
+
+
+def test_calculate_bye_award_tracks_a_high_scoring_round():
+    """A round where everyone did well pays the bye player more than a
+    round where everyone bombed — that's the 'neither punish nor
+    reward' property the flat 50 didn't have."""
+    assert calculate_bye_award([90, 85, 100, 80]) > calculate_bye_award([20, 15, 30, 10])
 
 
 # ── calculate_matchup_score ─────────────────────────────────────────
@@ -754,6 +877,25 @@ def test_build_scoreboard_embed_with_bye_includes_bye_field():
     bye_field = next(f for f in embed.fields if f.name == "Bye")
     assert bye_field.value is not None
     assert "<@3>" in bye_field.value
+
+
+def test_build_scoreboard_embed_bye_field_shows_the_actual_award():
+    payload = {"scores": {"1": 10, "3": 62}}
+    embed = build_scoreboard_embed(payload, 1, 5, bye_player=3, bye_award=62)
+    bye_field = next(f for f in embed.fields if f.name == "Bye")
+    assert bye_field.value is not None
+    assert "62" in bye_field.value
+    assert "50" not in bye_field.value
+
+
+def test_build_scoreboard_embed_bye_award_defaults_to_fifty_for_old_records():
+    """Round records written before the award went dynamic have no
+    bye_award — the embed still renders rather than showing None."""
+    payload = {"scores": {"1": 10, "3": 50}}
+    embed = build_scoreboard_embed(payload, 1, 5, bye_player=3)
+    bye_field = next(f for f in embed.fields if f.name == "Bye")
+    assert bye_field.value is not None
+    assert "50" in bye_field.value
 
 
 def test_build_scoreboard_embed_sorts_scores_highest_first():

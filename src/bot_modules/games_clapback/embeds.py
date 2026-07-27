@@ -289,13 +289,17 @@ def build_scoreboard_embed(
     round_num: int,
     total_rounds: int,
     bye_player: int | None,
+    bye_award: int | None = None,
     final: bool = False,
     color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the between-round (or final) scoreboard embed.
 
     Score field renders ``<@pid>`` mentions ranked highest-first with
-    medal emojis for the top three. The ``final`` flag is preserved
+    medal emojis for the top three. ``bye_award`` is what the bye
+    player was actually paid this round (the field's average); it
+    falls back to 50 for round records written before the award became
+    dynamic. The ``final`` flag is preserved
     from the cog signature for parity — the pre-extraction
     implementation didn't actually branch on it, so we don't either.
     """
@@ -327,7 +331,11 @@ def build_scoreboard_embed(
     if bye_player:
         embed.add_field(
             name="Bye",
-            value=f"<@{bye_player}> had a bye this round (+50 pts)",
+            value=(
+                f"<@{bye_player}> sat this round out — "
+                f"**+{50 if bye_award is None else bye_award}** pts "
+                f"(the round's average)"
+            ),
             inline=False,
         )
     embed.add_field(name="", value=footer_line, inline=False)

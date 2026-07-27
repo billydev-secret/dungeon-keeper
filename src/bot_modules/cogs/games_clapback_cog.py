@@ -43,6 +43,7 @@ from bot_modules.games.command_groups import play
 from bot_modules.games_clapback.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
+    calculate_bye_award,
     calculate_matchup_score,
     clamp_config_values,
     create_matchups,
@@ -253,6 +254,9 @@ class ClapbackJoinView(discord.ui.View):
         payload["used_prompts"] = []
         payload["phase"] = "playing"
         payload["last_bye"] = None
+        # Every bye handed out this game, in order. Drives the
+        # fewest-byes-first rotation in create_matchups.
+        payload["bye_history"] = []
         await update_game_payload(self.db, self.game_id, payload)
 
         try:
@@ -732,20 +736,22 @@ class ClapbackCog(commands.Cog):
                 await channel.send("Not enough answers this round — moving on!")
                 continue
 
-            # Create matchups
-            last_bye = payload.get("last_bye")
-            matchups, bye_player = create_matchups(answers, last_bye)
+            # Create matchups. bye_history is every bye handed out so far;
+            # games started before it existed carry only `last_bye`, so seed
+            # from that on crash-resume rather than restarting the rotation.
+            bye_history = payload.get("bye_history")
+            if bye_history is None:
+                legacy = payload.get("last_bye")
+                bye_history = [legacy] if legacy is not None else []
+            matchups, bye_player = create_matchups(answers, bye_history)
             payload = await get_game_payload(self.db, game_id)
             payload["matchups"] = matchups
             payload["phase"] = "voting"
-            if bye_player is not None:
-                payload["last_bye"] = bye_player
-                # Award bye points
-                payload["scores"][str(bye_player)] = payload["scores"].get(str(bye_player), 0) + 50
             await update_game_payload(self.db, game_id, payload)
 
             # Vote phase — process each matchup sequentially
             round_matchup_results = []
+            round_points: list[int] = []
             for mi, matchup in enumerate(matchups):
                 if self._is_cancelled(game_id):
                     return
@@ -755,6 +761,9 @@ class ClapbackCog(commands.Cog):
                 )
                 if result is None:
                     return  # game cancelled
+                # Contestants' points feed the bye award below; they're not
+                # part of the persisted round record.
+                round_points.extend(result.pop("_scores", {}).values())
                 round_matchup_results.append(result)
                 await asyncio.sleep(1)
 
@@ -763,6 +772,18 @@ class ClapbackCog(commands.Cog):
 
             # Record round history
             payload = await get_game_payload(self.db, game_id)
+
+            # Bye pays the field's average for this round, so it's settled
+            # here — after the matchups have scored, not before they run.
+            bye_award = None
+            if bye_player is not None:
+                bye_award = calculate_bye_award(round_points)
+                payload["scores"][str(bye_player)] = (
+                    payload["scores"].get(str(bye_player), 0) + bye_award
+                )
+                payload.setdefault("bye_history", list(bye_history)).append(bye_player)
+                payload["last_bye"] = bye_player
+
             round_record = {
                 "round": round_num,
                 "prompt": prompt,
@@ -770,6 +791,7 @@ class ClapbackCog(commands.Cog):
             }
             if bye_player is not None:
                 round_record["bye_player"] = bye_player
+                round_record["bye_award"] = bye_award
             payload.setdefault("round_history", []).append(round_record)
             # Round fully scored — checkpoint so a later crash resumes from here.
             payload["scores_checkpoint"] = dict(payload.get("scores", {}))
@@ -780,14 +802,18 @@ class ClapbackCog(commands.Cog):
             is_last = round_num == total_rounds
             if not is_last:
                 should_continue = await self._round_summary(
-                    game_id, channel, payload, round_num, total_rounds, host_id, bye_player,
+                    game_id, channel, payload, round_num, total_rounds, host_id,
+                    bye_player, bye_award,
                 )
                 if not should_continue or self._is_cancelled(game_id):
                     return
                 await asyncio.sleep(2)  # between-round breather
             else:
                 # Show final summary scoreboard briefly before recap
-                await self._post_scoreboard(game_id, channel, payload, round_num, total_rounds, bye_player, final=True)
+                await self._post_scoreboard(
+                    game_id, channel, payload, round_num, total_rounds,
+                    bye_player, bye_award, final=True,
+                )
 
         if self._is_cancelled(game_id):
             return
@@ -1020,15 +1046,19 @@ class ClapbackCog(commands.Cog):
             "answer_b": answer_b,
             "votes_b": vc[player_b],
             "clapback": result["clapback"],
+            # Stripped off by _run_game to compute the bye award — the
+            # persisted round record keeps its original shape.
+            "_scores": result["scores"],
         }
 
     # ── Round summary ────────────────────────────────────────────────────
 
     async def _round_summary(
-        self, game_id, channel, payload, round_num, total_rounds, host_id, bye_player,
+        self, game_id, channel, payload, round_num, total_rounds, host_id,
+        bye_player, bye_award=None,
     ):
         embed = build_scoreboard_embed(
-            payload, round_num, total_rounds, bye_player,
+            payload, round_num, total_rounds, bye_player, bye_award=bye_award,
             final=False, color=self._accents.get(game_id),
         )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
@@ -1052,9 +1082,12 @@ class ClapbackCog(commands.Cog):
             pass
         return True
 
-    async def _post_scoreboard(self, game_id, channel, payload, round_num, total_rounds, bye_player, final=False):
+    async def _post_scoreboard(
+        self, game_id, channel, payload, round_num, total_rounds,
+        bye_player, bye_award=None, final=False,
+    ):
         embed = build_scoreboard_embed(
-            payload, round_num, total_rounds, bye_player,
+            payload, round_num, total_rounds, bye_player, bye_award=bye_award,
             final=final, color=self._accents.get(game_id),
         )
         await channel.send(embed=embed)
