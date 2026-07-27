@@ -560,14 +560,13 @@ def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
 # ── Inactive-sweep config helper ────────────────────────────────────────
 
 
-def _inactive_section(conn, guild_id: int, guild=None) -> dict:
+def _inactive_section(conn, guild_id: int, guild) -> dict:
     from bot_modules.inactive.store import list_sweep_exemptions
 
     exemptions = [
         {
             "id": str(row["user_id"]),
             "name": _lookup_member_name(row["user_id"], guild, conn, guild_id),
-            "added_at": row["added_at"],
         }
         for row in list_sweep_exemptions(conn, guild_id)
     ]
@@ -577,7 +576,6 @@ def _inactive_section(conn, guild_id: int, guild=None) -> dict:
         ),
         "auto_sweep": _bool_val(conn, "inactive_auto_sweep", guild_id=guild_id),
         "sweep_cap": _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
-        "channel_id": str(_int_val(conn, "inactive_channel_id", guild_id=guild_id)),
         "exemptions": exemptions,
     }
 
@@ -2161,7 +2159,7 @@ async def preview_inactive_sweep(
     the listing is deliberately uncapped.
     """
     from bot_modules.inactive.logic import PreviewMember, PreviewRole, build_sweep_preview
-    from bot_modules.inactive.sweep_service import UNCAPPED, compute_candidates
+    from bot_modules.inactive.sweep_service import compute_candidates
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -2188,7 +2186,7 @@ async def preview_inactive_sweep(
         cap_override = max(1, min(200, cap_override))
 
     selection = await compute_candidates(
-        ctx, guild, threshold_days=threshold_days, cap=UNCAPPED
+        ctx, guild, threshold_days=threshold_days, cap=None
     )
 
     members: dict[int, PreviewMember] = {}
@@ -2197,20 +2195,21 @@ async def preview_inactive_sweep(
         if m is None:
             continue
         members[m.id] = PreviewMember(
-            user_id=m.id,
             display_name=m.display_name,
             roles=[PreviewRole(r.id, r.name, r.managed, r.position) for r in m.roles],
         )
 
-    def _read_settings() -> tuple[int, int, int]:
+    # The @Inactive role id is read plainly rather than through
+    # apply.ensure_inactive_role: a preview must never create a role as a side
+    # effect of being looked at.
+    def _read_settings() -> tuple[int, int]:
         with ctx.open_db() as conn:
             return (
                 _int_val(conn, "inactive_role_id", guild_id=guild_id),
-                _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
                 _int_val(conn, "inactive_channel_id", guild_id=guild_id),
             )
 
-    inactive_role_id, saved_cap, channel_id = await run_query(_read_settings)
+    inactive_role_id, channel_id = await run_query(_read_settings)
 
     sweepable, blocked = build_sweep_preview(
         candidates=selection.candidates,
@@ -2228,16 +2227,26 @@ async def preview_inactive_sweep(
             "days_idle": round(row.idle_seconds / 86400.0, 1),
             "last_seen_ts": row.last_seen,
             "has_tracked_messages": row.has_tracked_messages,
-            "removed_role_count": len(row.removed_role_ids),
+            "removed_role_count": len(row.removed_role_names),
             "removed_role_names": row.removed_role_names,
             "kept_managed_role_names": row.kept_managed_role_names,
         }
 
+    # How many of the listed members one run actually reaches. The cap applies to
+    # the whole most-idle-first candidate list *before* anyone is set aside as
+    # unstrippable, so this can't be derived from the sweepable count alone —
+    # comparing that against the cap would over-promise whenever the top of the
+    # list contains members the bot is outranked by.
+    cap = cap_override if cap_override is not None else selection.saved_cap
+    sweepable_ids = {r.user_id for r in sweepable}
+    first_run_reach = sum(
+        1 for c in selection.candidates[:cap] if c.user_id in sweepable_ids
+    )
+
     return {
         "threshold_days": selection.threshold_days,
-        # The cap the note is computed from: the value on screen when the panel
-        # sends one, so the note can't contradict the field the admin is reading.
-        "sweep_cap": cap_override if cap_override is not None else max(1, saved_cap),
+        "sweep_cap": cap,
+        "first_run_reach": first_run_reach,
         "inactive_channel_configured": bool(channel_id),
         "eligible_count": len(sweepable),
         "blocked_count": len(blocked),

@@ -1,10 +1,11 @@
 import {
-  loadConfig, loadMembers, apiPut, apiDelete, showStatus, guardForm, mountPicker,
+  loadConfig, loadMembers, apiPut, showStatus, clearStatus, guardForm, mountPicker,
+  mountExemptionList,
 } from "../config-helpers.js";
 import { esc, apiPost } from "../api.js";
-import { toast, confirmDialog } from "../ui.js";
+import { toast } from "../ui.js";
 
-function fmtTs(ts) {
+function fmtDay(ts) {
   if (!ts) return "Never";
   const d = new Date(ts * 1000);
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -35,8 +36,6 @@ export function mount(container) {
       members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
     );
     const memberName = (id) => nameById.get(String(id)) || String(id);
-
-    let exemptions = (cfg.exemptions || []).slice();
 
     container.innerHTML = `
       <div class="panel">
@@ -131,64 +130,21 @@ export function mount(container) {
         emptyLabel: "(pick a member)",
         placeholder: "Search members…",
         label: "Member to never sweep",
-        filter: (o) => !excludedIds().has(String(o.id)),
       },
     );
 
     guardForm(form);
 
-    function excludedIds() {
-      return new Set(exemptions.map((e) => String(e.id)));
-    }
-
-    function renderExemptions() {
-      if (!exemptions.length) {
-        exemptListEl.innerHTML = `<div class="empty" style="padding:8px 0;">Nobody is exempt — every member who goes quiet can be swept.</div>`;
-        return;
-      }
-      exemptListEl.innerHTML = `<div class="exempt-chips">${exemptions
-        .map(
-          (e) =>
-            `<span class="exempt-chip"><span>${esc(e.name)}</span><button type="button" data-remove-exempt="${esc(e.id)}" aria-label="Stop exempting ${esc(e.name)}" title="Stop exempting ${esc(e.name)}">×</button></span>`
-        )
-        .join("")}</div>`;
-      exemptListEl.querySelectorAll("[data-remove-exempt]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const uid = btn.dataset.removeExempt;
-          const entry = exemptions.find((e) => String(e.id) === String(uid));
-          const ok = await confirmDialog(
-            `Stop exempting ${entry ? entry.name : "this member"}? They will be swept like everyone else once they go quiet for too long.`,
-            { title: "Remove Exemption", danger: true, confirmLabel: "Remove Exemption" },
-          );
-          if (!ok) return;
-          try {
-            await apiDelete(`/api/config/inactive/exemptions/${uid}`);
-            exemptions = exemptions.filter((e) => String(e.id) !== String(uid));
-            renderExemptions();
-            exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
-          } catch (err) {
-            toast(err.message, "error");
-          }
-        });
-      });
-    }
-
-    // Returns whether the exemption was actually saved — callers that remove a
-    // row from the preview must not do so on a failed write, or a member who is
-    // still sweepable silently disappears from the listing.
-    async function addExemption(id, name) {
-      try {
-        // Member ids stay strings on the wire.
-        await apiPut(`/api/config/inactive/exemptions/${id}`, {});
-      } catch (err) {
-        toast(err.message, "error");
-        return false;
-      }
-      exemptions.push({ id: String(id), name });
-      exemptions.sort((a, b) => a.name.localeCompare(b.name));
-      renderExemptions();
-      return true;
-    }
+    const exemptList = mountExemptionList(exemptListEl, {
+      endpoint: "/api/config/inactive/exemptions",
+      picker: exemptPicker,
+      items: cfg.exemptions || [],
+      emptyText: "Nobody is exempt — every member who goes quiet can be swept.",
+      confirmTitle: "Remove Exemption",
+      confirmLabel: "Remove Exemption",
+      confirmText: (name) =>
+        `Stop exempting ${name}? They will be swept like everyone else once they go quiet for too long.`,
+    });
 
     container.querySelector("[data-add-exempt]").addEventListener("click", async () => {
       const id = exemptPicker.getValue();
@@ -196,12 +152,9 @@ export function mount(container) {
         toast("Pick a member first.", "error");
         return;
       }
-      if (!(await addExemption(id, memberName(id)))) return;
+      if (!(await exemptList.add(id, memberName(id)))) return;
       exemptPicker.setValue("0");
-      exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
     });
-
-    renderExemptions();
 
     function readThreshold(statusEl) {
       const v = parseInt(String(new FormData(form).get("threshold_days") ?? "").trim(), 10);
@@ -239,9 +192,9 @@ export function mount(container) {
       // A member with no tracked messages was aged from their join date alone —
       // say so rather than showing a date that reads like a last post.
       if (!row.has_tracked_messages) {
-        return `<span style="color:var(--ink-dim);">Joined ${esc(fmtTs(row.last_seen_ts))} — no tracked messages</span>`;
+        return `<span style="color:var(--ink-dim);">Joined ${esc(fmtDay(row.last_seen_ts))} — no tracked messages</span>`;
       }
-      return `<span style="color:var(--ink-dim);">${esc(fmtTs(row.last_seen_ts))}</span>`;
+      return `<span style="color:var(--ink-dim);">${esc(fmtDay(row.last_seen_ts))}</span>`;
     }
 
     function rolesCell(row, idx, prefix) {
@@ -256,13 +209,13 @@ export function mount(container) {
         aria-expanded="false" aria-controls="${prefix}-roles-${idx}">${esc(label)} ▸</button>`;
     }
 
-    function detailRow(row, idx, prefix, colspan) {
+    function detailRow(row, idx, prefix) {
       if (!row.removed_role_count) return "";
       const kept = row.kept_managed_role_names.length
         ? `<div style="margin-top:4px; color:var(--ink-dim);">Kept (managed by an integration): ${row.kept_managed_role_names.map(esc).join(", ")}</div>`
         : "";
       return `<tr class="sweep-roles-detail" id="${prefix}-roles-${idx}" hidden>
-        <td colspan="${colspan}">
+        <td colspan="5">
           <div>Would lose: ${row.removed_role_names.map(esc).join(", ")}</div>
           ${kept}
         </td></tr>`;
@@ -285,11 +238,9 @@ export function mount(container) {
     async function runPreview() {
       const threshold = readThreshold(previewStatusEl);
       if (threshold === null) return;
-      // readThreshold's error path goes through showStatus, which paints the
-      // element red and arms an 8s blanking timer. Left running, it wipes the
-      // result summary a corrected re-check just wrote.
-      clearTimeout(previewStatusEl._statusTimer);
-      previewStatusEl.className = "";
+      // readThreshold's error path goes through showStatus, whose blanking
+      // timer would otherwise wipe the summary written below.
+      clearStatus(previewStatusEl);
       previewStatusEl.textContent = "Checking…";
       previewEl.innerHTML = "";
       const cap = parseInt(new FormData(form).get("sweep_cap"), 10);
@@ -314,9 +265,13 @@ export function mount(container) {
           actually move. Run <code>/inactive panel</code> in Discord first.</div>`);
       }
       if (data.eligible_count) {
-        const capNote = data.eligible_count > data.sweep_cap
-          ? `A single run moves at most <strong>${esc(String(data.sweep_cap))}</strong> of these
-             ${esc(String(data.eligible_count))}, most idle first — the rest wait for the next run.`
+        // first_run_reach is computed server-side: the cap applies to the whole
+        // candidate list before anyone is set aside as unstrippable, so it isn't
+        // eligible_count vs the cap.
+        const capNote = data.first_run_reach < data.eligible_count
+          ? `A single run reaches <strong>${esc(String(data.first_run_reach))}</strong> of these
+             ${esc(String(data.eligible_count))}, most idle first — the rest wait for the next run
+             (cap: ${esc(String(data.sweep_cap))} per run).`
           : `All ${esc(String(data.eligible_count))} fit inside the per-run cap of
              <strong>${esc(String(data.sweep_cap))}</strong>, so one run would move every one of them.`;
         notes.push(`<div class="field-hint" style="margin-bottom:10px;">${capNote}</div>`);
@@ -333,12 +288,12 @@ export function mount(container) {
 
       // The action column pushes this past a phone's width, so the table gets
       // its own horizontal scroller rather than pushing the page sideways.
-      const table = (rows, prefix, withAction) => `
+      const table = (rows, prefix) => `
         <div class="preview-table-scroll">
         <table class="prune-preview-table">
           <thead>
             <tr><th>Member</th><th style="text-align:right;">Days Idle</th><th>Last Seen</th>
-              <th>Would Lose</th>${withAction ? "<th></th>" : ""}</tr>
+              <th>Would Lose</th><th></th></tr>
           </thead>
           <tbody>
             ${rows
@@ -349,9 +304,9 @@ export function mount(container) {
                     <td style="text-align:right; font-variant-numeric: tabular-nums;">${esc(String(r.days_idle))}</td>
                     <td>${lastSeenCell(r)}</td>
                     <td>${rolesCell(r, i, prefix)}</td>
-                    ${withAction ? `<td><button type="button" class="btn btn-sm" data-exempt-from-preview="${esc(r.user_id)}" data-exempt-name="${esc(r.display_name)}">Never Sweep</button></td>` : ""}
+                    <td><button type="button" class="btn btn-sm" data-exempt-from-preview="${esc(r.user_id)}" data-exempt-name="${esc(r.display_name)}">Never Sweep</button></td>
                   </tr>
-                  ${detailRow(r, i, prefix, withAction ? 5 : 4)}`
+                  ${detailRow(r, i, prefix)}`
               )
               .join("")}
           </tbody>
@@ -365,13 +320,13 @@ export function mount(container) {
              bot's own role, so it cannot remove it. A sweep would pick them up and then quietly
              fail on each one. Move the bot's role above theirs, or exempt them to stop it trying.
            </div>
-           ${table(data.blocked, "blocked", true)}`
+           ${table(data.blocked, "blocked")}`
         : "";
 
       previewEl.innerHTML =
         notes.join("") +
         (data.eligible_count
-          ? table(data.members, "sweep", true)
+          ? table(data.members, "sweep")
           : `<div class="empty">Nobody would be swept — but see below.</div>`) +
         blockedBlock;
 
@@ -381,8 +336,7 @@ export function mount(container) {
           const uid = btn.dataset.exemptFromPreview;
           // Only drop the row once the exemption is actually saved — otherwise a
           // failed write reads as "done" while the member is still sweepable.
-          if (!(await addExemption(uid, btn.dataset.exemptName))) return;
-          exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
+          if (!(await exemptList.add(uid, btn.dataset.exemptName))) return;
           const row = btn.closest("tr");
           const detail = row.nextElementSibling;
           if (detail && detail.classList.contains("sweep-roles-detail")) detail.remove();

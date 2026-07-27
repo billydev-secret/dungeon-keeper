@@ -110,17 +110,21 @@ def _candidate(user_id: int, *, idle_days: float = 40.0) -> SweepCandidate:
     )
 
 
-def _preview_member(user_id: int, roles) -> PreviewMember:
-    """``roles`` items are ``(role_id, name, managed[, position])``."""
-    return PreviewMember(
-        user_id=user_id,
+def _preview_member(user_id: int, roles) -> tuple[int, PreviewMember]:
+    """``roles`` items are ``(role_id, name, managed[, position])``.
+
+    Position defaults to 1 — below the bot — for the cases that aren't about
+    hierarchy. Returns the ``(user_id, member)`` pair ``_preview`` keys on.
+    """
+    return user_id, PreviewMember(
         display_name=f"u{user_id}",
-        roles=[PreviewRole(*r) for r in roles],
+        roles=[PreviewRole(*(r if len(r) == 4 else (*r, 1))) for r in roles],
     )
 
 
 def _preview(members, *, candidates=None, tracked=None, bot_position=BOT_TOP_POSITION):
-    by_id = {m.user_id: m for m in members}
+    # `members` is a list of (user_id, PreviewMember) pairs.
+    by_id = dict(members)
     return build_sweep_preview(
         candidates=candidates or [_candidate(uid) for uid in by_id],
         members=by_id,
@@ -178,7 +182,7 @@ def test_member_with_only_managed_roles_is_still_swept():
     # them from the listing would under-report the sweep.
     sweepable, _ = _preview([_preview_member(1, [(12, "Server Booster", True)])])
     assert [r.user_id for r in sweepable] == [1]
-    assert sweepable[0].removed_role_ids == []
+    assert sweepable[0].removed_role_names == []
 
 
 def test_members_above_the_bot_are_reported_as_blocked():

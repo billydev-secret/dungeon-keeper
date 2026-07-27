@@ -227,7 +227,17 @@ def test_no_panel_overflows(dashboard, browser):
     assert not failures, "Responsive layout faults:\n" + "\n".join(failures)
 
 
-# ── interaction scenario: the editor the original bug lived in ──────────────────
+# ── interaction scenarios: states a plain page load never reaches ───────────────
+
+
+def _assert_fits(res, label: str) -> None:
+    """Fail with the same fault description the panel sweep uses."""
+    faults = []
+    if res["viewport"]:
+        faults.append("off-screen — " + _describe(res["viewport"]))
+    if res["clipped"]:
+        faults.append("clipped — " + _describe(res["clipped"]))
+    assert not faults, f"{label} overflows on phone:\n" + "\n".join(faults)
 
 def test_announcement_button_editor_fits_on_phone(dashboard, browser):
     """Open the announcement editor and add role-button rows — the exact flow
@@ -248,12 +258,7 @@ def test_announcement_button_editor_fits_on_phone(dashboard, browser):
         res = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
         context.close()
-    faults = []
-    if res["viewport"]:
-        faults.append("off-screen — " + _describe(res["viewport"]))
-    if res["clipped"]:
-        faults.append("clipped — " + _describe(res["clipped"]))
-    assert not faults, "Announcement button editor overflows on phone:\n" + "\n".join(faults)
+    _assert_fits(res, "Announcement button editor")
 
 
 _SWEEP_PREVIEW_STUB = {
@@ -332,9 +337,4 @@ def test_inactive_sweep_preview_fits_on_phone(dashboard, browser):
         res = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
         context.close()
-    faults = []
-    if res["viewport"]:
-        faults.append("off-screen — " + _describe(res["viewport"]))
-    if res["clipped"]:
-        faults.append("clipped — " + _describe(res["clipped"]))
-    assert not faults, "Inactive sweep preview overflows on phone:\n" + "\n".join(faults)
+    _assert_fits(res, "Inactive sweep preview")

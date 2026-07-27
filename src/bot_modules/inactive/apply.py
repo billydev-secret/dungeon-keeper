@@ -33,9 +33,9 @@ from bot_modules.inactive.store import (
     reactivate_inactive,
 )
 from bot_modules.services.embeds import MOD_INFO, MOD_SUCCESS
+from bot_modules.inactive.logic import roles_to_strip
 from bot_modules.services.moderation import (
     compute_roles_to_restore,
-    compute_roles_to_snapshot,
     write_audit,
 )
 
@@ -244,10 +244,10 @@ async def apply_inactive(
 
     # Snapshot everything except @everyone and the Inactive role itself. Exclude
     # managed roles (integrations control them and the bot can't restore them).
-    stored_roles = compute_roles_to_snapshot(
+    stored_roles = roles_to_strip(
         [r.id for r in target.roles if not r.managed],
         default_role_id=guild.default_role.id,
-        jailed_role_id=role.id,
+        inactive_role_id=role.id,
     )
 
     removable = [

@@ -1,6 +1,7 @@
 // Shared helpers for config panels.
-import { api, apiPut, esc } from "./api.js";
+import { api, apiDelete, apiPut, esc } from "./api.js";
 import { filterSelect, multiFilterSelect } from "./filter-select.js";
+import { confirmDialog, toast } from "./ui.js";
 
 // Canonical escaping + write verbs live in api.js; re-exported here so the
 // 35 existing panel importers keep working unchanged.
@@ -328,6 +329,89 @@ export function showStatus(el, ok, msg) {
   // next to a button outlives its usefulness once the user moves on.
   clearTimeout(el._statusTimer);
   el._statusTimer = setTimeout(() => { el.textContent = ""; }, ok ? 3000 : 8000);
+}
+
+// A "these members are exempt" chip list backed by PUT/DELETE
+// `${endpoint}/${user_id}`. Config-prune grew the same widget by hand first;
+// this is the shared form so a fix to the chips, the confirm flow, or the
+// failed-write handling lands once. `picker` is an optional member picker whose
+// suggestions are kept clear of already-exempt members.
+//
+// Returns { add(id, name), ids() } — `add` resolves to whether the write
+// actually landed, so a caller removing a row from its own list can hold off
+// when it didn't.
+export function mountExemptionList(listEl, opts) {
+  const { endpoint, picker, emptyText, confirmTitle, confirmLabel, confirmText } = opts;
+  let items = (opts.items || []).slice();
+  // Held as a live Set rather than rebuilt per candidate: the picker's filter
+  // runs once per member on every keystroke.
+  const excluded = new Set(items.map((e) => String(e.id)));
+
+  function refresh() {
+    if (!items.length) {
+      listEl.innerHTML = `<div class="empty" style="padding:8px 0;">${esc(emptyText)}</div>`;
+    } else {
+      listEl.innerHTML = `<div class="exempt-chips">${items
+        .map(
+          (e) =>
+            `<span class="exempt-chip"><span>${esc(e.name)}</span><button type="button" data-remove-exempt="${esc(e.id)}" aria-label="Stop exempting ${esc(e.name)}" title="Stop exempting ${esc(e.name)}">×</button></span>`
+        )
+        .join("")}</div>`;
+      listEl.querySelectorAll("[data-remove-exempt]").forEach((btn) => {
+        btn.addEventListener("click", () => remove(btn.dataset.removeExempt));
+      });
+    }
+    if (picker) picker.setFilter((o) => !excluded.has(String(o.id)));
+  }
+
+  async function remove(id) {
+    const entry = items.find((e) => String(e.id) === String(id));
+    const ok = await confirmDialog(confirmText(entry ? entry.name : "this member"), {
+      title: confirmTitle,
+      danger: true,
+      confirmLabel,
+    });
+    if (!ok) return;
+    try {
+      await apiDelete(`${endpoint}/${id}`);
+    } catch (err) {
+      toast(err.message, "error");
+      return;
+    }
+    items = items.filter((e) => String(e.id) !== String(id));
+    excluded.delete(String(id));
+    refresh();
+  }
+
+  async function add(id, name) {
+    try {
+      // Member ids stay strings on the wire.
+      await apiPut(`${endpoint}/${id}`, {});
+    } catch (err) {
+      toast(err.message, "error");
+      return false;
+    }
+    items.push({ id: String(id), name });
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    excluded.add(String(id));
+    refresh();
+    return true;
+  }
+
+  refresh();
+  return { add, ids: () => excluded };
+}
+
+// Cancel a pending showStatus blanking and drop its styling. Callers that write
+// their own text into a status element afterwards need this — otherwise the
+// timer armed by an earlier error wipes the new message mid-read, and the
+// save-err class leaves it red. Owned here so showStatus's timer field stays
+// private to this module.
+export function clearStatus(el) {
+  clearTimeout(el._statusTimer);
+  el._statusTimer = null;
+  el.className = "";
+  el.textContent = "";
 }
 
 export function buildField(labelText, control, hint) {

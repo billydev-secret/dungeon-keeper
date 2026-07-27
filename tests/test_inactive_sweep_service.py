@@ -23,7 +23,7 @@ import pytest
 
 from bot_modules.core.app_context import AppContext
 from bot_modules.inactive.store import add_sweep_exemption, create_inactive
-from bot_modules.inactive.sweep_service import UNCAPPED, compute_candidates
+from bot_modules.inactive.sweep_service import compute_candidates
 from tests.db_template import migrated_db
 
 GUILD_ID = 100
@@ -199,7 +199,7 @@ async def test_saved_cap_truncates_and_reports_overflow(tmp_path):
     selection = await compute_candidates(ctx, _guild(members))
     assert len(selection.candidates) == 2
     assert selection.overflow == 4
-    assert selection.cap == 2
+    assert selection.saved_cap == 2
 
 
 async def test_uncapped_lists_everyone_for_the_preview(tmp_path):
@@ -211,6 +211,9 @@ async def test_uncapped_lists_everyone_for_the_preview(tmp_path):
         members.append(_member(uid))
     ctx.set_config_value("inactive_sweep_cap", "2", GUILD_ID)
 
-    selection = await compute_candidates(ctx, _guild(members), cap=UNCAPPED)
+    selection = await compute_candidates(ctx, _guild(members), cap=None)
     assert len(selection.candidates) == 6
     assert selection.overflow == 0
+    # The configured cap still comes back, so the caller can say what one run
+    # would reach even though the listing lifted it.
+    assert selection.saved_cap == 2

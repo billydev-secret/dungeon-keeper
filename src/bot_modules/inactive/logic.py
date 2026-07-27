@@ -28,7 +28,7 @@ def select_sweep_candidates(
     now: float,
     threshold_seconds: float,
     exclude_ids: set[int],
-    cap: int,
+    cap: int | None,
 ) -> tuple[list[SweepCandidate], int]:
     """Decide which members should be swept into the inactive channel.
 
@@ -40,13 +40,14 @@ def select_sweep_candidates(
 
     A member is a candidate when ``now - last_seen >= threshold_seconds``.
     Results are sorted most-idle-first (so the cap keeps the stalest members)
-    and truncated to ``cap``.
+    and truncated to ``cap``. ``cap=None`` means no truncation — the dashboard's
+    dry run lists every eligible member rather than one run's worth.
 
     Returns ``(candidates, overflow)`` where ``overflow`` is how many eligible
     members were dropped by the cap — the caller surfaces this so a silent
     truncation never reads as "swept everyone".
     """
-    if threshold_seconds <= 0 or cap <= 0:
+    if threshold_seconds <= 0 or (cap is not None and cap <= 0):
         return [], 0
 
     eligible: list[SweepCandidate] = []
@@ -62,9 +63,30 @@ def select_sweep_candidates(
     # Most-idle first, tie-break on user_id for a deterministic order.
     eligible.sort(key=lambda c: (-c.idle_seconds, c.user_id))
 
-    if len(eligible) <= cap:
+    if cap is None or len(eligible) <= cap:
         return eligible, 0
     return eligible[:cap], len(eligible) - cap
+
+
+def roles_to_strip(
+    member_role_ids: list[int], *, default_role_id: int, inactive_role_id: int
+) -> list[int]:
+    """Return the role IDs an inactive hold takes off a member.
+
+    Callers pass only the member's **unmanaged** roles — an integration owns the
+    managed ones, so the bot can neither strip them nor put them back.
+    ``@everyone`` and ``@Inactive`` drop out here (neither is strippable, and
+    re-adding ``@Inactive`` on release would re-apply the hold).
+
+    This exists so ``apply_inactive`` and the dashboard's dry-run preview can't
+    disagree about what a sweep costs a member: a preview built on its own copy
+    of this rule would drift the moment either side changed.
+    """
+    return compute_roles_to_snapshot(
+        member_role_ids,
+        default_role_id=default_role_id,
+        jailed_role_id=inactive_role_id,
+    )
 
 
 @dataclass(frozen=True)
@@ -74,14 +96,13 @@ class PreviewRole:
     role_id: int
     name: str
     managed: bool  # integration-controlled; the bot can neither strip nor restore it
-    position: int = 0
+    position: int
 
 
 @dataclass(frozen=True)
 class PreviewMember:
     """A sweep candidate's Discord state, flattened for pure processing."""
 
-    user_id: int
     display_name: str
     roles: list[PreviewRole]
 
@@ -95,7 +116,6 @@ class SweepPreviewRow:
     idle_seconds: float
     last_seen: float
     has_tracked_messages: bool
-    removed_role_ids: list[int]
     removed_role_names: list[str]
     kept_managed_role_names: list[str]
 
@@ -111,12 +131,11 @@ def build_sweep_preview(
 ) -> tuple[list[SweepPreviewRow], list[SweepPreviewRow]]:
     """Split sweep candidates into ``(sweepable, blocked_by_hierarchy)``.
 
-    The role lists mirror :func:`apply_inactive`'s call site exactly: *managed*
-    roles are filtered out first (an integration owns them — the bot can't strip
-    them and couldn't restore them afterwards), and only then does
-    :func:`compute_roles_to_snapshot` drop ``@everyone`` and ``@Inactive``. A
-    member whose every role is managed is still swept, they just lose nothing but
-    their channel access, so they keep a row with an empty removal list.
+    The role lists come from :func:`roles_to_strip`, the same function
+    ``apply_inactive`` snapshots with, so the preview cannot promise a role that
+    would in fact survive. A member whose every role is managed is still swept,
+    they just lose nothing but their channel access, so they keep a row with an
+    empty removal list.
 
     ``blocked_by_hierarchy`` holds candidates with a role to strip that sits at
     or above the bot's top role: the sweep would select them and then fail on
@@ -141,12 +160,13 @@ def build_sweep_preview(
             continue
 
         strippable = [r for r in member.roles if not r.managed]
-        removed_ids = compute_roles_to_snapshot(
-            [r.role_id for r in strippable],
-            default_role_id=default_role_id,
-            jailed_role_id=inactive_role_id,
+        removed = set(
+            roles_to_strip(
+                [r.role_id for r in strippable],
+                default_role_id=default_role_id,
+                inactive_role_id=inactive_role_id,
+            )
         )
-        removed = set(removed_ids)
 
         row = SweepPreviewRow(
             user_id=candidate.user_id,
@@ -154,7 +174,6 @@ def build_sweep_preview(
             idle_seconds=candidate.idle_seconds,
             last_seen=candidate.last_seen,
             has_tracked_messages=candidate.user_id in tracked_user_ids,
-            removed_role_ids=removed_ids,
             removed_role_names=[r.name for r in strippable if r.role_id in removed],
             kept_managed_role_names=[r.name for r in member.roles if r.managed],
         )

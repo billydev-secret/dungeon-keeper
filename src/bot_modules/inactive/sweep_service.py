@@ -31,11 +31,10 @@ if TYPE_CHECKING:
 DEFAULT_THRESHOLD_DAYS = 30
 DEFAULT_CAP = 25
 
-# Effectively "no cap" for the dashboard preview, which lists every eligible
-# member rather than one run's worth. Far above any real guild's member count,
-# and still a positive int — select_sweep_candidates treats cap <= 0 as "select
-# nobody", so 0 would silently empty the preview.
-UNCAPPED = 1_000_000
+# Default for compute_candidates' ``cap``, distinguishing "the caller said
+# nothing, use the guild's setting" from ``cap=None``, which means "no cap at
+# all" — what the dashboard preview passes to list every eligible member.
+USE_SAVED_CAP = -1
 
 
 # ── Config helpers ────────────────────────────────────────────────────
@@ -49,36 +48,17 @@ def _int_from(conn, key: str, default: int, guild_id: int) -> int:
         return default
 
 
-def read_int_config(ctx: AppContext, key: str, default: int, guild_id: int) -> int:
+def _read_int_config(ctx: AppContext, key: str, default: int, guild_id: int) -> int:
     with ctx.open_db() as conn:
         return _int_from(conn, key, default, guild_id)
 
 
-def read_threshold_days(ctx: AppContext, guild_id: int) -> int:
-    return max(
-        1, read_int_config(ctx, "inactive_threshold_days", DEFAULT_THRESHOLD_DAYS, guild_id)
-    )
-
-
-def read_sweep_cap(ctx: AppContext, guild_id: int) -> int:
-    return max(1, read_int_config(ctx, "inactive_sweep_cap", DEFAULT_CAP, guild_id))
-
-
 def auto_sweep_enabled(ctx: AppContext, guild_id: int) -> bool:
-    return read_int_config(ctx, "inactive_auto_sweep", 0, guild_id) == 1
+    return _read_int_config(ctx, "inactive_auto_sweep", 0, guild_id) == 1
 
 
 def read_inactive_channel_id(ctx: AppContext, guild_id: int) -> int:
-    return read_int_config(ctx, "inactive_channel_id", 0, guild_id)
-
-
-def read_inactive_role_id(ctx: AppContext, guild_id: int) -> int:
-    """Return the configured ``@Inactive`` role id, or 0 if setup hasn't run.
-
-    Deliberately a plain read rather than :func:`apply.ensure_inactive_role`:
-    the preview must never create a role as a side effect of being looked at.
-    """
-    return read_int_config(ctx, "inactive_role_id", 0, guild_id)
+    return _read_int_config(ctx, "inactive_channel_id", 0, guild_id)
 
 
 # ── Candidate gathering (Discord + DB, impure) ───────────────────────
@@ -98,10 +78,10 @@ def gather_last_seen(conn, guild_id: int) -> dict[int, float]:
 class SweepSelection:
     """The outcome of one selection pass."""
 
-    candidates: list[SweepCandidate]
+    candidates: list[SweepCandidate]  # most-idle first
     overflow: int  # eligible members the cap dropped
     threshold_days: int
-    cap: int
+    saved_cap: int  # the guild's configured per-run cap, whatever cap was applied
     tracked_user_ids: set[int]  # who has any message history at all
 
 
@@ -110,7 +90,7 @@ async def compute_candidates(
     guild: discord.Guild,
     *,
     threshold_days: int | None = None,
-    cap: int | None = None,
+    cap: int | None = USE_SAVED_CAP,
 ) -> SweepSelection:
     """Select the members a sweep would move, for this guild's settings.
 
@@ -119,10 +99,11 @@ async def compute_candidates(
     set (bots, owner, mods, admins, exempted members, already-inactive), then
     delegates the actual choice to the pure :func:`select_sweep_candidates`.
 
-    ``threshold_days`` and ``cap`` default to the saved config. The dashboard
-    preview passes its own so an unsaved threshold can be tried out, and
-    ``cap=UNCAPPED`` so it can list every eligible member rather than one run's
-    worth — the real sweeps pass neither.
+    ``threshold_days`` and ``cap`` default to the saved config; the dashboard
+    preview passes its own threshold so an unsaved value can be tried out, and
+    ``cap=None`` so it lists every eligible member rather than one run's worth.
+    The saved cap comes back on the result either way, so a caller that lifted it
+    can still say what a single run would reach.
     """
     guild_id = guild.id
 
@@ -145,20 +126,24 @@ async def compute_candidates(
         saved_threshold,
         saved_cap,
     ) = await asyncio.to_thread(_fetch)
+    saved_cap = max(1, saved_cap)
     if threshold_days is None:
         threshold_days = max(1, saved_threshold)
-    if cap is None:
-        cap = max(1, saved_cap)
+    if cap == USE_SAVED_CAP:
+        cap = saved_cap
     cfg = ctx.guild_config(guild_id)
 
     last_seen: dict[int, float] = {}
     exclude: set[int] = set(already_inactive) | exempt
     for m in guild.members:
+        # guild_permissions isn't cached — each read rebuilds and sorts the
+        # member's role list, so take it once per member rather than twice.
+        perms = m.guild_permissions
         if (
             m.bot
             or m.id == guild.owner_id
-            or m.guild_permissions.administrator
-            or m.guild_permissions.manage_guild
+            or perms.administrator
+            or perms.manage_guild
             or cfg.member_is_mod(m)
             or cfg.member_is_admin(m)
         ):
@@ -182,6 +167,6 @@ async def compute_candidates(
         candidates=candidates,
         overflow=overflow,
         threshold_days=threshold_days,
-        cap=cap,
+        saved_cap=saved_cap,
         tracked_user_ids=set(msg_last_seen),
     )

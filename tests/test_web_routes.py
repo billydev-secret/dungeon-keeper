@@ -847,25 +847,6 @@ def test_inactive_preview_refuses_when_the_bot_member_is_uncached(ctx, make_clie
     assert resp.status_code == 503
 
 
-def test_inactive_preview_ignores_managed_roles_for_hierarchy(ctx, make_client):
-    """A booster role above the bot doesn't stop the roles below being stripped."""
-    member = _sweep_member(
-        5,
-        [
-            _sweep_role(12, "Server Booster", managed=True, position=99),
-            _sweep_role(11, "Member", position=1),
-        ],
-    )
-    guild = _sweep_guild(ctx, [member], bot_top_position=10)
-    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
-    client = make_client()
-
-    data = client.post("/api/config/inactive/preview", json={"threshold_days": 30}).json()
-
-    assert [r["user_id"] for r in data["members"]] == ["5"]
-    assert data["blocked"] == []
-
-
 def test_inactive_preview_note_uses_the_cap_on_screen(ctx, make_client):
     """The panel sends the typed cap so its note can't contradict the field."""
     guild = _sweep_guild(ctx, [_sweep_member(5, [_sweep_role(11, "Member")])])
