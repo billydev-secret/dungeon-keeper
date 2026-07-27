@@ -665,3 +665,40 @@ def keno_payout(picks: list[int], drawn: list[int], amount: int) -> int:
 def describe_keno_ticket(picks: list[int]) -> str:
     """"Pick-6 · 4 12 33 41 56 78" — the bets board / recap line."""
     return f"Pick-{len(picks)} · {' '.join(str(n) for n in picks)}"
+
+
+def keno_pay_threshold(spots: int) -> int:
+    """Fewest catches that return anything on a ``spots`` ticket."""
+    tier = KENO_PAYTABLE.get(spots)
+    if tier is None:
+        raise ValueError(f"unknown keno tier: {spots} spots")
+    return min(tier)
+
+
+def describe_keno_result(picks: list[int], drawn: list[int], payout: int) -> str:
+    """One settled ticket: the picks with hits **bolded**, the catch count,
+    and — on a losing ticket only — the line it needed to reach.
+
+    A losing ticket is the whole point of this: "caught 3" beside the board
+    is what tells a member her Pick-10 fell one short, instead of leaving a
+    near miss indistinguishable from an unpaid win. Winners already show
+    stake → payout, so the threshold would only be noise there.
+
+    The threshold is read off KENO_PAYTABLE, never hardcoded, so it cannot
+    drift from what keno_payout actually pays. Tiers whose lowest paying
+    catch returns 1× (Pick-6 at 2, Pick-8 at 3, Pick-10 at 4) say "returns
+    your stake" rather than "pays" — promising a *win* at a break-even
+    tier is the next complaint waiting to happen.
+    """
+    hits = set(picks) & set(drawn)
+    board = " ".join(f"**{n}**" if n in hits else str(n) for n in picks)
+    line = f"Pick-{len(picks)} · {board} · caught {len(hits)}"
+    if payout > 0:
+        return line
+    need = keno_pay_threshold(len(picks))
+    verb = (
+        "returns your stake"
+        if KENO_PAYTABLE[len(picks)][need] == 1
+        else "pays"
+    )
+    return f"{line} · {need} {verb}"

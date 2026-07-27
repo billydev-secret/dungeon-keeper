@@ -165,6 +165,12 @@ class _WindowUI(NamedTuple):
     # (econ, accent, result, bets, pot_after) → (frames, result embed)
     build_show: Callable[..., tuple[list[discord.Embed], discord.Embed]]
     frame_sleep: float
+    # Result-time ticket line for games whose *draw* annotates the bet
+    # (keno catches). describe_bet can't do this: the bets board renders
+    # before anything is drawn, so there is nothing to catch against.
+    # None → the board-time description is the whole story. (bet row,
+    # draw result) → line.
+    annotate_bet: Callable[..., str] | None = None
 
 
 def _roulette_show(
@@ -366,6 +372,9 @@ _KENO_UI = _WindowUI(
     draw=logic.draw_keno,
     describe_bet=lambda b: logic.describe_keno_ticket(
         json.loads(str(b["spots"]))
+    ),
+    annotate_bet=lambda b, drawn: logic.describe_keno_result(
+        json.loads(str(b["spots"])), list(drawn), int(b["payout"])
     ),
     round_embed=casino_embeds.build_keno_round_embed,
     running_note=casino_embeds.build_draw_running_note,
@@ -1895,8 +1904,13 @@ class CasinoCog(commands.Cog, name="CasinoCog"):
         if settled is None:
             return
         rnd, result, bet_rows, econ, pot_after = settled
+        annotate = ui.annotate_bet
+        describe = (
+            ui.describe_bet if annotate is None
+            else (lambda b: annotate(b, result))
+        )
         bets = [
-            (int(b["user_id"]), ui.describe_bet(b), int(b["amount"]),
+            (int(b["user_id"]), describe(b), int(b["amount"]),
              int(b["payout"]))
             for b in bet_rows
         ]

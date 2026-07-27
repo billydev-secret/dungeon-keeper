@@ -292,6 +292,91 @@ def test_keno_result_all_losses_is_red():
     assert embed.color == discord.Color(COLOR_RED)
 
 
+def _fields(embed) -> list[tuple[str | None, str | None]]:
+    return [(f.name, f.value) for f in embed.fields]
+
+
+def test_keno_result_itemises_every_losing_ticket():
+    """Round 7's shape: three unpaid tickets that previously vanished into
+    "The house keeps 90 Coins" with nothing to explain them."""
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    embed = build_keno_result_embed(
+        _ECON, list(range(1, 21)),
+        [
+            (42, "Pick-4 · 8 16 24 77 · caught 0 · 2 pays", 30, 0),
+            (42, "Pick-10 · … · caught 3 · 4 returns your stake", 30, 0),
+            (42, "Pick-8 · … · caught 1 · 3 returns your stake", 30, 0),
+        ],
+    )
+    names = [n for n, _ in _fields(embed)]
+    assert names == ["No payout", "The house keeps"]  # money line stays last
+    unpaid = _fields(embed)[0][1]
+    assert unpaid is not None
+    assert unpaid.count("<@42>") == 3           # every loser, not a total
+    assert "caught 3 · 4 returns your stake" in unpaid
+    assert "90" in str(_fields(embed)[1][1])    # total still reconciles
+
+
+def test_keno_result_keeps_winners_above_the_unpaid_lines():
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    embed = build_keno_result_embed(
+        _ECON, list(range(1, 21)),
+        [
+            (7, "Pick-4 · **1** **2** **3** **4** · caught 4", 10, 600),
+            (42, "Pick-4 · 61 62 63 64 · caught 0 · 2 pays", 10, 0),
+        ],
+    )
+    assert [n for n, _ in _fields(embed)] == [
+        "Winners", "No payout", "The house keeps",
+    ]
+
+
+def test_keno_result_has_no_unpaid_field_when_everyone_won():
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    embed = build_keno_result_embed(
+        _ECON, list(range(1, 21)),
+        [(7, "Pick-4 · **1** **2** **3** **4** · caught 4", 10, 600)],
+    )
+    assert [n for n, _ in _fields(embed)] == ["Winners"]
+
+
+def test_only_keno_annotates_its_bets_with_the_draw():
+    """The one wiring assertion: keno's result lines are built from the
+    draw, and the four games that share _WindowUI opt out by leaving
+    annotate_bet None — their bets board line is the whole story."""
+    from bot_modules.cogs.casino import cog
+
+    annotated = {u.key for u in cog._WINDOW_UIS if u.annotate_bet is not None}
+    assert annotated == {"keno"}
+    line = cog._KENO_UI.annotate_bet(
+        {"spots": "[3, 4, 7, 18, 30, 40, 52, 62, 68, 72]", "payout": 0},
+        [2, 4, 5, 10, 14, 18, 20, 27, 31, 33,
+         35, 36, 38, 47, 50, 57, 63, 68, 70, 71],
+    )
+    assert line.endswith("· caught 3 · 4 returns your stake")
+
+
+def test_keno_result_unpaid_field_stays_under_the_field_limit():
+    """A busy round must truncate, never 400 the edit and freeze the
+    board mid-show."""
+    from bot_modules.cogs.casino.embeds import build_keno_result_embed
+
+    embed = build_keno_result_embed(
+        _ECON, list(range(1, 21)),
+        [
+            (10_000_000_000_000_000 + i,
+             "Pick-10 · " + " ".join(f"**{n}**" for n in range(1, 11))
+             + " · caught 3 · 4 returns your stake", 30, 0)
+            for i in range(40)
+        ],
+    )
+    value = _fields(embed)[0][1]
+    assert value is not None and len(value) <= 1024
+
+
 # ── war result cards ───────────────────────────────────────────────────
 
 

@@ -1049,13 +1049,31 @@ def build_keno_result_embed(
             "fall for no one."
         )
     winners = [b for b in bets if b[3] > 0]
-    losers_total = sum(b[2] for b in bets if b[3] == 0)
+    losers = [b for b in bets if b[3] == 0]
+    losers_total = sum(b[2] for b in losers)
     embed = discord.Embed(
         title="🔢 Keno — the draw is in!",
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
     _add_result_fields(embed, econ, winners, losers_total, pot_after)
+    # Keno itemises its losers — every other game collapses them into the
+    # house total, but there a loss is self-evident (your number didn't
+    # come up). Here a ticket that caught 3 of 10 looks identical to a
+    # ticket the house forgot to pay, so the unpaid lines carry their own
+    # catch counts. Inserted before the house-keeps field _add_result_fields
+    # just appended, so the money line stays last.
+    if losers:
+        lines = [
+            f"<@{uid}> — {d} · {_coins(econ, amount)}"
+            for uid, d, amount, _ in losers
+        ]
+        embed.insert_field_at(
+            len(embed.fields) - 1 if losers_total else len(embed.fields),
+            name="No payout",
+            value="\n".join(logic.cap_lines(lines, limit=1022)) + "\n​",
+            inline=False,
+        )
     embed.set_footer(text=_FOOTER)
     return embed
 
