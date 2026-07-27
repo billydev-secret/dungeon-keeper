@@ -299,10 +299,12 @@ def run_pipeline(
     detections = nudenet_dets + pose_dets
 
     if not detections:
-        # No detections from any source: refuse rather than crop a random region
-        # of an arbitrary (possibly off-topic) image. The cog turns an empty
-        # PipelineResult into a clear ephemeral rejection.
-        log.info("no detections from nudenet or pose — refusing submission")
+        # No detections from any source — an SFW submission with no person in
+        # it (a pet, a desk, a tattoo close-up) lands here routinely. This is
+        # not a rejection: the cog opens the crop editor on an empty
+        # PipelineResult with a default centred box for the submitter to frame
+        # by hand, with Auto disabled since there's nothing to cycle through.
+        log.info("no detections from nudenet or pose — submitter frames the crop manually")
         return PipelineResult(candidates=[], crops=[])
 
     face_boxes = detect_faces(image_bytes)

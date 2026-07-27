@@ -1,6 +1,8 @@
 # Guess — Feature Spec
 
-A guess-the-member image game. A consenting submitter posts an NSFW image; the bot detects an "interesting" region, offers a crop editor to frame it (faces filtered out where possible), and posts the crop to a dedicated channel. Anyone can guess the member from a picker restricted to opted-in members. All-time posting/solving totals are tracked per guild.
+A guess-the-member image game. A consenting submitter posts an image — **SFW or NSFW**; the bot detects an "interesting" region, offers a crop editor to frame it (faces filtered out where possible), and posts the crop to a dedicated channel. Anyone can guess the member from a picker restricted to opted-in members. All-time posting/solving totals are tracked per guild.
+
+> **SFW support (2026-07-27):** Guess was originally NSFW-only, and the web config route rejected any channel without Discord's age-restricted flag. That check is gone — submissions may be SFW or NSFW, and **the bot enforces nothing about where they are posted**. This is a deliberate call by the server owner: placement is policed by moderators, not by the bot. Note the runtime never had an `is_nsfw()` recheck either (the post-time one was removed in 47ca6a5), so the config route was the last vestige of the gate, and it was bypassable anyway — you could save an age-gated channel and then clear the flag. There is no per-submission explicitness verdict stored; NudeNet's detections drive crop selection only.
 
 > **History (2026-06-01):** This feature was originally called "Veil"; an internal rename moved every table, command, cog, and web panel to `guess_*`. The old `/veil` slash commands, cog, and web panels were deleted on the same day. The product is Guess only; there is no Veil variant.
 
@@ -8,7 +10,7 @@ A guess-the-member image game. A consenting submitter posts an NSFW image; the b
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/guess submit <image>` | Slash | Guess role (required — errors if the role isn't configured, or if you don't hold it) | Submit an NSFW image; runs the detection pipeline and opens the crop editor / post flow |
+| `/guess submit <image>` | Slash | Guess role (required — errors if the role isn't configured, or if you don't hold it) | Submit an image (SFW or NSFW); runs the detection pipeline and opens the crop editor / post flow |
 | `/guess optin` | Slash | Everyone (errors if the Guess role isn't configured) | Grants you the consent role immediately — no confirmation step. Makes you eligible to submit and to be picked as an answer |
 | `/guess leaderboard` | Slash | Everyone | Posts the top 5 submitters (rounds posted/solved) and top 5 guessers (rounds solved) — fixed, no arguments or categories |
 | `/guess round <round_id>` | Slash | Mod (`manage_guild`; hidden from non-mods in the Discord UI via `default_permissions`) | Inspect a specific round (status, submitter, answer, crop, guess/unique-guesser counts, re-roll count) |
@@ -17,7 +19,7 @@ A guess-the-member image game. A consenting submitter posts an NSFW image; the b
 | `/guess prompt` | Slash | Mod (`manage_guild`; hidden from non-mods in the Discord UI) | Immediately (re)posts the sticky Submit/Help prompt message at the bottom of the configured guess channel |
 | `Guess` button (on round post) | Persistent | Everyone except the round's submitter | Opens an ephemeral member picker (see Guessing below) |
 | `🎭 Submit Guess` / `❓ Help` buttons (on the sticky prompt) | Persistent | Everyone (Guess role enforced on submit) | Submit opens a URL-paste modal that feeds the same detection pipeline as `/guess submit`; Help shows a short how-to-play blurb |
-| Web config panel | Web (dashboard) | Admin | Per-guild role, channel, cooldown, difficulty, image limits. The channel must be age-gated (NSFW) — the API rejects non-NSFW channels when the bot can resolve them |
+| Web config panel | Web (dashboard) | Admin | Per-guild role, channel, cooldown, difficulty, image limits. Any channel may be chosen — age-gated or not. The API only checks the channel exists, and only when the bot can resolve the guild |
 | Web audit log | Web (dashboard) | Mod | Recent submit / delete / solve / guess-cap events |
 
 There is no `/guess optout` and no `/guess stats` command — neither exists in code.
@@ -39,7 +41,7 @@ The submitter uploads an image (via `/guess submit <image>`, or via the sticky p
 
 1. Validates MIME, dimensions (≥ configured min), and file size (≤ configured cap).
 2. Saves the original to an on-disk cache, keyed by round id, retained **only** until first correct solve.
-3. Runs **candidate detection** — combines NudeNet detections with a separate pose-based detector, merges adjacent different-type genital detections into a single "sex act" candidate, and re-weights scores so more "interesting" regions (genitals/breasts/buttocks) outrank incidental ones (belly/armpits). Candidates overlapping a detected face are filtered out, with a fallback to the single highest-scoring detection (even if it overlaps a face) if that would otherwise eliminate everything. **If no detector returns anything at all, the submission is not rejected** — the editor still opens with a default centered crop box and the note "No detections found — manually frame your crop, then ✓ Post."
+3. Runs **candidate detection** — combines NudeNet detections with a separate pose-based detector, merges adjacent different-type genital detections into a single "sex act" candidate, and re-weights scores so more "interesting" regions (genitals/breasts/buttocks) outrank incidental ones (belly/armpits). Candidates overlapping a detected face are filtered out, with a fallback to the single highest-scoring detection (even if it overlaps a face) if that would otherwise eliminate everything. **If no detector returns anything at all, the submission is not rejected** — the editor still opens with a default centered crop box and the note "No detections found — manually frame your crop, then ✓ Post." (Auto is disabled, since there are no candidates to cycle.) This is the normal path for an SFW submission with no person in it — a pet, a desk, a tattoo close-up. Note that pose landmarking works on clothed bodies, so an SFW photo *of a person* still produces torso/hip/thigh candidates and crops automatically.
 4. Applies difficulty-tuned padding around the top candidate: **easy** = looser (more context), **medium** = moderate, **hard** = tight crop. Output is clamped to image bounds and expanded if smaller than the minimum.
 5. Opens an ephemeral **crop editor**: a D-pad view (move up/down/left/right, zoom in/out, an **Auto** button that cycles through the ranked detected candidates, **✓ Post**, and **✗** cancel). There is no fixed re-roll cap — the submitter can nudge/zoom/cycle as many times as they like before posting. Cancelling before posting discards the submission entirely (nothing is written to the DB until Post).
 6. On Post, the crop posts publicly to the guess channel with a **Guess** button, and the bot best-effort reposts the sticky channel prompt underneath it.
@@ -118,7 +120,9 @@ On a **correct first solve**, the bot edits the round's message: the original im
 
 ## Stored data
 
-Rounds (one row per submission with crop / answer / solver / counts), guesses (one row per guess attempt), and an audit log (submit / delete / solve / guess-cap events) per guild. There's also a `guess_optins` table with full CRUD support in `guess_repo.py` (insert/delete/get/list-by-guild, keyed on user + guild with an `opted_in_at` timestamp) — but it's currently **dead**: nothing in the cog or web server calls it. `/guess optin` only grants the Discord role; eligibility is derived live from role membership (`guess_role.members`), not from this table.
+Rounds (one row per submission with crop / answer / solver / counts), guesses (one row per guess attempt), and an audit log (submit / delete / solve / guess-cap events) per guild.
+
+**There is no opt-in table.** Eligibility — who may submit, and who is pickable as an answer — is derived live from Discord role membership (`guess_role.members`), and that is the single source of truth. A `guess_optins` table (`veil_optins` before migration 020) used to exist with a full CRUD layer in `guess_repo.py`, but nothing in the cog or web server ever called it; it was empty in production and was dropped in migration 136 along with its dead functions. Deriving eligibility from the role is what makes a mod removing the role take effect immediately, and it's why the `answer_optout` round flag (see "Consent and opt-in") is the only persisted consent state.
 
 Filesystem cache: original submissions live in a per-round file on disk **only until first correct solve**, at which point the file is deleted and the path cleared. Crops live on disk for the round's lifetime and are deleted on round deletion. The Discord CDN URL of the posted crop is the canonical reference if the local cache is missing.
 

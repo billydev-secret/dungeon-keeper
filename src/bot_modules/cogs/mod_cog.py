@@ -264,7 +264,7 @@ def _build_help_pages(
     pages.append(
         _page(
             "Image Guessing Games",
-            "Submit a cropped NSFW image; opted-in members guess whose body it is. "
+            "Submit a cropped image, SFW or NSFW; opted-in members guess whose it is. "
             "Guess uses written-name guessing with a leaderboard.\n\n"
             "**❓ Guess**\n"
             + _fmt(
