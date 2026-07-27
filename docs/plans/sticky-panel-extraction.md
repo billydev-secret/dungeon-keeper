@@ -119,16 +119,44 @@ It shipped and looped in prod: the casino hub reposted itself every ~6 seconds
 (exactly `DEFAULT_DELAY`) in bursts of five to seven, each burst ending only
 when the race happened to be won.
 
-The decided fix is in `_delayed_restick`: **a panel that is already the
+The first fix was the at-the-bottom guard: **a panel that is already the
 channel's last message is never re-sticked.** Nothing is buried, so there is
 nothing to move. It reads `channel.last_message_id`, which discord.py maintains
-from the gateway, so it costs no API call, and both the cache write and
-`last_message_id` have converged by the time the debounce fires — the check is
-decided rather than raced. The message-id skip stays as a cheap way to avoid
-arming a doomed debounce, but it is an optimisation, not the protection.
+from the gateway, so it costs no API call. The message-id skip stays as a cheap
+way to avoid arming a doomed debounce, but it is an optimisation, not the
+protection.
 
 The guard applies to every panel, not just the opted-in one: any restick that
 would repost a panel already at the bottom was a wasted delete-and-send.
+
+**That guard shipped and the loop continued** — same ~6s cadence, now
+unbroken for hours and surviving a restart. The guard was sound; it was being
+fed a stored id that could no longer advance. `schedule_restick` cancel-and-arms
+on every trigger, and the task it cancels may be the one *inside* `place()`,
+parked in `send()`. Discord has already accepted the message at that point, so
+the panel posts — but everything after the send (`_remember`, the old-panel
+delete, `save_ids`) never runs. Each iteration therefore left a live panel
+nobody held the id for, froze the stored id on a long-dead message, and left the
+previous panel in place; the next restick compared `last_message_id` against
+that frozen id, saw a mismatch, and posted again. Self-sustaining, and immune to
+a restart: boot's `place_or_refresh` found the stale id still pointing at a real
+(buried) message and edited it in place, so the very next bot message re-armed
+the cycle. Prod evidence: `casino_panel_message_id` unchanged across ~200
+panel posts, none of which deleted its predecessor.
+
+So a placement is now **atomic to its caller's cancellation** — `place()` runs
+the work as a shielded task, and a cancel stops the *waiting*, never the work.
+The at-the-bottom check moved inside the placement lock as `only_if_buried`
+(passed by the restick path, never by an explicit post), where it is decided
+against ids read under that lock: a restick that queued behind another placement
+now sees that placement's result instead of stacking a second panel on top of
+it. Cancelling the debounce still cancels a *pending* repost, which is all the
+coalescing ever needed.
+
+Rejected alongside it: suppressing resticks for bot messages that arrive while a
+placement is in flight. It only saves one debounce tick and a DB read once
+placements are atomic, and it would swallow a genuine round result posted
+concurrently with a repost.
 
 One accepted edge: if the panel is hand-deleted *while it is the last message*,
 `last_message_id` still points at it and the next restick no-ops. The next

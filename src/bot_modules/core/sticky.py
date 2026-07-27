@@ -18,7 +18,9 @@ the best of them, so every caller now gets:
 * an optional **unchanged-content gate**, so a refresh that would render the
   same panel costs no API call at all;
 * a **guild fast-path**, so the ``on_message`` listener rejects guilds with no
-  panel without touching the database.
+  panel without touching the database;
+* **placements atomic to cancellation**, so the debounce's cancel-and-rearm can
+  never leave a posted panel unrecorded (see ``place``).
 
 See ``docs/plans/sticky-panel-extraction.md`` for the full site survey,
 including the panels that are deliberately *not* built on this.
@@ -66,7 +68,7 @@ def should_restick(
     guard below skips the panel's own message when the id is already cached —
     but that is a race against the gateway, so it is an optimisation, not the
     self-loop protection. The decided check is the already-at-the-bottom test
-    in ``_delayed_restick``.
+    in ``_place_locked``, taken under the placement lock.
     """
     if not panel_channel_id or not panel_message_id:
         return False  # no panel posted yet
@@ -116,7 +118,8 @@ class StickyPanel:
       because chasing our own notices is churn and re-sticking under our own
       repost self-loops. Turn it on where the bot is the main thing burying the
       panel (the casino posts round results into its own hub channel). A panel
-      that is already the channel's last message is never re-sticked, so this
+      that is already the channel's last message is never re-sticked, and a
+      placement always records the panel it posted (see ``place``), so this
       cannot chase its own repost.
 
     Then, from the cog: ``on_message`` from a listener, and ``cancel_all()``
@@ -213,7 +216,11 @@ class StickyPanel:
     # ── placement ────────────────────────────────────────────────────────
 
     async def place(
-        self, guild: discord.Guild, target: discord.TextChannel
+        self,
+        guild: discord.Guild,
+        target: discord.TextChannel,
+        *,
+        only_if_buried: bool = False,
     ) -> discord.Message | None:
         """Post a fresh panel at the bottom of ``target``, remove the old one,
         and persist the new ids.
@@ -221,12 +228,79 @@ class StickyPanel:
         Returns None when posting fails, leaving any existing panel untouched.
         Serialised per guild, so a manual post and a sticky repost can't race
         into two panels.
+
+        ``only_if_buried`` — what the sticky repost wants: do nothing (and
+        return None) if the stored panel is already the last message in
+        ``target``. An explicit post never passes it.
+
+        Cancelling the caller cannot abandon a placement half-done. The panel
+        is posted before it is recorded, so a cancel landing in between would
+        leave a live panel whose id nobody holds: the previous panel never
+        deleted and the stored id frozen on a dead message. ``schedule_restick``
+        cancel-and-rearms, and the task it cancels may be exactly the one parked
+        in ``send()`` here — for a ``restick_on_bot`` panel that is a loop,
+        since the repost's own gateway event arms the restick that cancels the
+        placement which would have recorded it. (Prod, 2026-07-26: the casino
+        hub reposted every 6s for hours and survived a restart, because the
+        stored id never advanced past a long-dead message.) So the placement
+        runs as a shielded task: the caller's cancellation stops the *waiting*,
+        never the work.
         """
+        task = asyncio.ensure_future(
+            self._place_locked(guild, target, only_if_buried=only_if_buried)
+        )
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # We're going away; the placement finishes on its own. Keep hold of
+            # its outcome so a failure is logged rather than surfacing as an
+            # unretrieved-exception warning whenever the task is collected.
+            task.add_done_callback(self._log_abandoned_placement)
+            raise
+
+    def _log_abandoned_placement(
+        self, task: asyncio.Task[discord.Message | None]
+    ) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            log.error(
+                "%s: placement failed after its caller was cancelled: %r",
+                self.name,
+                task.exception(),
+            )
+
+    @staticmethod
+    def _at_bottom(
+        target: discord.TextChannel, channel_id: int, message_id: int
+    ) -> bool:
+        """Whether the stored panel is already the last message in ``target``.
+
+        Free — ``last_message_id`` is gateway-maintained, not an API call.
+        Callers take this under the placement lock against a freshly read id,
+        so a restick that queued behind another placement sees *that* one's
+        result instead of posting a second panel on top of it.
+        """
+        return bool(
+            message_id
+            and channel_id == target.id
+            and target.last_message_id == message_id
+        )
+
+    async def _place_locked(
+        self,
+        guild: discord.Guild,
+        target: discord.TextChannel,
+        *,
+        only_if_buried: bool = False,
+    ) -> discord.Message | None:
         async with self._locks[guild.id]:
             # Re-read the stored ids INSIDE the lock — a caller's pre-lock
             # snapshot can be stale after a racing post, and deleting it would
             # orphan the live panel.
             old_channel_id, old_message_id = await self.ids(guild.id)
+            if only_if_buried and self._at_bottom(
+                target, old_channel_id, old_message_id
+            ):
+                return None
             content = await self._build(guild)
 
             # Post the replacement BEFORE removing the old one. Deleting first
@@ -404,12 +478,13 @@ class StickyPanel:
             # message-id skip in should_restick() only works if _remember() wins
             # a race against the gateway event for that repost, and it usually
             # loses (the MESSAGE_CREATE frame is dispatched while place() is
-            # still awaiting the HTTP response). Here both paths have converged,
-            # so the check is decided rather than raced. Free, too —
-            # last_message_id is gateway-maintained, not an API call.
+            # still awaiting the HTTP response). A cheap pre-check on cached
+            # ids; ``only_if_buried`` re-decides it under the placement lock,
+            # where a queued restick can also see a concurrent placement's
+            # result.
             if channel.last_message_id == message_id:
                 return
-            await self.place(guild, channel)
+            await self.place(guild, channel, only_if_buried=True)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -457,7 +532,11 @@ class StickyPanel:
             self._known.discard(guild_id)
 
     def cancel_all(self) -> None:
-        """Cancel pending resticks. Call from ``cog_unload``."""
+        """Cancel pending resticks. Call from ``cog_unload``.
+
+        A placement already in flight finishes anyway (it is shielded), so a
+        reload during one still records the panel it posted.
+        """
         for task in self._restick_tasks.values():
             task.cancel()
         self._restick_tasks.clear()
