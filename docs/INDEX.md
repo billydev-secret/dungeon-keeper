@@ -16,7 +16,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers |
 |---|---|
-| [README.md](../README.md) | Feature overview + slash-command reference — moved to the repo root (currency pass 2026-07-21; broad-strokes accurate, verify individual command signatures against `/help` when it matters) |
+| [README.md](../README.md) | Feature overview + quick start, written for someone evaluating the bot (slimmed 2026-07-27: 365→193 lines). Its command table is a hand-picked highlights list, deliberately **not** a reference — `/help` and `manual.html` are. Not on the per-commit docs contract; update it when a feature area appears or disappears |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [dev_remote_testing.md](dev_remote_testing.md) | Dispatching pytest to a faster machine over SSH (opt-in, falls back to local) |
 | [dev_sessions.md](dev_sessions.md) | Parallel feature sessions: `/dk-feature` and `/dk-ship` over tmux windows + git worktrees (replaced the clone-per-session flow 2026-07-25) |
