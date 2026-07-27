@@ -14,7 +14,7 @@ Reporting is the analytics backbone of the dashboard. A handful of small service
 | Message Review panel | Web | Mod | Filter and inspect past messages by author, channel, content, sentiment, and reply chain — see Behavior |
 | Cache clear | Web | Admin | Drop every cached report payload for the active guild |
 
-The bot needs **Manage Server** to read invite codes for attribution. When missing, invite attribution silently degrades to "no inviter detected" — no other report is blocked.
+The bot needs **Manage Server** to read invite codes for attribution. When missing, invite attribution degrades to "no inviter detected" and **logs a warning on every refresh and every unattributed join** — no other report is blocked. The collector (2026-07 rework, `invite_tracker.py`) diffs cached invite snapshots on each join: it drains join bursts one use at a time, attributes consumed single-use invites via their disappearance (Discord deletes them before the use count is ever observable), and keeps the cache current through `on_invite_create` / `on_invite_delete`. Attribution misses (vanity URL joins, diff races) are logged, never silent.
 
 ## Behavior
 
