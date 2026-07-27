@@ -240,6 +240,20 @@ guild's casino name, which is edited on **Config → Branding**
   number board. Recap carries 🔢 Next Draw. Keno's rare huge multipliers
   are why `payout` mints stay within the same `pay_out` path — no special
   casing.
+  Keno is the one windowed game that **itemises its losing tickets**
+  ("No payout", above the house-keeps line) instead of collapsing them
+  into a total: a ticket that caught 3 of 10 is otherwise
+  indistinguishable from one the house failed to pay, which is exactly
+  the complaint that produced this. Each settled line comes from
+  `describe_keno_result` — picks with the hits **bolded**, `caught N`,
+  and on an unpaid ticket the threshold it needed, read off
+  `KENO_PAYTABLE` via `keno_pay_threshold` so it can never drift from
+  `keno_payout`. Tiers whose floor returns 1× (Pick-6 at 2, Pick-8 at 3,
+  Pick-10 at 4) read "N returns your stake", never "N pays" — the
+  break-even tier must not be advertised as a win. The draw reaches that
+  line through `_WindowUI.annotate_bet`, an optional result-time hook the
+  other four games leave `None`; `describe_bet` can't do it, since the
+  bets board renders before anything is drawn.
 - **War** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1c) — one card
   each from the infinite shoe, aces high, high card pays even money. 12 of

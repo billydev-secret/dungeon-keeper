@@ -589,6 +589,73 @@ def test_keno_ticket_label():
     assert logic.describe_keno_ticket([4, 12, 33]) == "Pick-3 · 4 12 33"
 
 
+# The round-7 complaint: three losing tickets, no way to see the near miss.
+_ROUND_7 = [2, 4, 5, 10, 14, 18, 20, 27, 31, 33,
+            35, 36, 38, 47, 50, 57, 63, 68, 70, 71]
+
+
+def test_keno_pay_threshold_reads_the_paytable():
+    assert logic.keno_pay_threshold(4) == 2
+    assert logic.keno_pay_threshold(6) == 2
+    assert logic.keno_pay_threshold(8) == 3
+    assert logic.keno_pay_threshold(10) == 4
+    with pytest.raises(ValueError):
+        logic.keno_pay_threshold(3)
+
+
+@pytest.mark.parametrize(
+    ("picks", "expected"),
+    [
+        # 3 of 10 — the near miss that read as a missing payout.
+        pytest.param(
+            [3, 4, 7, 18, 30, 40, 52, 62, 68, 72],
+            "Pick-10 · 3 **4** 7 **18** 30 40 52 62 **68** 72 · caught 3 "
+            "· 4 returns your stake",
+            id="near-miss-bolds-its-hits",
+        ),
+        # Nothing caught: still itemised, still says what it needed.
+        pytest.param(
+            [8, 16, 24, 77],
+            "Pick-4 · 8 16 24 77 · caught 0 · 2 pays",
+            id="no-catch-tier-with-a-real-multiplier-says-pays",
+        ),
+        # Pick-8's floor is 3 catches at 1× — stake back, not a win.
+        pytest.param(
+            [11, 13, 15, 22, 39, 58, 60, 68],
+            "Pick-8 · 11 13 15 22 39 58 60 **68** · caught 1 "
+            "· 3 returns your stake",
+            id="break-even-floor-never-promises-a-win",
+        ),
+    ],
+)
+def test_describe_keno_result_annotates_a_losing_ticket(picks, expected):
+    assert logic.describe_keno_result(picks, _ROUND_7, 0) == expected
+
+
+def test_describe_keno_result_drops_the_threshold_for_winners():
+    """A paid ticket shows stake → payout already; the line it cleared
+    would only be noise."""
+    line = logic.describe_keno_result([2, 4, 5, 99], _ROUND_7, 240)
+    assert line == "Pick-4 · **2** **4** **5** 99 · caught 3"
+    assert "pays" not in line and "stake" not in line
+
+
+@pytest.mark.parametrize("spots", sorted(logic.KENO_PAYTABLE))
+def test_keno_threshold_matches_what_keno_payout_actually_pays(spots):
+    """The label is derived, never hardcoded: one catch below the stated
+    threshold must pay nothing, and the threshold itself must pay."""
+    need = logic.keno_pay_threshold(spots)
+    drawn = list(range(1, 21))
+    at = [*range(1, need + 1), *range(41, 41 + spots - need)]
+    below = [*range(1, need), *range(41, 41 + spots - need + 1)]
+    assert logic.keno_payout(at, drawn, 10) > 0
+    assert logic.keno_payout(below, drawn, 10) == 0
+    # ...and "returns your stake" appears exactly when the floor is 1×.
+    line = logic.describe_keno_result(below, drawn, 0)
+    breaks_even = logic.keno_payout(at, drawn, 10) == 10
+    assert ("returns your stake" in line) is breaks_even
+
+
 # ── fancy round: streaks & thresholds ──────────────────────────────────
 
 
