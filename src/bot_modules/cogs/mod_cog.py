@@ -204,7 +204,7 @@ def _build_help_pages(
             "**Channel Owner**\n"
             + _fmt(
                 [
-                    ("/voice access state:...", "One dial for who gets in: Open / NSFW / NSFW locked / Spectator (all but Open are age-gated)."),
+                    ("/voice access state:...", "One dial for who gets in: Open / NSFW / NSFW locked / Spectator (all but Open are marked NSFW)."),
                     ("/voice rename name:...", "Set a custom channel name."),
                     ("/voice limit n:...", "Set user capacity (0 = unlimited)."),
                     ("/voice invite @user", "Add a member to your allow-list and invite them."),

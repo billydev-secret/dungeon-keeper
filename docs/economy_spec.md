@@ -1387,7 +1387,7 @@ mods retain disclosed view access), built on existing machinery:
   overwrite snapshot/restore (`serialize_overwrites`/`rebuild_overwrites`); voice rooms
   deleted immediately.
 - NSFW flag inherits guild verification gates (never bypasses ID verification —
-  consistent with the Voice Control age-gated dial).
+  consistent with the Voice Control NSFW dial).
 
 ## 9. Metrics & Per-Guild Tuning
 

@@ -42,7 +42,7 @@ A configured voice channel acts as the **Hub** (e.g. "+ Create Voice"). When a m
 
 If the member already owns a live channel, joining the Hub moves them back into it instead of creating another. A Hub join inside the create cooldown, or past the max-channels-per-member cap, silently disconnects them from the Hub (no message — mid-event DMs are unreliable).
 
-On create the bot also: marks the channel age-gated (`nsfw=True`) when the profile's access state is anything but open, sets the access-state status line, posts the inline control panel into the channel's side chat (if enabled), DMs the owner about anything skipped, and arms the empty-grace timer (so an orphaned channel gets cleaned up even if the move-in failed).
+On create the bot also: marks the channel NSFW (`nsfw=True`) when the profile's access state is anything but open, sets the access-state status line, posts the inline control panel into the channel's side chat (if enabled), DMs the owner about anything skipped, and arms the empty-grace timer (so an orphaned channel gets cleaned up even if the move-in failed).
 
 ### The access dial (`/voice access`)
 

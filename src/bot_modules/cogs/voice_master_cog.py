@@ -878,8 +878,8 @@ class VoiceMasterCog(commands.Cog):
                 create_kwargs["user_limit"] = limit
             if bitrate > 0:
                 create_kwargs["bitrate"] = bitrate
-            # Every access state but plain "open" is age-gated (mirrors
-            # _apply_access_state), so carry Discord's age gate at creation.
+            # Every access state but plain "open" is marked NSFW (mirrors
+            # _apply_access_state), so carry Discord's NSFW flag at creation.
             initial_state = profile_access_state(profile)
             if initial_state != ACCESS_OPEN:
                 create_kwargs["nsfw"] = True

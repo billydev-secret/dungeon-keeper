@@ -418,7 +418,7 @@ async def _apply_access_state(
 
     The states — ``open`` / ``nsfw`` / ``locked`` / ``spectate`` — collapse the
     old lock, hide and spectator toggles into one control. Every state but
-    ``open`` is age-gated; ``locked`` also hides the channel (View + Connect
+    ``open`` is marked NSFW; ``locked`` also hides the channel (View + Connect
     denied to ``@everyone``); ``spectate`` opens a muted read-only audience.
     Whatever primitive each state needs — the lock/hide per-member text-chat
     grants, the spectator setup/teardown — is composed here, then the nsfw flag,
@@ -451,7 +451,7 @@ async def _apply_access_state(
                 ctx, channel, row, gate_role=gate_role
             )
         # Locked is the only state that touches @everyone: it denies both View
-        # and Connect (age-gated + hidden). open/nsfw clear both back to inherit.
+        # and Connect (NSFW + hidden). open/nsfw clear both back to inherit.
         want_locked = state == ACCESS_LOCKED
         was_locked = current == "lock"
         everyone = channel.guild.default_role
@@ -481,7 +481,7 @@ async def _apply_access_state(
             await _sync_hidden_member_overwrites(ctx, channel, row, hidden=False)
             await _sync_lock_member_overwrites(ctx, channel, row, locked=False)
 
-    # Age gate + status line in one edit — every state but open is age-gated.
+    # NSFW flag + status line in one edit — every state but open is NSFW.
     # Status rides a separate endpoint from the name edit (no name rate limit),
     # and a cosmetic failure here must not undo the overwrites above.
     status_mode = {
