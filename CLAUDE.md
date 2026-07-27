@@ -36,10 +36,14 @@ SQLite-backed. Tests in `tests/`.
   button/modal flow) ⇒ also update the **user-facing website docs** in the
   same commit: `src/web_server/static/manual.html` (the guide rendered in
   the dashboard's own Help panel — routed via
-  `static/js/panels/help-sections.js`/`help.js`), plus README.md's
-  slash-command reference. This is a different surface from `docs/` (dev
-  specs) and drifts independently — don't let it lag while `docs/` stays
-  current.
+  `static/js/panels/help-sections.js`/`help.js`). This is a different surface
+  from `docs/` (dev specs) and drifts independently — don't let it lag while
+  `docs/` stays current.
+- README.md is **not** part of that per-commit contract. It is a landing page
+  for someone evaluating the bot, and its command table is a hand-picked
+  highlights list, not a reference — `/help` and manual.html are the reference.
+  Touch it only when a change alters what the bot *is* (a whole new feature
+  area, or one removed), not when a command is added, renamed, or resignatured.
 
 ## Workflow
 
