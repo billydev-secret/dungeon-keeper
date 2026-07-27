@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import logging
@@ -501,11 +503,23 @@ def _setup_underlying_done(
     means they filled one out, a birthday row means they set it, a role-menu
     grant or purchase-kind ledger row means they've picked/bought. Kept as
     inline SQL (rather than importing the owning modules) so quest assignment
-    stays self-contained; these are stable core tables. role_pick has a known
-    soft edge: announcement-button grants aren't recorded in
-    ``role_menu_grants``, so those pickers stay visible until the paid-claim
-    backstop in ``_setup_quest_done`` catches them.
+    stays self-contained; these are stable core tables. Every kind also
+    honours an ``econ_setup_marks`` row — externally-detected completion the
+    hourly sweep records for actions the bot has no table of record for
+    (today: roles picked through Discord's native onboarding "Customize"
+    flow, which never touch ``role_menu_grants``). A mark clears the quest
+    from the board without paying it. role_pick's remaining soft edge:
+    announcement-button grants aren't recorded in ``role_menu_grants``
+    either, but those fire the trigger, so the paid-claim backstop in
+    ``_setup_quest_done`` catches them.
     """
+    marked = conn.execute(
+        "SELECT 1 FROM econ_setup_marks "
+        "WHERE guild_id = ? AND user_id = ? AND kind = ? LIMIT 1",
+        (guild_id, user_id, kind),
+    ).fetchone()
+    if marked is not None:
+        return True
     if kind == "bio_set":
         row = conn.execute(
             "SELECT 1 FROM bios WHERE guild_id = ? AND user_id = ? LIMIT 1",
@@ -533,6 +547,38 @@ def _setup_underlying_done(
     else:
         return False
     return row is not None
+
+
+def sweep_setup_marks(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    kind: str,
+    user_ids: Iterable[int],
+    *,
+    now: float | None = None,
+) -> int:
+    """Record that these members have already done a setup kind's real action.
+
+    The economy loop's hourly detector calls this with members it observed
+    completing the action outside the bot's own tables (e.g. holders of a
+    Discord-onboarding role for ``role_pick``). A mark only affects board
+    visibility — the quest drops off like any other done setup quest — and
+    never pays: paying on detection would mass-mint on the first sweep over
+    a guild full of long-standing pickers. Idempotent (INSERT OR IGNORE);
+    returns how many members were newly marked.
+    """
+    if kind not in quests.SETUP_QUEST_KINDS:
+        raise ValueError(f"unknown setup kind: {kind!r}")
+    now = time.time() if now is None else now
+    new = 0
+    for user_id in user_ids:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO econ_setup_marks "
+            "(guild_id, user_id, kind, marked_at) VALUES (?, ?, ?, ?)",
+            (guild_id, int(user_id), kind, now),
+        )
+        new += int(cur.rowcount or 0)
+    return new
 
 
 def _setup_quest_done(
@@ -999,6 +1045,110 @@ def reroll_quote(
     return price
 
 
+# A spotlight kind must be claimable by at least this fraction of 30-day
+# active members during its week to qualify for the pick (see
+# _reachable_spotlight_kinds). 25% keeps the double meaningful without
+# demanding universal reach — weekly-board kinds top out well under 100%.
+_SPOTLIGHT_REACH_FRACTION = 0.25
+
+
+def _reachable_spotlight_kinds(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    iso_week: str,
+    kinds: list[str],
+) -> list[str]:
+    """The candidate spotlight kinds enough members can actually earn.
+
+    A spotlight on a kind nobody's board carries is a dead week: the flip
+    announcement advertises a double that almost nobody can claim (2026-W31
+    would have doubled a kind that landed on zero boards, every daily slot
+    being setup-pinned). A kind qualifies when at least
+    ``_SPOTLIGHT_REACH_FRACTION`` of 30-day-active members could claim a
+    quest of it some time during ``iso_week``: event-cadence kinds reach
+    everyone (no board gate), and board kinds are measured by simulating
+    each member's weekly board plus all seven daily boards of the week —
+    the same pure draw, pair bundling, done-setup drops and setup pins as
+    the real thing, but against the LIVE pools and without freezing any
+    snapshot (the week's later periods must stay editable until their real
+    roll, so this must never call ``assigned_board_ids``). Reroll overrides
+    are ignored — they don't exist yet for periods that haven't started.
+    With no active members there is nothing to measure, so every kind
+    qualifies. Preserves the order of ``kinds``.
+    """
+    members = active_member_ids(conn, guild_id, days=30)
+    if not members:
+        return list(kinds)
+    event_kinds = {
+        str(r["trigger_kind"])
+        for r in conn.execute(
+            "SELECT DISTINCT trigger_kind FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND qtype = 'event' "
+            "AND trigger_kind != ''",
+            (guild_id,),
+        )
+    }
+    board_kinds = [k for k in kinds if k not in event_kinds]
+    if not board_kinds:
+        return list(kinds)
+    from datetime import date, timedelta
+
+    settings = load_econ_settings(conn, guild_id)
+    sizes = board_sizes(settings)
+    monday = date.fromisoformat(local_day_for_period("weekly", iso_week))
+    week_days = [(monday + timedelta(days=i)).isoformat() for i in range(7)]
+    reach: dict[str, set[int]] = {k: set() for k in board_kinds}
+    for qtype in sorted(quests.BOARD_CADENCES):
+        n = quests.board_size(qtype, sizes)
+        if n <= 0:
+            continue
+        rows = conn.execute(
+            "SELECT id, pair_tag, trigger_kind FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
+            (guild_id, qtype),
+        ).fetchall()
+        if not rows:
+            continue
+        tagged = {int(r["id"]): str(r["pair_tag"]) for r in rows}
+        kind_by_id = {int(r["id"]): str(r["trigger_kind"] or "") for r in rows}
+        pool = sorted(tagged)
+        pairs = quests.pair_map(tagged)
+        setup_kinds = _setup_kinds_by_id(conn, guild_id, set(pool))
+        # The weekly board holds all week; daily boards re-draw each day, so
+        # a daily kind counts if ANY of the week's seven boards carries it.
+        days = week_days if qtype == "daily" else week_days[:1]
+        idxs = [quests.period_index(qtype, d) for d in days]
+        for user_id in members:
+            done = {
+                qid
+                for qid, kind in setup_kinds.items()
+                if _setup_quest_done(conn, guild_id, user_id, qid, kind)
+            }
+            pending = set(setup_kinds) - done
+            seen: set[int] = set()
+            for idx in idxs:
+                board = set(
+                    quests.apply_pair_bundles(
+                        quests.assigned_quest_ids(pool, user_id, idx, n), pairs
+                    )
+                )
+                board -= done
+                if pending:
+                    slots = max(0, n - len(pending))
+                    board = pending | _keep_ordinary_units(
+                        board - pending, pairs, slots
+                    )
+                seen |= board
+            for qid in seen:
+                kind = kind_by_id.get(qid, "")
+                if kind in reach:
+                    reach[kind].add(user_id)
+    floor = max(1, math.ceil(len(members) * _SPOTLIGHT_REACH_FRACTION))
+    return [
+        k for k in kinds if k in event_kinds or len(reach.get(k, ())) >= floor
+    ]
+
+
 def spotlight_kind(
     conn: sqlite3.Connection, guild_id: int, iso_week: str
 ) -> str | None:
@@ -1010,11 +1160,14 @@ def spotlight_kind(
     read returns the stored value. Without that store the underlying kind list
     drifts mid-week (dashboard toggles, rotate_pool) and both the modulo and the
     chosen kind move — so the claim-credit path would silently double a kind the
-    once-posted announcement never advertised. None when fewer than 2 kinds are
-    active — a "rotating featured activity" is meaningless with nothing to
-    rotate, and it would otherwise be a permanent silent 2× on a tiny library;
-    that off state is NOT frozen, so a second kind added later can still switch
-    the spotlight on.
+    once-posted announcement never advertised. Candidates are narrowed to the
+    kinds enough members can actually claim this week (see
+    ``_reachable_spotlight_kinds``) whenever at least two qualify — a spotlight
+    that almost nobody can earn is a dead announcement. None when fewer than 2
+    kinds are active — a "rotating featured activity" is meaningless with
+    nothing to rotate, and it would otherwise be a permanent silent 2× on a
+    tiny library; that off state is NOT frozen, so a second kind added later
+    can still switch the spotlight on.
     """
     stored = conn.execute(
         "SELECT kind FROM econ_spotlight_kind WHERE guild_id = ? AND iso_week = ?",
@@ -1033,6 +1186,9 @@ def spotlight_kind(
     )
     if len(kinds) < 2:
         return None
+    reachable = _reachable_spotlight_kinds(conn, guild_id, iso_week, kinds)
+    if len(reachable) >= 2:
+        kinds = reachable
     digest = hashlib.sha256(f"{guild_id}:{iso_week}".encode()).hexdigest()
     chosen = kinds[int(digest, 16) % len(kinds)]
     # INSERT OR IGNORE: a concurrent sibling read may win the freeze; either

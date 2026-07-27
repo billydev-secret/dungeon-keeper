@@ -683,9 +683,24 @@ ever on a constant period (occurrence `set`), pay on completion even when not
 drawn on the member's board, and drop off the board once the underlying thing
 is done (`_setup_underlying_done`: bio row / birthday row / any
 `role_menu_grants` grant row / any `econ_ledger` row with a purchase kind —
-`PURCHASE_LEDGER_KINDS`). Known soft edge: announcement-button grants aren't
-recorded in `role_menu_grants`, so those pickers stay board-visible until the
-paid-claim backstop catches them.
+`PURCHASE_LEDGER_KINDS` — or an `econ_setup_marks` row, below). Known soft
+edge: announcement-button grants aren't recorded in `role_menu_grants`, so
+those pickers stay board-visible until the paid-claim backstop catches them.
+
+**Externally-detected completion** (`econ_setup_marks`, migration 134,
+2026-07-26): some completing actions happen where the bot has no table of
+record — picking roles through Discord's native onboarding ("Channels &
+Roles → Customize") assigns roles with no bot event, so those members looked
+forever-pending and `role_pick` stayed pinned to their boards (live data:
+148 of 149 active members). The economy loop's hourly sweep
+(`_sync_setup_marks`) fetches `guild.onboarding()`, and any non-bot member
+holding one of the onboarding-offered roles gets a
+`(guild, user, 'role_pick')` mark via `sweep_setup_marks`. A mark clears the
+quest from the board exactly like the feature-table checks but **never
+pays** — detection is not the member acting on the quest, and the first
+sweep over a guild full of long-standing pickers would otherwise mass-mint.
+A marked member who later picks via a role menu or announcement button still
+earns the once-ever claim through the normal trigger.
 
 **Kind activity ledger.** Every `fire_trigger_quests` call — before the
 income-source switch and the personal-board filter — bumps
@@ -914,6 +929,14 @@ fragments mid-period.
   **double** on quest claims (`spotlight_kind`: deterministic sha256 over
   (guild, week) across the distinct kinds with an active non-community
   quest; `None` under 2 kinds — rotation needs something to rotate).
+  Candidates are narrowed to kinds **enough members can actually earn**
+  that week (`_reachable_spotlight_kinds`, 2026-07-26): event kinds reach
+  everyone; board kinds must land on ≥25% of 30-day-active members'
+  simulated boards (weekly + all seven dailies, pins and done-drops
+  included — computed against the live pools without freezing snapshots).
+  Skipped when it would leave <2 candidates or there are no active members
+  to measure. Without it a dead pick is possible — 2026-W31 would have
+  spotlit a kind on zero boards, every daily slot being setup-pinned.
   Applied in `_credit_reward` (meta `spotlight: true` on the ledger row);
   surfaced on `/quests` (⚡ tags + banner), the leaderboard embed, the flip
   announcement, and the live tracker. A sign-off approved after the week

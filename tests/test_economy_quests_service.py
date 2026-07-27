@@ -3364,3 +3364,178 @@ def test_load_member_quest_board_surfaces_trigger_channel_id(db):
         by_id = {e["id"]: e for e in board}
         assert by_id[scoped]["trigger_channel_id"] == 123456
         assert by_id[server_wide]["trigger_channel_id"] is None
+
+
+# ── externally-detected setup completion (econ_setup_marks) ───────────────
+# Roles picked through Discord's native onboarding ("Channels & Roles →
+# Customize") assign roles with no bot event and no role_menu_grants row.
+# The hourly sweep records those members in econ_setup_marks; a mark clears
+# the quest from the board like the feature-table checks do, but never pays.
+
+
+def _mark_role_pickers(conn, *user_ids):
+    from bot_modules.services.economy_quests_service import sweep_setup_marks
+
+    return sweep_setup_marks(conn, GUILD, "role_pick", user_ids)
+
+
+def test_sweep_setup_marks_counts_only_new_rows(db):
+    with open_db(db) as conn:
+        assert _mark_role_pickers(conn, USER, USER_2) == 2
+        assert _mark_role_pickers(conn, USER, USER_2) == 0  # idempotent replay
+        assert _mark_role_pickers(conn, USER, 1003) == 1  # only the newcomer
+
+
+def test_sweep_setup_marks_rejects_unknown_kind(db):
+    from bot_modules.services.economy_quests_service import sweep_setup_marks
+
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="unknown setup kind"):
+            sweep_setup_marks(conn, GUILD, "message_sent", [USER])
+
+
+def test_onboarding_marked_member_drops_role_pick_off_board_unpaid(db):
+    # Bug-fix-first (2026-07-26 review): 148 of 149 active members looked
+    # role_pick-pending because their picks happened in Discord's onboarding,
+    # so the quest stayed pinned to every board forever. A mark must clear
+    # the quest AND its pin — without minting the reward.
+    with open_db(db) as conn:
+        _fill_daily_pool(conn)
+        setup = _make(conn, qtype="daily", trigger_kind="role_pick", reward=25)
+        day = "2026-07-12"
+        assert setup in assigned_board_ids(conn, GUILD, USER, "daily", day, SETTINGS)
+        _mark_role_pickers(conn, USER)
+        assert setup not in assigned_board_ids(
+            conn, GUILD, USER, "daily", day, SETTINGS
+        )
+        # Visibility only: no claim row, no coins.
+        assert get_balance(conn, GUILD, USER) == 0
+        assert (
+            conn.execute(
+                "SELECT 1 FROM econ_quest_claims WHERE quest_id = ? AND user_id = ?",
+                (setup, USER),
+            ).fetchone()
+            is None
+        )
+        # An unmarked member keeps seeing (and being pinned) the quest.
+        assert setup in assigned_board_ids(
+            conn, GUILD, USER_2, "daily", day, SETTINGS
+        )
+
+
+def test_marked_member_still_gets_paid_on_a_real_pick(db):
+    # The mark hides the quest; the completing action (a menu or announcement
+    # button grant firing the trigger) still pays its once-ever claim.
+    with open_db(db) as conn:
+        setup = _make(conn, qtype="daily", trigger_kind="role_pick", reward=25)
+        _mark_role_pickers(conn, USER)
+        fired = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "role_pick", USER,
+            local_day="2026-07-12", occurrence="set", booster=False,
+        )
+        assert [int(q["id"]) for q, _ in fired] == [setup]
+        assert get_balance(conn, GUILD, USER) == 25
+
+
+# ── spotlight reach filter ────────────────────────────────────────────────
+# A spotlight kind must be claimable by enough members to matter; a kind on
+# zero boards makes the flip announcement advertise a double nobody can earn.
+
+
+def _mark_active(conn, *user_ids):
+    now = time.time()
+    for uid in user_ids:
+        conn.execute(
+            "INSERT OR REPLACE INTO member_activity "
+            "(guild_id, user_id, last_channel_id, last_message_id, "
+            "last_message_at) VALUES (?, ?, 1, 1, ?)",
+            (GUILD, uid, now),
+        )
+
+
+def test_spotlight_skips_kinds_no_board_can_reach(db):
+    # Bug-fix-first: the 2026-W31 live shape — every daily slot pinned by
+    # pending setup quests, so an ordinary daily kind lands on zero boards.
+    # Weeks whose unfiltered hash pick would have chosen the dead kind must
+    # now choose something else; the pinned setup kinds and event kinds
+    # (no board gate) stay eligible.
+    import hashlib
+
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _mark_active(conn, USER, USER_2, 1003, 1004)
+        for kind in ("bio_set", "birthday_set", "role_pick", "shop_purchase"):
+            _make(conn, qtype="daily", trigger_kind=kind, reward=10)
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="event", trigger_kind="photo_post")
+        _make(conn, qtype="event", trigger_kind="cat_catch")
+        kinds = sorted(
+            [
+                "bio_set", "birthday_set", "cat_catch", "message_sent",
+                "photo_post", "role_pick", "shop_purchase",
+            ]
+        )
+        dead_weeks = [
+            wk
+            for wk in (f"2026-W{w:02d}" for w in range(1, 53))
+            if kinds[
+                int(hashlib.sha256(f"{GUILD}:{wk}".encode()).hexdigest(), 16)
+                % len(kinds)
+            ]
+            == "message_sent"
+        ]
+        assert dead_weeks  # sanity: the old pick WOULD have hit the dead kind
+        for wk in dead_weeks:
+            assert spotlight_kind(conn, GUILD, wk) != "message_sent"
+
+
+def test_spotlight_reach_filter_never_narrows_below_two(db):
+    # One event kind + one unreachable board kind: filtering would leave a
+    # single candidate — no rotation at all — so the full list is used
+    # instead of pinning a permanent 2× on the lone reachable kind.
+    from bot_modules.services.economy_quests_service import spotlight_kind
+    from bot_modules.services.economy_service import save_econ_settings
+
+    with open_db(db) as conn:
+        _mark_active(conn, USER, USER_2)
+        save_econ_settings(
+            conn, GUILD, {"quest_board_daily": 0, "quest_board_weekly": 0}
+        )
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="event", trigger_kind="photo_post")
+        assert spotlight_kind(conn, GUILD, "2026-W30") in {
+            "message_sent", "photo_post",
+        }
+
+
+def test_spotlight_reach_estimate_freezes_no_snapshots(db):
+    # The estimator walks the week's future daily boards — it must never
+    # freeze those periods' pool snapshots, or dashboard edits would stop
+    # surfacing at each real daily roll.
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _mark_active(conn, USER)
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="daily", trigger_kind="reaction_given")
+        spotlight_kind(conn, GUILD, "2026-W30")
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM econ_quest_pool_snapshots"
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_spotlight_unmeasurable_guild_keeps_old_behavior(db):
+    # No 30-day-active members → nothing to measure → the filter must not
+    # veto anything (a fresh guild still gets a spotlight).
+    from bot_modules.services.economy_quests_service import spotlight_kind
+
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="message_sent")
+        _make(conn, qtype="daily", trigger_kind="reaction_given")
+        assert spotlight_kind(conn, GUILD, "2026-W30") in {
+            "message_sent", "reaction_given",
+        }
