@@ -53,6 +53,14 @@ Two register notes up front:
   looking at — Truth vs Dare card coding (Truth or Dare, FFA) — since there the
   color *is* information, the same test win/loss passes. Everything else in a
   game follows the accent.
+- **`/help` follows the accent** (ruling 2026-07-27, #76). Its section pages
+  carried a per-section palette (`mod_cog._SECTION_META`: Economy gold,
+  Moderation red, Voice green…). That palette is retired — the section **emoji**
+  is the wayfinding cue, the color is the guild's branding. Sections without a
+  resolvable guild (a DM) share one `_NO_ACCENT_FALLBACK`, never a spread of
+  colors. Same for the privacy deletion progress cards, which were a module-level
+  blurple constant with no accent path (`_PROGRESS_FALLBACK` is now only the
+  no-guild default); the "Deletion complete" summary stays semantic green.
 - **Per-domain identity palettes are a deliberate exception.** A few features
   carry a *fixed brand color* instead of the guild accent, as an intentional
   visual identity — centralized in **`services/embeds.py`** and always used via

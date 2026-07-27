@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import discord
+
 from bot_modules.cogs.mod_cog import _build_help_pages
 
 
@@ -82,3 +84,29 @@ def test_general_page_has_bio_and_recap():
     body = _find(_pages(), "General")
     assert "/bio" in body
     assert "/recap" in body
+
+
+# ── branding accent (#76) ────────────────────────────────────────────────────
+
+
+def test_every_page_takes_the_branding_accent():
+    """No page keeps a hand-picked color of its own.
+
+    /help used to carry a per-section palette (Economy gold, Moderation red,
+    Voice green…) in _SECTION_META. The accent was resolved by help_command and
+    threaded all the way into _build_help_pages, then dropped on the floor —
+    every page rendered its palette entry regardless of the guild's branding.
+    """
+    accent = discord.Color(0x5A32A8)
+    pages = _build_help_pages(cast(Any, _DenyCtx()), cast(Any, object()), color=accent)
+    assert pages, "no help pages built"
+    for page in pages:
+        assert page.color == accent, f"{page.title} ignored the accent"
+
+
+def test_pages_fall_back_when_there_is_no_guild_accent():
+    """In a DM there is no guild to resolve an accent from, so /help still needs
+    a color — one shared default, not the old per-section palette."""
+    pages = _build_help_pages(cast(Any, _DenyCtx()), cast(Any, object()), color=None)
+    colors = {p.color for p in pages}
+    assert len(colors) == 1, f"pages disagree on the fallback color: {colors}"
