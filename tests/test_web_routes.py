@@ -748,7 +748,7 @@ def _sweep_role(role_id: int, name: str, *, managed: bool = False, position: int
     return SimpleNamespace(id=role_id, name=name, managed=managed, position=position)
 
 
-def _sweep_member(member_id: int, roles, *, top_position: int = 1, joined_days_ago=400):
+def _sweep_member(member_id: int, roles, *, joined_days_ago=400):
     import datetime as _dt
 
     return SimpleNamespace(
@@ -756,7 +756,6 @@ def _sweep_member(member_id: int, roles, *, top_position: int = 1, joined_days_a
         bot=False,
         display_name=f"member{member_id}",
         roles=roles,
-        top_role=SimpleNamespace(position=top_position),
         joined_at=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=joined_days_ago),
         guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
     )
@@ -818,8 +817,8 @@ def test_inactive_preview_lists_members_and_what_they_would_lose(ctx, make_clien
 
 
 def test_inactive_preview_separates_members_the_bot_cannot_strip(ctx, make_client):
-    ok = _sweep_member(5, [_sweep_role(11, "Member")], top_position=1)
-    outranking = _sweep_member(6, [_sweep_role(12, "Staff")], top_position=99)
+    ok = _sweep_member(5, [_sweep_role(11, "Member", position=1)])
+    outranking = _sweep_member(6, [_sweep_role(12, "Staff", position=99)])
     guild = _sweep_guild(ctx, [ok, outranking], bot_top_position=10)
     ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
     client = make_client()
@@ -831,6 +830,55 @@ def test_inactive_preview_separates_members_the_bot_cannot_strip(ctx, make_clien
     # The headline count excludes the member the sweep would fail on.
     assert data["eligible_count"] == 1
     assert data["blocked_count"] == 1
+
+
+def test_inactive_preview_refuses_when_the_bot_member_is_uncached(ctx, make_client):
+    """No `guild.me` means no role position to compare against.
+
+    Defaulting it would file every candidate under "the bot can't strip them"
+    and report nobody as sweepable — a confidently wrong answer.
+    """
+    guild = _sweep_guild(ctx, [_sweep_member(5, [_sweep_role(11, "Member")])])
+    guild.me = None
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    resp = client.post("/api/config/inactive/preview", json={"threshold_days": 30})
+    assert resp.status_code == 503
+
+
+def test_inactive_preview_ignores_managed_roles_for_hierarchy(ctx, make_client):
+    """A booster role above the bot doesn't stop the roles below being stripped."""
+    member = _sweep_member(
+        5,
+        [
+            _sweep_role(12, "Server Booster", managed=True, position=99),
+            _sweep_role(11, "Member", position=1),
+        ],
+    )
+    guild = _sweep_guild(ctx, [member], bot_top_position=10)
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    data = client.post("/api/config/inactive/preview", json={"threshold_days": 30}).json()
+
+    assert [r["user_id"] for r in data["members"]] == ["5"]
+    assert data["blocked"] == []
+
+
+def test_inactive_preview_note_uses_the_cap_on_screen(ctx, make_client):
+    """The panel sends the typed cap so its note can't contradict the field."""
+    guild = _sweep_guild(ctx, [_sweep_member(5, [_sweep_role(11, "Member")])])
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+
+    typed = client.post(
+        "/api/config/inactive/preview", json={"threshold_days": 30, "sweep_cap": 5}
+    ).json()
+    saved = client.post("/api/config/inactive/preview", json={"threshold_days": 30}).json()
+
+    assert typed["sweep_cap"] == 5
+    assert saved["sweep_cap"] == 25  # falls back to the stored setting
 
 
 def test_inactive_preview_uses_the_unsaved_threshold(ctx, make_client):

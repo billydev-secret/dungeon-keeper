@@ -28,6 +28,14 @@ export function mount(container) {
       .sort((a, b) => a.left - b.left || a.label.localeCompare(b.label))
       .map((o) => (o.left ? { ...o, label: `${o.label} (left the server)` } : o));
 
+    // Chip labels come from the member record itself rather than by unpicking
+    // the picker's "Display (username)" label — a member whose own name has
+    // brackets ("Ana (EU)") would lose them to that.
+    const nameById = new Map(
+      members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
+    );
+    const memberName = (id) => nameById.get(String(id)) || String(id);
+
     let exemptions = (cfg.exemptions || []).slice();
 
     container.innerHTML = `
@@ -165,17 +173,21 @@ export function mount(container) {
       });
     }
 
-    async function addExemption(id, label) {
+    // Returns whether the exemption was actually saved — callers that remove a
+    // row from the preview must not do so on a failed write, or a member who is
+    // still sweepable silently disappears from the listing.
+    async function addExemption(id, name) {
       try {
         // Member ids stay strings on the wire.
         await apiPut(`/api/config/inactive/exemptions/${id}`, {});
-        const displayName = label.replace(/\s*\([^)]*\)\s*$/, "").trim() || label;
-        exemptions.push({ id: String(id), name: displayName });
-        exemptions.sort((a, b) => a.name.localeCompare(b.name));
-        renderExemptions();
       } catch (err) {
         toast(err.message, "error");
+        return false;
       }
+      exemptions.push({ id: String(id), name });
+      exemptions.sort((a, b) => a.name.localeCompare(b.name));
+      renderExemptions();
+      return true;
     }
 
     container.querySelector("[data-add-exempt]").addEventListener("click", async () => {
@@ -184,8 +196,7 @@ export function mount(container) {
         toast("Pick a member first.", "error");
         return;
       }
-      const opt = memberOpts.find((o) => o.id === String(id));
-      await addExemption(id, opt ? opt.label : String(id));
+      if (!(await addExemption(id, memberName(id)))) return;
       exemptPicker.setValue("0");
       exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
     });
@@ -274,11 +285,22 @@ export function mount(container) {
     async function runPreview() {
       const threshold = readThreshold(previewStatusEl);
       if (threshold === null) return;
+      // readThreshold's error path goes through showStatus, which paints the
+      // element red and arms an 8s blanking timer. Left running, it wipes the
+      // result summary a corrected re-check just wrote.
+      clearTimeout(previewStatusEl._statusTimer);
+      previewStatusEl.className = "";
       previewStatusEl.textContent = "Checking…";
       previewEl.innerHTML = "";
+      const cap = parseInt(new FormData(form).get("sweep_cap"), 10);
       let data;
       try {
-        data = await apiPost("/api/config/inactive/preview", { threshold_days: threshold });
+        data = await apiPost("/api/config/inactive/preview", {
+          threshold_days: threshold,
+          // Send the cap on screen so the "one run reaches N" note can't
+          // contradict the field right above it.
+          sweep_cap: Number.isFinite(cap) && cap >= 1 && cap <= 200 ? cap : null,
+        });
       } catch (err) {
         previewStatusEl.textContent = "";
         previewEl.innerHTML = `<div class="error">Couldn't run the check: ${esc(err.message)}</div>`;
@@ -339,9 +361,9 @@ export function mount(container) {
       const blockedBlock = data.blocked_count
         ? `<div class="section-label" style="margin-top:16px;">Would Fail — Bot Outranked</div>
            <div class="field-hint" style="margin-bottom:10px;">
-             These members qualify, but their highest role sits at or above the bot's, so it
-             cannot remove their roles. A sweep would pick them up and then quietly fail on each
-             one. Move the bot's role above theirs, or exempt them to stop it trying.
+             These members qualify, but one of the roles they would lose sits at or above the
+             bot's own role, so it cannot remove it. A sweep would pick them up and then quietly
+             fail on each one. Move the bot's role above theirs, or exempt them to stop it trying.
            </div>
            ${table(data.blocked, "blocked", true)}`
         : "";
@@ -356,7 +378,10 @@ export function mount(container) {
       wireRoleToggles(previewEl);
       previewEl.querySelectorAll("[data-exempt-from-preview]").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          await addExemption(btn.dataset.exemptFromPreview, btn.dataset.exemptName);
+          const uid = btn.dataset.exemptFromPreview;
+          // Only drop the row once the exemption is actually saved — otherwise a
+          // failed write reads as "done" while the member is still sweepable.
+          if (!(await addExemption(uid, btn.dataset.exemptName))) return;
           exemptPicker.setFilter((o) => !excludedIds().has(String(o.id)));
           const row = btn.closest("tr");
           const detail = row.nextElementSibling;

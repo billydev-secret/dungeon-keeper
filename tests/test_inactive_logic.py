@@ -110,11 +110,11 @@ def _candidate(user_id: int, *, idle_days: float = 40.0) -> SweepCandidate:
     )
 
 
-def _preview_member(user_id: int, roles, *, top_position: int = 1) -> PreviewMember:
+def _preview_member(user_id: int, roles) -> PreviewMember:
+    """``roles`` items are ``(role_id, name, managed[, position])``."""
     return PreviewMember(
         user_id=user_id,
         display_name=f"u{user_id}",
-        top_role_position=top_position,
         roles=[PreviewRole(*r) for r in roles],
     )
 
@@ -185,8 +185,8 @@ def test_members_above_the_bot_are_reported_as_blocked():
     """The sweep would select these and then fail silently on Forbidden."""
     sweepable, blocked = _preview(
         [
-            _preview_member(1, [(11, "Member", False)], top_position=1),
-            _preview_member(2, [(12, "Staff", False)], top_position=99),
+            _preview_member(1, [(11, "Member", False, 1)]),
+            _preview_member(2, [(12, "Staff", False, 99)]),
         ]
     )
     assert [r.user_id for r in sweepable] == [1]
@@ -194,12 +194,52 @@ def test_members_above_the_bot_are_reported_as_blocked():
 
 
 def test_member_level_with_the_bot_is_blocked():
-    # Discord refuses role edits on an equal top role, not just a higher one.
+    # Discord refuses role edits on an equal role position, not just a higher one.
     sweepable, blocked = _preview(
-        [_preview_member(1, [(11, "Member", False)], top_position=BOT_TOP_POSITION)]
+        [_preview_member(1, [(11, "Member", False, BOT_TOP_POSITION)])]
     )
     assert sweepable == []
     assert [r.user_id for r in blocked] == [1]
+
+
+def test_managed_role_above_the_bot_does_not_block():
+    """Only strippable roles can fail on hierarchy.
+
+    A booster/Twitch role outranking the bot is never touched by the sweep and
+    doesn't stop it removing the roles below, so judging by the member's *top*
+    role would file a perfectly sweepable member under "would fail" — and drop
+    them from the count of who a sweep actually moves.
+    """
+    sweepable, blocked = _preview(
+        [
+            _preview_member(
+                1,
+                [(12, "Server Booster", True, 99), (11, "Member", False, 1)],
+            )
+        ]
+    )
+    assert [r.user_id for r in sweepable] == [1]
+    assert blocked == []
+    assert sweepable[0].removed_role_names == ["Member"]
+
+
+def test_highest_strippable_role_decides_the_split():
+    # One low role is not enough — any role due to be stripped that outranks the
+    # bot fails the whole call.
+    sweepable, blocked = _preview(
+        [_preview_member(1, [(11, "Member", False, 1), (12, "Staff", False, 99)])]
+    )
+    assert sweepable == []
+    assert [r.user_id for r in blocked] == [1]
+
+
+def test_member_with_nothing_to_strip_is_never_blocked():
+    # No remove_roles call is made, so there is no hierarchy check to fail.
+    sweepable, blocked = _preview(
+        [_preview_member(1, [(12, "Server Booster", True, 99)])]
+    )
+    assert [r.user_id for r in sweepable] == [1]
+    assert blocked == []
 
 
 def test_untracked_members_are_flagged():

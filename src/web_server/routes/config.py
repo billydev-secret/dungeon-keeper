@@ -2137,6 +2137,7 @@ async def delete_inactive_exemption(
 
 class InactivePreviewRequest(BaseModel):
     threshold_days: int | None = None
+    sweep_cap: int | None = None
 
 
 @router.post("/config/inactive/preview")
@@ -2151,20 +2152,16 @@ async def preview_inactive_sweep(
     the very same ``compute_candidates`` the real sweeps use, so the listing
     can't drift from what enabling the auto-sweep would actually do — only the
     cap differs, because this lists every eligible member rather than one run's
-    worth, and reports the saved cap separately so the panel can say how many of
-    them a single run would reach.
+    worth, and reports the cap separately so the panel can say how many of them a
+    single run would reach.
 
-    ``threshold_days`` overrides the saved setting so an unsaved value can be
-    tried before committing to it.
+    ``threshold_days`` and ``sweep_cap`` override the saved settings so unsaved
+    values can be tried before committing to them. The threshold changes who is
+    selected; the cap only changes the "one run reaches N of these" note, since
+    the listing is deliberately uncapped.
     """
     from bot_modules.inactive.logic import PreviewMember, PreviewRole, build_sweep_preview
-    from bot_modules.inactive.sweep_service import (
-        UNCAPPED,
-        compute_candidates,
-        read_inactive_channel_id,
-        read_inactive_role_id,
-        read_sweep_cap,
-    )
+    from bot_modules.inactive.sweep_service import UNCAPPED, compute_candidates
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -2176,16 +2173,23 @@ async def preview_inactive_sweep(
     if guild is None:
         raise HTTPException(503, "Discord guild not available")
 
+    # Without the bot's own member object there is no role position to compare
+    # against, and defaulting it would file every candidate under "the bot can't
+    # strip them" — a confidently wrong report is worse than refusing.
+    bot_member = guild.me
+    if bot_member is None:
+        raise HTTPException(503, "Discord guild not available")
+
     threshold_days = body.threshold_days
     if threshold_days is not None:
         threshold_days = max(1, min(3650, threshold_days))
+    cap_override = body.sweep_cap
+    if cap_override is not None:
+        cap_override = max(1, min(200, cap_override))
 
     selection = await compute_candidates(
         ctx, guild, threshold_days=threshold_days, cap=UNCAPPED
     )
-
-    bot_member = guild.me
-    bot_top_position = bot_member.top_role.position if bot_member is not None else 0
 
     members: dict[int, PreviewMember] = {}
     for candidate in selection.candidates:
@@ -2195,16 +2199,25 @@ async def preview_inactive_sweep(
         members[m.id] = PreviewMember(
             user_id=m.id,
             display_name=m.display_name,
-            top_role_position=m.top_role.position,
-            roles=[PreviewRole(r.id, r.name, r.managed) for r in m.roles],
+            roles=[PreviewRole(r.id, r.name, r.managed, r.position) for r in m.roles],
         )
+
+    def _read_settings() -> tuple[int, int, int]:
+        with ctx.open_db() as conn:
+            return (
+                _int_val(conn, "inactive_role_id", guild_id=guild_id),
+                _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
+                _int_val(conn, "inactive_channel_id", guild_id=guild_id),
+            )
+
+    inactive_role_id, saved_cap, channel_id = await run_query(_read_settings)
 
     sweepable, blocked = build_sweep_preview(
         candidates=selection.candidates,
         members=members,
         default_role_id=guild.default_role.id,
-        inactive_role_id=read_inactive_role_id(ctx, guild_id),
-        bot_top_role_position=bot_top_position,
+        inactive_role_id=inactive_role_id,
+        bot_top_role_position=bot_member.top_role.position,
         tracked_user_ids=selection.tracked_user_ids,
     )
 
@@ -2222,8 +2235,10 @@ async def preview_inactive_sweep(
 
     return {
         "threshold_days": selection.threshold_days,
-        "sweep_cap": read_sweep_cap(ctx, guild_id),
-        "inactive_channel_configured": bool(read_inactive_channel_id(ctx, guild_id)),
+        # The cap the note is computed from: the value on screen when the panel
+        # sends one, so the note can't contradict the field the admin is reading.
+        "sweep_cap": cap_override if cap_override is not None else max(1, saved_cap),
+        "inactive_channel_configured": bool(channel_id),
         "eligible_count": len(sweepable),
         "blocked_count": len(blocked),
         "members": [_row(r) for r in sweepable],

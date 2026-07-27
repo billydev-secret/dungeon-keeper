@@ -74,6 +74,7 @@ class PreviewRole:
     role_id: int
     name: str
     managed: bool  # integration-controlled; the bot can neither strip nor restore it
+    position: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,6 @@ class PreviewMember:
 
     user_id: int
     display_name: str
-    top_role_position: int
     roles: list[PreviewRole]
 
 
@@ -118,10 +118,11 @@ def build_sweep_preview(
     member whose every role is managed is still swept, they just lose nothing but
     their channel access, so they keep a row with an empty removal list.
 
-    ``blocked_by_hierarchy`` holds candidates whose top role sits at or above the
-    bot's: the sweep would select them and then fail on ``Forbidden`` when it
-    tried to strip their roles, counting the failure silently. They're reported
-    apart so the sweepable count is one the caller can trust.
+    ``blocked_by_hierarchy`` holds candidates with a role to strip that sits at
+    or above the bot's top role: the sweep would select them and then fail on
+    ``Forbidden``, counting the failure silently. They're reported apart so the
+    sweepable count is one the caller can trust. Managed roles are ignored for
+    this too — they are never stripped, so one outranking the bot blocks nothing.
 
     ``tracked_user_ids`` is who has any message history at all. A member outside
     it was aged from their join date alone — the weakest possible evidence of
@@ -158,7 +159,14 @@ def build_sweep_preview(
             kept_managed_role_names=[r.name for r in member.roles if r.managed],
         )
 
-        if member.top_role_position >= bot_top_role_position:
+        # Only the roles that would actually be stripped can fail on hierarchy.
+        # A member's *top* role is the wrong yardstick: it may be a managed role
+        # (booster, Twitch sync, another bot's role) sitting above the bot, which
+        # the sweep never touches and which doesn't stop it removing the roles
+        # below. Judging by top role would file such a member under "would fail"
+        # and drop them from the count of who a sweep really moves.
+        strip_positions = [r.position for r in strippable if r.role_id in removed]
+        if strip_positions and max(strip_positions) >= bot_top_role_position:
             blocked.append(row)
         else:
             sweepable.append(row)

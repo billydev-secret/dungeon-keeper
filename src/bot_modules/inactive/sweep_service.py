@@ -41,13 +41,17 @@ UNCAPPED = 1_000_000
 # ── Config helpers ────────────────────────────────────────────────────
 
 
-def read_int_config(ctx: AppContext, key: str, default: int, guild_id: int) -> int:
-    with ctx.open_db() as conn:
-        raw = get_config_value(conn, key, str(default), guild_id)
+def _int_from(conn, key: str, default: int, guild_id: int) -> int:
+    """Read an int config value from an already-open connection."""
     try:
-        return int(raw)
+        return int(get_config_value(conn, key, str(default), guild_id))
     except (TypeError, ValueError):
         return default
+
+
+def read_int_config(ctx: AppContext, key: str, default: int, guild_id: int) -> int:
+    with ctx.open_db() as conn:
+        return _int_from(conn, key, default, guild_id)
 
 
 def read_threshold_days(ctx: AppContext, guild_id: int) -> int:
@@ -121,20 +125,30 @@ async def compute_candidates(
     worth — the real sweeps pass neither.
     """
     guild_id = guild.id
-    if threshold_days is None:
-        threshold_days = read_threshold_days(ctx, guild_id)
-    if cap is None:
-        cap = read_sweep_cap(ctx, guild_id)
 
-    def _fetch() -> tuple[dict[int, float], set[int], set[int]]:
+    # One trip to SQLite off the event loop for everything, settings included —
+    # the dashboard preview calls this from a request handler.
+    def _fetch() -> tuple[dict[int, float], set[int], set[int], int, int]:
         with ctx.open_db() as conn:
             return (
                 gather_last_seen(conn, guild_id),
                 active_inactive_user_ids(conn, guild_id),
                 sweep_exempt_user_ids(conn, guild_id),
+                _int_from(conn, "inactive_threshold_days", DEFAULT_THRESHOLD_DAYS, guild_id),
+                _int_from(conn, "inactive_sweep_cap", DEFAULT_CAP, guild_id),
             )
 
-    msg_last_seen, already_inactive, exempt = await asyncio.to_thread(_fetch)
+    (
+        msg_last_seen,
+        already_inactive,
+        exempt,
+        saved_threshold,
+        saved_cap,
+    ) = await asyncio.to_thread(_fetch)
+    if threshold_days is None:
+        threshold_days = max(1, saved_threshold)
+    if cap is None:
+        cap = max(1, saved_cap)
     cfg = ctx.guild_config(guild_id)
 
     last_seen: dict[int, float] = {}
