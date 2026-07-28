@@ -15,7 +15,8 @@ import time
 
 import pytest
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.quests import (
     POOL_CAP,
     TRIGGER_KIND_INFO,
@@ -26,6 +27,9 @@ from bot_modules.economy.quests import (
 )
 from bot_modules.services.economy_quests_service import (
     ClaimOutcome,
+    claim_trigger_word,
+    load_trigger_index,
+    matching_triggers,
     SlotLimitError,
     active_member_ids,
     claim_quest,
@@ -59,6 +63,7 @@ from bot_modules.services.economy_quests_service import (
     update_quest,
 )
 from bot_modules.services.economy_service import (
+    load_econ_settings,
     EconSettings,
     apply_credit,
     get_balance,
@@ -3706,3 +3711,149 @@ def test_daily_completion_only_feeds_a_meta_on_the_members_board(db):
             local_day=day, occurrence="vc", booster=False,
         )
         assert get_progress(conn, meta, off_board_user, "2026-W29") == 0
+
+
+# ── trigger-*word* quests ──────────────────────────────────────────────
+#
+# Moved out of the cog's on_message listener. The board-membership gate in
+# claim_trigger_word was a second copy of the rule fire_trigger_quests already
+# enforced, and was only reachable through a fake Discord message.
+
+
+def _enable(db, **overrides) -> None:
+    values: dict = {"enabled": True, "quest_board_daily": 5}
+    values.update(overrides)
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, values)
+
+
+def test_trigger_index_is_empty_while_the_economy_is_off(db):
+    with open_db(db) as conn:
+        _make(conn, trigger_words="gm, good morning")
+        assert load_trigger_index(conn, GUILD) == []
+
+
+def test_trigger_index_compiles_active_phrases(db):
+    _enable(db)
+    with open_db(db) as conn:
+        qid = _make(conn, trigger_words="gm, good morning")
+        index = load_trigger_index(conn, GUILD)
+    assert [t.quest_id for t in index] == [qid]
+    assert index[0].qtype == "daily"
+    assert index[0].channel_id is None
+
+
+def test_trigger_index_skips_a_quest_whose_phrases_compile_to_nothing(db):
+    _enable(db)
+    with open_db(db) as conn:
+        _make(conn, trigger_words="   ")
+        assert load_trigger_index(conn, GUILD) == []
+
+
+def test_trigger_index_carries_the_channel_scope(db):
+    _enable(db)
+    with open_db(db) as conn:
+        _make(conn, trigger_words="gm", trigger_channel_id=777)
+        index = load_trigger_index(conn, GUILD)
+    assert index[0].channel_id == 777
+
+
+def _index(db, **kw):
+    _enable(db)
+    with open_db(db) as conn:
+        _make(conn, **kw)
+        return load_trigger_index(conn, GUILD)
+
+
+def test_matching_requires_the_phrase(db):
+    index = _index(db, trigger_words="gm, good morning")
+    assert matching_triggers(index, "GM everyone!", (1, None))
+    assert matching_triggers(index, "good morning all", (1, None))
+    assert matching_triggers(index, "nothing here", (1, None)) == []
+
+
+def test_an_unscoped_quest_fires_in_any_channel(db):
+    index = _index(db, trigger_words="gm")
+    assert matching_triggers(index, "gm", (12345, None))
+
+
+def test_a_scoped_quest_only_fires_in_its_channel(db):
+    index = _index(db, trigger_words="gm", trigger_channel_id=777)
+    assert matching_triggers(index, "gm", (777, None))
+    assert matching_triggers(index, "gm", (999, None)) == []
+
+
+def test_a_scoped_quest_fires_in_a_thread_of_its_channel(db):
+    """The thread's parent counts, so a phrase in a thread still pays."""
+    index = _index(db, trigger_words="gm", trigger_channel_id=777)
+    assert matching_triggers(index, "gm", (55555, 777))
+
+
+def test_claim_trigger_word_pays_once_per_period(db):
+    _enable(db)
+    now = time.time()
+    with open_db(db) as conn:
+        _make(conn, trigger_words="gm", reward=10)
+        trig = load_trigger_index(conn, GUILD)[0]
+        _settings, outcome = claim_trigger_word(
+            conn, GUILD, USER, trig, booster=False, now=now
+        )
+        assert outcome.state == "paid"
+        assert get_balance(conn, GUILD, USER) == 10
+
+        # A repeat inside the period is an ordinary "nothing to do".
+        with pytest.raises(ValueError):
+            claim_trigger_word(conn, GUILD, USER, trig, booster=False, now=now)
+        assert get_balance(conn, GUILD, USER) == 10
+
+
+def test_claim_trigger_word_refuses_a_quest_off_the_members_board(db):
+    """Parity with the kind-trigger gate: off-board pays nothing.
+
+    A board sized to 1 with two candidate quests leaves one of them off the
+    member's board for the period; saying its phrase must not pay.
+    """
+    _enable(db, quest_board_daily=1)
+    now = time.time()
+    with open_db(db) as conn:
+        first = _make(conn, trigger_words="alpha", reward=10, title="A")
+        second = _make(conn, trigger_words="beta", reward=10, title="B")
+        index = {t.quest_id: t for t in load_trigger_index(conn, GUILD)}
+
+        offset = get_tz_offset_hours(conn, GUILD)
+        day = local_day_for(now, offset)
+        settings = load_econ_settings(conn, GUILD)
+        on_board = assigned_board_ids(conn, GUILD, USER, "daily", day, settings)
+
+    assert len(on_board) == 1
+    off_board = ({first, second} - set(on_board)).pop()
+
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="board"):
+            claim_trigger_word(
+                conn, GUILD, USER, index[off_board], booster=False, now=now
+            )
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_claim_trigger_word_applies_the_booster_multiplier(db):
+    _enable(db)
+    with open_db(db) as conn:
+        _make(conn, trigger_words="gm", reward=10)
+        trig = load_trigger_index(conn, GUILD)[0]
+        claim_trigger_word(conn, GUILD, USER, trig, booster=True, now=time.time())
+        # SETTINGS-independent: the stored settings carry the live multiplier.
+        assert get_balance(conn, GUILD, USER) > 10
+
+
+def test_claim_trigger_word_files_a_pending_claim_for_signoff(db):
+    _enable(db)
+    with open_db(db) as conn:
+        _make(conn, trigger_words="gm", reward=10, signoff=1)
+        trig = load_trigger_index(conn, GUILD)[0]
+        _settings, outcome = claim_trigger_word(
+            conn, GUILD, USER, trig, booster=False, now=time.time()
+        )
+    assert outcome.state == "pending"
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 0

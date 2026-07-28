@@ -10,12 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple, cast
 
 import discord
@@ -116,22 +114,11 @@ from bot_modules.services.economy_qotd_sponsor_service import (
     sponsor_enabled,
     submit_sponsor,
 )
-from bot_modules.economy.quests import (
-    compile_trigger_pattern,
-    has_board,
-    message_matches_trigger,
-    parse_trigger_words,
-    quest_period,
-)
 from bot_modules.services.economy_quests_service import (
-    assigned_board_ids,
-    claim_quest,
     fire_trigger_inline,
     fire_trigger_quests,
-    list_trigger_quests,
     load_member_quest_board,
     reroll_quote,
-    source_enabled,
 )
 from bot_modules.services.economy_icon_catalog_service import (
     catalog_price_range,
@@ -155,6 +142,8 @@ from bot_modules.services.economy_loop import revoke_perk_effect
 from bot_modules.economy.rentals import prorated_refund
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_wager_service as wager_svc
+from bot_modules.services import economy_photo_service as photo_svc
+from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -308,16 +297,6 @@ class _ShopContext(NamedTuple):
     refundable: list[dict]
     shields_held: int
     shield_price: int
-
-
-@dataclass(frozen=True)
-class _TriggerQuest:
-    """One active trigger-word quest, pre-compiled for the message listener."""
-
-    quest_id: int
-    qtype: str
-    channel_id: int | None  # None = any channel counts
-    pattern: re.Pattern[str]
 
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif")
@@ -1233,7 +1212,9 @@ class EconomyCog(commands.Cog):
         # guild_id → (monotonic expiry, trigger quests). TTL-refreshed in the
         # message listener; empty lists are cached too so guilds without
         # trigger quests cost one dict lookup per message.
-        self._trigger_cache: dict[int, tuple[float, list[_TriggerQuest]]] = {}
+        self._trigger_cache: dict[
+            int, tuple[float, list[quests_svc.TriggerQuest]]
+        ] = {}
         # Four channel-bottom panels, all on the shared machinery in
         # core.sticky (locks, debounce, id cache, post-before-delete). This cog
         # only says where each panel's ids live and what it should look like.
@@ -3160,7 +3141,12 @@ class EconomyCog(commands.Cog):
         The message is the verification: an instant quest pays on the spot
         (reply + ✅), a sign-off quest files the pending claim and posts the
         bank-channel card. Repeats inside the period fall out silently via
-        ``claim_quest``'s per-period collision ValueError.
+        ``claim_trigger_word``'s ValueError.
+
+        The compiled-pattern index is TTL-cached here because this fires for
+        every message in the guild; the matching and the claim rules live in
+        ``economy_quests_service`` beside the trigger-*kind* mechanic they
+        share a board gate with.
         """
         if message.guild is None or message.author.bot:
             return
@@ -3175,10 +3161,13 @@ class EconomyCog(commands.Cog):
         now = time.monotonic()
         cached = self._trigger_cache.get(guild_id)
         if cached is None or cached[0] <= now:
+
+            def _load() -> list[quests_svc.TriggerQuest]:
+                with self.ctx.open_db() as conn:
+                    return quests_svc.load_trigger_index(conn, guild_id)
+
             try:
-                triggers = await asyncio.to_thread(
-                    self._load_trigger_quests, guild_id
-                )
+                triggers = await asyncio.to_thread(_load)
             except Exception:
                 log.exception("econ trigger: failed to load quests for %s", guild_id)
                 return
@@ -3189,43 +3178,16 @@ class EconomyCog(commands.Cog):
             return
 
         channel = message.channel
-        parent_id = getattr(channel, "parent_id", None)  # threads count as parent
-        for trig in triggers:
-            if trig.channel_id is not None and trig.channel_id not in (
-                channel.id,
-                parent_id,
-            ):
-                continue
-            if message_matches_trigger(content, trig.pattern):
-                await self._complete_trigger_quest(message, member, trig)
-
-    def _load_trigger_quests(self, guild_id: int) -> list[_TriggerQuest]:
-        """Active trigger quests with compiled patterns ([] when econ is off)."""
-        with self.ctx.open_db() as conn:
-            settings = load_econ_settings(conn, guild_id)
-            if not settings.enabled:
-                return []
-            rows = list_trigger_quests(conn, guild_id)
-        out: list[_TriggerQuest] = []
-        for row in rows:
-            pattern = compile_trigger_pattern(
-                parse_trigger_words(str(row["trigger_words"]))
-            )
-            if pattern is None:
-                continue
-            channel_id = row["trigger_channel_id"]
-            out.append(
-                _TriggerQuest(
-                    quest_id=int(row["id"]),
-                    qtype=str(row["qtype"]),
-                    channel_id=int(channel_id) if channel_id is not None else None,
-                    pattern=pattern,
-                )
-            )
-        return out
+        # Threads count as their parent channel.
+        scope = (channel.id, getattr(channel, "parent_id", None))
+        for trig in quests_svc.matching_triggers(triggers, content, scope):
+            await self._complete_trigger_quest(message, member, trig)
 
     async def _complete_trigger_quest(
-        self, message: discord.Message, member: discord.Member, trig: _TriggerQuest
+        self,
+        message: discord.Message,
+        member: discord.Member,
+        trig: quests_svc.TriggerQuest,
     ) -> None:
         """Claim a matched trigger quest for the message author, best-effort."""
         guild = message.guild
@@ -3234,36 +3196,17 @@ class EconomyCog(commands.Cog):
 
         def _claim():
             with self.ctx.open_db() as conn:
-                settings = load_econ_settings(conn, guild.id)
-                offset = get_tz_offset_hours(conn, guild.id)
-                day = local_day_for(time.time(), offset)
-                period = quest_period(trig.qtype, day)
-                # A trigger-word quest still only pays when it's on the
-                # member's personal board this period (parity with kind
-                # triggers). Off-board → treat like an unclaimable repeat.
-                if has_board(trig.qtype) and trig.quest_id not in (
-                    assigned_board_ids(
-                        conn, guild.id, member.id, trig.qtype, day, settings
-                    )
-                ):
-                    raise ValueError("quest not on member's board this period")
-                outcome = claim_quest(
-                    conn,
-                    settings,
-                    guild.id,
-                    trig.quest_id,
-                    member.id,
-                    period=period,
-                    booster=booster,
+                return quests_svc.claim_trigger_word(
+                    conn, guild.id, member.id, trig,
+                    booster=booster, now=time.time(),
                 )
-            return settings, outcome
 
         try:
             settings, outcome = await asyncio.to_thread(_claim)
         except ValueError:
-            # Already claimed this period, quest window closed, or deactivated
-            # since the cache load — every repeat message would hit this, so
-            # stay quiet rather than spam the channel.
+            # Already claimed this period, quest window closed, deactivated
+            # since the cache load, or off-board — every repeat message would
+            # hit this, so stay quiet rather than spam the channel.
             return
         except Exception:
             log.exception(
@@ -3309,64 +3252,25 @@ class EconomyCog(commands.Cog):
 
     _PHOTO_OPTS_TTL = 60.0  # channel-id cache staleness bound (seconds)
 
-    def _read_photo_channel(self, guild_id: int) -> int:
-        """The configured Photo Challenge channel id, or 0 when unset.
-
-        0 means the admin hasn't picked a Photo Challenge channel — the
-        listener no-ops then, so the mechanic is dormant until one is set.
-        Read from ``games_game_config`` (game_type 'photo'), the same
-        ``channel_id`` the standalone Photo Challenge Setup panel owns. When
-        that config carries no channel but an **active photo schedule** does
-        (a schedule created without the Setup panel ever being saved, which
-        leaves the config row empty), fall back to the schedule's channel so
-        posts there still earn instead of silently paying nothing.
-        """
-        with self.ctx.open_db() as conn:
-            row = conn.execute(
-                "SELECT options FROM games_game_config"
-                " WHERE guild_id = ? AND game_type = 'photo'",
-                (guild_id,),
-            ).fetchone()
-            opts: dict = {}
-            if row and row[0]:
-                try:
-                    opts = json.loads(row[0])
-                except (ValueError, TypeError):
-                    opts = {}
-            try:
-                channel_id = int(str(opts.get("channel_id")).strip() or 0)
-            except (ValueError, TypeError):
-                channel_id = 0
-            if channel_id > 0:
-                return channel_id
-            # Config has no channel — recover the channel from an active photo
-            # schedule so a schedule-only setup isn't silently unpaid.
-            sched = conn.execute(
-                "SELECT channel_id FROM games_scheduled"
-                " WHERE guild_id = ? AND game_type = 'photo' AND status = 'active'"
-                " ORDER BY id ASC LIMIT 1",
-                (guild_id,),
-            ).fetchone()
-        if sched and sched[0]:
-            try:
-                return int(sched[0])
-            except (ValueError, TypeError):
-                return 0
-        return 0
-
     async def _photo_channel(self, guild_id: int) -> int:
-        """TTL-cached ``_read_photo_channel`` — one DB read per guild per TTL.
+        """TTL-cached ``read_photo_channel`` — one DB read per guild per TTL.
 
-        Keeps the on_message listener (which fires for every message in the
-        guild) off the DB on each event; only image posts in the configured
-        channel go past this to the eligibility check.
+        The cache stays here rather than in the service: it exists because
+        ``on_message`` fires for every message in the guild, which is a
+        listener concern, not a rule about how photo posts pay. Only image
+        posts in the configured channel go past this to the service.
         """
         now = time.monotonic()
         cached = self._photo_opts.get(guild_id)
         if cached is not None and cached[0] > now:
             return cached[1]
+
+        def _read() -> int:
+            with self.ctx.open_db() as conn:
+                return photo_svc.read_photo_channel(conn, guild_id)
+
         try:
-            channel_id = await asyncio.to_thread(self._read_photo_channel, guild_id)
+            channel_id = await asyncio.to_thread(_read)
         except Exception:
             log.exception("econ photo: channel read failed in guild %s", guild_id)
             return 0
@@ -3377,16 +3281,11 @@ class EconomyCog(commands.Cog):
     async def _on_photo_post(self, message: discord.Message) -> None:
         """Pay for an image posted in the Photo Challenge channel.
 
-        Two independent payouts, both once per guild-local day:
-        - a flat **participation award** (``reward_photo_post``) on the post
-          itself — no quest required; and
-        - the **photo_post quest** bonus on top, if one is active.
-        The post itself earns — no reactions needed. Guards cheapest-first:
-        guild/bot check, image check, TTL-cached channel gate, then a DB
-        eligibility pre-check (economy on, source on, and something to pay).
-        The flat award dedups on ``econ_photo_rewards``; the quest dedups on
-        its own claim (occurrence ``photo_post:<local_day>``), so posting
-        several photos in a day still pays each side once.
+        Guards cheapest-first: guild/bot check, image check, TTL-cached
+        channel gate, then a DB eligibility pre-check so a channel with
+        nothing to pay never opens a write transaction. The payout split
+        (flat participation award + stacked photo_post quest bonus, each
+        once per guild-local day) lives in ``economy_photo_service``.
         """
         if message.guild is None or message.author.bot:
             return
@@ -3405,8 +3304,13 @@ class EconomyCog(commands.Cog):
             return
 
         guild_id = message.guild.id
+
+        def _possible() -> bool:
+            with self.ctx.open_db() as conn:
+                return photo_svc.payout_possible(conn, guild_id)
+
         try:
-            eligible = await asyncio.to_thread(self._photo_eligible, guild_id)
+            eligible = await asyncio.to_thread(_possible)
         except Exception:
             log.exception(
                 "econ photo: eligibility check failed in guild %s", guild_id
@@ -3419,48 +3323,10 @@ class EconomyCog(commands.Cog):
 
         def _claim():
             with self.ctx.open_db() as conn:
-                settings = load_econ_settings(conn, guild_id)
-                if not settings.enabled:
-                    return None
-                if not source_enabled(conn, guild_id, "photo_post"):
-                    return None
-                offset = get_tz_offset_hours(conn, guild_id)
-                day = local_day_for(time.time(), offset)
-                # Flat participation award — once per local day. The
-                # INSERT OR IGNORE anchor rides this transaction, so concurrent
-                # posts pay it at most once (mirrors the login faucet).
-                participation = 0
-                if settings.reward_photo_post > 0:
-                    cur = conn.execute(
-                        "INSERT OR IGNORE INTO econ_photo_rewards"
-                        " (guild_id, user_id, local_day) VALUES (?, ?, ?)",
-                        (guild_id, member.id, day),
-                    )
-                    if (cur.rowcount or 0) == 1:
-                        participation = apply_credit(
-                            conn,
-                            guild_id,
-                            member.id,
-                            settings.reward_photo_post,
-                            "photo_post",
-                            meta={"day": day},
-                            booster=booster,
-                            multiplier=settings.booster_multiplier,
-                        )
-                # The photo_post quest bonus stacks on top (once/day by
-                # occurrence; fire_trigger_quests re-checks the source toggle).
-                fired = fire_trigger_quests(
-                    conn,
-                    settings,
-                    guild_id,
-                    "photo_post",
-                    member.id,
-                    local_day=day,
-                    occurrence=day,
-                    booster=booster,
-                    channel_ids=(channel_id,),
+                return photo_svc.award_photo_post(
+                    conn, guild_id, member.id,
+                    channel_id=channel_id, booster=booster, now=time.time(),
                 )
-                return settings, participation, fired
 
         try:
             result = await asyncio.to_thread(_claim)
@@ -3480,29 +3346,6 @@ class EconomyCog(commands.Cog):
                 await message.add_reaction("✅")
             except discord.HTTPException:
                 log.debug("econ photo: participation react failed", exc_info=True)
-
-    def _photo_eligible(self, guild_id: int) -> bool:
-        """True when a photo payout is possible in this guild right now.
-
-        Economy enabled and the photo_post income source on, plus at least one
-        thing to pay: a positive flat participation award (``reward_photo_post``)
-        or ≥1 active photo_post quest. Gates the per-post write so a channel
-        with nothing to pay never opens a DB transaction.
-        """
-        with self.ctx.open_db() as conn:
-            settings = load_econ_settings(conn, guild_id)
-            if not settings.enabled:
-                return False
-            if not source_enabled(conn, guild_id, "photo_post"):
-                return False
-            if settings.reward_photo_post > 0:
-                return True
-            row = conn.execute(
-                "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
-                " AND trigger_kind = 'photo_post' LIMIT 1",
-                (guild_id,),
-            ).fetchone()
-            return row is not None
 
     @commands.Cog.listener("on_member_update")
     async def _on_boost_started(
