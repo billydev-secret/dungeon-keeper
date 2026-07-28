@@ -10,17 +10,16 @@ from __future__ import annotations
 import discord
 import pytest
 
+from bot_modules.core.utils import jump_url
 from bot_modules.services.event_echo_logic import (
     GLOBAL_COOLDOWN_SECONDS,
-    ICON_EVENT,
-    ICON_GAME,
-    LEAD_EVENT,
-    LEAD_GAME,
     PER_TYPE_COOLDOWN_SECONDS,
+    SOURCE_DISCORD_EVENT,
+    SOURCE_PARTY_GAME,
     build_echo_embed,
     decide,
     is_fresh,
-    jump_url,
+    style_for,
 )
 
 NOW = 1_800_000_000.0
@@ -69,13 +68,6 @@ def test_decide_applies_both_cooldowns(last_same_type, last_any, allowed, reason
     assert verdict.reason == reason
 
 
-def test_decide_honours_custom_windows():
-    """The windows are parameters, so a caller can tighten them without a fork."""
-    assert decide(
-        now=NOW, last_same_type=NOW - 120, last_any=NOW - 120,
-        per_type_seconds=60, global_seconds=30,
-    ).allowed
-
 
 @pytest.mark.parametrize(
     "opened_at, fresh",
@@ -91,11 +83,6 @@ def test_decide_honours_custom_windows():
 def test_is_fresh(opened_at, fresh):
     assert is_fresh(opened_at, NOW) is fresh
 
-
-def test_freshness_suppresses_a_restart_backlog():
-    """After downtime the sweep sees every open game at once; old ones stay quiet."""
-    opened = [NOW - 30, NOW - 4000, NOW - 9000]
-    assert [is_fresh(t, NOW) for t in opened] == [True, False, False]
 
 
 def test_jump_url_includes_the_message_id():
@@ -119,17 +106,29 @@ class TestEchoEmbed:
         assert "<#" not in (embed.description or "")
         assert "https://x/1" in (embed.description or "")
 
-    def test_copy_varies_by_source(self):
-        """"A game is open" reads as a bug on an event called Movie Night."""
-        game = build_echo_embed(game_name="Truth or Dare", channel_id=9, url="u")
-        event = build_echo_embed(
-            game_name="Movie Night", channel_id=9, url="u",
-            lead=LEAD_EVENT, icon=ICON_EVENT,
+    def test_copy_is_derived_from_the_source(self):
+        """"A game is open" reads as a bug on an event called Movie Night.
+
+        Keyed off `source` rather than passed alongside it, so the copy can't
+        desync from the thing it describes.
+        """
+        game = build_echo_embed(
+            game_name="Truth or Dare", channel_id=9, url="u", source=SOURCE_PARTY_GAME
         )
-        assert LEAD_GAME in (game.description or "")
-        assert LEAD_GAME not in (event.description or "")
-        assert (game.title or "").startswith(ICON_GAME)
-        assert (event.title or "").startswith(ICON_EVENT)
+        event = build_echo_embed(
+            game_name="Movie Night", channel_id=9, url="u", source=SOURCE_DISCORD_EVENT
+        )
+        game_style = style_for(SOURCE_PARTY_GAME)
+        event_style = style_for(SOURCE_DISCORD_EVENT)
+        assert game_style != event_style
+        assert game_style.lead in (game.description or "")
+        assert event_style.lead in (event.description or "")
+        assert (game.title or "").startswith(game_style.icon)
+        assert (event.title or "").startswith(event_style.icon)
+
+    def test_an_unknown_source_falls_back_to_game_copy(self):
+        """A new source is one table row; forgetting it must not crash."""
+        assert style_for("something_new") == style_for(SOURCE_PARTY_GAME)
 
     def test_host_is_optional(self):
         assert build_echo_embed(

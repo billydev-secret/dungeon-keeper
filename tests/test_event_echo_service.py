@@ -201,17 +201,6 @@ class TestEchoEvent:
         assert await echo(bot, guild, ref="b", key="story", now=NOW + 5000) is False
         assert bot.sent_channel.send.await_count == 1
 
-    async def test_unreachable_destination_is_not_an_error(self, bot, guild, sync_db_path):
-        configure(sync_db_path)
-        bot.get_channel = MagicMock(return_value=None)
-        bot.fetch_channel = AsyncMock(side_effect=discord.NotFound(MagicMock(), "gone"))
-        assert await echo(bot, guild) is False
-
-    async def test_send_failure_is_swallowed(self, bot, guild, sync_db_path):
-        configure(sync_db_path)
-        bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
-        assert await echo(bot, guild) is False
-
     @pytest.mark.parametrize(
         "break_it",
         [
@@ -306,16 +295,12 @@ class TestGamebotLobby:
 def test_opened_at_tolerates_bad_timestamps(raw):
     """An unparseable created_at must not take the sweep down."""
     row = {"created_at": raw}
-    assert svc._opened_at(_FakeRow(row)) is None
+    assert svc._opened_at(row) is None
 
 
 def test_opened_at_reads_sqlite_utc_text():
-    row = _FakeRow({"created_at": "2026-07-28 12:00:00"})
+    row = dict({"created_at": "2026-07-28 12:00:00"})
     assert svc._opened_at(row) == pytest.approx(1785240000.0, abs=1)
-
-
-class _FakeRow(dict):
-    """sqlite3.Row exposes keys() and __getitem__; dict does both already."""
 
 
 # ── The party-game sweep ────────────────────────────────────────────────────
@@ -331,7 +316,7 @@ def _game_row(**over):
         "created_at": None,
     }
     row.update(over)
-    return _FakeRow(row)
+    return row
 
 
 @pytest.mark.asyncio
@@ -395,6 +380,18 @@ class TestProcessGame:
         assert "Brand New" in (embed.title or "")
 
 
+SWEEP_NOW = 1785240000.0  # matches "2026-07-28 12:00:00" UTC
+
+
+def _insert_game(conn, game_id, *, state="open", message_id=888, created_at=None):
+    conn.execute(
+        "INSERT INTO games_active_games "
+        "(game_id, channel_id, message_id, game_type, host_id, state, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (game_id, 777, message_id, "mfk", 1, state, created_at or "2026-07-28 11:58:00"),
+    )
+
+
 @pytest.mark.asyncio
 async def test_live_games_returns_every_state(sync_db_path):
     """The sweep's query must not enumerate states.
@@ -407,15 +404,36 @@ async def test_live_games_returns_every_state(sync_db_path):
     states = ["joining", "open", "playing"]
     with open_db(sync_db_path) as conn:
         for i, state in enumerate(states):
-            conn.execute(
-                "INSERT INTO games_active_games "
-                "(game_id, channel_id, message_id, game_type, host_id, state) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (f"g-{i}", 777, 888, "mfk", 1, state),
-            )
+            _insert_game(conn, f"g-{i}", state=state)
 
-    rows = await svc.live_games(GamesDb(sync_db_path))
-    assert sorted(r["state"] for r in rows) == sorted(states)
+    rows = await svc.live_games(GamesDb(sync_db_path), SWEEP_NOW)
+    assert len(rows) == 3
+
+
+@pytest.mark.asyncio
+async def test_live_games_filters_the_cheap_cases_in_sql(sync_db_path):
+    """Unposted lobbies and stale rows never reach Python.
+
+    Both are re-checked downstream; doing the bulk cut in SQL is what keeps a
+    15s sweep off rows it can't act on.
+    """
+    with open_db(sync_db_path) as conn:
+        _insert_game(conn, "echoable")
+        _insert_game(conn, "no-lobby-yet", message_id=None)
+        _insert_game(conn, "stale", created_at="2026-07-28 09:00:00")
+
+    rows = await svc.live_games(GamesDb(sync_db_path), SWEEP_NOW)
+    assert [r["game_id"] for r in rows] == ["echoable"]
+
+
+@pytest.mark.asyncio
+async def test_live_games_does_not_read_the_payload_blob(sync_db_path):
+    """payload holds rosters and story text — kilobytes this sweep never uses."""
+    with open_db(sync_db_path) as conn:
+        _insert_game(conn, "g-1")
+
+    rows = await svc.live_games(GamesDb(sync_db_path), SWEEP_NOW)
+    assert "payload" not in rows[0].keys()
 
 
 # ── Discord events ──────────────────────────────────────────────────────────

@@ -5,9 +5,11 @@ import {
   showStatus,
   buildField,
   mountChannelPicker,
+  onPickerChange,
   guardForm,
   renderMetaWarning,
 } from "../config-helpers.js";
+import { renderLoading } from "../states.js";
 
 // One knob, deliberately. The destination channel *is* the on/off switch —
 // "(off)" clears the key and nothing posts. A separate enable checkbox would
@@ -17,7 +19,7 @@ export function mount(container) {
   container.replaceChildren();
   const loading = document.createElement("div");
   loading.className = "panel";
-  loading.innerHTML = `<div class="empty">Loading Event Echo…</div>`;
+  loading.innerHTML = renderLoading("Loading Event Echo…");
   container.appendChild(loading);
 
   (async () => {
@@ -74,14 +76,12 @@ export function mount(container) {
       chanSlot,
       "Where echoes are posted — normally your main chat. Choose \"(off)\" to stop echoing entirely.",
     ));
-    // Snowflakes stay strings all the way through. "0" is the off sentinel,
-    // matching the rest of the codebase — settings_registry declares this key
-    // with default "0", and Billy-bot writes literal "0" when it clears a
-    // channel setting. With emptyValue "" instead, a stored "0" matches no
-    // option and the field renders the bare text `0` rather than "(off)".
+    // Snowflakes stay strings throughout; "0" is the codebase-wide unset id
+    // (mountChannelPicker's own default) which Billy-bot also writes when it
+    // clears a channel setting.
     const chanPicker = mountChannelPicker(
       chanSlot, channels, String(s.channel_id || "0"),
-      { emptyValue: "0", emptyLabel: "(off)", label: "Echo channel" },
+      { emptyLabel: "(off)", label: "Echo channel" },
     );
 
     function syncBanner() {
@@ -89,16 +89,7 @@ export function mount(container) {
       offBanner.style.display = v && v !== "0" ? "none" : "";
     }
     syncBanner();
-    // filterSelect emits no change event of its own, and `chanSlot` was
-    // replaced out of the DOM by mountChannelPicker — so listen on the
-    // picker's own element, the way activity.js does.
-    let lastValue = chanPicker.getValue();
-    chanPicker.el.addEventListener("focusout", () => {
-      setTimeout(() => {
-        const cur = chanPicker.getValue();
-        if (cur !== lastValue) { lastValue = cur; syncBanner(); }
-      }, 200);
-    });
+    onPickerChange(chanPicker, syncBanner);
 
     // What actually gets echoed, spelled out — the rules live in code and an
     // admin has no other way to find out why a given game didn't appear.

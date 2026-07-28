@@ -84,6 +84,17 @@ _START_GAMES: dict[str, str] = {
     "anagrams": GAME_ANAGRAMS,
 }
 
+# The reverse direction, for anything that has to *show* a Gamebot game to a
+# member (Event Echo's main-chat announcement). Kept here because this module
+# already owns Gamebot's vocabulary — a rename lands in one file rather than
+# in a feature that has never heard of Gamebot. Canonical rather than derived
+# from `_START_GAMES`, whose CAH key has two spellings.
+GAME_LABELS: dict[str, str] = {
+    GAME_CAH: "Cards Against Humanity",
+    GAME_CONNECT4: "Connect 4",
+    GAME_ANAGRAMS: "Anagrams",
+}
+
 # A lobby that timed out without enough players. Gamebot still posts a *Game
 # over!* for it, but no game was played, so it must pay nobody.
 _ABANDONED_MARK = "Not enough players joined the game!"

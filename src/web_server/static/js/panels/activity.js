@@ -4,6 +4,7 @@ import { makeBarChart, CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, ROLE_COL
 import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
 import { filterSelect } from "../filter-select.js";
+import { onPickerChange } from "../config-helpers.js";
 
 const RESOLUTIONS = [
   { value: "hour",        label: "Hourly (24h)" },
@@ -38,18 +39,6 @@ const SOURCE_COLORS = {
   grant:       ROLE_COLORS[3],
 };
 const FALLBACK_SOURCE_COLOR = ROLE_COLORS[5];
-
-/** Fire `cb` when a shared filterSelect's value changes (it has no change
- *  event of its own — selection closes the popover, focus leaves after). */
-function onPickerChange(fs, cb) {
-  let last = fs.getValue();
-  fs.el.addEventListener("focusout", () => {
-    setTimeout(() => {
-      const cur = fs.getValue();
-      if (cur !== last) { last = cur; cb(); }
-    }, 200);
-  });
-}
 
 export function mount(container, initialParams) {
   container.innerHTML = `

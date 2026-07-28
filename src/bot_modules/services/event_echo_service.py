@@ -13,17 +13,24 @@ Every one of them ends at :func:`echo_event`, which owns the destination, the
 cooldowns and the dedupe claim. Adding a fourth source means writing a caller,
 not touching the rules.
 
-**Why a poll loop for party games.** The obvious hook is where each game posts
-its lobby, but that is 28 ``update_game_message`` call sites across the game
-cogs, and a game whose author forgets the call is a silent gap. Sweeping
-``games_active_games`` is one place instead of 28, it picks up scheduled games
-for free, and — like ``game_start_ping_service``, whose shape this borrows —
-it survives a restart, which a per-lobby task does not. The table holds only
-live games, a handful of rows, so polling it is cheap.
+**Why a poll loop for party games.** Not because hooking would mean touching
+28 call sites — those funnel through one ``update_game_message``, and
+``end_game``'s ``bot=`` kwarg is precedent for threading a side effect into a
+shared manager function. The real reason is that ``update_game_message`` isn't
+the only way a lobby's message id gets recorded: ``games_ffa_cog`` and
+``games_photo_cog`` pass ``message_id=`` straight to ``create_game`` and never
+call it at all, so a hook there would silently miss them — exactly the class
+of gap that let three schedulable games go unechoed until it was caught in
+review. A sweep sees whatever ended up in the table, however it got there,
+which is the property worth having. ``game_start_ping_service`` polls the same
+table on the same cadence for the same reason.
 
 The cost of polling is that a game which opens *and finishes* inside one tick
 is never echoed. That is the correct trade: an echo pointing at a game already
-over is worse than no echo.
+over is worse than no echo. (Restart survival is *not* a benefit worth
+claiming — ``FRESHNESS_SECONDS`` deliberately discards the post-restart
+backlog, so nothing is recovered that the freshness bound doesn't then throw
+away.)
 """
 from __future__ import annotations
 
@@ -38,13 +45,12 @@ import discord
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value, open_db, open_db_immediate
+from bot_modules.core.utils import jump_url, resolve_bot_channel
 from bot_modules.games.constants import GAME_NAMES
+from bot_modules.games_external import parser
 from bot_modules.services.event_echo_logic import (
-    GAMEBOT_ECHO_NAMES,
-    ICON_EVENT,
-    ICON_GAME,
-    LEAD_EVENT,
-    LEAD_GAME,
+    FRESHNESS_SECONDS,
+    GAMEBOT_ECHO_GAMES,
     RETENTION_SECONDS,
     SOURCE_DISCORD_EVENT,
     SOURCE_GAMEBOT,
@@ -52,7 +58,6 @@ from bot_modules.services.event_echo_logic import (
     build_echo_embed,
     decide,
     is_fresh,
-    jump_url,
 )
 
 log = logging.getLogger(__name__)
@@ -116,6 +121,22 @@ def claim_echo(
     return cur.rowcount > 0
 
 
+def already_claimed(
+    conn: sqlite3.Connection, *, guild_id: int, source: str, ref: str
+) -> bool:
+    """Has this ref been decided already (echoed or suppressed)?
+
+    A cheap read that exists to keep the common case off the write lock: the
+    sweep re-offers the same lobby on every one of the ~40 ticks it stays
+    fresh, and only the first has anything to insert.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM event_echo_log WHERE guild_id = ? AND source = ? AND ref = ?",
+        (guild_id, source, ref),
+    ).fetchone()
+    return row is not None
+
+
 def release_echo(
     conn: sqlite3.Connection, *, guild_id: int, source: str, ref: str
 ) -> None:
@@ -161,16 +182,6 @@ def echo_channel_id(conn: sqlite3.Connection, guild_id: int) -> int | None:
 
 # ── The sender ──────────────────────────────────────────────────────────────
 
-async def _resolve_channel(bot, channel_id: int):
-    channel = bot.get_channel(channel_id)
-    if channel is not None:
-        return channel
-    try:
-        return await bot.fetch_channel(channel_id)
-    except discord.DiscordException:
-        return None
-
-
 async def echo_event(
     bot,
     *,
@@ -182,8 +193,6 @@ async def echo_event(
     origin_channel_id: int | None,
     url: str,
     host_name: str | None = None,
-    lead: str = LEAD_GAME,
-    icon: str = ICON_GAME,
     now: float | None = None,
 ) -> bool:
     """Post one echo, subject to config, cooldowns and dedupe.
@@ -196,19 +205,29 @@ async def echo_event(
     db_path: Path = bot.ctx.db_path
 
     def _claim() -> tuple[int | None, bool]:
-        # BEGIN IMMEDIATE, not the default deferred transaction: this is a
-        # read-then-write on the cooldown window, and all three sources reach
-        # it concurrently (the sweep's worker thread, the Gamebot listener,
-        # the scheduled-event listener). Under a deferred transaction two
-        # overlapping claims can both read "nothing echoed yet", both pass
-        # decide(), and both insert — two echoes inside the 10-minute floor
-        # this feature exists to enforce. It also avoids the
-        # SQLITE_BUSY_SNAPSHOT that a deferred read→write upgrade raises when
-        # another writer commits in between (see open_db_immediate's docstring).
-        with open_db_immediate(db_path) as conn:
+        # Cheap read first. The sweep re-offers every fresh lobby on all ~40
+        # ticks it stays fresh, and when the feature is unconfigured no row is
+        # ever written, so nothing self-limits — without this pre-check each of
+        # those visits took the database-wide write lock just to re-read one
+        # config key and insert nothing. Now only a genuinely new echo pays.
+        with open_db(db_path) as conn:
             dest = echo_channel_id(conn, guild.id)
             if dest is None:
                 return None, False
+            if already_claimed(conn, guild_id=guild.id, source=source, ref=ref):
+                return dest, False
+
+        # BEGIN IMMEDIATE for the decision itself: this is a read-then-write on
+        # the cooldown window, and all three sources reach it concurrently (the
+        # sweep's worker thread, the Gamebot listener, the scheduled-event
+        # listener). Under a deferred transaction two overlapping claims can
+        # both read "nothing echoed yet", both pass decide(), and both insert —
+        # two echoes inside the 10-minute floor this feature exists to enforce.
+        # It also avoids the SQLITE_BUSY_SNAPSHOT that a deferred read→write
+        # upgrade raises when another writer commits in between (see
+        # open_db_immediate's docstring). The pre-check above is only an
+        # optimisation; claim_echo's unique index remains the dedupe guarantee.
+        with open_db_immediate(db_path) as conn:
             last_same, last_any = last_echo_times(conn, guild.id, echo_key)
             verdict = decide(now=now, last_same_type=last_same, last_any=last_any)
             claimed = claim_echo(
@@ -241,7 +260,7 @@ async def echo_event(
     # to release it, or a send that never landed goes on blocking the next
     # real game for the length of both cooldowns.
     try:
-        channel = await _resolve_channel(bot, dest_id)
+        channel = await resolve_bot_channel(bot, dest_id)
         if channel is None:
             log.warning("event echo: destination channel %s unreachable", dest_id)
             await asyncio.to_thread(_release)
@@ -253,8 +272,7 @@ async def echo_event(
             channel_id=origin_channel_id,
             url=url,
             host_name=host_name,
-            lead=lead,
-            icon=icon,
+            source=source,
             color=color,
         )
         # Silent by design — see event_echo_logic's module docstring.
@@ -278,9 +296,9 @@ async def echo_gamebot_lobby(bot, message: discord.Message, sub_game: str) -> bo
     path we were running anyway, not a second watcher to keep in sync with
     Gamebot's wording.
     """
-    name = GAMEBOT_ECHO_NAMES.get(sub_game)
-    if name is None or message.guild is None:
+    if sub_game not in GAMEBOT_ECHO_GAMES or message.guild is None:
         return False
+    name = parser.GAME_LABELS.get(sub_game, sub_game)
     return await echo_event(
         bot,
         guild=message.guild,
@@ -316,8 +334,6 @@ async def echo_discord_event(bot, event: discord.ScheduledEvent) -> bool:
         origin_channel_id=event.channel.id if event.channel is not None else None,
         url=event.url,
         host_name=event.creator.display_name if event.creator else None,
-        lead=LEAD_EVENT,
-        icon=ICON_EVENT,
     )
 
 
@@ -342,17 +358,33 @@ def _opened_at(row) -> float | None:
     return parsed.timestamp()
 
 
-async def live_games(db):
-    """Every game currently in ``games_active_games``, whatever its state.
+async def live_games(db, now: float):
+    """Games worth considering for an echo this tick.
 
-    Deliberately unfiltered. The six lobby games sit in ``joining``, most
-    others in ``open``, and wyr / nhie / price are created straight into
-    ``playing`` — an enumerated state list silently dropped those three
-    (all schedulable), and would drop the next game to invent a state.
-    Presence in this table already means "live"; freshness and the per-game
-    dedupe bound the rest.
+    Deliberately **not filtered by state**. The six lobby games sit in
+    ``joining``, most others in ``open``, and wyr / nhie / price are created
+    straight into ``playing`` — an enumerated state list silently dropped
+    those three (all schedulable), and would drop the next game to invent a
+    state. Presence in this table already means "live".
+
+    What it *does* filter, in SQL rather than in Python: rows whose lobby
+    hasn't been posted yet (nothing to link to), and rows too old to be worth
+    announcing. Named columns rather than ``SELECT *`` because ``payload``
+    holds lobby rosters and story text — kilobytes per row that this sweep
+    reads four times a minute and never looks at.
+
+    The freshness bound is applied twice, deliberately: this SQL cut is the
+    cheap one and only understands SQLite's own ``CURRENT_TIMESTAMP`` text,
+    while ``is_fresh`` re-checks in Python and decides what an unparseable
+    timestamp means.
     """
-    return await db.fetchall("SELECT * FROM games_active_games")
+    cutoff = datetime.fromtimestamp(now - FRESHNESS_SECONDS, timezone.utc)
+    return await db.fetchall(
+        "SELECT game_id, channel_id, message_id, game_type, host_id, created_at "
+        "FROM games_active_games "
+        "WHERE message_id IS NOT NULL AND (created_at IS NULL OR created_at >= ?)",
+        (cutoff.strftime("%Y-%m-%d %H:%M:%S"),),
+    )
 
 
 def _host_name(guild: discord.Guild, host_id) -> str | None:
@@ -422,7 +454,7 @@ async def event_echo_loop(bot) -> None:
     while not bot.is_closed():
         try:
             now = time.time()
-            rows = await live_games(db)
+            rows = await live_games(db, now)
             for row in rows:
                 try:
                     await _process_game(bot, row, now)

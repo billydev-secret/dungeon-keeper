@@ -19,6 +19,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
+from bot_modules.core.utils import resolve_bot_channel
 from bot_modules.games.constants import (
     GAME_NAMES,
     LOBBY_GAME_TYPES,
@@ -230,15 +231,6 @@ async def _advance_or_finish(games_db, row, now: float, last_status: str,
         )
 
 
-async def _resolve_channel(bot, channel_id: int):
-    channel = bot.get_channel(channel_id)
-    if channel is not None:
-        return channel
-    try:
-        return await bot.fetch_channel(channel_id)
-    except Exception:
-        return None
-
 
 async def _process_due(bot, games_db, row, now: float) -> None:
     sched_id = row["id"]
@@ -270,7 +262,7 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         return
 
     # 1. Resolve the target channel.
-    channel = await _resolve_channel(bot, channel_id)
+    channel = await resolve_bot_channel(bot, channel_id)
     if channel is None:
         log.warning("Scheduled game %s: channel %s unreachable", sched_id, channel_id)
         await _advance_or_finish(games_db, row, now, "error", offset, recur_days)

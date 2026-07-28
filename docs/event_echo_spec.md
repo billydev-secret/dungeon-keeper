@@ -48,12 +48,15 @@ There are no slash commands. Cooldown windows are constants in
 | `discord_event` | A native Discord event going `scheduled → active` | `discord_event` | event id |
 
 **Party games** are swept by `event_echo_loop` every 15s rather than hooked at
-each game's lobby post: that is 28 `update_game_message` call sites, and a new
-game whose author forgets the call would be a silent gap. Sweeping is one
-place, it picks up **scheduled games** for free (they launch down the same
-path), and it survives a restart — which a per-lobby task does not. The cost
-is that a game opening and finishing inside one tick is never echoed, which is
-the right trade.
+each game's lobby post. Not because hooking would mean 28 call sites — those
+funnel through one `update_game_message`, and `end_game`'s `bot=` kwarg is
+precedent for threading a side effect into a shared manager function. The real
+reason is that `update_game_message` isn't the only path: `games_ffa_cog` and
+`games_photo_cog` pass `message_id=` straight to `create_game` and never call
+it, so a hook there would silently miss them. A sweep sees whatever ended up
+in the table however it got there. It also picks up **scheduled games** for
+free (same launch path). The cost is that a game opening and finishing inside
+one tick is never echoed, which is the right trade.
 
 The sweep is deliberately **unfiltered by state**. The six lobby games sit in
 `joining`, most others in `open`, and `wyr` / `nhie` / `price` are created
@@ -159,7 +162,8 @@ else there renders as a mention Discord can't resolve.
   echoes turn out to be too easy to miss. If added, it must allow-list exactly
   that role per `embed_style_guide.md`.
 - **Dashboard-tunable cooldowns.** The two windows are constants. Making them
-  settings is a small change to `decide()`'s already-parameterised callers.
+  settings means reading them from config in `decide()` instead of from the
+  module constants.
 - **Casino and Cat Bot.** Out of scope by decision, not by omission — both fire
   far too often to echo.
 - **Live-updating summary message.** One "games running now" post edited in
