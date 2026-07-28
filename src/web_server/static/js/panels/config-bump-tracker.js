@@ -71,10 +71,17 @@ export function mount(container) {
                    style="width:80px;" required />
           </td>
           <td>
-            <input aria-label="Detector bot ID for ${esc(s.site_name)}"
-                   type="text" data-detector inputmode="numeric"
-                   value="${esc(s.detector_bot_id || "")}" placeholder="Optional"
-                   style="width:170px;" />
+            <div style="display:flex; flex-direction:column; gap:4px; min-width:190px;">
+              <input aria-label="Detector bot ID for ${esc(s.site_name)}"
+                     type="text" data-detector inputmode="numeric"
+                     value="${esc(s.detector_bot_id || "")}" placeholder="Bot ID (optional)" />
+              <input aria-label="Bump-confirmed text for ${esc(s.site_name)}"
+                     type="text" data-pattern maxlength="200"
+                     value="${esc(s.detector_pattern || "")}" placeholder="Text when bumped" />
+              <input aria-label="Bump-refused text for ${esc(s.site_name)}"
+                     type="text" data-failure maxlength="200"
+                     value="${esc(s.failure_pattern || "")}" placeholder="Text when refused" />
+            </div>
           </td>
           <td style="white-space:nowrap;">
             <button type="button" class="btn" data-act="save">Save</button>
@@ -130,7 +137,7 @@ export function mount(container) {
             <table class="table" data-sites>
               <thead><tr>
                 <th>Site</th><th>Status</th><th>Last Bumped</th>
-                <th>Cooldown (hours)</th><th>Detector Bot ID</th><th>Actions</th><th></th>
+                <th>Cooldown (hours)</th><th>Detection</th><th>Actions</th><th></th>
               </tr></thead>
               <tbody>${rows}</tbody>
             </table>
@@ -139,10 +146,18 @@ export function mount(container) {
             "each one gets its own cooldown and reminder."
           )}
           <div class="field-hint" style="margin-top:8px;">
-            <strong>Detector Bot ID</strong> is optional. Set it to the listing bot's user
-            ID and a bump is recorded automatically when that bot posts a confirmation,
-            so nobody has to run <code>/bump log</code>. Leave it blank to rely on the
-            command alone.
+            <strong>Detection</strong> is optional. Set <strong>Bot ID</strong> to the
+            listing bot's user ID and a bump is recorded automatically when that bot
+            posts, so nobody has to run <code>/bump log</code>. Leave it blank to rely on
+            the command alone.
+            <br /><strong>Text when bumped</strong> narrows that to messages containing
+            a phrase (e.g. <code>Bump done!</code>); blank means any message from the bot
+            counts.
+            <br /><strong>Text when refused</strong> is the safety catch — a phrase that
+            marks a <em>rejected</em> bump (e.g. <code>already bumped recently</code>).
+            Matching messages are ignored instead of resetting the timer. Set this
+            whenever the bot replies publicly on failure, otherwise a refusal looks
+            like a successful bump.
           </div>
         </div>
 
@@ -167,6 +182,19 @@ export function mount(container) {
             <input id="new-detector" name="detector_bot_id" type="text" inputmode="numeric"
                    placeholder="Optional" />
             <div class="field-hint">Optional, as described above.</div>
+          </div>
+          <div class="field">
+            <label for="new-pattern">Text when bumped</label>
+            <input id="new-pattern" name="detector_pattern" type="text" maxlength="200"
+                   placeholder="Bump done!" />
+            <div class="field-hint">Leave blank to count any message from that bot.</div>
+          </div>
+          <div class="field">
+            <label for="new-failure">Text when refused</label>
+            <input id="new-failure" name="failure_pattern" type="text" maxlength="200"
+                   placeholder="already bumped recently" />
+            <div class="field-hint">Messages containing this are ignored, so a rejected
+              bump can't reset the timer.</div>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary">Add Site</button>
@@ -245,7 +273,8 @@ export function mount(container) {
             await apiPut(`/api/config/bump-tracker/sites/${encodeURIComponent(site)}`, {
               cooldown_hours: hours,
               detector_bot_id: detector || null,
-              detector_pattern: "",
+              detector_pattern: row.querySelector("[data-pattern]").value.trim(),
+              failure_pattern: row.querySelector("[data-failure]").value.trim(),
             });
             showStatus(rowStatus, true);
           } catch (err) {
@@ -313,7 +342,8 @@ export function mount(container) {
           await apiPut(`/api/config/bump-tracker/sites/${encodeURIComponent(name)}`, {
             cooldown_hours: hours,
             detector_bot_id: detector || null,
-            detector_pattern: "",
+            detector_pattern: addForm.querySelector('[name="detector_pattern"]').value.trim(),
+            failure_pattern: addForm.querySelector('[name="failure_pattern"]').value.trim(),
           });
           addForm.reset();
           await refresh();

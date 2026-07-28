@@ -818,6 +818,7 @@ def _bump_tracker_section(conn, guild_id: int) -> dict:
         r["site_name"]: {
             "detector_bot_id": str(r["detector_bot_id"]) if r["detector_bot_id"] else None,
             "detector_pattern": r["detector_pattern"] or "",
+            "failure_pattern": r["failure_pattern"] or "",
         }
         for r in site_rows
     }
@@ -843,6 +844,7 @@ def _bump_tracker_section(conn, guild_id: int) -> dict:
             "notified": bool(r["notified"]) if r["notified"] is not None else False,
             "detector_bot_id": det.get("detector_bot_id"),
             "detector_pattern": det.get("detector_pattern", ""),
+            "failure_pattern": det.get("failure_pattern", ""),
         })
     if cfg is None:
         return {"configured": False, "enabled": False, "channel_id": None, "role_id": None, "sites": sites}
@@ -3227,15 +3229,20 @@ class BumpTrackerConfigUpdate(BaseModel):
     enabled: bool | None = None
 
 
+# A pattern of None means "not supplied, leave it alone"; "" clears it. A stale
+# dashboard tab still running the pre-137 JS omits failure_pattern entirely, and
+# must not wipe the veto that migration seeded.
 class BumpTrackerSiteUpdate(BaseModel):
     cooldown_hours: float
     detector_bot_id: str | None = None
-    detector_pattern: str = ""
+    detector_pattern: str | None = Field(default=None, max_length=200)
+    failure_pattern: str | None = Field(default=None, max_length=200)
 
 
 class BumpTrackerDetectorUpdate(BaseModel):
     detector_bot_id: str
-    detector_pattern: str = ""
+    detector_pattern: str = Field(default="", max_length=200)
+    failure_pattern: str | None = Field(default=None, max_length=200)
 
 
 @router.put("/config/bump-tracker")
@@ -3280,6 +3287,7 @@ async def update_bump_tracker_site(
                 int(body.cooldown_hours * 3600),
                 detector_bot_id=int(body.detector_bot_id) if body.detector_bot_id else 0,
                 detector_pattern=body.detector_pattern,
+                failure_pattern=body.failure_pattern,
             )
         return {"ok": True}
 
@@ -3299,7 +3307,12 @@ async def update_bump_tracker_detector(
     def _q():
         with open_db(ctx.db_path) as conn:
             updated = _bump_set_detector(
-                conn, guild_id, site_name, int(body.detector_bot_id), body.detector_pattern
+                conn,
+                guild_id,
+                site_name,
+                int(body.detector_bot_id),
+                body.detector_pattern,
+                body.failure_pattern,
             )
             if not updated:
                 raise HTTPException(status_code=404, detail="Site not found")

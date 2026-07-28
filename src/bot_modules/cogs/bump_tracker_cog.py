@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.bump_tracker.detector_logic import match_site, message_text
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 
@@ -88,19 +89,38 @@ def _add_site(
     cooldown_seconds: int,
     *,
     detector_bot_id: int = 0,
-    detector_pattern: str = "",
+    detector_pattern: str | None = None,
+    failure_pattern: str | None = None,
 ) -> None:
+    """Insert a site, or update the fields the caller actually supplied.
+
+    A pattern of `None` means "not supplied" and leaves any existing value
+    alone; `""` explicitly clears it. Callers that omit a pattern must not
+    silently wipe one — an erased `failure_pattern` turns a listing bot's
+    refusal back into a recorded bump.
+    """
     conn.execute(
         """
         INSERT INTO bump_tracker_sites
-            (guild_id, site_name, cooldown_seconds, detector_bot_id, detector_pattern)
-        VALUES (?, ?, ?, ?, ?)
+            (guild_id, site_name, cooldown_seconds, detector_bot_id,
+             detector_pattern, failure_pattern)
+        VALUES (?, ?, ?, ?, COALESCE(?, ''), COALESCE(?, ''))
         ON CONFLICT (guild_id, site_name) DO UPDATE SET
             cooldown_seconds = excluded.cooldown_seconds,
             detector_bot_id  = excluded.detector_bot_id,
-            detector_pattern = excluded.detector_pattern
+            detector_pattern = COALESCE(?, bump_tracker_sites.detector_pattern),
+            failure_pattern  = COALESCE(?, bump_tracker_sites.failure_pattern)
         """,
-        (guild_id, site_name, cooldown_seconds, detector_bot_id, detector_pattern),
+        (
+            guild_id,
+            site_name,
+            cooldown_seconds,
+            detector_bot_id,
+            detector_pattern,
+            failure_pattern,
+            detector_pattern,
+            failure_pattern,
+        ),
     )
 
 
@@ -110,14 +130,18 @@ def _set_detector(
     site_name: str,
     detector_bot_id: int,
     detector_pattern: str,
+    failure_pattern: str | None = None,
 ) -> bool:
+    """Repoint a site's detector. `failure_pattern=None` keeps the current veto."""
     cur = conn.execute(
         """
         UPDATE bump_tracker_sites
-        SET detector_bot_id = ?, detector_pattern = ?
+        SET detector_bot_id  = ?,
+            detector_pattern = ?,
+            failure_pattern  = COALESCE(?, failure_pattern)
         WHERE guild_id = ? AND site_name = ?
         """,
-        (detector_bot_id, detector_pattern, guild_id, site_name),
+        (detector_bot_id, detector_pattern, failure_pattern, guild_id, site_name),
     )
     return cur.rowcount > 0
 
@@ -137,7 +161,8 @@ def _remove_site(conn: sqlite3.Connection, guild_id: int, site_name: str) -> boo
 def _list_sites(conn: sqlite3.Connection, guild_id: int) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT site_name, cooldown_seconds, detector_bot_id, detector_pattern
+        SELECT site_name, cooldown_seconds, detector_bot_id, detector_pattern,
+               failure_pattern
         FROM bump_tracker_sites WHERE guild_id = ? ORDER BY site_name
         """,
         (guild_id,),
@@ -150,7 +175,7 @@ def _get_sites_with_detectors(
     """Return sites that have a detector bot configured."""
     return conn.execute(
         """
-        SELECT site_name, detector_bot_id, detector_pattern
+        SELECT site_name, detector_bot_id, detector_pattern, failure_pattern
         FROM bump_tracker_sites
         WHERE guild_id = ? AND detector_bot_id != 0
         """,
@@ -548,22 +573,28 @@ class BumpTrackerCog(commands.Cog):
         if cfg is None or not detector_sites:
             return
 
-        matched_site: str | None = None
-        for site in detector_sites:
-            if message.author.id != site["detector_bot_id"]:
-                continue
-            pattern = site["detector_pattern"]
-            if pattern:
-                content = message.content or ""
-                embed_text = " ".join(
-                    e.description or "" for e in message.embeds if e.description
-                )
-                if pattern.lower() not in content.lower() and pattern.lower() not in embed_text.lower():
-                    continue
-            matched_site = site["site_name"]
-            break
+        # Narrow by author before reading the message: extracting embed and
+        # Components V2 text walks a whole component tree, and most bot traffic
+        # in the channel is from bots no site tracks.
+        author_sites = [
+            dict(s) for s in detector_sites if s["detector_bot_id"] == message.author.id
+        ]
+        if not author_sites:
+            return
 
-        if matched_site is None:
+        matched = match_site(author_sites, message.author.id, message_text(message))
+        if matched is None:
+            return
+
+        matched_site, outcome = matched
+
+        # A refused bump ("already bumped recently") must not reset the timer —
+        # the cooldown keeps running off the last real bump.
+        if outcome == "failure":
+            log.info(
+                "bump_tracker: ignored refused bump for %r in guild %d",
+                matched_site, guild_id,
+            )
             return
 
         # Attribution: a listing bot's success message is its slash command's
@@ -574,7 +605,7 @@ class BumpTrackerCog(commands.Cog):
 
         def _do_log():
             with open_db(self.ctx.db_path) as conn:
-                _log_bump(conn, guild_id, matched_site, bumper_id)  # type: ignore[arg-type]
+                _log_bump(conn, guild_id, matched_site, bumper_id)
                 logs = _get_all_logs(conn, guild_id)
                 return logs
 
