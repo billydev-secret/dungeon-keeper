@@ -41,7 +41,7 @@ Default canvas **900×500**.
 3. **Avatar** (non-`none` modes) — the *unblurred* avatar is drawn on the left
    as a circle or rounded-square with a drop shadow and a double ring
    (cream outer + theme-gold inner). `author_name` is drawn as a small
-   attribution below it.
+   attribution below the quote (see **Attribution placement**).
 4. **Rounded-corner alpha**, then the **border** is composited last.
 
 **`pfp_shape`:**
@@ -53,6 +53,104 @@ Default canvas **900×500**.
   **left-aligned** in the right-hand column — only banner/announcement bodies are
   centered. Body lines are clamped left of the floral corner so centering never
   runs text under the flowers.)
+
+### Attribution placement
+
+In avatar modes the attribution (`— Name`) **left-aligns to the quote column** and
+hangs one `gap` (~0.85 × attribution font size) below the quote's last line. The
+quote and its attribution are then **centred as a single group**, so neither the
+top nor the bottom of the card carries a dead band.
+
+It is *not* centred under the avatar. That was the earlier behaviour, and because
+it centred on the disc (`pfp_cx − attr_w / 2`), any name wider than the disc drove
+the anchor negative, collapsed it onto the left-margin floor, and ran the first
+characters across the avatar's lower-left arc — while leaving the attribution
+aligned to nothing. Anchoring to the text column fixes both at once: the column
+already begins clear of the avatar's drawn footprint (double ring + drop shadow,
+not the bare radius), so **no name length can reach back into the avatar**.
+
+A name too wide for the column is **shrunk** to the largest size that fits (floor
+≈ half the base attribution size) and only then **truncated with an ellipsis**, so
+it never runs past the column's right edge.
+
+Placement is factored into pure helpers so the geometry is unit-testable without
+pixel-peeping a blurred card: `attribution_y()`, `attribution_block_h()`, and
+`fit_attribution_text()`. Both layout paths share them — the bundled-border path
+and the custom-frame (`mask_fit`) path, where a frame opening's bottom edge also
+clamps the line upward. **y resolves before x**, because the column's horizontal
+bounds are read at whatever row the line finally lands on; reading them at the
+pre-clamp row would pick the wrong bound whenever the clamp moved the line, and in
+an opening that narrows toward the bottom that means drawing over the frame.
+
+Attribution height comes from the font's **line box** (`ascent + descent`), never a
+string's ink bbox — an ink bbox varies with which letters the name contains ("Bob"
+20px, "gg" 21px, a parenthesised name 30px), which would make the reserve and the
+centring jitter per user. The line box is also identical whether or not pilmoji is
+installed, so geometry doesn't fork on an optional dependency. (Width *does* go
+through pilmoji when available, so an emoji contributes its drawn width rather than
+the tofu box it replaces.) The custom-frame path reserves this same measured block
+instead of a `1.7 ×` font-size estimate; the two are close at the default size
+(49 vs 45px), so that change is about having one source of truth, not about size.
+
+### Vertical bounding and the floral corner
+
+**All three** layout paths — avatar, custom-frame, and banner — bound the text to a
+vertical band and **cap the line count** to what fits, ellipsizing the last line.
+The avatar path previously had no such bound: past ~9 lines (~150 chars, well
+inside `QUOTE_MAX_CHARS`) the quote ran off both card edges, and the attribution —
+which follows the quote rather than sitting at a fixed y — went off the bottom with
+it and vanished from the PNG. The banner path had the same gap (~130 chars
+overflowed a 900×500 card; `QUOTE_MAX_CHARS` put the tail at y=725 on a 500px
+canvas), which mattered more because it is the layout every non-`/quote` caller
+uses.
+
+Ellipsizing happens **after the block's final position is known**, and the closing
+`…”` is re-fitted to the last line's own row via `ellipsize_line()`. Appending it
+straight onto the wrapped line is wrong twice over: those two glyphs were never
+counted by the wrapper, and capping shifts the block downward so the last line
+lands on a *narrower* row than the one it was wrapped against. Since the capped
+line is always the block's bottom line — exactly where the floral corner or a
+narrowing frame opening leaves least room — an unfitted ellipsis was drawn over the
+artwork the layout exists to avoid (measured at 76px past the bound).
+
+The banner **header** is width-fitted with the same `fit_attribution_text()` used
+for the attribution: it was drawn from a bare centre offset with no bound, so a
+39-char display name measured 1350px on a 900px card and was drawn from x=−225. For
+the four callers that render in banner mode this header is the only place the
+author's name appears, so an overflowing header loses the attribution outright.
+
+On the slim border, the text column's nominal right edge (738 at 900w) runs into
+the flower cluster (pasted from x≈586, y≈253), so a low, long line was drawn under
+the petals. The usable right edge is therefore bounded **per row** by
+`slim_flower_left_edge()` — the cluster's leftmost solidly-drawn pixel per row,
+read from its alpha and cached per (frame, mtime, size). Reading real alpha rather
+than the cluster's bounding box matters for typography: the cluster's upper rows
+are a few sparse buds, and reserving its full width for them cost a wrapped line at
+*every* quote length. `flower_limit()` takes the tightest bound across the rows a
+line actually covers, since a line is a band and petals dipping into its lower rows
+must bound it too. `slim_flower_rect()` is shared with `_composite_slim_border()`
+so the layout's idea of where the flowers sit can't drift from where they're drawn.
+
+The **banner** (`pfp_shape="none"`) layout uses the same per-row edge. It used to
+carve the corner with a hand-tuned linear ramp (0.95w tapering to 0.58w) that
+over-reserved by up to 233px on a 900×500 card, so each line wrapped shorter than
+the last and short words were orphaned onto their own line. Frames *without* a
+separable cluster (anything not `slim_frame`) keep that ramp: it's a crude but safe
+stand-in for border art this can't measure, and dropping it could put text over
+their artwork.
+
+The **default frame is resolved at the top of `render_quote_card()`**, not just
+before compositing. Filling it in late meant a caller passing no `border_style` —
+which is every caller except `/quote` — laid its text out as if the card were bare
+and then had the poppy frame drawn over it, putting the last lines back under the
+petals.
+
+**Heights that feed layout always come from a font's line box, never a string's ink
+bbox.** This applies to the attribution (above) *and* the banner header: the
+header's height sets where the body starts, and the body's usable width narrows
+toward the floral corner, so an ink-bbox header made the **quote itself re-wrap
+based on which glyphs the author's name contained** — a name with parentheses
+pushed the body down a line.
 
 ### `render_quote(...)` — legacy solid-bg card
 
