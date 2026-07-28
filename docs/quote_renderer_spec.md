@@ -94,11 +94,30 @@ instead of a `1.7 ×` font-size estimate; the two are close at the default size
 
 ### Vertical bounding and the floral corner
 
-Both paths bound the text to a vertical band and **cap the line count** to what
-fits, ellipsizing the last line. The bundled-border path previously had no such
-bound: past ~9 lines (~150 chars, well inside `QUOTE_MAX_CHARS`) the quote ran off
-both card edges, and the attribution — which follows the quote rather than sitting
-at a fixed y — went off the bottom with it and vanished from the PNG.
+**All three** layout paths — avatar, custom-frame, and banner — bound the text to a
+vertical band and **cap the line count** to what fits, ellipsizing the last line.
+The avatar path previously had no such bound: past ~9 lines (~150 chars, well
+inside `QUOTE_MAX_CHARS`) the quote ran off both card edges, and the attribution —
+which follows the quote rather than sitting at a fixed y — went off the bottom with
+it and vanished from the PNG. The banner path had the same gap (~130 chars
+overflowed a 900×500 card; `QUOTE_MAX_CHARS` put the tail at y=725 on a 500px
+canvas), which mattered more because it is the layout every non-`/quote` caller
+uses.
+
+Ellipsizing happens **after the block's final position is known**, and the closing
+`…”` is re-fitted to the last line's own row via `ellipsize_line()`. Appending it
+straight onto the wrapped line is wrong twice over: those two glyphs were never
+counted by the wrapper, and capping shifts the block downward so the last line
+lands on a *narrower* row than the one it was wrapped against. Since the capped
+line is always the block's bottom line — exactly where the floral corner or a
+narrowing frame opening leaves least room — an unfitted ellipsis was drawn over the
+artwork the layout exists to avoid (measured at 76px past the bound).
+
+The banner **header** is width-fitted with the same `fit_attribution_text()` used
+for the attribution: it was drawn from a bare centre offset with no bound, so a
+39-char display name measured 1350px on a 900px card and was drawn from x=−225. For
+the four callers that render in banner mode this header is the only place the
+author's name appears, so an overflowing header loses the attribution outright.
 
 On the slim border, the text column's nominal right edge (738 at 900w) runs into
 the flower cluster (pasted from x≈586, y≈253), so a low, long line was drawn under

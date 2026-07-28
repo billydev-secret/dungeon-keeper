@@ -725,6 +725,23 @@ def _wrap_text(text: str, font, max_width: int, draw, measure=None) -> list[str]
     return result or [""]
 
 
+def ellipsize_line(line: str, avail_w: int, measure) -> str:
+    """Close a truncated quote with `…”`, shrunk until it fits ``avail_w``.
+
+    Appending the ellipsis *after* wrapping adds two glyphs the wrapper never
+    accounted for, and the capped line is always the block's bottom line — exactly
+    the row where the floral corner (or a narrowing frame opening) leaves least
+    room. Without re-fitting here, the closing text is drawn over the artwork the
+    surrounding layout exists to avoid.
+
+    ``measure(text) -> width``.
+    """
+    base = line.rstrip("” ").rstrip()
+    while base and measure(f"{base}…”") > avail_w:
+        base = base[:-1].rstrip()
+    return f"{base}…”"
+
+
 def attribution_y(
     *, quote_bot: int, attr_h: int, gap: int, limit_bot: "int | None" = None
 ) -> int:
@@ -1055,6 +1072,30 @@ def render_quote_card(
     header_size = max(body_size + 10, int(body_size * 1.6))
     header_font = _load_font(header_size, header_font_style)
     _header_stroke = max(1, header_size // 40)
+    if _header_text:
+        # Fit the header to the card the same way the attribution is fitted to its
+        # column. It was drawn from a bare centre offset with no bound, so a long
+        # display name ran clean off both edges (a 39-char name measured 1350px on a
+        # 900px card, drawn from x=-225). For four of the callers this header is the
+        # *only* place the name appears, so losing its ends loses the attribution.
+        def _hdr_measure(t: str, sz: int) -> int:
+            _hf = _load_font(sz, header_font_style)
+            _w = (
+                _emoji_getsize(t, font=_hf)[0]  # type: ignore[misc]
+                if _HAS_PILMOJI
+                else int(draw.textbbox((0, 0), t, font=_hf)[2]
+                         - draw.textbbox((0, 0), t, font=_hf)[0])
+            )
+            return _w + 2 * max(1, sz // 40)  # stroke widens the drawn glyphs
+
+        _hdr_avail = width - 2 * int(width * 0.06)
+        if _hdr_measure(_header_text, header_size) > _hdr_avail:
+            header_size, _header_text = fit_attribution_text(
+                _header_text, _hdr_avail, _hdr_measure,
+                list(range(header_size, max(18, body_size // 2) - 1, -1)),
+            )
+            header_font = _load_font(header_size, header_font_style)
+            _header_stroke = max(1, header_size // 40)
     _header_h = _header_gap = 0
     if _header_text:
         # Line box (ascent + descent), not the string's ink bbox. The header's
@@ -1165,12 +1206,19 @@ def render_quote_card(
 
         # Ellipsize if even the smallest size overflows the opening.
         _max_lines = max(1, _band_h // (line_h + line_gap))
-        if len(lines) > _max_lines:
+        _mcapped = len(lines) > _max_lines
+        if _mcapped:
             lines = lines[:_max_lines]
-            lines[-1] = lines[-1].rstrip("” ").rstrip() + "…”"
 
         _blk = len(lines) * (line_h + line_gap)
         text_y_start = _band_top + max(0, (_band_h - _blk) // 2)
+        if _mcapped:
+            # Fit the closing `…”` to the last line's own row — in an opening that
+            # narrows toward the bottom, that row is the tightest of the block.
+            _mlast_y = text_y_start + (len(lines) - 1) * (line_h + line_gap)
+            lines[-1] = ellipsize_line(
+                lines[-1], _m_right(_mlast_y) - _m_left(_mlast_y), _full_measure
+            )
         _content_top = op.top + max(6, int(height * 0.03))
 
         def _line_x(s: str, y: int) -> int:
@@ -1255,6 +1303,20 @@ def render_quote_card(
         lines = _flow(text_y_start)
         text_y_start, _content_top = _layout(lines)
 
+        # Bound the banner the same way the avatar path is bounded. Without this it
+        # grew off the bottom of the card: ~130 chars overflowed a 900x500 card and
+        # QUOTE_MAX_CHARS put the tail at y=725 on a 500px canvas, invisible. This
+        # is the layout every non-quote caller uses, so it was the common case.
+        _bvpad = max(6, int(height * 0.03))
+        _bmax_lines = max(
+            1, (height - _bvpad - text_y_start + line_gap) // (line_h + line_gap)
+        )
+        if len(lines) > _bmax_lines:
+            lines = lines[:_bmax_lines]
+            text_y_start, _content_top = _layout(lines)
+            _blast_y = text_y_start + (len(lines) - 1) * (line_h + line_gap)
+            lines[-1] = ellipsize_line(lines[-1], _avail_w(_blast_y), _full_measure)
+
         def _line_x(s: str, y: int) -> int:
             # Centered: announcement banners read centered. Start from the true card
             # center, then shove left only if the line would otherwise reach into
@@ -1332,14 +1394,23 @@ def render_quote_card(
         lines = _flow_p(_pband_top)
         _blk_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
         lines = _flow_p(_pband_top + max(0, (_pband_h - _blk_h) // 2))
-        if len(lines) > _pmax_lines:
+        _capped = len(lines) > _pmax_lines
+        if _capped:
             lines = lines[:_pmax_lines]
-            lines[-1] = lines[-1].rstrip("” ").rstrip() + "…”"
         # Centre the quote AND its attribution as one group within that band.
         # Centring the quote alone (what this did before) pushed the pair
         # top-heavy: the name hung below the already-centred block, leaving a dead
         # band along the bottom.
         _blk_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
+        if _capped:
+            # Ellipsize only now that the block's final position is known: the
+            # closing `…”` has to be fitted against the *last line's own row*, which
+            # is the narrowest one under the floral corner.
+            _last_y = (
+                _pband_top + max(0, (_pband_h - _blk_h) // 2)
+                + (len(lines) - 1) * (line_h + line_gap)
+            )
+            lines[-1] = ellipsize_line(lines[-1], _avail_p(_last_y), _full_measure)
         _content_top = _pband_top + max(0, (_pband_h - _blk_h) // 2)
         text_y_start = _content_top
 

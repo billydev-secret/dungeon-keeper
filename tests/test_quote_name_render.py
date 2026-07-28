@@ -161,8 +161,12 @@ LONG_EMOJI_NAME = "Chi-Gal \U0001fa75 (#FUCK ICE)"
 QUOTE = "You have access to everything, I gave it to you personally"
 
 
-def _attr_xy(monkeypatch, **kwargs) -> tuple[int, int]:
-    """Render a card and capture where the attribution was actually drawn.
+def _attr_drawn(monkeypatch, **kwargs):
+    """Render a card and capture the attribution exactly as drawn.
+
+    Returns ``(x, y, text, font)`` — the text and font matter because a long name
+    is shrunk and truncated to fit, so re-measuring at the nominal size would check
+    a string the renderer never drew.
 
     Spying on the draw call reads the real layout's geometry without pixel-peeping
     a blurred, shadowed card. With an avatar present the attribution is the only
@@ -170,11 +174,12 @@ def _attr_xy(monkeypatch, **kwargs) -> tuple[int, int]:
     """
     from bot_modules.services import quote_renderer as qr
 
-    seen: list[tuple[int, int]] = []
+    seen: list[tuple] = []
     real = qr._draw_text_layers
 
     def _spy(bg, draw, layers, text, **kw):
-        seen.append(layers[-1][0])  # the top (unshadowed) layer's anchor
+        x, y = layers[-1][0]  # the top (unshadowed) layer's anchor
+        seen.append((x, y, text, kw.get("font")))
         return real(bg, draw, layers, text, **kw)
 
     monkeypatch.setattr(qr, "_draw_text_layers", _spy)
@@ -187,6 +192,11 @@ def _attr_xy(monkeypatch, **kwargs) -> tuple[int, int]:
     )
     assert len(seen) == 1, f"expected one attribution draw, got {len(seen)}"
     return seen[0]
+
+
+def _attr_xy(monkeypatch, **kwargs) -> tuple[int, int]:
+    x, y, _, _ = _attr_drawn(monkeypatch, **kwargs)
+    return x, y
 
 
 def test_attribution_aligns_to_the_quote_column(monkeypatch) -> None:
@@ -324,19 +334,20 @@ def test_attribution_keeps_clear_of_the_floral_corner(monkeypatch) -> None:
     """The name must not be drawn under the slim border's flower cluster."""
     from bot_modules.services import quote_renderer as qr
 
-    fl_x, fl_y = qr.slim_flower_bound(900, 500)
-    attr_size = max(19, 900 // 33)
-    attr_h = sum(qr._load_font(attr_size).getmetrics())
+    border = qr.BORDERS["golden_poppy"]
+    if not border.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    edge = qr.slim_flower_left_edge(border, 900, 500)
+    assert edge is not None
 
     # A mid-length quote pushes the byline down into the flowers' rows.
     for n in (100, 130, 150, 200):
-        ax, ay = _attr_xy(monkeypatch, text=LONG_QUOTE[:n])
-        if ay + attr_h <= fl_y:
-            continue  # above the cluster entirely
-        # Re-measure what was actually drawn (it may have been shrunk to fit).
-        width = qr._emoji_getsize(f"— {LONG_EMOJI_NAME}", font=qr._load_font(attr_size))[0]
-        assert ax + min(width, fl_x - ax) <= fl_x, f"name reaches the flowers at {n} chars"
-        assert ax < fl_x, "name should start left of the cluster"
+        ax, ay, text, font = _attr_drawn(monkeypatch, text=LONG_QUOTE[:n])
+        right = ax + qr._emoji_getsize(text, font=font)[0]
+        limit = qr.flower_limit(edge, ay, sum(font.getmetrics()))
+        assert right <= limit, (
+            f"{n} chars: name drawn to x={right}, past the flower edge at {limit}"
+        )
 
 
 def test_flower_bound_matches_where_the_cluster_is_pasted() -> None:
@@ -596,3 +607,116 @@ def test_banner_body_wrap_does_not_depend_on_the_name(monkeypatch) -> None:
         for name in ("Chi-Gal", LONG_EMOJI_NAME, "gggg", "AAAA")
     }
     assert len(set(wraps.values())) == 1, f"wrap varies with the name: {wraps}"
+
+
+# --- Ellipsize / vertical bounds (round 2 of review) -------------------------
+# The cap appends "…”" AFTER wrapping, on the block's bottom line — exactly the row
+# where the floral corner leaves least room. Nothing re-checked that row, so the
+# closing text landed under the petals (worst case 84px past the bound).
+# A capped quote whose last line lands wide. Capping shifts the block down, so the
+# final row is narrower than the one the line was wrapped against — the ellipsis is
+# then appended on top of that. Found by fuzzing; pinned here because the failure
+# needs a last line that is both truncated and wide (short-word text hides it).
+WIDE_WORDS = (
+    "fantastic marvellous fantastic zz wonderful fantastic tu marvellous "
+    "marvellous zz tu fantastic marvellous vwxyz zz marvellous wonderful tu tu zz "
+    "brilliant vwxyz fantastic marvellous fantastic fantastic tu tu brilliant tu "
+    "vwxyz zz fantastic extraor"
+)
+
+
+def test_ellipsized_last_line_respects_the_flower_bound(monkeypatch) -> None:
+    """The `…”` appended after wrapping must be re-fitted to its own row."""
+    from bot_modules.services import quote_renderer as qr
+
+    border = qr.BORDERS["golden_poppy"]
+    if not border.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    edge = qr.slim_flower_left_edge(border, 900, 500)
+    assert edge is not None
+    font = qr._load_font(max(32, 900 // 19))
+    line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
+
+    drawn: list[tuple[str, int, int]] = []
+    real = qr._render_line_mixed
+    monkeypatch.setattr(
+        qr, "_render_line_mixed",
+        lambda line, x, y, **kw: (drawn.append((line, x, y)), real(line, x, y, **kw))[1],
+    )
+    # Long words make the truncated line wide — short-word text hides this.
+    for n in (len(WIDE_WORDS), 200, qr.QUOTE_MAX_CHARS):
+        drawn.clear()
+        qr.render_quote_card(
+            WIDE_WORDS[:n], author_name="Chi-Gal", avatar_bytes=_avatar(),
+            theme=next(iter(THEMES.values())),
+        )
+        assert any(line.endswith("…”") for line in (d[0] for d in drawn)), (
+            f"expected an ellipsized line at {n} chars"
+        )
+        for line, x, y in drawn:
+            right = x + qr._emoji_getsize(line, font=font)[0]
+            assert right <= qr.flower_limit(edge, y, line_h), (
+                f"{n} chars: {line!r} drawn to x={right}, past the flowers"
+            )
+
+
+def test_ellipsize_line_fits_the_width_it_is_given() -> None:
+    """Unit: the closing glyphs are part of what must fit, not an afterthought."""
+    from bot_modules.services.quote_renderer import ellipsize_line
+
+    def measure(t: str) -> int:
+        return len(t) * 10
+
+    # Trailing quote/space are stripped before the ellipsis is added.
+    assert ellipsize_line('some text” ', 200, measure) == "some text…”"
+    # Too wide → characters come off until it fits, ellipsis included.
+    out = ellipsize_line("abcdefghijklmnop", 80, measure)
+    assert out.endswith("…”")
+    assert measure(out) <= 80
+    # Degenerate width still terminates rather than looping.
+    assert ellipsize_line("abc", 1, measure) == "…”"
+
+
+def test_banner_text_stays_on_the_card(monkeypatch) -> None:
+    """Regression: the banner had no vertical bound and grew off the bottom."""
+    from bot_modules.services import quote_renderer as qr
+
+    font = qr._load_font(max(32, 900 // 19))
+    line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
+    for n in (100, 130, 200, qr.QUOTE_MAX_CHARS):
+        drawn = _banner_lines(monkeypatch, LONG_QUOTE[:n])
+        bottom = max(y for _, _, y in drawn) + line_h
+        assert bottom <= 500, f"{n} chars: banner text reaches y={bottom} on a 500px card"
+
+
+def test_banner_header_is_fitted_to_the_card(monkeypatch) -> None:
+    """A long display name must not run off the edges of the banner header.
+
+    For the four callers that render in banner mode this header is the only place
+    the name appears, so an overflowing header loses the attribution entirely.
+    """
+    from bot_modules.services import quote_renderer as qr
+
+    real = qr._draw_text_layers  # capture once: re-reading it inside the loop would
+    seen: list[tuple] = []       # wrap the already-patched function and recurse
+
+    def _spy(bg, dr, ly, t, **kw):
+        seen.append((ly[-1][0], t, kw.get("font"), kw.get("stroke_width", 0)))
+        return real(bg, dr, ly, t, **kw)
+
+    monkeypatch.setattr(qr, "_draw_text_layers", _spy)
+    for name in (
+        "Bartholomew Q. Fortescue-Wellington III",
+        LONG_EMOJI_NAME,
+        "W" * 60,
+        "Chi-Gal",
+    ):
+        seen.clear()
+        qr.render_quote_card(
+            "Short.", author_name=name, avatar_bytes=_avatar(),
+            theme=next(iter(THEMES.values())), pfp_shape="none",
+        )
+        (hx, _), text, font, stroke = seen[0]
+        right = hx + qr._emoji_getsize(text, font=font)[0] + 2 * stroke
+        assert hx >= 0, f"{name[:20]!r}: header starts off-card at x={hx}"
+        assert right <= 900, f"{name[:20]!r}: header ends off-card at x={right}"
