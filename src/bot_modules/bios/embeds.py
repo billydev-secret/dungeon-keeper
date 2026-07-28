@@ -18,6 +18,7 @@ from bot_modules.bios.logic import (
     QuestionSnapshot,
     cap_field_values_for_embed,
     cap_question_answers_for_embed,
+    question_field_name,
     shrink_to_embed_total,
 )
 
@@ -75,7 +76,7 @@ def build_bio_embed(payload: BioRenderPayload) -> discord.Embed:
         if snap.skipped or not snap.answer:
             continue
         embed.add_field(
-            name=f"› {snap.question_text}",
+            name=question_field_name(snap.question_text),
             value=snap.answer,
             inline=False,
         )

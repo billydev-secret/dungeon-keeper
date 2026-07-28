@@ -8,8 +8,13 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from bot_modules.bios.embeds import build_bio_embed
 from bot_modules.bios.logic import (
+    idle_timeout_seconds,
+    input_timeout_seconds,
+    question_field_name,
     BioField,
     BioQuestion,
     BioRenderPayload,
@@ -377,3 +382,67 @@ def test_build_bio_embed_question_uses_arrow_prefix():
     embed = build_bio_embed(payload)
     assert embed.fields[0].name == "› Favorite tree?"
     assert embed.fields[0].inline is False
+
+
+# ── Discord's 256-char cap on embed field names and titles ────────────
+#
+# `bio_questions.prompt` accepts 512 chars through the dashboard API, and the
+# rendered name is "› " + the prompt. Overflowing the cap makes Discord reject
+# the whole embed with a 400, which the wizard turns into a silent
+# `cancel("error")` — the member's channel vanishes with nothing saved and no
+# message they'd understand.
+
+_LONG_PROMPT = "Q" * 512
+
+
+def test_question_field_name_fits_after_the_arrow_prefix():
+    payload = BioRenderPayload(
+        display_name="Iris",
+        avatar_url="",
+        headline_value="Iris",
+        fields=(),
+        questions=(
+            QuestionSnapshot(question_text=_LONG_PROMPT, answer="oak", skipped=False),
+        ),
+        embed_color=0xC8763E,
+        created_at_iso="",
+    )
+    embed = build_bio_embed(payload)
+    name = embed.fields[0].name
+    assert name.startswith("› ")
+    assert len(name) <= 256, f"embed field name is {len(name)} chars"
+
+
+def test_cap_question_answers_leaves_room_for_the_prefix():
+    [capped] = cap_question_answers_for_embed(
+        [QuestionSnapshot(question_text=_LONG_PROMPT, answer="a", skipped=False)]
+    )
+    assert len(f"› {capped.question_text}") <= 256
+
+
+def test_question_field_name_helper_caps_and_preserves_short_text():
+    assert question_field_name("Favorite tree?") == "› Favorite tree?"
+    assert len(question_field_name(_LONG_PROMPT)) <= 256
+
+
+# ── Step timeouts must outlive the idle watchdog ──────────────────────
+#
+# The views used to hardcode 900s while `bios_wizard_timeout` is configurable
+# up to 120 minutes. Past 15 minutes every button returned "This interaction
+# failed" while the watchdog slept on, so a member could be stuck with no way
+# forward and no explanation. Whatever the configured window, the watchdog has
+# to fire first — it is the only path that tells the member what happened.
+
+
+@pytest.mark.parametrize("minutes", [1, 5, 15, 30, 60, 120])
+def test_input_windows_outlive_the_idle_watchdog(minutes):
+    idle = idle_timeout_seconds(minutes)
+    assert idle == minutes * 60
+    assert input_timeout_seconds(minutes) > idle
+
+
+def test_input_window_tracks_the_configured_timeout():
+    """The bug: a fixed window that ignores config. 120 minutes configured
+    must not leave buttons dying at 15."""
+    assert input_timeout_seconds(120) > 120 * 60
+    assert input_timeout_seconds(120) > input_timeout_seconds(15)

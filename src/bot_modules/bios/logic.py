@@ -13,6 +13,51 @@ from typing import Literal
 
 FieldType = Literal["short", "paragraph", "choice"]
 
+# ── Discord hard limits the renderers have to respect ────────────────
+
+#: Discord's cap on an embed field name and on an embed title.
+EMBED_NAME_LIMIT = 256
+
+#: Rendered before every question, in the posted bio and in the wizard's own
+#: prompt. Defined once because the budget below depends on its length — the
+#: two drifted apart before, producing 258-char names that Discord rejects.
+QUESTION_NAME_PREFIX = "› "
+
+#: How much question text can survive once the prefix is added.
+QUESTION_TEXT_LIMIT = EMBED_NAME_LIMIT - len(QUESTION_NAME_PREFIX)
+
+
+def question_field_name(question_text: str) -> str:
+    """The embed name/title for a question, guaranteed to fit Discord's cap.
+
+    ``bio_questions.prompt`` accepts 512 characters through the dashboard, so
+    this is not theoretical: an over-long name makes Discord reject the entire
+    embed with a 400, which the wizard can only turn into a silent teardown.
+    """
+    return QUESTION_NAME_PREFIX + truncate(question_text, QUESTION_TEXT_LIMIT)
+
+
+# ── Session timing ───────────────────────────────────────────────────
+
+#: How long the member's inputs stay live *past* the idle watchdog's window.
+#: Every way of answering a step — buttons, select menus, and the message
+#: listener — has to outlast the watchdog, so that a member who runs out of
+#: time gets told the session ended instead of finding controls that silently
+#: do nothing. The step views used to hardcode 900s regardless of the
+#: configured timeout, so at any setting above 15 minutes the controls died
+#: first and the wizard sat there until the watchdog eventually woke.
+INPUT_GRACE_SECONDS = 30
+
+
+def idle_timeout_seconds(wizard_timeout_minutes: int) -> float:
+    """When the watchdog gives up on a member who has stopped responding."""
+    return wizard_timeout_minutes * 60
+
+
+def input_timeout_seconds(wizard_timeout_minutes: int) -> float:
+    """How long a step's controls accept input — always past the watchdog."""
+    return idle_timeout_seconds(wizard_timeout_minutes) + INPUT_GRACE_SECONDS
+
 
 @dataclass(frozen=True)
 class BioField:
@@ -140,10 +185,15 @@ def cap_field_values_for_embed(snapshots: list[FieldSnapshot]) -> list[FieldSnap
 def cap_question_answers_for_embed(
     snapshots: list[QuestionSnapshot],
 ) -> list[QuestionSnapshot]:
-    """Apply the 1024-char per-answer cap."""
+    """Apply the 1024-char per-answer cap.
+
+    Question text is capped to leave room for :data:`QUESTION_NAME_PREFIX`, so
+    the rendered name lands inside Discord's 256-char limit rather than two
+    characters past it.
+    """
     return [
         QuestionSnapshot(
-            question_text=truncate(s.question_text, 256),
+            question_text=truncate(s.question_text, QUESTION_TEXT_LIMIT),
             answer=truncate(s.answer, 1024),
             skipped=s.skipped,
         )
