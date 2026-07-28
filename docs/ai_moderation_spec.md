@@ -17,18 +17,15 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 | `/watch add user:<member>` | Slash | Mod | Subscribe yourself to that member's posts |
 | `/watch remove user:<member>` | Slash | Mod | Unsubscribe yourself |
 | `/watch list` | Slash | Mod | Show everyone you're currently watching |
-| `/rules-watch digest` | Slash | Mod | Post a summary of all unlabeled digest-tier events |
-| `/rules-watch stats` | Slash | Mod | Show event counts, false-positive rate, and signal firing rates |
-| `/rules-watch status` | Slash | Mod | Show whether the monitor is enabled and which alert channel is configured (no parameters) |
-| `/rules-watch label <event_id> <verdict> [corrected_rule]` | Slash | Mod | Manually label an event. `verdict` is free text: a leading "v" means confirmed violation, anything else is a false positive. `corrected_rule` optionally records the right rule number when the guard guessed wrong |
 | `Report Rule Violation` | Message context menu | Mod | Modal (optional rule number + note) that inserts a manual `immediate`-tier event for the message and pre-labels it a confirmed violation |
 | Rules Watch enable/disable + alert channel | Web | Admin | Toggle passive monitoring and set the immediate-alert channel (dashboard's Rules Watch config panel — replaced the retired `/rules-watch enable`/`disable`/`set-channel` commands) |
 | AI config (models / prompts / clear) | Web | Admin | Read or override the per-guild model and system prompt for each command |
 | AI prompt test | Web | Admin | Run the current prompt + model against arbitrary input |
 | Model status / source / reload | Web | Admin | Inspect or change the loaded model file |
 | Guild-wide message query | Web | Moderator | Free-form question against the local archive with optional filters |
-| Rules Watch alert queue | Web | Moderator | Review flagged events; Confirm / Dismiss with inline label buttons |
-| Rules Watch label stats | Web | Moderator | Label counts, false-positive rate, events by tier and rule |
+| Rules Watch alert queue | Web | Moderator | Review flagged events (including the unlabeled digest tier); Confirm / Dismiss with inline label buttons. Replaced the retired `/rules-watch digest` and `/rules-watch label` commands |
+| Rules Watch label stats | Web | Moderator | Label counts, false-positive rate, events by tier and rule. Replaced the retired `/rules-watch stats` command |
+| Rules Watch status | Web | Moderator | Whether monitoring is on and which alert channel is set, shown on the config panel — replaced the retired `/rules-watch status` command |
 
 ---
 
@@ -114,7 +111,7 @@ The floor for any flag is `priority_score = 1.0` regardless of down-weights — 
 | Tier | Condition | Action |
 |---|---|---|
 | `immediate` | priority_score ≥ 7 | Embed posted to the configured alert channel with Confirm / Dismiss buttons |
-| `digest` | priority_score 3–6.9 | Stored; surfaced by `/rules-watch digest` or the web queue |
+| `digest` | priority_score 3–6.9 | Stored; surfaced by the web queue |
 | `logged` | priority_score < 3 | Stored only; no notification |
 
 Every event is stored regardless of tier, so no information is lost.
@@ -123,9 +120,18 @@ Every event is stored regardless of tier, so no information is lost.
 For `immediate` and `digest` events with an identified target, a background task re-checks 30 minutes later whether the target has posted in that channel. Silence upgrades the `target_withdrew` flag. If the re-score escalates the tier to `immediate`, a brief follow-up note is posted to the alert channel.
 
 #### Label capture
-When a moderator clicks **✅ Confirmed violation** or **❌ False positive** on an alert embed, or runs `/rules-watch label`, or confirms/dismisses through the web dashboard:
+When a moderator clicks **✅ Confirmed violation** or **❌ False positive** on an alert embed, or confirms/dismisses through the web dashboard:
 - A row is written to `rules_labels` with the verdict, the labeling moderator's ID, and a timestamp.
-- Corrected rule numbers can be supplied via the web dashboard or `/rules-watch label`'s optional `corrected_rule` parameter.
+- Corrected rule numbers are captured by the **Correct rule** input beside the
+  review queue's label buttons, which posts `corrected_rule` alongside
+  `is_violation`. It is sent only with a confirmation: a dismissal has no correct
+  rule, so anything typed is dropped rather than written against `is_violation=0`.
+  Leaving it blank omits the field, so the column stays NULL rather than recording
+  an empty-string "correction". Re-labelling an event overwrites the previous
+  correction, and re-labelling it as a false positive clears it.
+  (This input replaced `/rules-watch label`'s `corrected_rule` parameter; the
+  command was removed 2026-07-28 and for one commit the capability was lost —
+  see `docs/plans/command-surface-audit.md`.)
 - The alert embed's buttons are disabled after labeling.
 
 The mod-only **Report Rule Violation** message context menu is the reverse path: instead of labeling an event the monitor raised, it *creates* one — a manual `immediate`-tier event for the reported message, pre-labeled as a confirmed violation, with an optional rule number and note captured in a modal. These are high-value positive training examples and the primary human-reporting capture path (see §12.4 of `rules_watch_cog.md`).
@@ -180,7 +186,6 @@ The `model` argument threaded through `chat()` remains ignored on both backends 
 | Dashboard guild-wide query, guild unavailable | "Guild not available" |
 | Dashboard prompt update, unknown key | "Unknown prompt key: {key}" |
 | Dashboard model reload, no source set | "No model source configured." |
-| `/rules-watch label`, event not found | "Event #{id} not found." |
 | Dashboard label, event not found | 404 |
 
 The "OLLAMA_BASE_URL" wording is legacy — the check is whether a model file or HuggingFace source has been configured.

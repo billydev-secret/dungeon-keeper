@@ -135,8 +135,11 @@ python -m dungeonkeeper
 ```
 
 On first boot the bot applies all migrations, syncs slash commands globally
-(production mode), and connects. In your server, run **`/setup`** to provision
-channels/categories and walk through role/category configuration.
+(production mode), and connects. Configure it from the **web dashboard**: open
+**Config → Moderation** and set the mod and admin roles, the jail and ticket
+categories, and the log and transcript channels. (A `/setup` wizard walked
+through the same six settings until 2026-07-28; it was removed once every one
+of them had a home on that page.)
 
 Stop with `Ctrl+C`. The SQLite database is written to `DB_PATH_PROD`
 (`dungeonkeeper.db` by default) in the working directory.

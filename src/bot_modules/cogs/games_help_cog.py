@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 from bot_modules.games.command_groups import games
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.games_help.embeds import build_help_embed, build_support_embed
+from bot_modules.games_help.embeds import build_help_embed
 from bot_modules.games.utils.game_manager import channel_name
 
 log = logging.getLogger(__name__)
@@ -20,15 +20,6 @@ async def help_command(interaction: discord.Interaction):
     guild = interaction.guild
     color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, guild) if guild else None
     embed = build_help_embed(color=color)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@games.command(name="support", description="Get a link to the support Discord server.")
-async def support_command(interaction: discord.Interaction):
-    log.info("%s used /games support in #%s", interaction.user.display_name, channel_name(interaction.channel))
-    guild = interaction.guild
-    color = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, guild) if guild else None
-    embed = build_support_embed(color=color)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

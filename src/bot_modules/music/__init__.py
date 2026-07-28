@@ -7,7 +7,7 @@ pagination math, idle-disconnect gating, message/embed assembly --
 lives here so it's unit-testable without spinning up Discord or
 Lavalink.
 
-Sibling services (``music_queue``, ``music_settings``,
+Sibling services (``music_queue``,
 ``music_now_playing``, ``spotify_resolver``, ``lavalink_manager``) are
 untouched -- this package is a thin layer of new sibling logic on top.
 """

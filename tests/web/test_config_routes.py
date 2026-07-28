@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
@@ -2039,3 +2039,142 @@ def test_greeting_watch_extra_words_empty_string_clears(authed_client, fake_ctx)
     assert section["extra_words"] == ""
     cfg = fake_ctx.guild_config(fake_ctx.guild_id)
     assert cfg.greeting_watch_extra_words == ()
+
+
+# ── inactive channel setup + sweep (replaced /inactive panel|sweep) ──
+
+
+def _inactive_bot(fake_ctx, *, channel_ok=True):
+    """A live-bot stand-in with a text channel the setup route can reach."""
+    import discord
+
+    guild = MagicMock()
+    guild.me = MagicMock()
+    channel = MagicMock(spec=discord.TextChannel) if channel_ok else MagicMock(
+        spec=discord.VoiceChannel
+    )
+    channel.name = "inactive"
+    guild.get_channel.return_value = channel
+    bot = MagicMock()
+    bot.get_guild.return_value = guild
+    fake_ctx.bot = bot
+    return bot, guild, channel
+
+
+def test_inactive_channel_setup_delegates_to_the_service(authed_client, fake_ctx, monkeypatch):
+    """The route is plumbing; the four-step setup (persist, ensure role, grant
+    access, revoke the old channel, post the panel) lives in the service so the
+    auto-sweep and the dashboard can't drift apart."""
+    import bot_modules.inactive.sweep_service as svc
+
+    _inactive_bot(fake_ctx)
+    called = {}
+
+    async def _fake(ctx, guild, channel):
+        called["hit"] = True
+        return True, ""
+
+    monkeypatch.setattr(svc, "setup_inactive_channel", _fake)
+    r = authed_client.post("/api/config/inactive/channel", json={"channel_id": "5"})
+    assert r.status_code == 200, r.text
+    assert called["hit"]
+
+
+def test_inactive_channel_setup_surfaces_the_failure_reason(authed_client, fake_ctx, monkeypatch):
+    """"Missing Manage Roles" is fixable; a generic 500 isn't."""
+    import bot_modules.inactive.sweep_service as svc
+
+    _inactive_bot(fake_ctx)
+
+    async def _fake(ctx, guild, channel):
+        return False, "Missing **Manage Roles** — can't create the Inactive role."
+
+    monkeypatch.setattr(svc, "setup_inactive_channel", _fake)
+    r = authed_client.post("/api/config/inactive/channel", json={"channel_id": "5"})
+    assert r.status_code == 400
+    assert "Manage Roles" in r.json()["detail"]
+
+
+def test_inactive_channel_setup_refuses_a_non_text_channel(authed_client, fake_ctx):
+    _inactive_bot(fake_ctx, channel_ok=False)
+    r = authed_client.post("/api/config/inactive/channel", json={"channel_id": "5"})
+    assert r.status_code == 400
+    assert "text channel" in r.json()["detail"].lower()
+
+
+def test_running_the_sweep_needs_a_configured_channel(authed_client, fake_ctx):
+    """Otherwise it would strip roles and move nobody anywhere."""
+    _inactive_bot(fake_ctx)
+    r = authed_client.post("/api/config/inactive/sweep")
+    assert r.status_code == 400
+    assert "no inactive channel" in r.json()["detail"].lower()
+
+
+def test_running_the_sweep_reports_what_it_moved(authed_client, fake_ctx, monkeypatch):
+    import bot_modules.inactive.sweep_service as svc
+
+    _inactive_bot(fake_ctx)
+    monkeypatch.setattr(svc, "read_inactive_channel_id", lambda ctx, gid: 99)
+
+    async def _fake(ctx, guild, actor):
+        return 3, 5, 2
+
+    monkeypatch.setattr(svc, "run_inactive_sweep", _fake)
+    r = authed_client.post("/api/config/inactive/sweep")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # considered and overflow both reported: "moved 3" alone hides that two
+    # more qualified but were held back by the per-run cap.
+    assert (body["moved"], body["considered"], body["overflow"]) == (3, 5, 2)
+
+
+def test_inactive_channel_setup_leaves_the_old_channel_alone_when_posting_fails(
+    authed_client, fake_ctx, monkeypatch
+):
+    """Nothing destructive may run before the last thing that can fail.
+
+    The revoke used to happen before the panel post, so a failed post (missing
+    Embed Links, say) returned an error *after* the old channel's @Inactive
+    access was already gone — reported as a failure while leaving the guild with
+    no working inactive channel at all.
+    """
+    import asyncio
+
+    import discord
+
+    import bot_modules.inactive.sweep_service as svc
+
+    guild = MagicMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = "new-inactive"
+    channel.set_permissions = AsyncMock()
+    channel.send = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=403), "no embeds")
+    )
+    old_channel = MagicMock(spec=discord.TextChannel)
+    old_channel.set_permissions = AsyncMock()
+    guild.id = fake_ctx.guild_id
+    guild.get_channel.side_effect = lambda cid: (
+        channel if cid == 5 else old_channel
+    )
+
+    # setup_inactive_channel imports these inside the function, so patch them
+    # where they're defined rather than on the calling module.
+    monkeypatch.setattr(
+        "bot_modules.inactive.apply.ensure_inactive_role",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(
+        "bot_modules.inactive.logic.stale_inactive_channel_id",
+        lambda prev, new: 999,
+    )
+    monkeypatch.setattr(
+        "bot_modules.core.branding.resolve_accent_color", AsyncMock(return_value=None)
+    )
+
+    ok, note = asyncio.run(svc.setup_inactive_channel(fake_ctx, guild, channel))
+
+    assert ok is False
+    assert "info panel" in note
+    # The old channel keeps its access; the admin's previous setup still works.
+    old_channel.set_permissions.assert_not_awaited()

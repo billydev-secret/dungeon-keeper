@@ -18,7 +18,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Tickets
 
-- [ ] **`/ticket panel <channel>`** — Post the persistent Open Ticket button; confirm it survives a bot restart.
+- [ ] **Channel Panels → Support Ticket Panel** — Post the persistent Open Ticket button into a channel; confirm it survives a bot restart.
 - [ ] **`/ticket close [reason]`** — Close an open ticket; confirm the channel locks read-only for the creator and the embed shows Reopen/Delete buttons.
 - [ ] **`/ticket reopen`** — Reopen a closed ticket; confirm send permissions restore and the 24h auto-delete clock resets. Try on an already-open ticket and confirm the rejection.
 - [ ] **`/ticket delete`** — Delete a closed ticket; confirm a transcript generates and posts, DMs the creator, then the channel deletes.
@@ -34,8 +34,8 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 ### Warnings
 
 - [ ] **`/warn <user> [reason]`** — Warn a member; confirm a DM with reason + running count, plus an audit embed. Hit the warning threshold (default 3) and confirm the admin-ping alert.
-- [ ] **`/warnings <user>`** — Confirm it lists active and revoked warnings with dates, reasons, and issuing mod.
-- [ ] **`/revokewarn <user> <warning_id>`** — Soft-delete a real warning id; confirm it moves to revoked history. Try a bogus id and confirm the "couldn't find" error.
+- [ ] **Warnings page (dashboard)** — Confirm it lists active and revoked warnings with dates, reasons, and issuing mod. (Replaced `/warnings`, removed 2026-07-28.)
+- [ ] **`/revokewarn <user> <warning_id>`** — Soft-delete a real warning id (take the id from the dashboard's Warnings page); confirm it moves to revoked history. Try a bogus id and confirm the "couldn't find" error.
 
 ### Modinfo
 
@@ -73,15 +73,11 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Rules Watch
 
-- [ ] **`/rules-watch enable` / `disable`** — Toggle passive monitoring; confirm the start/stop confirmations.
-- [ ] **`/rules-watch set-channel`** — Point the alert channel at a chosen channel; confirm it updates.
-- [ ] **`/rules-watch digest`** — Run it after some digest-tier events exist; confirm a summary posts.
-- [ ] **`/rules-watch stats`** — Confirm event counts, false-positive rate, and signal firing rates display.
-- [ ] **`/rules-watch label <event_id> <verdict>`** — Label a real event; confirm it records. Try a bogus id and confirm the "not found" error.
-- [ ] **`/rules-watch status`** — Confirm it reports whether monitoring is active and the alert channel.
+- [ ] **Rules Watch config (dashboard)** — Toggle passive monitoring and point the alert channel at a chosen channel; confirm both persist and the panel reports the current state.
 - [ ] **Passive Rules Watch alert** — Post a message that trips the pre-filter; confirm an alert posts with Confirm/Dismiss buttons, and clicking one disables further action and writes a label.
-- [ ] **Rules Watch alert queue (dashboard)** — Confirm flagged events list with inline Confirm/Dismiss.
+- [ ] **Rules Watch alert queue (dashboard)** — Confirm flagged events list with inline Confirm/Dismiss, and that the **Digest** tier filter shows unlabeled digest-tier events.
 - [ ] **Rules Watch label stats (dashboard)** — Confirm label counts, false-positive rate, and per-tier/rule breakdown render.
+- [ ] **`Report Rule Violation` context menu** — Right-click a member's message as a mod; confirm the modal logs a pre-labeled confirmed violation. Confirm it refuses bot messages and non-mods.
 
 ### Message Query
 
@@ -108,9 +104,9 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 ### Bank
 
 - [ ] **`/bank grant @member amount reason`** — Grant currency with a reason; confirm the balance updates and the ledger is audit-tagged.
-- [ ] **`/bank post-guide [channel]`** — Post the branded guide embed; re-run in the same channel and confirm it edits in place.
-- [ ] **`/bank post-shop [channel]`** — Post the persistent shop panel; confirm any member can click Rent and get an ephemeral reply, and that chatting in the channel re-sticks the panel to the bottom once the room falls quiet.
-- [ ] **`/bank post-leaderboard [channel]`** — Post the leaderboard panel; confirm it auto-refreshes hourly.
+- [ ] **Channel Panels → Economy How-To** — Post the branded guide embed; re-post to the same channel and confirm it edits in place rather than moving to the bottom.
+- [ ] **Channel Panels → Perk Shop** — Post the persistent shop panel; confirm any member can click Rent and get an ephemeral reply, and that chatting in the channel re-sticks the panel to the bottom once the room falls quiet.
+- [ ] **Channel Panels → Economy Leaderboard** — Post the leaderboard panel; confirm it auto-refreshes hourly.
 
 ### Income Sources
 
@@ -134,13 +130,13 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 - [ ] **`/games join` / `/games leave` (others)** — Add/remove another player as a Mod or Game-Host; confirm a non-elevated player attempting the same is rejected.
 - [ ] **`/games config game-status`** — Run in a channel with an active game; confirm it reports live state.
-- [ ] **`/games config game-end`** — Force-close an active game; confirm the "Force-Closed" notice.
+- [ ] **`/games end force:true`** — As a mod, force-close an active game with no confirmation step; confirm the "Force-Closed" notice. As the host (not a mod), confirm `force:true` is refused.
 
 ### Game Tracking
 
-- [ ] **`/games track watch <channel> <bot>`** — Watch a channel + external bot; confirm it starts banking messages there.
-- [ ] **`/games track status` / `disable` / `enable`** — Confirm status reporting and that pausing/resuming doesn't lose banked data.
-- [ ] **`/games track sample`** — Confirm it dumps recent bot messages as JSON.
+- [ ] **Games → External Tracking — add a watch** — Pick a channel + external bot + format; confirm it starts banking messages there without a restart.
+- [ ] **Games → External Tracking — Pause / Resume** — Confirm the banked count is per channel, and that pausing then resuming doesn't lose banked data.
+- [ ] **Games → External Tracking — Sample** — Confirm it dumps recent banked messages with raw content and embeds.
 
 ### Duel Game Config
 
@@ -154,7 +150,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 - [ ] **Guess — `/guess round <round_id>`** — Inspect an existing round; confirm status/submitter/answer/counts show.
 - [ ] **Guess — `/guess delete` (other's round)** — Delete another member's round; confirm a non-mod/non-submitter is rejected doing the same.
-- [ ] **Guess — `/guess prompt`** — Force an immediate repost of the sticky Submit/Help prompt.
+- [ ] **Channel Panels → Guess Who Submit Prompt** — Force an immediate repost of the sticky Submit/Help prompt. With no Guess channel configured, confirm the error names the settings page.
 - [ ] **Guess — dashboard audit log** — Confirm recent submit/delete/solve/guess-cap events list.
 
 ### 24/7 Mode
@@ -179,15 +175,13 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Docs
 
-- [ ] **`/docs post`** — Post a dashboard-authored doc into a channel; confirm it renders and stays tracked for sync.
-- [ ] **`/docs sync`** — Edit a doc's markdown on the dashboard, then sync; confirm all placements re-render in place.
-- [ ] **`/docs unpost`** — Confirm the doc's messages are deleted from that channel and the placement drops.
-- [ ] **`/docs list`** — Confirm it lists the guild's docs and where each is posted.
 - [ ] **Docs dashboard authoring** — Create a doc, upload an image, add a placement, toggle pin, save; confirm live re-render and pin/unpin behavior.
+- [ ] **Post a placement (dashboard)** — Add a placement for a channel; confirm the doc renders there and stays tracked for sync. (Replaced `/docs post`, removed 2026-07-28.)
+- [ ] **Sync (dashboard)** — Edit a doc's markdown, then sync; confirm every placement re-renders in place. (Replaced `/docs sync`.)
+- [ ] **Remove a placement (dashboard)** — Confirm the doc's messages are deleted from that channel and the placement drops. (Replaced `/docs unpost`.)
 
 ### Quality Leave
 
-- [ ] **`/quality_leave add/remove/list`** — Mark a member on leave, clear it, and list the active roster; confirm scoring reflects leave status.
 
 ### Message Review
 

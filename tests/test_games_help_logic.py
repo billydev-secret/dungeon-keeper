@@ -164,7 +164,10 @@ def test_build_support_embed_includes_invite_url():
 def test_build_support_embed_has_footer():
     embed = build_support_embed()
     assert embed.footer.text is not None
-    assert "/games support" in embed.footer.text
+    # Names /support, not the retired /games support — the embed is reachable
+    # from the top-level command now, and support was never games-specific.
+    assert "/support" in embed.footer.text
+    assert "/games support" not in embed.footer.text
 
 
 def test_build_support_embed_uses_golden_meadow_color():

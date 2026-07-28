@@ -25,7 +25,6 @@ from bot_modules.jail.embeds import (
     build_warning_audit_embed,
     build_warning_revoke_audit_embed,
     build_warning_threshold_embed,
-    build_warnings_list_embed,
 )
 from bot_modules.jail.logic import sanitize_channel_name
 
@@ -426,8 +425,6 @@ class JailCog(commands.Cog):
         await stamp_channel_jail_deny(channel, role)
 
     # ── /jail ─────────────────────────────────────────────────────────────
-    # Note: the /setup command lives in cogs/setup_cog.py, which runs both
-    # the channel-creation phase and this cog's role/category wizard.
 
     @app_commands.command(name="jail", description="Place a member in a private jail channel.")
     @app_commands.default_permissions(moderate_members=True)
@@ -485,32 +482,28 @@ class JailCog(commands.Cog):
 
     # ── /ticket ───────────────────────────────────────────────────────────
 
-    @ticket.command(name="panel", description="Post the ticket-creation button in a channel.")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.describe(channel="Channel to post the panel in")
-    async def ticket_panel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        ctx = self.ctx
-        guild = interaction.guild
-        member = interaction.user
-        if (
-            not isinstance(member, discord.Member)
-            or guild is None
-            or not _is_mod(member, ctx)
-        ):
-            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
-            return
+    async def post_ticket_panel(self, guild, channel):
+        """Post the Open Ticket button into ``channel``.
 
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        Entry point for the dashboard's panel poster (``panel_registry``);
+        replaced /ticket panel on 2026-07-28. Unlike the StickyPanel-backed
+        panels this posts a fresh message each time and records it, so an older
+        panel keeps working until someone deletes it — the button is stateless,
+        and silently killing a panel members may have bookmarked would be worse
+        than leaving two live.
+
+        Returns the new message, or None if Discord refused the post.
+        """
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_ticket_panel_embed(color=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
-        msg = await channel.send(embed=embed, view=view)
-        _add_ticket_panel(ctx, guild.id, channel.id, msg.id)
-        await interaction.response.send_message(
-            f"✅ Ticket panel posted in {channel.mention}", ephemeral=True
-        )
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.HTTPException:
+            return None
+        _add_ticket_panel(self.ctx, guild.id, channel.id, msg.id)
+        return msg
 
     @ticket.command(
         name="open", description="Open a private support ticket with the mod team."
@@ -530,7 +523,7 @@ class JailCog(commands.Cog):
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "❌ Ticket category not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category not configured. Ask an admin to set one on the dashboard (Config → Moderation).",
                 ephemeral=True,
             )
             return
@@ -975,7 +968,7 @@ class JailCog(commands.Cog):
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "❌ Ticket category not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category not configured. Ask an admin to set one on the dashboard (Config → Moderation).",
                 ephemeral=True,
             )
             return
@@ -1222,6 +1215,11 @@ class JailCog(commands.Cog):
         )
         await _post_audit(ctx, guild, audit_embed)
 
+    # The dashboard's Policy Tickets panel covers the *proposal* workflow
+    # (policy_tickets: open / voting / closed). Adopted policies live in a
+    # separate `policies` table that no web route reads, so this stays the only
+    # way to see what actually passed — checked during the 2026-07-28 command
+    # surface audit and deliberately kept.
     @policy.command(name="list", description="List all passed policies.")
     @app_commands.default_permissions(moderate_members=True)
     async def policy_list_cmd(self, interaction: discord.Interaction) -> None:
@@ -1494,43 +1492,6 @@ class JailCog(commands.Cog):
             )
             await _post_audit(ctx, guild, alert)
 
-    # ── /warnings ─────────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="warnings",
-        description="List all warnings (active and revoked) for a member.",
-    )
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.describe(user="Member to check")
-    async def warnings_cmd(
-        self, interaction: discord.Interaction, user: discord.Member
-    ) -> None:
-        ctx = self.ctx
-        member = interaction.user
-        if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
-            return
-
-        guild = interaction.guild
-        if not guild:
-            return
-        warns_guild_id = guild.id
-
-        def _get_warns():
-            with ctx.open_db() as conn:
-                return get_warnings(conn, warns_guild_id, user.id)
-
-        warns = await asyncio.to_thread(_get_warns)
-
-        if not warns:
-            await interaction.response.send_message(
-                f"{user} has no warnings.", ephemeral=True
-            )
-            return
-
-        embed = build_warnings_list_embed(str(user), warns, ts_formatter=_ts_str)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     # ── /revokewarn ───────────────────────────────────────────────────────
 
     @app_commands.command(
@@ -1540,7 +1501,7 @@ class JailCog(commands.Cog):
     @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(
         user="Member the warning belongs to",
-        warning_id="The warning's numeric ID (see /warnings).",
+        warning_id="The warning's numeric ID (see the dashboard's Warnings page).",
         reason="Why this warning is being revoked.",
     )
     async def revokewarn_cmd(

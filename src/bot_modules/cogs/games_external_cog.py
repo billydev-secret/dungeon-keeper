@@ -10,7 +10,6 @@ table, so re-parsing on a format change never loses history.
 """
 from __future__ import annotations
 
-import io
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -28,7 +27,6 @@ from bot_modules.economy.game_rewards import (
     pay_game_rewards,
     resolve_named_scores,
 )
-from bot_modules.games.command_groups import games
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
 from bot_modules.games_external import logic, parser
 
@@ -424,276 +422,31 @@ class GamesExternalCog(commands.Cog):
         except Exception:
             log.exception("Co-ordle payout failed for message %s", message.id)
 
-    # ── config commands: /games track … ───────────────────────────────────
-    track = app_commands.Group(
-        name="track",
-        description="Track results from an external game bot (mods only).",
-    )
+    # ── watch cache ───────────────────────────────────────────────────────
+    #
+    # /games track watch|status|disable|enable|sample were replaced by
+    # Games → External Tracking on the dashboard (2026-07-28). The listener
+    # matches messages against this in-memory map, so a dashboard write has to
+    # refresh it — otherwise a newly-watched channel is ignored until restart.
 
-    @track.command(name="watch", description="Watch a channel + bot and start banking its game results.")
-    @is_mod_or_admin()
-    @app_commands.describe(
-        channel="The channel the external game bot posts results in.",
-        bot="The external game bot to track (e.g. Gamebot or Cat Bot).",
-        kind="Which bot's format this is — selects the parser + payout.",
-    )
-    @app_commands.choices(
-        kind=[
-            app_commands.Choice(name=label, value=key)
-            for key, label in logic.WATCH_KIND_LABELS.items()
-        ]
-    )
-    async def track_watch(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        bot: discord.User,
-        kind: app_commands.Choice[str],
-    ):
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
-            return
-        if not bot.bot:
-            await interaction.response.send_message(
-                f"⚠️ {bot.mention} isn't a bot account. Pick the game bot itself "
-                "(the one that posts the results).",
-                ephemeral=True,
-            )
-            return
-        await logic.set_watch(
-            self.db, interaction.guild.id, channel.id, bot.id, kind.value,
-            interaction.user.id,
-        )
-        self._watch.setdefault(interaction.guild.id, {})[
-            (bot.id, channel.id)
-        ] = kind.value
-        log.info(
-            "External game tracking enabled by %s: #%s watching bot %s (%s)",
-            interaction.user.display_name, channel.name, bot.id, kind.value,
-        )
-        others = [
-            int(w["channel_id"])
-            for w in await logic.watch_channels_for_bot(
-                self.db, interaction.guild.id, bot.id
-            )
-            if int(w["channel_id"]) != channel.id
-        ]
-        extra = (
-            f" That's on top of {', '.join(f'<#{c}>' for c in others)} — games "
-            "running in several channels at once each pay out on their own."
-            if others else ""
-        )
-        await interaction.response.send_message(
-            f"✅ Now banking {bot.mention}'s messages in {channel.mention} as "
-            f"**{kind.name}**.{extra} Run `/games track sample` after a game or "
-            "two to confirm the format.",
-            ephemeral=True,
-        )
+    async def refresh_watch_cache(self, guild_id: int) -> None:
+        """Re-read this guild's watches into the listener's fast path.
 
-    @track.command(name="status", description="Show external game-tracking status for this server.")
-    @is_mod_or_admin()
-    async def track_status(self, interaction: discord.Interaction):
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
-            return
-        watches = await logic.list_watches(self.db, interaction.guild.id)
-        if not watches:
-            await interaction.response.send_message(
-                "No external game bot is being tracked. Use `/games track watch`.",
-                ephemeral=True,
-            )
-            return
-        lines = ["**External game tracking**"]
-        for w in watches:
-            n = await logic.count_messages(
-                self.db, interaction.guild.id, int(w["bot_user_id"]),
-                int(w["channel_id"]),
-            )
-            state = "enabled" if w["enabled"] else "paused"
-            label = logic.WATCH_KIND_LABELS.get(str(w["kind"]), str(w["kind"]))
-            lines.append(
-                f"• <@{w['bot_user_id']}> — {label} in <#{w['channel_id']}> "
-                f"({state}, **{n}** banked)"
-            )
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
-
-    async def _resolve_one_bot(
-        self, guild_id: int, bot: discord.User | None
-    ) -> tuple[int | None, str]:
-        """The bot id to act on for disable/enable/sample, or (None, error)."""
-        if bot is not None:
-            return bot.id, ""
-        watches = await logic.list_watches(self.db, guild_id)
-        if not watches:
-            return None, "Nothing configured yet — use `/games track watch` first."
-        if len(watches) == 1:
-            return int(watches[0]["bot_user_id"]), ""
-        names = ", ".join(f"<@{w['bot_user_id']}>" for w in watches)
-        return None, f"Several bots are tracked ({names}) — pass the `bot` option."
-
-    @track.command(name="disable", description="Pause banking for a tracked bot (keeps all data).")
-    @is_mod_or_admin()
-    @app_commands.describe(bot="Which tracked bot to pause (optional if only one).")
-    async def track_disable(
-        self, interaction: discord.Interaction, bot: discord.User | None = None
-    ):
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
-            return
-        bot_id, err = await self._resolve_one_bot(interaction.guild.id, bot)
-        if bot_id is None:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        ok = await logic.set_watch_enabled(self.db, interaction.guild.id, bot_id, False)
-        if ok:
-            # Pauses the bot in *every* channel it's watched in.
-            watches = self._watch.get(interaction.guild.id, {})
-            for key in [k for k in watches if k[0] == bot_id]:
-                watches.pop(key, None)
-        msg = f"⏸️ Paused tracking <@{bot_id}>." if ok else "That bot wasn't being tracked."
-        await interaction.response.send_message(msg, ephemeral=True)
-
-    @track.command(name="enable", description="Resume banking a previously-configured bot.")
-    @is_mod_or_admin()
-    @app_commands.describe(bot="Which tracked bot to resume (optional if only one).")
-    async def track_enable(
-        self, interaction: discord.Interaction, bot: discord.User | None = None
-    ):
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
-            return
-        bot_id, err = await self._resolve_one_bot(interaction.guild.id, bot)
-        if bot_id is None:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        ok = await logic.set_watch_enabled(self.db, interaction.guild.id, bot_id, True)
-        if not ok:
-            await interaction.response.send_message(
-                "That bot isn't configured — use `/games track watch` first.",
-                ephemeral=True,
-            )
-            return
-        rows = await logic.watch_channels_for_bot(self.db, interaction.guild.id, bot_id)
-        watches = self._watch.setdefault(interaction.guild.id, {})
-        for row in rows:
-            watches[(bot_id, int(row["channel_id"]))] = str(row["kind"])
-        where = ", ".join(f"<#{r['channel_id']}>" for r in rows)
-        await interaction.response.send_message(
-            f"▶️ Resumed tracking <@{bot_id}>{f' in {where}' if where else ''}.",
-            ephemeral=True,
-        )
-
-    @track.command(name="sample", description="Dump recent bot messages (raw content + embeds) to confirm the format.")
-    @is_mod_or_admin()
-    @app_commands.describe(
-        channel="Channel to sample (defaults to the watched channel).",
-        bot="Which tracked bot to sample (optional if only one).",
-        count="How many recent messages to scan (1–100, default 40).",
-    )
-    async def track_sample(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-        bot: discord.User | None = None,
-        count: app_commands.Range[int, 1, 100] = 40,
-    ):
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ This command only works in a server.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-
-        target = channel
-        watched_bot: int | None = bot.id if bot is not None else None
-        if target is None:
-            bot_id, err = await self._resolve_one_bot(interaction.guild.id, bot)
-            if bot_id is None:
-                await interaction.followup.send(
-                    err or "No watched channel — pass one with the `channel` option.",
-                    ephemeral=True,
-                )
-                return
-            row = await logic.get_watch_for_bot(
-                self.db, interaction.guild.id, bot_id
-            )
-            if row is None:
-                await interaction.followup.send(
-                    "No watched channel — pass one with the `channel` option.",
-                    ephemeral=True,
-                )
-                return
-            watched_bot = int(row["bot_user_id"])
-            ch = interaction.guild.get_channel(int(row["channel_id"]))
-            if not isinstance(ch, discord.TextChannel):
-                await interaction.followup.send(
-                    "Watched channel is missing or not a text channel.", ephemeral=True
-                )
-                return
-            target = ch
-
-        dumped = []
-        try:
-            async for msg in target.history(limit=count):
-                if not msg.author.bot:
-                    continue
-                if watched_bot is not None and msg.author.id != watched_bot:
-                    continue
-                dumped.append(
-                    {
-                        "message_id": msg.id,
-                        "author": f"{msg.author} ({msg.author.id})",
-                        "created_at": msg.created_at.isoformat(),
-                        "content": msg.content,
-                        "embeds": [e.to_dict() for e in msg.embeds],
-                    }
-                )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                f"I can't read history in {target.mention} (missing permission).",
-                ephemeral=True,
-            )
-            return
-
-        if not dumped:
-            await interaction.followup.send(
-                f"No bot messages found in the last {count} messages of {target.mention}.",
-                ephemeral=True,
-            )
-            return
-
-        blob = json.dumps(dumped, indent=2, ensure_ascii=False)
-        file = discord.File(
-            io.BytesIO(blob.encode("utf-8")), filename="gamebot_sample.json"
-        )
-        await interaction.followup.send(
-            f"Dumped **{len(dumped)}** bot message(s) from {target.mention}.",
-            file=file,
-            ephemeral=True,
-        )
-
-    @track_watch.error
-    @track_status.error
-    @track_disable.error
-    @track_enable.error
-    @track_sample.error
-    async def _track_error(self, interaction: discord.Interaction, error):
-        if isinstance(error, app_commands.CheckFailure):
-            try:
-                await interaction.response.send_message(
-                    "❌ You need moderator or admin permissions for this command.",
-                    ephemeral=True,
-                )
-            except discord.NotFound:
-                pass
-        else:
-            log.error("Error in /games track command: %s", error, exc_info=True)
+        Public: the dashboard route calls it after any write. Rebuilds the
+        guild's whole entry rather than patching one key, so a pause that
+        spans several channels and a re-point to a new channel both land
+        correctly without the caller having to know which happened.
+        """
+        rows = await logic.list_watches(self.db, guild_id)
+        self._watch[guild_id] = {
+            (int(r["bot_user_id"]), int(r["channel_id"])): str(r["kind"])
+            for r in rows
+            if r["enabled"]
+        }
 
 
 async def setup(bot: "Bot"):
-    cog = GamesExternalCog(bot)
-    await bot.add_cog(cog)
-    # add_cog auto-registers the `track` group at the top level of the tree;
-    # pull it off so it only lives under /games (same pattern as the other
-    # games subgroup cogs). Leaving it top-level registers an empty /track
-    # group, which Discord rejects on sync.
-    bot.tree.remove_command("track")
-    games.add_command(cog.track, override=True)
+    # No commands: this cog is a message listener plus the watch cache the
+    # dashboard writes through. The /games track group it used to register was
+    # removed 2026-07-28.
+    await bot.add_cog(GamesExternalCog(bot))

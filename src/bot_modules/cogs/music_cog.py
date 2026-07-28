@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import time
 from typing import TYPE_CHECKING, Literal
 
 import discord
@@ -18,15 +17,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.music.embeds import build_247_status_embed, build_queue_embed
+from bot_modules.music.embeds import build_queue_embed
 from bot_modules.music.logic import (
-    format_247_status_line,
-    format_247_toggle_message,
     format_spotify_summary,
     is_search_url,
     paginate_queue,
     should_idle_disconnect,
-    shuffled_autoplay_pool,
     track_summary_from_object,
 )
 from bot_modules.services.lavalink_manager import LavalinkManager
@@ -36,15 +32,6 @@ from bot_modules.services.music_now_playing import (
     cycle_loop_mode,
 )
 from bot_modules.services.music_queue import GuildQueue, LoopMode
-from bot_modules.services.music_settings import (
-    ChannelSettings,
-    clear_channel,
-    get_channel_settings,
-    list_all_always_on,
-    list_always_on_channels,
-    set_always_on,
-    set_autoplay_playlist,
-)
 from bot_modules.services.spotify_resolver import (
     SpotifyResolveError,
     SpotifyResolver,
@@ -57,8 +44,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.music")
 
 _IDLE_DISCONNECT_S = 60
-_AUTOPLAY_QUEUE_BATCH = 50
-_REJOIN_NODE_WAIT_S = 30
 # Initial volume on every fresh voice connect. New users often don't know how
 # to lower it; 20% is a friendly default that nobody complains about.
 _DEFAULT_VOLUME = 20
@@ -106,9 +91,6 @@ class MusicCog(commands.Cog):
             self._starting = False
 
         self.bot.add_view(NowPlayingView())
-        self.bot.startup_task_factories.append(
-            lambda: self._rejoin_always_on_channels()
-        )
         log.info("Music cog ready (Lavalink %s:%d)", lavalink.host, lavalink.port)
 
     async def cog_unload(self) -> None:
@@ -490,16 +472,10 @@ class MusicCog(commands.Cog):
         queue.current = None
         await player.stop()
 
-        is_247 = self._channel_is_247(guild.id, player.channel.id if player.channel else 0)
-        if not is_247:
-            with contextlib.suppress(Exception):
-                await player.disconnect()
-            self._queues.pop(guild.id, None)
-            await interaction.response.send_message("Stopped and disconnected.")
-        else:
-            await interaction.response.send_message(
-                "Stopped. Staying in channel (24/7 mode)."
-            )
+        with contextlib.suppress(Exception):
+            await player.disconnect()
+        self._queues.pop(guild.id, None)
+        await interaction.response.send_message("Stopped and disconnected.")
 
     @app_commands.command(name="nowplaying", description="Repost the now-playing embed.")
     async def now_playing_cmd(self, interaction: discord.Interaction) -> None:
@@ -534,7 +510,6 @@ class MusicCog(commands.Cog):
             await self._ephemeral(interaction, "❌ Join the bot's voice channel first.")
             return
         guild, player = sv
-        ch_id = player.channel.id if player.channel else None
         queue = self._queue(guild.id)
         queue.clear()
         queue.current = None
@@ -543,124 +518,7 @@ class MusicCog(commands.Cog):
             await player.disconnect()
         self._queues.pop(guild.id, None)
 
-        # If 24/7 was on for this channel, disable it.
-        if ch_id is not None:
-            settings = self._get_settings(guild.id, ch_id)
-            if settings and settings.always_on:
-                _guild_id = guild.id
-                _ch_id = ch_id
-                _user_id = interaction.user.id
-
-                def _do_disable_always_on():
-                    with self.ctx.open_db() as conn:
-                        set_always_on(conn, _guild_id, _ch_id, False, _user_id)
-
-                await asyncio.to_thread(_do_disable_always_on)
-                await interaction.response.send_message(
-                    "Disconnected. 24/7 disabled for this channel."
-                )
-                return
         await interaction.response.send_message("Disconnected.")
-
-    # ------------------------------------------------------------------
-    # /247 /247_status (mod-only)
-    # ------------------------------------------------------------------
-
-    @app_commands.command(name="247", description="(Mod) Toggle 24/7 mode for your voice channel.")
-    @app_commands.describe(
-        enabled="Turn 24/7 on or off",
-        autoplay_playlist="Optional Spotify playlist URL for autoplay when queue is idle",
-    )
-    @app_commands.default_permissions(manage_channels=True)
-    async def cmd_247(
-        self,
-        interaction: discord.Interaction,
-        enabled: bool,
-        autoplay_playlist: str | None = None,
-    ) -> None:
-        if not self.ctx.is_mod(interaction):
-            await self._ephemeral(interaction, "❌ You need mod permissions.")
-            return
-        guild = interaction.guild
-        member = interaction.user if isinstance(interaction.user, discord.Member) else None
-        if guild is None or member is None:
-            await self._ephemeral(interaction, "❌ Use in a server.")
-            return
-        if member.voice is None or member.voice.channel is None:
-            await self._ephemeral(interaction, "❌ Join the voice channel you want to configure first.")
-            return
-
-        ch_id = member.voice.channel.id
-        if autoplay_playlist and self._spotify is not None and not self._spotify.is_spotify_url(autoplay_playlist):
-            await self._ephemeral(interaction, "❌ autoplay_playlist must be a Spotify URL.")
-            return
-
-        _guild_id = guild.id
-        _user_id = interaction.user.id
-
-        def _do_247_toggle():
-            with self.ctx.open_db() as conn:
-                _previous = list_always_on_channels(conn, _guild_id)
-                _cleared = [s for s in _previous if s.voice_channel_id != ch_id and s.always_on]
-                for s in _cleared:
-                    set_always_on(conn, _guild_id, s.voice_channel_id, False, _user_id)
-                set_always_on(conn, _guild_id, ch_id, enabled, _user_id)
-                if autoplay_playlist:
-                    set_autoplay_playlist(conn, _guild_id, ch_id, autoplay_playlist, _user_id)
-            return _cleared
-
-        cleared = await asyncio.to_thread(_do_247_toggle)
-        cleared_mentions: list[str] = []
-        join_error: str | None = None
-        if enabled:
-            for s in cleared:
-                ch = guild.get_channel(s.voice_channel_id)
-                cleared_mentions.append(
-                    ch.mention if ch else f"<#{s.voice_channel_id}>"
-                )
-            # If we're not already in the channel, join it now.
-            if guild.voice_client is None:
-                try:
-                    player = await member.voice.channel.connect(cls=wavelink.Player)
-                    await player.set_volume(_DEFAULT_VOLUME)
-                except Exception as exc:
-                    log.warning("24/7 join failed: %s", exc)
-                    join_error = str(exc)
-        msg = format_247_toggle_message(
-            enabled=enabled,
-            channel_mention=member.voice.channel.mention,
-            cleared_mentions=cleared_mentions,
-            autoplay_saved=bool(autoplay_playlist),
-            join_error=join_error,
-        )
-        await interaction.response.send_message(msg)
-
-    @app_commands.command(name="247_status", description="Show 24/7-enabled channels in this server.")
-    async def cmd_247_status(self, interaction: discord.Interaction) -> None:
-        guild = interaction.guild
-        if guild is None:
-            await self._ephemeral(interaction, "❌ Use in a server.")
-            return
-        _guild_id = guild.id
-
-        def _do_list_always_on():
-            with self.ctx.open_db() as conn:
-                return list_always_on_channels(conn, _guild_id)
-
-        entries = await asyncio.to_thread(_do_list_always_on)
-        if not entries:
-            await interaction.response.send_message("No 24/7 channels configured.")
-            return
-        lines: list[str] = []
-        for s in entries:
-            ch = guild.get_channel(s.voice_channel_id)
-            mention = ch.mention if ch else f"<#{s.voice_channel_id}>"
-            lines.append(
-                format_247_status_line(mention, bool(s.autoplay_playlist_url))
-            )
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = build_247_status_embed(lines, color=accent)
-        await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
     # Wavelink event handlers
@@ -731,53 +589,8 @@ class MusicCog(commands.Cog):
         guild = player.guild
         if guild is None or player.channel is None:
             return
-        channel_id = player.channel.id
-        settings = self._get_settings(guild.id, channel_id)
-
-        if settings and settings.always_on and settings.autoplay_playlist_url:
-            try:
-                added = await self._autoplay_refill(queue, settings.autoplay_playlist_url)
-            except Exception:
-                log.exception("autoplay refill failed")
-                added = 0
-            if added > 0:
-                next_track = queue.next()
-                if next_track is not None:
-                    with contextlib.suppress(Exception):
-                        await player.play(next_track)
-                    return
-            await self._notify_text(
-                player,
-                "Autoplay playlist couldn't be refreshed. Pausing autoplay; "
-                "use /247 to update the playlist.",
-            )
-
-        if settings and settings.always_on:
-            return  # 24/7 with no autoplay -- stay idle in voice
-
         # Schedule 60s idle disconnect
         self._schedule_idle_disconnect(guild, _IDLE_DISCONNECT_S)
-
-    async def _autoplay_refill(
-        self, queue: GuildQueue, playlist_url: str
-    ) -> int:
-        if self._spotify is None:
-            return 0
-        result = await self._spotify.resolve(playlist_url)
-        # Shuffle the full candidate pool; cap on _added_ tracks (not
-        # candidates), since some Spotify entries fail to mirror to YouTube
-        # and we want the queue refill to still land near the batch target.
-        candidates = shuffled_autoplay_pool(result.tracks)
-        added = 0
-        for s_track in candidates:
-            if added >= _AUTOPLAY_QUEUE_BATCH:
-                break
-            wt = await self._search_one(self._spotify.to_search_query(s_track))
-            if wt is None:
-                continue
-            queue.add(wt, requester_id=self.bot.user.id if self.bot.user else 0)
-            added += 1
-        return added
 
     async def _post_now_playing(
         self, player: wavelink.Player, track: wavelink.Playable
@@ -878,19 +691,6 @@ class MusicCog(commands.Cog):
         if not isinstance(channel, discord.VoiceChannel):
             return
         guild = channel.guild
-        _guild_id = guild.id
-        _channel_id = channel.id
-
-        def _do_clear_channel():
-            with self.ctx.open_db() as conn:
-                _settings = get_channel_settings(conn, _guild_id, _channel_id)
-                if _settings:
-                    clear_channel(conn, _guild_id, _channel_id)
-                    log.info(
-                        "cleared music settings for deleted voice channel %s", _channel_id
-                    )
-
-        await asyncio.to_thread(_do_clear_channel)
         player = self._player(guild)
         if player is not None and player.channel and player.channel.id == channel.id:
             with contextlib.suppress(Exception):
@@ -912,14 +712,12 @@ class MusicCog(commands.Cog):
         player = self._player(guild)
         if player is None or player.channel is None:
             return
-        settings = self._get_settings(guild.id, player.channel.id)
         queue = self._queue(guild.id)
         if not should_idle_disconnect(
             humans_present=any(not m.bot for m in player.channel.members),
             playing=player.playing,
             paused=player.paused,
             has_current=queue.current is not None,
-            always_on=bool(settings and settings.always_on),
         ):
             return
         log.info(
@@ -929,89 +727,6 @@ class MusicCog(commands.Cog):
             await player.disconnect()
         self._queues.pop(guild.id, None)
         self._idle_tasks.pop(guild.id, None)
-
-    def _channel_is_247(self, guild_id: int, channel_id: int) -> bool:
-        settings = self._get_settings(guild_id, channel_id)
-        return bool(settings and settings.always_on)
-
-    def _get_settings(self, guild_id: int, channel_id: int) -> ChannelSettings | None:
-        with self.ctx.open_db() as conn:
-            return get_channel_settings(conn, guild_id, channel_id)
-
-    # ------------------------------------------------------------------
-    # 24/7 rejoin task (background)
-    # ------------------------------------------------------------------
-
-    async def _rejoin_always_on_channels(self) -> None:
-        await self.bot.wait_until_ready()
-
-        # Wait for at least one wavelink node to be connected before issuing
-        # voice.connect(cls=wavelink.Player), or wavelink will raise.
-        deadline = time.monotonic() + _REJOIN_NODE_WAIT_S
-        while time.monotonic() < deadline:
-            try:
-                if any(node.status == wavelink.NodeStatus.CONNECTED for node in wavelink.Pool.nodes.values()):
-                    break
-            except Exception:
-                log.exception("wavelink node status check")
-            await asyncio.sleep(1.0)
-        else:
-            log.warning("no wavelink node connected after %ss; aborting 24/7 rejoin", _REJOIN_NODE_WAIT_S)
-            return
-
-        def _do_list_all_always_on():
-            with self.ctx.open_db() as conn:
-                return list_all_always_on(conn)
-
-        entries = await asyncio.to_thread(_do_list_all_always_on)
-        for s in entries:
-            try:
-                guild = self.bot.get_guild(s.guild_id)
-                if guild is None:
-                    log.info("24/7 rejoin: guild %s not in cache; skipping", s.guild_id)
-                    continue
-                channel = guild.get_channel(s.voice_channel_id)
-                if not isinstance(channel, discord.VoiceChannel):
-                    log.warning(
-                        "24/7 rejoin: channel %s in guild %s not a voice channel",
-                        s.voice_channel_id,
-                        s.guild_id,
-                    )
-                    continue
-                me = guild.me
-                if me is None:
-                    continue
-                perms = channel.permissions_for(me)
-                if not (perms.connect and perms.speak):
-                    log.warning(
-                        "24/7 rejoin: missing Connect/Speak in guild=%s channel=%s",
-                        s.guild_id,
-                        s.voice_channel_id,
-                    )
-                    continue
-                if guild.voice_client is None:
-                    try:
-                        player = await channel.connect(cls=wavelink.Player)
-                    except Exception as exc:
-                        log.warning("24/7 rejoin connect failed: %s", exc)
-                        continue
-                    await player.set_volume(_DEFAULT_VOLUME)
-                    queue = self._queue(s.guild_id)
-                    queue.voice_channel_id = s.voice_channel_id
-                    queue.autoplay_playlist_url = s.autoplay_playlist_url
-                    if s.autoplay_playlist_url:
-                        try:
-                            added = await self._autoplay_refill(queue, s.autoplay_playlist_url)
-                        except Exception:
-                            log.exception("autoplay refill on rejoin failed")
-                            added = 0
-                        if added > 0:
-                            track = queue.next()
-                            if track is not None:
-                                with contextlib.suppress(Exception):
-                                    await player.play(track)
-            except Exception:
-                log.exception("24/7 rejoin: error for entry %s", s)
 
     # ------------------------------------------------------------------
     # View callback handlers (called by NowPlayingView buttons)
@@ -1070,10 +785,9 @@ class MusicCog(commands.Cog):
         queue.clear()
         queue.current = None
         await player.stop()
-        if player.channel and not self._channel_is_247(guild.id, player.channel.id):
-            with contextlib.suppress(Exception):
-                await player.disconnect()
-            self._queues.pop(guild.id, None)
+        with contextlib.suppress(Exception):
+            await player.disconnect()
+        self._queues.pop(guild.id, None)
         await interaction.response.send_message("Stopped.", ephemeral=True)
 
     async def handle_view_shuffle(

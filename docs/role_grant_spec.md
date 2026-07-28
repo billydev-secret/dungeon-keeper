@@ -9,11 +9,11 @@ Let trusted members hand out specific community roles with `/grant`, without giv
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/grant role:<key> member:<@member>` | Slash | Per-grant allowlist, or mod | Give a configured community role to a member |
-| `/grant_audit role:<key> min_level:<n> channel:<#ch>` | Slash | Mod | Post (or refresh/move) the auto-updating grant-audit card |
+| **Config → Channel Panels → Grant Audit Card** | Web | Admin | Post (or refresh/move) the auto-updating grant-audit card. Takes the grant role and minimum level as panel options |
 
 The `role` argument autocompletes from the guild's configured grant roles, matching against both the internal key and the display label (max 25 choices). Members who can grant at least one role also get a "Role Grants" page in `/help` listing their available grants.
 
-(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** panel and the `/grant_audit` card, below.)
+(The old `/grant_missing` audit command was replaced by the dashboard's **Grant Audit** report panel; the Discord card it also posts moved to Channel Panels on 2026-07-28, retiring `/grant_audit`.)
 
 ## Grant Audit panel
 
@@ -38,9 +38,9 @@ The inactivity-prune loop (`inactivity_prune_service`, see the prune rule config
 
 A one-off backfill helper (`role_grant_audit_service.backfill_prune_events_from_role_events`) seeds the ledger from historical `role_events` removals, skipping removals the activity history disproves as prunes and inserting already-restored rows for members who hold the role again. It's idempotent and is run once per guild/role from a REPL after deploy.
 
-### The auto-updating card (`/grant_audit`)
+### The auto-updating card
 
-The same three buckets also render as a channel embed a mod can pin anywhere: `/grant_audit role:<key> min_level:<n> [channel:<#ch>]` posts the card (defaults: `nsfw`, level 5, current channel). Behavior mirrors the economy leaderboard panel:
+The same three buckets also render as a channel embed a mod can pin anywhere. **Config → Channel Panels → Grant Audit Card** posts it — pick a channel, and set the grant role and minimum level as panel options (defaults: `nsfw`, level 5). Behavior mirrors the economy leaderboard panel:
 
 - The card's channel/message ids and grant/min-level parameters are stored per guild in config (`grant_audit_card_*` keys); one card per guild.
 - Re-running the command in the same channel refreshes in place; a different channel moves the card (the stale message is deleted when reachable).

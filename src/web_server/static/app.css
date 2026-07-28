@@ -4197,3 +4197,52 @@ fieldset.field {
   color: var(--ink-dim);
   padding: 0;
 }
+
+/* ── Channel Panels ──────────────────────────────────────────────────
+   One row per postable panel: description on the left, channel picker and
+   Post button on the right. The row wraps rather than sitting on a fixed
+   two-column grid, so the picker drops under the description on a phone
+   instead of squeezing both (see docs/web_testing.md on wrapping flex rows). */
+.panel-list { display: flex; flex-direction: column; gap: 4px; }
+.panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, #333);
+}
+.panel-row:last-child { border-bottom: 0; }
+.panel-row__main { flex: 1 1 260px; min-width: 0; }
+.panel-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.panel-row__actions [data-status] { min-width: 0; overflow-wrap: anywhere; }
+
+/* External-tracking sample dump: raw bot output, so it must not be reflowed.
+   Each block scrolls inside its own box rather than widening the page. */
+.ge-sample { display: flex; flex-direction: column; gap: 10px; }
+.ge-sample__row { border: 1px solid var(--border, #333); border-radius: 6px; padding: 8px; }
+.ge-sample__row pre {
+  margin: 4px 0 0;
+  padding: 6px;
+  background: var(--surface2, #3a3d42);
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+/* Panel options (only the grant-audit card has any). Under the description
+   rather than in the actions row, which goes sticky on narrow viewports. */
+.panel-row__options { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.panel-opt { display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 0; }
+.panel-opt select,
+.panel-opt input { padding: 4px 6px; font-size: 13px; max-width: 220px; }

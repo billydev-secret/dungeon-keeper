@@ -13,7 +13,7 @@ Two ways in:
   Inactive Sweep panel) that moves members idle past a configurable
   threshold. The sweep is a
   destructive mass role-strip, so it never touches bots/mods/admins/the owner,
-  is hard-capped per run, and ``/inactive sweep`` defaults to a dry-run preview.
+  is hard-capped per run, and the dashboard's Check Now is a dry-run preview.
 
 One way out: ``/inactive release @user`` restores roles and removes ``@Inactive``.
 """
@@ -29,25 +29,19 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.commands.jail_commands import (
-    TicketPanelButton,
-    _is_admin,
     _is_mod,
 )
-from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value, set_config_value
 from bot_modules.inactive.apply import (
     apply_inactive,
     check_inactive_preconditions,
-    ensure_inactive_role,
     reactivate_member,
 )
-from bot_modules.inactive.logic import stale_inactive_channel_id
 from bot_modules.inactive.sweep_service import (
     auto_sweep_enabled,
     compute_candidates,
     read_inactive_channel_id,
 )
-from bot_modules.services.embeds import MOD_INFO
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -102,8 +96,9 @@ class InactiveCog(commands.Cog):
 
         if not read_inactive_channel_id(ctx, guild.id):
             await interaction.response.send_message(
-                "❌ No inactive channel is set up yet. Run `/inactive panel` first so "
-                "moved members have somewhere to land.",
+                "❌ No inactive channel is set up yet. Set one on the dashboard "
+                "(Config → Inactive Sweep → Inactive Channel) so moved members have "
+                "somewhere to land.",
                 ephemeral=True,
             )
             return
@@ -152,171 +147,13 @@ class InactiveCog(commands.Cog):
 
     # ── /inactive panel ───────────────────────────────────────────────
 
-    @inactive.command(
-        name="panel",
-        description="Set up the inactive channel and post its info/ticket panel.",
-    )
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(channel="The channel to use as the inactive channel")
-    async def inactive_panel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        ctx = self.ctx
-        guild = interaction.guild
-        member = interaction.user
-        if guild is None or not isinstance(member, discord.Member) or not _is_admin(member, ctx):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
+    # /inactive panel and /inactive sweep were replaced by Config → Inactive
+    # Sweep on 2026-07-28. The panel page had been telling admins to go run
+    # /inactive panel in Discord — the one place the dashboard depended on a
+    # command. Both flows live in inactive/sweep_service.py now
+    # (setup_inactive_channel, run_inactive_sweep) so the routes and the
+    # auto-sweep loop share one implementation.
 
-        await interaction.response.defer(ephemeral=True)
-
-        # Note where the inactive channel used to point *before* overwriting it,
-        # so a re-point can strip the @Inactive overwrite off the old channel.
-        previous_raw = await asyncio.to_thread(
-            _read_config, ctx, "inactive_channel_id", guild.id
-        )
-        stale_channel_id = stale_inactive_channel_id(previous_raw, channel.id)
-
-        # Persist the channel choice, then ensure the @Inactive role exists and
-        # can view this channel (create it now so the grant below lands on it).
-        await asyncio.to_thread(
-            _set_config, ctx, "inactive_channel_id", str(channel.id), guild.id
-        )
-        role = await ensure_inactive_role(ctx, guild)
-        if role is None:
-            await interaction.followup.send(
-                "❌ Missing **Manage Roles** — can't create the Inactive role.",
-                ephemeral=True,
-            )
-            return
-        try:
-            await channel.set_permissions(
-                role, view_channel=True, send_messages=True, read_message_history=True
-            )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                f"❌ Couldn't grant the Inactive role access to {channel.mention} — "
-                "check my channel permissions.",
-                ephemeral=True,
-            )
-            return
-
-        # Re-point: the old channel would otherwise stay visible to @Inactive
-        # forever. Clearing the role's overwrite falls back to whatever the
-        # channel's normal permissions say (which deny it, from setup).
-        revoke_note = ""
-        if stale_channel_id:
-            old_channel = guild.get_channel(stale_channel_id)
-            if old_channel is not None:
-                try:
-                    await old_channel.set_permissions(role, overwrite=None)
-                except discord.HTTPException:
-                    log.warning(
-                        "Could not revoke @Inactive from old inactive channel %s",
-                        stale_channel_id, exc_info=True,
-                    )
-                    revoke_note = (
-                        f"\n⚠️ Couldn't remove the Inactive role's access to "
-                        f"<#{stale_channel_id}> — clear it manually."
-                    )
-
-        accent = await resolve_accent_color(ctx.db_path, guild)
-        embed = discord.Embed(
-            title="💤 You're in the Inactive Channel",
-            description=(
-                "You've been moved here because you've been inactive for a while.\n\n"
-                "**Your roles are safe** — nothing has been deleted. When you're "
-                "ready to come back, just open a ticket below and a moderator will "
-                "restore your access.\n\nWelcome back whenever you like!"
-            ),
-            color=accent or MOD_INFO,
-        )
-        view = discord.ui.View(timeout=None)
-        view.add_item(TicketPanelButton())
-        await channel.send(embed=embed, view=view)
-        await interaction.followup.send(
-            f"✅ Inactive channel set to {channel.mention} and panel posted."
-            f"{revoke_note}",
-            ephemeral=True,
-        )
-
-    # ── /inactive sweep ───────────────────────────────────────────────
-
-    @inactive.command(
-        name="sweep",
-        description="Preview (or run) an inactivity sweep. Defaults to a dry run.",
-    )
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(
-        apply="Set true to actually move the members. Omit for a dry-run preview."
-    )
-    async def inactive_sweep(
-        self, interaction: discord.Interaction, apply: bool = False
-    ) -> None:
-        ctx = self.ctx
-        guild = interaction.guild
-        member = interaction.user
-        if guild is None or not isinstance(member, discord.Member) or not _is_admin(member, ctx):
-            await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-            return
-
-        if not read_inactive_channel_id(ctx, guild.id):
-            await interaction.response.send_message(
-                "❌ No inactive channel is set up yet. Run `/inactive panel` first.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        selection = await compute_candidates(ctx, guild)
-        candidates = selection.candidates
-        overflow = selection.overflow
-        threshold_days = selection.threshold_days
-
-        if not candidates:
-            await interaction.followup.send(
-                f"No members are inactive past **{threshold_days} days**.",
-                ephemeral=True,
-            )
-            return
-
-        lines = []
-        for c in candidates[:20]:
-            idle_days = int(c.idle_seconds // 86400)
-            lines.append(f"• <@{c.user_id}> — idle {idle_days}d")
-        listing = "\n".join(lines)
-        if len(candidates) > 20:
-            listing += f"\n…and {len(candidates) - 20} more"
-        overflow_note = (
-            f"\n\n⚠️ {overflow} more member(s) qualify but were held back by the "
-            f"per-run cap." if overflow else ""
-        )
-
-        if not apply:
-            await interaction.followup.send(
-                f"**Dry run** — {len(candidates)} member(s) idle past "
-                f"**{threshold_days} days** would be moved:\n{listing}{overflow_note}"
-                f"\n\nRe-run with `apply: true` to move them.",
-                ephemeral=True,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            return
-
-        moved = 0
-        for c in candidates:
-            target = guild.get_member(c.user_id)
-            if target is None:
-                continue
-            result = await apply_inactive(
-                ctx, guild, target, member, reason="Inactivity sweep", source="command"
-            )
-            if result.ok:
-                moved += 1
-        await interaction.followup.send(
-            f"✅ Moved **{moved}** member(s) to the inactive channel.{overflow_note}",
-            ephemeral=True,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
 
 def _read_config(ctx: AppContext, key: str, guild_id: int) -> str:
     with ctx.open_db() as conn:

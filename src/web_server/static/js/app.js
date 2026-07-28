@@ -154,6 +154,7 @@ const SECTIONS = [
         { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js", keywords: "dead chat prompts", help: "help-chat-revive" },
         { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true, keywords: "quotes border color" },
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
+        { id: "channel-panels",    label: "Channel Panels",    module: "./panels/channel-panels.js", adminOnly: true, keywords: "post panel sticky ticket shop leaderboard guide prompt voice control" },
       ]},
       { heading: "Voice", items: [
         { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels" },
@@ -211,6 +212,7 @@ const SECTIONS = [
       { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js", help: "help-games" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
       { id: "games-config",       label: "Global Config",     module: "./panels/games-config.js", adminOnly: true, help: "help-games" },
+      { id: "games-external",     label: "External Tracking", module: "./panels/games-external.js", perms: ["moderator"], keywords: "track external bot results bank payout watch channel" },
       // Single-page games flattened to direct items named after the game
       // (subgroups below are only for games with two or more pages).
       { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },

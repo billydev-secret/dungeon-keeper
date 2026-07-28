@@ -119,13 +119,18 @@ def _build_help_pages(
                     ),
                     ("/birthday set", "Set your own birthday."),
                     ("/wellness setup", "Opt in to wellness — pick timezone and enforcement style."),
-                    ("/wellness away on", "Turn on your away auto-reply."),
-                    ("/wellness away off", "Turn off your away auto-reply."),
+                    (
+                        "/wellness away set state:[on|off]",
+                        "Turn your away auto-reply on or off; pass a message to "
+                        "change what it says.",
+                    ),
                     ("/confess", "Open the anonymous confession form."),
-                    ("/dm_help", "Overview of the DM request system."),
-                    ("/dm_set_mode", "Set your DM preference (open / ask / closed)."),
-                    ("/dm_status @user", "Check whether mutual DM permission exists."),
-                    ("/dm_revoke @user", "Revoke a DM permission relationship."),
+                    (
+                        "DM panel → My DM Settings",
+                        "Set your DM preference (open / ask / closed), check whether "
+                        "you're connected to someone, and remove a connection. On the "
+                        "server's DM panel — there are no /dm_ commands.",
+                    ),
                     ("/penpals join", "Enter the Pen Pals pool — you'll be matched into a private 2-person channel with a conversation starter."),
                     ("/penpals leave", "Leave the pool before you're matched."),
                     ("/penpals status", "Check your current Pen Pals status."),
@@ -245,8 +250,6 @@ def _build_help_pages(
                     ("/queue page:1", "View the current queue (10 tracks per page)."),
                     ("/nowplaying", "Repost the now-playing embed with control buttons."),
                     ("/disconnect", "Force-disconnect the bot from voice."),
-                    ("/247 enabled:... [autoplay_playlist:...]", "(Mod) Keep the bot in your voice channel 24/7, with optional Spotify autoplay."),
-                    ("/247_status", "List all 24/7-enabled channels in this server."),
                 ]
             ),
         )
@@ -340,7 +343,6 @@ def _build_help_pages(
                     ("/games join / /games leave", "Hop into or out of the game running in this channel."),
                     ("/games end", "End the game running in this channel (host or mod)."),
                     ("/games help", "Full game-mode browser."),
-                    ("/games support", "Link to the support server."),
                 ]
             ),
         )

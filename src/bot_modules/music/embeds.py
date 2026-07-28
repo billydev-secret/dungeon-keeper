@@ -67,22 +67,3 @@ def build_queue_embed(
 
     embed.set_footer(text=f"Page {page}/{total_pages} · loop: {loop_mode_value}")
     return embed
-
-
-def build_247_status_embed(
-    lines: Sequence[str], color: "discord.Color | None" = None
-) -> discord.Embed:
-    """Build the embed for ``/247_status``.
-
-    ``lines`` is a sequence of pre-formatted bullet strings (one per
-    24/7 channel) -- ``format_247_status_line`` produces them. Empty
-    sequences are still rendered (the caller decides whether to short
-    out on no entries with a plain message instead).
-    """
-    if color is None:
-        color = discord.Color(_EMBED_COLOR)
-    return discord.Embed(
-        title="📻 24/7 channels",
-        description="\n".join(lines) if lines else "(none)",
-        color=color,
-    )

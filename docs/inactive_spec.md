@@ -1,6 +1,6 @@
 # Inactive — Feature Spec
 
-Moves inactive members into a single shared "inactive" channel: their roles are snapshotted and stripped, they receive the `@Inactive` role (which can only see that channel), and a persistent panel there invites them to open a ticket to be reactivated. A softer sibling of the jail system — no per-user channels, transcripts, or policy machinery. Members enter manually (`/inactive mark`) or via an inactivity sweep (manual `/inactive sweep` or an opt-in background loop); the only way out is `/inactive release`.
+Moves inactive members into a single shared "inactive" channel: their roles are snapshotted and stripped, they receive the `@Inactive` role (which can only see that channel), and a persistent panel there invites them to open a ticket to be reactivated. A softer sibling of the jail system — no per-user channels, transcripts, or policy machinery. Members enter manually (`/inactive mark`) or via an inactivity sweep (run from Config → Inactive Sweep on the dashboard, or an opt-in background loop); the only way out is `/inactive release`.
 
 ## Commands
 
@@ -10,13 +10,13 @@ All are subcommands of the `/inactive` group.
 |---|---|---|---|
 | `/inactive mark user:<member> [reason]` | Slash | Mod (default perm: Moderate Members) | Snapshot + strip roles, apply `@Inactive`, move member to the inactive channel |
 | `/inactive release user:<member> [reason]` | Slash | Mod (default perm: Moderate Members) | Restore snapshotted roles and remove `@Inactive` |
-| `/inactive panel channel:<text channel>` | Slash | Admin (default perm: Manage Guild) | Set the inactive channel, create/wire the `@Inactive` role, post the info + "Open Ticket" panel |
-| `/inactive sweep [apply:<bool>]` | Slash | Admin (default perm: Manage Guild) | Preview (default, dry run) or execute an inactivity sweep |
+| **Config → Inactive Sweep → Inactive Channel** | Web | Admin | Set the inactive channel, create/wire the `@Inactive` role, revoke the old channel's access, post the info + "Open Ticket" panel. Replaced `/inactive panel` 2026-07-28 |
+| **Config → Inactive Sweep → Who Would Be Swept** | Web | Admin | Preview the sweep (**Check Now**) or run it (**Move Them Now**). Replaced `/inactive sweep` 2026-07-28; both halves share `compute_candidates`, so the preview can't disagree with the run |
 
 Sweep settings (threshold/auto/cap — previously `/inactive config`) are configured from the
 web dashboard's Inactive Sweep panel — see [Configuration](#configuration).
 
-Runtime checks re-verify mod/admin status via the bot's own role config (`_is_mod` / `_is_admin`), independent of Discord default permissions. `mark` and `sweep` refuse to run until `/inactive panel` has set an inactive channel.
+Runtime checks re-verify mod/admin status via the bot's own role config (`_is_mod` / `_is_admin`), independent of Discord default permissions. `mark` and the sweep refuse to run until an inactive channel has been set on Config → Inactive Sweep.
 
 ## Behavior
 
@@ -36,7 +36,7 @@ Building that function's inputs — the last-seen map and the exclusion set — 
 
 Note the limits of the evidence: `processed_messages` is never pruned by retention, but it only goes back to when tracking started and is wiped per-user by a privacy erasure. A member with no rows at all is aged from `joined_at` alone, so "active before the bot arrived" and "joined long ago and never spoke" are indistinguishable. The sweep treats both as idle; the dashboard preview flags them (`has_tracked_messages`) rather than showing a last-seen date that reads like a last post.
 
-### `/inactive sweep`
+### The sweep
 Default is a **dry run**: lists up to 20 candidates with idle days plus an overflow note, and instructs re-running with `apply: true`. With `apply: true` each candidate goes through the full mark flow (reason "Inactivity sweep") and the moved count is reported.
 
 ### Dashboard dry-run preview
@@ -55,7 +55,7 @@ A background loop starts with the bot and wakes every **6 hours**. It acts only 
 ### Release (`/inactive release`)
 Restores whichever snapshotted roles still exist (deleted roles are counted and reported), then removes `@Inactive` — in that order, so a partial failure never strands the member with neither. Marks the DB row `reactivated`, writes an `inactive_reactivate` audit entry, DMs the member, and posts a "Member Reactivated" embed to the log channel. Any ticket the member opened is deliberately left for a moderator to close.
 
-### Panel (`/inactive panel`)
+### The info panel
 Persists the channel choice, ensures the `@Inactive` role exists and can see the channel, then posts an accent-colored embed with the ticket system's persistent "Open Ticket" button (registered by the jail cog, so it survives restarts).
 
 Re-running the command against a **different** channel re-points the setup: the `@Inactive` role's permission overwrite is cleared from the previously-configured channel (`stale_inactive_channel_id` in `inactive/logic.py` decides whether there is one), so an ex-inactive channel doesn't stay visible to held members. If that cleanup fails (missing permissions or a Discord error) the panel still goes up and the invoker gets a warning naming the channel to fix by hand.
@@ -63,7 +63,7 @@ Re-running the command against a **different** channel re-points the setup: the 
 ## Configuration
 
 Per-guild keys in the config table. `inactive_channel_id`/`inactive_role_id` are set via
-`/inactive panel`; the sweep-tuning keys are set from the web dashboard's **Inactive Sweep**
+the dashboard's Inactive Channel setup; the sweep-tuning keys are set on the same **Inactive Sweep**
 panel (`config-inactive.js` / `PUT /api/config/inactive`) — the `/inactive config` command
 that used to set them was removed.
 
@@ -81,7 +81,7 @@ Per-member exemptions from inactivity holds, managed on the same panel
 (`PUT`/`DELETE /api/config/inactive/exemptions/{user_id}`). An exemption is
 **absolute**: `check_inactive_preconditions` refuses an exempt target
 (`exempt_target`), and since `apply_inactive` runs those preconditions itself,
-that one check covers every entry path — `/inactive mark`, `/inactive sweep`, and
+that one check covers every entry path — `/inactive mark`, the dashboard sweep, and
 the background loop. Exempt ids *also* join the sweep's exclusion set upstream,
 which is not redundancy for its own sake: it keeps exempt members out of the
 selection entirely, so they never appear in the preview and never inflate a

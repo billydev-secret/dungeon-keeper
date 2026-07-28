@@ -65,9 +65,19 @@ class GamesConfigCog(commands.Cog):
             except discord.HTTPException:
                 pass
 
+    # `force` absorbed /games config game-end (2026-07-28): both tore down the
+    # channel's active game through _teardown_active_game and announced it with
+    # build_force_end_embed, differing only in who may run it and whether it
+    # confirms first. That's an option, not a second command.
     @app_commands.command(name="end", description="End the active game in this channel (host or mod).")
-    async def games_end(self, interaction: discord.Interaction):
-        log.info("%s used /games end in #%s", interaction.user.display_name, channel_name(interaction.channel))
+    @app_commands.describe(force="Skip the confirmation and close it immediately (mods only).")
+    async def games_end(self, interaction: discord.Interaction, force: bool = False):
+        log.info(
+            "%s used /games end%s in #%s",
+            interaction.user.display_name,
+            " (force)" if force else "",
+            channel_name(interaction.channel),
+        )
         row = await get_active_game(self.db, interaction.channel_id)
         if not row:
             await interaction.response.send_message(
@@ -84,17 +94,33 @@ class GamesConfigCog(commands.Cog):
                 "Only the game's host or a moderator can end it.", ephemeral=True,
             )
             return
+        # The old command was mod-gated; a host skipping their own confirmation
+        # would be a new capability, so force stays mod-only.
+        if force and not is_mod:
+            await interaction.response.send_message(
+                "Only a moderator can force-close without confirming.", ephemeral=True,
+            )
+            return
 
         channel = interaction.channel
         # Slash commands with an active game always run in a sendable channel.
         assert isinstance(channel, discord.abc.Messageable)
 
-        async def _confirmed(confirm_interaction):
+        async def _close() -> None:
             await self._teardown_active_game(row, channel)
             try:
                 await channel.send(embed=build_force_end_embed(row["game_type"]))
             except discord.HTTPException:
                 pass
+
+        if force:
+            await interaction.response.defer(ephemeral=True)
+            await _close()
+            await interaction.followup.send("Game closed.", ephemeral=True)
+            return
+
+        async def _confirmed(confirm_interaction):
+            await _close()
 
         view = ConfirmCloseView(_confirmed)
         await interaction.response.send_message(
@@ -192,23 +218,7 @@ class GamesConfigCog(commands.Cog):
         embed = build_game_status_embed(row, color=color)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @config_group.command(name="game-end", description="Force-close the active game in this channel.")
-    @is_mod_or_admin()
-    async def game_end(self, interaction: discord.Interaction):
-        log.info("%s used /games config game-end in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        await interaction.response.defer(ephemeral=True)
-        row = await get_active_game(self.db, interaction.channel_id)
-        if not row:
-            await interaction.followup.send(
-                "No active game in this channel.", ephemeral=True
-            )
-            return
-        await self._teardown_active_game(row, interaction.channel)
-        embed = build_force_end_embed(row["game_type"])
-        await interaction.followup.send(embed=embed)
-
     @game_status.error
-    @game_end.error
     async def mod_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.CheckFailure):
             log.error("Permission denied for %s on mod command in #%s", interaction.user.display_name, channel_name(interaction.channel))

@@ -30,8 +30,7 @@ The `/wellness` group (`wellness_cog.py`) registers exactly three commands:
 | Command | Permission | Behavior |
 |---|---|---|
 | `/wellness setup` | Everyone (server only) | Opens an ephemeral 2-step wizard: (1) disclaimer + timezone select, (2) enforcement level (Gentle / Cooldown / Slow mode / Gradual). On completion, writes the member's opt-in row and assigns the Wellness Guardian role. **Aborts early** if the guild has no `role_id` configured (see activation gap). |
-| `/wellness away on` | Opted-in members | Enables the away auto-reply. Optional `message` arg (≤ 500 chars); if omitted, a default message is used. Replies with an ephemeral preview embed. |
-| `/wellness away off` | Opted-in members | Disables the away auto-reply. |
+| `/wellness away set state:<on\|off>` | Opted-in members | Turns the away auto-reply on or off. Optional `message` arg (≤ 500 chars, on only — passing it with `off` is refused rather than silently dropped); if omitted when turning on, the stored message is kept, falling back to a default. Turning on replies with an ephemeral preview embed. Replaced the separate `/wellness away on` and `/wellness away off` commands 2026-07-28. |
 
 The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class exists in the cog but is **not wired to any command** — a dead stub from the abandoned slash surface.
 
@@ -104,7 +103,7 @@ Today only a single configured `channel_id` is used (for the active-in-commitmen
 
 ### Member slash-command surface (not built as commands)
 
-The original doc presented this full `/wellness` command table. **Only `/wellness setup`, `/wellness away on`, and `/wellness away off` actually exist** (see Current Behavior). The rest are unbuilt as slash commands; most have a dashboard equivalent, with exceptions noted after the table.
+The original doc presented this full `/wellness` command table. **Only `/wellness setup` and `/wellness away set` actually exist** (see Current Behavior). The rest are unbuilt as slash commands; most have a dashboard equivalent, with exceptions noted after the table.
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
@@ -118,9 +117,7 @@ The original doc presented this full `/wellness` command table. **Only `/wellnes
 | `/wellness blackout list` | Slash | Wellness role | Show all blackouts |
 | `/wellness blackout toggle` | Slash | Wellness role | Enable / disable a blackout |
 | `/wellness blackout remove` | Slash | Wellness role | Delete a blackout |
-| `/wellness away on` | Slash | Wellness role | Enable the away message. Optional custom text (≤500 chars). Variables: `{user}`, `{streak_days}` |
-| `/wellness away off` | Slash | Wellness role | Disable the away message |
-| `/wellness away set` | Slash | Wellness role | Update away message without toggling |
+| `/wellness away set` | Slash | Wellness role | **Built** — turns away mode on or off, with an optional message |
 | `/wellness away preview` | Slash | Wellness role | Preview the away message |
 | `/wellness score` | Slash | Wellness role | Streak, personal best, milestone badge, qualitative summary |
 | `/wellness partner request @user` | Slash | Wellness role | Send a partner request (DM with Accept / Decline) |

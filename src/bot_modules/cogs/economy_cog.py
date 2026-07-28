@@ -3588,52 +3588,37 @@ class EconomyCog(commands.Cog):
 
     # ── how-to guide panel ───────────────────────────────────────────────
 
-    @bank.command(
-        name="post-guide",
-        description="Post (or refresh) the economy how-to panel (staff only).",
-    )
-    @app_commands.describe(channel="Where the panel lives — defaults to this channel")
-    async def bank_post_guide(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        assert interaction.guild is not None
-        guild = interaction.guild
-        actor = interaction.user
-        assert isinstance(actor, discord.Member)
+    async def _require_economy_enabled(self, guild_id: int) -> None:
+        """Raise with a reason the admin can act on when the economy is off.
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        The panel route maps ValueError to a 400 carrying the message; returning
+        None instead would surface as "Discord rejected the post", pointing at
+        the wrong thing entirely.
+        """
+        settings = await asyncio.to_thread(self._load_settings, guild_id)
         if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if not _can_grant(actor, settings):
-            await interaction.response.send_message(
-                "❌ You don't have permission to post the guide panel.",
-                ephemeral=True,
+            raise ValueError(
+                "The economy is disabled for this server — turn it on under "
+                "Economy → Settings before posting its panels."
             )
-            return
 
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
-            await interaction.response.send_message(
-                "❌ Pick a regular text channel for the guide panel.", ephemeral=True
-            )
-            return
+    async def post_guide_panel(self, guild, channel):
+        """Place the how-to panel. Entry point for the dashboard's panel poster
+        (``panel_registry``); replaced /bank post-guide on 2026-07-28.
 
-        # Edits in place when it's already in this channel (a re-brand refresh
-        # shouldn't hop the panel to the bottom), otherwise posts fresh.
-        message = await self.guide_panel.place_or_refresh(guild, target)
-        if message is None:
-            await interaction.response.send_message(
-                f"❌ I don't have permission to post in {target.mention}.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message(
-            f"Guide panel is live in {target.mention}: {message.jump_url}",
-            ephemeral=True,
-        )
+        Edits in place when the panel is already this channel's, so a re-brand
+        refresh doesn't hop it to the bottom. Returns None only when Discord
+        refused the post.
+
+        The disabled-economy check lives here rather than in the route because
+        it is a domain rule, not an access rule: posting a currency guide for a
+        currency that doesn't exist would be wrong however you got here. It
+        *raises* rather than returning None so the admin is told to turn the
+        economy on — a bare None reads as "Discord rejected it" and sends them
+        to check bot permissions instead.
+        """
+        await self._require_economy_enabled(guild.id)
+        return await self.guide_panel.place_or_refresh(guild, channel)
 
     # ── channel-bottom panels ────────────────────────────────────────────
     #
@@ -3794,101 +3779,17 @@ class EconomyCog(commands.Cog):
 
     # ── auto-updating leaderboard panel ──────────────────────────────────
 
-    @bank.command(
-        name="post-leaderboard",
-        description="Post (or refresh) the auto-updating leaderboard panel (staff only).",
-    )
-    @app_commands.describe(channel="Where the panel lives — defaults to this channel")
-    async def bank_post_leaderboard(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        assert interaction.guild is not None
-        guild = interaction.guild
-        actor = interaction.user
-        assert isinstance(actor, discord.Member)
-
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if not _can_grant(actor, settings):
-            await interaction.response.send_message(
-                "❌ You don't have permission to post the leaderboard panel.",
-                ephemeral=True,
-            )
-            return
-
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
-            await interaction.response.send_message(
-                "❌ Pick a regular text channel for the leaderboard panel.",
-                ephemeral=True,
-            )
-            return
-
-        message = await self.leaderboard_panel.place_or_refresh(guild, target)
-        if message is None:
-            await interaction.response.send_message(
-                f"❌ I don't have permission to post in {target.mention}.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message(
-            f"Leaderboard panel is live in {target.mention}: {message.jump_url}"
-            " — it refreshes itself and stays at the bottom of the channel.",
-            ephemeral=True,
-        )
+    async def post_leaderboard_panel(self, guild, channel):
+        """Place the auto-updating leaderboard panel. See post_guide_panel."""
+        await self._require_economy_enabled(guild.id)
+        return await self.leaderboard_panel.place_or_refresh(guild, channel)
 
     # ── persistent shop panel ────────────────────────────────────────────
 
-    @bank.command(
-        name="post-shop",
-        description="Post (or refresh) the perk-shop panel (staff only).",
-    )
-    @app_commands.describe(channel="Where the panel lives — defaults to this channel")
-    async def bank_post_shop(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        assert interaction.guild is not None
-        guild = interaction.guild
-        actor = interaction.user
-        assert isinstance(actor, discord.Member)
-
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if not _can_grant(actor, settings):
-            await interaction.response.send_message(
-                "❌ You don't have permission to post the shop panel.",
-                ephemeral=True,
-            )
-            return
-
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
-            await interaction.response.send_message(
-                "❌ Pick a regular text channel for the shop panel.", ephemeral=True
-            )
-            return
-
-        message = await self.shop_panel.place_or_refresh(guild, target)
-        if message is None:
-            await interaction.response.send_message(
-                f"❌ I don't have permission to post in {target.mention}.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_message(
-            f"Shop panel is live in {target.mention}: {message.jump_url} — it "
-            "stays at the bottom of the channel. Re-run this after re-pricing "
-            "to refresh it.",
-            ephemeral=True,
-        )
+    async def post_shop_panel(self, guild, channel):
+        """Place the perk-shop panel. See post_guide_panel."""
+        await self._require_economy_enabled(guild.id)
+        return await self.shop_panel.place_or_refresh(guild, channel)
 
     async def cog_load(self) -> None:
         # Re-register the persistent buttons so clicks on existing messages

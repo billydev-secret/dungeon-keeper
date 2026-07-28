@@ -117,45 +117,29 @@ class RiskyRollCog(commands.Cog):
     # Game commands
     # ------------------------------------------------------------------
 
+    # `ping` replaced the separate /risky start_no_ping command (2026-07-28):
+    # the two callbacks were identical but for this flag. A quiet round also
+    # skips the minimum game time — the two always moved together, because the
+    # minimum exists to give pinged members time to arrive.
     @risky.command(name="start", description="Open a new Risky Rolls round in this channel")
     @app_commands.describe(
         auto_close_players="Auto-close when this many players have rolled (default 25)",
         auto_close_minutes="Auto-close after this many minutes (default 120)",
+        ping="Ping the round role and hold a minimum game time (default yes)",
     )
     async def risky_start(
         self,
         interaction: discord.Interaction,
         auto_close_players: int | None = 25,
         auto_close_minutes: int | None = 120,
+        ping: bool = True,
     ) -> None:
         await self._start_game(
             interaction,
             auto_close_players=auto_close_players,
             auto_close_minutes=auto_close_minutes,
-            ping=True,
-            skip_min_game_time=False,
-        )
-
-    @risky.command(
-        name="start_no_ping",
-        description="Open a new round without pinging and without a minimum game time",
-    )
-    @app_commands.describe(
-        auto_close_players="Auto-close when this many players have rolled (default 25)",
-        auto_close_minutes="Auto-close after this many minutes (default 120)",
-    )
-    async def risky_start_no_ping(
-        self,
-        interaction: discord.Interaction,
-        auto_close_players: int | None = 25,
-        auto_close_minutes: int | None = 120,
-    ) -> None:
-        await self._start_game(
-            interaction,
-            auto_close_players=auto_close_players,
-            auto_close_minutes=auto_close_minutes,
-            ping=False,
-            skip_min_game_time=True,
+            ping=ping,
+            skip_min_game_time=not ping,
         )
 
     async def _start_game(

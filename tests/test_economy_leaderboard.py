@@ -533,15 +533,13 @@ async def test_post_leaderboard_posts_and_saves_ids(ctx, db):
     interaction.user = _admin()
     interaction.channel = channel
 
-    await cog.bank_post_leaderboard.callback(cog, interaction, None)  # pyright: ignore[reportCallIssue]
+    await cog.post_leaderboard_panel(interaction.guild, channel)
 
     embed = channel.send.await_args.kwargs["embed"]
     top = next(f.value for f in embed.fields if "Top earners" in (f.name or ""))
     assert top is not None and "99" in top
     assert "User 42" in top  # not a guild member, known_users empty → fallback
     assert _stored(db) == (CHANNEL_ID, 8888)
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "refreshes" in msg
 
 
 @pytest.mark.asyncio
@@ -564,7 +562,7 @@ async def test_post_leaderboard_refreshes_in_place(ctx, db):
     interaction.user = _admin()
     interaction.channel = channel
 
-    await cog.bank_post_leaderboard.callback(cog, interaction, None)  # pyright: ignore[reportCallIssue]
+    await cog.post_leaderboard_panel(interaction.guild, channel)
 
     old.edit.assert_awaited_once()
     channel.send.assert_not_awaited()

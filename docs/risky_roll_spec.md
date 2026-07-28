@@ -7,11 +7,10 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/risky start` | Slash | Everyone (server only) | Open a new round; pings the configured role (if set) and applies the min-game-time floor |
-| `/risky start_no_ping` | Slash | Everyone (server only) | Same as `/risky start` but skips the ping and the min-game-time wait |
 | `/risky reset_state` | Slash | Administrator | Wipe every active round, pending question, and posted question in **this channel** |
 | **Roll** button | Persistent | Round participant | Roll 1–100 once (rerolls in tie state are restricted to tied players) |
 | **How to Play** button | Persistent | Everyone | Show the rules in an ephemeral message |
-| **Close Round** button | Persistent | Round opener or admin | Resolve the round (blocked until min-game-time elapses unless start_no_ping was used) |
+| **Close Round** button | Persistent | Round opener or admin | Resolve the round (blocked until min-game-time elapses unless the round was opened with `ping:false`) |
 | **Ask Question** button | Persistent | Eligible questioner | Open the question modal |
 | **Reply** button | Persistent | Allowed replier | Open the reply modal; first valid reply locks the question |
 | Risky panel | Web (dashboard) | Admin | Configure the ping role and the min-game-time floor |
@@ -20,7 +19,7 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 
 ### Starting a round
 
-`/risky start` opens a new round. The bot checks Send Messages + Embed Links in the channel, refuses if the channel already has 10 active games, then posts the round embed with the **Roll / How to Play / Close Round** buttons. If a ping role is configured, the bot also posts a one-line ping ("A new Risky Rolls round has begun!"). `/risky start_no_ping` is the same except it skips the role ping and bypasses the min-game-time floor.
+`/risky start` opens a new round. The bot checks Send Messages + Embed Links in the channel, refuses if the channel already has 10 active games, then posts the round embed with the **Roll / How to Play / Close Round** buttons. If a ping role is configured, the bot also posts a one-line ping ("A new Risky Rolls round has begun!"). Passing `ping:false` skips the role ping and bypasses the min-game-time floor — the two move together, since the floor exists to give pinged members time to arrive. (This replaced the separate `/risky start_no_ping` command on 2026-07-28.)
 
 An auto-close is scheduled at start: by default the round auto-closes 120 minutes after start, or sooner once 25 distinct players have rolled (whichever comes first, never before the min-game-time floor).
 
@@ -47,7 +46,7 @@ Both the question **and** the reply are public free text, so both are screened a
 
 ### Cooldown / minimum game time
 
-A configurable min-game-time floor (default 30 minutes) prevents premature closes. `/risky start_no_ping` bypasses it.
+A configurable min-game-time floor (default 30 minutes) prevents premature closes. Opening the round with `ping:false` bypasses it.
 
 ### Persistence and restarts
 
@@ -56,7 +55,7 @@ Active rounds, pending questions, and posted questions are all stored in SQLite.
 ## Permissions
 
 - **User-side**:
-  - `/risky start`, `/risky start_no_ping`: everyone, server only.
+  - `/risky start`: everyone, server only.
   - `/risky reset_state`: Administrator.
   - Buttons gate themselves at click time (opener-or-admin for Close; eligible-questioner for Ask; allowed-replier for Reply).
 - **Web**: admin only.
@@ -109,8 +108,8 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 
 | Key | Default | Purpose |
 |---|---|---|
-| Ping role | unset | Optional role to ping on `/risky start` (not on start_no_ping). Setting it to "no role" clears the row |
-| Min game seconds | 1800 (30 min) | Floor on round duration; blocks early **Close Round**. `/risky start_no_ping` bypasses |
+| Ping role | unset | Optional role to ping on `/risky start` (not when `ping:false`). Setting it to "no role" clears the row |
+| Min game seconds | 1800 (30 min) | Floor on round duration; blocks early **Close Round**. `ping:false` bypasses |
 
 Per-round only (not persisted as config):
 - **Auto-close after N players** — default 25 (must be ≥ 2).

@@ -580,6 +580,11 @@ def _inactive_section(conn, guild_id: int, guild) -> dict:
         ),
         "auto_sweep": _bool_val(conn, "inactive_auto_sweep", guild_id=guild_id),
         "sweep_cap": _int_val(conn, "inactive_sweep_cap", 25, guild_id=guild_id),
+        # The panel's channel picker preselects this, so a re-point starts from
+        # where the channel currently is rather than from blank.
+        "inactive_channel_id": str(
+            _int_val(conn, "inactive_channel_id", guild_id=guild_id)
+        ),
         "exemptions": exemptions,
     }
 
@@ -2180,6 +2185,85 @@ async def delete_inactive_exemption(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+class InactiveChannelRequest(BaseModel):
+    channel_id: str
+
+
+@router.post("/config/inactive/channel")
+async def setup_inactive_channel_route(
+    request: Request,
+    body: InactiveChannelRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Point the inactive system at a channel and publish its info panel.
+
+    Replaced ``/inactive panel`` (2026-07-28) — which this page used to tell
+    admins to go and run, the one place the dashboard depended on a Discord
+    command. More than a config write: it also creates the ``@Inactive`` role if
+    needed, grants it access here, and revokes it from the previous channel so
+    that one doesn't stay visible to inactive members forever.
+    """
+    import discord
+
+    from bot_modules.inactive.sweep_service import setup_inactive_channel
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+    try:
+        channel_id = int(body.channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid channel_id")
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(400, "Channel must be a text channel in this guild")
+
+    ok, note = await setup_inactive_channel(ctx, guild, channel)
+    if not ok:
+        raise HTTPException(400, note)
+    return {"ok": True, "note": note}
+
+
+@router.post("/config/inactive/sweep")
+async def run_inactive_sweep_route(
+    request: Request,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Actually move the members the preview lists.
+
+    Replaced ``/inactive sweep apply:true`` (2026-07-28). The dry run already
+    lived here; only the "and do it" half was still a command. Both run through
+    the same ``compute_candidates``, so this can't move a different set than the
+    preview showed.
+    """
+    from bot_modules.inactive.sweep_service import (
+        read_inactive_channel_id,
+        run_inactive_sweep,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+    if not read_inactive_channel_id(ctx, guild_id):
+        raise HTTPException(
+            400, "No inactive channel is set up yet — set one above first."
+        )
+
+    actor = guild.get_member(int(getattr(user, "user_id", 0) or 0)) or guild.me
+    moved, considered, overflow = await run_inactive_sweep(ctx, guild, actor)
+    return {"ok": True, "moved": moved, "considered": considered, "overflow": overflow}
 
 
 class InactivePreviewRequest(BaseModel):

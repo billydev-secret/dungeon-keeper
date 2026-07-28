@@ -8,7 +8,7 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Setup Wizard
 
-- [ ] **`/setup`** — Run the onboarding wizard as an admin; confirm it DMs the 6-step flow (mod roles, admin roles, jail category, ticket category, log channel, transcript channel), falling back to an in-channel wizard if your DMs are closed. Confirm skipping a step leaves existing config untouched and re-running is safe.
+- [ ] **Config → Moderation** — Set mod roles, admin roles, jail category, ticket category, log channel, transcript channel; confirm each persists and that jail/ticket flows pick them up. (Replaced the `/setup` wizard, removed 2026-07-28.)
 
 ### Config Commands
 
@@ -22,8 +22,8 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Inactive Sweep
 
-- [ ] **`/inactive panel`** — Confirm the `@Inactive` role is created/wired and the info + ticket panel posts.
-- [ ] **`/inactive sweep`** — Dry-run first (confirm it lists candidates without acting), then `apply:true` (confirm eligible idle members are actually marked).
+- [ ] **Config → Inactive Sweep → Inactive Channel** — Set a channel; confirm the `@Inactive` role is created/wired and the info + ticket panel posts. Re-point it to a second channel and confirm the first loses `@Inactive` access.
+- [ ] **Config → Inactive Sweep** — **Check Now** first (confirm it lists candidates without acting), then **Move Them Now** (confirm the same members are actually moved, and the count reports how many the per-run cap held back).
 - [ ] **`/inactive config`** — Set threshold/auto/cap; confirm values save and echo back.
 - [ ] **Automatic inactive-sweep loop** — With `auto:true` and a channel configured, confirm the 6-hourly loop marks idle members automatically.
 
@@ -57,7 +57,7 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Spotify Authorization
 
-- [ ] **`/spotify_authorize`** — Confirm an ephemeral link to the dashboard's Spotify OAuth flow.
+- [ ] **Connect Spotify (dashboard)** — Config → Global → Integrations; confirm the button starts Spotify's consent flow and returns you to the dashboard.
 
 ### Bot Identity
 

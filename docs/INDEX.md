@@ -31,7 +31,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
-| [docs_cog_spec.md](docs_cog_spec.md) | `/docs` cog: posts dashboard-authored docs into channels (not this docs/ folder) |
+| [docs_cog_spec.md](docs_cog_spec.md) | Channel docs: dashboard posts authored docs into channels (not this docs/ folder) |
 | [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
@@ -58,7 +58,6 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch functional spec (v0.3 + §12 ledger) |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
-| [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo: `/todo`, the sticky Discord board (Add/Complete buttons, auto-updating, bottom-stuck) and dashboard-configured recurring reminder tasks. Corrected 2026-07-26 — the "Add to Todo" context menu it used to document does not exist in the code |
 | [usage_telemetry_spec.md](usage_telemetry_spec.md) | Usage telemetry: per-user slash-command and dashboard-panel usage in `usage_events`, surfaced as the admin **Reports → Bot Usage** panel. Headline output is the never-run/never-opened lists; retained indefinitely and cleared only by `purge_user_data` |
@@ -106,6 +105,7 @@ feature and also appear in the Design table above.
 
 | Plan | What it covers | Status |
 |---|---|---|
+| [plans/command-surface-audit.md](plans/command-surface-audit.md) | Slash-command audit against CLAUDE.md's "config lives on the web" rule: what moved, what was deleted, what was kept and why | **Complete 2026-07-28** — 39 commands removed (190 → 151); all three gaps closed. Records the method note worth carrying: a parity claim must name the field, not the feature |
 | [plans/casino-classics-and-prediction-market.md](plans/casino-classics-and-prediction-market.md) | New casino games (Baccarat, Sic Bo, War, Keno) + a parimutuel prediction market ("Pools": one self-running daily over/under on the economy's own net change) | Stage 1 complete (Baccarat, Dice, War, Keno) 2026-07-25; Stage 2 prediction market ("Pools") built 2026-07-28, ships disabled |
 | [plans/ai-advisor.md](plans/ai-advisor.md) | AI advisor (per-guild name, default "Billy-bot"): grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
 | [plans/help_bot_knowledge.md](plans/help_bot_knowledge.md) | Billy-bot as a setup guide: model tiering, settings registry, gap detection, proactive suggestions | Stages 1–6 built (latest 2026-07-25: per-feature KV fetch + intake registry entry) |

@@ -1922,38 +1922,25 @@ class GuessCog(commands.Cog):
         await interaction.followup.send(embed=embed)
 
 
-    @guess.command(name="prompt", description="Post the channel-bottom Submit/Help prompt now.")
-    @app_commands.default_permissions(manage_guild=True)
-    async def guess_prompt(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild
-        await interaction.response.defer(ephemeral=True)
+    async def post_prompt_panel(self, guild, channel=None):
+        """Place the channel-bottom Submit/Help prompt.
 
-        db_path = self.bot.ctx.db_path
-        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
-
+        Entry point for the dashboard's panel poster (``panel_registry``);
+        replaced /guess prompt on 2026-07-28. ``channel`` is ignored — the
+        prompt belongs in the configured Guess channel, and posting it anywhere
+        else would leave the submit button outside the flow it drives. Returns
+        None when no Guess channel is set or it can't be posted to.
+        """
+        config = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, guild.id)
         if config.guess_channel_id == 0:
-            await interaction.followup.send(
-                "❌ Guess channel is not configured. Set it in the web dashboard first.",
-                ephemeral=True,
-            )
-            return
-
-        channel = interaction.guild.get_channel(config.guess_channel_id)
+            return None
+        target = guild.get_channel(config.guess_channel_id)
         if not isinstance(
-            channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+            target, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
         ):
-            await interaction.followup.send(
-                "Configured Guess channel can't be posted to. "
-                "Update the Guess channel in the web dashboard.",
-                ephemeral=True,
-            )
-            return
-
-        await _repost_prompt(self.bot, channel, interaction.guild.id)
-        await interaction.followup.send(
-            f"Prompt posted in {channel.mention}.", ephemeral=True
-        )
-
+            return None
+        await _repost_prompt(self.bot, target, guild.id)
+        return target
 
 
 async def setup(bot: "Bot") -> None:

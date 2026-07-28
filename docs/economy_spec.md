@@ -701,7 +701,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
 | `photo_post` | a member posts an image in the configured Photo Challenge channel (the post itself pays — no reactions needed) | `EconomyCog._on_photo_post` (on_message listener; announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_post:<local_day>` (once/day by construction) |
-| `party_game` | party game completes with the member in the roster — **including external games** (Gamebot Cards Against Humanity / Anagrams / Connect 4, Wordle, Co-ordle, parsed from `/games track`) | `pay_game_rewards` via `game_manager.end_game`, or `pay_cah_game_by_score` via `games_external_cog._pay_cah_game` / `._pay_anagrams_game` / `._pay_wordle_results` / `._pay_coordle_round` (score-proportional coins, same trigger) | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`, `party_game:anagrams:…`, `party_game:connect4:…`, `party_game:wordle:<digest-msg-id>`, `party_game:coordle:<round-timestamp>`) |
+| `party_game` | party game completes with the member in the roster — **including external games** (Gamebot Cards Against Humanity / Anagrams / Connect 4, Wordle, Co-ordle, parsed from externally-tracked channels) | `pay_game_rewards` via `game_manager.end_game`, or `pay_cah_game_by_score` via `games_external_cog._pay_cah_game` / `._pay_anagrams_game` / `._pay_wordle_results` / `._pay_coordle_round` (score-proportional coins, same trigger) | `party_game:<game_type>:<game_id>` (`party_game:cah:<game-over-msg-id>`, `party_game:anagrams:…`, `party_game:connect4:…`, `party_game:wordle:<digest-msg-id>`, `party_game:coordle:<round-timestamp>`) |
 | `game_host` | a party game the member hosted completes with **at least one other member** in the roster (empty games pay nothing — the anti-farm gate). Native party games *and* external Gamebot games, whose host comes from the lobby embed's title (`parser.host_from_lobby`, resolved by username) — external games passed no host and so paid no bounty before 2026-07-26 | `pay_game_rewards` via `game_manager.end_game` or `pay_cah_game_by_score` for external games, both through the shared `pay_host_bounty` → `award_host_bounty` | `game_host:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
@@ -720,7 +720,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `game_win` | winning a party game (NHIE, TTL liar+guesser, Hot Takes, Rushmore, Clapback, MLT, Price resolve winners as of 2026-07-20) — **including external CAH** (the *Game over!* winner) | `pay_game_rewards` winners pass, or `pay_cah_game_by_score` for CAH | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
-| `cat_catch` | catching a cat with the external **Cat Bot** in a `/games track … kind:Cat Bot` channel — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 1 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |
+| `cat_catch` | catching a cat with the external **Cat Bot** in a channel tracked with the Cat Bot parser — parsed from the catch message (catcher resolved by username→member, rarity from the emoji). Pays **rarity-tiered coins** (common 1 → divine 300, blessed catches ×2) *and* this trigger | `games_external_cog._pay_cat_catch` → `pay_cat_catch` (`apply_credit` kind `cat_catch` + trigger); once per catch via the `games_external_payouts` ledger | `catbot:<catch-msg-id>` |
 | `confession` | member submits an anonymous confession (posts to the feed) | `confessions_cog.ConfessModal.on_submit` → `_fire_confession_trigger` (both forum + text paths) | `confession:<message_id>` — silent claim keeps the feed anonymous; only trace is the ledger |
 | `ama_ask` | member's AMA question becomes visible: on submit (unfiltered) or on host approval (screened; rejected never pays) | `games_ama_cog` `AskQuestionModal.on_submit` + `ScreenedQuestionView.approve` → `_fire_ama_ask_trigger` | `ama_ask:<game_id>:<q_idx>` |
 | `whisper` | member sends an anonymous whisper that is delivered | `whisper_cog.WhisperCog._send_impl` after the DM+feed post succeed | `whisper:<whisper_id>` |
@@ -1309,7 +1309,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
 - **Discord is the entire v1 member surface** (decided — the member-facing dashboard
   wallet page and role studio are v2). One top-level group **`/bank`** (`wallet`,
   `pay`, `quests`, `shop`, `gift`, `sponsor`, `emoji`, `role`, `mute`, `grant` [mod],
-  `post-guide` [mod], `post-leaderboard` [mod], `post-shop` [mod])
+  the guide, leaderboard, and shop panels are posted from Config → Channel Panels)
   plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
@@ -1349,7 +1349,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
     file uploads, so image icons (256KB max) still arrive via slash command. The
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
     modals.
-- **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
+- **Channel guide panel (shipped):** posted from **Config → Channel Panels on the dashboard (replaced the slash command 2026-07-28)** [admin] —
   single branded "how it works" embed (a **Notifications** field explaining the
   panel's own 🔔 toggle for the opt-in DM role — it replaced a **Joining** field
   that pointed at `<id:customize>` back when that role also gated the channels —
@@ -1369,7 +1369,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   with the command under a per-guild lock. All three channel panels (guide, shop,
   leaderboard) stick to the bottom this way, each with its own ref cache, debounce
   task, and lock.
-- **Shop panel (shipped):** **`/bank post-shop [channel]`** [mod] posts the
+- **Shop panel (shipped):** posted from **Config → Channel Panels on the dashboard (replaced the slash command 2026-07-28)** [admin] —
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
   prices templated from `EconSettings`, feature-gated rows annotated) with a
@@ -1391,10 +1391,10 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   per-guild lock), so the one panel members are meant to tap never scrolls away.
   The repost re-derives gating, icon prices, and accent through
   `_build_shop_panel_embed` — the same builder the command uses, so a re-stick
-  can't serve a staler panel than `/bank post-shop` would.
+  can't serve a staler panel than a fresh post from Channel Panels would.
   Gifting stays command-only (`/bank gift` needs a
   target member, which a button can't carry).
-- **Leaderboard panel (shipped, live):** **`/bank post-leaderboard
+- **Leaderboard panel (shipped, live):** posted from Channel Panels (**`/bank post-leaderboard
   [channel]`** [mod] posts a single live status embed — the economy's
   centerpiece surface. Content, top to bottom: **today's pulse** (guild-local
   coins paid / quests completed / distinct earners, plus dailies-reset and

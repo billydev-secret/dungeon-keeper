@@ -15,14 +15,11 @@ import pytest
 from bot_modules.services.member_quality_score import (
     STATUS_ACTIVE,
     STATUS_INSUFFICIENT,
-    STATUS_LEAVE,
     STATUS_ONBOARDING,
     TENURE_12MO_BUFFER,
     MemberStandIn,
-    add_leave,
     build_quality_report,
     compute_quality_scores,
-    init_quality_score_tables,
 )
 from bot_modules.services.gender_service import init_gender_tables, set_gender
 from bot_modules.services.message_store import (
@@ -50,7 +47,6 @@ def conn():
     c.row_factory = sqlite3.Row
     init_message_tables(c)
     init_known_users_table(c)
-    init_quality_score_tables(c)
     init_gender_tables(c)
     yield c
     c.close()
@@ -138,18 +134,6 @@ def test_onboarding_status(conn):
     seed_active(conn, 1, days=5, start_days_ago=5)
     scores = compute_quality_scores(conn, GUILD, [FakeMember(1, 3)], now=NOW)
     assert by_id(scores, 1).status == STATUS_ONBOARDING
-
-
-def test_leave_of_absence_active_and_expired(conn):
-    members = [FakeMember(1, 200), FakeMember(2, 200)]
-    seed_active(conn, 1, days=10)
-    seed_active(conn, 2, days=10)
-    add_leave(conn, GUILD, 1, NOW_TS - 86400, NOW_TS + 86400)  # active leave
-    add_leave(conn, GUILD, 2, NOW_TS - 10 * 86400, NOW_TS - 86400)  # expired
-
-    scores = compute_quality_scores(conn, GUILD, members, now=NOW)
-    assert by_id(scores, 1).status == STATUS_LEAVE
-    assert by_id(scores, 2).status == STATUS_ACTIVE
 
 
 def test_insufficient_data_below_min_active_days(conn):

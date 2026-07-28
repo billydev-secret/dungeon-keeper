@@ -1,5 +1,6 @@
-"""Cog-level tests for the sticky channel prompt: /guess prompt, on_message
-listener with debounce, and the GuessPromptView buttons."""
+"""Cog-level tests for the sticky channel prompt: the dashboard's
+post_prompt_panel entry point, the on_message listener with debounce, and the
+GuessPromptView buttons."""
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +11,7 @@ import discord
 import pytest
 
 from bot_modules.services.guess_models import GuessConfig
-from tests.fakes import FakeGuild, FakeMember, fake_interaction
+from tests.fakes import FakeGuild, fake_interaction
 
 GUESS_CHANNEL_ID = 8001
 GUESS_ROLE_ID = 7001
@@ -266,38 +267,52 @@ async def test_cog_unload_cancels_pending_repost_tasks():
     assert not cog._pending_prompt_reposts
 
 
-# ── /guess prompt admin command ──────────────────────────────────────────────
-
-async def _guess_prompt(cog, interaction):
-    await cog.guess_prompt.callback(cog, interaction)
+# ── post_prompt_panel (dashboard entry point) ────────────────────────────────
+#
+# /guess prompt was replaced by Config → Channel Panels on 2026-07-28. The
+# method ignores any channel handed to it — the prompt belongs in the configured
+# Guess channel, since that is the only place the cog's sticky listener looks.
 
 
 @pytest.mark.asyncio
-async def test_guess_prompt_rejects_when_channel_unset():
-    member = FakeMember(id=1001)
-    guild = FakeGuild(id=GUILD_ID, members={member.id: member})
-    interaction = fake_interaction(user=member, guild=guild)
+async def test_post_prompt_panel_returns_none_when_channel_unset():
+    """None is how the route knows to say "set a Guess channel first" rather
+    than reporting a Discord failure."""
     cog = _make_cog()
+    guild = FakeGuild(id=GUILD_ID)
 
     with patch("bot_modules.cogs.guess_cog._load_config", return_value=_config(channel_id=0)):
-        await _guess_prompt(cog, interaction)
+        result = await cog.post_prompt_panel(guild, None)
 
-    msg = interaction.followup.send.call_args.args[0]
-    assert "not configured" in msg.lower() or "setup" in msg.lower()
+    assert result is None
 
 
 @pytest.mark.asyncio
-async def test_guess_prompt_posts_to_configured_channel():
-    member = FakeMember(id=1001)
+async def test_post_prompt_panel_posts_to_the_configured_channel():
     channel = _make_text_channel()
-    guild = FakeGuild(id=GUILD_ID, members={member.id: member}, channels={GUESS_CHANNEL_ID: channel})
-    interaction = fake_interaction(user=member, guild=guild)
-    cog = _make_cog()
+    guild = FakeGuild(id=GUILD_ID, channels={GUESS_CHANNEL_ID: channel})
 
+    cog = _make_cog()
     with patch("bot_modules.cogs.guess_cog._load_config", return_value=_config()), \
          patch("bot_modules.cogs.guess_cog._do_set_config"):
-        await _guess_prompt(cog, interaction)
+        result = await cog.post_prompt_panel(guild, None)
 
     channel.send.assert_awaited_once()
-    msg = interaction.followup.send.call_args.args[0]
-    assert "posted" in msg.lower() or "prompt" in msg.lower()
+    assert result is channel
+
+
+@pytest.mark.asyncio
+async def test_post_prompt_panel_ignores_a_supplied_channel():
+    """Honouring a picked channel would strand the Submit button outside the
+    flow the sticky listener drives."""
+    configured = _make_text_channel()
+    other = _make_text_channel(channel_id=4242)
+    guild = FakeGuild(id=GUILD_ID, channels={GUESS_CHANNEL_ID: configured})
+
+    cog = _make_cog()
+    with patch("bot_modules.cogs.guess_cog._load_config", return_value=_config()), \
+         patch("bot_modules.cogs.guess_cog._do_set_config"):
+        await cog.post_prompt_panel(guild, other)
+
+    configured.send.assert_awaited_once()
+    other.send.assert_not_awaited()

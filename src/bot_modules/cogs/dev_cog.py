@@ -5,7 +5,6 @@ import ast
 import importlib
 import inspect
 import logging
-import os
 import sys
 import types
 from typing import TYPE_CHECKING
@@ -148,22 +147,10 @@ class DevCog(commands.Cog):
         )
 
 
-    @app_commands.command(
-        name="spotify_authorize",
-        description="(Owner) Get a one-time link to authorize Spotify private-playlist access.",
-    )
-    async def spotify_authorize(self, interaction: discord.Interaction) -> None:
-        if not await self.bot.is_owner(interaction.user):
-            await interaction.response.send_message("❌ Bot owner only.", ephemeral=True)
-            return
-        base = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
-        if base.endswith("/callback"):
-            base = base[: -len("/callback")]
-        url = f"{base}/spotify/authorize"
-        await interaction.response.send_message(
-            f"Click to authorize Spotify (admin login required): {url}",
-            ephemeral=True,
-        )
+    # /spotify_authorize was removed 2026-07-28. It only printed the dashboard
+    # URL; the whole OAuth flow already lived on the web
+    # (GET /spotify/authorize -> /spotify/callback, admin-gated). The link is
+    # now a "Connect Spotify" button under Config -> Global -> Integrations.
 
 
 async def setup(bot: Bot) -> None:

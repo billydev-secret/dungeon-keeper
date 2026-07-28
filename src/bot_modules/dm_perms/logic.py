@@ -98,12 +98,32 @@ def classify_dm_request(
 
 
 def dm_status_text(mutual: bool) -> str:
-    """Return the one-line status string for ``/dm_status``.
+    """Return the one-line status string for the settings panel's status check.
 
     Trivial mapping, but extracted so the wording is testable and lives
     next to the rest of the DM-perm copy.
     """
     return "✅ You two are connected." if mutual else "❌ No connection yet."
+
+
+def discard_consent_pair(
+    pair_set: set[tuple[int, int]], user_a: int, user_b: int
+) -> bool:
+    """Drop both orderings of a consent pair from the in-memory cache.
+
+    A connection is stored under whichever ordering created it, so a revoke
+    has to try both. Returns whether either ordering was actually present —
+    the caller ORs this with the DB delete to decide between "done" and
+    "you have no connection with them".
+
+    Mutates ``pair_set`` in place, matching how the cog holds per-guild state.
+    """
+    removed = False
+    for key in ((user_a, user_b), (user_b, user_a)):
+        if key in pair_set:
+            pair_set.discard(key)
+            removed = True
+    return removed
 
 
 def pick_dm_roles_to_remove(roles: Iterable[discord.Role]) -> list[discord.Role]:

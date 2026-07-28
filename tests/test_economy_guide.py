@@ -214,7 +214,16 @@ def _interaction(actor, channel, guild=None):
 
 
 async def _post_guide(cog, interaction, channel=None):
-    await cog.bank_post_guide.callback(cog, interaction, channel)
+    """Post the guide panel.
+
+    /bank post-guide was replaced by Config → Channel Panels on 2026-07-28, so
+    this drives the cog method the route calls. ``interaction`` is kept in the
+    signature to leave the call sites alone — only its guild is used now, since
+    permission is the route's job.
+    """
+    return await cog.post_guide_panel(
+        interaction.guild, channel or interaction.channel
+    )
 
 
 def _stored(db) -> tuple[int, int]:
@@ -264,36 +273,18 @@ async def test_post_guide_disabled_gate(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(admin=True), _channel(CHANNEL_ID))
 
-    await _post_guide(cog, interaction)
-
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "isn't enabled" in msg
-
-
-@pytest.mark.asyncio
-async def test_post_guide_plain_member_refused(ctx, db):
-    _enable(db, manager_role_id=MANAGER_ROLE_ID)
-    cog = _make_cog(ctx)
-    channel = _channel(CHANNEL_ID)
-    interaction = _interaction(_member(), channel)
-
-    await _post_guide(cog, interaction)
-
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "permission" in msg
-    channel.send.assert_not_awaited()
+    # Domain rule, kept on the cog: no currency, no currency guide, however you
+    # got here. It raises rather than returning None so the route can name the
+    # actual fix — a bare None surfaces as "Discord rejected the post", which
+    # sends the admin to check bot permissions instead of the economy toggle.
+    with pytest.raises(ValueError, match="disabled"):
+        await _post_guide(cog, interaction)
 
 
-@pytest.mark.asyncio
-async def test_post_guide_rejects_non_text_channel(ctx, db):
-    _enable(db)
-    cog = _make_cog(ctx)
-    interaction = _interaction(_member(admin=True), MagicMock())  # not a TextChannel
-
-    await _post_guide(cog, interaction)
-
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "text channel" in msg
+# "Plain member refused" and "rejects a non-text channel" moved with the
+# command: post_guide_panel is unguarded by design, and its only caller is
+# POST /api/panels/{key}/post, which is admin-gated and does the channel-type
+# check (tests/web/test_panels_routes.py, plus the authz sweep).
 
 
 @pytest.mark.asyncio
@@ -313,10 +304,6 @@ async def test_post_guide_posts_and_saves_ids(ctx, db):
     embed = channel.send.await_args.kwargs["embed"]
     assert "Gems" in embed.title
     assert _stored(db) == (CHANNEL_ID, 8888)
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "is live" in msg and interaction.response.send_message.await_args.kwargs[
-        "ephemeral"
-    ]
 
 
 @pytest.mark.asyncio
@@ -392,10 +379,12 @@ async def test_post_guide_forbidden_target(ctx, db):
     channel.send.side_effect = discord.Forbidden(MagicMock(status=403), "no")
     interaction = _interaction(_member(admin=True), channel)
 
-    await _post_guide(cog, interaction)
+    result = await _post_guide(cog, interaction)
 
-    msg = interaction.response.send_message.await_args.args[0]
-    assert "permission to post" in msg
+    # The cog reports failure by returning None; turning that into a
+    # user-facing "missing permission" message is the route's job now
+    # (tests/web/test_panels_routes.py).
+    assert result is None
     assert _stored(db) == (0, 0)  # nothing saved
 
 

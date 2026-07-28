@@ -102,6 +102,13 @@ function renderDetail(ev) {
       ${windowHtml ? `<div class="rw-section"><div class="rw-section__title">Conversation window${windowFlagged ? ' · <span class="rw-flag-legend">flagged message</span>' : ""}</div>${windowHtml}</div>` : ""}
 
       ${!alreadyLabeled ? `
+        <div class="rw-correction">
+          <label for="rw-corrected-rule">Correct rule</label>
+          <input id="rw-corrected-rule" type="text" data-corrected-rule maxlength="16"
+                 inputmode="numeric" autocomplete="off"
+                 placeholder="${esc(ev.guard_rule || "?")}">
+          <span class="rw-correction__hint">optional — only if this is a real violation the guard matched to the wrong rule</span>
+        </div>
         <div class="rw-actions">
           <button class="btn btn-danger" data-label="true">✅ Confirmed violation</button>
           <button class="btn btn-secondary" data-label="false">❌ False positive</button>
@@ -245,6 +252,16 @@ export function mount(container, initialParams = {}) {
                                padding-left:8px; font-weight:600; }
       .rw-flag-legend { color:var(--red, #e06666); }
       .rw-actions { display:flex; gap:8px; margin-top:12px; }
+      /* Own row rather than inside .rw-actions: the mobile rule below makes
+         that row sticky and stretches its .btn children, which an input
+         shouldn't join. Wraps so the hint drops under the field on narrow
+         viewports instead of pushing the layout sideways. */
+      .rw-correction { display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+                       margin-top:12px; font-size:12px; color:var(--dim, #888); }
+      .rw-correction input { width:80px; padding:4px 6px; font-size:13px;
+                             border:1px solid var(--border); border-radius:4px;
+                             background:var(--surface2, #3a3d42); color:inherit; }
+      .rw-correction__hint { flex:1 1 auto; min-width:0; }
       .rw-stats__tables { display:flex; gap:16px; margin-top:16px; }
       .rw-table { border-collapse:collapse; font-size:13px; }
       .rw-table th, .rw-table td { padding:4px 12px; border:1px solid var(--border); }
@@ -427,8 +444,16 @@ export function mount(container, initialParams = {}) {
     detailEl.querySelectorAll("[data-label]").forEach(btn => {
       btn.addEventListener("click", async () => {
         const isViolation = btn.dataset.label === "true";
+        // Only meaningful alongside a confirmation: a false positive has no
+        // "correct" rule, so anything typed is dropped rather than recorded
+        // against a dismissal. Restores what /rules-watch label used to send
+        // (removed 2026-07-28); the endpoint has always accepted it.
+        const correctedEl = detailEl.querySelector("[data-corrected-rule]");
+        const corrected = isViolation && correctedEl ? correctedEl.value.trim() : "";
+        const payload = { is_violation: isViolation };
+        if (corrected) payload.corrected_rule = corrected;
         try {
-          await apiPost(`/api/rules-watch/events/${ev.id}/label`, { is_violation: isViolation });
+          await apiPost(`/api/rules-watch/events/${ev.id}/label`, payload);
           ev.is_violation = isViolation;
           const nextId = nextUnlabeledId(ev.id);
           if (nextId != null) {

@@ -666,7 +666,7 @@ def build_panel_embed(
             f"🟢 **{names['open']}** — Anyone can message them freely\n"
             f"🟡 **{names['ask']}** — They want to approve requests first\n"
             f"🔴 **{names['closed']}** — Not accepting requests right now\n\n"
-            "Set your own preference with `/dm_set_mode`."
+            "Set your own preference with the **My DM Settings** button below."
         ),
         inline=False,
     )
@@ -693,7 +693,9 @@ def build_panel_embed(
         inline=False,
     )
     apply_section_spacing(embed)
-    embed.set_footer(text="You can revoke any connection at any time with /dm_revoke.")
+    embed.set_footer(
+        text="You can revoke any connection at any time from My DM Settings below."
+    )
     return embed
 
 
