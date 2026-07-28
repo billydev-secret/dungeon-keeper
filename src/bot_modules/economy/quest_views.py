@@ -35,7 +35,8 @@ import discord
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import is_economy_manager, local_day_for
-from bot_modules.economy.leaderboard import progress_bar
+from bot_modules.economy.leaderboard import bar_fill, progress_bar
+from bot_modules.economy.view_helpers import unit as _unit
 from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
@@ -51,7 +52,13 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
 )
-from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.services.embeds import (
+    COLOR_GREEN,
+    COLOR_RED,
+    EMBED_FIELD_LIMIT,
+    fit_lines,
+    pad_cell as _pad,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -65,7 +72,7 @@ _CLAIM_VIEW_TIMEOUT = 180  # seconds; the ephemeral claim select is short-lived.
 # per-quest detail view (the /bank quests list itself stays one line per
 # quest; this is where the long form lives).
 # Glyphs for the three live states stay in lock-step with the one-line
-# board (_quest_line_status in economy_cog): 🔶 = your move / claimable,
+# board (_quest_line_status, below): 🔶 = your move / claimable,
 # ⏳ = awaiting sign-off, ✅ = done. Sharing the vocabulary keeps ✅ from
 # meaning "claimable" here and "done" on the board.
 QUEST_STATE_LABEL = {
@@ -110,12 +117,176 @@ def can_manage_economy(member: discord.Member, settings: EconSettings) -> bool:
     )
 
 
-def _unit(settings: EconSettings, amount: int) -> str:
-    return settings.currency_name if abs(amount) == 1 else settings.currency_plural
-
-
 def _reward_text(settings: EconSettings, reward: int) -> str:
     return f"{settings.currency_emoji} **{reward:,}** {_unit(settings, reward)}"
+
+
+# ── the /bank quests board ────────────────────────────────────────────────────
+#
+# The list render lives beside the details popup it must stay consistent with:
+# both name the same quest states, and QUEST_STATE_LABEL above is the long-form
+# of the short glyph phrases _quest_line_status produces. They were in separate
+# modules — the cog held the half nobody looked at — so the vocabulary drifted
+# apart by construction.
+
+# The /bank quests board is two sections: the member's own board (daily/weekly
+# board draws) and the guild-wide goals everyone moves together (the monthly
+# goal + the weekly community goals — both shared counters, no self-claim).
+# Event ("Anytime") quests aren't board-drawn and don't get a section here —
+# they stay a surprise payout rather than a proactively-listed menu; they're
+# still claimable via the details select if one lands in a claimable state.
+# Each section is one embed field; within it, a cadence sub-label separates
+# the groups when more than one is present. The long per-state explainer text
+# lives in QUEST_STATE_LABEL, shown by the details select — the list itself
+# stays one line per quest.
+_CADENCE_LABEL = {
+    "daily": "Daily",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
+    "community": "Weekly",
+}
+_QUEST_SECTIONS = (
+    ("🧍 Your quests", ("daily", "weekly")),
+    # Weekly community goals lead, the slower monthly goal anchors the foot —
+    # same near-term-first order as the member's own board above.
+    ("🌐 Community goals", ("community", "monthly")),
+)
+
+
+# The ``/bank quests`` list draws the same ``▰▱`` meter the details popup and
+# login digest use, just narrower so a bar + reward still fit one line on
+# mobile. Counted daily/weekly show ``{bar} n/target`` — the small personal
+# counts are the point ("7/10 messages"). The guild-wide community/monthly
+# goals show the **bar alone**: their shared totals run into five or six
+# figures (``7,875/68,935``), which bloated the column and read as noise next
+# to the fill — the exact numbers live in the details popup and login digest.
+# One-shot quests keep a glyph phrase.
+_QUEST_BAR_WIDTH = 8
+
+
+def _quest_line_status(q: dict) -> str:
+    """The status column: a progress bar for counted/community quests, else
+    one short glyph phrase."""
+    state = str(q.get("state") or "")
+    if state == "community":
+        return bar_fill(int(q["current"]), int(q["target"]), _QUEST_BAR_WIDTH)
+    if state == "done":
+        return "✅ done"
+    if state == "pending":
+        return "⏳ sign-off"
+    if state == "claimable":
+        return "🔶 claim below"
+    if q.get("progress_target"):
+        return progress_bar(
+            int(q["progress_current"]), int(q["progress_target"]), _QUEST_BAR_WIDTH
+        )
+    return "☐ to do"
+
+
+def _quest_line_reward(q: dict, settings: EconSettings) -> str:
+    """The payment column: coins, optional XP, optional spotlight bolt.
+    The XP suffix stays glyph-free — on phone widths the reward column
+    hugs the wrap point, and a ⭐ was enough to push it onto its own line."""
+    reward = f"{settings.currency_emoji} {int(q['reward']):,}"
+    if q.get("reward_xp"):
+        reward += f" +{int(q['reward_xp']):,}xp"
+    if q.get("spotlight"):
+        reward += " ⚡"
+    return reward
+
+
+# Emoji-presentation glyphs that appear in a status cell render ~2 monospace
+# columns wide (unlike ☐/▰▱, which sit at ~1). Counting them as 2 when sizing
+# the status column keeps the reward column that follows the code cell aligned.
+_WIDE_STATUS_GLYPHS = ("✅", "⏳", "🔶")
+
+
+def _status_disp_width(text: str) -> int:
+    """Approximate monospace column width of a status cell for padding."""
+    return len(text) + sum(text.count(g) for g in _WIDE_STATUS_GLYPHS)
+
+
+def _quest_section_lines(
+    cadences: tuple[str, ...],
+    groups: dict[str, list[dict]],
+    settings: EconSettings,
+    width: int,
+) -> list[str]:
+    """Display lines for one board section — each present cadence's quests,
+    one line apiece, with a bold cadence sub-label above them when the section
+    spans more than one cadence (a single-cadence section needs no sub-label,
+    the field heading already names it).
+
+    Title and status share one monospace code cell (per the embed style
+    guide's one-cell-per-row rule) so their columns line up; the status column
+    is padded to the section's widest status so the reward — which stays
+    *outside* the backticks, emoji and all — starts at the same column on every
+    row."""
+    present = [c for c in cadences if groups.get(c)]
+    show_labels = len(present) > 1
+    rows = [(c, q, _quest_line_status(q)) for c in present for q in groups[c]]
+    status_w = max((_status_disp_width(s) for _, _, s in rows), default=0)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for cadence, q, status in rows:
+        if show_labels and cadence not in seen:
+            lines.append(f"**{_CADENCE_LABEL[cadence]}**")
+            seen.add(cadence)
+        pad = " " * max(0, status_w - _status_disp_width(status))
+        cell = f"{_pad(str(q['title']), width)}  {status}{pad}"
+        lines.append(f"`{cell}` {_quest_line_reward(q, settings)}")
+    return lines
+
+
+def build_quest_board_embed(
+    settings: EconSettings,
+    quests_state: list[dict],
+    *,
+    color: discord.Color | None,
+) -> discord.Embed:
+    """The ``/bank quests`` list: one line per quest, split into two sections.
+
+    Returns the "nothing active" embed unchanged when ``quests_state`` is
+    empty — the caller skips the claim view in that case.
+    """
+    embed = discord.Embed(title=f"{settings.currency_emoji} Quests", color=color)
+    if not quests_state:
+        embed.description = "_No active quests right now — check back soon!_"
+        return embed
+
+    # One line per quest — title | status | payment — split into two
+    # sections (your board vs the guild-wide goals), cadence sub-labelled
+    # within each. Descriptions and the how-it-completes explainers live
+    # behind the details select, so the list stays scannable.
+    desc_bits = []
+    if any(q.get("spotlight") for q in quests_state):
+        desc_bits.append("⚡ Spotlight quests pay **double** this week!")
+    desc_bits.append(
+        "Pick a quest from the menu below for its full story."
+    )
+    embed.description = "\n".join(desc_bits) + "\n​"
+
+    groups: dict[str, list[dict]] = {}
+    for q in quests_state:
+        groups.setdefault(str(q["qtype"]), []).append(q)
+    width = min(max(len(str(q["title"])) for q in quests_state), 22)
+    sections = [
+        (heading, _quest_section_lines(cadences, groups, settings, width))
+        for heading, cadences in _QUEST_SECTIONS
+    ]
+    sections = [(heading, lines) for heading, lines in sections if lines]
+    for i, (heading, quest_lines) in enumerate(sections):
+        # Defensive cap: a large quest_board_* size could still blow the
+        # 1024-char field cap and 400 the whole command guild-wide.
+        # (Reserve room for the "+N more" tail + breathing-room line.)
+        value = fit_lines(quest_lines, EMBED_FIELD_LIMIT - 40)
+        shown = value.count("\n") + 1 if value else 0
+        if shown < len(quest_lines):
+            value += f"\n_…and {len(quest_lines) - shown} more_"
+        if i < len(sections) - 1:  # breathing room above the next heading
+            value += "\n​"
+        embed.add_field(name=heading, value=value, inline=False)
+    return embed
 
 
 # ── sign-off card embed ───────────────────────────────────────────────────────

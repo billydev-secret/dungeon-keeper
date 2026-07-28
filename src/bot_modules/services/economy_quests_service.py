@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sqlite3
 import time
 from collections.abc import Iterable
@@ -443,6 +444,108 @@ def list_trigger_quests(
     ).fetchall()
 
 
+# ── trigger-*word* quests (a member says the phrase) ──────────────────────────
+#
+# The sibling of the trigger-*kind* mechanic below (``fire_trigger_quests``):
+# same board-membership rule, same per-period claim, different evidence — a
+# phrase in a message rather than an event the bot observed. It lived in the
+# cog's on_message listener, which meant the board gate existed in two places,
+# only one of them reachable from a service test.
+
+
+@dataclass(frozen=True)
+class TriggerQuest:
+    """One active trigger-word quest, pre-compiled for the message listener."""
+
+    quest_id: int
+    qtype: str
+    channel_id: int | None  # None = any channel counts
+    pattern: re.Pattern[str]
+
+
+def load_trigger_index(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[TriggerQuest]:
+    """Active trigger quests with compiled patterns ([] when econ is off).
+
+    The caller caches this — recompiling every phrase for every message in the
+    guild would be the listener's dominant cost.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled:
+        return []
+    out: list[TriggerQuest] = []
+    for row in list_trigger_quests(conn, guild_id):
+        pattern = quests.compile_trigger_pattern(
+            quests.parse_trigger_words(str(row["trigger_words"]))
+        )
+        if pattern is None:
+            continue
+        channel_id = row["trigger_channel_id"]
+        out.append(
+            TriggerQuest(
+                quest_id=int(row["id"]),
+                qtype=str(row["qtype"]),
+                channel_id=int(channel_id) if channel_id is not None else None,
+                pattern=pattern,
+            )
+        )
+    return out
+
+
+def matching_triggers(
+    triggers: Iterable[TriggerQuest],
+    content: str,
+    channel_ids: tuple[int | None, ...],
+) -> list[TriggerQuest]:
+    """The triggers this message content fires, respecting per-quest channel scope.
+
+    ``channel_ids`` is the message's channel plus its parent, so a phrase said
+    in a thread counts for a quest scoped to the thread's parent channel.
+    """
+    out: list[TriggerQuest] = []
+    for trig in triggers:
+        if trig.channel_id is not None and trig.channel_id not in channel_ids:
+            continue
+        if quests.message_matches_trigger(content, trig.pattern):
+            out.append(trig)
+    return out
+
+
+def claim_trigger_word(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    trig: TriggerQuest,
+    *,
+    booster: bool,
+    now: float,
+) -> tuple[EconSettings, object]:
+    """Claim one matched trigger-word quest: ``(settings, outcome)``.
+
+    Raises ``ValueError`` for the ordinary "nothing to do" cases — already
+    claimed this period, the window closed, the quest was deactivated since
+    the caller's cache load, or it isn't on this member's board this period.
+    Callers stay silent on those; every repeat message would hit one.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    offset = get_tz_offset_hours(conn, guild_id)
+    day = local_day_for(now, offset)
+    period = quests.quest_period(trig.qtype, day)
+    # A trigger-word quest still only pays when it's on the member's personal
+    # board this period (parity with kind triggers). Off-board → treat like an
+    # unclaimable repeat.
+    if quests.has_board(trig.qtype) and trig.quest_id not in assigned_board_ids(
+        conn, guild_id, user_id, trig.qtype, day, settings
+    ):
+        raise ValueError("quest not on member's board this period")
+    outcome = claim_quest(
+        conn, settings, guild_id, trig.quest_id, user_id,
+        period=period, booster=booster,
+    )
+    return settings, outcome
+
+
 def list_kind_triggered_quests(
     conn: sqlite3.Connection, guild_id: int, trigger_kind: str
 ) -> list[sqlite3.Row]:
@@ -459,6 +562,22 @@ def list_kind_triggered_quests(
         """,
         (guild_id, trigger_kind),
     ).fetchall()
+
+
+def has_active_kind_quest(
+    conn: sqlite3.Connection, guild_id: int, trigger_kind: str
+) -> bool:
+    """Whether any active quest is auto-paid by ``trigger_kind``.
+
+    The cheap form of ``list_kind_triggered_quests``, for the per-event gates
+    that only need the yes/no — those run on a hot path and shouldn't
+    materialise rows they immediately discard.
+    """
+    return conn.execute(
+        "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
+        " AND trigger_kind = ? LIMIT 1",
+        (guild_id, trigger_kind),
+    ).fetchone() is not None
 
 
 def list_active_pool_ids(

@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import discord
 from discord import app_commands
@@ -30,15 +28,29 @@ from bot_modules.economy.guide import (
     build_guide_embed,
 )
 from bot_modules.economy.leaderboard import (
-    _pad,
-    bar_fill,
     build_leaderboard_embed,
     collect_leaderboard_data,
-    progress_bar,
 )
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.logic import local_day_for
-from bot_modules.economy.register import kind_display
+from bot_modules.economy.view_helpers import (
+    unit as _unit,
+)
+from bot_modules.economy.wallet import build_wallet_embed
+from bot_modules.economy.perks import (
+    CUSTOMISE_LABELS as _CUSTOMISE_LABELS,
+    FEATURE_GATED,
+    GIFTABLE_PERKS,
+    NO_CONFIG_PERKS,
+    PERK_EMOJI,
+    PERK_LABELS,
+    PERK_REFUSAL as _PERK_REFUSAL,
+    PERK_REFUSAL_FALLBACK as _PERK_REFUSAL_FALLBACK,
+    PERK_SHORT,
+    SELF_PERKS,
+    perk_price,
+)
+from bot_modules.economy.shop import build_shop_embed
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -47,6 +59,7 @@ from bot_modules.economy.perk_actions import (
     revoke_role_perks,
 )
 from bot_modules.economy.quest_views import (
+    build_quest_board_embed,
     QuestApproveButton,
     QuestBoardView,
     QuestClaimView,
@@ -104,22 +117,11 @@ from bot_modules.services.economy_qotd_sponsor_service import (
     sponsor_enabled,
     submit_sponsor,
 )
-from bot_modules.economy.quests import (
-    compile_trigger_pattern,
-    has_board,
-    message_matches_trigger,
-    parse_trigger_words,
-    quest_period,
-)
 from bot_modules.services.economy_quests_service import (
-    assigned_board_ids,
-    claim_quest,
     fire_trigger_inline,
     fire_trigger_quests,
-    list_trigger_quests,
     load_member_quest_board,
     reroll_quote,
-    source_enabled,
 )
 from bot_modules.services.economy_icon_catalog_service import (
     catalog_price_range,
@@ -143,6 +145,8 @@ from bot_modules.services.economy_loop import revoke_perk_effect
 from bot_modules.economy.rentals import prorated_refund
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_wager_service as wager_svc
+from bot_modules.services import economy_photo_service as photo_svc
+from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -182,78 +186,18 @@ _CATALOG_LOCKED_MSG = (
     "pick **Custom** from the shop's icon picker first (/bank shop)."
 )
 _QOTD_CARD_FILENAME = "qotd.png"
+_NO_ROLE_ICONS_MSG = "❌ This server doesn't support role icons right now."
 
 # Transfers above this need an explicit confirm step (spec §5, "over 100").
 _PAY_CONFIRM_THRESHOLD = 100
 _MAX_ROLE_NAME_LEN = 32
 _MAX_MEMO_LEN = 100
-# Memos are shortened further in the one-line wallet render, and the joined
-# field is bounded — Discord rejects an embed field over 1024 chars.
-_WALLET_MEMO_LEN = 40
-_EMBED_FIELD_LIMIT = 1024
 _MAX_ICON_BYTES = 256 * 1024
-
-# Human labels for the rentable perks (shop rows, wallet field, DMs).
-_PERK_LABELS = {
-    "role_color": "Custom Role Color",
-    "role_name": "Custom Role Name",
-    "role_icon": "Role Icon",
-    "role_gradient": "Gradient Role",
-    "role_holographic": "Holographic Role",
-    "voice_style": "Voice Style",
+# Emoji upload types Discord accepts, mapped to whether they're animated.
+_EMOJI_CONTENT_TYPES = {
+    "image/png": False, "image/jpeg": False,
+    "image/webp": False, "image/gif": True,
 }
-# The role perks a member rents for themselves, in shop display order. Every
-# giftable perk (these + the voice-style lease) is gifted as the same perk
-# kind rented with the friend as beneficiary (gift_color retired in 091).
-_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_holographic", "role_icon")
-# Self-perks with no member-side customisation: renting IS the whole thing
-# (holographic is a fixed Discord preset, not a colour the member picks), so
-# these skip the "Set …" modal and post-rent button.
-_NO_CONFIG_PERKS = ("role_holographic",)
-_GIFTABLE_PERKS = (*_SELF_PERKS, "voice_style")
-# Feature-gated perks and the friendly reason shown when the gate is closed.
-_FEATURE_GATED = ("role_gradient", "role_holographic", "role_icon")
-
-# Shop-table furniture. The full `_PERK_LABELS` names are too wide for an
-# aligned two-cell row, so the shop uses a short cell label plus a one-line
-# blurb — most members have never seen a gradient role and can't price what
-# they can't picture. Blurbs stay under ~27 chars so a row survives mobile.
-_PERK_SHORT = {
-    "role_color": "Color",
-    "role_name": "Name",
-    "role_gradient": "Gradient",
-    "role_holographic": "Holo",
-    "role_icon": "Icon",
-    "voice_style": "Voice",
-}
-# Blurbs stay under ~15 chars: the shop row is one code cell of
-# label + blurb, and anything wider pushes the price onto its own
-# line on a phone-width embed.
-_PERK_BLURBS = {
-    "role_color": "any solid color",
-    "role_name": "nickname + role",
-    "role_gradient": "two-color fade",
-    "role_holographic": "shimmer preset",
-    "role_icon": "badge by name",
-    "voice_style": "your voice room",
-}
-_PERK_EMOJI = {
-    "role_color": "🎨",
-    "role_name": "✨",
-    "role_gradient": "🌈",
-    "role_holographic": "🪩",
-    "role_icon": "🖼️",
-    "voice_style": "🎙️",
-}
-# Self-perks grouped into a price ladder — cheap everyday tweaks first, the
-# showy ones second — so the shop reads as tiers to climb rather than a flat
-# spreadsheet. Rows sort by price inside each tier at render time, since
-# prices are guild-configurable and can reorder.
-_PERK_TIERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Essentials", ("role_name", "role_color")),
-    ("Signature", ("role_gradient", "role_icon", "role_holographic")),
-)
-
 
 # The custom-name perk renames the member's personal role AND sets their
 # server nickname to match — "call yourself anything" has to actually change
@@ -277,10 +221,6 @@ def _custom_name_confirmation(text: str, *, nick_ok: bool, nick_reason: str = ""
         )
     base = f"Your role name is now **{text}**."
     return f"{base} {nick_reason}" if nick_reason else base
-
-
-def _perk_price(settings: EconSettings, perk: str) -> int:
-    return int(getattr(settings, f"price_{perk}"))
 
 
 def _icon_store_path(db_path, guild_id: int, user_id: int):
@@ -312,31 +252,6 @@ def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None
     return discord.utils.get(guild.emojis, name=name)
 
 
-def _rental_lines(settings: EconSettings, rentals: list, user_id: int) -> list[str]:
-    """One line per live rental for the wallet's 'Active rentals' field."""
-    emoji = settings.currency_emoji
-    lines: list[str] = []
-    for r in rentals:
-        perk = str(r["perk"])
-        label = _PERK_LABELS.get(perk, perk)
-        price = int(r["price"])
-        next_bill = int(r["next_bill_at"])
-        owner_id = int(r["user_id"])
-        beneficiary_id = int(r["beneficiary_id"])
-        attribution = ""
-        if beneficiary_id != owner_id:
-            if beneficiary_id == user_id:
-                attribution = " (gift received)"
-            elif owner_id == user_id:
-                attribution = f" (gift to <@{beneficiary_id}>)"
-        grace = " · ⏳ in grace" if str(r["state"]) == "grace" else ""
-        lines.append(
-            f"**{label}**{attribution} — {emoji} {price:,}/wk · "
-            f"renews <t:{next_bill}:R>{grace}"
-        )
-    return lines
-
-
 async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
     """Bytes for the QOTD card background — the server icon, bot avatar fallback."""
     if guild.icon is not None:
@@ -353,134 +268,21 @@ async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
     return None
 
 
-def _unit(settings: EconSettings, amount: int) -> str:
-    """Currency name matching ``amount``'s grammatical number."""
-    return settings.currency_name if abs(amount) == 1 else settings.currency_plural
-
-
-# The /bank quests board is two sections: the member's own board (daily/weekly
-# board draws) and the guild-wide goals everyone moves together (the monthly
-# goal + the weekly community goals — both shared counters, no self-claim).
-# Event ("Anytime") quests aren't board-drawn and don't get a section here —
-# they stay a surprise payout rather than a proactively-listed menu; they're
-# still claimable via the details select if one lands in a claimable state.
-# Each section is one embed field; within it, a cadence sub-label separates
-# the groups when more than one is present. The long per-state explainer text
-# lives in quest_views.QUEST_STATE_LABEL, shown by the details select — the
-# list itself stays one line per quest.
-_CADENCE_LABEL = {
-    "daily": "Daily",
-    "weekly": "Weekly",
-    "monthly": "Monthly",
-    "community": "Weekly",
-}
-_QUEST_SECTIONS = (
-    ("🧍 Your quests", ("daily", "weekly")),
-    # Weekly community goals lead, the slower monthly goal anchors the foot —
-    # same near-term-first order as the member's own board above.
-    ("🌐 Community goals", ("community", "monthly")),
-)
-
-
-# The ``/bank quests`` list draws the same ``▰▱`` meter the details popup and
-# login digest use, just narrower so a bar + reward still fit one line on
-# mobile. Counted daily/weekly show ``{bar} n/target`` — the small personal
-# counts are the point ("7/10 messages"). The guild-wide community/monthly
-# goals show the **bar alone**: their shared totals run into five or six
-# figures (``7,875/68,935``), which bloated the column and read as noise next
-# to the fill — the exact numbers live in the details popup and login digest.
-# One-shot quests keep a glyph phrase.
-_QUEST_BAR_WIDTH = 8
-
-
-def _quest_line_status(q: dict) -> str:
-    """The status column: a progress bar for counted/community quests, else
-    one short glyph phrase."""
-    state = str(q.get("state") or "")
-    if state == "community":
-        return bar_fill(int(q["current"]), int(q["target"]), _QUEST_BAR_WIDTH)
-    if state == "done":
-        return "✅ done"
-    if state == "pending":
-        return "⏳ sign-off"
-    if state == "claimable":
-        return "🔶 claim below"
-    if q.get("progress_target"):
-        return progress_bar(
-            int(q["progress_current"]), int(q["progress_target"]), _QUEST_BAR_WIDTH
-        )
-    return "☐ to do"
-
-
-def _quest_line_reward(q: dict, settings: EconSettings) -> str:
-    """The payment column: coins, optional XP, optional spotlight bolt.
-    The XP suffix stays glyph-free — on phone widths the reward column
-    hugs the wrap point, and a ⭐ was enough to push it onto its own line."""
-    reward = f"{settings.currency_emoji} {int(q['reward']):,}"
-    if q.get("reward_xp"):
-        reward += f" +{int(q['reward_xp']):,}xp"
-    if q.get("spotlight"):
-        reward += " ⚡"
-    return reward
-
-
-# Emoji-presentation glyphs that appear in a status cell render ~2 monospace
-# columns wide (unlike ☐/▰▱, which sit at ~1). Counting them as 2 when sizing
-# the status column keeps the reward column that follows the code cell aligned.
-_WIDE_STATUS_GLYPHS = ("✅", "⏳", "🔶")
-
-
-def _status_disp_width(text: str) -> int:
-    """Approximate monospace column width of a status cell for padding."""
-    return len(text) + sum(text.count(g) for g in _WIDE_STATUS_GLYPHS)
-
-
-def _quest_section_lines(
-    cadences: tuple[str, ...],
-    groups: dict[str, list[dict]],
-    settings: EconSettings,
-    width: int,
-) -> list[str]:
-    """Display lines for one board section — each present cadence's quests,
-    one line apiece, with a bold cadence sub-label above them when the section
-    spans more than one cadence (a single-cadence section needs no sub-label,
-    the field heading already names it).
-
-    Title and status share one monospace code cell (per the embed style
-    guide's one-cell-per-row rule) so their columns line up; the status column
-    is padded to the section's widest status so the reward — which stays
-    *outside* the backticks, emoji and all — starts at the same column on every
-    row."""
-    present = [c for c in cadences if groups.get(c)]
-    show_labels = len(present) > 1
-    rows = [(c, q, _quest_line_status(q)) for c in present for q in groups[c]]
-    status_w = max((_status_disp_width(s) for _, _, s in rows), default=0)
-    lines: list[str] = []
-    seen: set[str] = set()
-    for cadence, q, status in rows:
-        if show_labels and cadence not in seen:
-            lines.append(f"**{_CADENCE_LABEL[cadence]}**")
-            seen.add(cadence)
-        pad = " " * max(0, status_w - _status_disp_width(status))
-        cell = f"{_pad(str(q['title']), width)}  {status}{pad}"
-        lines.append(f"`{cell}` {_quest_line_reward(q, settings)}")
-    return lines
-
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
 _TRIGGER_CACHE_TTL = 60.0
 
 
+class _ShopContext(NamedTuple):
+    """Everything /bank shop renders from, read on a single connection."""
 
-@dataclass(frozen=True)
-class _TriggerQuest:
-    """One active trigger-word quest, pre-compiled for the message listener."""
-
-    quest_id: int
-    qtype: str
-    signoff: bool
-    channel_id: int | None  # None = any channel counts
-    pattern: re.Pattern[str]
+    settings: EconSettings
+    owned: set[str]
+    balance: int
+    icon_range: tuple[int, int, int] | None
+    refundable: list[dict]
+    shields_held: int
+    shield_price: int
 
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif")
@@ -499,11 +301,6 @@ def _has_image_attachment(message: discord.Message) -> bool:
         if not ctype and att.filename.lower().endswith(_IMAGE_EXTENSIONS):
             return True
     return False
-
-
-# A text meter for a community quest's running total — shared with the
-# leaderboard panel so the two surfaces render one way.
-_progress_bar = progress_bar
 
 
 def _can_grant(user: discord.Member, settings: EconSettings) -> bool:
@@ -530,42 +327,35 @@ def _clean_memo(memo: str | None) -> str | None:
     return cleaned[:_MAX_MEMO_LEN]
 
 
-def _ellipsis(text: str, limit: int = _WALLET_MEMO_LEN) -> str:
-    """Shorten a memo for the cramped one-line wallet render."""
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+class _MemberScopedView(discord.ui.View):
+    """A view usable only by the member it was opened for.
 
-
-def _fit_lines(lines: list[str], limit: int = _EMBED_FIELD_LIMIT) -> str:
-    """Join as many leading lines as fit an embed field.
-
-    Memos make each activity row variable-length, so ten of them can overrun
-    the 1024-char field cap and make Discord reject the whole wallet embed.
-    Dropping the oldest rows keeps the newest visible rather than 400-ing.
+    Shared base for the shop-adjacent pickers (``_ShopView``,
+    ``_IconCatalogView``, ``_RefundPickerView``) and for the confirm gates,
+    which were each carrying an identical ``interaction_check``. Subclasses
+    differ only in what the refusal says and how long they live, so those are
+    a class attribute and a constructor argument rather than a re-implementation.
     """
-    out: list[str] = []
-    used = 0
-    for line in lines:
-        cost = len(line) + (1 if out else 0)
-        if used + cost > limit:
-            break
-        out.append(line)
-        used += cost
-    return "\n".join(out)
+
+    SCOPE_DENIAL = "❌ Open your own shop with /bank shop."
+
+    def __init__(self, user_id: int, *, timeout: float | None = 120) -> None:
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                self.SCOPE_DENIAL, ephemeral=True
+            )
+            return False
+        return True
 
 
-def _memo_of(row_meta: str | None) -> str | None:
-    """Pull the memo out of a ledger row's meta JSON, tolerating junk."""
-    if not row_meta:
-        return None
-    try:
-        memo = json.loads(row_meta).get("memo")
-    except (ValueError, TypeError, AttributeError):
-        return None
-    return memo if isinstance(memo, str) and memo else None
-
-
-class _PayConfirmView(discord.ui.View):
+class _PayConfirmView(_MemberScopedView):
     """Ephemeral Confirm/Cancel gate for a transfer over the threshold."""
+
+    SCOPE_DENIAL = "❌ This confirmation isn't yours."
 
     def __init__(
         self,
@@ -577,7 +367,7 @@ class _PayConfirmView(discord.ui.View):
         amount: int,
         memo: str | None = None,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(sender.id, timeout=60)
         self.cog = cog
         self.settings = settings
         self.guild = guild
@@ -585,14 +375,6 @@ class _PayConfirmView(discord.ui.View):
         self.recipient = recipient
         self.amount = amount
         self.memo = memo
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.sender.id:
-            await interaction.response.send_message(
-                "❌ This confirmation isn't yours.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
     async def _confirm(
@@ -614,12 +396,14 @@ class _PayConfirmView(discord.ui.View):
         )
 
 
-class _GiftConfirmView(discord.ui.View):
+class _GiftConfirmView(_MemberScopedView):
     """Ephemeral Confirm/Cancel gate for gifting a perk the friend already has.
 
     The rental would stack silently (their role already shows the perk), so
     the double-spend has to be an explicit choice, mirroring _PayConfirmView.
     """
+
+    SCOPE_DENIAL = "❌ This confirmation isn't yours."
 
     def __init__(
         self,
@@ -630,21 +414,13 @@ class _GiftConfirmView(discord.ui.View):
         member: discord.Member,
         perk: str,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(gifter.id, timeout=60)
         self.cog = cog
         self.settings = settings
         self.guild = guild
         self.gifter = gifter
         self.member = member
         self.perk = perk
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.gifter.id:
-            await interaction.response.send_message(
-                "❌ This confirmation isn't yours.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Gift Anyway", style=discord.ButtonStyle.success)
     async def _confirm(
@@ -682,22 +458,15 @@ class _RaffleBuyModal(discord.ui.Modal, title="Weekly Raffle Tickets"):
         )
 
 
-class _EmojiCancelView(discord.ui.View):
+class _EmojiCancelView(_MemberScopedView):
     """Cancel button on the bare /bank emoji status reply (pending only)."""
 
+    SCOPE_DENIAL = "❌ This isn't your submission."
+
     def __init__(self, cog: EconomyCog, submission_id: int, user_id: int) -> None:
-        super().__init__(timeout=60)
+        super().__init__(user_id, timeout=60)
         self.cog = cog
         self.submission_id = submission_id
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This isn't your submission.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Cancel & Refund", style=discord.ButtonStyle.danger)
     async def _cancel(
@@ -832,13 +601,6 @@ _CFG_MODALS = {
     "role_icon": _RoleIconModal,
 }
 
-# Short button labels for the customise flows (the perk label is on the row).
-_CUSTOMISE_LABELS = {
-    "role_color": "Set Color",
-    "role_name": "Set Name",
-    "role_gradient": "Set Gradient",
-    "role_icon": "Set Icon",
-}
 
 
 # Discord caps a select at 25 options; the last slot is the bring-your-own
@@ -902,28 +664,6 @@ class _IconCatalogSelect(discord.ui.Select):
         )
 
 
-class _MemberScopedView(discord.ui.View):
-    """A view usable only by the member it was opened for.
-
-    Shared base for every shop-adjacent picker (``_ShopView``,
-    ``_IconCatalogView``, ``_RefundPickerView``) — they were each carrying an
-    identical ``interaction_check`` before this; one shared implementation
-    means the scoping rule/error text only needs to change in one place.
-    """
-
-    def __init__(self, user_id: int, *, timeout: float | None = 120) -> None:
-        super().__init__(timeout=timeout)
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ Open your own shop with /bank shop.", ephemeral=True
-            )
-            return False
-        return True
-
-
 class _IconCatalogView(_MemberScopedView):
     """Ephemeral catalog picker, scoped to the member who opened the shop."""
 
@@ -959,7 +699,7 @@ class _RefundSelect(discord.ui.Select):
         now = time.time()
         options: list[discord.SelectOption] = []
         for r in rentals:
-            label = _PERK_LABELS.get(str(r["perk"]), str(r["perk"]))
+            label = PERK_LABELS.get(str(r["perk"]), str(r["perk"]))
             if r["state"] == "active":
                 preview = prorated_refund(
                     int(r["price"]), float(r["next_bill_at"]), now
@@ -1014,12 +754,14 @@ class _RefundPickerView(_MemberScopedView):
         self.add_item(_RefundSelect(cog, settings, guild, rentals, shield_price))
 
 
-class _RefundConfirmView(discord.ui.View):
+class _RefundConfirmView(_MemberScopedView):
     """Ephemeral Confirm/Back gate before a refund actually runs.
 
     Danger-styled (unlike _PayConfirmView's plain success Confirm) since this
     ends a live perk immediately, not just moves money between two members.
     """
+
+    SCOPE_DENIAL = "❌ This confirmation isn't yours."
 
     def __init__(
         self,
@@ -1029,20 +771,11 @@ class _RefundConfirmView(discord.ui.View):
         user_id: int,
         target: str,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(user_id, timeout=60)
         self.cog = cog
         self.settings = settings
         self.guild = guild
-        self.user_id = user_id
         self.target = target
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This confirmation isn't yours.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Yes, Cancel & Refund", style=discord.ButtonStyle.danger)
     async def _confirm(
@@ -1090,7 +823,7 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
-        for perk in _SELF_PERKS:
+        for perk in SELF_PERKS:
             if perk == "role_icon" and has_catalog:
                 # A curated catalog replaces the rent/customise buttons with a
                 # single picker — renting and restyling both happen by choosing
@@ -1114,12 +847,12 @@ class _ShopView(_MemberScopedView):
                 button.callback = self._make_icons_callback()
                 self.add_item(button)
                 continue
-            if perk in owned and perk in _NO_CONFIG_PERKS:
+            if perk in owned and perk in NO_CONFIG_PERKS:
                 # Nothing to customise (a fixed preset) — show it as active,
                 # like the voice lease's "Leased" chip, rather than a dead
                 # "Set …" button that opens an empty modal.
                 button = discord.ui.Button(
-                    label=f"{_PERK_EMOJI[perk]} Active",
+                    label=f"{PERK_EMOJI[perk]} Active",
                     style=discord.ButtonStyle.success,
                     disabled=True,
                     custom_id=f"econ_shop_active:{perk}",
@@ -1136,7 +869,7 @@ class _ShopView(_MemberScopedView):
                 # No price in the label — the table above carries it, and a
                 # short emoji-led label keeps the row scannable.
                 button = discord.ui.Button(
-                    label=f"{_PERK_EMOJI[perk]} {_PERK_SHORT[perk]}",
+                    label=f"{PERK_EMOJI[perk]} {PERK_SHORT[perk]}",
                     style=discord.ButtonStyle.primary,
                     disabled=perk in gated,
                     custom_id=f"econ_shop_rent:{perk}",
@@ -1279,15 +1012,8 @@ async def _rent_perk_flow(
     except ValueError as exc:
         msg = str(exc)
         if "insufficient" in msg:
-
-            def _bal() -> int:
-                with ctx.open_db() as conn:
-                    return get_balance(conn, guild.id, user_id)
-
-            bal = await asyncio.to_thread(_bal)
-            text = (
-                f"❌ You need {settings.currency_emoji} "
-                f"{_perk_price(settings, perk):,} but only have {bal:,}."
+            text = await cog._short_funds_text(
+                settings, guild.id, user_id, perk_price(settings, perk)
             )
         elif "already rented" in msg:
             text = "❌ You're already renting that perk."
@@ -1307,11 +1033,11 @@ async def _rent_perk_flow(
         )
         return
     await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
-    if perk in _NO_CONFIG_PERKS:
+    if perk in NO_CONFIG_PERKS:
         # A fixed preset — there's nothing to set, so it's live the moment the
         # role projects. No customise button (an empty modal would confuse).
         await interaction.response.send_message(
-            f"Rented **{_PERK_LABELS[perk]}**! Your personal role now wears "
+            f"Rented **{PERK_LABELS[perk]}**! Your personal role now wears "
             "Discord's holographic shimmer — no setup needed.",
             ephemeral=True,
         )
@@ -1322,7 +1048,7 @@ async def _rent_perk_flow(
         else ""
     )
     await interaction.response.send_message(
-        f"Rented **{_PERK_LABELS[perk]}**! Set it up right here:{note}",
+        f"Rented **{PERK_LABELS[perk]}**! Set it up right here:{note}",
         view=_PostRentView(cog, perk),
         ephemeral=True,
     )
@@ -1396,7 +1122,7 @@ class ShopRentButton(
     ) -> None:
         super().__init__(
             discord.ui.Button(
-                label=label or f"Rent {_PERK_LABELS.get(perk, perk)}",
+                label=label or f"Rent {PERK_LABELS.get(perk, perk)}",
                 style=style,
                 disabled=disabled,
                 custom_id=f"econ_shop_panel:{perk}",
@@ -1415,157 +1141,6 @@ class ShopRentButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _open_shop_from_panel(interaction)
-
-
-def _shop_row_price(
-    settings: EconSettings,
-    perk: str,
-    icon_catalog: tuple[int, int, int] | None,
-) -> tuple[int, str]:
-    """(sort key, display string) for a shop row's price.
-
-    A curated icon catalog prices per icon, so the role-icon row shows a span
-    and sorts on its floor. The flat ``price_role_icon`` folds into that span —
-    the picker's bring-your-own Custom entry sells at it, so it's a price the
-    row genuinely offers.
-    """
-    if perk == "role_icon" and icon_catalog is not None:
-        lo, hi, _count = icon_catalog
-        lo = min(lo, settings.price_role_icon)
-        hi = max(hi, settings.price_role_icon)
-        return lo, f"{lo:,}" if lo == hi else f"{lo:,}–{hi:,}"
-    price = _perk_price(settings, perk)
-    return price, f"{price:,}"
-
-
-def _build_shop_embed(
-    settings: EconSettings,
-    gated: set[str],
-    accent: discord.Color | None,
-    *,
-    panel: bool = False,
-    owned: set[str] | frozenset[str] = frozenset(),
-    icon_catalog: tuple[int, int, int] | None = None,
-    balance: int | None = None,
-    shields_held: int = 0,
-) -> discord.Embed:
-    """The shop listing, shared by /bank shop and the channel panel.
-
-    Rendered as the aligned code-cell table the leaderboard, guide and quest
-    panels use: one ``label  blurb`` cell then the price, grouped into price
-    tiers (the quest-board row shape — a single cell keeps the whole row
-    inside a phone-width line). Five ``inline=False`` fields carrying four
-    words each read as an airy list; a table reads as a storefront.
-
-    ``owned`` marks the viewer's rented rows, ``balance`` puts their wallet
-    in the description, and ``shields_held`` marks the shield row — all only
-    meaningful for the ephemeral per-member view; the channel panel is
-    member-agnostic and passes none of them.
-    ``icon_catalog`` is (min price, max price, icon count) across the guild's
-    curated catalog; when set, the role-icon row shows that span and its size
-    instead of a single flat price.
-    """
-    # The balance lives in the description, not the footer: footers render
-    # plain text, so a custom currency emoji would show as raw <:name:id>.
-    header = "Weekly rentals · cancel any time"
-    if balance is not None:
-        header += f" · you have {settings.currency_emoji} **{balance:,}**"
-    description = (
-        header
-        + "\n"
-        + (
-            "Tap **Open Shop** for your personal menu — rent, customize, "
-            "and refund, all private to you."
-            if panel
-            else "Green buttons customize what you've already rented."
-        )
-        + "\n​"
-    )
-    embed = discord.Embed(
-        title="🛍️ Perk Shop", description=description, color=accent
-    )
-    if settings.currency_icon_url:
-        embed.set_thumbnail(url=settings.currency_icon_url)
-
-    # The Voice tier exists only while the lease is priced (> 0 = the paywall
-    # is armed); at the price-0 dark default the shop shows no trace of it.
-    tiers = list(_PERK_TIERS)
-    table_perks: list[str] = list(_SELF_PERKS)
-    if settings.price_voice_style > 0:
-        tiers.append(("Voice", ("voice_style",)))
-        table_perks.append("voice_style")
-
-    # One width per table, not per tier, so cells line up across the whole
-    # embed rather than jumping at each heading.
-    label_width = max(len(_PERK_SHORT[p]) for p in table_perks)
-    blurb_width = max(len(_PERK_BLURBS[p]) for p in table_perks)
-
-    def _line(perk: str) -> str:
-        _sort, price_str = _shop_row_price(settings, perk, icon_catalog)
-        note = ""
-        if perk in gated:
-            note = " · _needs a server feature not enabled here_"
-        elif perk in owned:
-            note = " · ✅"
-        elif perk == "role_icon" and icon_catalog is not None:
-            note = f" · {icon_catalog[2]} + your own"
-        return (
-            f"`{_pad(_PERK_SHORT[perk], label_width)}  "
-            f"{_pad(_PERK_BLURBS[perk], blurb_width)}` "
-            f"{settings.currency_emoji} **{price_str}**{note}"
-        )
-
-    for tier_name, perks in tiers:
-        ordered = sorted(
-            perks, key=lambda p: _shop_row_price(settings, p, icon_catalog)[0]
-        )
-        embed.add_field(
-            name=tier_name,
-            value="\n".join(_line(p) for p in ordered) + "\n​",
-            inline=False,
-        )
-    if settings.price_streak_shield > 0:
-        # One-shot, not a rental — the only non-weekly row, so it carries its
-        # own field with the "once" spelled out instead of joining the table.
-        held = " · 🛡️ **held**" if shields_held > 0 else ""
-        embed.add_field(
-            name="One-shot",
-            value=(
-                f"🛡️ Streak shield — {settings.currency_emoji} "
-                f"**{settings.price_streak_shield:,}** once{held}\n"
-                "Auto-burns to save your login streak from a missed day the "
-                "free grace can't cover. Hold one at a time."
-            ),
-            inline=False,
-        )
-    if raffle_svc.raffle_enabled(settings):
-        embed.add_field(
-            name="Weekly Raffle",
-            value=(
-                f"🎟️ Tickets — {settings.currency_emoji} "
-                f"**{settings.price_raffle_ticket:,}** each, up to "
-                f"{settings.raffle_max_tickets}/week. Drawn at the week "
-                "roll; the winner's next weekly perk payment is free "
-                "(and they're announced by name)."
-            ),
-            inline=False,
-        )
-    embed.add_field(
-        name="For a Friend",
-        value=(
-            "🎁 Any perk above can be gifted at its listed price — "
-            "you pay the weekly rent, they wear it. Send one with `/bank gift`."
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(
-        text=(
-            "Prices are per week, billed every 7 days. A short grace period "
-            "covers a missed renewal."
-        )
-    )
-    return embed
 
 
 class EconomyCog(commands.Cog):
@@ -1616,8 +1191,10 @@ class EconomyCog(commands.Cog):
         # guild_id → (monotonic expiry, trigger quests). TTL-refreshed in the
         # message listener; empty lists are cached too so guilds without
         # trigger quests cost one dict lookup per message.
-        self._trigger_cache: dict[int, tuple[float, list[_TriggerQuest]]] = {}
-        # Three channel-bottom panels, all on the shared machinery in
+        self._trigger_cache: dict[
+            int, tuple[float, list[quests_svc.TriggerQuest]]
+        ] = {}
+        # Four channel-bottom panels, all on the shared machinery in
         # core.sticky (locks, debounce, id cache, post-before-delete). This cog
         # only says where each panel's ids live and what it should look like.
         self.guide_panel = StickyPanel(
@@ -1728,6 +1305,10 @@ class EconomyCog(commands.Cog):
 
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    # The caller refuses before rendering, so the other five
+                    # reads would be thrown away (mirrors _shop_context).
+                    return settings, 0, [], [], 0, None
                 balance = get_balance(conn, guild_id, user_id)
                 ledger = get_ledger(conn, guild_id, user_id, limit=10)
                 rentals = list_member_rentals(conn, guild_id, user_id)
@@ -1739,78 +1320,20 @@ class EconomyCog(commands.Cog):
             await asyncio.to_thread(_load)
         )
 
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        description = (
-            f"{settings.currency_emoji} **{balance:,}** {_unit(settings, balance)}"
-        )
-        if shields > 0:
-            description += "\n🛡️ Streak shield held"
-        embed = discord.Embed(
-            title=f"{settings.currency_emoji} {settings.wallet_name}",
-            description=description,
+        embed = build_wallet_embed(
+            settings,
+            balance=balance,
+            ledger=ledger,
+            rentals=rentals,
+            shields=shields,
+            casino=casino,
+            viewer_id=user_id,
             color=accent,
         )
-        if settings.currency_icon_url:
-            embed.set_thumbnail(url=settings.currency_icon_url)
-
-        if ledger:
-            lines = []
-            for row in ledger:
-                amount = int(row["amount"])
-                sign = "+" if amount >= 0 else "−"
-                ts = int(row["created_at"])
-                glyph, label = kind_display(str(row["kind"]))
-                line = (
-                    f"{sign}{abs(amount):,} {settings.currency_emoji} · "
-                    f"{glyph} {label} · <t:{ts}:R>"
-                )
-                memo = _memo_of(row["meta"])
-                if memo:
-                    line += f" — *{discord.utils.escape_markdown(_ellipsis(memo))}*"
-                lines.append(line)
-            embed.add_field(
-                name="Recent Activity", value=_fit_lines(lines), inline=False
-            )
-        else:
-            embed.add_field(
-                name="Recent Activity", value="_No activity yet._", inline=False
-            )
-
-        rental_lines = _rental_lines(settings, rentals, user_id)
-        if rental_lines:
-            # A dozen+ gifted perks can overrun the 1024-char field and 400 the
-            # whole embed — trim to what fits (mirrors Recent Activity above).
-            embed.add_field(
-                name="Active Rentals", value=_fit_lines(rental_lines), inline=False
-            )
-
-        if casino is not None and int(casino["plays"]) > 0:
-            wagered = int(casino["wagered"])
-            returned = int(casino["returned"])
-            net = returned - wagered
-            streak = int(casino["streak"])
-            lines = [
-                f"Wagered **{wagered:,}** · returned **{returned:,}** · "
-                f"net **{'+' if net >= 0 else '−'}{abs(net):,}**"
-            ]
-            if int(casino["biggest_win"]) > 0:
-                lines.append(
-                    f"Biggest win: {settings.currency_emoji} "
-                    f"**{int(casino['biggest_win']):,}** "
-                    f"({str(casino['biggest_win_game'])})"
-                )
-            if streak >= 3:
-                lines.append(f"🔥 {streak}-win streak going")
-            elif streak <= -3:
-                lines.append(f"🧊 {abs(streak)} losses running — walk away?")
-            embed.add_field(
-                name="🎰 At the Tables", value="\n".join(lines), inline=False
-            )
-
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bank.command(name="grant", description="Award currency to a member (staff only).")
@@ -1832,10 +1355,8 @@ class EconomyCog(commands.Cog):
         actor = interaction.user
         assert isinstance(actor, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild_id)
-
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild_id)
+        if settings is None:
             return
 
         if not _can_grant(actor, settings):
@@ -1906,9 +1427,8 @@ class EconomyCog(commands.Cog):
         guild_id = guild.id
         user_id = interaction.user.id
 
-        settings = await asyncio.to_thread(self._load_settings, guild_id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild_id)
+        if settings is None:
             return
 
         def _toggle() -> bool:
@@ -1955,9 +1475,8 @@ class EconomyCog(commands.Cog):
         # DM) takes the cleaned value and escapes only at render.
         memo = _clean_memo(memo)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not settings.transfers_enabled:
             await interaction.response.send_message(
@@ -2087,36 +1606,28 @@ class EconomyCog(commands.Cog):
         guild = interaction.guild
         user_id = interaction.user.id
 
-        settings, owned, balance = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        shop = await asyncio.to_thread(self._shop_context, guild.id, user_id)
+        settings = shop.settings
+        if await self._refuse_disabled(interaction, settings):
             return
 
-        gated: set[str] = set()
-        for perk in _FEATURE_GATED:
-            if not await feature_gate_ok(self.bot, guild.id, perk):
-                gated.add(perk)
+        gated = await self._gated_perks(guild.id)
 
-        icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
-        has_catalog = icon_range is not None
-        refundable, shields, shield_price = await asyncio.to_thread(
-            self._refundables, guild.id, user_id, settings
-        )
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = _build_shop_embed(
+        embed = build_shop_embed(
             settings,
             gated,
             accent,
-            owned=owned,
-            icon_catalog=icon_range,
-            balance=balance,
-            shields_held=shields,
+            owned=shop.owned,
+            icon_catalog=shop.icon_range,
+            balance=shop.balance,
+            shields_held=shop.shields_held,
         )
         view = _ShopView(
-            self, settings, guild, user_id, gated, owned, has_catalog,
-            shields_held=shields, refundable=refundable, shield_price=shield_price,
+            self, settings, guild, user_id, gated, shop.owned,
+            shop.icon_range is not None,
+            shields_held=shop.shields_held, refundable=shop.refundable,
+            shield_price=shop.shield_price,
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -2138,10 +1649,8 @@ class EconomyCog(commands.Cog):
         except ValueError as exc:
             msg = str(exc)
             if "insufficient" in msg:
-                bal = await asyncio.to_thread(self._balance, guild.id, user_id)
-                text = (
-                    f"❌ You need {settings.currency_emoji} "
-                    f"{settings.price_streak_shield:,} but only have {bal:,}."
+                text = await self._short_funds_text(
+                    settings, guild.id, user_id, settings.price_streak_shield
                 )
             elif "already holding" in msg:
                 text = (
@@ -2270,7 +1779,7 @@ class EconomyCog(commands.Cog):
                     embed=None, view=None,
                 )
                 return
-            label = _PERK_LABELS.get(str(rental["perk"]), str(rental["perk"]))
+            label = PERK_LABELS.get(str(rental["perk"]), str(rental["perk"]))
             if rental["state"] == "active":
                 preview = prorated_refund(
                     int(rental["price"]), float(rental["next_bill_at"]), time.time()
@@ -2352,7 +1861,7 @@ class EconomyCog(commands.Cog):
                 "Economy shop refund: failed to revoke perk for beneficiary %s.",
                 result.beneficiary_id,
             )
-        label = _PERK_LABELS.get(result.perk, result.perk)
+        label = PERK_LABELS.get(result.perk, result.perk)
         if result.refund > 0:
             text = (
                 f"✅ **{label}** cancelled — {settings.currency_emoji} "
@@ -2377,9 +1886,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not sponsor_enabled(settings):
             await interaction.response.send_message(
@@ -2435,9 +1943,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not pin_enabled(settings):
             await interaction.response.send_message(
@@ -2457,9 +1964,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not pin_enabled(settings):
             await interaction.response.send_message(
@@ -2503,9 +2009,8 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not bounty_enabled(settings):
             await interaction.response.send_message(
@@ -2588,9 +2093,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not emoji_svc.sponsoring_enabled(settings):
             await interaction.response.send_message(
@@ -2602,12 +2106,8 @@ class EconomyCog(commands.Cog):
             await self._emoji_status(interaction, settings, guild, member)
             return
 
-        content_types = {
-            "image/png": False, "image/jpeg": False,
-            "image/webp": False, "image/gif": True,
-        }
         ctype = (image.content_type or "").split(";")[0].strip()
-        if ctype not in content_types:
+        if ctype not in _EMOJI_CONTENT_TYPES:
             await interaction.response.send_message(
                 "❌ Emoji images are PNG, JPEG, WEBP, or GIF.", ephemeral=True
             )
@@ -2618,7 +2118,7 @@ class EconomyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        animated = content_types[ctype]
+        animated = _EMOJI_CONTENT_TYPES[ctype]
 
         await interaction.response.defer(ephemeral=True)
         data = await image.read()
@@ -2631,13 +2131,17 @@ class EconomyCog(commands.Cog):
 
         ext = "gif" if animated else "png"
         directory = self.ctx.db_path.parent / "econ_emoji" / str(guild.id)
-        directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{int(time.time())}_{member.id}.{ext}"
-        path.write_bytes(data)
 
         taken = {e.name for e in guild.emojis}
 
         def _submit():
+            # The mkdir and the up-to-256KB write ride the worker thread with
+            # the DB work rather than stalling the event loop — same order as
+            # before (image on disk before the row that points at it), so the
+            # unlink below still undoes a rejected submission.
+            directory.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
             with self.ctx.open_db() as conn:
                 for row in emoji_svc.list_submissions(conn, guild.id):
                     if row["state"] in ("pending", "approved", "live"):
@@ -2742,8 +2246,8 @@ class EconomyCog(commands.Cog):
     @app_commands.describe(member="Who to gift it to", perk="Which perk to gift")
     @app_commands.choices(
         perk=[
-            app_commands.Choice(name=_PERK_LABELS[p], value=p)
-            for p in _GIFTABLE_PERKS
+            app_commands.Choice(name=PERK_LABELS[p], value=p)
+            for p in GIFTABLE_PERKS
         ]
     )
     async def bank_gift(
@@ -2758,9 +2262,8 @@ class EconomyCog(commands.Cog):
         assert isinstance(gifter, discord.Member)
         perk_key = perk.value
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if member.bot:
             await interaction.response.send_message(
@@ -2772,7 +2275,7 @@ class EconomyCog(commands.Cog):
                 "❌ Rent your own perks with /bank shop.", ephemeral=True
             )
             return
-        if perk_key in _FEATURE_GATED and not await feature_gate_ok(
+        if perk_key in FEATURE_GATED and not await feature_gate_ok(
             self.bot, guild.id, perk_key
         ):
             await interaction.response.send_message(
@@ -2795,7 +2298,7 @@ class EconomyCog(commands.Cog):
             # Probably a mistake — the perk stacks silently (their role
             # already shows it), so make the double-spend an explicit choice.
             await interaction.response.send_message(
-                f"{member.display_name} already has **{_PERK_LABELS[perk_key]}**. "
+                f"{member.display_name} already has **{PERK_LABELS[perk_key]}**. "
                 "Gift it anyway?",
                 view=_GiftConfirmView(self, settings, guild, gifter, member, perk_key),
                 ephemeral=True,
@@ -2827,16 +2330,14 @@ class EconomyCog(commands.Cog):
                     beneficiary_id=member.id, now=time.time(),
                 )
 
-        label = _PERK_LABELS[perk]
+        label = PERK_LABELS[perk]
         try:
             await asyncio.to_thread(_rent)
         except ValueError as exc:
             msg = str(exc)
             if "insufficient" in msg:
-                bal = await asyncio.to_thread(self._balance, guild.id, gifter.id)
-                text = (
-                    f"❌ You need {settings.currency_emoji} "
-                    f"{_perk_price(settings, perk):,} but only have {bal:,}."
+                text = await self._short_funds_text(
+                    settings, guild.id, gifter.id, perk_price(settings, perk)
                 )
             elif "already rented" in msg:
                 text = f"❌ You're already gifting them **{label}**."
@@ -2850,18 +2351,18 @@ class EconomyCog(commands.Cog):
         # single 429 can't push the first response past the 3s budget and leave
         # the charged gifter staring at "This interaction failed."
         await self._defer(interaction, via_confirm=via_confirm)
-        if perk in _SELF_PERKS:
+        if perk in SELF_PERKS:
             await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
         # `/bank role icon` (upload) hard-refuses catalog servers, so only hint it
         # off-catalog; on a catalog server the recipient picks from /bank shop.
         note = ""
-        if perk == "role_icon" and not await asyncio.to_thread(
-            self._has_catalog, guild.id
+        if perk == "role_icon" and (
+            await asyncio.to_thread(self._icon_price_range, guild.id) is None
         ):
             note = " They can upload one with `/bank role icon`."
         if perk == "voice_style":
             gift_hint = "Renaming and sizing your voice channel are unlocked."
-        elif perk in _NO_CONFIG_PERKS:
+        elif perk in NO_CONFIG_PERKS:
             gift_hint = "It's already live on your personal role — no setup needed."
         else:
             gift_hint = "Set it up from /bank shop."
@@ -2897,10 +2398,7 @@ class EconomyCog(commands.Cog):
         guild: discord.Guild,
     ) -> None:
         """Show the curated icon picker (rent a new icon or switch the rented one)."""
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
         icons = await asyncio.to_thread(self._load_catalog, guild.id)
         if not icons:
@@ -2947,8 +2445,7 @@ class EconomyCog(commands.Cog):
             return settings, icon, existing_id
 
         settings, icon, existing_id = await asyncio.to_thread(_load)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
         if icon is None:
             await interaction.response.send_message(
@@ -2956,10 +2453,7 @@ class EconomyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
 
         if existing_id is None:
@@ -2981,10 +2475,8 @@ class EconomyCog(commands.Cog):
             except ValueError as exc:
                 msg = str(exc)
                 if "insufficient" in msg:
-                    bal = await asyncio.to_thread(self._balance, guild.id, user_id)
-                    text = (
-                        f"❌ You need {settings.currency_emoji} {icon['price']:,} but "
-                        f"only have {bal:,}."
+                    text = await self._short_funds_text(
+                        settings, guild.id, user_id, int(icon["price"])
                     )
                 elif "already rented" in msg:
                     text = "❌ You're already renting a role icon."
@@ -3049,13 +2541,9 @@ class EconomyCog(commands.Cog):
             return fresh, existing
 
         settings, existing = await asyncio.to_thread(_load)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
 
         if existing is None:
@@ -3091,16 +2579,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if "role_name" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Custom Role Name** perk first (/bank shop).", ephemeral=True
-            )
+        if not await self._require_perk(interaction, guild.id, "role_name"):
             return
         text = text.strip()
         if not text or len(text) > _MAX_ROLE_NAME_LEN:
@@ -3148,17 +2627,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if "role_color" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Custom Role Color** perk or get one gifted (/bank shop).",
-                ephemeral=True,
-            )
+        if not await self._require_perk(interaction, guild.id, "role_color"):
             return
         value = parse_hex_color(hex)
         if value is None:
@@ -3186,16 +2655,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if "role_gradient" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Gradient Role** perk first (/bank shop).", ephemeral=True
-            )
+        if not await self._require_perk(interaction, guild.id, "role_gradient"):
             return
         if not await feature_gate_ok(self.bot, guild.id, "role_gradient"):
             await interaction.response.send_message(
@@ -3230,21 +2690,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if not await self._require_perk(interaction, guild.id, "role_icon"):
             return
-        if "role_icon" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Role Icon** perk first (/bank shop).", ephemeral=True
-            )
-            return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
         if await asyncio.to_thread(self._catalog_locked, guild.id, user_id):
             await interaction.response.send_message(_CATALOG_LOCKED_MSG, ephemeral=True)
@@ -3277,16 +2725,7 @@ class EconomyCog(commands.Cog):
                 "❌ That emoji's image is too big — 256KB max.", ephemeral=True
             )
             return
-        path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
-
-        def _write() -> None:
-            path.write_bytes(data)
-            self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
-
-        await asyncio.to_thread(_write)
-        await self._apply_and_confirm(
-            interaction, guild.id, user_id, "Your role icon is set."
-        )
+        await self._store_role_icon(interaction, guild.id, user_id, data)
 
     @role.command(
         name="icon", description="Upload an image for your personal role's icon."
@@ -3300,21 +2739,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if not await self._require_perk(interaction, guild.id, "role_icon"):
             return
-        if "role_icon" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Role Icon** perk first (/bank shop).", ephemeral=True
-            )
-            return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
         if await asyncio.to_thread(self._catalog_locked, guild.id, user_id):
             await interaction.response.send_message(_CATALOG_LOCKED_MSG, ephemeral=True)
@@ -3325,16 +2752,7 @@ class EconomyCog(commands.Cog):
             )
             return
         data = await image.read()
-        path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
-
-        def _write() -> None:
-            path.write_bytes(data)
-            self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
-
-        await asyncio.to_thread(_write)
-        await self._apply_and_confirm(
-            interaction, guild.id, user_id, "Your role icon is set."
-        )
+        await self._store_role_icon(interaction, guild.id, user_id, data)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
@@ -3416,6 +2834,90 @@ class EconomyCog(commands.Cog):
                 ),
             )
 
+    async def _refuse_disabled(
+        self, interaction: discord.Interaction, settings: EconSettings
+    ) -> bool:
+        """Send the economy-off refusal; True when it fired and the caller stops.
+
+        Every member-facing economy surface opens with this gate. Commands that
+        already hold ``settings`` from a compound load (the shop's role context,
+        the quest board, the wallet) call this directly; the ones that would
+        otherwise load settings for the gate alone go through
+        ``_settings_or_refuse``.
+        """
+        if settings.enabled:
+            return False
+        await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        return True
+
+    async def _settings_or_refuse(
+        self, interaction: discord.Interaction, guild_id: int
+    ) -> EconSettings | None:
+        """Settings for an enabled economy, else send the refusal and give None."""
+        settings = await asyncio.to_thread(self._load_settings, guild_id)
+        return None if await self._refuse_disabled(interaction, settings) else settings
+
+    async def _require_perk(
+        self, interaction: discord.Interaction, guild_id: int, perk: str
+    ) -> bool:
+        """Whether the member may drive ``perk``'s role-studio setter.
+
+        The economy-off gate and the not-rented refusal in one place: every
+        setter opened with the same pair, differing only in the perk name and
+        its refusal line.
+        """
+        settings, ent = await asyncio.to_thread(
+            self._load_role_ctx, guild_id, interaction.user.id
+        )
+        if await self._refuse_disabled(interaction, settings):
+            return False
+        if perk not in ent:
+            # .get, not [perk]: the table covers four of the five SELF_PERKS,
+            # so a setter added for the fifth must degrade to a polite refusal,
+            # not a KeyError and "This interaction failed."
+            await interaction.response.send_message(
+                _PERK_REFUSAL.get(perk, _PERK_REFUSAL_FALLBACK), ephemeral=True
+            )
+            return False
+        return True
+
+    async def _role_icon_gate_ok(
+        self, interaction: discord.Interaction, guild_id: int
+    ) -> bool:
+        """Whether role icons are available here; sends the refusal if not."""
+        if await feature_gate_ok(self.bot, guild_id, "role_icon"):
+            return True
+        await interaction.response.send_message(_NO_ROLE_ICONS_MSG, ephemeral=True)
+        return False
+
+    async def _gated_perks(self, guild_id: int) -> set[str]:
+        """The feature-gated perks this guild currently can't offer."""
+        return {
+            perk
+            for perk in FEATURE_GATED
+            if not await feature_gate_ok(self.bot, guild_id, perk)
+        }
+
+    async def _store_role_icon(
+        self, interaction: discord.Interaction, guild_id: int, user_id: int, data: bytes
+    ) -> None:
+        """Persist role-icon bytes and re-apply the role.
+
+        Shared tail of the two acquisition paths — the emoji modal and the
+        `/bank role icon` upload — which differ only in where ``data`` and its
+        size refusal come from.
+        """
+        def _write() -> None:
+            # _icon_store_path mkdirs, so it belongs on the worker thread too.
+            path = _icon_store_path(self.ctx.db_path, guild_id, user_id)
+            path.write_bytes(data)
+            self._upsert_role(guild_id, user_id, {"icon_path": str(path)})
+
+        await asyncio.to_thread(_write)
+        await self._apply_and_confirm(
+            interaction, guild_id, user_id, "Your role icon is set."
+        )
+
     async def _defer(
         self, interaction: discord.Interaction, *, via_confirm: bool
     ) -> None:
@@ -3453,37 +2955,62 @@ class EconomyCog(commands.Cog):
         with self.ctx.open_db() as conn:
             return get_balance(conn, guild_id, user_id)
 
-    def _refundables(
-        self, guild_id: int, user_id: int, settings: EconSettings
-    ) -> tuple[list[dict], int, int]:
-        """The member's refundable rentals, held-shield count, and its price.
+    async def _short_funds_text(
+        self, settings: EconSettings, guild_id: int, user_id: int, price: int
+    ) -> str:
+        """The shared refusal for a purchase the member can't afford.
 
-        One connection for the rental list AND the streak-shield status
-        (previously a separate ``_shields`` call plus its own query) — shop's
-        cancel/refund flow. ``list_refundable_rentals`` already excludes
+        Reads the balance back so the member sees the gap, not just the price.
+        Every "insufficient" handler in the cog renders this one sentence — a
+        reword belongs here, not in four places.
+        """
+        bal = await asyncio.to_thread(self._balance, guild_id, user_id)
+        return (
+            f"❌ You need {settings.currency_emoji} {price:,} "
+            f"but only have {bal:,}."
+        )
+
+    def _shop_context(self, guild_id: int, user_id: int) -> _ShopContext:
+        """Read the whole shop in one go.
+
+        The header (settings, entitlements, balance), the catalog row's price
+        span, and the refund/shield controls' state were three separate thread
+        hops, each opening — and PRAGMA-ing — its own connection for a page
+        that renders once. ``list_refundable_rentals`` already excludes
         sponsored-emoji rentals (a different self-service surface, ``/bank
         emoji``) and admin-force-cancelled ones.
+
+        A disabled economy stops after the settings row: the caller refuses
+        before rendering anything, so reading the rest would be paying five
+        queries to say "the economy is off".
         """
         with self.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled:
+                return _ShopContext(settings, set(), 0, None, [], 0, 0)
+            ent = entitlements(conn, guild_id, user_id)
+            balance = get_balance(conn, guild_id, user_id)
+            icon_range = catalog_price_range(conn, guild_id)
             rentals = [dict(r) for r in list_refundable_rentals(conn, guild_id, user_id)]
             shields_held, shield_price = get_streak_shield_status(
                 conn, guild_id, user_id, settings
             )
-        return rentals, shields_held, shield_price
+        return _ShopContext(
+            settings, ent, balance, icon_range, rentals, shields_held, shield_price
+        )
 
     def _load_role_ctx(
         self, guild_id: int, user_id: int
-    ) -> tuple[EconSettings, set[str], int]:
-        """Settings, the member's entitlements, and their balance in one trip.
+    ) -> tuple[EconSettings, set[str]]:
+        """Settings and the member's entitlements, for the role-studio gates.
 
-        The shop header shows the balance next to the prices, so it rides
-        along on the connection the perk rows already need.
+        No balance: the shop header is the only surface that shows one, and it
+        reads the whole page through ``_shop_context``.
         """
         with self.ctx.open_db() as conn:
             settings = load_econ_settings(conn, guild_id)
             ent = entitlements(conn, guild_id, user_id)
-            balance = get_balance(conn, guild_id, user_id)
-        return settings, ent, balance
+        return settings, ent
 
     def _name_blocklist(self, guild_id: int) -> list[str]:
         with self.ctx.open_db() as conn:
@@ -3507,10 +3034,6 @@ class EconomyCog(commands.Cog):
         """(min, max, count) over enabled icons, or None with no catalog set up."""
         with self.ctx.open_db() as conn:
             return catalog_price_range(conn, guild_id)
-
-    def _has_catalog(self, guild_id: int) -> bool:
-        """Whether the guild has at least one enabled catalog icon."""
-        return self._icon_price_range(guild_id) is not None
 
     def _catalog_locked(self, guild_id: int, user_id: int) -> bool:
         """Whether this member's live icon rental is tied to a catalog icon.
@@ -3541,50 +3064,14 @@ class EconomyCog(commands.Cog):
         settings, quests_state, board_meta = await asyncio.to_thread(
             self._load_quests_state, guild.id, interaction.user.id
         )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = discord.Embed(title=f"{settings.currency_emoji} Quests", color=accent)
-
+        embed = build_quest_board_embed(settings, quests_state, color=accent)
         if not quests_state:
-            embed.description = "_No active quests right now — check back soon!_"
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-
-        # One line per quest — title | status | payment — split into two
-        # sections (your board vs the guild-wide goals), cadence sub-labelled
-        # within each. Descriptions and the how-it-completes explainers live
-        # behind the details select, so the list stays scannable.
-        desc_bits = []
-        if any(q.get("spotlight") for q in quests_state):
-            desc_bits.append("⚡ Spotlight quests pay **double** this week!")
-        desc_bits.append(
-            "Pick a quest from the menu below for its full story."
-        )
-        embed.description = "\n".join(desc_bits) + "\n\u200b"
-
-        groups: dict[str, list[dict]] = {}
-        for q in quests_state:
-            groups.setdefault(str(q["qtype"]), []).append(q)
-        width = min(max(len(str(q["title"])) for q in quests_state), 22)
-        sections = [
-            (heading, _quest_section_lines(cadences, groups, settings, width))
-            for heading, cadences in _QUEST_SECTIONS
-        ]
-        sections = [(heading, lines) for heading, lines in sections if lines]
-        for i, (heading, quest_lines) in enumerate(sections):
-            # Defensive cap: a large quest_board_* size could still blow the
-            # 1024-char field cap and 400 the whole command guild-wide.
-            # (Reserve room for the "+N more" tail + breathing-room line.)
-            value = _fit_lines(quest_lines, _EMBED_FIELD_LIMIT - 40)
-            shown = value.count("\n") + 1 if value else 0
-            if shown < len(quest_lines):
-                value += f"\n_…and {len(quest_lines) - shown} more_"
-            if i < len(sections) - 1:  # breathing room above the next heading
-                value += "\n\u200b"
-            embed.add_field(name=heading, value=value, inline=False)
 
         claimable = [q for q in quests_state if q["state"] == "claimable"]
         rerollable = board_meta.get("rerollable") or []
@@ -3646,7 +3133,12 @@ class EconomyCog(commands.Cog):
         The message is the verification: an instant quest pays on the spot
         (reply + ✅), a sign-off quest files the pending claim and posts the
         bank-channel card. Repeats inside the period fall out silently via
-        ``claim_quest``'s per-period collision ValueError.
+        ``claim_trigger_word``'s ValueError.
+
+        The compiled-pattern index is TTL-cached here because this fires for
+        every message in the guild; the matching and the claim rules live in
+        ``economy_quests_service`` beside the trigger-*kind* mechanic they
+        share a board gate with.
         """
         if message.guild is None or message.author.bot:
             return
@@ -3661,10 +3153,13 @@ class EconomyCog(commands.Cog):
         now = time.monotonic()
         cached = self._trigger_cache.get(guild_id)
         if cached is None or cached[0] <= now:
+
+            def _load() -> list[quests_svc.TriggerQuest]:
+                with self.ctx.open_db() as conn:
+                    return quests_svc.load_trigger_index(conn, guild_id)
+
             try:
-                triggers = await asyncio.to_thread(
-                    self._load_trigger_quests, guild_id
-                )
+                triggers = await asyncio.to_thread(_load)
             except Exception:
                 log.exception("econ trigger: failed to load quests for %s", guild_id)
                 return
@@ -3675,44 +3170,16 @@ class EconomyCog(commands.Cog):
             return
 
         channel = message.channel
-        parent_id = getattr(channel, "parent_id", None)  # threads count as parent
-        for trig in triggers:
-            if trig.channel_id is not None and trig.channel_id not in (
-                channel.id,
-                parent_id,
-            ):
-                continue
-            if message_matches_trigger(content, trig.pattern):
-                await self._complete_trigger_quest(message, member, trig)
-
-    def _load_trigger_quests(self, guild_id: int) -> list[_TriggerQuest]:
-        """Active trigger quests with compiled patterns ([] when econ is off)."""
-        with self.ctx.open_db() as conn:
-            settings = load_econ_settings(conn, guild_id)
-            if not settings.enabled:
-                return []
-            rows = list_trigger_quests(conn, guild_id)
-        out: list[_TriggerQuest] = []
-        for row in rows:
-            pattern = compile_trigger_pattern(
-                parse_trigger_words(str(row["trigger_words"]))
-            )
-            if pattern is None:
-                continue
-            channel_id = row["trigger_channel_id"]
-            out.append(
-                _TriggerQuest(
-                    quest_id=int(row["id"]),
-                    qtype=str(row["qtype"]),
-                    signoff=bool(row["signoff"]),
-                    channel_id=int(channel_id) if channel_id is not None else None,
-                    pattern=pattern,
-                )
-            )
-        return out
+        # Threads count as their parent channel.
+        scope = (channel.id, getattr(channel, "parent_id", None))
+        for trig in quests_svc.matching_triggers(triggers, content, scope):
+            await self._complete_trigger_quest(message, member, trig)
 
     async def _complete_trigger_quest(
-        self, message: discord.Message, member: discord.Member, trig: _TriggerQuest
+        self,
+        message: discord.Message,
+        member: discord.Member,
+        trig: quests_svc.TriggerQuest,
     ) -> None:
         """Claim a matched trigger quest for the message author, best-effort."""
         guild = message.guild
@@ -3721,36 +3188,17 @@ class EconomyCog(commands.Cog):
 
         def _claim():
             with self.ctx.open_db() as conn:
-                settings = load_econ_settings(conn, guild.id)
-                offset = get_tz_offset_hours(conn, guild.id)
-                day = local_day_for(time.time(), offset)
-                period = quest_period(trig.qtype, day)
-                # A trigger-word quest still only pays when it's on the
-                # member's personal board this period (parity with kind
-                # triggers). Off-board → treat like an unclaimable repeat.
-                if has_board(trig.qtype) and trig.quest_id not in (
-                    assigned_board_ids(
-                        conn, guild.id, member.id, trig.qtype, day, settings
-                    )
-                ):
-                    raise ValueError("quest not on member's board this period")
-                outcome = claim_quest(
-                    conn,
-                    settings,
-                    guild.id,
-                    trig.quest_id,
-                    member.id,
-                    period=period,
-                    booster=booster,
+                return quests_svc.claim_trigger_word(
+                    conn, guild.id, member.id, trig,
+                    booster=booster, now=time.time(),
                 )
-            return settings, outcome
 
         try:
             settings, outcome = await asyncio.to_thread(_claim)
         except ValueError:
-            # Already claimed this period, quest window closed, or deactivated
-            # since the cache load — every repeat message would hit this, so
-            # stay quiet rather than spam the channel.
+            # Already claimed this period, quest window closed, deactivated
+            # since the cache load, or off-board — every repeat message would
+            # hit this, so stay quiet rather than spam the channel.
             return
         except Exception:
             log.exception(
@@ -3796,64 +3244,25 @@ class EconomyCog(commands.Cog):
 
     _PHOTO_OPTS_TTL = 60.0  # channel-id cache staleness bound (seconds)
 
-    def _read_photo_channel(self, guild_id: int) -> int:
-        """The configured Photo Challenge channel id, or 0 when unset.
-
-        0 means the admin hasn't picked a Photo Challenge channel — the
-        listener no-ops then, so the mechanic is dormant until one is set.
-        Read from ``games_game_config`` (game_type 'photo'), the same
-        ``channel_id`` the standalone Photo Challenge Setup panel owns. When
-        that config carries no channel but an **active photo schedule** does
-        (a schedule created without the Setup panel ever being saved, which
-        leaves the config row empty), fall back to the schedule's channel so
-        posts there still earn instead of silently paying nothing.
-        """
-        with self.ctx.open_db() as conn:
-            row = conn.execute(
-                "SELECT options FROM games_game_config"
-                " WHERE guild_id = ? AND game_type = 'photo'",
-                (guild_id,),
-            ).fetchone()
-            opts: dict = {}
-            if row and row[0]:
-                try:
-                    opts = json.loads(row[0])
-                except (ValueError, TypeError):
-                    opts = {}
-            try:
-                channel_id = int(str(opts.get("channel_id")).strip() or 0)
-            except (ValueError, TypeError):
-                channel_id = 0
-            if channel_id > 0:
-                return channel_id
-            # Config has no channel — recover the channel from an active photo
-            # schedule so a schedule-only setup isn't silently unpaid.
-            sched = conn.execute(
-                "SELECT channel_id FROM games_scheduled"
-                " WHERE guild_id = ? AND game_type = 'photo' AND status = 'active'"
-                " ORDER BY id ASC LIMIT 1",
-                (guild_id,),
-            ).fetchone()
-        if sched and sched[0]:
-            try:
-                return int(sched[0])
-            except (ValueError, TypeError):
-                return 0
-        return 0
-
     async def _photo_channel(self, guild_id: int) -> int:
-        """TTL-cached ``_read_photo_channel`` — one DB read per guild per TTL.
+        """TTL-cached ``read_photo_channel`` — one DB read per guild per TTL.
 
-        Keeps the on_message listener (which fires for every message in the
-        guild) off the DB on each event; only image posts in the configured
-        channel go past this to the eligibility check.
+        The cache stays here rather than in the service: it exists because
+        ``on_message`` fires for every message in the guild, which is a
+        listener concern, not a rule about how photo posts pay. Only image
+        posts in the configured channel go past this to the service.
         """
         now = time.monotonic()
         cached = self._photo_opts.get(guild_id)
         if cached is not None and cached[0] > now:
             return cached[1]
+
+        def _read() -> int:
+            with self.ctx.open_db() as conn:
+                return photo_svc.read_photo_channel(conn, guild_id)
+
         try:
-            channel_id = await asyncio.to_thread(self._read_photo_channel, guild_id)
+            channel_id = await asyncio.to_thread(_read)
         except Exception:
             log.exception("econ photo: channel read failed in guild %s", guild_id)
             return 0
@@ -3864,16 +3273,11 @@ class EconomyCog(commands.Cog):
     async def _on_photo_post(self, message: discord.Message) -> None:
         """Pay for an image posted in the Photo Challenge channel.
 
-        Two independent payouts, both once per guild-local day:
-        - a flat **participation award** (``reward_photo_post``) on the post
-          itself — no quest required; and
-        - the **photo_post quest** bonus on top, if one is active.
-        The post itself earns — no reactions needed. Guards cheapest-first:
-        guild/bot check, image check, TTL-cached channel gate, then a DB
-        eligibility pre-check (economy on, source on, and something to pay).
-        The flat award dedups on ``econ_photo_rewards``; the quest dedups on
-        its own claim (occurrence ``photo_post:<local_day>``), so posting
-        several photos in a day still pays each side once.
+        Guards cheapest-first: guild/bot check, image check, TTL-cached
+        channel gate, then a DB eligibility pre-check so a channel with
+        nothing to pay never opens a write transaction. The payout split
+        (flat participation award + stacked photo_post quest bonus, each
+        once per guild-local day) lives in ``economy_photo_service``.
         """
         if message.guild is None or message.author.bot:
             return
@@ -3892,8 +3296,13 @@ class EconomyCog(commands.Cog):
             return
 
         guild_id = message.guild.id
+
+        def _possible() -> bool:
+            with self.ctx.open_db() as conn:
+                return photo_svc.payout_possible(conn, guild_id)
+
         try:
-            eligible = await asyncio.to_thread(self._photo_eligible, guild_id)
+            eligible = await asyncio.to_thread(_possible)
         except Exception:
             log.exception(
                 "econ photo: eligibility check failed in guild %s", guild_id
@@ -3906,48 +3315,10 @@ class EconomyCog(commands.Cog):
 
         def _claim():
             with self.ctx.open_db() as conn:
-                settings = load_econ_settings(conn, guild_id)
-                if not settings.enabled:
-                    return None
-                if not source_enabled(conn, guild_id, "photo_post"):
-                    return None
-                offset = get_tz_offset_hours(conn, guild_id)
-                day = local_day_for(time.time(), offset)
-                # Flat participation award — once per local day. The
-                # INSERT OR IGNORE anchor rides this transaction, so concurrent
-                # posts pay it at most once (mirrors the login faucet).
-                participation = 0
-                if settings.reward_photo_post > 0:
-                    cur = conn.execute(
-                        "INSERT OR IGNORE INTO econ_photo_rewards"
-                        " (guild_id, user_id, local_day) VALUES (?, ?, ?)",
-                        (guild_id, member.id, day),
-                    )
-                    if (cur.rowcount or 0) == 1:
-                        participation = apply_credit(
-                            conn,
-                            guild_id,
-                            member.id,
-                            settings.reward_photo_post,
-                            "photo_post",
-                            meta={"day": day},
-                            booster=booster,
-                            multiplier=settings.booster_multiplier,
-                        )
-                # The photo_post quest bonus stacks on top (once/day by
-                # occurrence; fire_trigger_quests re-checks the source toggle).
-                fired = fire_trigger_quests(
-                    conn,
-                    settings,
-                    guild_id,
-                    "photo_post",
-                    member.id,
-                    local_day=day,
-                    occurrence=day,
-                    booster=booster,
-                    channel_ids=(channel_id,),
+                return photo_svc.award_photo_post(
+                    conn, guild_id, member.id,
+                    channel_id=channel_id, booster=booster, now=time.time(),
                 )
-                return settings, participation, fired
 
         try:
             result = await asyncio.to_thread(_claim)
@@ -3967,29 +3338,6 @@ class EconomyCog(commands.Cog):
                 await message.add_reaction("✅")
             except discord.HTTPException:
                 log.debug("econ photo: participation react failed", exc_info=True)
-
-    def _photo_eligible(self, guild_id: int) -> bool:
-        """True when a photo payout is possible in this guild right now.
-
-        Economy enabled and the photo_post income source on, plus at least one
-        thing to pay: a positive flat participation award (``reward_photo_post``)
-        or ≥1 active photo_post quest. Gates the per-post write so a channel
-        with nothing to pay never opens a DB transaction.
-        """
-        with self.ctx.open_db() as conn:
-            settings = load_econ_settings(conn, guild_id)
-            if not settings.enabled:
-                return False
-            if not source_enabled(conn, guild_id, "photo_post"):
-                return False
-            if settings.reward_photo_post > 0:
-                return True
-            row = conn.execute(
-                "SELECT 1 FROM econ_quests WHERE guild_id = ? AND active = 1"
-                " AND trigger_kind = 'photo_post' LIMIT 1",
-                (guild_id,),
-            ).fetchone()
-            return row is not None
 
     @commands.Cog.listener("on_member_update")
     async def _on_boost_started(
@@ -4098,9 +3446,8 @@ class EconomyCog(commands.Cog):
         actor = interaction.user
         assert isinstance(actor, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild_id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild_id)
+        if settings is None:
             return
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
@@ -4137,8 +3484,6 @@ class EconomyCog(commands.Cog):
             sponsor_id = int(queued["user_id"])
             question = str(queued["question"])
 
-        accent = await resolve_accent_color(self.ctx.db_path, guild)
-
         # Prefer the rendered quote card; fall back to a plain branded embed if
         # there's no usable background image or the renderer raises.
         card_file: discord.File | None = None
@@ -4168,6 +3513,16 @@ class EconomyCog(commands.Cog):
                 )
             except Exception:
                 log.exception("qotd: failed to render card in guild %s", guild_id)
+
+        # Only the fallback embed is accented — the rendered card carries its
+        # own palette — so the card path skips the lookup entirely. Resolved
+        # before the try, as it was, so a failure here still can't be mistaken
+        # for a failed send and release the claimed sponsored question.
+        accent = (
+            None
+            if card_file is not None
+            else await resolve_accent_color(self.ctx.db_path, guild)
+        )
 
         content: str | None = None
         mentions = discord.AllowedMentions.none()
@@ -4282,9 +3637,12 @@ class EconomyCog(commands.Cog):
 
     # ── channel-bottom panels ────────────────────────────────────────────
     #
-    # All three run on core.sticky.StickyPanel. Each supplies only: where its
+    # All four run on core.sticky.StickyPanel. Each supplies only: where its
     # ids live, and what it should look like. A panel is treated as unposted
     # while the economy is disabled, so a disabled guild never re-sticks.
+    #
+    # _PANEL_FIELDS covers the three permanent panels; the auction card keeps
+    # its ids elsewhere and supplies its own callbacks (see below).
 
     _PANEL_FIELDS = {
         "guide": ("guide_channel_id", "guide_message_id"),
@@ -4317,18 +3675,21 @@ class EconomyCog(commands.Cog):
         )
 
     async def _build_leaderboard_panel(self, guild: discord.Guild) -> PanelContent:
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
         now_ts = time.time()
 
         def _collect():
+            # Settings ride the connection the board data already needs; this
+            # runs on every sticky repost, so a second connect+PRAGMA for one
+            # settings row was the most-repeated waste in the cog.
             with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
                 data = collect_leaderboard_data(conn, guild.id, now_ts)
                 known = get_known_users_bulk(
                     conn, guild.id, [uid for uid, _ in data.top_earners]
                 )
-            return data, known
+            return settings, data, known
 
-        data, known = await asyncio.to_thread(_collect)
+        settings, data, known = await asyncio.to_thread(_collect)
 
         def _name(uid: int) -> str:
             member = guild.get_member(uid)
@@ -4345,25 +3706,38 @@ class EconomyCog(commands.Cog):
         )
 
     async def _build_shop_panel_embed(
-        self, guild: discord.Guild, settings: EconSettings
+        self,
+        guild: discord.Guild,
+        settings: EconSettings,
+        icon_range: tuple[int, int, int] | None,
     ) -> discord.Embed:
         """The channel shop panel's embed with current gating, icon prices and
-        accent — shared by ``/bank post-shop`` and the sticky repost so the two
-        can't render different panels."""
-        gated: set[str] = set()
-        for perk in _FEATURE_GATED:
-            if not await feature_gate_ok(self.bot, guild.id, perk):
-                gated.add(perk)
-        icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
+        accent. Every route to the panel — ``/bank post-shop`` and the sticky
+        repost alike — arrives through ``_build_shop_panel``, so the two can't
+        render different panels.
+
+        ``icon_range`` is read by the caller on the connection it already
+        holds; ``None`` means this guild has no icon catalog.
+        """
+        gated = await self._gated_perks(guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        return _build_shop_embed(
+        return build_shop_embed(
             settings, gated, accent, panel=True, icon_catalog=icon_range
         )
 
     async def _build_shop_panel(self, guild: discord.Guild) -> PanelContent:
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        def _read() -> tuple[EconSettings, tuple[int, int, int] | None]:
+            # One connection for both, like _build_leaderboard_panel — this
+            # runs on every debounced sticky repost.
+            with self.ctx.open_db() as conn:
+                return (
+                    load_econ_settings(conn, guild.id),
+                    catalog_price_range(conn, guild.id),
+                )
+
+        settings, icon_range = await asyncio.to_thread(_read)
         return PanelContent(
-            embed=await self._build_shop_panel_embed(guild, settings),
+            embed=await self._build_shop_panel_embed(guild, settings, icon_range),
             view=ShopPanelView(),
         )
 
@@ -4417,7 +3791,6 @@ class EconomyCog(commands.Cog):
             self.auction_panel,
         ):
             await panel.on_message(message)
-
 
     # ── auto-updating leaderboard panel ──────────────────────────────────
 

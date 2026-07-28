@@ -12,8 +12,11 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.logic import local_day_for
-from bot_modules.cogs.economy_cog import _quest_line_status
 from bot_modules.economy.quest_views import (
+    _quest_line_reward,
+    _quest_line_status,
+    _quest_section_lines,
+    _status_disp_width,
     QUEST_BOARD_CUSTOM_ID,
     QUEST_STATE_LABEL,
     QuestApproveButton,
@@ -656,3 +659,97 @@ async def test_already_resolved_race_refreshes_card_no_double_pay(ctx, db):
     notify.assert_not_awaited()  # no second DM
     msg = interaction.response.send_message.await_args.args[0]
     assert "already resolved" in msg.lower()
+
+
+# ── the board's one-line renderer ────────────────────────────────────────
+# These moved here with build_quest_board_embed: the list render and the
+# details popup they must stay consistent with now live in one module.
+
+
+def test_quest_line_status_draws_bar_for_counted_and_community():
+    """Counted daily/weekly and community/monthly goals render a ▰▱ bar;
+    one-shot and claim-state quests keep their glyph phrase."""
+    # Counted quest (daily or weekly): tracked progress → bar + fraction; the
+    # small personal counts are the point.
+    counted = _quest_line_status(
+        {"state": "message_sent", "progress_current": 3, "progress_target": 6}
+    )
+    assert "▰" in counted and "▱" in counted and "3/6" in counted
+    # Guild-wide community/monthly goal → bar fill only, no n/target (the
+    # shared totals run to five figures and read as noise on the board).
+    community = _quest_line_status(
+        {"state": "community", "current": 40, "target": 100}
+    )
+    assert "▰" in community and "▱" in community and "/" not in community
+    # One-shot quest with no counted target → no bar, just the to-do glyph.
+    one_shot = _quest_line_status({"state": "photo_post"})
+    assert one_shot == "☐ to do"
+    # Claim states are unchanged phrases (no bar).
+    assert _quest_line_status({"state": "done"}) == "✅ done"
+    assert _quest_line_status({"state": "pending"}) == "⏳ sign-off"
+    assert _quest_line_status({"state": "claimable"}) == "🔶 claim below"
+
+
+def test_quest_line_reward_xp_suffix_is_glyph_free():
+    """The board's XP suffix carries no ⭐ — on phone widths the reward
+    column hugs the wrap point and the star pushed it onto its own line.
+    The spotlight bolt (rarer, and last on the line) stays."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    line = _quest_line_reward({"reward": 15, "reward_xp": 8}, settings)
+    assert line == "🪙 15 +8xp"
+    bolt = _quest_line_reward(
+        {"reward": 15, "reward_xp": 8, "spotlight": True}, settings
+    )
+    assert bolt.endswith("⚡")
+
+
+def test_quest_section_lines_labels_only_when_multi_cadence():
+    """A section spanning >1 cadence gets a bold sub-label per group; a
+    single-cadence section is unlabelled (the field heading already names it)."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    two_cadence = _quest_section_lines(
+        ("daily", "weekly", "event"),
+        {
+            "daily": [{
+                "state": "message_sent", "progress_current": 2,
+                "progress_target": 5, "title": "Chatty", "reward": 10,
+            }],
+            "weekly": [{"state": "done", "title": "Grind", "reward": 40}],
+        },
+        settings, 12,
+    )
+    assert "**Daily**" in two_cadence and "**Weekly**" in two_cadence
+    assert any("Chatty" in ln for ln in two_cadence)
+    # Only the community goal present → no sub-label line at all.
+    one_cadence = _quest_section_lines(
+        ("monthly", "community"),
+        {"community": [{
+            "state": "community", "current": 3, "target": 9,
+            "title": "Buzz", "reward": 5,
+        }]},
+        settings, 12,
+    )
+    assert not any(ln.startswith("**") for ln in one_cadence)
+    assert any("Buzz" in ln for ln in one_cadence)
+
+
+def test_quest_section_lines_align_the_reward_column():
+    """Every row's title+status code cell is padded to one width, so the
+    reward payload after the closing backtick starts at the same column —
+    a counted (bar) row and a claim-state (glyph) row included."""
+    settings = SimpleNamespace(currency_emoji="🪙")
+    lines = _quest_section_lines(
+        ("daily", "weekly", "event"),
+        {"daily": [
+            {"state": "message_sent", "progress_current": 2,
+             "progress_target": 5, "title": "Chatty", "reward": 10},
+            {"state": "claimable", "title": "Say hi", "reward": 25},
+            {"state": "done", "title": "All done", "reward": 40},
+        ]},
+        settings, 12,
+    )
+    cells = [ln.split("`")[1] for ln in lines if ln.startswith("`")]
+    assert len(cells) == 3
+    # All cells share one display width → the trailing backtick (and the
+    # reward after it) lands in the same column on every row.
+    assert len({_status_disp_width(c) for c in cells}) == 1

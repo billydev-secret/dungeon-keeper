@@ -36,7 +36,7 @@ from bot_modules.services.economy_quests_service import (
     spotlight_kind,
 )
 from bot_modules.services.economy_service import load_econ_settings
-from bot_modules.services.embeds import pad_cell, rel_ts
+from bot_modules.services.embeds import EMBED_FIELD_LIMIT, pad_cell, rel_ts
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -470,7 +470,7 @@ BOARD_HEADING = "📋 Quest board & community goals"
 # 2-char zero-width spacer to every value. Merging two former sections into one
 # field doubles the overrun risk, so blocks pack into "… (cont.)" fields the way
 # quest_digest._pack does for the login digest.
-_FIELD_LIMIT = 1024
+_FIELD_LIMIT = EMBED_FIELD_LIMIT
 _SPACER_LEN = 2  # "\n​"
 
 

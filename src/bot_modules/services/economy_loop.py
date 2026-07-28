@@ -84,6 +84,7 @@ from bot_modules.economy.leaderboard import (
     build_leaderboard_embed,
     collect_leaderboard_data,
 )
+from bot_modules.economy.perks import FEATURE_GATED
 from bot_modules.economy.quest_views import QuestBoardView
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
@@ -151,7 +152,9 @@ from bot_modules.services.message_store import get_known_users_bulk
 # holographic role colors). Only these are swept each tick — the sweep asks
 # Discord whether the feature still exists, so it is kept to the perks that can
 # actually lose it.
-_FEATURE_GATED_PERKS = ("role_icon", "role_gradient", "role_holographic")
+# Same set as the shop's, and now literally it: the constant was private to
+# the cog until economy/shop.py made it importable, so this had to restate it.
+_FEATURE_GATED_PERKS = FEATURE_GATED
 
 # Grace-window length in whole hours, for the "payment failed" DM copy.
 _GRACE_HOURS = int(GRACE_SECONDS // 3600)

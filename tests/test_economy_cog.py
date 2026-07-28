@@ -1,6 +1,7 @@
 """Cog-level tests for /bank — wallet view, mod grant matrix, and /bank quests."""
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -23,10 +24,6 @@ from bot_modules.services.economy_quests_service import (
 from bot_modules.cogs.economy_cog import (
     _NICK_FORBIDDEN,
     _custom_name_confirmation,
-    _quest_line_reward,
-    _quest_line_status,
-    _quest_section_lines,
-    _status_disp_width,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -39,6 +36,7 @@ from bot_modules.services.economy_service import (
     save_econ_settings,
 )
 from bot_modules.services.quote_renderer import THEMES
+from bot_modules.services.voice_master_service import add_name_blocklist
 from tests.db_template import migrated_db
 from tests.fakes import FakeGuild, fake_interaction
 
@@ -491,95 +489,6 @@ async def test_quests_listing_state_matrix(ctx, db):
     assert daily  # referenced
 
 
-def test_quest_line_status_draws_bar_for_counted_and_community():
-    """Counted daily/weekly and community/monthly goals render a ▰▱ bar;
-    one-shot and claim-state quests keep their glyph phrase."""
-    # Counted quest (daily or weekly): tracked progress → bar + fraction; the
-    # small personal counts are the point.
-    counted = _quest_line_status(
-        {"state": "message_sent", "progress_current": 3, "progress_target": 6}
-    )
-    assert "▰" in counted and "▱" in counted and "3/6" in counted
-    # Guild-wide community/monthly goal → bar fill only, no n/target (the
-    # shared totals run to five figures and read as noise on the board).
-    community = _quest_line_status(
-        {"state": "community", "current": 40, "target": 100}
-    )
-    assert "▰" in community and "▱" in community and "/" not in community
-    # One-shot quest with no counted target → no bar, just the to-do glyph.
-    one_shot = _quest_line_status({"state": "photo_post"})
-    assert one_shot == "☐ to do"
-    # Claim states are unchanged phrases (no bar).
-    assert _quest_line_status({"state": "done"}) == "✅ done"
-    assert _quest_line_status({"state": "pending"}) == "⏳ sign-off"
-    assert _quest_line_status({"state": "claimable"}) == "🔶 claim below"
-
-
-def test_quest_line_reward_xp_suffix_is_glyph_free():
-    """The board's XP suffix carries no ⭐ — on phone widths the reward
-    column hugs the wrap point and the star pushed it onto its own line.
-    The spotlight bolt (rarer, and last on the line) stays."""
-    settings = SimpleNamespace(currency_emoji="🪙")
-    line = _quest_line_reward({"reward": 15, "reward_xp": 8}, settings)
-    assert line == "🪙 15 +8xp"
-    bolt = _quest_line_reward(
-        {"reward": 15, "reward_xp": 8, "spotlight": True}, settings
-    )
-    assert bolt.endswith("⚡")
-
-
-def test_quest_section_lines_labels_only_when_multi_cadence():
-    """A section spanning >1 cadence gets a bold sub-label per group; a
-    single-cadence section is unlabelled (the field heading already names it)."""
-    settings = SimpleNamespace(currency_emoji="🪙")
-    two_cadence = _quest_section_lines(
-        ("daily", "weekly", "event"),
-        {
-            "daily": [{
-                "state": "message_sent", "progress_current": 2,
-                "progress_target": 5, "title": "Chatty", "reward": 10,
-            }],
-            "weekly": [{"state": "done", "title": "Grind", "reward": 40}],
-        },
-        settings, 12,
-    )
-    assert "**Daily**" in two_cadence and "**Weekly**" in two_cadence
-    assert any("Chatty" in ln for ln in two_cadence)
-    # Only the community goal present → no sub-label line at all.
-    one_cadence = _quest_section_lines(
-        ("monthly", "community"),
-        {"community": [{
-            "state": "community", "current": 3, "target": 9,
-            "title": "Buzz", "reward": 5,
-        }]},
-        settings, 12,
-    )
-    assert not any(ln.startswith("**") for ln in one_cadence)
-    assert any("Buzz" in ln for ln in one_cadence)
-
-
-def test_quest_section_lines_align_the_reward_column():
-    """Every row's title+status code cell is padded to one width, so the
-    reward payload after the closing backtick starts at the same column —
-    a counted (bar) row and a claim-state (glyph) row included."""
-    settings = SimpleNamespace(currency_emoji="🪙")
-    lines = _quest_section_lines(
-        ("daily", "weekly", "event"),
-        {"daily": [
-            {"state": "message_sent", "progress_current": 2,
-             "progress_target": 5, "title": "Chatty", "reward": 10},
-            {"state": "claimable", "title": "Say hi", "reward": 25},
-            {"state": "done", "title": "All done", "reward": 40},
-        ]},
-        settings, 12,
-    )
-    cells = [ln.split("`")[1] for ln in lines if ln.startswith("`")]
-    assert len(cells) == 3
-    # All cells share one display width → the trailing backtick (and the
-    # reward after it) lands in the same column on every row.
-    assert len({_status_disp_width(c) for c in cells}) == 1
-
-
 @pytest.mark.asyncio
 async def test_quests_event_quests_have_no_display_section(ctx, db):
     # event ("Anytime") quests aren't board-drawn and don't get a section in
@@ -683,10 +592,6 @@ async def test_bank_mute_toggles_pref(ctx, db):
 
 # ── Stage 3: transfers / shop / role studio / gift / rentals ─────────────────
 
-import contextlib  # noqa: E402
-
-from bot_modules.services.voice_master_service import add_name_blocklist  # noqa: E402
-
 
 def _credit(db, user_id, amount) -> None:
     with open_db(db) as conn:
@@ -718,6 +623,14 @@ def _add_rental(
                 catalog_icon_id, now,
             ),
         )
+
+
+def _personal_role(db, user_id=500):
+    """The member's personal-role row — what every role-studio setter writes."""
+    with open_db(db) as conn:
+        return conn.execute(
+            "SELECT * FROM econ_personal_roles WHERE user_id = ?", (user_id,)
+        ).fetchone()
 
 
 def _live_rentals(db) -> list:
@@ -768,60 +681,41 @@ async def _pay(cog, interaction, member, amount) -> None:
     await cog.bank_pay.callback(cog, interaction, member, amount)
 
 
+# The confirm gate triggers *over* 100 (spec §5) — 100 itself sends straight
+# through. One test for the threshold, one row per side of it.
+@pytest.mark.parametrize(
+    ("amount", "needs_confirm"),
+    [
+        pytest.param(50, False, id="under"),
+        pytest.param(100, False, id="exactly-the-threshold"),
+        pytest.param(200, True, id="over"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_pay_immediate_under_threshold(ctx, db):
-    _enable(db)
-    _credit(db, 500, 200)
-    cog = _make_cog(ctx)
-    sender = _member(member_id=500, name="Alice")
-    recipient = _member(member_id=900, name="Bob")
-    interaction = _interaction(sender)
-
-    with _patch_projection() as (_apply, _revoke, notify):
-        await _pay(cog, interaction, recipient, 50)
-
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 150
-        assert get_balance(conn, GUILD_ID, 900) == 50
-    notify.assert_awaited_once()
-    assert notify.await_args is not None
-    assert "50" in notify.await_args.kwargs["content"]
-
-
-@pytest.mark.asyncio
-async def test_pay_over_threshold_requires_confirm(ctx, db):
-    _enable(db)
-    _credit(db, 500, 500)
-    cog = _make_cog(ctx)
-    sender = _member(member_id=500)
-    recipient = _member(member_id=900)
-    interaction = _interaction(sender)
-
-    with _patch_projection():
-        await _pay(cog, interaction, recipient, 200)
-
-    kwargs = interaction.response.send_message.await_args.kwargs
+async def test_pay_confirm_gate_follows_the_threshold(ctx, db, amount, needs_confirm):
     from bot_modules.cogs.economy_cog import _PayConfirmView
 
-    assert isinstance(kwargs["view"], _PayConfirmView)
-    # No transfer happened yet — the gate holds.
-    with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 500) == 500
-        assert get_balance(conn, GUILD_ID, 900) == 0
-
-
-@pytest.mark.asyncio
-async def test_pay_exactly_100_transfers_without_confirm(ctx, db):
-    """Spec: confirm triggers *over* 100 — 100 itself sends straight through."""
     _enable(db)
     _credit(db, 500, 500)
     cog = _make_cog(ctx)
-    interaction = _interaction(_member(member_id=500))
-    with _patch_projection():
-        await _pay(cog, interaction, _member(member_id=900), 100)
-    assert "view" not in interaction.response.send_message.await_args.kwargs
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+
+    with _patch_projection() as (_apply, _revoke, notify):
+        await _pay(cog, interaction, _member(member_id=900, name="Bob"), amount)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
     with open_db(db) as conn:
-        assert get_balance(conn, GUILD_ID, 900) == 100
+        received = get_balance(conn, GUILD_ID, 900)
+
+    if needs_confirm:
+        assert isinstance(kwargs["view"], _PayConfirmView)
+        assert received == 0  # the gate holds; nothing moved yet
+        notify.assert_not_awaited()
+    else:
+        assert "view" not in kwargs
+        assert received == amount
+        notify.assert_awaited_once()
+        assert str(amount) in notify.await_args.kwargs["content"]
 
 
 @pytest.mark.asyncio
@@ -884,29 +778,26 @@ async def test_pay_transfers_disabled(ctx, db):
 # ── /bank shop ───────────────────────────────────────────────────────────────
 
 
+async def _open_shop(cog, interaction) -> None:
+    """Open the shop with every feature gate open — the default for these tests.
+
+    Gate-closed behaviour has its own tests that patch the gate explicitly.
+    """
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
+
+
 async def _shop(cog, interaction) -> None:
     await cog.bank_shop.callback(cog, interaction)
-
-
-def _build_shop_embed(*args, **kwargs):
-    from bot_modules.cogs.economy_cog import _build_shop_embed as build
-
-    return build(*args, **kwargs)
 
 
 def _ShopView(*args, **kwargs):
     from bot_modules.cogs.economy_cog import _ShopView as view_cls
 
     return view_cls(*args, **kwargs)
-
-
-def _shop_row(embed, label: str) -> str:
-    """The shop-table line whose first code cell is ``label``."""
-    for field in embed.fields:
-        for line in field.value.splitlines():
-            if line.startswith(f"`{label}") and "`" in line[1:]:
-                return line
-    raise AssertionError(f"no {label!r} row in {[f.name for f in embed.fields]}")
 
 
 @pytest.mark.asyncio
@@ -937,98 +828,6 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     assert "needs a server feature" in blob
 
 
-def test_shop_table_aligns_cells_and_tiers_by_price(db):
-    """Rows are fixed-width code cells, grouped in tiers, cheapest first."""
-    _enable(
-        db,
-        price_role_name=35,
-        price_role_color=50,
-        price_role_gradient=120,
-        price_role_icon=400,
-    )
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-
-    tiers = {f.name: f.value for f in embed.fields}
-    assert list(tiers) == ["Essentials", "Signature", "One-shot", "For a Friend"]
-
-    # Every row's cells share one width across the whole embed, so the columns
-    # line up across tier headings rather than restarting at each one.
-    rows = [
-        line
-        for value in tiers.values()
-        for line in value.splitlines()
-        if line.startswith("`")
-    ]
-    # Five self-perk rows — the "For a friend" tier is prose since gifting
-    # generalized to every perk (no single gift price to tabulate).
-    assert len(rows) == 5
-    # One `label  blurb` cell per row (quest-board shape), all the same
-    # width so columns align across tier headings — and narrow enough that
-    # the price doesn't wrap onto its own line on a phone-width embed.
-    cells = {line.split("`")[1] for line in rows}
-    assert len({len(c) for c in cells}) == 1
-    assert all(len(c) <= 27 for c in cells)
-
-    # Ascending price inside each tier, and the blurb is present.
-    assert tiers["Essentials"].index("**35**") < tiers["Essentials"].index("**50**")
-    assert tiers["Signature"].index("**120**") < tiers["Signature"].index("**400**")
-    assert "nickname + role" in _shop_row(embed, "Name")
-
-
-def test_shop_table_reorders_when_prices_are_reconfigured(db):
-    """The ladder follows the guild's prices, not the hardcoded tier order."""
-    _enable(db, price_role_name=90, price_role_color=10)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    essentials = next(f.value for f in embed.fields if f.name == "Essentials")
-    assert essentials.index("**10**") < essentials.index("**90**")
-
-
-def test_shop_icon_row_shows_catalog_span_and_size(db):
-    """A curated catalog prices per icon — show the span and how many there are.
-
-    The flat custom price (default 75) folds into the span: the picker's
-    bring-your-own entry sells at it, so the row's floor is min(catalog, flat).
-    """
-    _enable(db)
-    embed = _build_shop_embed(
-        _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
-    )
-    row = _shop_row(embed, "Icon")
-    assert "**75–400**" in row
-    assert "40 + your own" in row
-
-
-def test_shop_icon_row_span_floor_is_catalog_when_below_flat(db):
-    """A catalog cheaper than the flat custom price sets the floor itself."""
-    _enable(db, price_role_icon=500)
-    embed = _build_shop_embed(
-        _settings(db), set(), None, panel=True, icon_catalog=(120, 400, 40)
-    )
-    assert "**120–500**" in _shop_row(embed, "Icon")
-
-
-def test_shop_icon_row_collapses_a_single_priced_catalog(db):
-    """One price across catalog AND flat reads as a price, not a degenerate span."""
-    _enable(db, price_role_icon=200)
-    embed = _build_shop_embed(
-        _settings(db), set(), None, panel=True, icon_catalog=(200, 200, 3)
-    )
-    assert "**200**" in _shop_row(embed, "Icon")
-    assert "–" not in _shop_row(embed, "Icon")
-
-
-def test_shop_shows_balance_to_a_member_but_not_in_the_panel(db):
-    """The wallet anchors the prices — but the channel panel is member-agnostic."""
-    _enable(db)
-    settings = _settings(db)
-    mine = _build_shop_embed(settings, set(), None, balance=1240)
-    assert "1,240" in mine.description
-
-    panel = _build_shop_embed(settings, set(), None, panel=True)
-    assert "1,240" not in panel.description
-    assert "you have" not in panel.description
-
-
 @pytest.mark.asyncio
 async def test_shop_buttons_carry_no_price(ctx, db):
     """Prices live in the table only, so re-pricing can't stale a button label."""
@@ -1036,10 +835,7 @@ async def test_shop_buttons_carry_no_price(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch(
-        "bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)
-    ):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
     labels = [
@@ -1082,8 +878,7 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
     buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
@@ -1093,8 +888,10 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     # The other perks still offer Rent.
     assert "econ_shop_rent:role_name" in ids
     # The rented row is ticked in the table.
-    color_row = _shop_row(kwargs["embed"], "Color")
-    assert "✅" in color_row
+    table = "\n".join(f.value for f in kwargs["embed"].fields)
+    assert any(
+        ln.startswith("`Color") and "✅" in ln for ln in table.splitlines()
+    )
 
 
 @pytest.mark.asyncio
@@ -1105,8 +902,7 @@ async def test_shop_rented_holographic_shows_active_not_customise(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
     buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
@@ -1125,8 +921,7 @@ async def test_shop_customise_button_opens_modal(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     view = interaction.response.send_message.await_args.kwargs["view"]
     button = next(
@@ -1150,8 +945,7 @@ async def test_shop_gift_recipient_gets_color_customise(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
-    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
-        await _shop(cog, interaction)
+    await _open_shop(cog, interaction)
 
     view = interaction.response.send_message.await_args.kwargs["view"]
     ids = {str(b.custom_id) for b in view.children if isinstance(b, discord.ui.Button)}
@@ -1192,10 +986,7 @@ async def test_name_modal_submit_sets_role_name(ctx, db):
     with _patch_projection() as (apply_mock, _r, _n):
         await modal.on_submit(interaction)
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT name FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert row["name"] == "Stardust"
 
 
@@ -1450,6 +1241,44 @@ def _fake_emoji(name="party", eid=999, animated=False, data=b"emoji-bytes"):
     return e
 
 
+@pytest.mark.asyncio
+async def test_require_perk_falls_back_for_an_unmapped_perk(ctx, db):
+    """A setter for a perk with no _PERK_REFUSAL row still refuses politely.
+
+    SELF_PERKS has six members and the refusal table four, so a future setter
+    for role_holographic or voice_style would otherwise raise KeyError and
+    show the member "This interaction failed."
+    """
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+
+    assert await cog._require_perk(interaction, GUILD_ID, "role_holographic") is False
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "Rent that perk first" in msg
+
+
+def test_disabled_shop_stops_after_the_settings_row(ctx, db):
+    """The economy-off gate stays cheap — no catalog/rental reads to say 'off'.
+
+    The returned values would be empty either way; what this pins is that the
+    four post-gate queries aren't issued for a page that will only ever say
+    the economy is disabled.
+    """
+    cog = _make_cog(ctx)  # economy left disabled
+    with (
+        patch("bot_modules.cogs.economy_cog.catalog_price_range") as catalog,
+        patch("bot_modules.cogs.economy_cog.list_refundable_rentals") as rentals,
+    ):
+        shop = cog._shop_context(GUILD_ID, 500)
+
+    assert shop.settings.enabled is False
+    catalog.assert_not_called()
+    rentals.assert_not_called()
+    assert (shop.owned, shop.balance, shop.icon_range) == (set(), 0, None)
+    assert (shop.refundable, shop.shields_held, shop.shield_price) == ([], 0, 0)
+
+
 @pytest.mark.parametrize(
     ("perk", "rented", "refusal"),
     [
@@ -1523,10 +1352,7 @@ async def test_role_name_success(ctx, db):
     with _patch_projection() as (apply_mock, _r, _n):
         await _role_name(cog, interaction, "Stardust")
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT name FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert row["name"] == "Stardust"
 
 
@@ -1568,10 +1394,7 @@ async def test_role_color_gift_entitlement_allows(ctx, db):
     with _patch_projection() as (apply_mock, _r, _n):
         await _role_color(cog, interaction, "#00FF00")
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT color FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert row["color"] == 0x00FF00
 
 
@@ -1607,10 +1430,7 @@ async def test_role_icon_custom_emoji_success(ctx, db, raw):
     ):
         await _role_icon_emoji(cog, interaction, raw)
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     # The emoji's image is downloaded into the managed icon store.
     assert Path(row["icon_path"]).read_bytes() == b"emoji-bytes"
 
@@ -1796,10 +1616,7 @@ async def test_role_icon_image_upload_success(ctx, db):
     ):
         await _role_icon_image(cog, interaction, image)
     apply_mock.assert_awaited_once()
-    with open_db(db) as conn:
-        row = conn.execute(
-            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
-        ).fetchone()
+    row = _personal_role(db)
     assert Path(row["icon_path"]).read_bytes() == b"png-bytes"
 
 
@@ -1820,13 +1637,58 @@ async def test_role_icon_image_too_big(ctx, db):
     apply_mock.assert_not_awaited()
 
 
+# The shop table (economy/shop.py) and the shop buttons (_ShopView, here)
+# decide row visibility from the same three prices, independently and in two
+# different modules. A guild that prices one of them at 0 must get neither the
+# row nor the button — never a listed row you can't buy, or a button for a row
+# that isn't there. Both halves read dashboard-editable knobs, so this drift is
+# reachable in prod, not theoretical.
+@pytest.mark.parametrize(
+    ("overrides", "field", "custom_id"),
+    [
+        pytest.param({"price_voice_style": 0}, "Voice", "econ_shop_rent:voice_style",
+                     id="voice-dark"),
+        pytest.param({"price_voice_style": 30}, "Voice", "econ_shop_rent:voice_style",
+                     id="voice-priced"),
+        pytest.param({"price_streak_shield": 0}, "One-shot", "econ_shop_shield",
+                     id="shield-off"),
+        pytest.param({"price_streak_shield": 40}, "One-shot", "econ_shop_shield",
+                     id="shield-priced"),
+        pytest.param({"raffle_enabled": False}, "Weekly Raffle", "econ_shop_raffle",
+                     id="raffle-off"),
+        pytest.param({"raffle_enabled": True}, "Weekly Raffle", "econ_shop_raffle",
+                     id="raffle-on"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_shop_table_row_and_its_button_agree(ctx, db, overrides, field, custom_id):
+    _enable(db, **overrides)
+    _credit(db, 500, 5000)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await _open_shop(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    has_row = any(f.name == field for f in kwargs["embed"].fields)
+    has_button = any(
+        str(b.custom_id) == custom_id
+        for b in kwargs["view"].children
+        if isinstance(b, discord.ui.Button)
+    )
+    assert has_row is has_button, (
+        f"{field!r} row={has_row} but {custom_id!r} button={has_button} "
+        f"for {overrides}"
+    )
+
+
 # ── /bank gift ───────────────────────────────────────────────────────────────
 
 
 async def _gift(cog, interaction, member, perk="role_color") -> None:
-    from bot_modules.cogs.economy_cog import _PERK_LABELS
+    from bot_modules.economy.perks import PERK_LABELS
 
-    choice = app_commands.Choice(name=_PERK_LABELS[perk], value=perk)
+    choice = app_commands.Choice(name=PERK_LABELS[perk], value=perk)
     await cog.bank_gift.callback(cog, interaction, member, choice)
 
 
@@ -1968,7 +1830,7 @@ async def test_wallet_shows_active_rentals(ctx, db):
 async def test_wallet_active_rentals_field_stays_under_cap(ctx, db):
     # A popular member on the receiving end of many gifts can accrue a dozen+
     # live rentals; each renders ~70 chars, so the joined field would blow past
-    # Discord's 1024-char cap and 400 the whole wallet embed. _fit_lines trims.
+    # Discord's 1024-char cap and 400 the whole wallet embed; fit_lines trims.
     _enable(db)
     for payer in range(800, 830):  # 30 distinct gifters -> 30 live rentals
         _add_rental(db, "role_color", user_id=payer, beneficiary_id=500)
@@ -2585,30 +2447,6 @@ def test_clean_memo_collapses_whitespace_and_caps_length():
     assert len(_clean_memo("x" * 500)) == _MAX_MEMO_LEN
 
 
-def test_memo_of_tolerates_missing_and_malformed_meta():
-    from bot_modules.cogs.economy_cog import _memo_of
-
-    assert _memo_of('{"to": 1, "memo": "hi"}') == "hi"
-    assert _memo_of('{"to": 1}') is None
-    assert _memo_of(None) is None
-    assert _memo_of("") is None
-    assert _memo_of("not json") is None
-    # A non-string memo must not crash the render.
-    assert _memo_of('{"memo": 5}') is None
-
-
-def test_fit_lines_keeps_newest_rows_under_the_field_cap():
-    from bot_modules.cogs.economy_cog import _fit_lines
-
-    short = ["a", "b", "c"]
-    assert _fit_lines(short) == "a\nb\nc"
-    # Ten max-length memo rows must not overrun the 1024-char embed field.
-    fat = [("x" * 200) for _ in range(10)]
-    out = _fit_lines(fat)
-    assert len(out) <= 1024
-    assert out.startswith("x")
-
-
 async def _pay(cog, interaction, member, amount, memo=None) -> None:
     await cog.bank_pay.callback(cog, interaction, member, amount, memo)
 
@@ -2682,40 +2520,6 @@ async def test_pay_memo_survives_the_large_amount_confirm_gate(ctx, db):
         assert json.loads(get_ledger(conn, GUILD_ID, 500, limit=1)[0]["meta"])[
             "memo"
         ] == "big one"
-
-
-# ── streak shield in the shop (sinks round 3, stage 2) ───────────────────────
-
-
-def test_shop_embed_shield_row_and_held_marker(db):
-    _enable(db)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    row = next(f for f in embed.fields if f.name == "One-shot")
-    assert "Streak shield" in row.value
-    assert "held" not in row.value
-    held = _build_shop_embed(_settings(db), set(), None, shields_held=1)
-    assert "held" in next(f for f in held.fields if f.name == "One-shot").value
-
-
-@pytest.mark.parametrize(
-    ("overrides", "field", "token"),
-    [
-        # token None → the row must be absent entirely.
-        ({"price_streak_shield": 0}, "One-shot", None),
-        ({}, "Voice", None),  # price_voice_style defaults to 0 — shipped dark
-        ({"price_voice_style": 30}, "Voice", "30"),
-        ({}, "Weekly Raffle", None),
-        ({"raffle_enabled": True}, "Weekly Raffle", "10"),  # ticket price
-    ],
-)
-def test_shop_embed_row_visibility(db, overrides, field, token):
-    _enable(db, **overrides)
-    embed = _build_shop_embed(_settings(db), set(), None, panel=True)
-    if token is None:
-        assert not any(f.name == field for f in embed.fields)
-    else:
-        row = next(f for f in embed.fields if f.name == field)
-        assert token in row.value
 
 
 @pytest.mark.asyncio
@@ -2804,18 +2608,51 @@ async def test_shop_view_shows_refund_button_only_when_something_refundable(ctx,
     )
 
 
-@pytest.mark.asyncio
-async def test_refund_picker_view_scoped_to_its_own_member(ctx, db):
-    # _RefundPickerView shares its ownership guard with _ShopView/
-    # _IconCatalogView via _MemberScopedView — confirm the shared base still
-    # rejects a different member's click.
-    from bot_modules.cogs.economy_cog import _RefundPickerView
+def _scoped_view(name, cog, settings):
+    """Build one member-scoped view, owned by member 500."""
+    from bot_modules.cogs import economy_cog as mod
 
+    owner, friend = _member(member_id=500), _member(member_id=501)
+    guild = _guild_roles()
+    return {
+        "_RefundPickerView": lambda: mod._RefundPickerView(
+            cog, settings, guild, 500, [], 30
+        ),
+        "_PayConfirmView": lambda: mod._PayConfirmView(
+            cog, settings, guild, owner, friend, 250
+        ),
+        "_GiftConfirmView": lambda: mod._GiftConfirmView(
+            cog, settings, guild, owner, friend, "role_color"
+        ),
+        "_EmojiCancelView": lambda: mod._EmojiCancelView(cog, 7, 500),
+        "_RefundConfirmView": lambda: mod._RefundConfirmView(
+            cog, settings, guild, 500, "role_color"
+        ),
+    }[name]()
+
+
+# Every scoped view routes its ownership guard through _MemberScopedView; the
+# refusal copy is per-class, so pin each one. Before the shared base these were
+# five hand-rolled interaction_checks and only the picker had a test.
+@pytest.mark.parametrize(
+    ("view_name", "denial"),
+    [
+        ("_RefundPickerView", "Open your own shop"),
+        ("_PayConfirmView", "This confirmation isn't yours."),
+        ("_GiftConfirmView", "This confirmation isn't yours."),
+        ("_EmojiCancelView", "This isn't your submission."),
+        ("_RefundConfirmView", "This confirmation isn't yours."),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scoped_views_reject_other_members(ctx, db, view_name, denial):
     cog = _make_cog(ctx)
-    view = _RefundPickerView(cog, _settings(db), _guild_roles(), 500, [], 30)
+    view = _scoped_view(view_name, cog, _settings(db))
+
     stranger = _interaction(_member(member_id=999))
     assert await view.interaction_check(stranger) is False
-    assert "Open your own shop" in stranger.response.send_message.await_args.args[0]
+    assert denial in stranger.response.send_message.await_args.args[0]
+
     owner = _interaction(_member(member_id=500))
     assert await view.interaction_check(owner) is True
 
@@ -2827,12 +2664,10 @@ async def test_refund_picker_previews_prorated_amount(ctx, db):
     _add_rental(db, "role_color", user_id=500)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
-    refundable, _shields_held, shield_price = cog._refundables(
-        GUILD_ID, 500, _settings(db)
-    )
+    shop = cog._shop_context(GUILD_ID, 500)
 
     await cog.open_refund_picker(
-        interaction, _settings(db), _guild_roles(), refundable, shield_price
+        interaction, _settings(db), _guild_roles(), shop.refundable, shop.shield_price
     )
     view = interaction.response.send_message.await_args.kwargs["view"]
     select = next(c for c in view.children if isinstance(c, discord.ui.Select))
@@ -3037,7 +2872,7 @@ async def test_set_role_name_also_sets_nickname(ctx, db):
         patch.object(
             cog,
             "_load_role_ctx",
-            return_value=(EconSettings(enabled=True), {"role_name": True}, 0),
+            return_value=(EconSettings(enabled=True), {"role_name": True}),
         ),
         patch.object(cog, "_name_blocklist", return_value=[]),
         patch.object(cog, "_upsert_role"),
@@ -3070,7 +2905,7 @@ async def test_set_role_name_nick_forbidden_still_renames_role(ctx, db):
         patch.object(
             cog,
             "_load_role_ctx",
-            return_value=(EconSettings(enabled=True), {"role_name": True}, 0),
+            return_value=(EconSettings(enabled=True), {"role_name": True}),
         ),
         patch.object(cog, "_name_blocklist", return_value=[]),
         patch.object(cog, "_upsert_role", upsert),

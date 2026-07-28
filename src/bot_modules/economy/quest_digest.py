@@ -20,11 +20,12 @@ yesterday" field leads when there is community-goal history to show.
 from __future__ import annotations
 
 from bot_modules.economy.leaderboard import bar_fill
+from bot_modules.services.embeds import EMBED_FIELD_LIMIT
 from bot_modules.economy.quests import TRIGGER_KINDS
 
 # Discord caps an embed field value at 1024 chars; a cadence group that would
 # overrun splits into "<heading> (cont.)" fields.
-FIELD_LIMIT = 1024
+FIELD_LIMIT = EMBED_FIELD_LIMIT
 
 # Longest a quest description is shown before it's clipped, so one wordy quest
 # can't blow the field budget.

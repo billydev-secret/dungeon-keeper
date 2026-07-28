@@ -18,6 +18,19 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.economy")
 
 
+def unit(settings: EconSettings, amount: int) -> str:
+    """Currency name matching ``amount``'s grammatical number.
+
+    Note the deliberate difference from ``coins`` below: this returns the
+    configured plural verbatim, including an empty one. Callers that render
+    the bare unit (the wallet header, quest rewards) have always shown
+    whatever the guild configured; ``coins`` substitutes a literal fallback.
+    Don't "unify" the two without deciding which behaviour a guild with an
+    empty ``currency_plural`` should get.
+    """
+    return settings.currency_name if abs(amount) == 1 else settings.currency_plural
+
+
 def coins(settings: EconSettings, amount: int) -> str:
     """``🪙 **250** coins`` — the currency vocabulary every economy card uses."""
     unit = (
