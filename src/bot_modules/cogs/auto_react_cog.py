@@ -15,6 +15,7 @@ from bot_modules.services.auto_react_service import (
     record_placement,
     should_place_tip_emoji,
 )
+from bot_modules.services.reaction_tip_service import apply_tip
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -128,6 +129,51 @@ class AutoReactCog(commands.Cog):
             # loud log, but never worth breaking the listener over.
             log.exception(
                 "auto_react: failed to record placement for message %s", message.id
+            )
+
+
+    @commands.Cog.listener("on_raw_reaction_add")
+    async def _on_reaction(self, payload: discord.RawReactionActionEvent) -> None:
+        """Charge a tip when someone taps an emoji the bot placed.
+
+        Raw rather than ``on_reaction_add`` so reactions on messages missing
+        from the cache still pay. Glue — every guard lives in
+        reaction_tip_service.apply_tip so the decline reasons are testable.
+        """
+        if payload.guild_id is None:
+            return
+        if self.bot.user is not None and payload.user_id == self.bot.user.id:
+            return
+
+        member = payload.member
+        try:
+            outcome = await asyncio.to_thread(
+                apply_tip,
+                self.ctx.db_path,
+                guild_id=payload.guild_id,
+                message_id=payload.message_id,
+                reactor_id=payload.user_id,
+                emoji=str(payload.emoji),
+                reactor_is_bot=bool(member and member.bot),
+            )
+        except Exception:
+            # Money moves here, so a failure is worth an exception log — but
+            # never worth taking down the reaction listener.
+            log.exception(
+                "tip: failed to apply tip for %s on message %s",
+                payload.user_id,
+                payload.message_id,
+            )
+            return
+
+        if outcome.charged:
+            log.info(
+                "tip: %s paid %d (%d delivered, %d burned) on message %s",
+                payload.user_id,
+                outcome.paid,
+                outcome.delivered,
+                outcome.burned,
+                payload.message_id,
             )
 
 
