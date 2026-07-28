@@ -66,6 +66,15 @@ class CasinoSettings:
     dice_enabled: bool = True
     war_enabled: bool = True
     keno_enabled: bool = True
+    pools_enabled: bool = False
+    # Guild-local hour betting shuts on the day being measured. Late enough
+    # that most of the day's mint is visible, early enough that the night's
+    # casino play — where the variance lives — is still unwritten.
+    pools_close_hour: int = 18
+    # Deducted from the whole pool at settle and BURNED. Distinct from
+    # jackpot_cut_pct, which is skimmed from each fully-lost stake and fed
+    # to a pot that re-mints it. Same number today, different bases.
+    pools_takeout_pct: int = 5
     roulette_window_seconds: int = 45
     # Derby races want a touch more hype time than a roulette spin.
     derby_window_seconds: int = 60
@@ -108,6 +117,7 @@ _BOOL_KEYS = [
     "dice_enabled",
     "war_enabled",
     "keno_enabled",
+    "pools_enabled",
     "jackpot_enabled",
 ]
 # Everything else on the dataclass is a plain int.
@@ -214,6 +224,7 @@ def take_stake(
     now: float | None = None,
     enforce_bet_limits: bool = True,
     channel_id: int | None = None,
+    meta: dict[str, object] | None = None,
 ) -> str | None:
     """Debit a stake, or return the member-facing reason it can't happen.
 
@@ -228,6 +239,13 @@ def take_stake(
     casino channel: an orphaned hub panel — one a channel move failed to
     delete — keeps working buttons forever, and this is the guard that
     stops it taking real money outside the casino.
+
+    ``meta`` merges into the ledger row's metadata alongside ``game``.
+    Windowed games pass their ``round_id`` so a stake can be tied back to
+    the session it belongs to: the economy metric attributes both halves of
+    a session to the day it opened, and without the linkage a stake and its
+    payout can be booked on opposite sides of midnight (see the plan doc's
+    session-day attribution).
     """
     if amount < 1:
         raise ValueError("A casino stake has to be at least 1.")
@@ -282,7 +300,7 @@ def take_stake(
             )
     if not apply_debit(
         conn, guild_id, user_id, amount, STAKE_KIND,
-        actor_id=user_id, meta={"game": game},
+        actor_id=user_id, meta={"game": game, **(meta or {})},
     ):
         if settings.daily_wager_cap:
             # Give the allowance back — an unaffordable bet must not eat into
@@ -1099,11 +1117,15 @@ def refund_member_live_stakes(
         # a settled bet can never ALSO be refunded (the double-pay race a
         # separate SELECT would open), and refunds pay only what was
         # actually removed.
+        open_pred, extra = "status = 'open'", ()
+        if t.leavers_until_close:
+            open_pred += " AND closes_at > ?"
+            extra = (time.time() if now is None else now,)
         removed = conn.execute(
             f"DELETE FROM {t.bets} WHERE guild_id = ? AND user_id = ? "
-            f"AND round_id IN (SELECT id FROM {t.rounds} WHERE status = 'open') "
+            f"AND round_id IN (SELECT id FROM {t.rounds} WHERE {open_pred}) "
             "RETURNING amount",
-            (guild_id, user_id),
+            (guild_id, user_id, *extra),
         ).fetchall()
         total = sum(int(r["amount"]) for r in removed)
         if total:
@@ -1143,6 +1165,14 @@ class RoundTables(NamedTuple):
     bets: str          # bets table
     result_col: str    # "result" (roulette) / "winner" (derby)
     closed_error: str  # member-facing window-closed message
+    # Leaver refunds normally pull a departing member's bets from any open
+    # round. That is safe when the window is 45-60s, because "open" and
+    # "still accepting bets" mean the same thing for all but an instant.
+    # Pools sits open for hours AFTER betting shuts, and its payouts are
+    # pro-rata — so pulling a stake out of a closed pool would silently
+    # change what every remaining bettor is owed. When True, the sweep
+    # stops at the betting close and the stake settles normally.
+    leavers_until_close: bool = False
 
 
 ROULETTE_TABLES = RoundTables(
@@ -1165,11 +1195,17 @@ KENO_TABLES = RoundTables(
     "keno", "casino_keno_rounds", "casino_keno_bets",
     "result", "Tickets for that draw have closed.",
 )
+POOLS_TABLES = RoundTables(
+    "pools", "casino_pools_rounds", "casino_pools_bets",
+    "result", "Betting on today's market has closed.",
+    leavers_until_close=True,
+)
 # Every windowed game, for cross-game sweeps (leaver refunds). A new game
 # added here is automatically covered — never enumerate the tables by hand
 # at a call site.
 ALL_ROUND_TABLES = (
     ROULETTE_TABLES, DERBY_TABLES, BACCARAT_TABLES, DICE_TABLES, KENO_TABLES,
+    POOLS_TABLES,
 )
 
 
@@ -1255,7 +1291,10 @@ def _place_bet(
     ).fetchone()
     if claimed is None:
         return t.closed_error
-    err = take_stake(conn, int(rnd["guild_id"]), user_id, amount, t.game, now=now)
+    err = take_stake(
+        conn, int(rnd["guild_id"]), user_id, amount, t.game,
+        now=now, meta={"round_id": round_id},
+    )
     if err is not None:
         return err
     names = ", ".join(columns)
@@ -1284,6 +1323,8 @@ def _settle_round(
     result: int | str,  # a number (roulette/derby) or JSON (baccarat's coup)
     payout_fn,
     *,
+    round_ctx_fn=None,
+    feeds_jackpot: bool = True,
     now: float | None = None,
 ) -> list[dict] | None:
     """Resolution: claim the round, pay every winning bet.
@@ -1293,6 +1334,19 @@ def _settle_round(
     rule). Returns the bets as dicts with ``payout`` filled in for the
     recap — the rows are read once, settings once (not per losing bet),
     and the winner updates land as one executemany.
+
+    Two hooks exist for Pools, the parimutuel market, whose payouts cannot
+    be computed per-bet from a paytable (see the plan doc, Stage 2):
+
+    ``round_ctx_fn(bets, result)`` runs once after the bets are read and its
+    return value is passed to ``payout_fn`` as a third argument. Pools uses
+    it to split the pool; every other game leaves it None and keeps the
+    two-argument ``payout_fn`` untouched.
+
+    ``feeds_jackpot=False`` suppresses the per-bet skim. In a pool the
+    losing stakes ARE the winners' payout, so skimming them would pay the
+    pot out of money already owed, and Pools burns its takeout instead of
+    feeding a pot that re-mints what it holds.
     """
     claimed = conn.execute(
         f"UPDATE {t.rounds} "
@@ -1304,10 +1358,15 @@ def _settle_round(
         return None
     settings = load_casino_settings(conn, int(claimed["guild_id"]))
     bets = [dict(b) for b in _round_bets(conn, t, round_id)]
+    ctx = None if round_ctx_fn is None else round_ctx_fn(bets, result)
     winner_updates: list[tuple[int, int]] = []
     for bet in bets:
         amount = int(bet["amount"])
-        payout = int(payout_fn(bet, result))
+        payout = int(
+            payout_fn(bet, result)
+            if round_ctx_fn is None
+            else payout_fn(bet, result, ctx)
+        )
         bet["payout"] = payout
         if payout:
             winner_updates.append((payout, int(bet["id"])))
@@ -1315,7 +1374,7 @@ def _settle_round(
                 conn, int(bet["guild_id"]), int(bet["user_id"]), payout,
                 t.game, meta={"round_id": round_id, t.result_col: result},
             )
-        else:
+        elif feeds_jackpot:
             feed_jackpot(
                 conn, int(bet["guild_id"]), amount, now=now, settings=settings
             )
@@ -1788,6 +1847,191 @@ def void_keno_round(
 
 def open_keno_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return _open_rounds(conn, KENO_TABLES)
+
+
+# ── pools (casino-classics Stage 2 — the parimutuel market) ────────────
+#
+# Same windowed machine as the five games above, with two differences that
+# both fall out of the round being a day long instead of 45 seconds:
+# betting shuts at closes_at but the round stays 'open' until the measured
+# day is over and can be settled, and payouts are pro-rata over the whole
+# pool rather than per-bet off a paytable. The metric and line live in
+# pools_service; the maths lives in pools_logic.
+
+
+def live_pools_round(
+    conn: sqlite3.Connection, channel_id: int
+) -> sqlite3.Row | None:
+    return _live_round(conn, POOLS_TABLES, channel_id)
+
+
+def get_pools_round(conn: sqlite3.Connection, round_id: int) -> sqlite3.Row | None:
+    return _get_round(conn, POOLS_TABLES, round_id)
+
+
+def pools_round_for_day(
+    conn: sqlite3.Connection, guild_id: int, day: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM casino_pools_rounds WHERE guild_id = ? AND local_day = ?",
+        (guild_id, day),
+    ).fetchone()
+
+
+def open_pools_round(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    day: str,
+    line: float,
+    closes_at: float,
+    *,
+    now: float | None = None,
+) -> int | None:
+    """Open the day's market. None = one already exists for that day.
+
+    The line persists on the row rather than being recomputed at settle.
+    The outcome is recoverable from the ledger at any later time, so a
+    round whose close was missed by hours must still settle against the
+    line members actually bet into — not one recomputed from a history
+    that has since grown.
+    """
+    ts = time.time() if now is None else now
+    try:
+        cur = conn.execute(
+            "INSERT INTO casino_pools_rounds "
+            "(guild_id, channel_id, local_day, line, opened_at, closes_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (guild_id, channel_id, day, float(line), ts, closes_at),
+        )
+    except sqlite3.IntegrityError:
+        return None
+    return int(cur.lastrowid or 0) or None
+
+
+def set_pools_message(
+    conn: sqlite3.Connection, round_id: int, message_id: int
+) -> None:
+    _set_round_message(conn, POOLS_TABLES, round_id, message_id)
+
+
+def place_pools_bet(
+    conn: sqlite3.Connection,
+    round_id: int,
+    user_id: int,
+    side: str,
+    amount: int,
+    *,
+    now: float | None = None,
+) -> str | None:
+    """Stake on a side. The member-facing error, or None on success."""
+    from bot_modules.services import pools_logic  # noqa: PLC0415
+
+    if side not in pools_logic.SIDES:
+        raise ValueError(f"unknown pools side: {side!r}")
+    return _place_bet(
+        conn, POOLS_TABLES, get_pools_round(conn, round_id), round_id,
+        user_id, {"side": side}, amount, now=now,
+    )
+
+
+def pools_bets(conn: sqlite3.Connection, round_id: int) -> list[sqlite3.Row]:
+    return _round_bets(conn, POOLS_TABLES, round_id)
+
+
+class PoolsResult(NamedTuple):
+    """What settlement did.
+
+    ``bets`` is None when there was nothing to do — someone else already
+    claimed the round, or it was voided. ``voided`` distinguishes the two.
+    """
+
+    bets: list[dict] | None
+    takeout: int
+    voided: bool
+    refunds: dict[int, int]
+
+
+def settle_pools_round(
+    conn: sqlite3.Connection,
+    round_id: int,
+    result: int,
+    *,
+    now: float | None = None,
+) -> PoolsResult:
+    """Settle against the round's stored line.
+
+    A round with an empty side is voided and refunded in full instead of
+    settled: a one-sided pool has no counterparty, so there is nothing to
+    pay winners *out of*, and taking a cut would be a pure tax on whoever
+    turned up. At this server's size those rounds are routine, not
+    exceptional.
+    """
+    from bot_modules.services import pools_logic  # noqa: PLC0415
+
+    rnd = get_pools_round(conn, round_id)
+    if rnd is None:
+        return PoolsResult(None, 0, False, {})
+    line = float(rnd["line"])
+    if pools_logic.is_void(
+        pools_logic.pool_split([dict(b) for b in pools_bets(conn, round_id)])
+    ):
+        refunds = _void_round(conn, POOLS_TABLES, round_id, now=now)
+        # An empty refund map is ambiguous on its own — it means either "we
+        # lost the claim" or "there was nothing staked" — so read the state
+        # back rather than inferring it.
+        after = get_pools_round(conn, round_id)
+        voided = after is not None and str(after["status"]) == "void"
+        return PoolsResult(None, 0, voided, refunds)
+
+    settings = load_casino_settings(conn, int(rnd["guild_id"]))
+    taken = {"takeout": 0}
+
+    def ctx(round_bets: list[dict], _result: str) -> dict[int, int]:
+        # Keyed by bet id, not position: _settle_round reads its own rows,
+        # so a positional mapping would be aligned against a different list.
+        s = pools_logic.settle(
+            round_bets, result, line, settings.pools_takeout_pct
+        )
+        taken["takeout"] = s.takeout
+        return {
+            int(b["id"]): p for b, p in zip(round_bets, s.payouts, strict=True)
+        }
+
+    def payout_for(bet: dict, _result: str, by_id: dict[int, int]) -> int:
+        return by_id.get(int(bet["id"]), 0)
+
+    settled = _settle_round(
+        conn, POOLS_TABLES, round_id, str(result), payout_for,
+        round_ctx_fn=ctx, feeds_jackpot=False, now=now,
+    )
+    if settled is None:
+        return PoolsResult(None, 0, False, {})
+    return PoolsResult(settled, taken["takeout"], False, {})
+
+
+def void_pools_round(
+    conn: sqlite3.Connection, round_id: int, *, now: float | None = None
+) -> dict[int, int]:
+    return _void_round(conn, POOLS_TABLES, round_id, now=now)
+
+
+def open_pools_rounds(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return _open_rounds(conn, POOLS_TABLES)
+
+
+def due_pools_rounds(
+    conn: sqlite3.Connection, *, now: float | None = None
+) -> list[sqlite3.Row]:
+    """Open rounds whose betting has shut and whose day has rolled over.
+
+    Settlement is gated on the day being *finished*, not on betting
+    closing — the metric is not final until the day is. A round found here
+    after hours of downtime settles to the same value it would have then,
+    because the ledger is what decides it.
+    """
+    ts = time.time() if now is None else now
+    return [r for r in open_pools_rounds(conn) if float(r["closes_at"]) <= ts]
 
 
 # ── casino war (casino-classics Stage 1c — blackjack's live-hand shape) ─
