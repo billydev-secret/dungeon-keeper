@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")
 
@@ -397,7 +398,7 @@ def test_flower_edge_is_read_from_alpha_not_the_bounding_box() -> None:
 
     border = BORDERS["golden_poppy"]
     if not border.path.exists():
-        return  # asset not present in this checkout
+        pytest.skip("bundled frame not resolvable from this CWD")
     edge = slim_flower_left_edge(border, 900, 500)
     assert edge is not None
     box_x, box_y = slim_flower_bound(900, 500)
@@ -431,7 +432,7 @@ def test_body_text_stays_clear_of_the_flowers(monkeypatch) -> None:
 
     border = qr.BORDERS["golden_poppy"]
     if not border.path.exists():
-        return
+        pytest.skip("bundled frame not resolvable from this CWD")
     edge = qr.slim_flower_left_edge(border, 900, 500)
     assert edge is not None
 
@@ -457,3 +458,141 @@ def test_body_text_stays_clear_of_the_flowers(monkeypatch) -> None:
             assert right <= qr.flower_limit(edge, y, line_h), (
                 f"{n} chars: line {line!r} reaches x={right} into the flowers"
             )
+
+
+# --- Banner (no-pfp) layout --------------------------------------------------
+# Shared by photo challenge, FFA, economy, chat revive and /quote's banner mode.
+# It carved space for the floral corner with a hand-tuned linear ramp that
+# over-reserved by up to 233px on a 900x500 card, so each line wrapped shorter
+# than the last and short words were orphaned onto their own line.
+BANNER_TEXT = "You have access to everything, I gave it to you personally"
+
+
+def _banner_lines(monkeypatch, text=BANNER_TEXT, **kwargs):
+    from bot_modules.services import quote_renderer as qr
+
+    drawn: list[tuple[str, int, int]] = []
+    real = qr._render_line_mixed
+
+    def _spy(line, x, y, **kw):
+        drawn.append((line, x, y))
+        return real(line, x, y, **kw)
+
+    monkeypatch.setattr(qr, "_render_line_mixed", _spy)
+    qr.render_quote_card(
+        text, author_name=kwargs.pop("author_name", LONG_EMOJI_NAME),
+        avatar_bytes=_avatar(), theme=next(iter(THEMES.values())),
+        pfp_shape="none", **kwargs,
+    )
+    return drawn
+
+
+def test_banner_text_stays_clear_of_the_flowers(monkeypatch) -> None:
+    """Centred banner lines must not reach into the poppy cluster."""
+    from bot_modules.services import quote_renderer as qr
+
+    border = qr.BORDERS["golden_poppy"]
+    if not border.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    edge = qr.slim_flower_left_edge(border, 900, 500)
+    assert edge is not None
+    font = qr._load_font(max(32, 900 // 19))
+    line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
+
+    for text in (BANNER_TEXT, BANNER_TEXT * 2, "Short."):
+        for line, x, y in _banner_lines(monkeypatch, text):
+            right = x + qr._emoji_getsize(line, font=font)[0]
+            assert right <= qr.flower_limit(edge, y, line_h), (
+                f"banner line {line!r} reaches x={right} into the flowers"
+            )
+
+
+def test_banner_wraps_without_orphaning_short_lines(monkeypatch) -> None:
+    """The ramp orphaned 'to you' onto its own line; the real edge does not.
+
+    Needs the bundled frame: without it there is no cluster to measure and the
+    layout correctly falls back to the ramp, orphan and all.
+    """
+    from bot_modules.services.quote_renderer import BORDERS
+
+    if not BORDERS["golden_poppy"].path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    lines = [line for line, _, _ in _banner_lines(monkeypatch)]
+    assert len(lines) <= 3, f"expected a tight wrap, got {len(lines)}: {lines}"
+    # No interior line may be a small fraction of the longest — that's the
+    # staircase the over-reserving ramp produced.
+    longest = max(len(line) for line in lines)
+    for line in lines[:-1]:  # the last line is legitimately short
+        assert len(line) > longest * 0.5, f"orphaned line {line!r} among {lines}"
+
+
+def test_banner_keeps_the_ramp_for_frames_without_a_poppy_cluster(monkeypatch) -> None:
+    """Only the bundled slim frame has a separable cluster to measure.
+
+    Other frames keep the hand-tuned ramp, which is a crude but safe stand-in for
+    border art this can't measure — dropping it could put text over their artwork.
+    """
+    from bot_modules.services import quote_renderer as qr
+
+    other = qr.BORDERS["midnight_frame"]
+    assert not other.slim_frame
+    # Renders without error and still reserves the corner (lines stay left of the
+    # ramp's floor at the rows it applies to).
+    drawn = _banner_lines(monkeypatch, BANNER_TEXT, border_style=other)
+    assert drawn
+
+
+def test_default_border_is_resolved_before_layout(monkeypatch) -> None:
+    """A caller passing no border must lay out as if the default were present.
+
+    The default was filled in just before compositing, so a caller that passed none
+    laid its text out as if the card were bare and then had the poppy frame drawn
+    over it — putting the last lines back under the petals. No caller but /quote
+    passes a border, so this was the common path.
+    """
+    from bot_modules.services import quote_renderer as qr
+
+    border = qr.BORDERS["golden_poppy"]
+    if not border.path.exists():
+        pytest.skip("bundled frame not resolvable from this CWD")
+    edge = qr.slim_flower_left_edge(border, 900, 500)
+    assert edge is not None
+    font = qr._load_font(max(32, 900 // 19))
+    line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
+
+    def _worst(border_style):
+        drawn: list[tuple[str, int, int]] = []
+        real = qr._render_line_mixed
+        monkeypatch.setattr(
+            qr, "_render_line_mixed",
+            lambda line, x, y, **kw: (drawn.append((line, x, y)), real(line, x, y, **kw))[1],
+        )
+        qr.render_quote_card(
+            LONG_QUOTE[:200], author_name=LONG_EMOJI_NAME, avatar_bytes=_avatar(),
+            theme=next(iter(THEMES.values())), border_style=border_style,
+        )
+        monkeypatch.setattr(qr, "_render_line_mixed", real)
+        return max(
+            x + qr._emoji_getsize(line, font=font)[0] - qr.flower_limit(edge, y, line_h)
+            for line, x, y in drawn
+        )
+
+    # Passing no border must be as clear of the flowers as passing it explicitly.
+    assert _worst(None) <= 0
+    assert _worst(None) == _worst(border)
+
+
+def test_banner_body_wrap_does_not_depend_on_the_name(monkeypatch) -> None:
+    """The quote must wrap the same regardless of the glyphs in the author's name.
+
+    The header's height sets where the body starts, and the body's usable width
+    narrows toward the floral corner — so measuring the header by its ink bbox made
+    a name with parentheses or descenders push the body down and re-wrap the quote.
+    """
+    # Holds with or without the bundled frame: the header height feeding layout is
+    # a font metric either way, so no skip is needed here.
+    wraps = {
+        name: tuple(line for line, _, _ in _banner_lines(monkeypatch, author_name=name))
+        for name in ("Chi-Gal", LONG_EMOJI_NAME, "gggg", "AAAA")
+    }
+    assert len(set(wraps.values())) == 1, f"wrap varies with the name: {wraps}"

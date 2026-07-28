@@ -112,6 +112,27 @@ line actually covers, since a line is a band and petals dipping into its lower r
 must bound it too. `slim_flower_rect()` is shared with `_composite_slim_border()`
 so the layout's idea of where the flowers sit can't drift from where they're drawn.
 
+The **banner** (`pfp_shape="none"`) layout uses the same per-row edge. It used to
+carve the corner with a hand-tuned linear ramp (0.95w tapering to 0.58w) that
+over-reserved by up to 233px on a 900×500 card, so each line wrapped shorter than
+the last and short words were orphaned onto their own line. Frames *without* a
+separable cluster (anything not `slim_frame`) keep that ramp: it's a crude but safe
+stand-in for border art this can't measure, and dropping it could put text over
+their artwork.
+
+The **default frame is resolved at the top of `render_quote_card()`**, not just
+before compositing. Filling it in late meant a caller passing no `border_style` —
+which is every caller except `/quote` — laid its text out as if the card were bare
+and then had the poppy frame drawn over it, putting the last lines back under the
+petals.
+
+**Heights that feed layout always come from a font's line box, never a string's ink
+bbox.** This applies to the attribution (above) *and* the banner header: the
+header's height sets where the body starts, and the body's usable width narrows
+toward the floral corner, so an ink-bbox header made the **quote itself re-wrap
+based on which glyphs the author's name contained** — a name with parentheses
+pushed the body down a line.
+
 ### `render_quote(...)` — legacy solid-bg card
 
 Older, simpler path used only by `guess_cog`. Solid dark background, accent bars

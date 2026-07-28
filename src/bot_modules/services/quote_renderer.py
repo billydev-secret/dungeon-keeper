@@ -948,7 +948,14 @@ def render_quote_card(
     # the avatar + text inside it. A frame with no usable opening (rejected at
     # upload) falls back to the standard layout; one with no room for a disc
     # renders centered (avatar as background, author as a header).
-    _mask = border_style is not None and border_style.mask_fit
+    # Resolve the default frame BEFORE laying anything out. It used to be filled in
+    # just before compositing, which meant a caller passing no border laid its text
+    # out as if the card were bare and then had the poppy frame drawn over it —
+    # putting the last lines back under the petals the layout is meant to avoid.
+    if border_style is None:
+        border_style = BORDERS["golden_poppy"]
+
+    _mask = border_style.mask_fit
     _mask_opening = (
         analyze_border_opening(border_style, width, height)
         if _mask and border_style is not None
@@ -1050,8 +1057,13 @@ def render_quote_card(
     _header_stroke = max(1, header_size // 40)
     _header_h = _header_gap = 0
     if _header_text:
-        _hb = draw.textbbox((0, 0), _header_text, font=header_font, stroke_width=_header_stroke)
-        _header_h = int(_hb[3] - _hb[1])
+        # Line box (ascent + descent), not the string's ink bbox. The header's
+        # height sets where the body starts, and the body's usable width narrows
+        # toward the floral corner — so an ink bbox made the *quote* re-wrap based
+        # on which glyphs the author's name happened to contain (a name with
+        # parentheses pushed the body down a line). Same reason the attribution
+        # measures its line box; see attribution height above.
+        _header_h = sum(header_font.getmetrics()) + 2 * _header_stroke
         _header_gap = max(14, line_h)
     _header_block = (_header_h + _header_gap) if _header_text else 0
 
@@ -1184,7 +1196,22 @@ def render_quote_card(
         _ex_left_min = width * 0.58         # flowers' left edge level with them
         _gap3 = 3 * max(1, _full_measure("nnn") // 3)  # ~3 characters of breathing room
 
+        # Prefer the cluster's real per-row silhouette over the straight-line ramp
+        # below. The ramp was tuned by eye and reserves far more than the artwork
+        # occupies — 233px too much at the worst row on a 900×500 card — which
+        # wrapped each line shorter than the last and orphaned short words onto
+        # their own line. Only the bundled poppy frame has a separable cluster;
+        # every other frame keeps the ramp, which for them is a crude but safe
+        # stand-in for border art this can't measure.
+        _b_edge = (
+            slim_flower_left_edge(border_style, width, height)
+            if border_style.slim_frame and border_style.path.exists()
+            else None
+        )
+
         def _flower_left(y: float) -> float:
+            if _b_edge is not None:
+                return float(flower_limit(_b_edge, int(y), line_h))
             if y <= _ex_apex_y:
                 return _ex_left_top
             frac = min(1.0, (y - _ex_apex_y) / max(1.0, _ex_reach_y - _ex_apex_y))
@@ -1477,9 +1504,8 @@ def render_quote_card(
     out = bg.convert("RGBA")
     out.putalpha(card_mask)
 
-    # Border overlay — composited after transparency so it shows over the full card area
-    if border_style is None:
-        border_style = BORDERS["golden_poppy"]
+    # Border overlay — composited after transparency so it shows over the full card
+    # area. Defaulted at the top of the function, so layout already knows the frame.
     if border_style.slim_frame and border_style.path.exists():
         _composite_slim_border(out, border_style, width, height)
     elif border_style.path.exists():
