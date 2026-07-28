@@ -29,27 +29,28 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+# The kind sets and the day-attribution rule are imported, not restated:
+# Pools settles against this same number, and a second copy here is how the
+# offline report and the live line would quietly diverge.
+from bot_modules.services.pools_logic import derive_line  # noqa: E402
+from bot_modules.services.pools_service import (  # noqa: E402
+    BURN_KINDS_EXCLUDED,
+    NON_FAUCET_KINDS,
+    daily_series,
+)
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "dungeonkeeper.db"
 MAIN_GUILD = 1469491362444480666
 # Guild-local day offset (hours from UTC). The main guild has no tz row and
 # inherits the global -7 — keep in sync with the tz_offset config.
 TZ_OFFSET_HOURS = -7.0
-
-# Ledger kinds that are member↔member movement, not real income. Casino
-# payouts belong here too: a returned bet is the member's own stake coming
-# back, and counting it as a faucet inflated minted by the full handle.
-NON_FAUCET_KINDS = (
-    "transfer_in", "wager_payout", "wager_refund", "casino_payout", "casino_refund",
-)
-# Kinds that actually destroy currency (transfers/wagers move it sideways).
-# casino_stake is excluded for the mirror-image reason — most of a stake is
-# handed straight back, so booking the whole thing as burn made the casino
-# look like the biggest sink in the economy when its real contribution is
-# the hold (see casino_hold below).
-BURN_KINDS_EXCLUDED = ("transfer_out", "wager_stake", "casino_stake")
 
 DEMURRAGE_FLOORS = (300, 500, 750, 1000)
 DEMURRAGE_RATES = (2, 5, 10)
@@ -161,11 +162,16 @@ def collect(
     # every lost stake is escrowed in the pot and re-minted when someone
     # lines up three sevens. The pot is a running total (feed_jackpot writes
     # no ledger row), so it is reported as a standing memo, not windowed.
+    # Pools is player-vs-player with a burned takeout, and its stakes are
+    # excluded from the economy metric it settles against — so counting
+    # them as casino handle here would make the report and the market
+    # disagree about the same week.
     handle, returned = conn.execute(
         f"SELECT "
         f"  COALESCE(SUM(CASE WHEN kind = 'casino_stake' THEN -amount END), 0), "
         f"  COALESCE(SUM(CASE WHEN kind = 'casino_payout' THEN amount END), 0) "
-        f"FROM econ_ledger WHERE guild_id = ? AND {day_expr} BETWEEN ? AND ?",
+        f"FROM econ_ledger WHERE guild_id = ? AND {day_expr} BETWEEN ? AND ? "
+        f"AND COALESCE(json_extract(meta, '$.game'), '') != 'pools'",
         (guild_id, week_start, week_end),
     ).fetchone()
     handle, returned = int(handle), int(returned)
@@ -198,9 +204,22 @@ def collect(
             }
         )
 
+    # The Pools metric: net change per guild-local day, with both halves of
+    # a casino session attributed to the day it opened and Pools' own money
+    # excluded. This is exactly what the market's line is a median of, so
+    # the report and the market cannot describe the same day differently.
+    pools_days = [
+        {"day": m.day, "net": m.net, "mint": m.mint, "burn": m.burn,
+         "hold": m.hold, "close": m.close}
+        for m in daily_series(
+            conn, guild_id, tz_offset_hours=TZ_OFFSET_HOURS, limit_days=14
+        )
+    ]
+
     pcts = {"p50": 0.50, "p75": 0.75, "p90": 0.90, "p95": 0.95}
     income_pct = _percentiles(weekly_income, pcts)
     return {
+        "pools_daily_net": pools_days,
         "generated": str(today),
         "guild_id": str(guild_id),
         "week": f"{week_start}..{week_end}",
@@ -295,6 +314,22 @@ def print_report(stats: dict, baseline: dict | None) -> None:
             print(
                 f"  jackpot pot (standing)       {pot:,}"
                 "  — escrowed from past holds, re-minted when it is won"
+            )
+    days = stats.get("pools_daily_net") or []
+    if days:
+        print("\nPools metric — net change per guild-local day")
+        print("  (session-attributed, Pools' own stakes excluded; this is")
+        print("   the series the market's line is a trailing median of)")
+        print(f"  {'day':<12}{'net':>9}{'mint':>9}{'burn':>8}{'hold':>8}{'level':>9}")
+        for d in days:
+            print(
+                f"  {d['day']:<12}{d['net']:>+9,}{d['mint']:>9,}"
+                f"{d['burn']:>8,}{d['hold']:>8,}{d['close']:>9,}"
+            )
+        line = derive_line([d["net"] for d in days])
+        if line is not None:
+            print(
+                f"  {'line':<12}{line:>+9,.1f}   <- what Pools would open at"
             )
     print("\nDemurrage what-if (weekly burn at rate % of excess over floor)")
     print(f"  {'floor':>6} {'hit':>4} {'excess':>8} " + " ".join(

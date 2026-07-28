@@ -139,6 +139,10 @@ All movement goes through `services/casino_service.py`:
 | `dice_window_seconds` | 45 | dice betting window (bounds 15–600) |
 | `keno_window_seconds` | 45 | keno ticket window (bounds 15–600) |
 | `blackjack_idle_seconds` | 180 | idle hand auto-stands **and idle War standoffs auto-resolve** — one table-idle knob, not two (bounds 30–**840**: an ephemeral hand is editable only through its interaction webhook, whose token dies at 15 min — a longer window would stand hands nobody can repaint; a larger pre-2026-07-24 stored value still loads and settles fine, its message just goes stale) |
+| `pools_enabled` | **false** | the daily prediction market — ships off, unlike the nine tables |
+| `pools_channel_id` | 0 | where the market panel lives; 0 = fall back to `channel_id`. Its own channel because the round is a day long |
+| `pools_close_hour` | 18 | guild-local hour betting shuts on the day being measured (bounds 0–23). Settlement is at the day roll, not here |
+| `pools_takeout_pct` | 5 | % of the whole pool taken at settle and **burned** (bounds 0–50). Distinct from `jackpot_cut_pct`, which is skimmed per lost stake and fed to a pot that re-mints it |
 | `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
@@ -299,6 +303,46 @@ cards, hit/stand/dealer flow) live in `resolve_blackjack_action` /
 the double's second stake is derived from the hand row, never
 caller-supplied.
 
+## Pools — the parimutuel prediction market (migration 140)
+
+Not a table: **player-versus-player with the house as bookkeeper only.** One
+round per guild-local day, opened and settled by the bot with no admin
+authoring and no admin resolution.
+
+- **The question** is whether the day's *net change in the economy* (mint
+  minus burn) lands over or under a line. The line is the trailing 7-day
+  median **plus 0.5**, so an exact hit is unreachable and there is no push
+  rule to write.
+- **Settlement is arithmetic, not judgement.** The metric is the change in
+  total circulation, which is exactly the running sum of `econ_ledger.amount`
+  — so it is recomputable from the ledger at any later time. A missed close,
+  a restart or hours of downtime all settle to the same answer, which no
+  other game in the casino can say.
+- **Session-day attribution.** Both halves of a casino session are booked to
+  the day its round or hand *opened*, not to each ledger row's timestamp.
+  Without this, a hand dealt at 23:59 and stood at 00:00:30 shifts the metric
+  by its whole stake for an expected cost of nothing. `take_stake` records
+  `round_id` for this reason.
+- **Pools' own rows are excluded** from the metric, or a bigger pool would
+  drag the number it is betting on.
+- **The takeout is burned**, not fed to the jackpot: the pot re-mints what it
+  holds, so routing the takeout there would return it to the metric weeks
+  later.
+- **A one-sided pool voids and refunds in full.** No counterparty means
+  nothing to pay winners out of. At 13–18 bettors a day these are routine.
+- **The day-roll sweep answers the idle case from two indexed lookups.** It
+  runs on the cog's 60-second maintenance tick, and on all but one tick a
+  day there is nothing to do; only a tick with real work computes the day
+  series, which is a full ledger scan.
+- **The leaver sweep stops at the betting close** for Pools
+  (`RoundTables.leavers_until_close`): the round stays `status='open'` for
+  hours after betting shuts, and pulling a departing member's stake from a
+  closed pool would silently change every remaining bettor's pro-rata payout.
+
+Design and the full record of what was deliberately left out:
+[plans/casino-classics-and-prediction-market.md](plans/casino-classics-and-prediction-market.md)
+Stage 2.
+
 ## The fancy layer (plan: [plans/casino-fancy-round.md](plans/casino-fancy-round.md))
 
 - **Progressive jackpot** — `feed_jackpot` skims `jackpot_cut_pct`% of every
@@ -370,6 +414,12 @@ trimmed to `TICKER_KEEP` rows per guild on insert).
 `services/casino_logic.py` (paytables, RNG at module level) ·
 `cogs/casino/` (cog + views + embeds glue) · `web_server/routes/config.py`
 (`_casino_section`, `update_casino`) · `static/js/panels/config-casino.js`.
+
+Pools adds `services/pools_logic.py` (pool split, line, candle assembly),
+`services/pools_service.py` (the economy metric and the day-roll plan),
+`services/pools_charts.py` (matplotlib renderers) and
+`cogs/casino/pools_panel.py` (a mixin on `CasinoCog`, kept out of the
+84k `cog.py`).
 
 ## Testing
 

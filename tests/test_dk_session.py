@@ -382,8 +382,8 @@ def test_claude_command_is_platform_independent(flavour):
 
 def test_newest_precommit_patch_picks_the_latest(tmp_path):
     old, new = tmp_path / "patch100", tmp_path / "patch200"
-    old.write_text("a")
-    new.write_text("b")
+    old.write_text("a", encoding="utf-8")
+    new.write_text("b", encoding="utf-8")
     os.utime(old, (1, 1))
     os.utime(new, (2, 2))
     assert dk_session.newest_precommit_patch(tmp_path) == new

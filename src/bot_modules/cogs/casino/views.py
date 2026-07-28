@@ -17,6 +17,7 @@ import discord
 
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import casino_service as svc
+from bot_modules.services import pools_logic
 
 if TYPE_CHECKING:
     from bot_modules.cogs.casino.cog import CasinoCog
@@ -921,3 +922,56 @@ class RouletteNextView(discord.ui.View):
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
             await cog.open_roulette(interaction)
+
+
+# ── pools (casino-classics Stage 2) ────────────────────────────────────
+
+
+class PoolsBetModal(_AmountBetModal):
+    """One amount box; the side was chosen by the button that opened it."""
+
+    def __init__(self, side: str, **kwargs) -> None:
+        super().__init__(
+            title=f"Bet {pools_logic.describe_side(side)}", **kwargs
+        )
+        self.side = side
+
+    async def _place(
+        self, cog: CasinoCog, interaction: discord.Interaction, amount: int
+    ) -> None:
+        await cog.place_pools_bet(interaction, self.side, amount)
+
+
+class PoolsPanelView(discord.ui.View):
+    """The two standing buttons on the daily market panel.
+
+    No round id in the custom ids: there is exactly one open market per
+    guild at a time, so the handler resolves it at click. That also means
+    the panel keeps working across a restart and across the day roll
+    without re-registering anything.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Bet Over", emoji="📈",
+        style=discord.ButtonStyle.success, custom_id="casino:pools_over",
+    )
+    async def bet_over(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_pools_bet(interaction, pools_logic.OVER)
+
+    @discord.ui.button(
+        label="Bet Under", emoji="📉",
+        style=discord.ButtonStyle.danger, custom_id="casino:pools_under",
+    )
+    async def bet_under(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_pools_bet(interaction, pools_logic.UNDER)

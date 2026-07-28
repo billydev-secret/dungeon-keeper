@@ -493,6 +493,10 @@ def _casino_section(conn, guild_id: int) -> dict:
         "dice_enabled": s.dice_enabled,
         "war_enabled": s.war_enabled,
         "keno_enabled": s.keno_enabled,
+        "pools_enabled": s.pools_enabled,
+        "pools_channel_id": str(s.pools_channel_id),
+        "pools_close_hour": s.pools_close_hour,
+        "pools_takeout_pct": s.pools_takeout_pct,
         "roulette_window_seconds": s.roulette_window_seconds,
         "derby_window_seconds": s.derby_window_seconds,
         "baccarat_window_seconds": s.baccarat_window_seconds,
@@ -4083,6 +4087,16 @@ class CasinoConfigUpdate(BaseModel):
     dice_enabled: bool | None = None
     war_enabled: bool | None = None
     keno_enabled: bool | None = None
+    pools_enabled: bool | None = None
+    # A snowflake, so it travels as a string like channel_id. "0" means
+    # "put the market in the casino channel".
+    pools_channel_id: str | None = None
+    # Guild-local hour betting shuts on the day being measured. Late
+    # enough that most of the day's mint is visible, early enough that
+    # the night's casino play is still unwritten.
+    pools_close_hour: int | None = Field(default=None, ge=0, le=23)
+    # Burned, not fed to the jackpot — the pot re-mints what it holds.
+    pools_takeout_pct: int | None = Field(default=None, ge=0, le=50)
     roulette_window_seconds: int | None = Field(default=None, ge=15, le=600)
     derby_window_seconds: int | None = Field(default=None, ge=15, le=600)
     baccarat_window_seconds: int | None = Field(default=None, ge=15, le=600)
@@ -4119,11 +4133,14 @@ async def update_casino(
         k: v for k, v in body.model_dump(exclude_unset=True).items()
         if v is not None
     }
-    if "channel_id" in values:
-        try:
-            values["channel_id"] = int(values["channel_id"] or 0)
-        except (TypeError, ValueError):
-            raise HTTPException(400, "channel_id must be a snowflake or 0") from None
+    for key in ("channel_id", "pools_channel_id"):
+        if key in values:
+            try:
+                values[key] = int(values[key] or 0)
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    400, f"{key} must be a snowflake or 0"
+                ) from None
 
     def _q():
         with ctx.open_db() as conn:
