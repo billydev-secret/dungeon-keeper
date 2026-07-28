@@ -70,19 +70,47 @@ already begins clear of the avatar's drawn footprint (double ring + drop shadow,
 not the bare radius), so **no name length can reach back into the avatar**.
 
 A name too wide for the column is **shrunk** to the largest size that fits (floor
-≈ half the base attribution size) and only then **truncated with an ellipsis** —
-it never runs past the column's right edge into the floral corner.
+≈ half the base attribution size) and only then **truncated with an ellipsis**, so
+it never runs past the column's right edge.
 
 Placement is factored into pure helpers so the geometry is unit-testable without
-pixel-peeping a blurred card: `attribution_pos()`, `attribution_block_h()`, and
+pixel-peeping a blurred card: `attribution_y()`, `attribution_block_h()`, and
 `fit_attribution_text()`. Both layout paths share them — the bundled-border path
 and the custom-frame (`mask_fit`) path, where a frame opening's bottom edge also
-clamps the line upward. That clamp is safe *because* the line is horizontally
-clear of the avatar; riding it up can no longer cause a collision.
+clamps the line upward. **y resolves before x**, because the column's horizontal
+bounds are read at whatever row the line finally lands on; reading them at the
+pre-clamp row would pick the wrong bound whenever the clamp moved the line, and in
+an opening that narrows toward the bottom that means drawing over the frame.
 
-The custom-frame path reserves the attribution's **measured** height rather than a
-`1.7 ×` font-size estimate, since pilmoji draws an emoji taller than the font's own
-line box and an emoji-bearing name overran the estimate.
+Attribution height comes from the font's **line box** (`ascent + descent`), never a
+string's ink bbox — an ink bbox varies with which letters the name contains ("Bob"
+20px, "gg" 21px, a parenthesised name 30px), which would make the reserve and the
+centring jitter per user. The line box is also identical whether or not pilmoji is
+installed, so geometry doesn't fork on an optional dependency. (Width *does* go
+through pilmoji when available, so an emoji contributes its drawn width rather than
+the tofu box it replaces.) The custom-frame path reserves this same measured block
+instead of a `1.7 ×` font-size estimate; the two are close at the default size
+(49 vs 45px), so that change is about having one source of truth, not about size.
+
+### Vertical bounding and the floral corner
+
+Both paths bound the text to a vertical band and **cap the line count** to what
+fits, ellipsizing the last line. The bundled-border path previously had no such
+bound: past ~9 lines (~150 chars, well inside `QUOTE_MAX_CHARS`) the quote ran off
+both card edges, and the attribution — which follows the quote rather than sitting
+at a fixed y — went off the bottom with it and vanished from the PNG.
+
+On the slim border, the text column's nominal right edge (738 at 900w) runs into
+the flower cluster (pasted from x≈586, y≈253), so a low, long line was drawn under
+the petals. The usable right edge is therefore bounded **per row** by
+`slim_flower_left_edge()` — the cluster's leftmost solidly-drawn pixel per row,
+read from its alpha and cached per (frame, mtime, size). Reading real alpha rather
+than the cluster's bounding box matters for typography: the cluster's upper rows
+are a few sparse buds, and reserving its full width for them cost a wrapped line at
+*every* quote length. `flower_limit()` takes the tightest bound across the rows a
+line actually covers, since a line is a band and petals dipping into its lower rows
+must bound it too. `slim_flower_rect()` is shared with `_composite_slim_border()`
+so the layout's idea of where the flowers sit can't drift from where they're drawn.
 
 ### `render_quote(...)` — legacy solid-bg card
 

@@ -303,6 +303,107 @@ _SLIM_FLOWER_SCALE = 0.72
 _SLIM_FLOWER_CROP = (0.494, 0.30, 0.947, 0.93)
 
 
+def slim_flower_rect(width: int, height: int, flower_w: int, flower_h: int) -> "tuple[int, int]":
+    """Top-left corner the slim border's flower cluster is pasted at.
+
+    Shared with ``_composite_slim_border`` so the layout's idea of where the
+    flowers sit can't drift from where they're actually drawn. Text that must stay
+    clear of the corner bounds itself against this.
+    """
+    inset = max(8, int(min(width, height) * 0.03))
+    return width - inset - 6 - flower_w, height - inset - 6 - flower_h
+
+
+_FLOWER_EDGE_CACHE: "dict[tuple, list[int]]" = {}
+
+
+def slim_flower_left_edge(
+    border_style: BorderStyle, width: int, height: int
+) -> "list[int] | None":
+    """Per-row leftmost *opaque* pixel of the slim border's flower cluster.
+
+    ``[y] -> x``, or ``width`` for rows the cluster doesn't reach. ``None`` if the
+    frame can't be read (callers then fall back to the cluster's bounding box).
+
+    A bounding box is far too blunt here: the cluster's upper rows are a few sparse
+    buds, so reserving its full width for them costs real typography — every quote
+    length gained a wrapped line, and short quotes wrap narrower than they need to.
+    Reading the actual alpha lets text run right up to the petals and no further.
+    Cached per (frame, mtime, size) like the other frame analyses, since this loads
+    and resizes the PNG.
+    """
+    try:
+        st = border_style.path.stat()
+    except OSError:
+        return None
+    key = (str(border_style.path), st.st_mtime_ns, width, height)
+    if key in _FLOWER_EDGE_CACHE:
+        return _FLOWER_EDGE_CACHE[key]
+
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    border = Image.open(border_style.path).convert("RGBA")
+    if border_style.flip:
+        border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    border = border.resize((width, height), Image.Resampling.LANCZOS)
+    if border_style.luma_key:
+        lum = border.convert("RGB").convert("L")
+        border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))
+
+    fl, ft, fr, fb = _SLIM_FLOWER_CROP
+    flowers = border.crop((int(width * fl), int(height * ft),
+                           int(width * fr), int(height * fb)))
+    flowers = flowers.resize(
+        (max(1, int(flowers.width * _SLIM_FLOWER_SCALE)),
+         max(1, int(flowers.height * _SLIM_FLOWER_SCALE))),
+        Image.Resampling.LANCZOS,
+    )
+    ox, oy = slim_flower_rect(width, height, flowers.width, flowers.height)
+
+    # Treat only solidly-drawn pixels as blocking; the cluster's edges feather out
+    # over a few near-transparent pixels that text can safely sit against.
+    solid = np.array(flowers.getchannel("A")) > 96
+    edge = [width] * height
+    for row in range(solid.shape[0]):
+        cols = np.nonzero(solid[row])[0]
+        if cols.size:
+            y = oy + row
+            if 0 <= y < height:
+                edge[y] = ox + int(cols[0])
+    _FLOWER_EDGE_CACHE[key] = edge
+    return edge
+
+
+def flower_limit(edge: "list[int]", y: int, h: int) -> int:
+    """Rightmost x a line of height ``h`` starting at ``y`` can reach.
+
+    The tightest bound over the rows the line actually covers — a line is a band,
+    not a single row, so petals dipping into its lower rows must bound it too.
+    """
+    if not edge:
+        return 1 << 30
+    lo = max(0, min(y, len(edge) - 1))
+    hi = max(0, min(y + max(1, h) - 1, len(edge) - 1))
+    return min(edge[lo:hi + 1], default=1 << 30)
+
+
+def slim_flower_bound(width: int, height: int) -> "tuple[int, int]":
+    """``(left_x, top_y)`` of the slim border's flower cluster, from constants alone.
+
+    Derived without opening the PNG so layout code can call it cheaply. The cluster
+    has its own transparency, so its sparse upper rows are treated as occupied —
+    conservative in the safe direction (text keeps clear rather than risking
+    petals).
+    """
+    fl, ft, fr, fb = _SLIM_FLOWER_CROP
+    crop_w = int(width * fr) - int(width * fl)
+    crop_h = int(height * fb) - int(height * ft)
+    fw = max(1, int(crop_w * _SLIM_FLOWER_SCALE))
+    fh = max(1, int(crop_h * _SLIM_FLOWER_SCALE))
+    return slim_flower_rect(width, height, fw, fh)
+
+
 def _composite_slim_border(out, border_style: BorderStyle, width: int, height: int) -> None:
     """Draw a thin gold frame and tuck a shrunk flower cluster into the corner.
 
@@ -330,9 +431,7 @@ def _composite_slim_border(out, border_style: BorderStyle, width: int, height: i
          max(1, int(flowers.height * _SLIM_FLOWER_SCALE))),
         Image.Resampling.LANCZOS,
     )
-    ax = width - inset - 6 - flowers.width
-    ay = height - inset - 6 - flowers.height
-    out.alpha_composite(flowers, (ax, ay))
+    out.alpha_composite(flowers, slim_flower_rect(width, height, flowers.width, flowers.height))
 
     rad = max(20, int(min(width, height) * 0.10))
     ImageDraw.Draw(out).rounded_rectangle(
@@ -626,32 +725,27 @@ def _wrap_text(text: str, font, max_width: int, draw, measure=None) -> list[str]
     return result or [""]
 
 
-def attribution_pos(
-    *,
-    col_left: int,
-    quote_bot: int,
-    attr_h: int,
-    gap: int,
-    limit_bot: "int | None" = None,
-) -> "tuple[int, int]":
-    """Top-left anchor for the attribution line, as a pure function of the layout.
+def attribution_y(
+    *, quote_bot: int, attr_h: int, gap: int, limit_bot: "int | None" = None
+) -> int:
+    """Top edge of the attribution line, as a pure function of the layout.
 
-    The attribution left-aligns to the **quote column** (``col_left``) and hangs a
-    ``gap`` below the quote block's last baseline. Anchoring to the text column
-    rather than centring under the avatar is what keeps a long name off the disc:
-    the column already starts clear of the avatar's drawn footprint, so no name
-    length can reach back into it. Previously this centred on the disc
-    (``pfp_cx - attr_w // 2``), which for any name wider than the disc collapsed
-    onto the left-margin floor and struck the avatar's lower-left arc.
+    The line hangs a ``gap`` below the quote block and ``limit_bot`` (the card's or
+    a frame opening's bottom edge) clamps it up so it stays on the card. Resolved
+    before x, because the column's horizontal bounds are read at whatever row the
+    line ends up on.
 
-    ``limit_bot`` (a frame opening's bottom edge) clamps the line up so it stays
-    inside the frame. That clamp is safe here precisely because the line is
-    horizontally clear of the avatar — pulling it up can no longer collide.
+    Its x comes from the **quote column**, not from centring under the avatar.
+    Centring on the disc (``pfp_cx - attr_w // 2``) drove the anchor negative for
+    any name wider than the disc, collapsing it onto the left-margin floor and
+    straight through the avatar's lower-left arc. The column already begins clear
+    of the avatar's drawn footprint, so no name length can reach back into it —
+    which is also why clamping upward here is safe.
     """
     ay = quote_bot + gap
     if limit_bot is not None:
         ay = min(ay, limit_bot - attr_h - 4)
-    return col_left, ay
+    return ay
 
 
 def attribution_block_h(attr_h: int, gap: int) -> int:
@@ -673,14 +767,19 @@ def fit_attribution_text(
     ``measure(text, size) -> width`` so the caller owns font loading (and whether
     emoji widths come from pilmoji or a bare textbbox).
     """
+    if not sizes:
+        return 0, text
     for sz in sizes:
         if measure(text, sz) <= avail_w:
             return sz, text
     sz = sizes[-1]
     t = text
-    while len(t) > 4 and measure(f"{t}…", sz) > avail_w:
+    while t and measure(f"{t}…", sz) > avail_w:
         t = t[:-1]
-    return sz, f"{t.rstrip()}…"
+    # Truncating to nothing still leaves the ellipsis wider than the space, which
+    # means the column is too narrow for any name. Drop the line rather than draw
+    # over whatever is beside it.
+    return sz, f"{t.rstrip()}…" if t else ""
 
 
 def _make_emoji_measure(base_fn, emoji_size: int):
@@ -915,13 +1014,20 @@ def render_quote_card(
     attr_text = f"— {author_name}" if author_name else ""
     attr_w = attr_h = 0
     if attr_text and not _no_pfp:
+        # Height from the font's own line box (ascent + descent), NOT from the
+        # string's ink bbox: an ink bbox varies with which letters the name happens
+        # to contain ("Bob" 20px vs "gg" 21px vs a parenthesised name 30px), which
+        # would make the reserve and the centring jitter per user. The line box is
+        # constant for a given size, and identical whether or not pilmoji is
+        # installed, so the geometry doesn't fork on an optional dependency.
+        attr_h = sum(attr_font.getmetrics())
         if _HAS_PILMOJI:
-            # Measure through pilmoji so an emoji in the name contributes its drawn
+            # Width still comes through pilmoji so an emoji contributes its drawn
             # width — textbbox would only count the tofu box it replaces.
-            attr_w, attr_h = _emoji_getsize(attr_text, font=attr_font)  # type: ignore[misc]
+            attr_w = _emoji_getsize(attr_text, font=attr_font)[0]  # type: ignore[misc]
         else:
             _ab = draw.textbbox((0, 0), attr_text, font=attr_font)
-            attr_w, attr_h = int(_ab[2] - _ab[0]), int(_ab[3] - _ab[1])
+            attr_w = int(_ab[2] - _ab[0])
     _attr_gap = max(12, int(attr_size * 0.85))
     _attr_block = attribution_block_h(attr_h, _attr_gap)
 
@@ -976,9 +1082,11 @@ def render_quote_card(
         # a little top/bottom so lines don't kiss the opening edge.
         _linset = max(6, _full_measure("n"))
         _vpad = max(6, int(height * 0.02))
-        # Reserve the attribution's *measured* height, not a 1.7×font-size guess —
-        # pilmoji draws an emoji taller than the font's own line box, so a name
-        # bearing one overran the guess and crowded the frame's bottom edge.
+        # Reserve the attribution's real line box + gap rather than a 1.7×font-size
+        # estimate. The two are close at the default size (49 vs 45 px), so this is
+        # a consistency fix, not a big one: the reserve, the group centring and the
+        # draw now all derive from the same numbers instead of an independent guess
+        # that would drift if the gap or font ever changed.
         _attr_reserve = _attr_block if (_has_disc and author_name) else 0
 
         def _m_left(y: int) -> int:
@@ -1131,19 +1239,91 @@ def render_quote_card(
                 x = right_limit - lw
             return max(left_margin, x)
     else:
-        _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
-        lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
-        # Centre the quote AND its attribution as one group. Centring the quote
-        # alone (what this did before) pushed the pair top-heavy: the name hung
-        # below the already-centred block, leaving a dead band along the bottom.
+        # The text column's nominal right edge (738 at 900w) runs straight into the
+        # slim border's flower cluster (from x=586, y=253), so any line low enough
+        # and long enough was drawn under the petals. Bound the right edge per row —
+        # only for the rows the flowers actually occupy, so short cards are
+        # unaffected — and wrap the body against that.
+        _fl_x, _fl_y = slim_flower_bound(width, height)
+        _slim = border_style is not None and border_style.slim_frame
+        _fpad = max(6, int(width * 0.01))
+        _fl_edge = (
+            slim_flower_left_edge(border_style, width, height)
+            if _slim and border_style is not None and border_style.path.exists()
+            else None
+        )
+
+        def _col_right_slim(y: int, h: int = 0) -> int:
+            hi = text_pad_l + text_col_w
+            if not _slim:
+                return hi
+            if _fl_edge is not None:
+                return min(hi, flower_limit(_fl_edge, y, h) - _fpad)
+            # Frame unreadable: fall back to the cluster's bounding box.
+            if y + h > _fl_y:
+                hi = min(hi, _fl_x - _fpad)
+            return hi
+
+        def _avail_p(y: int) -> int:
+            # Never collapse the column to nothing, however far into the corner a
+            # row reaches; a very narrow line is better than an unwrappable one.
+            return max(int(width * 0.20), _col_right_slim(y, line_h) - text_pad_l)
+
+        def _flow_p(start_y: int) -> list[str]:
+            out: list[str] = []
+            for para in _quoted_text.splitlines():
+                words = para.split()
+                if not words:
+                    out.append("")
+                    continue
+                cur = ""
+                for w in words:
+                    y = start_y + len(out) * (line_h + line_gap)
+                    cand = f"{cur} {w}".strip()
+                    if _full_measure(cand) <= _avail_p(y) or not cur:
+                        cur = cand
+                    else:
+                        out.append(cur)
+                        cur = w
+                if cur:
+                    out.append(cur)
+            return out or [""]
+
+        # Bound the block to a real vertical band, the way the frame-fit path does.
+        # Without this the quote ran off both card edges once it passed ~9 lines
+        # (~150 chars, well inside QUOTE_MAX_CHARS) and the attribution — which now
+        # follows the quote instead of sitting at a fixed y — went off the bottom
+        # with it. Cap the line count to what fits, then ellipsize.
+        _pvpad = max(6, int(height * 0.03))
+        _pband_top = _pvpad
+        _pband_bot = height - _pvpad - _attr_block
+        _pband_h = max(1, _pband_bot - _pband_top)
+        _pmax_lines = max(1, (_pband_h + line_gap) // (line_h + line_gap))
+
+        # Two passes: usable width depends on absolute y, which depends on how many
+        # lines there are. Flow at a nominal top, re-centre, then flow for real.
+        lines = _flow_p(_pband_top)
         _blk_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-        _content_top = (height - (_blk_h + _attr_block)) // 2
+        lines = _flow_p(_pband_top + max(0, (_pband_h - _blk_h) // 2))
+        if len(lines) > _pmax_lines:
+            lines = lines[:_pmax_lines]
+            lines[-1] = lines[-1].rstrip("” ").rstrip() + "…”"
+        # Centre the quote AND its attribution as one group within that band.
+        # Centring the quote alone (what this did before) pushed the pair
+        # top-heavy: the name hung below the already-centred block, leaving a dead
+        # band along the bottom.
+        _blk_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
+        _content_top = _pband_top + max(0, (_pband_h - _blk_h) // 2)
         text_y_start = _content_top
 
         def _line_x(s: str, y: int) -> int:
             return text_pad_l
-        # _attr_left/_attr_right/_attr_limit_bot keep their defaults here: this is
-        # the plain text column the attribution already aligns to.
+
+        def _attr_right_p(y: int) -> int:
+            return _col_right_slim(y, attr_h)
+
+        _attr_right = _attr_right_p
+        _attr_limit_bot = height - _pvpad
 
     # Soft gaussian text shadow
     _shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -1257,14 +1437,16 @@ def render_quote_card(
         # centered under the pfp — see attribution_pos for why).
         if author_name:
             _quote_bot = text_y_start + len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-            _row = _quote_bot + _attr_gap
-            ax, ay = attribution_pos(
-                col_left=_attr_left(_row),
-                quote_bot=_quote_bot,
-                attr_h=attr_h,
-                gap=_attr_gap,
-                limit_bot=_attr_limit_bot,
+            # Resolve y first, then read the column bounds at the row the line
+            # actually lands on. Reading them at the pre-clamp row would place the
+            # line against the wrong bound whenever limit_bot moved it, and in a
+            # frame whose opening narrows toward the bottom that means drawing over
+            # the frame itself.
+            ay = attribution_y(
+                quote_bot=_quote_bot, attr_h=attr_h,
+                gap=_attr_gap, limit_bot=_attr_limit_bot,
             )
+            ax = _attr_left(ay)
             # Shrink (then truncate) a name too wide for the column. Only ever
             # reduces height, so the space reserved from the full-size measurement
             # above stays sufficient.
@@ -1275,7 +1457,7 @@ def render_quote_card(
                 _bb = draw.textbbox((0, 0), t, font=_f)
                 return int(_bb[2] - _bb[0])
 
-            _avail = max(60, _attr_right(_row) - ax)
+            _avail = max(60, _attr_right(ay) - ax)
             if attr_w > _avail:
                 _sz, attr_text = fit_attribution_text(
                     attr_text, _avail, _attr_measure,

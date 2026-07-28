@@ -272,12 +272,188 @@ def test_attribution_reserve_uses_measured_height() -> None:
 
 
 def test_attribution_clamp_respects_the_frame_opening() -> None:
-    """Inside a frame the line is pulled up to stay in the opening."""
-    from bot_modules.services.quote_renderer import attribution_pos
+    """Inside a frame (or against the card edge) the line is pulled up to fit."""
+    from bot_modules.services.quote_renderer import attribution_y
 
     # Unclamped: hangs a gap below the quote.
-    assert attribution_pos(col_left=300, quote_bot=400, attr_h=30, gap=20) == (300, 420)
-    # Clamped: opening ends at 430, so it rides up to fit (430 - 30 - 4).
-    assert attribution_pos(
-        col_left=300, quote_bot=400, attr_h=30, gap=20, limit_bot=430
-    ) == (300, 396)
+    assert attribution_y(quote_bot=400, attr_h=30, gap=20) == 420
+    # Clamped: the bound is at 430, so it rides up to fit (430 - 30 - 4).
+    assert attribution_y(quote_bot=400, attr_h=30, gap=20, limit_bot=430) == 396
+
+
+# A quote long enough to wrap past the card. Caught by review: anchoring the name
+# to the quote (rather than to a fixed y under the avatar) meant a mid-length quote
+# pushed it clean off the bottom edge — at ~9 lines the byline was simply absent.
+LONG_QUOTE = "the quick brown fox jumps over the lazy dog and keeps on running far away past the hills " * 3
+
+
+def test_attribution_stays_on_card_for_long_quotes(monkeypatch) -> None:
+    """Regression: the byline must never fall off the bottom of the card."""
+    from bot_modules.services.quote_renderer import QUOTE_MAX_CHARS, _load_font
+
+    attr_h = sum(_load_font(max(19, 900 // 33)).getmetrics())
+    # Sweep the whole legal length range, not just a short quote.
+    for n in (30, 60, 100, 130, 150, 180, 221, QUOTE_MAX_CHARS):
+        _, ay = _attr_xy(monkeypatch, text=LONG_QUOTE[:n])
+        assert ay + attr_h <= 500, f"byline off-card at {n} chars: bottom={ay + attr_h}"
+
+
+def test_long_quote_body_stays_on_card(monkeypatch) -> None:
+    """Regression: the quote is capped to the band instead of overflowing both edges."""
+    from bot_modules.services import quote_renderer as qr
+
+    body_ys: list[int] = []
+    real = qr._render_line_mixed
+
+    def _spy(line, x, y, **kw):
+        body_ys.append(y)
+        return real(line, x, y, **kw)
+
+    monkeypatch.setattr(qr, "_render_line_mixed", _spy)
+    qr.render_quote_card(
+        LONG_QUOTE[:qr.QUOTE_MAX_CHARS],
+        author_name=LONG_EMOJI_NAME,
+        avatar_bytes=_avatar(),
+        theme=next(iter(THEMES.values())),
+    )
+    assert min(body_ys) >= 0, f"quote clipped off the top: first line at y={min(body_ys)}"
+
+
+def test_attribution_keeps_clear_of_the_floral_corner(monkeypatch) -> None:
+    """The name must not be drawn under the slim border's flower cluster."""
+    from bot_modules.services import quote_renderer as qr
+
+    fl_x, fl_y = qr.slim_flower_bound(900, 500)
+    attr_size = max(19, 900 // 33)
+    attr_h = sum(qr._load_font(attr_size).getmetrics())
+
+    # A mid-length quote pushes the byline down into the flowers' rows.
+    for n in (100, 130, 150, 200):
+        ax, ay = _attr_xy(monkeypatch, text=LONG_QUOTE[:n])
+        if ay + attr_h <= fl_y:
+            continue  # above the cluster entirely
+        # Re-measure what was actually drawn (it may have been shrunk to fit).
+        width = qr._emoji_getsize(f"— {LONG_EMOJI_NAME}", font=qr._load_font(attr_size))[0]
+        assert ax + min(width, fl_x - ax) <= fl_x, f"name reaches the flowers at {n} chars"
+        assert ax < fl_x, "name should start left of the cluster"
+
+
+def test_flower_bound_matches_where_the_cluster_is_pasted() -> None:
+    """The layout's flower rect must agree with the compositor's paste position."""
+    from bot_modules.services.quote_renderer import (
+        _SLIM_FLOWER_CROP,
+        _SLIM_FLOWER_SCALE,
+        slim_flower_bound,
+        slim_flower_rect,
+    )
+
+    w, h = 900, 500
+    fl, ft, fr, fb = _SLIM_FLOWER_CROP
+    fw = max(1, int((int(w * fr) - int(w * fl)) * _SLIM_FLOWER_SCALE))
+    fh = max(1, int((int(h * fb) - int(h * ft)) * _SLIM_FLOWER_SCALE))
+    assert slim_flower_bound(w, h) == slim_flower_rect(w, h, fw, fh)
+
+
+def test_attribution_height_is_stable_across_names() -> None:
+    """Geometry must not jitter with the letters a name happens to contain.
+
+    An ink bbox gives 20px for "Bob" but 30px for a parenthesised name; the font's
+    line box is constant, and identical with or without pilmoji installed.
+    """
+    from bot_modules.services.quote_renderer import _load_font
+
+    font = _load_font(27)
+    assert sum(font.getmetrics()) == 34
+    # The ink bbox — what this used to use — is the thing that varies.
+    inks = {font.getbbox(f"— {n}")[3] - font.getbbox(f"— {n}")[1] for n in ("Bob", "gg", "(X)")}
+    assert len(inks) > 1, "expected ink heights to vary, proving why they're unusable"
+
+
+def test_fit_attribution_handles_degenerate_input() -> None:
+    """No crash on an empty size list; no overflow when even a stub can't fit."""
+    from bot_modules.services.quote_renderer import fit_attribution_text
+
+    def _measure(t: str, sz: int) -> int:
+        return len(t) * sz
+
+    assert fit_attribution_text("abc", 100, _measure, []) == (0, "abc")
+    # Column so narrow that even "…" overflows → drop the line, don't draw over.
+    sz, txt = fit_attribution_text("abcdefgh", 5, _measure, [20, 16])
+    assert txt == ""
+
+
+def test_flower_edge_is_read_from_alpha_not_the_bounding_box() -> None:
+    """The per-row bound must be looser than the cluster's box where it's sparse.
+
+    Using the box for every row cost a wrapped line at every quote length: the
+    cluster's upper rows are a few buds, and reserving its full width for them
+    narrowed the column for text that had no petals beside it.
+    """
+    from bot_modules.services.quote_renderer import (
+        BORDERS,
+        slim_flower_bound,
+        slim_flower_left_edge,
+    )
+
+    border = BORDERS["golden_poppy"]
+    if not border.path.exists():
+        return  # asset not present in this checkout
+    edge = slim_flower_left_edge(border, 900, 500)
+    assert edge is not None
+    box_x, box_y = slim_flower_bound(900, 500)
+    # Somewhere in the cluster's upper half, the true edge is right of the box edge.
+    upper = [edge[y] for y in range(box_y, min(box_y + 60, 500))]
+    assert max(upper) > box_x, "expected sparse upper rows to allow more text"
+    # And rows above the cluster are unbounded.
+    assert edge[box_y - 20] == 900
+    # Cached: a second call returns the identical object.
+    assert slim_flower_left_edge(border, 900, 500) is edge
+
+
+def test_flower_limit_bounds_a_line_over_its_whole_height() -> None:
+    """A line is a band — petals dipping into its lower rows must bound it."""
+    from bot_modules.services.quote_renderer import flower_limit
+
+    edge = [900] * 100
+    edge[50] = 700  # a petal intrudes on one row only
+    # A line covering that row is bounded by it, even though its top row is clear.
+    assert flower_limit(edge, 45, 10) == 700
+    # A line finishing above it is not.
+    assert flower_limit(edge, 30, 10) == 900
+    # Out-of-range rows clamp rather than raise.
+    assert flower_limit(edge, 98, 40) == 900
+    assert flower_limit([], 0, 10) > 0
+
+
+def test_body_text_stays_clear_of_the_flowers(monkeypatch) -> None:
+    """No body line may reach into the floral corner on the slim border."""
+    from bot_modules.services import quote_renderer as qr
+
+    border = qr.BORDERS["golden_poppy"]
+    if not border.path.exists():
+        return
+    edge = qr.slim_flower_left_edge(border, 900, 500)
+    assert edge is not None
+
+    drawn: list[tuple[str, int, int]] = []
+    real = qr._render_line_mixed
+
+    def _spy(line, x, y, **kw):
+        drawn.append((line, x, y))
+        return real(line, x, y, **kw)
+
+    monkeypatch.setattr(qr, "_render_line_mixed", _spy)
+    body_font = qr._load_font(max(32, 900 // 19))
+    line_h = body_font.getbbox("Ag")[3] - body_font.getbbox("Ag")[1]
+
+    for n in (60, 130, 200, 280):
+        drawn.clear()
+        qr.render_quote_card(
+            LONG_QUOTE[:n], author_name=LONG_EMOJI_NAME, avatar_bytes=_avatar(),
+            theme=next(iter(THEMES.values())), border_style=border,
+        )
+        for line, x, y in drawn:
+            right = x + qr._emoji_getsize(line, font=body_font)[0]
+            assert right <= qr.flower_limit(edge, y, line_h), (
+                f"{n} chars: line {line!r} reaches x={right} into the flowers"
+            )
