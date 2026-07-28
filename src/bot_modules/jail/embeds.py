@@ -63,7 +63,6 @@ def _fmt_xp(amount: float) -> str:
 # the constant baked into the cog.
 DEFAULT_MAX_ELIGIBLE_MENTIONS = 25
 DEFAULT_POLICIES_PAGE_SIZE = 25
-DEFAULT_WARNINGS_PAGE_SIZE = 20
 DEFAULT_POLICY_DESC_PREVIEW = 100
 
 # ``MOD_JAIL`` is ``0xE74C3C`` — the same bright red used in the original
@@ -213,57 +212,6 @@ def build_policy_list_embed(
     return embed
 
 
-# ── Warnings list ──────────────────────────────────────────────────────
-
-
-def build_warnings_list_embed(
-    user_label: str,
-    warns: Sequence[Mapping[str, Any]],
-    *,
-    page_size: int = DEFAULT_WARNINGS_PAGE_SIZE,
-    ts_formatter=None,
-) -> discord.Embed:
-    """Build the ``/warnings`` list embed.
-
-    ``warns`` is a sequence of rows in newest-first order with at least
-    ``id``, ``created_at``, ``moderator_id``, ``reason``, ``revoked``,
-    ``revoke_reason``.
-
-    ``ts_formatter`` is an optional ``Callable[[float | None], str]`` — if
-    not given, falls back to Discord's ``<t:…:f>`` form. Pass an identity
-    formatter in tests for stable snapshots.
-
-    The cog's count footer ("N active / M total") is always rendered.
-    Truncates after ``page_size`` rows so the embed stays under Discord's
-    4096-char description cap.
-    """
-    formatter = ts_formatter or (lambda ts: f"<t:{int(ts)}:f>" if ts else "N/A")
-    lines: list[str] = []
-    for w in warns:
-        status = "~~Revoked~~" if w["revoked"] else "**Active**"
-        dt = formatter(w["created_at"])
-        line = f"#{w['id']} — {status} — {dt} — by <@{w['moderator_id']}>"
-        if w["reason"]:
-            line += f"\n  Reason: {w['reason']}"
-        if w["revoked"] and w.get("revoke_reason"):
-            line += f"\n  Revoke reason: {w['revoke_reason']}"
-        lines.append(line)
-
-    shown_lines = lines[:page_size]
-    description = "\n\n".join(shown_lines)
-    if len(lines) > page_size:
-        description += (
-            f"\n\n*…and {len(lines) - page_size} more (older). "
-            "Inspect via the dashboard for the full list.*"
-        )
-    embed = discord.Embed(
-        title=f"⚠️ Warnings for {user_label}", description=description, color=MOD_WARNING,
-    )
-    active = sum(1 for w in warns if not w["revoked"])
-    embed.set_footer(text=f"{active} active / {len(warns)} total")
-    return embed
-
-
 # ── Ticket panel ───────────────────────────────────────────────────────
 
 
@@ -375,7 +323,9 @@ def build_modinfo_embed(
     win for cog testability: the field-by-field formatting used to live
     inline in the slash-command handler.
 
-    ``ts_formatter`` mirrors ``build_warnings_list_embed``.
+    ``ts_formatter`` is an optional ``Callable[[float | None], str]`` — if not
+    given, falls back to Discord's ``<t:…:f>`` form. Pass an identity formatter
+    in tests for stable snapshots.
     """
     formatter = ts_formatter or (lambda ts: f"<t:{int(ts)}:f>" if ts else "N/A")
 

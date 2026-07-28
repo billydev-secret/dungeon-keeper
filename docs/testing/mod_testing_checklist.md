@@ -34,8 +34,8 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 ### Warnings
 
 - [ ] **`/warn <user> [reason]`** — Warn a member; confirm a DM with reason + running count, plus an audit embed. Hit the warning threshold (default 3) and confirm the admin-ping alert.
-- [ ] **`/warnings <user>`** — Confirm it lists active and revoked warnings with dates, reasons, and issuing mod.
-- [ ] **`/revokewarn <user> <warning_id>`** — Soft-delete a real warning id; confirm it moves to revoked history. Try a bogus id and confirm the "couldn't find" error.
+- [ ] **Warnings page (dashboard)** — Confirm it lists active and revoked warnings with dates, reasons, and issuing mod. (Replaced `/warnings`, removed 2026-07-28.)
+- [ ] **`/revokewarn <user> <warning_id>`** — Soft-delete a real warning id (take the id from the dashboard's Warnings page); confirm it moves to revoked history. Try a bogus id and confirm the "couldn't find" error.
 
 ### Modinfo
 
@@ -73,15 +73,11 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Rules Watch
 
-- [ ] **`/rules-watch enable` / `disable`** — Toggle passive monitoring; confirm the start/stop confirmations.
-- [ ] **`/rules-watch set-channel`** — Point the alert channel at a chosen channel; confirm it updates.
-- [ ] **`/rules-watch digest`** — Run it after some digest-tier events exist; confirm a summary posts.
-- [ ] **`/rules-watch stats`** — Confirm event counts, false-positive rate, and signal firing rates display.
-- [ ] **`/rules-watch label <event_id> <verdict>`** — Label a real event; confirm it records. Try a bogus id and confirm the "not found" error.
-- [ ] **`/rules-watch status`** — Confirm it reports whether monitoring is active and the alert channel.
+- [ ] **Rules Watch config (dashboard)** — Toggle passive monitoring and point the alert channel at a chosen channel; confirm both persist and the panel reports the current state.
 - [ ] **Passive Rules Watch alert** — Post a message that trips the pre-filter; confirm an alert posts with Confirm/Dismiss buttons, and clicking one disables further action and writes a label.
-- [ ] **Rules Watch alert queue (dashboard)** — Confirm flagged events list with inline Confirm/Dismiss.
+- [ ] **Rules Watch alert queue (dashboard)** — Confirm flagged events list with inline Confirm/Dismiss, and that the **Digest** tier filter shows unlabeled digest-tier events.
 - [ ] **Rules Watch label stats (dashboard)** — Confirm label counts, false-positive rate, and per-tier/rule breakdown render.
+- [ ] **`Report Rule Violation` context menu** — Right-click a member's message as a mod; confirm the modal logs a pre-labeled confirmed violation. Confirm it refuses bot messages and non-mods.
 
 ### Message Query
 
@@ -179,11 +175,10 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 ### Docs
 
-- [ ] **`/docs post`** — Post a dashboard-authored doc into a channel; confirm it renders and stays tracked for sync.
-- [ ] **`/docs sync`** — Edit a doc's markdown on the dashboard, then sync; confirm all placements re-render in place.
-- [ ] **`/docs unpost`** — Confirm the doc's messages are deleted from that channel and the placement drops.
-- [ ] **`/docs list`** — Confirm it lists the guild's docs and where each is posted.
 - [ ] **Docs dashboard authoring** — Create a doc, upload an image, add a placement, toggle pin, save; confirm live re-render and pin/unpin behavior.
+- [ ] **Post a placement (dashboard)** — Add a placement for a channel; confirm the doc renders there and stays tracked for sync. (Replaced `/docs post`, removed 2026-07-28.)
+- [ ] **Sync (dashboard)** — Edit a doc's markdown, then sync; confirm every placement re-renders in place. (Replaced `/docs sync`.)
+- [ ] **Remove a placement (dashboard)** — Confirm the doc's messages are deleted from that channel and the placement drops. (Replaced `/docs unpost`.)
 
 ### Quality Leave
 

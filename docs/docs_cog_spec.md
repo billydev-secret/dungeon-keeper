@@ -1,17 +1,20 @@
-# Docs Cog (`/docs`) — Feature Spec
+# Channel Docs — Feature Spec
 
-This spec describes the **`/docs` Discord command cog** — not the repo's `docs/` folder. A "doc" here is a guild-scoped, single-source markdown document (rules, mod FAQ, staff info, …) authored on the dashboard (Config → Docs) and stored in the database. The cog is the Discord surface for *placing* a doc into channels and re-syncing it: editing the doc's markdown anywhere (dashboard save or `/docs sync`) re-renders every channel it's posted in, in place. Code lives in `src/bot_modules/cogs/docs_cog.py` plus the `src/bot_modules/docs/` package (`render` / `db` / `sync`) and the dashboard route `src/web_server/routes/docs.py`.
+This spec describes the **channel-docs feature** — not the repo's `docs/` folder. A "doc" here is a guild-scoped, single-source markdown document (rules, mod FAQ, staff info, …) authored on the dashboard (Config → Docs) and stored in the database. Placing a doc into channels and re-syncing it happens entirely on the dashboard: editing the doc's markdown re-renders every channel it's posted in, in place. Code lives in the `src/bot_modules/docs/` package (`render` / `db` / `sync`) and the dashboard route `src/web_server/routes/docs.py`.
 
-## Commands
+## Surface
 
-| Command | Type | Permission | Purpose |
-|---|---|---|---|
-| `/docs post doc_key [channel]` | Slash | Manage Guild + bot-mod | Post a doc into a channel (defaults to the current one) and keep it synced |
-| `/docs sync [doc_key]` | Slash | Manage Guild + bot-mod | Re-render a doc everywhere it's posted; with no key, syncs every doc in the guild |
-| `/docs unpost doc_key channel` | Slash | Manage Guild + bot-mod | Delete the doc's messages from a channel and drop the placement |
-| `/docs list` | Slash | Manage Guild + bot-mod | List the guild's docs and which channels each is posted in |
+Everything is on the dashboard's Docs panel (`static/js/panels/docs.js`), moderator-level:
 
-The group is guild-only with `default_permissions=Manage Guild`, and every command additionally passes through the bot's own `ctx.is_mod` check. All replies are ephemeral. `doc_key` autocompletes from the guild's docs (matches key or title, max 25).
+| Action | Endpoint | Purpose |
+|---|---|---|
+| List docs + placements | `GET /api/docs` | The guild's docs and which channels each is posted in |
+| Post into a channel | `POST /api/docs/{doc_key}/placements` | Place a doc in a channel and keep it synced |
+| Re-render everywhere | `POST /api/docs/{doc_key}/sync` | Re-render a doc in every channel it's posted in |
+| Remove from a channel | `DELETE /api/docs/{doc_key}/placements/{channel_id}` | Delete the doc's messages and drop the placement |
+| Pin / unpin a placement | `PUT /api/docs/{doc_key}/placements/{channel_id}/pin` | Toggle the placement's pinned state |
+
+The `/docs post|sync|unpost|list` slash commands were removed 2026-07-28 in the command-surface audit — each was a 1:1 duplicate of the endpoint above it, and CLAUDE.md keeps configuration on the dashboard. `src/bot_modules/cogs/docs_cog.py` is gone; the routes call `docs_db` / `docs_sync` directly, with no cog dependency.
 
 ## Behavior
 
@@ -49,7 +52,7 @@ Doc keys are slugs (`[a-z0-9-]`, max 49 chars; user input is slugified). Title �
 
 ## Configuration
 
-None in the cog. Per-doc: optional `accent` hex (falls back to the guild branding accent). Access is gated by Discord's Manage Guild default permission plus the bot's moderator check; the bot needs send/edit/delete permission in target channels, and Manage Messages where pinning is enabled.
+No global settings. Per-doc: optional `accent` hex (falls back to the guild branding accent). Access is gated at the dashboard's moderator level; the bot needs send/edit/delete permission in target channels, and Manage Messages where pinning is enabled.
 
 ## Stored data
 

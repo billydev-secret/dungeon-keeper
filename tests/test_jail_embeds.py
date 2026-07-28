@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from bot_modules.jail.embeds import (
     DEFAULT_MAX_ELIGIBLE_MENTIONS,
     DEFAULT_POLICIES_PAGE_SIZE,
-    DEFAULT_WARNINGS_PAGE_SIZE,
     build_adopted_policies_embed,
     build_jail_audit_embed,
     build_modinfo_embed,
@@ -29,7 +28,6 @@ from bot_modules.jail.embeds import (
     build_warning_audit_embed,
     build_warning_revoke_audit_embed,
     build_warning_threshold_embed,
-    build_warnings_list_embed,
 )
 from bot_modules.services.embeds import (
     MOD_INFO,
@@ -205,71 +203,6 @@ def test_policy_list_embed_no_pagination_when_zero_size():
 def test_policy_list_embed_empty():
     embed = build_policy_list_embed([])
     assert len(embed.fields) == 0
-
-
-# ── build_warnings_list_embed ─────────────────────────────────────────
-
-
-def _warn(
-    wid, *, revoked=False, reason="bad", revoke_reason="", moderator_id=99, ts=1000,
-):
-    return {
-        "id": wid,
-        "revoked": revoked,
-        "reason": reason,
-        "revoke_reason": revoke_reason,
-        "moderator_id": moderator_id,
-        "created_at": ts,
-    }
-
-
-def test_warnings_embed_active_only():
-    embed = build_warnings_list_embed(
-        "user#1234", [_warn(1, reason="spam")], ts_formatter=lambda ts: f"t{ts}",
-    )
-    assert embed.title == "⚠️ Warnings for user#1234"
-    assert "**Active**" in embed.description
-    assert "spam" in embed.description
-    assert "t1000" in embed.description
-    assert embed.footer.text == "1 active / 1 total"
-
-
-def test_warnings_embed_with_revoked_includes_revoke_reason():
-    embed = build_warnings_list_embed(
-        "u",
-        [_warn(1, revoked=True, revoke_reason="appealed")],
-        ts_formatter=lambda ts: f"t{ts}",
-    )
-    assert "~~Revoked~~" in embed.description
-    assert "Revoke reason: appealed" in embed.description
-    assert embed.footer.text == "0 active / 1 total"
-
-
-def test_warnings_embed_truncates_long_lists():
-    warns = [_warn(i) for i in range(DEFAULT_WARNINGS_PAGE_SIZE + 5)]
-    embed = build_warnings_list_embed("u", warns, ts_formatter=lambda ts: "t")
-    assert "and 5 more (older)" in embed.description
-
-
-def test_warnings_embed_empty_warning_with_no_reason():
-    embed = build_warnings_list_embed(
-        "u", [_warn(1, reason="")], ts_formatter=lambda ts: "t",
-    )
-    # Empty reason → no "Reason: " line, but the warning row still appears
-    assert "Reason:" not in embed.description
-    assert "#1" in embed.description
-
-
-def test_warnings_embed_color_and_footer():
-    embed = build_warnings_list_embed("u", [], ts_formatter=lambda ts: "t")
-    assert embed.color is not None and embed.color.value == MOD_WARNING
-    assert embed.footer.text == "0 active / 0 total"
-
-
-def test_warnings_embed_default_ts_formatter_when_none():
-    """No formatter → uses the discord ``<t:…:f>`` format."""
-    embed = build_warnings_list_embed("u", [_warn(1, ts=1700)])
-    assert "<t:1700:f>" in embed.description
 
 
 # ── build_ticket_panel_embed ──────────────────────────────────────────

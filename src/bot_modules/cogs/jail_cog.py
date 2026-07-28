@@ -25,7 +25,6 @@ from bot_modules.jail.embeds import (
     build_warning_audit_embed,
     build_warning_revoke_audit_embed,
     build_warning_threshold_embed,
-    build_warnings_list_embed,
 )
 from bot_modules.jail.logic import sanitize_channel_name
 
@@ -1222,6 +1221,11 @@ class JailCog(commands.Cog):
         )
         await _post_audit(ctx, guild, audit_embed)
 
+    # The dashboard's Policy Tickets panel covers the *proposal* workflow
+    # (policy_tickets: open / voting / closed). Adopted policies live in a
+    # separate `policies` table that no web route reads, so this stays the only
+    # way to see what actually passed — checked during the 2026-07-28 command
+    # surface audit and deliberately kept.
     @policy.command(name="list", description="List all passed policies.")
     @app_commands.default_permissions(moderate_members=True)
     async def policy_list_cmd(self, interaction: discord.Interaction) -> None:
@@ -1494,43 +1498,6 @@ class JailCog(commands.Cog):
             )
             await _post_audit(ctx, guild, alert)
 
-    # ── /warnings ─────────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="warnings",
-        description="List all warnings (active and revoked) for a member.",
-    )
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.describe(user="Member to check")
-    async def warnings_cmd(
-        self, interaction: discord.Interaction, user: discord.Member
-    ) -> None:
-        ctx = self.ctx
-        member = interaction.user
-        if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
-            return
-
-        guild = interaction.guild
-        if not guild:
-            return
-        warns_guild_id = guild.id
-
-        def _get_warns():
-            with ctx.open_db() as conn:
-                return get_warnings(conn, warns_guild_id, user.id)
-
-        warns = await asyncio.to_thread(_get_warns)
-
-        if not warns:
-            await interaction.response.send_message(
-                f"{user} has no warnings.", ephemeral=True
-            )
-            return
-
-        embed = build_warnings_list_embed(str(user), warns, ts_formatter=_ts_str)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     # ── /revokewarn ───────────────────────────────────────────────────────
 
     @app_commands.command(
@@ -1540,7 +1507,7 @@ class JailCog(commands.Cog):
     @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(
         user="Member the warning belongs to",
-        warning_id="The warning's numeric ID (see /warnings).",
+        warning_id="The warning's numeric ID (see the dashboard's Warnings page).",
         reason="Why this warning is being revoked.",
     )
     async def revokewarn_cmd(

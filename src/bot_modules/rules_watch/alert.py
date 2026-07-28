@@ -198,32 +198,3 @@ def register_persistent_views(bot, db_path) -> None:
         log.debug("rules_watch: registered %d persistent label views", len(rows))
     except Exception:
         log.exception("rules_watch: failed to register persistent views")
-
-
-def build_digest_embed(
-    events: list,
-    guild: discord.Guild,
-) -> discord.Embed:
-    """Build a summary embed for /rules-watch digest."""
-    embed = discord.Embed(
-        title=f"📋 Rules Watch Digest — {len(events)} pending",
-        color=discord.Color.orange(),
-        description="Events below have not yet been labeled. Use the web dashboard or "
-                    "`/rules-watch label` to review.",
-    )
-    for ev in events[:10]:
-        rule = ev["guard_rule"] or "?"
-        score = ev["priority_score"] or 0
-        author_id = ev["author_id"]
-        m = guild.get_member(author_id)
-        author_name = m.display_name if m else f"User {author_id}"
-        ch = guild.get_channel(ev["channel_id"])
-        ch_name = f"#{ch.name}" if ch and hasattr(ch, "name") else str(ev["channel_id"])
-        embed.add_field(
-            name=f"Event #{ev['id']} — Rule {rule} ({score:.1f})",
-            value=f"{author_name} in {ch_name} · {ev['priority_reason'] or ''}",
-            inline=False,
-        )
-    if len(events) > 10:
-        embed.set_footer(text=f"Showing 10 of {len(events)}. See dashboard for full list.")
-    return embed

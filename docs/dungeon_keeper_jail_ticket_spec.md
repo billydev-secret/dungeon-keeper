@@ -23,11 +23,10 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | `/policy open title:<title> [description]` | Slash | Admin | Open a policy proposal channel; title is required and capped at 200 chars (longer titles are trimmed with an ellipsis) |
 | `/policy vote` | Slash | Mod / Admin | Start the formal vote on the current policy proposal (opens a modal) |
 | `/policy close [reason]` | Slash | Admin | Close a policy proposal without voting |
-| `/policy list` | Slash | Mod / Admin | List all passed policies |
+| `/policy list` | Slash | Mod / Admin | List all passed policies. Kept in Discord deliberately: the dashboard's Policy Tickets panel covers the proposal workflow (`policy_tickets`), but adopted policies live in a separate `policies` table no web route reads |
 | `/pull <user>` | Slash | Mod | Add a user into the current jail or ticket channel |
 | `/remove <user>` | Slash | Mod | Remove a previously pulled user |
 | `/warn <user> [reason]` | Slash | Mod | Record a warning and DM the member |
-| `/warnings <user>` | Slash | Mod | Show the user's full warning history |
 | `/revokewarn <user> <warning_id>` | Slash | Mod | Soft-delete a warning |
 | `/modinfo <user>` | Slash | Mod | Unified view: jail status, jail history, warnings, ticket history |
 
@@ -124,7 +123,7 @@ Transcripts are delivered as Markdown (`.md`) files. They're readable in any tex
 
 ### Warnings
 
-`/warn` records a warning, DMs the member with the reason and their current active warning count, and writes an audit embed. When a member's active warning count **reaches** the configured threshold (default 3) the bot posts a highlighted alert in the log channel that pings admin roles. **The threshold never auto-jails** — it escalates to humans, who decide what happens next. `/warnings <user>` shows active and revoked warnings with dates, reasons, and the issuing mod. `/revokewarn` is a deliberate manual soft-delete — no timed expiry.
+`/warn` records a warning, DMs the member with the reason and their current active warning count, and writes an audit embed. When a member's active warning count **reaches** the configured threshold (default 3) the bot posts a highlighted alert in the log channel that pings admin roles. **The threshold never auto-jails** — it escalates to humans, who decide what happens next. Reading a member's warning history — active and revoked, with dates, reasons, and the issuing mod — is the dashboard's Warnings page (`GET /api/moderation/warnings`); the `/warnings` command that duplicated it was removed 2026-07-28. `/revokewarn` stays in Discord as a deliberate manual soft-delete — no timed expiry — and takes the numeric ID shown on that page.
 
 ### Modinfo
 
@@ -143,7 +142,7 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 **Bot needs:** Manage Roles (to assign / strip / restore roles and create `@Jailed`), Manage Channels (jail and ticket channel creation, lock/unlock, permission overwrites), View Channels and Send Messages in the configured log channels, Read Message History and Embed Links for embeds, Attach Files for transcript delivery. The bot's top role must sit above `@Jailed` for role-strip to work.
 
 **User needs:**
-- Mod role (configured via `/setup` or the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/warnings`, `/revokewarn`, `/modinfo`, `/ticket panel`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
+- Mod role (configured via `/setup` or the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/revokewarn`, `/modinfo`, `/ticket panel`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
 - Admin role: `/setup`, `/policy open`, `/policy close`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 

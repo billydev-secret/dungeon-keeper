@@ -1397,20 +1397,19 @@
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/warnings user:@user</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Lists all active and revoked warnings for a member, with dates, reasons, and which mod issued each one.</span>
-    </div>
-
-    <div class="cmd-block">
       <span class="cmd-name">/revokewarn user:@user warning_id:&lt;N&gt; reason:...</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Revoke a specific warning. Revoked warnings stay in the member's history (they don't disappear) but no longer count toward thresholds. Run <code>/warnings @user</code> first to find the numeric warning ID.</span>
+      <span class="cmd-desc">Revoke a specific warning. Revoked warnings stay in the member's history (they don't disappear) but no longer count toward thresholds. Open <strong>Moderation → Warnings</strong> on the dashboard first to find the numeric warning ID.</span>
       <div class="cmd-params">
-        <strong>warning_id</strong> — numeric ID from <code>/warnings</code>.<br>
+        <strong>warning_id</strong> — numeric ID from the dashboard's Warnings page.<br>
         <strong>reason</strong> — optional; recorded in the audit log alongside the revocation.
       </div>
     </div>
+
+    <p class="note">Reading a member's warning history lives on the dashboard under
+      <strong>Moderation → Warnings</strong> — it lists active and revoked warnings with dates,
+      reasons, and the issuing mod. The old <code>/warnings</code> command was removed; the
+      dashboard page is the reference.</p>
 
     <h3 id="ticket-cmds">Ticket Commands</h3>
 
@@ -1657,34 +1656,21 @@
       </div>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/rules-watch digest</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Post a summary of unlabeled digest-tier events for batch review (up to 25 pending events per digest).</span>
-    </div>
+    <p class="note">Rules Watch has no slash commands — reviewing and labeling all happen on the
+      dashboard under <strong>Moderation → Rules Watch</strong>. The event list has tier filters
+      (<strong>All / Immediate / Digest</strong>) and shows only unlabeled events by default, so the
+      Digest filter is the batch-review queue. Each row carries <strong>✅ Confirmed violation</strong>
+      and <strong>❌ False positive</strong> buttons, and a corrected rule number can be recorded
+      there. The <strong>Stats</strong> tab has signal firing rates, label counts, and the
+      false-positive rate. Whether monitoring is on and which channel gets immediate alerts lives on
+      <strong>Config → Rules Watch</strong>. The old <code>/rules-watch digest</code>,
+      <code>label</code>, <code>stats</code>, and <code>status</code> commands were removed.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/rules-watch label event_id:&lt;n&gt; verdict:[violation|fp]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Manually label a queued event as a violation or false positive. Labels tune the signal over time.</span>
-      <div class="cmd-params">
-        <strong>event_id</strong> — numeric ID shown in the digest embed.<br>
-        <strong>verdict</strong> — <code>violation</code> (confirmed real) or <code>fp</code> (false positive).<br>
-        <strong>corrected_rule</strong> — optional: the correct rule number, if the guard flagged a real violation but matched the wrong rule.
-      </div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/rules-watch stats</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">View signal firing rates, label counts, and the false-positive rate.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/rules-watch status</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Show whether Rules Watch is currently active. No parameters.</span>
-    </div>
+    <p>The one Rules Watch action that stays in Discord is the
+      <strong>Report Rule Violation</strong> message context menu — right-click a message →
+      <em>Apps</em> → <em>Report Rule Violation</em>. It opens a short form (optional rule number and
+      note) and logs the message as a confirmed violation straight away. Mod-only, and it refuses
+      bot messages.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          TODO LIST & BOARD
@@ -1957,11 +1943,13 @@
     <h3 id="docs">Docs</h3>
     <p>Author documents on the dashboard and post them into channels as bot-maintained messages — rules pages, guides, FAQ posts. Edit the doc on the dashboard and re-sync; the posted copies update in place.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/docs post &nbsp;&nbsp; /docs sync &nbsp;&nbsp; /docs unpost &nbsp;&nbsp; /docs list</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
-      <span class="cmd-desc"><strong>post</strong> puts a doc into a channel (and keeps it synced), <strong>sync</strong> re-renders a doc everywhere it's posted (leave the doc blank to sync all), <strong>unpost</strong> removes it from a channel, and <strong>list</strong> shows every doc and where it's posted. The documents themselves are written and managed on the dashboard's <a href="/#/docs">Docs</a> panel.</span>
-    </div>
+    <p class="note">Docs have no slash commands — everything is on the dashboard's
+      <a href="/#/docs">Docs</a> panel. Write the document there, then use its placement controls to
+      <strong>post</strong> it into a channel (which keeps it synced), <strong>sync</strong> it to
+      re-render every copy in place, <strong>pin</strong> or unpin a placement, or
+      <strong>remove</strong> it from a channel. The panel also lists every doc and where each is
+      posted. The old <code>/docs post</code>, <code>sync</code>, <code>unpost</code>, and
+      <code>list</code> commands were removed.</p>
 
     <h3 id="announcements">Announcements</h3>
     <p>Queue server announcements on the dashboard, preview them, and set a post time — the bot posts them for you. Each announcement is a rich embed (title, markdown body, optional image, accent color that defaults to your server branding) plus an optional plain-text line shown above the embed. Mentions only ping from that plain-text line, and only when you explicitly pick them: no mentions, one role, or @everyone — nothing pings by accident. Times are <strong>server-local</strong> (the timezone offset from the Global config panel).</p>
@@ -2106,7 +2094,6 @@
       <tbody>
         <tr><td><a href="#jail"><code>/jail</code> / <code>/unjail</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
         <tr><td><a href="#warnings"><code>/warn user:@u reason:...</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Log a warning — member isn't DM'd, but the confirmation posts in-channel, so run it in a mod channel</td></tr>
-        <tr><td><a href="#warnings"><code>/warnings user:@u</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>List all active and revoked warnings for a member</td></tr>
         <tr><td><a href="#warnings"><code>/revokewarn user:@u warning_id:N</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Revoke a warning by ID — stays in history, stops counting</td></tr>
         <tr><td><a href="#modinfo"><code>/modinfo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>
         <tr><td><a href="#purge"><code>/purge</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>

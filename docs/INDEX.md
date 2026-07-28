@@ -31,7 +31,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
-| [docs_cog_spec.md](docs_cog_spec.md) | `/docs` cog: posts dashboard-authored docs into channels (not this docs/ folder) |
+| [docs_cog_spec.md](docs_cog_spec.md) | Channel docs: dashboard posts authored docs into channels (not this docs/ folder) |
 | [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
@@ -106,6 +106,7 @@ feature and also appear in the Design table above.
 
 | Plan | What it covers | Status |
 |---|---|---|
+| [plans/command-surface-audit.md](plans/command-surface-audit.md) | Slash-command audit against CLAUDE.md's "config lives on the web" rule: what was deleted, what was kept and why, and the two remaining gap lists | 9 commands removed 2026-07-28 (190 → 181); 15 panel-poster commands + 13 no-dashboard-surface commands still open |
 | [plans/casino-classics-and-prediction-market.md](plans/casino-classics-and-prediction-market.md) | New casino games (Baccarat, Sic Bo, War, Keno) + a parimutuel prediction market ("Pools": one self-running daily over/under on the economy's own net change) | Stage 1 complete (Baccarat, Dice, War, Keno) 2026-07-25; Stage 2 prediction market ("Pools") built 2026-07-28, ships disabled |
 | [plans/ai-advisor.md](plans/ai-advisor.md) | AI advisor (per-guild name, default "Billy-bot"): grounded "how do I use X" assistant (Discord + dashboard) | Stages 1–2 shipped |
 | [plans/help_bot_knowledge.md](plans/help_bot_knowledge.md) | Billy-bot as a setup guide: model tiering, settings registry, gap detection, proactive suggestions | Stages 1–6 built (latest 2026-07-25: per-feature KV fetch + intake registry entry) |
