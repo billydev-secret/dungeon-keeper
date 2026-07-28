@@ -228,3 +228,56 @@ def test_update_casino_blackjack_idle_capped_at_webhook_ttl(authed_client):
         "/api/config/casino", json={"blackjack_idle_seconds": 900}
     )
     assert too_long.status_code == 422
+
+
+def test_config_exposes_pools_defaults(authed_client):
+    casino = authed_client.get("/api/config").json()["casino"]
+    # Ships off: the market mints nothing, but it is a new game surface and
+    # an admin should choose to run it.
+    assert casino["pools_enabled"] is False
+    # A snowflake, so it travels as a string like channel_id. "0" = put the
+    # market in the casino channel.
+    assert casino["pools_channel_id"] == "0"
+    assert casino["pools_close_hour"] == 18
+    assert casino["pools_takeout_pct"] == 5
+
+
+def test_update_pools_settings_persist(authed_client, fake_ctx):
+    fake_ctx.bot = MagicMock()
+    resp = authed_client.put(
+        "/api/config/casino",
+        json={
+            "pools_enabled": True,
+            "pools_channel_id": "515151515151515151",
+            "pools_close_hour": 20,
+            "pools_takeout_pct": 3,
+        },
+    )
+    assert resp.status_code == 200
+    casino = authed_client.get("/api/config").json()["casino"]
+    assert casino["pools_enabled"] is True
+    assert casino["pools_channel_id"] == "515151515151515151"
+    assert casino["pools_close_hour"] == 20
+    assert casino["pools_takeout_pct"] == 3
+
+
+def test_update_pools_rejects_an_impossible_close_hour(authed_client):
+    for hour in (-1, 24, 99):
+        resp = authed_client.put(
+            "/api/config/casino", json={"pools_close_hour": hour}
+        )
+        assert resp.status_code == 422, hour
+
+
+def test_update_pools_rejects_a_confiscatory_takeout(authed_client):
+    """Capped at 50%: the takeout is burned, so a runaway value would just
+    delete members' stakes."""
+    assert authed_client.put(
+        "/api/config/casino", json={"pools_takeout_pct": 80}
+    ).status_code == 422
+
+
+def test_update_pools_rejects_a_garbage_channel(authed_client):
+    assert authed_client.put(
+        "/api/config/casino", json={"pools_channel_id": "not-a-snowflake"}
+    ).status_code == 400
