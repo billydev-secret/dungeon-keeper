@@ -200,11 +200,16 @@ def render_blocks(blocks: list[Block]) -> list[str]:
     Discord's Copy Text takes the whole message, so a heading sharing the
     message means trimming it off every single paste. Both block kinds render
     the same way now: heading message, then content message(s).
+
+    Titles render as an H2 (``## title``) rather than bold: the channel is a
+    procedure read top to bottom, so its sections want to be real headings —
+    Discord sizes them and lists them in the channel's jump bar — not bold text
+    that merely looks heavier.
     """
     messages: list[str] = []
     for b in blocks:
         if b.title:
-            messages.append(f"**{b.title}**")
+            messages.append(f"## {b.title}")
         if b.kind == KIND_QUESTIONS:
             messages.extend(_question_lines(b.body))
         elif b.body.strip():
