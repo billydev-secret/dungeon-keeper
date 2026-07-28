@@ -74,18 +74,31 @@ export function mount(container) {
       chanSlot,
       "Where echoes are posted — normally your main chat. Choose \"(off)\" to stop echoing entirely.",
     ));
-    // Snowflakes stay strings all the way through; "" is the stored value
-    // meaning "no channel", which is also how the feature is disabled.
+    // Snowflakes stay strings all the way through. "0" is the off sentinel,
+    // matching the rest of the codebase — settings_registry declares this key
+    // with default "0", and Billy-bot writes literal "0" when it clears a
+    // channel setting. With emptyValue "" instead, a stored "0" matches no
+    // option and the field renders the bare text `0` rather than "(off)".
     const chanPicker = mountChannelPicker(
-      chanSlot, channels, String(s.channel_id || ""),
-      { emptyValue: "", emptyLabel: "(off)", label: "Echo channel" },
+      chanSlot, channels, String(s.channel_id || "0"),
+      { emptyValue: "0", emptyLabel: "(off)", label: "Echo channel" },
     );
 
     function syncBanner() {
-      offBanner.style.display = chanPicker.getValue() ? "none" : "";
+      const v = chanPicker.getValue();
+      offBanner.style.display = v && v !== "0" ? "none" : "";
     }
     syncBanner();
-    chanSlot.addEventListener("change", syncBanner);
+    // filterSelect emits no change event of its own, and `chanSlot` was
+    // replaced out of the DOM by mountChannelPicker — so listen on the
+    // picker's own element, the way activity.js does.
+    let lastValue = chanPicker.getValue();
+    chanPicker.el.addEventListener("focusout", () => {
+      setTimeout(() => {
+        const cur = chanPicker.getValue();
+        if (cur !== lastValue) { lastValue = cur; syncBanner(); }
+      }, 200);
+    });
 
     // What actually gets echoed, spelled out — the rules live in code and an
     // admin has no other way to find out why a given game didn't appear.
@@ -130,7 +143,7 @@ export function mount(container) {
       e.preventDefault();
       try {
         await apiPut("/api/config/event-echo", {
-          channel_id: chanPicker.getValue() || "",
+          channel_id: chanPicker.getValue() || "0",
         });
         showStatus(saveStatus, true);
         syncBanner();

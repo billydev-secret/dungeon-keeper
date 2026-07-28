@@ -43,7 +43,7 @@ There are no slash commands. Cooldown windows are constants in
 
 | Source | Trigger | `echo_key` | Dedupe `ref` |
 |---|---|---|---|
-| `party_game` | An open row in `games_active_games` with a posted lobby | game type (`mfk`, `story`, …) | `game_id` |
+| `party_game` | Any row in `games_active_games` with a posted lobby | game type (`mfk`, `story`, …) | `game_id` |
 | `gamebot` | A Gamebot lobby embed for Cards Against Humanity | sub-game (`cah`) | message id |
 | `discord_event` | A native Discord event going `scheduled → active` | `discord_event` | event id |
 
@@ -54,6 +54,18 @@ place, it picks up **scheduled games** for free (they launch down the same
 path), and it survives a restart — which a per-lobby task does not. The cost
 is that a game opening and finishing inside one tick is never echoed, which is
 the right trade.
+
+The sweep is deliberately **unfiltered by state**. The six lobby games sit in
+`joining`, most others in `open`, and `wyr` / `nhie` / `price` are created
+straight into `playing` — all three schedulable, so an enumerated state list
+silently excluded them. Presence in `games_active_games` already means live;
+freshness and the per-game dedupe bound the rest.
+
+The guild comes from the game's **own channel**, never from `ctx.guild_id`:
+the table has no `guild_id` column, so a lobby opened in any other guild the
+bot is in would otherwise be announced here with a jump link whose guild
+segment points at the wrong server. `game_manager.end_game` resolves it the
+same way, for the same reason.
 
 **Cards Against Humanity** rides the `on_message` listener
 `games_external_cog` already runs over Gamebot for economy payouts, so it costs
@@ -102,7 +114,17 @@ the next window out, or one busy minute would cascade into a window that keeps
 receding and the feature would go quiet permanently.
 
 Claims are taken *before* the send, so a crash between the two loses an echo
-rather than repeating one. Rows are pruned after 24h.
+rather than repeating one — but a send we *know* failed is released back to
+`suppressed = 1`, or an unreachable destination would burn both cooldowns on
+behalf of a message nobody ever saw. The row stays (flagged) rather than being
+deleted, so the sweep doesn't retry a dead channel every 15 seconds.
+
+The claim runs under `open_db_immediate`, not the default deferred
+transaction: it is a read-then-write on the cooldown window and all three
+sources reach it concurrently, so under a deferred transaction two overlapping
+claims could both read "nothing echoed yet" and both post inside the floor.
+
+Rows are pruned after 24h.
 
 ## Member experience
 
@@ -113,7 +135,13 @@ In main chat:
 > **[Jump in →]**
 
 No ping, no notification, no buttons. One accent-coloured embed
-(`resolve_accent_color`), footer naming the host where one is known.
+(`resolve_accent_color`), footer naming the host where one is known (cache
+lookup only — a footer isn't worth an API round trip per game).
+
+Copy varies by source: a native Discord event gets 📅 and "It's happening"
+rather than 🎲 and "A game is open". An `external` event carries a location
+string and no channel, so the `in <#…>` clause is dropped entirely — anything
+else there renders as a mention Discord can't resolve.
 
 ## Tests
 

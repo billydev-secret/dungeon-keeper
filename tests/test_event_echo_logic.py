@@ -12,6 +12,10 @@ import pytest
 
 from bot_modules.services.event_echo_logic import (
     GLOBAL_COOLDOWN_SECONDS,
+    ICON_EVENT,
+    ICON_GAME,
+    LEAD_EVENT,
+    LEAD_GAME,
     PER_TYPE_COOLDOWN_SECONDS,
     build_echo_embed,
     decide,
@@ -108,6 +112,24 @@ class TestEchoEmbed:
         assert "Truth or Dare" in (embed.title or "")
         assert "<#999>" in (embed.description or "")
         assert "https://x/1" in (embed.description or "")
+
+    def test_a_channel_less_echo_renders_no_mention(self):
+        """External Discord events have a location string and no channel."""
+        embed = build_echo_embed(game_name="Movie Night", url="https://x/1")
+        assert "<#" not in (embed.description or "")
+        assert "https://x/1" in (embed.description or "")
+
+    def test_copy_varies_by_source(self):
+        """"A game is open" reads as a bug on an event called Movie Night."""
+        game = build_echo_embed(game_name="Truth or Dare", channel_id=9, url="u")
+        event = build_echo_embed(
+            game_name="Movie Night", channel_id=9, url="u",
+            lead=LEAD_EVENT, icon=ICON_EVENT,
+        )
+        assert LEAD_GAME in (game.description or "")
+        assert LEAD_GAME not in (event.description or "")
+        assert (game.title or "").startswith(ICON_GAME)
+        assert (event.title or "").startswith(ICON_EVENT)
 
     def test_host_is_optional(self):
         assert build_echo_embed(

@@ -15,6 +15,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services import event_echo_service as svc
+from bot_modules.services.games_db import GamesDb
 from bot_modules.services.event_echo_logic import (
     SOURCE_GAMEBOT,
     SOURCE_PARTY_GAME,
@@ -211,6 +212,49 @@ class TestEchoEvent:
         bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
         assert await echo(bot, guild) is False
 
+    @pytest.mark.parametrize(
+        "break_it",
+        [
+            pytest.param("unreachable", id="channel-unreachable"),
+            pytest.param("forbidden", id="send-forbidden"),
+            pytest.param("accent", id="accent-lookup-raises"),
+        ],
+    )
+    async def test_a_send_that_never_landed_does_not_burn_the_cooldown(
+        self, bot, guild, sync_db_path, monkeypatch, break_it
+    ):
+        """An echo nobody saw must not refuse the next real game.
+
+        The claim is taken before the send (so a crash loses an echo rather
+        than repeating one), which means a *known* failure has to release it —
+        otherwise picking a channel the bot can't post in silently blocks
+        every game for the length of both cooldowns.
+        """
+        configure(sync_db_path)
+        if break_it == "unreachable":
+            bot.get_channel = MagicMock(return_value=None)
+            bot.fetch_channel = AsyncMock(side_effect=discord.NotFound(MagicMock(), "x"))
+        elif break_it == "forbidden":
+            bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
+        else:
+            monkeypatch.setattr(
+                svc, "resolve_accent_color", AsyncMock(side_effect=RuntimeError("boom"))
+            )
+
+        assert await echo(bot, guild, ref="failed") is False
+        with open_db(sync_db_path) as conn:
+            assert svc.last_echo_times(conn, GUILD_ID, "mfk") == (None, None)
+
+    async def test_a_failed_ref_is_not_retried_every_tick(self, bot, guild, sync_db_path):
+        """Released, but still claimed — the sweep must not hammer a dead channel."""
+        configure(sync_db_path)
+        bot.sent_channel.send.side_effect = discord.Forbidden(MagicMock(), "no perms")
+        assert await echo(bot, guild, ref="game-1") is False
+        bot.sent_channel.send.side_effect = None
+        assert await echo(bot, guild, ref="game-1", now=NOW + 15) is False
+        # A *different* game still gets its chance — the window wasn't burned.
+        assert await echo(bot, guild, ref="game-2", now=NOW + 30) is True
+
 
 # ── Gamebot source ──────────────────────────────────────────────────────────
 
@@ -272,3 +316,151 @@ def test_opened_at_reads_sqlite_utc_text():
 
 class _FakeRow(dict):
     """sqlite3.Row exposes keys() and __getitem__; dict does both already."""
+
+
+# ── The party-game sweep ────────────────────────────────────────────────────
+
+def _game_row(**over):
+    row = {
+        "game_id": "g-1",
+        "channel_id": 777,
+        "message_id": 888,
+        "game_type": "mfk",
+        "host_id": 12345,
+        "state": "open",
+        "created_at": None,
+    }
+    row.update(over)
+    return _FakeRow(row)
+
+
+@pytest.mark.asyncio
+class TestProcessGame:
+    @pytest.fixture
+    def sweep_bot(self, bot, guild):
+        """The game's own channel resolves to a guild, as in production."""
+        origin = MagicMock()
+        origin.guild = guild
+        guild.get_member = MagicMock(return_value=None)
+        dest = bot.sent_channel
+        bot.get_channel = MagicMock(
+            side_effect=lambda cid: origin if cid == 777 else dest
+        )
+        return bot
+
+    async def test_guild_comes_from_the_games_own_channel(self, sweep_bot, sync_db_path):
+        """games_active_games has no guild_id; the channel is the only source.
+
+        Using the home guild id instead would build a jump link whose guild
+        segment points at the wrong server — a dead link.
+        """
+        configure(sync_db_path)
+        await svc._process_game(sweep_bot, _game_row(), NOW)
+        embed = sweep_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert f"/{GUILD_ID}/777/888" in embed.description
+
+    async def test_a_game_in_an_unknown_channel_is_skipped(self, bot, sync_db_path):
+        configure(sync_db_path)
+        bot.get_channel = MagicMock(return_value=None)
+        await svc._process_game(bot, _game_row(), NOW)
+        bot.sent_channel.send.assert_not_awaited()
+
+    async def test_a_lobby_with_no_message_yet_waits(self, sweep_bot, sync_db_path):
+        """create_game runs before the lobby is posted — there's nothing to link."""
+        configure(sync_db_path)
+        await svc._process_game(sweep_bot, _game_row(message_id=None), NOW)
+        sweep_bot.sent_channel.send.assert_not_awaited()
+
+    async def test_a_stale_game_is_skipped(self, sweep_bot, sync_db_path):
+        """After downtime the sweep sees every open game; old ones stay quiet."""
+        configure(sync_db_path)
+        row = _game_row(created_at="2026-07-28 12:00:00")
+        await svc._process_game(sweep_bot, row, 1785240000.0 + 5000)
+        sweep_bot.sent_channel.send.assert_not_awaited()
+
+    async def test_host_is_named_when_resolvable(self, sweep_bot, guild, sync_db_path):
+        configure(sync_db_path)
+        member = MagicMock()
+        member.display_name = "Ada"
+        guild.get_member = MagicMock(return_value=member)
+        await svc._process_game(sweep_bot, _game_row(), NOW)
+        embed = sweep_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert embed.footer.text == "Hosted by Ada"
+
+    async def test_an_unknown_game_type_still_gets_a_name(self, sweep_bot, sync_db_path):
+        """A new game shows up in main chat the day it ships."""
+        configure(sync_db_path)
+        await svc._process_game(sweep_bot, _game_row(game_type="brand_new"), NOW)
+        embed = sweep_bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "Brand New" in (embed.title or "")
+
+
+@pytest.mark.asyncio
+async def test_live_games_returns_every_state(sync_db_path):
+    """The sweep's query must not enumerate states.
+
+    The six lobby games sit in 'joining' and most others in 'open', but
+    wyr / nhie / price are created straight into 'playing' — and all three are
+    schedulable, so a state filter silently excluded them from a feature whose
+    docs promise scheduled games are covered.
+    """
+    states = ["joining", "open", "playing"]
+    with open_db(sync_db_path) as conn:
+        for i, state in enumerate(states):
+            conn.execute(
+                "INSERT INTO games_active_games "
+                "(game_id, channel_id, message_id, game_type, host_id, state) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (f"g-{i}", 777, 888, "mfk", 1, state),
+            )
+
+    rows = await svc.live_games(GamesDb(sync_db_path))
+    assert sorted(r["state"] for r in rows) == sorted(states)
+
+
+# ── Discord events ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+class TestDiscordEvent:
+    def _event(self, guild, channel_id=None):
+        ev = MagicMock(spec=discord.ScheduledEvent)
+        ev.id = 5150
+        ev.guild = guild
+        ev.name = "Movie Night"
+        ev.url = "https://discord.com/events/1/5150"
+        ev.creator = None
+        if channel_id is None:
+            ev.channel = None
+        else:
+            ev.channel = MagicMock()
+            ev.channel.id = channel_id
+        return ev
+
+    async def test_uses_event_copy_not_game_copy(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        assert await svc.echo_discord_event(bot, self._event(guild, 4242)) is True
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "A game is open" not in (embed.description or "")
+        assert "<#4242>" in (embed.description or "")
+
+    async def test_external_event_renders_no_dead_channel_mention(
+        self, bot, guild, sync_db_path
+    ):
+        """An `external` event has a location string and no channel.
+
+        Falling back to the guild id would render `<#guild_id>` — a mention
+        Discord can't resolve, shown to members as a dead link.
+        """
+        configure(sync_db_path)
+        assert await svc.echo_discord_event(bot, self._event(guild)) is True
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "<#" not in (embed.description or "")
+        assert str(GUILD_ID) not in (embed.description or "")
+
+    async def test_repeated_updates_echo_once(self, bot, guild, sync_db_path):
+        """Discord emits on_scheduled_event_update generously."""
+        configure(sync_db_path)
+        ev = self._event(guild, 4242)
+        assert await svc.echo_discord_event(bot, ev) is True
+        assert await svc.echo_discord_event(bot, ev) is False
+        assert bot.sent_channel.send.await_count == 1

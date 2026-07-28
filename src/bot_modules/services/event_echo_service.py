@@ -37,10 +37,14 @@ from pathlib import Path
 import discord
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.core.db_utils import get_config_value, open_db
+from bot_modules.core.db_utils import get_config_value, open_db, open_db_immediate
 from bot_modules.games.constants import GAME_NAMES
 from bot_modules.services.event_echo_logic import (
     GAMEBOT_ECHO_NAMES,
+    ICON_EVENT,
+    ICON_GAME,
+    LEAD_EVENT,
+    LEAD_GAME,
     RETENTION_SECONDS,
     SOURCE_DISCORD_EVENT,
     SOURCE_GAMEBOT,
@@ -112,6 +116,27 @@ def claim_echo(
     return cur.rowcount > 0
 
 
+def release_echo(
+    conn: sqlite3.Connection, *, guild_id: int, source: str, ref: str
+) -> None:
+    """Downgrade a claimed echo to suppressed after the send didn't land.
+
+    The claim is taken before the send so a crash loses an echo rather than
+    repeating one — but a send we *know* failed must not go on counting as a
+    posted echo, or an unreachable destination silently burns both cooldowns
+    and refuses the next real game on behalf of a message nobody ever saw.
+
+    The row stays (flagged) rather than being deleted: the ref must remain
+    claimed so the poll loop doesn't retry the same lobby every 15 seconds
+    against a channel that is still unreachable.
+    """
+    conn.execute(
+        "UPDATE event_echo_log SET suppressed = 1 "
+        "WHERE guild_id = ? AND source = ? AND ref = ?",
+        (guild_id, source, ref),
+    )
+
+
 def prune_echo_log(conn: sqlite3.Connection, now: float) -> int:
     """Drop rows past the retention window; returns how many went."""
     cur = conn.execute(
@@ -154,9 +179,11 @@ async def echo_event(
     echo_key: str,
     ref: str,
     game_name: str,
-    origin_channel_id: int,
+    origin_channel_id: int | None,
     url: str,
     host_name: str | None = None,
+    lead: str = LEAD_GAME,
+    icon: str = ICON_GAME,
     now: float | None = None,
 ) -> bool:
     """Post one echo, subject to config, cooldowns and dedupe.
@@ -169,7 +196,16 @@ async def echo_event(
     db_path: Path = bot.ctx.db_path
 
     def _claim() -> tuple[int | None, bool]:
-        with open_db(db_path) as conn:
+        # BEGIN IMMEDIATE, not the default deferred transaction: this is a
+        # read-then-write on the cooldown window, and all three sources reach
+        # it concurrently (the sweep's worker thread, the Gamebot listener,
+        # the scheduled-event listener). Under a deferred transaction two
+        # overlapping claims can both read "nothing echoed yet", both pass
+        # decide(), and both insert — two echoes inside the 10-minute floor
+        # this feature exists to enforce. It also avoids the
+        # SQLITE_BUSY_SNAPSHOT that a deferred read→write upgrade raises when
+        # another writer commits in between (see open_db_immediate's docstring).
+        with open_db_immediate(db_path) as conn:
             dest = echo_channel_id(conn, guild.id)
             if dest is None:
                 return None, False
@@ -193,28 +229,41 @@ async def echo_event(
                 )
             return dest, (verdict.allowed and claimed)
 
+    def _release() -> None:
+        with open_db(db_path) as conn:
+            release_echo(conn, guild_id=guild.id, source=source, ref=ref)
+
     dest_id, go = await asyncio.to_thread(_claim)
     if dest_id is None or not go:
         return False
 
-    channel = await _resolve_channel(bot, dest_id)
-    if channel is None:
-        log.warning("event echo: destination channel %s unreachable", dest_id)
-        return False
-
-    color = await resolve_accent_color(db_path, guild)
-    embed = build_echo_embed(
-        game_name=game_name,
-        channel_id=origin_channel_id,
-        url=url,
-        host_name=host_name,
-        color=color,
-    )
+    # From here the row is claimed as *posted*. Every failure path below has
+    # to release it, or a send that never landed goes on blocking the next
+    # real game for the length of both cooldowns.
     try:
+        channel = await _resolve_channel(bot, dest_id)
+        if channel is None:
+            log.warning("event echo: destination channel %s unreachable", dest_id)
+            await asyncio.to_thread(_release)
+            return False
+
+        color = await resolve_accent_color(db_path, guild)
+        embed = build_echo_embed(
+            game_name=game_name,
+            channel_id=origin_channel_id,
+            url=url,
+            host_name=host_name,
+            lead=lead,
+            icon=icon,
+            color=color,
+        )
         # Silent by design — see event_echo_logic's module docstring.
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-    except discord.DiscordException:
+    except asyncio.CancelledError:
+        raise
+    except Exception:
         log.warning("event echo: send failed for %s/%s", source, ref, exc_info=True)
+        await asyncio.to_thread(_release)
         return False
     return True
 
@@ -254,7 +303,6 @@ async def echo_discord_event(bot, event: discord.ScheduledEvent) -> bool:
     """
     if event.guild is None:
         return False
-    location = event.channel.id if event.channel is not None else None
     return await echo_event(
         bot,
         guild=event.guild,
@@ -262,9 +310,14 @@ async def echo_discord_event(bot, event: discord.ScheduledEvent) -> bool:
         echo_key=SOURCE_DISCORD_EVENT,
         ref=str(event.id),
         game_name=event.name,
-        origin_channel_id=location if location is not None else event.guild.id,
+        # None for an `external` event — those carry a location string and no
+        # channel. Falling back to the guild id here would render as
+        # `<#guild_id>`: a mention Discord can't resolve, shown as a dead link.
+        origin_channel_id=event.channel.id if event.channel is not None else None,
         url=event.url,
         host_name=event.creator.display_name if event.creator else None,
+        lead=LEAD_EVENT,
+        icon=ICON_EVENT,
     )
 
 
@@ -289,7 +342,33 @@ def _opened_at(row) -> float | None:
     return parsed.timestamp()
 
 
-async def _process_game(bot, guild: discord.Guild, row, now: float) -> None:
+async def live_games(db):
+    """Every game currently in ``games_active_games``, whatever its state.
+
+    Deliberately unfiltered. The six lobby games sit in ``joining``, most
+    others in ``open``, and wyr / nhie / price are created straight into
+    ``playing`` — an enumerated state list silently dropped those three
+    (all schedulable), and would drop the next game to invent a state.
+    Presence in this table already means "live"; freshness and the per-game
+    dedupe bound the rest.
+    """
+    return await db.fetchall("SELECT * FROM games_active_games")
+
+
+def _host_name(guild: discord.Guild, host_id) -> str | None:
+    """The host's display name, or None if they've left or can't be resolved.
+
+    Cache-only (``get_member``, no fetch): a footer is decoration, not worth
+    an API round trip per game on a 15s sweep.
+    """
+    try:
+        member = guild.get_member(int(host_id))
+    except (TypeError, ValueError):
+        return None
+    return member.display_name if member is not None else None
+
+
+async def _process_game(bot, row, now: float) -> None:
     message_id = row["message_id"]
     if not message_id:
         # The lobby hasn't been posted yet (create_game runs before the send).
@@ -297,6 +376,17 @@ async def _process_game(bot, guild: discord.Guild, row, now: float) -> None:
         # message to link to — the whole point of the echo.
         return
     if not is_fresh(_opened_at(row), now):
+        return
+
+    channel_id = int(row["channel_id"])
+    # The guild comes from the game's own channel, never from ctx.guild_id:
+    # games_active_games has no guild_id column, so a lobby opened in any
+    # other guild the bot is in would otherwise be announced here, with a jump
+    # link whose guild segment points at the wrong server — a dead link.
+    # game_manager.end_game resolves it the same way for the same reason.
+    channel = bot.get_channel(channel_id)
+    guild = getattr(channel, "guild", None)
+    if guild is None:
         return
 
     game_type = str(row["game_type"])
@@ -310,8 +400,9 @@ async def _process_game(bot, guild: discord.Guild, row, now: float) -> None:
         # than being dropped — a new game should show up in main chat on the
         # day it ships, not once someone remembers the display-name table.
         game_name=GAME_NAMES.get(game_type) or game_type.replace("_", " ").title(),
-        origin_channel_id=int(row["channel_id"]),
-        url=jump_url(guild.id, int(row["channel_id"]), int(message_id)),
+        origin_channel_id=channel_id,
+        url=jump_url(guild.id, channel_id, int(message_id)),
+        host_name=_host_name(guild, row["host_id"]),
         now=now,
     )
 
@@ -331,20 +422,16 @@ async def event_echo_loop(bot) -> None:
     while not bot.is_closed():
         try:
             now = time.time()
-            guild: discord.Guild | None = bot.get_guild(bot.ctx.guild_id)
-            if guild is not None:
-                rows = await db.fetchall(
-                    "SELECT * FROM games_active_games WHERE state IN ('open', 'joining')"
-                )
-                for row in rows:
-                    try:
-                        await _process_game(bot, guild, row, now)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        log.exception(
-                            "event echo: game %s failed to process", row["game_id"]
-                        )
+            rows = await live_games(db)
+            for row in rows:
+                try:
+                    await _process_game(bot, row, now)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception(
+                        "event echo: game %s failed to process", row["game_id"]
+                    )
 
             # Hourly, not every tick — the table is tiny and the prune is pure
             # housekeeping.

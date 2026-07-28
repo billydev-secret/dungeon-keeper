@@ -54,6 +54,13 @@ RETENTION_SECONDS = 86400
 
 _DEFAULT_ACCENT = discord.Color(0x5865F2)
 
+# Per-source copy. One builder serves games and native Discord events, and
+# "A game is open" reads as a bug on an event called "Movie Night".
+LEAD_GAME = "A game is open"
+LEAD_EVENT = "It's happening"
+ICON_GAME = "🎲"
+ICON_EVENT = "📅"
+
 # Gamebot's sub-game keys → the name a member would recognise. Only the games
 # worth echoing appear; `game_from_start` also recognises Connect 4 and
 # Anagrams, which are two-player/quickfire and don't warrant main chat.
@@ -122,9 +129,11 @@ def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
 def build_echo_embed(
     *,
     game_name: str,
-    channel_id: int,
     url: str,
+    channel_id: int | None = None,
     host_name: str | None = None,
+    lead: str = LEAD_GAME,
+    icon: str = ICON_GAME,
     color: discord.Color | None = None,
 ) -> discord.Embed:
     """The echo itself: what's starting, where, and a link to go there.
@@ -132,13 +141,17 @@ def build_echo_embed(
     Deliberately small — this lands in a conversation channel, and a tall
     embed in the middle of a chat is the thing people mute. No thumbnail, no
     fields, one line of body.
+
+    ``lead``/``icon`` vary by source because the same builder serves games and
+    native Discord events, and "A game is open" is simply wrong for Movie
+    Night. ``channel_id`` is optional for the same reason: an external Discord
+    event has a location string and no channel, and interpolating anything
+    else into ``<#…>`` renders as a dead mention.
     """
+    where = f" in <#{channel_id}>" if channel_id is not None else ""
     embed = discord.Embed(
-        title=f"🎲 {game_name} is starting",
-        description=(
-            f"A game is open in <#{channel_id}>.\n"
-            f"**[Jump in →]({url})**"
-        ),
+        title=f"{icon} {game_name} is starting",
+        description=f"{lead}{where}.\n**[Jump in →]({url})**",
         color=color or _DEFAULT_ACCENT,
     )
     if host_name:
