@@ -158,6 +158,64 @@ def resolve_card(
 
 
 # ---------------------------------------------------------------------------
+# Level 5 cards — not ledger-backed, refreshed in place
+# ---------------------------------------------------------------------------
+#
+# The Level 5 card (xp_service.maybe_log_level_5) predates the ledger above and
+# is keyed by member id, not a card row. Its "Spicy access" field is the one
+# live thing on an otherwise at-promotion snapshot, so we remember where each
+# card was posted and re-render that single field whenever the role changes —
+# by the card's own button, by /grant, or by a mod adding it by hand.
+
+SPICY_FIELD_NAME = "Spicy access"
+SPICY_GRANTED = "✅ Granted"
+SPICY_NOT_GRANTED = "❌ Not granted"
+
+
+def spicy_access_value(has_nsfw: bool) -> str:
+    """The "Spicy access" field value for a member's current role state.
+
+    Shared by the poster and the refresh hook so the two can't drift apart.
+    """
+    return SPICY_GRANTED if has_nsfw else SPICY_NOT_GRANTED
+
+
+def record_level_5_card(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    channel_id: int,
+    message_id: int,
+    created_at: float,
+) -> None:
+    """Remember a posted Level 5 card so it stays refreshable.
+
+    Idempotent on ``message_id``: the immediate post path and the deferred
+    recheck loop must never double-record the same send.
+    """
+    conn.execute(
+        "INSERT OR IGNORE INTO xp_level_5_cards "
+        "(guild_id, user_id, channel_id, message_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        (guild_id, user_id, channel_id, message_id, created_at),
+    )
+
+
+def level_5_cards_for(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> list[sqlite3.Row]:
+    """Every Level 5 card posted for a member, oldest first."""
+    return conn.execute(
+        "SELECT * FROM xp_level_5_cards WHERE guild_id = ? AND user_id = ? ORDER BY id",
+        (guild_id, user_id),
+    ).fetchall()
+
+
+def forget_level_5_card(conn: sqlite3.Connection, card_id: int) -> None:
+    """Drop a card whose message is gone, so it isn't fetched forever."""
+    conn.execute("DELETE FROM xp_level_5_cards WHERE id = ?", (card_id,))
+
+
+# ---------------------------------------------------------------------------
 # Trigger populations
 # ---------------------------------------------------------------------------
 

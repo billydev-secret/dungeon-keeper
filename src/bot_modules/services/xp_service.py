@@ -233,8 +233,14 @@ async def maybe_log_level_5(
     *,
     nsfw_role_id: int = 0,
     accent: discord.Color | None = None,
+    db_path: Path | None = None,
 ) -> None:
-    """Log a level 5 achievement announcement."""
+    """Log a level 5 achievement announcement.
+
+    ``db_path`` records where the card landed (``xp_level_5_cards``) so its
+    "Spicy access" field can be refreshed later; without it the card still posts
+    but goes stale the moment access is granted outside its own button.
+    """
     if level_5_log_channel_id <= 0:
         log.debug(
             "Skipping level %s announcement for %s: level-5 log channel is not configured.",
@@ -265,10 +271,12 @@ async def maybe_log_level_5(
     if reward_role is not None:
         embed.add_field(name="Reward Role", value=reward_role.mention, inline=True)
     if nsfw_role_id > 0:
+        from bot_modules.services import promotion_review_service as promo_svc
+
         has_nsfw = any(r.id == nsfw_role_id for r in member.roles)
         embed.add_field(
-            name="Spicy access",
-            value="✅ Granted" if has_nsfw else "❌ Not granted",
+            name=promo_svc.SPICY_FIELD_NAME,
+            value=promo_svc.spicy_access_value(has_nsfw),
             inline=True,
         )
     if member.joined_at is not None:
@@ -293,13 +301,34 @@ async def maybe_log_level_5(
     from bot_modules.services.promotion_review_views import Level5PromotionView
 
     try:
-        await channel.send(embed=embed, view=Level5PromotionView(member.id))
+        posted = await channel.send(embed=embed, view=Level5PromotionView(member.id))
         log.info(
             "Sent level %s announcement for %s to channel %s.",
             settings.role_grant_level,
             format_user_for_log(member),
             level_5_log_channel_id,
         )
+        if db_path is not None:
+            from bot_modules.core.db_utils import open_db
+            from bot_modules.services import promotion_review_service as promo_svc
+
+            now = datetime.now(timezone.utc).timestamp()
+
+            def _record_card() -> None:
+                with open_db(db_path) as conn:
+                    promo_svc.record_level_5_card(
+                        conn, member.guild.id, member.id, channel.id, posted.id, now
+                    )
+
+            try:
+                await asyncio.to_thread(_record_card)
+            except Exception:
+                # The card is posted; losing the row only costs later refreshes.
+                log.exception(
+                    "Failed to record level %s card %s for refreshes.",
+                    settings.role_grant_level,
+                    posted.id,
+                )
     except discord.Forbidden:
         log.warning(
             "Missing permission to send level %s announcements in channel %s.",
@@ -512,6 +541,7 @@ async def handle_level_progress(
                     settings,
                     nsfw_role_id=nsfw_role_id,
                     accent=accent,
+                    db_path=db_path,
                 )
             else:
                 log.info(
@@ -587,6 +617,7 @@ async def promotion_review_recheck_loop(
                         cfg.xp_settings,
                         nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
                         accent=accent,
+                        db_path=db_path,
                     )
 
                 with open_db(db_path) as conn:

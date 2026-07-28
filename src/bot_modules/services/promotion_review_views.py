@@ -20,6 +20,7 @@ import asyncio
 import logging
 import re
 import time
+from copy import deepcopy
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -95,6 +96,84 @@ def build_review_embed(
         }.get(resolution, "Resolved")
         embed.add_field(name="Resolved", value=f"{verb} by {resolver}", inline=False)
     return embed
+
+
+def refresh_spicy_field(embed: discord.Embed, has_nsfw: bool) -> discord.Embed | None:
+    """A copy of a Level 5 card with its "Spicy access" field brought up to date.
+
+    Returns ``None`` when there is nothing to do — the embed has no such field
+    (an ordinary level-up post shares this channel, and a card posted while
+    ``nsfw_role_id`` was unset never rendered one) or the value is already
+    right. The caller then skips the Discord edit entirely.
+
+    Only that one field is rewritten: ``Total XP`` and ``Joined`` are
+    deliberately an at-promotion snapshot and must not drift.
+    """
+    want = svc.spicy_access_value(has_nsfw)
+    for idx, field in enumerate(embed.fields):
+        if field.name != svc.SPICY_FIELD_NAME:
+            continue
+        if field.value == want:
+            return None
+        # deepcopy, not Embed.copy(): that is a shallow copy whose to_dict()
+        # hands back the *same* field dicts, so set_field_at would rewrite the
+        # caller's embed too.
+        updated = deepcopy(embed)
+        updated.set_field_at(idx, name=field.name, value=want, inline=bool(field.inline))
+        return updated
+    return None
+
+
+async def refresh_level_5_cards(
+    ctx: AppContext, member: discord.Member, has_nsfw: bool
+) -> None:
+    """Re-render every stored Level 5 card for ``member`` to match their roles.
+
+    Driven by the ``on_member_update`` role diff, so the card tracks access
+    however it was granted — this is what the card's own Grant button never did
+    (:func:`_grant_role_only` only replies ephemerally) and what ``/grant``
+    could never do. Best-effort: a card whose message has been deleted is
+    forgotten rather than re-fetched forever.
+    """
+    guild = member.guild
+    try:
+        rows = await asyncio.to_thread(_level_5_cards, ctx, guild.id, member.id)
+    except Exception:
+        log.exception("promo review: failed to load level 5 cards for %s", member.id)
+        return
+
+    for row in rows:
+        channel = guild.get_channel_or_thread(int(row["channel_id"]))
+        if not isinstance(channel, discord.abc.Messageable):
+            continue
+        message_id = int(row["message_id"])
+        try:
+            message = await channel.fetch_message(message_id)
+        except discord.NotFound:
+            await asyncio.to_thread(_forget_level_5_card, ctx, int(row["id"]))
+            continue
+        except discord.HTTPException:
+            log.debug("promo review: can't fetch level 5 card %s", message_id, exc_info=True)
+            continue
+        if not message.embeds:
+            continue
+        updated = refresh_spicy_field(message.embeds[0], has_nsfw)
+        if updated is None:
+            continue
+        try:
+            await message.edit(embed=updated)
+        except discord.HTTPException:
+            log.debug("promo review: failed to refresh card %s", message_id, exc_info=True)
+
+
+def _level_5_cards(ctx: AppContext, guild_id: int, user_id: int):
+    with ctx.open_db() as conn:
+        return svc.level_5_cards_for(conn, guild_id, user_id)
+
+
+def _forget_level_5_card(ctx: AppContext, card_id: int) -> None:
+    with ctx.open_db() as conn:
+        svc.forget_level_5_card(conn, card_id)
 
 
 # ---------------------------------------------------------------------------

@@ -1507,6 +1507,17 @@ class EventsCog(commands.Cog):
 
         await asyncio.to_thread(_do_log_role_events)
         cfg = self.ctx.guild_config(after.guild.id)
+        # Keep the Level 5 card's "Spicy access" indicator honest. That field is
+        # rendered once at post time, so before this hook a card stayed stale
+        # forever whenever access arrived by /grant or a hand-added role — the
+        # card's own Grant button never edited it either.
+        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles)
+        if nsfw_role_id > 0 and nsfw_role_id in (before_ids ^ after_ids):
+            from bot_modules.services.promotion_review_views import (
+                refresh_level_5_cards,
+            )
+
+            await refresh_level_5_cards(self.ctx, after, nsfw_role_id in after_ids)
         # Welcome fires the moment the unverified role is stripped (e.g. once
         # DoubleCounter finishes its alt scan and lifts the gate). No bio is
         # required — {member_bio_link} simply resolves to "" when absent.
