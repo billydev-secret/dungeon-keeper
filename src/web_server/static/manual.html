@@ -450,7 +450,6 @@
 
     <h3 id="start-admin">I'm setting up the server</h3>
     <ol class="steps">
-      <li>Run <code>/setup</code> in Discord for channels and mod/admin roles.</li>
       <li>Sign in to the <a href="/">dashboard</a> and work through <a href="#first-steps">First-Time Setup</a>.</li>
       <li>Skim the <a href="#functional-blocks">Feature Map</a> below and enable what you need.</li>
     </ol>
@@ -823,16 +822,15 @@
       </div>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/grant_audit role:nsfw min_level:5 channel:#mod-log</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Posts an auto-updating card showing who's missing the grant role and why — waiting for their first grant, stripped by the inactivity prune but active again, or recently stripped and still inactive. The card refreshes hourly and keeps itself at the bottom of the channel (reposting when anyone has chatted since); re-running the command refreshes or moves it, and deleting the message retires it. The full sortable view lives on the <strong>Grant Audit</strong> dashboard panel.</span>
-      <div class="cmd-params">
-        <strong>role</strong> — grant role to audit (default nsfw).<br>
-        <strong>min_level</strong> — level bar for the waiting bucket (default 5).<br>
-        <strong>channel</strong> — where the card lives; defaults to the current channel.
-      </div>
-    </div>
+    <p class="note">The <strong>grant-audit card</strong> — who's missing the grant role and
+      why (waiting for their first grant, stripped by the inactivity prune but active again,
+      or recently stripped and still inactive) — is posted from
+      <a href="/#/channel-panels">Config → Channel Panels</a>. Pick a channel, choose which
+      grant role to audit and the level bar for the waiting bucket, then press Post. The card
+      refreshes hourly and keeps itself at the bottom of the channel (reposting when anyone
+      has chatted since); posting again refreshes or moves it, and deleting the message
+      retires it. The full sortable view is the <a href="/#/grant-audit">Grant Audit</a>
+      report panel.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -1723,8 +1721,8 @@
 
     <h3 id="first-steps">First-Time Setup (Admin)</h3>
     <ol class="steps">
-      <li>Run <code>/setup</code> in Discord — walks you through a 6-step wizard for mod/admin roles and jail/ticket categories.</li>
       <li>Open the <a href="/">web dashboard</a> and sign in via the Discord OAuth login.</li>
+      <li><strong><a href="/#/config-moderation">Config → Moderation &amp; Safety → Moderation</a></strong> — set the mod and admin roles, the jail and ticket categories, and the log and transcript channels. (This replaced the <code>/setup</code> wizard, which walked through the same six settings.)</li>
       <li><strong><a href="/#/config-global">Config → Server → Global</a></strong> — set your mod role IDs, admin role IDs, mod notification channel, and server timezone offset.</li>
       <li><strong><a href="/#/config-roles">Config → Roles → Role Grants</a></strong> — configure which community roles can be handed out with <code>/grant</code> and who can grant them.</li>
       <li><strong><a href="/#/config-xp">Config → Members → XP &amp; Leveling</a></strong> — set the Level-5 milestone role, XP announcement channels, and any channels excluded from XP.</li>

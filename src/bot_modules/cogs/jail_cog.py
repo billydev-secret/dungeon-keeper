@@ -425,8 +425,6 @@ class JailCog(commands.Cog):
         await stamp_channel_jail_deny(channel, role)
 
     # ── /jail ─────────────────────────────────────────────────────────────
-    # Note: the /setup command lives in cogs/setup_cog.py, which runs both
-    # the channel-creation phase and this cog's role/category wizard.
 
     @app_commands.command(name="jail", description="Place a member in a private jail channel.")
     @app_commands.default_permissions(moderate_members=True)
@@ -525,7 +523,7 @@ class JailCog(commands.Cog):
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "❌ Ticket category not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category not configured. Ask an admin to set one on the dashboard (Config → Moderation).",
                 ephemeral=True,
             )
             return
@@ -970,7 +968,7 @@ class JailCog(commands.Cog):
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
-                "❌ Ticket category not configured. Ask an admin to run `/setup`.",
+                "❌ Ticket category not configured. Ask an admin to set one on the dashboard (Config → Moderation).",
                 ephemeral=True,
             )
             return

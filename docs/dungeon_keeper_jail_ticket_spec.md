@@ -8,7 +8,6 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/setup` | Slash | Administrator | First-run interactive wizard for roles, categories, log channels |
 | `/jail <user> [duration] [reason]` | Slash | Mod | Jail a member, optionally with a duration like `24h` or `7d` |
 | `/unjail <user> [reason]` | Slash | Mod | Release a jailed member |
 | `Jail User` | User context menu | Mod | Modal for duration + reason, then runs the jail flow |
@@ -75,7 +74,7 @@ the channel-side effects.
 
 ### First-run setup
 
-`/setup` walks an admin through a short interactive wizard with role and channel pickers: mod roles, admin roles, jail category, ticket category, log channel, transcript channel (with a "same as log" shortcut), then a confirmation summary. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Because a jailed member keeps `@everyone`, those per-channel denies are what actually hide the server; the bot keeps them current after setup too. Every channel or category created while the bot is online is stamped with the `@Jailed` view+send deny as it appears (an `on_guild_channel_create` listener), and a one-shot sweep at startup backfills any channel that leaked while the bot was offline. Without this, a channel created after the `@Jailed` role existed would carry no deny and stay visible to jailed members. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel from Config → Channel Panels.
+First-run configuration is **Config → Moderation** on the dashboard: mod roles, admin roles, jail category, ticket category, log channel, transcript channel. A six-step `/setup` wizard covered the same ground until 2026-07-28 and was removed — every setting it walked through already had a home on that page, and it created nothing in the server that the jail flow doesn't create itself. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Because a jailed member keeps `@everyone`, those per-channel denies are what actually hide the server; the bot keeps them current after setup too. Every channel or category created while the bot is online is stamped with the `@Jailed` view+send deny as it appears (an `on_guild_channel_create` listener), and a one-shot sweep at startup backfills any channel that leaked while the bot was offline. Without this, a channel created after the `@Jailed` role existed would carry no deny and stay visible to jailed members. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel from Config → Channel Panels.
 
 ### Jail flow
 
@@ -142,8 +141,8 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 **Bot needs:** Manage Roles (to assign / strip / restore roles and create `@Jailed`), Manage Channels (jail and ticket channel creation, lock/unlock, permission overwrites), View Channels and Send Messages in the configured log channels, Read Message History and Embed Links for embeds, Attach Files for transcript delivery. The bot's top role must sit above `@Jailed` for role-strip to work.
 
 **User needs:**
-- Mod role (configured via `/setup` or the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/revokewarn`, `/modinfo`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
-- Admin role: `/setup`, `/policy open`, `/policy close`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Mod role (configured on the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/revokewarn`, `/modinfo`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
+- Admin role: `/policy open`, `/policy close`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
 ## User-visible errors

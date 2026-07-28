@@ -8,7 +8,7 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Setup Wizard
 
-- [ ] **`/setup`** — Run the onboarding wizard as an admin; confirm it DMs the 6-step flow (mod roles, admin roles, jail category, ticket category, log channel, transcript channel), falling back to an in-channel wizard if your DMs are closed. Confirm skipping a step leaves existing config untouched and re-running is safe.
+- [ ] **Config → Moderation** — Set mod roles, admin roles, jail category, ticket category, log channel, transcript channel; confirm each persists and that jail/ticket flows pick them up. (Replaced the `/setup` wizard, removed 2026-07-28.)
 
 ### Config Commands
 

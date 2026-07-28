@@ -9,10 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.commands.role_grant_commands import (
-    _execute_grant,
-    _execute_grant_audit_post,
-)
+from bot_modules.commands.role_grant_commands import _execute_grant
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
@@ -77,30 +74,30 @@ class RoleGrantCog(commands.Cog):
             ctx=ctx,
         )
 
-    @app_commands.command(
-        name="grant_audit",
-        description="Post (or refresh) the auto-updating grant-audit card (mods).",
-    )
-    @app_commands.describe(
-        role="Grant role to audit.",
-        min_level="Minimum XP level for the waiting bucket (default 5).",
-        channel="Where the card lives — defaults to this channel.",
-    )
-    @app_commands.autocomplete(role=_role_autocomplete)
-    async def grant_audit_cmd(
-        self,
-        interaction: discord.Interaction,
-        role: str = "nsfw",
-        min_level: int = 5,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        ctx = self.ctx
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                NO_PERMISSION, ephemeral=True
-            )
-            return
-        await _execute_grant_audit_post(interaction, role, min_level, channel, ctx)
+    async def post_audit_card(
+        self, guild, channel, *, role_key: str = "nsfw", min_level: int = 5
+    ):
+        """Place the auto-updating grant-audit card.
+
+        Entry point for the dashboard's panel poster (``panel_registry``);
+        replaced /grant_audit on 2026-07-28. Unlike the other panels this one
+        takes options — which grant role, and the level at or above which
+        members are expected to hold it — so the registry declares them and the
+        route passes them through.
+
+        Raises ValueError with the reason when placement is refused, which the
+        route turns into a message naming the specific thing to fix.
+        """
+        from bot_modules.services.role_grant_audit_service import (
+            place_grant_audit_card,
+        )
+
+        message, reason = await place_grant_audit_card(
+            self.ctx, guild, channel, role_key=role_key, min_level=min_level
+        )
+        if message is None:
+            raise ValueError(reason)
+        return message
 
 
 async def setup(bot: Bot) -> None:

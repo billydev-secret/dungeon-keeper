@@ -4239,3 +4239,10 @@ fieldset.field {
   overflow-wrap: anywhere;
   font-size: 12px;
 }
+
+/* Panel options (only the grant-audit card has any). Under the description
+   rather than in the actions row, which goes sticky on narrow viewports. */
+.panel-row__options { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.panel-opt { display: flex; flex-direction: column; gap: 3px; font-size: 12px; min-width: 0; }
+.panel-opt select,
+.panel-opt input { padding: 4px 6px; font-size: 13px; max-width: 220px; }

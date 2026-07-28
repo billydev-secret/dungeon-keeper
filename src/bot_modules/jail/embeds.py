@@ -262,37 +262,6 @@ def build_ticket_open_embed(
     return embed
 
 
-# ── Setup wizard completion ────────────────────────────────────────────
-
-
-def build_setup_step_embed(
-    step_meta: Mapping[str, str],
-    *,
-    color: "discord.Color | None" = None,
-) -> discord.Embed:
-    """Build the per-step embed for the ``/setup`` wizard.
-
-    Takes the dict returned by ``jail.logic.setup_step_meta`` so the data
-    and the View stay decoupled.
-    """
-    if color is None:
-        color = discord.Color(MOD_TICKET)
-    return discord.Embed(
-        title=f"⚙️ {step_meta['title']}",
-        description=step_meta["description"],
-        color=color,
-    )
-
-
-def build_setup_complete_embed() -> discord.Embed:
-    """Final "Setup Complete" embed shown after the wizard ends."""
-    return discord.Embed(
-        title="⚙️ Setup Complete",
-        description="All settings saved. Use `/config` to adjust later.",
-        color=MOD_SUCCESS,
-    )
-
-
 # ── Mod info ──────────────────────────────────────────────────────────
 
 

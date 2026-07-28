@@ -68,6 +68,10 @@ export function mount(container) {
         const btn = e.currentTarget;
         const status = row.querySelector("[data-status]");
         const channelId = picker ? picker.getValue() : null;
+        const options = {};
+        row.querySelectorAll("[data-opt]").forEach((el) => {
+          options[el.dataset.opt] = el.value;
+        });
         if (!p.targets_own_channel && (!channelId || channelId === "0")) {
           toast("Pick a channel first.", "error");
           return;
@@ -77,6 +81,7 @@ export function mount(container) {
         try {
           const res = await apiPost(`/api/panels/${encodeURIComponent(p.key)}/post`, {
             channel_id: p.targets_own_channel ? null : channelId,
+            options,
           });
           status.innerHTML = res.message_url
             ? `<a href="${esc(res.message_url)}" target="_blank" rel="noopener">Posted — open in Discord</a>`
@@ -104,6 +109,7 @@ function renderRow(p) {
       <div class="panel-row__main">
         <div class="section-label">${esc(p.label)}</div>
         <div class="field-hint">${esc(p.description)}${related}</div>
+        ${renderOptions(p.options)}
       </div>
       <div class="panel-row__actions">
         ${picker}
@@ -112,4 +118,24 @@ function renderRow(p) {
       </div>
     </div>
   `;
+}
+
+// Only the grant-audit card declares options today. They sit under the
+// description rather than in the actions row, which is sticky on mobile.
+function renderOptions(options) {
+  if (!options || !options.length) return "";
+  return `<div class="panel-row__options">${options.map((o) => {
+    const control = o.kind === "grant_role"
+      ? `<select data-opt="${esc(o.name)}">${(o.choices || []).map((c) =>
+          `<option value="${esc(c.value)}"${c.value === o.default ? " selected" : ""}>${esc(c.label)}</option>`
+        ).join("")}</select>`
+      : `<input type="number" data-opt="${esc(o.name)}" value="${esc(String(o.default))}"
+           ${o.minimum != null ? `min="${esc(String(o.minimum))}"` : ""}>`;
+    const empty = o.kind === "grant_role" && !(o.choices || []).length
+      ? `<div class="field-hint">No grant roles configured yet.</div>` : "";
+    return `<label class="panel-opt">
+        <span>${esc(o.label)}</span>${control}
+        ${o.hint ? `<span class="field-hint">${esc(o.hint)}</span>` : ""}${empty}
+      </label>`;
+  }).join("")}</div>`;
 }

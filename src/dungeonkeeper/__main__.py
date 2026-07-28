@@ -226,7 +226,6 @@ def main() -> None:
         "bot_modules.cogs.dm_perms_cog",
         "bot_modules.cogs.birthday_cog",
         "bot_modules.cogs.dev_cog",
-        "bot_modules.cogs.setup_cog",
         "bot_modules.cogs.starboard_cog",
         "bot_modules.cogs.music_cog",
         "bot_modules.cogs.voice_master_cog",

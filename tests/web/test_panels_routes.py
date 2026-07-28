@@ -155,3 +155,92 @@ def test_offline_bot_is_a_503(fake_ctx, authed_client):
     fake_ctx.bot = None
     r = authed_client.post("/api/panels/economy-guide/post", json={"channel_id": "1"})
     assert r.status_code == 503
+
+
+# ── declared options (the grant-audit card) ──────────────────────────
+
+
+def test_option_specs_are_described_for_the_dashboard(authed_client):
+    """The page renders the controls from this, so a missing kind or default
+    would ship an input the admin can't use."""
+    panels = {p["key"]: p for p in authed_client.get("/api/panels").json()["panels"]}
+    opts = {o["name"]: o for o in panels["grant-audit"]["options"]}
+    assert opts["role_key"]["kind"] == "grant_role"
+    assert "choices" in opts["role_key"]
+    assert opts["min_level"]["kind"] == "int"
+    assert opts["min_level"]["minimum"] == 1
+    # Panels without options say so plainly rather than omitting the key.
+    assert panels["economy-guide"]["options"] == []
+
+
+def test_options_reach_the_panel_method(client_with_bot):
+    client, bot, *_ = client_with_bot()
+    cog = bot.get_cog.return_value
+    cog.post_audit_card = AsyncMock(return_value=MagicMock(jump_url="u"))
+
+    r = client.post(
+        "/api/panels/grant-audit/post",
+        json={"channel_id": "123", "options": {"role_key": "vip", "min_level": "9"}},
+    )
+    assert r.status_code == 200, r.text
+    kwargs = cog.post_audit_card.await_args.kwargs
+    assert kwargs == {"role_key": "vip", "min_level": 9}
+
+
+def test_missing_options_fall_back_to_declared_defaults(client_with_bot):
+    client, bot, *_ = client_with_bot()
+    cog = bot.get_cog.return_value
+    cog.post_audit_card = AsyncMock(return_value=MagicMock(jump_url="u"))
+
+    client.post("/api/panels/grant-audit/post", json={"channel_id": "123"})
+
+    assert cog.post_audit_card.await_args.kwargs == {"role_key": "nsfw", "min_level": 5}
+
+
+def test_undeclared_options_are_dropped_not_forwarded(client_with_bot):
+    """A crafted body must not reach a keyword the panel method never meant to
+    expose."""
+    client, bot, *_ = client_with_bot()
+    cog = bot.get_cog.return_value
+    cog.post_audit_card = AsyncMock(return_value=MagicMock(jump_url="u"))
+
+    client.post(
+        "/api/panels/grant-audit/post",
+        json={"channel_id": "123", "options": {"role_key": "vip", "ctx": "pwned"}},
+    )
+
+    assert "ctx" not in cog.post_audit_card.await_args.kwargs
+
+
+def test_a_non_numeric_int_option_is_refused(client_with_bot):
+    client, *_ = client_with_bot()
+    r = client.post(
+        "/api/panels/grant-audit/post",
+        json={"channel_id": "123", "options": {"min_level": "lots"}},
+    )
+    assert r.status_code == 400
+    assert "whole number" in r.json()["detail"]
+
+
+def test_an_int_option_below_its_minimum_is_refused(client_with_bot):
+    client, *_ = client_with_bot()
+    r = client.post(
+        "/api/panels/grant-audit/post",
+        json={"channel_id": "123", "options": {"min_level": "0"}},
+    )
+    assert r.status_code == 400
+    assert "at least 1" in r.json()["detail"]
+
+
+def test_a_panel_refusal_reason_reaches_the_admin(client_with_bot):
+    """post_audit_card raises ValueError naming what to fix (an unconfigured
+    grant role, say) — that should surface, not become a generic 502."""
+    client, bot, *_ = client_with_bot()
+    cog = bot.get_cog.return_value
+    cog.post_audit_card = AsyncMock(
+        side_effect=ValueError("The grant role 'nsfw' is not configured.")
+    )
+
+    r = client.post("/api/panels/grant-audit/post", json={"channel_id": "123"})
+    assert r.status_code == 400
+    assert "not configured" in r.json()["detail"]

@@ -657,8 +657,6 @@ KNOWN_UNCOVERED = {
     "bot_modules.jail.embeds.build_policy_proposal_embed",
     "bot_modules.jail.embeds.build_policy_vote_initial_embed",
     "bot_modules.jail.embeds.build_policy_vote_update_embed",
-    "bot_modules.jail.embeds.build_setup_complete_embed",
-    "bot_modules.jail.embeds.build_setup_step_embed",
     "bot_modules.jail.embeds.build_ticket_open_embed",
     "bot_modules.jail.embeds.build_ticket_panel_embed",
     "bot_modules.jail.embeds.build_warning_audit_embed",

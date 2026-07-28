@@ -58,7 +58,6 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [server_map.md](server_map.md) | Server map: channel/category guide + role groupings for The Golden Meadow. **Snapshot** from the live Discord API (2026-07-18) — re-generate rather than hand-editing when it drifts |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch functional spec (v0.3 + §12 ledger) |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
-| [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo: `/todo`, the sticky Discord board (Add/Complete buttons, auto-updating, bottom-stuck) and dashboard-configured recurring reminder tasks. Corrected 2026-07-26 — the "Add to Todo" context menu it used to document does not exist in the code |
 | [usage_telemetry_spec.md](usage_telemetry_spec.md) | Usage telemetry: per-user slash-command and dashboard-panel usage in `usage_events`, surfaced as the admin **Reports → Bot Usage** panel. Headline output is the never-run/never-opened lists; retained indefinitely and cleared only by `purge_user_data` |

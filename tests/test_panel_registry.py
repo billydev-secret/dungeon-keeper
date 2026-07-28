@@ -27,6 +27,7 @@ _COG_MODULES = {
     "VoiceMasterCog": "bot_modules.cogs.voice_master_cog",
     "GuessCog": "bot_modules.cogs.guess_cog",
     "JailCog": "bot_modules.cogs.jail_cog",
+    "RoleGrantCog": "bot_modules.cogs.role_grant_cog",
 }
 
 
@@ -86,6 +87,7 @@ def test_registry_covers_the_commands_it_replaced():
         "voice-control",      # /voice-admin post-panel
         "guess-prompt",       # /guess prompt
         "ticket-panel",       # /ticket panel
+        "grant-audit",        # /grant_audit
     }
 
 

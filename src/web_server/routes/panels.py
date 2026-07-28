@@ -19,7 +19,11 @@ import discord
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from bot_modules.services.panel_registry import get_panel_spec, list_panel_specs
+from bot_modules.services.panel_registry import (
+    PanelSpec,
+    get_panel_spec,
+    list_panel_specs,
+)
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms
 
@@ -32,10 +36,14 @@ class PostPanelRequest(BaseModel):
     #: Ignored by panels that own their destination (Voice Control, Guess Who),
     #: which post into the channel configured on their own settings page.
     channel_id: str | None = None
+    #: Values for the options a spec declares. Anything not declared is dropped
+    #: rather than forwarded, so the request body can't reach a keyword the
+    #: panel method never meant to expose.
+    options: dict[str, str] | None = None
 
 
 @router.get("/panels")
-async def list_panels(_: AuthenticatedUser = _ADMIN):
+async def list_panels(request: Request, _: AuthenticatedUser = _ADMIN):
     """The postable panels, for the dashboard to render.
 
     Static data — no guild or bot needed, so this still answers while the bot
@@ -49,10 +57,69 @@ async def list_panels(_: AuthenticatedUser = _ADMIN):
                 "description": spec.description,
                 "related_page": spec.related_page,
                 "targets_own_channel": spec.method in _OWN_CHANNEL_METHODS,
+                "options": _describe_options(request, spec),
             }
             for spec in list_panel_specs()
         ]
     }
+
+
+def _describe_options(request: Request, spec: PanelSpec) -> list[dict]:
+    """Render a spec's options for the dashboard, resolving any live choices.
+
+    ``grant_role`` choices come from per-guild config rather than the registry,
+    since which roles a server hands out is that server's business. Read from
+    the database, so the list is right even with the bot offline.
+    """
+    out: list[dict] = []
+    for opt in spec.options:
+        row = {
+            "name": opt.name,
+            "label": opt.label,
+            "kind": opt.kind,
+            "default": opt.default,
+            "hint": opt.hint,
+            "minimum": opt.minimum,
+        }
+        if opt.kind == "grant_role":
+            ctx = get_ctx(request)
+            grants = ctx.guild_config(get_active_guild_id(request)).grant_roles
+            row["choices"] = [
+                {"value": key, "label": cfg.get("label") or key}
+                for key, cfg in sorted(grants.items())
+                if cfg.get("role_id", 0) > 0
+            ]
+        out.append(row)
+    return out
+
+
+def _coerce_options(spec: PanelSpec, supplied: dict[str, str] | None) -> dict:
+    """Build the keyword arguments for a panel method from a request body.
+
+    Only declared options are read — an undeclared key is ignored rather than
+    forwarded, so a crafted body can't reach a keyword the method didn't intend
+    to expose. Missing values fall back to the declared default.
+    """
+    values = supplied or {}
+    kwargs: dict = {}
+    for opt in spec.options:
+        raw = values.get(opt.name)
+        if raw is None or raw == "":
+            kwargs[opt.name] = opt.default
+            continue
+        if opt.kind == "int":
+            try:
+                number = int(raw)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{opt.label} must be a whole number")
+            if opt.minimum is not None and number < opt.minimum:
+                raise HTTPException(
+                    400, f"{opt.label} must be at least {opt.minimum}"
+                )
+            kwargs[opt.name] = number
+        else:
+            kwargs[opt.name] = str(raw)
+    return kwargs
 
 
 # Panels that post into a channel from their own config rather than one the
@@ -119,7 +186,11 @@ async def post_panel(
             )
 
     try:
-        message = await post(guild, channel)
+        message = await post(guild, channel, **_coerce_options(spec, body.options))
+    except ValueError as e:
+        # A panel refusing for a reason worth naming (unconfigured role, a
+        # channel it can't post in) rather than a generic failure.
+        raise HTTPException(400, str(e))
     except discord.HTTPException as e:
         raise HTTPException(502, f"Discord rejected the post: {e}")
 

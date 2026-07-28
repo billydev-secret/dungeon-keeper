@@ -766,3 +766,96 @@ def guilds_with_card_from_path(db_path: Path) -> list[int]:
 
     with open_db(db_path) as conn:
         return guilds_with_card(conn)
+
+
+async def place_grant_audit_card(
+    ctx,
+    guild,
+    channel,
+    *,
+    role_key: str = "nsfw",
+    min_level: int = 5,
+) -> tuple[object | None, str]:
+    """Post, edit, or move the auto-updating grant-audit card.
+
+    Returns ``(message, "")`` on success or ``(None, reason)`` — the reason is
+    shown to the admin, so it names the specific thing to fix rather than
+    reporting a generic failure.
+
+    Same channel-id/message-id pattern the economy leaderboard uses: posting
+    into the channel the card already occupies edits it in place, posting
+    elsewhere moves it and deletes the stale copy when reachable, and the hourly
+    ``grant_audit_card_loop`` keeps whichever message is stored fresh.
+
+    Lifted out of ``/grant_audit`` on 2026-07-28 so Config → Channel Panels can
+    call it; the command's body was the only thing that knew how to place this
+    card, and it was interaction-coupled.
+    """
+    import asyncio
+    import time as _time
+
+    import discord
+
+    from bot_modules.core.branding import resolve_accent_color
+
+    cfg = ctx.guild_config(guild.id).grant_roles.get(role_key)
+    if cfg is None or cfg["role_id"] <= 0:
+        return None, f"The grant role '{role_key}' is not configured."
+
+    role = guild.get_role(cfg["role_id"])
+    if role is None:
+        return None, "The configured role no longer exists."
+    if min_level < 1:
+        return None, "Minimum level must be at least 1."
+    if not isinstance(channel, discord.TextChannel):
+        return None, "Pick a regular text channel for the card."
+
+    guild_id = guild.id
+    role_id = role.id
+    role_name = role.name
+    now_ts = _time.time()
+
+    def _load():
+        with ctx.open_db() as conn:
+            return (
+                load_card_ref(conn, guild_id),
+                gather_grant_audit(conn, guild_id, role_id, min_level, role_name),
+            )
+
+    ref, gathered = await asyncio.to_thread(_load)
+    snap = resolve_grant_audit_buckets(guild, role, gathered, min_level, now_ts)
+    accent = await resolve_accent_color(ctx.db_path, guild)
+    embed = build_grant_audit_embed(cfg["label"], snap, now_ts=now_ts, color=accent)
+
+    message = None
+    if ref.message_id and ref.channel_id == channel.id:
+        try:
+            old = await channel.fetch_message(ref.message_id)
+            await old.edit(embed=embed)
+            message = old
+        except discord.HTTPException:
+            pass  # gone or unreachable — fall through to a fresh post
+
+    if message is None:
+        # Moving the card: retire the old one so two don't refresh forever.
+        if ref.message_id and ref.channel_id and ref.channel_id != channel.id:
+            old_channel = guild.get_channel(ref.channel_id)
+            if isinstance(old_channel, discord.TextChannel):
+                try:
+                    stale = await old_channel.fetch_message(ref.message_id)
+                    await stale.delete()
+                except discord.HTTPException:
+                    pass
+        try:
+            message = await channel.send(embed=embed)
+        except discord.Forbidden:
+            return None, f"I can't post in #{channel.name}."
+
+    message_id = message.id
+
+    def _save() -> None:
+        with ctx.open_db() as conn:
+            save_card_ref(conn, guild_id, channel.id, message_id, role_key, min_level)
+
+    await asyncio.to_thread(_save)
+    return message, ""

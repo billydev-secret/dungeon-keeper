@@ -21,8 +21,6 @@ from bot_modules.jail.embeds import (
     build_policy_proposal_embed,
     build_policy_vote_initial_embed,
     build_policy_vote_update_embed,
-    build_setup_complete_embed,
-    build_setup_step_embed,
     build_ticket_open_embed,
     build_ticket_panel_embed,
     build_warning_audit_embed,
@@ -236,30 +234,6 @@ def test_ticket_open_embed_defaults_timestamp_to_now():
         ticket_id=1, description="d", opener_mention="<@1>",
     )
     assert embed.timestamp is not None
-
-
-# ── build_setup_step_embed / build_setup_complete_embed ───────────────
-
-
-def test_setup_step_embed_takes_meta_dict():
-    """The cog passes the dict from ``setup_step_meta`` straight in."""
-    meta = {
-        "title": "Setup — Step 1/6",
-        "description": "Which roles?",
-        "config_key": "mod_role_ids",
-        "select_kind": "role",
-        "placeholder": "Select…",
-    }
-    embed = build_setup_step_embed(meta)
-    assert embed.title == "⚙️ Setup — Step 1/6"
-    assert embed.description == "Which roles?"
-    assert embed.color is not None and embed.color.value == MOD_TICKET
-
-
-def test_setup_complete_embed():
-    embed = build_setup_complete_embed()
-    assert embed.title == "⚙️ Setup Complete"
-    assert embed.color is not None and embed.color.value == MOD_SUCCESS
 
 
 # ── build_modinfo_embed ───────────────────────────────────────────────

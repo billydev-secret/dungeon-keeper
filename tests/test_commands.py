@@ -285,10 +285,14 @@ def grant_audit_setup(tmp_path):
     ctx.open_db = lambda: open_db(db_path)
     ctx.db_path = db_path
     cog = RoleGrantCog(MagicMock(), ctx)
-    cmd = RoleGrantCog.grant_audit_cmd.callback
 
-    async def grant_audit(interaction, role="nsfw", min_level=5, channel=None):
-        return await cmd(cog, interaction, role, min_level, channel)
+    # /grant_audit was replaced by Config → Channel Panels on 2026-07-28. The
+    # card placement is the same; only its entry point moved, so these drive
+    # post_audit_card(guild, channel) directly. Permission is the route's now.
+    async def grant_audit(guild, channel, *, role_key="nsfw", min_level=5):
+        return await cog.post_audit_card(
+            guild, channel, role_key=role_key, min_level=min_level
+        )
 
     return ctx, grant_audit, db_path
 
@@ -315,12 +319,9 @@ def _audit_channel(channel_id=777):
     return channel, message
 
 
-async def test_grant_audit_denied_for_non_mod(grant_audit_setup):
-    ctx, grant_audit, _ = grant_audit_setup
-    ctx.is_mod.return_value = False
-    ix = _make_interaction(guild=_audit_guild())
-    await grant_audit(ix)
-    assert "permission" in ix.response.send_message.call_args[0][0].lower()
+# "denied for non-mod" moved with the command: post_audit_card is unguarded by
+# design, and its only caller is POST /api/panels/{key}/post, which is
+# admin-gated (tests/web/test_panels_routes.py plus the authz sweep).
 
 
 async def test_grant_audit_posts_card_and_stores_ref(grant_audit_setup):
@@ -330,9 +331,8 @@ async def test_grant_audit_posts_card_and_stores_ref(grant_audit_setup):
     ctx, grant_audit, db_path = grant_audit_setup
     guild = _audit_guild()
     channel, message = _audit_channel()
-    ix = _make_interaction(guild=guild, channel=channel)
 
-    await grant_audit(ix)
+    await grant_audit(guild, channel)
 
     channel.send.assert_awaited_once()
     embed = channel.send.call_args.kwargs["embed"]
@@ -341,7 +341,6 @@ async def test_grant_audit_posts_card_and_stores_ref(grant_audit_setup):
         ref = load_card_ref(conn, 12345)
     assert (ref.channel_id, ref.message_id) == (channel.id, message.id)
     assert (ref.grant_name, ref.min_level) == ("nsfw", 5)
-    assert "is live" in ix.followup.send.call_args[0][0]
 
 
 async def test_grant_audit_repost_same_channel_edits_in_place(grant_audit_setup):
@@ -357,9 +356,37 @@ async def test_grant_audit_repost_same_channel_edits_in_place(grant_audit_setup)
     channel.fetch_message = AsyncMock(return_value=old_message)
     with open_db(db_path) as conn:
         save_card_ref(conn, 12345, channel.id, old_message.id, "nsfw", 5)
-    ix = _make_interaction(guild=guild, channel=channel)
 
-    await grant_audit(ix)
+    await grant_audit(guild, channel)
 
     old_message.edit.assert_awaited_once()
+    channel.send.assert_not_awaited()
+
+
+async def test_grant_audit_refuses_an_unconfigured_role(grant_audit_setup):
+    """post_audit_card raises with the reason so the route can name what to fix
+    — an admin who picked a role that isn't set up should be told that, not
+    handed a generic failure."""
+    import pytest
+
+    ctx, grant_audit, _ = grant_audit_setup
+    guild = _audit_guild()
+    channel, _ = _audit_channel()
+
+    with pytest.raises(ValueError) as exc:
+        await grant_audit(guild, channel, role_key="not-configured")
+    assert "not configured" in str(exc.value)
+    channel.send.assert_not_awaited()
+
+
+async def test_grant_audit_refuses_a_min_level_below_one(grant_audit_setup):
+    import pytest
+
+    ctx, grant_audit, _ = grant_audit_setup
+    guild = _audit_guild()
+    channel, _ = _audit_channel()
+
+    with pytest.raises(ValueError) as exc:
+        await grant_audit(guild, channel, min_level=0)
+    assert "at least 1" in str(exc.value)
     channel.send.assert_not_awaited()

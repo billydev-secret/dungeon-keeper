@@ -1,7 +1,7 @@
 """Which channel panels the dashboard can post, and how to reach each one.
 
 Before 2026-07-28 every panel had its own slash command whose whole job was
-"put this panel in that channel" — six commands, one shape, and exactly the kind
+"put this panel in that channel" — seven commands, one shape, and exactly the kind
 of admin plumbing CLAUDE.md keeps on the web. They collapse into one route
 (``POST /api/panels/{key}/post``) reading this table.
 
@@ -13,15 +13,38 @@ module-level helper, and one that built its message inline.
 
 Deliberately *not* auto-posted on boot, unlike the DM request panel. That one is
 the only route to a member's DM settings, so a guild whose admin never pressed
-the button would have no surface at all. These six all sit alongside commands
-that still work — ``/ticket open``, ``/guess submit``, ``/voice …``,
-``/bank wallet`` — so a guild that never posts one loses discoverability, not
-capability. Posting into a channel unasked is a bigger imposition than that.
+the button would have no surface at all. These all sit alongside something that
+still works — ``/ticket open``, ``/guess submit``, ``/voice …``, ``/bank wallet``,
+or the Grant Audit report page — so a guild that never posts one loses
+discoverability, not capability. Posting into a channel unasked is a bigger
+imposition than that.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class PanelOption:
+    """A setting a panel needs before it can be posted.
+
+    Only the grant-audit card has any: it renders one grant role at one minimum
+    level, and those are a genuine choice rather than configuration living
+    somewhere else. Declared here so the dashboard renders the right control and
+    the route knows what to accept, instead of every panel with settings growing
+    its own endpoint.
+
+    ``kind`` is ``"grant_role"`` (choices resolved per-guild from grant-role
+    config) or ``"int"``.
+    """
+
+    name: str
+    label: str
+    kind: str
+    default: str | int
+    hint: str = ""
+    minimum: int | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +63,8 @@ class PanelSpec:
     method: str
     #: Nav page whose settings govern this panel, for a dashboard cross-link.
     related_page: str | None = None
+    #: Settings the poster needs. Empty for panels that render themselves.
+    options: tuple[PanelOption, ...] = ()
 
 
 PANEL_SPECS: tuple[PanelSpec, ...] = (
@@ -98,6 +123,35 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         cog="GuessCog",
         method="post_prompt_panel",
         related_page="config-guess",
+    ),
+    PanelSpec(
+        key="grant-audit",
+        label="Grant Audit Card",
+        description=(
+            "Who is at or past the level threshold but still missing the grant "
+            "role. Posts a card that refreshes itself hourly; delete the message "
+            "to retire it."
+        ),
+        cog="RoleGrantCog",
+        method="post_audit_card",
+        related_page="grant-audit",
+        options=(
+            PanelOption(
+                name="role_key",
+                label="Grant role",
+                kind="grant_role",
+                default="nsfw",
+                hint="Which configured grant role the card audits.",
+            ),
+            PanelOption(
+                name="min_level",
+                label="Minimum level",
+                kind="int",
+                default=5,
+                minimum=1,
+                hint="Members at or above this level are expected to hold the role.",
+            ),
+        ),
     ),
     PanelSpec(
         key="ticket-panel",
