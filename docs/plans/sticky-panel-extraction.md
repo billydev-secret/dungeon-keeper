@@ -114,6 +114,25 @@ The whole lifecycle fits in the two id callbacks:
 the channel (bid confirmations are ephemeral, outbid notices are DMs), so there
 is nothing of ours to chase.
 
+**The trap this shape walks into — read this before building the next one.**
+A caller that posts its own panel instead of going through `place()` gets no
+`_remember()`, and `on_message` reads ids through the 300s TTL cache, which
+caches *"no panel"* just as readily as a real id and is populated by any member
+message anywhere in the guild. The auction card is posted directly at
+`/bank auction start`, so without an explicit `forget()` the brand-new card
+would not stick **at all** until that entry lapsed — up to five minutes of the
+feature silently not working, and invisible in testing unless the guild had
+chat in the preceding five minutes. Found in review, 2026-07-28; covered by
+`test_a_panel_posted_outside_place_is_invisible_until_forget` in
+`tests/test_core_sticky.py`. Any future non-permanent panel must either place
+through `place()` or `forget()` after posting.
+
+The mirror of it at the other end: state that ends must also be released
+*promptly*. The close paths call `forget()` the instant the DB state flips, so
+a restick fires against a fresh `(0, 0)` and returns early rather than reaching
+the build refusal — which is a correct stop, but core logs it via
+`log.exception`, and an expected close is not an error.
+
 **The one thing this shape cannot solve is channel sharing.** Two sticky panels
 in one channel contend for the single bottom slot; the auction card loses
 reliably, because the resident panels re-stick under bot messages and it does

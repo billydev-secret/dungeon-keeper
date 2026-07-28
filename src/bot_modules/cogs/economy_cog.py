@@ -4388,11 +4388,15 @@ class EconomyCog(commands.Cog):
     async def _build_auction_panel(self, guild: discord.Guild) -> PanelContent:
         content = await build_auction_panel(self.bot, guild)
         if content is None:
-            # Only reachable if the auction vanished between the restick's id
-            # read and the placement. Raising keeps place() from posting a
-            # card for an auction that isn't there; the panel is already
-            # dormant by then, so nothing retries into a loop.
-            raise RuntimeError(f"no auction card to build for guild {guild.id}")
+            # The auction finished between this restick being armed and the
+            # placement reaching build. Raising is the hard stop that keeps
+            # place() from posting a card for an auction that is over — build
+            # runs before send, so nothing is posted. The close paths call
+            # _release_panel the moment the state flips, which normally makes
+            # the restick return earlier than this; getting here is the narrow
+            # residual race, and core logs it at error level.
+            raise RuntimeError(f"auction finished before its card was rebuilt "
+                               f"(guild {guild.id})")
         return content
 
     @commands.Cog.listener("on_message")

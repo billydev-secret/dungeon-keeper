@@ -296,22 +296,54 @@ to currency.
     - `restick_on_bot` stays **off** and must: while an auction is open the bot
       posts nothing into the channel (bid confirmations are ephemeral, outbid
       notices are DMs), so there is no bot noise to chase.
-  - **Freeze on close.** `_freeze_card` reposts the closed card once, *after*
-    the "Sold!" ping (which would otherwise bury the result it announces), then
-    the card never moves again. Post-before-delete by hand, so a failed send
-    leaves the working card alone; the in-place repaint runs first so the card
-    reads "closed" either way. Exactly-once by riding the settle/end state
-    claim.
-  - **Panel collision.** Discord has one bottom slot per channel, so an auction
-    started in a channel that already hosts a sticky panel loses that contest
-    reliably — the resident panels re-stick under bot messages, the card does
-    not. It settles rather than storming, but the card ends up buried.
-    `sticky_panel_channels` detects the four panels reachable from a config
-    read (guide, leaderboard, shop, casino hub) and `/bank auction start`
-    **warns the mod** instead of coupling the cogs at runtime. The other four
-    sticky panels (pen pals, DM perms, Voice Master, todo board) keep their ids
-    in their own tables and are not covered — a missed warning costs nothing
-    but the warning. Prod precedent: auction #1 ran in the casino hub's channel.
+    - `_release_panel` drops the panel's TTL id cache at **both** ends of the
+      lifecycle, and the start end is not optional. `on_message` reads ids
+      through a 300s cache populated by *any* member message in the guild, and
+      it caches "no panel" as readily as a real id — only `place` refreshes it,
+      via `_remember`. Since this feature posts its own card at
+      `/bank auction start` rather than through `place`, a guild with recent
+      chat would otherwise cache `(0, 0)` and the new card **would not stick at
+      all** for up to five minutes. At the close end it merely avoids a
+      pointless wake-up (and the ERROR the build refusal logs).
+  - **Freeze on close.** `_freeze_card` reposts the finished card once, on all
+    three end paths (timed settle, `/bank auction end`, `/bank auction cancel`),
+    *after* the "Sold!" ping (which would otherwise bury the result it
+    announces), then the card never moves again. Post-before-delete by hand, so
+    a failed send leaves the working card alone; the in-place repaint runs first
+    so the card reads closed either way. Exactly-once by riding the
+    settle/end/cancel state claim. Two ordering hazards it has to respect:
+    - It **re-reads the card id** from the row rather than trusting the caller's
+      snapshot, which was taken when the state claim won. A restick that placed
+      in between has already deleted that message and recorded a new one;
+      deleting the snapshot would strand the re-sticked card — rendered while
+      the auction was still open, Bid button and all — above the frozen result
+      permanently.
+    - It writes with `attach_card` (concrete auction id), **not**
+      `attach_card_to_latest`. The state-blind variant is only correct on the
+      `save_ids` path where a guild id is all there is; here, a mod starting the
+      next auction while the freeze's send is in flight would otherwise have
+      their fresh card's ids overwritten by the dead one — and the next restick
+      would then delete the frozen result and orphan the new card.
+  - **Where the card can't stay at the bottom.** `_sticky_warning` covers the
+    two cases and `/bank auction start` tells the mod, who is standing right
+    there choosing a channel. The auction runs either way — this is a warning,
+    not a gate.
+    - **A channel that already hosts a sticky panel.** One bottom slot, two
+      claimants; the auction loses reliably, because the resident panels
+      re-stick under bot messages and the card does not. It settles rather than
+      storming, but the card ends up buried.  `sticky_panel_channels` detects
+      the four panels reachable from a config read (guide, leaderboard, shop,
+      casino hub) instead of coupling the cogs at runtime. The other four
+      sticky panels (pen pals, DM perms, Voice Master, todo board) keep their
+      ids in their own tables and are not covered — a missed warning costs
+      nothing but the warning. Prod precedent: auction #1 ran in the casino
+      hub's channel.
+    - **A thread or forum post.** `StickyPanel._channel` resolves ids with
+      `guild.get_channel`, which never returns a thread, and `_freeze_card`
+      wants a `TextChannel` too — so the card posts and works but never moves.
+      Auctions in threads predate stickiness, so this warns rather than blocks;
+      the capability isn't ours to remove. Without the warning it is a silent
+      broken promise, since manual.html now says the card stays at the bottom.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and — since the
   stage-4a funnel (sinks round 2) — at the duel games' **single terminal-state

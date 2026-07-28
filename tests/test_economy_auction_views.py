@@ -14,6 +14,7 @@ bottom exactly once.
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,10 +23,13 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.core.sticky import StickyPanel
 from bot_modules.economy.auction_views import (
     _freeze_card,
     build_auction_panel,
+    _sticky_warning,
     render_auction_card,
+    start_auction,
 )
 from bot_modules.services.economy_auction_service import (
     attach_card,
@@ -36,9 +40,13 @@ from bot_modules.services.economy_auction_service import (
     open_auction,
     place_bid,
 )
-from bot_modules.services.economy_service import EconSettings, apply_credit
+from bot_modules.services.economy_service import (
+    EconSettings,
+    apply_credit,
+    save_econ_settings,
+)
 from tests.db_template import migrated_db
-from tests.fakes import FakeGuild
+from tests.fakes import FakeGuild, fake_interaction
 
 GUILD = 900
 HOST, A, B = 5001, 5002, 5003
@@ -228,7 +236,7 @@ async def test_freeze_card_reposts_the_result_and_drops_the_old_card(bot, db):
     bot.get_channel = MagicMock(return_value=channel)
     bot.get_cog = MagicMock(return_value=None)
 
-    await _freeze_card(bot, _guild(), aid, 1, 4242)
+    await _freeze_card(bot, _guild(), aid, 1)
 
     channel.send.assert_awaited_once()
     # The closed card is posted fresh, then the buried one is removed.
@@ -252,7 +260,7 @@ async def test_freeze_card_keeps_the_old_card_when_the_repost_fails(bot, db):
     bot.get_channel = MagicMock(return_value=channel)
     bot.get_cog = MagicMock(return_value=None)
 
-    await _freeze_card(bot, _guild(), aid, 1, 4242)
+    await _freeze_card(bot, _guild(), aid, 1)
 
     channel.get_partial_message.assert_not_called()
     with open_db(db) as conn:
@@ -260,13 +268,106 @@ async def test_freeze_card_keeps_the_old_card_when_the_repost_fails(bot, db):
 
 
 async def test_freeze_card_does_nothing_when_no_card_was_ever_posted(bot, db):
-    """An auction rolled back at start has no card to move."""
+    """An auction whose card never posted has nothing to move."""
+    with open_db(db) as conn:
+        aid = _open(conn)  # no attach_card — message_id stays 0
+        end_auction_now(conn, GUILD, aid, now=NOW + 60)
+    channel = _text_channel(cid=1)
+    bot.get_channel = MagicMock(return_value=channel)
+    bot.get_cog = MagicMock(return_value=None)
+
+    await _freeze_card(bot, _guild(), aid, 1)
+    channel.send.assert_not_awaited()
+
+
+async def test_freeze_card_uses_the_current_card_id_not_a_stale_snapshot(bot, db):
+    """A restick that placed between the settle claim and the freeze has
+    already replaced the card, and the caller's snapshot is a dead id.
+
+    Deleting the snapshot would leave the re-sticked card — rendered while the
+    auction was still open, Bid button and all — sitting above the frozen
+    result forever. _freeze_card re-reads the row instead.
+    """
     with open_db(db) as conn:
         aid = _open(conn)
+        attach_card(conn, aid, 1, 4242)          # the id the caller snapshots
         end_auction_now(conn, GUILD, aid, now=NOW + 60)
-    bot.get_channel = MagicMock()
-    await _freeze_card(bot, _guild(), aid, 0, 0)
-    bot.get_channel.assert_not_called()
+        attach_card(conn, aid, 1, 7777)          # ...a restick moved it here
+
+    channel = _text_channel(cid=1)
+    bot.get_channel = MagicMock(return_value=channel)
+    bot.get_cog = MagicMock(return_value=None)
+
+    await _freeze_card(bot, _guild(), aid, 1)
+
+    # The live card is removed, not the stale snapshot.
+    channel.get_partial_message.assert_called_once_with(7777)
+
+
+async def test_freeze_card_cannot_clobber_the_next_auctions_card(bot, db):
+    """A mod may start the next auction while this freeze is mid-send.
+
+    The freeze knows its own auction id, so it must write there — the
+    state-blind attach_card_to_latest is only correct on the save_ids path,
+    where a guild id is all there is. Writing to "the newest row" here would
+    hand the new auction the dead card's ids, and its next restick would
+    delete the frozen result and orphan its own card.
+    """
+    with open_db(db) as conn:
+        old_id = _open(conn)
+        attach_card(conn, old_id, 1, 4242)
+        end_auction_now(conn, GUILD, old_id, now=NOW + 60)
+
+    channel = _text_channel(cid=1)
+    bot.get_channel = MagicMock(return_value=channel)
+    bot.get_cog = MagicMock(return_value=None)
+
+    # The next auction opens and posts its own card while the freeze runs.
+    async def _send(*a, **kw):
+        with open_db(db) as conn:
+            new_id = open_auction(
+                conn, SETTINGS, GUILD, created_by=HOST, title="Next up",
+                description="", duration_hours=48.0, channel_id=1, now=NOW + 120,
+            )
+            attach_card(conn, new_id, 1, 9999)
+        return SimpleNamespace(id=5555)
+
+    channel.send = AsyncMock(side_effect=_send)
+    await _freeze_card(bot, _guild(), old_id, 1)
+
+    with open_db(db) as conn:
+        assert int(get_auction(conn, old_id)["message_id"]) == 5555
+        # The new auction keeps its own card, and stays stickable.
+        assert card_ids(conn, GUILD) == (1, 9999)
+
+
+@pytest.mark.parametrize(
+    ("channel_kind", "expect"),
+    [
+        pytest.param("thread", "threads", id="thread-never-sticks"),
+        pytest.param("panel", "stuck to the bottom", id="channel-already-has-a-panel"),
+        pytest.param("plain", None, id="ordinary-channel-no-warning"),
+    ],
+)
+async def test_sticky_warning_covers_both_ways_to_lose_the_bottom(
+    bot, db, channel_kind, expect
+):
+    """manual.html promises the card stays at the bottom; these are the two
+    channels where it can't, and the mod is told rather than left to notice."""
+    if channel_kind == "thread":
+        channel = MagicMock(spec=discord.Thread)
+        channel.id = 77
+    else:
+        channel = _text_channel(cid=77)
+    if channel_kind == "panel":
+        with open_db(db) as conn:
+            save_econ_settings(conn, GUILD, {"shop_channel_id": 77})
+
+    warning = await _sticky_warning(bot, _guild(), channel)
+    if expect is None:
+        assert warning is None
+    else:
+        assert warning is not None and expect in warning
 
 
 async def test_freeze_card_also_runs_for_a_cancelled_auction(bot, db):
@@ -281,10 +382,63 @@ async def test_freeze_card_also_runs_for_a_cancelled_auction(bot, db):
     bot.get_channel = MagicMock(return_value=channel)
     bot.get_cog = MagicMock(return_value=None)
 
-    await _freeze_card(bot, _guild(), aid, 1, 4242)
+    await _freeze_card(bot, _guild(), aid, 1)
 
     posted = channel.send.await_args.kwargs["embed"]
     assert "cancelled" in (posted.title or "").lower()
     channel.get_partial_message.assert_called_once_with(4242)
     with open_db(db) as conn:
         assert int(get_auction(conn, aid)["message_id"]) == 5555
+
+
+# ── priming the panel at start ──────────────────────────────────────────────
+
+
+def _start_interaction(bot, channel):
+    member = MagicMock(spec=discord.Member)
+    member.id = HOST
+    member.guild_permissions = discord.Permissions.all()
+    member.roles = []
+    inter = fake_interaction(guild=cast("FakeGuild", _guild()), user=member)
+    inter.client = bot
+    inter.channel = channel
+    return inter
+
+
+async def test_start_auction_drops_the_panels_stale_no_card_cache(bot, db):
+    """The card is posted here, not through StickyPanel.place, so nothing
+    calls ``_remember`` — and ``on_message`` caches "no panel" for five
+    minutes off any member message in the guild. Without an explicit
+    ``forget`` the brand-new auction simply does not stick until that entry
+    lapses, which is the whole feature not working for up to 300s.
+    """
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {
+            "enabled": True,
+            "auction_min_bid": 10,
+            "auction_min_increment": 5,
+            "auction_max_duration_hours": 168,
+        })
+    channel = _text_channel(cid=77)
+    panel = StickyPanel(
+        "econ auction", MagicMock(),
+        load_ids=lambda gid: (0, 0),
+        save_ids=lambda gid, cid, mid: None,
+        build=AsyncMock(),
+    )
+    # Chat before the auction existed poisons the cache with (0, 0).
+    panel._ref[GUILD] = (time.monotonic() + 300.0, 0, 0)
+    bot.get_cog = MagicMock(return_value=SimpleNamespace(auction_panel=panel))
+
+    await start_auction(
+        _start_interaction(bot, channel),
+        title="Founder role", prize="A shiny thing", duration_hours=48.0,
+    )
+
+    channel.send.assert_awaited_once()
+    assert GUILD not in panel._ref, (
+        "start_auction must drop the panel's cached ids, or the new card "
+        "will not re-stick until the 300s TTL lapses"
+    )
+    with open_db(db) as conn:
+        assert card_ids(conn, GUILD) == (77, 5555)
