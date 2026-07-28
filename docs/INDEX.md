@@ -35,6 +35,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [embed_style_guide.md](embed_style_guide.md) | Conventions for bot-generated embeds/panels + user-facing copy (accent color, card anatomy, Title Case ruling, error/❌ style, voice & terminology, dashboard copy) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
+| [event_echo_spec.md](event_echo_spec.md) | Event Echo: mirrors a starting party game / CAH lobby / live Discord event into main chat with a jump link. Silent by design (no ping, ever); per-type + global cooldowns are the feature. Dashboard-configured (`event_echo_channel_id`), no commands |
 | [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`). Photo Challenge left this suite — it's now a standalone scheduled dashboard feature (own channel + schedule, `/api/photo-challenge`, panel `photo-challenge.js`) |
 | [greeting_watch_spec.md](greeting_watch_spec.md) | Greeting Watch: DMs a member when a "good morning"/"hello" goes unanswered in a watched channel (dashboard-configured, no commands) |
 | [guess_spec.md](guess_spec.md) | Guess image game (`/guess submit\|round\|delete\|optin\|confess\|leaderboard\|prompt`) |

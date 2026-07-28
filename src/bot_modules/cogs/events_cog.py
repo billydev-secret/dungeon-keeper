@@ -25,6 +25,7 @@ from bot_modules.services.birthday_service import (
     is_birthday_wish,
 )
 from bot_modules.services.discord_scan import collect_messageable_channels
+from bot_modules.services.event_echo_service import echo_discord_event
 from bot_modules.services.greeting_watch_service import (
     is_greeting,
     pending_greetings_for,
@@ -1681,6 +1682,23 @@ class EventsCog(commands.Cog):
     async def on_invite_delete(self, invite: discord.Invite) -> None:
         if invite.guild is not None:
             cache_invite_delete(invite.guild.id, invite.code)
+
+    @commands.Cog.listener()
+    async def on_scheduled_event_update(
+        self, before: discord.ScheduledEvent, after: discord.ScheduledEvent
+    ) -> None:
+        """Echo a native Discord event into main chat when it actually starts.
+
+        The transition is the trigger, not the status: an event created
+        already-active, or a repeated update while active, must not re-post.
+        (``echo_discord_event`` also dedupes on the event id, so this is belt
+        and braces — Discord emits this listener generously.)
+        """
+        if (
+            before.status is not discord.EventStatus.active
+            and after.status is discord.EventStatus.active
+        ):
+            await echo_discord_event(self.bot, after)
 
     @commands.Cog.listener()
     async def on_member_ban(

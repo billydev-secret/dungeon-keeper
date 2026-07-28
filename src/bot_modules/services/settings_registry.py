@@ -401,6 +401,16 @@ FEATURES: tuple[Feature, ...] = (
         ),
     ),
     Feature(
+        slug="event_echo",
+        label="Event Echo",
+        panel="Config → Event Echo",
+        blurb="Mirrors a starting game into main chat with a link to jump to it.",
+        settings=(
+            _ch("event_echo_channel_id", "Echo destination", required=True,
+                help="Where echoes are posted. Unset means the feature is off."),
+        ),
+    ),
+    Feature(
         slug="billy_bot",
         label="Billy-bot",
         panel="Config → Billy-bot",
