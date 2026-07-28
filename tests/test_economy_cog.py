@@ -2804,18 +2804,51 @@ async def test_shop_view_shows_refund_button_only_when_something_refundable(ctx,
     )
 
 
-@pytest.mark.asyncio
-async def test_refund_picker_view_scoped_to_its_own_member(ctx, db):
-    # _RefundPickerView shares its ownership guard with _ShopView/
-    # _IconCatalogView via _MemberScopedView — confirm the shared base still
-    # rejects a different member's click.
-    from bot_modules.cogs.economy_cog import _RefundPickerView
+def _scoped_view(name, cog, settings):
+    """Build one member-scoped view, owned by member 500."""
+    from bot_modules.cogs import economy_cog as mod
 
+    owner, friend = _member(member_id=500), _member(member_id=501)
+    guild = _guild_roles()
+    return {
+        "_RefundPickerView": lambda: mod._RefundPickerView(
+            cog, settings, guild, 500, [], 30
+        ),
+        "_PayConfirmView": lambda: mod._PayConfirmView(
+            cog, settings, guild, owner, friend, 250
+        ),
+        "_GiftConfirmView": lambda: mod._GiftConfirmView(
+            cog, settings, guild, owner, friend, "role_color"
+        ),
+        "_EmojiCancelView": lambda: mod._EmojiCancelView(cog, 7, 500),
+        "_RefundConfirmView": lambda: mod._RefundConfirmView(
+            cog, settings, guild, 500, "role_color"
+        ),
+    }[name]()
+
+
+# Every scoped view routes its ownership guard through _MemberScopedView; the
+# refusal copy is per-class, so pin each one. Before the shared base these were
+# five hand-rolled interaction_checks and only the picker had a test.
+@pytest.mark.parametrize(
+    ("view_name", "denial"),
+    [
+        ("_RefundPickerView", "Open your own shop"),
+        ("_PayConfirmView", "This confirmation isn't yours."),
+        ("_GiftConfirmView", "This confirmation isn't yours."),
+        ("_EmojiCancelView", "This isn't your submission."),
+        ("_RefundConfirmView", "This confirmation isn't yours."),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scoped_views_reject_other_members(ctx, db, view_name, denial):
     cog = _make_cog(ctx)
-    view = _RefundPickerView(cog, _settings(db), _guild_roles(), 500, [], 30)
+    view = _scoped_view(view_name, cog, _settings(db))
+
     stranger = _interaction(_member(member_id=999))
     assert await view.interaction_check(stranger) is False
-    assert "Open your own shop" in stranger.response.send_message.await_args.args[0]
+    assert denial in stranger.response.send_message.await_args.args[0]
+
     owner = _interaction(_member(member_id=500))
     assert await view.interaction_check(owner) is True
 

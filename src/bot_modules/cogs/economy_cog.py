@@ -182,6 +182,18 @@ _CATALOG_LOCKED_MSG = (
     "pick **Custom** from the shop's icon picker first (/bank shop)."
 )
 _QOTD_CARD_FILENAME = "qotd.png"
+# What each role-studio setter says when the member hasn't rented its perk.
+# The wording differs per perk (colour can also arrive as a gift) and is
+# asserted verbatim by the setter-refusal tests — keep the strings as they are.
+_PERK_REFUSAL = {
+    "role_name": "❌ Rent the **Custom Role Name** perk first (/bank shop).",
+    "role_color": (
+        "❌ Rent the **Custom Role Color** perk or get one gifted (/bank shop)."
+    ),
+    "role_gradient": "❌ Rent the **Gradient Role** perk first (/bank shop).",
+    "role_icon": "❌ Rent the **Role Icon** perk first (/bank shop).",
+}
+_NO_ROLE_ICONS_MSG = "❌ This server doesn't support role icons right now."
 
 # Transfers above this need an explicit confirm step (spec §5, "over 100").
 _PAY_CONFIRM_THRESHOLD = 100
@@ -557,8 +569,35 @@ def _memo_of(row_meta: str | None) -> str | None:
     return memo if isinstance(memo, str) and memo else None
 
 
-class _PayConfirmView(discord.ui.View):
+class _MemberScopedView(discord.ui.View):
+    """A view usable only by the member it was opened for.
+
+    Shared base for the shop-adjacent pickers (``_ShopView``,
+    ``_IconCatalogView``, ``_RefundPickerView``) and for the confirm gates,
+    which were each carrying an identical ``interaction_check``. Subclasses
+    differ only in what the refusal says and how long they live, so those are
+    a class attribute and a constructor argument rather than a re-implementation.
+    """
+
+    SCOPE_DENIAL = "❌ Open your own shop with /bank shop."
+
+    def __init__(self, user_id: int, *, timeout: float | None = 120) -> None:
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                self.SCOPE_DENIAL, ephemeral=True
+            )
+            return False
+        return True
+
+
+class _PayConfirmView(_MemberScopedView):
     """Ephemeral Confirm/Cancel gate for a transfer over the threshold."""
+
+    SCOPE_DENIAL = "❌ This confirmation isn't yours."
 
     def __init__(
         self,
@@ -570,7 +609,7 @@ class _PayConfirmView(discord.ui.View):
         amount: int,
         memo: str | None = None,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(sender.id, timeout=60)
         self.cog = cog
         self.settings = settings
         self.guild = guild
@@ -578,14 +617,6 @@ class _PayConfirmView(discord.ui.View):
         self.recipient = recipient
         self.amount = amount
         self.memo = memo
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.sender.id:
-            await interaction.response.send_message(
-                "❌ This confirmation isn't yours.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
     async def _confirm(
@@ -607,12 +638,14 @@ class _PayConfirmView(discord.ui.View):
         )
 
 
-class _GiftConfirmView(discord.ui.View):
+class _GiftConfirmView(_MemberScopedView):
     """Ephemeral Confirm/Cancel gate for gifting a perk the friend already has.
 
     The rental would stack silently (their role already shows the perk), so
     the double-spend has to be an explicit choice, mirroring _PayConfirmView.
     """
+
+    SCOPE_DENIAL = "❌ This confirmation isn't yours."
 
     def __init__(
         self,
@@ -623,21 +656,13 @@ class _GiftConfirmView(discord.ui.View):
         member: discord.Member,
         perk: str,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(gifter.id, timeout=60)
         self.cog = cog
         self.settings = settings
         self.guild = guild
         self.gifter = gifter
         self.member = member
         self.perk = perk
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.gifter.id:
-            await interaction.response.send_message(
-                "❌ This confirmation isn't yours.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Gift Anyway", style=discord.ButtonStyle.success)
     async def _confirm(
@@ -675,22 +700,15 @@ class _RaffleBuyModal(discord.ui.Modal, title="Weekly Raffle Tickets"):
         )
 
 
-class _EmojiCancelView(discord.ui.View):
+class _EmojiCancelView(_MemberScopedView):
     """Cancel button on the bare /bank emoji status reply (pending only)."""
 
+    SCOPE_DENIAL = "❌ This isn't your submission."
+
     def __init__(self, cog: EconomyCog, submission_id: int, user_id: int) -> None:
-        super().__init__(timeout=60)
+        super().__init__(user_id, timeout=60)
         self.cog = cog
         self.submission_id = submission_id
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This isn't your submission.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Cancel & Refund", style=discord.ButtonStyle.danger)
     async def _cancel(
@@ -895,28 +913,6 @@ class _IconCatalogSelect(discord.ui.Select):
         )
 
 
-class _MemberScopedView(discord.ui.View):
-    """A view usable only by the member it was opened for.
-
-    Shared base for every shop-adjacent picker (``_ShopView``,
-    ``_IconCatalogView``, ``_RefundPickerView``) — they were each carrying an
-    identical ``interaction_check`` before this; one shared implementation
-    means the scoping rule/error text only needs to change in one place.
-    """
-
-    def __init__(self, user_id: int, *, timeout: float | None = 120) -> None:
-        super().__init__(timeout=timeout)
-        self.user_id = user_id
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ Open your own shop with /bank shop.", ephemeral=True
-            )
-            return False
-        return True
-
-
 class _IconCatalogView(_MemberScopedView):
     """Ephemeral catalog picker, scoped to the member who opened the shop."""
 
@@ -1007,12 +1003,14 @@ class _RefundPickerView(_MemberScopedView):
         self.add_item(_RefundSelect(cog, settings, guild, rentals, shield_price))
 
 
-class _RefundConfirmView(discord.ui.View):
+class _RefundConfirmView(_MemberScopedView):
     """Ephemeral Confirm/Back gate before a refund actually runs.
 
     Danger-styled (unlike _PayConfirmView's plain success Confirm) since this
     ends a live perk immediately, not just moves money between two members.
     """
+
+    SCOPE_DENIAL = "❌ This confirmation isn't yours."
 
     def __init__(
         self,
@@ -1022,20 +1020,11 @@ class _RefundConfirmView(discord.ui.View):
         user_id: int,
         target: str,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(user_id, timeout=60)
         self.cog = cog
         self.settings = settings
         self.guild = guild
-        self.user_id = user_id
         self.target = target
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "❌ This confirmation isn't yours.", ephemeral=True
-            )
-            return False
-        return True
 
     @discord.ui.button(label="Yes, Cancel & Refund", style=discord.ButtonStyle.danger)
     async def _confirm(
@@ -1272,15 +1261,8 @@ async def _rent_perk_flow(
     except ValueError as exc:
         msg = str(exc)
         if "insufficient" in msg:
-
-            def _bal() -> int:
-                with ctx.open_db() as conn:
-                    return get_balance(conn, guild.id, user_id)
-
-            bal = await asyncio.to_thread(_bal)
-            text = (
-                f"❌ You need {settings.currency_emoji} "
-                f"{_perk_price(settings, perk):,} but only have {bal:,}."
+            text = await cog._short_funds_text(
+                settings, guild.id, user_id, _perk_price(settings, perk)
             )
         elif "already rented" in msg:
             text = "❌ You're already renting that perk."
@@ -1732,8 +1714,7 @@ class EconomyCog(commands.Cog):
             await asyncio.to_thread(_load)
         )
 
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
@@ -1825,10 +1806,8 @@ class EconomyCog(commands.Cog):
         actor = interaction.user
         assert isinstance(actor, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild_id)
-
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild_id)
+        if settings is None:
             return
 
         if not _can_grant(actor, settings):
@@ -1899,9 +1878,8 @@ class EconomyCog(commands.Cog):
         guild_id = guild.id
         user_id = interaction.user.id
 
-        settings = await asyncio.to_thread(self._load_settings, guild_id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild_id)
+        if settings is None:
             return
 
         def _toggle() -> bool:
@@ -1948,9 +1926,8 @@ class EconomyCog(commands.Cog):
         # DM) takes the cleaned value and escapes only at render.
         memo = _clean_memo(memo)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not settings.transfers_enabled:
             await interaction.response.send_message(
@@ -2083,14 +2060,10 @@ class EconomyCog(commands.Cog):
         settings, owned, balance = await asyncio.to_thread(
             self._load_role_ctx, guild.id, user_id
         )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
 
-        gated: set[str] = set()
-        for perk in _FEATURE_GATED:
-            if not await feature_gate_ok(self.bot, guild.id, perk):
-                gated.add(perk)
+        gated = await self._gated_perks(guild.id)
 
         icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         has_catalog = icon_range is not None
@@ -2131,10 +2104,8 @@ class EconomyCog(commands.Cog):
         except ValueError as exc:
             msg = str(exc)
             if "insufficient" in msg:
-                bal = await asyncio.to_thread(self._balance, guild.id, user_id)
-                text = (
-                    f"❌ You need {settings.currency_emoji} "
-                    f"{settings.price_streak_shield:,} but only have {bal:,}."
+                text = await self._short_funds_text(
+                    settings, guild.id, user_id, settings.price_streak_shield
                 )
             elif "already holding" in msg:
                 text = (
@@ -2370,9 +2341,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not sponsor_enabled(settings):
             await interaction.response.send_message(
@@ -2428,9 +2398,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not pin_enabled(settings):
             await interaction.response.send_message(
@@ -2450,9 +2419,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not pin_enabled(settings):
             await interaction.response.send_message(
@@ -2496,9 +2464,8 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not bounty_enabled(settings):
             await interaction.response.send_message(
@@ -2581,9 +2548,8 @@ class EconomyCog(commands.Cog):
         member = interaction.user
         assert isinstance(member, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if not emoji_svc.sponsoring_enabled(settings):
             await interaction.response.send_message(
@@ -2751,9 +2717,8 @@ class EconomyCog(commands.Cog):
         assert isinstance(gifter, discord.Member)
         perk_key = perk.value
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
             return
         if member.bot:
             await interaction.response.send_message(
@@ -2826,10 +2791,8 @@ class EconomyCog(commands.Cog):
         except ValueError as exc:
             msg = str(exc)
             if "insufficient" in msg:
-                bal = await asyncio.to_thread(self._balance, guild.id, gifter.id)
-                text = (
-                    f"❌ You need {settings.currency_emoji} "
-                    f"{_perk_price(settings, perk):,} but only have {bal:,}."
+                text = await self._short_funds_text(
+                    settings, guild.id, gifter.id, _perk_price(settings, perk)
                 )
             elif "already rented" in msg:
                 text = f"❌ You're already gifting them **{label}**."
@@ -2890,10 +2853,7 @@ class EconomyCog(commands.Cog):
         guild: discord.Guild,
     ) -> None:
         """Show the curated icon picker (rent a new icon or switch the rented one)."""
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
         icons = await asyncio.to_thread(self._load_catalog, guild.id)
         if not icons:
@@ -2940,8 +2900,7 @@ class EconomyCog(commands.Cog):
             return settings, icon, existing_id
 
         settings, icon, existing_id = await asyncio.to_thread(_load)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
         if icon is None:
             await interaction.response.send_message(
@@ -2949,10 +2908,7 @@ class EconomyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
 
         if existing_id is None:
@@ -2974,10 +2930,8 @@ class EconomyCog(commands.Cog):
             except ValueError as exc:
                 msg = str(exc)
                 if "insufficient" in msg:
-                    bal = await asyncio.to_thread(self._balance, guild.id, user_id)
-                    text = (
-                        f"❌ You need {settings.currency_emoji} {icon['price']:,} but "
-                        f"only have {bal:,}."
+                    text = await self._short_funds_text(
+                        settings, guild.id, user_id, int(icon["price"])
                     )
                 elif "already rented" in msg:
                     text = "❌ You're already renting a role icon."
@@ -3042,13 +2996,9 @@ class EconomyCog(commands.Cog):
             return fresh, existing
 
         settings, existing = await asyncio.to_thread(_load)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
 
         if existing is None:
@@ -3084,16 +3034,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if "role_name" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Custom Role Name** perk first (/bank shop).", ephemeral=True
-            )
+        if not await self._require_perk(interaction, guild.id, "role_name"):
             return
         text = text.strip()
         if not text or len(text) > _MAX_ROLE_NAME_LEN:
@@ -3141,17 +3082,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if "role_color" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Custom Role Color** perk or get one gifted (/bank shop).",
-                ephemeral=True,
-            )
+        if not await self._require_perk(interaction, guild.id, "role_color"):
             return
         value = parse_hex_color(hex)
         if value is None:
@@ -3179,16 +3110,7 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
-            return
-        if "role_gradient" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Gradient Role** perk first (/bank shop).", ephemeral=True
-            )
+        if not await self._require_perk(interaction, guild.id, "role_gradient"):
             return
         if not await feature_gate_ok(self.bot, guild.id, "role_gradient"):
             await interaction.response.send_message(
@@ -3223,21 +3145,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if not await self._require_perk(interaction, guild.id, "role_icon"):
             return
-        if "role_icon" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Role Icon** perk first (/bank shop).", ephemeral=True
-            )
-            return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
         if await asyncio.to_thread(self._catalog_locked, guild.id, user_id):
             await interaction.response.send_message(_CATALOG_LOCKED_MSG, ephemeral=True)
@@ -3270,16 +3180,7 @@ class EconomyCog(commands.Cog):
                 "❌ That emoji's image is too big — 256KB max.", ephemeral=True
             )
             return
-        path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
-
-        def _write() -> None:
-            path.write_bytes(data)
-            self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
-
-        await asyncio.to_thread(_write)
-        await self._apply_and_confirm(
-            interaction, guild.id, user_id, "Your role icon is set."
-        )
+        await self._store_role_icon(interaction, guild.id, user_id, data)
 
     @role.command(
         name="icon", description="Upload an image for your personal role's icon."
@@ -3293,21 +3194,9 @@ class EconomyCog(commands.Cog):
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
-        settings, ent, _bal = await asyncio.to_thread(
-            self._load_role_ctx, guild.id, user_id
-        )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if not await self._require_perk(interaction, guild.id, "role_icon"):
             return
-        if "role_icon" not in ent:
-            await interaction.response.send_message(
-                "❌ Rent the **Role Icon** perk first (/bank shop).", ephemeral=True
-            )
-            return
-        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
-            await interaction.response.send_message(
-                "❌ This server doesn't support role icons right now.", ephemeral=True
-            )
+        if not await self._role_icon_gate_ok(interaction, guild.id):
             return
         if await asyncio.to_thread(self._catalog_locked, guild.id, user_id):
             await interaction.response.send_message(_CATALOG_LOCKED_MSG, ephemeral=True)
@@ -3318,16 +3207,7 @@ class EconomyCog(commands.Cog):
             )
             return
         data = await image.read()
-        path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
-
-        def _write() -> None:
-            path.write_bytes(data)
-            self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
-
-        await asyncio.to_thread(_write)
-        await self._apply_and_confirm(
-            interaction, guild.id, user_id, "Your role icon is set."
-        )
+        await self._store_role_icon(interaction, guild.id, user_id, data)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
@@ -3409,6 +3289,87 @@ class EconomyCog(commands.Cog):
                 ),
             )
 
+    async def _refuse_disabled(
+        self, interaction: discord.Interaction, settings: EconSettings
+    ) -> bool:
+        """Send the economy-off refusal; True when it fired and the caller stops.
+
+        Every member-facing economy surface opens with this gate. Commands that
+        already hold ``settings`` from a compound load (the shop's role context,
+        the quest board, the wallet) call this directly; the ones that would
+        otherwise load settings for the gate alone go through
+        ``_settings_or_refuse``.
+        """
+        if settings.enabled:
+            return False
+        await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        return True
+
+    async def _settings_or_refuse(
+        self, interaction: discord.Interaction, guild_id: int
+    ) -> EconSettings | None:
+        """Settings for an enabled economy, else send the refusal and give None."""
+        settings = await asyncio.to_thread(self._load_settings, guild_id)
+        return None if await self._refuse_disabled(interaction, settings) else settings
+
+    async def _require_perk(
+        self, interaction: discord.Interaction, guild_id: int, perk: str
+    ) -> bool:
+        """Whether the member may drive ``perk``'s role-studio setter.
+
+        The economy-off gate and the not-rented refusal in one place: every
+        setter opened with the same pair, differing only in the perk name and
+        its refusal line.
+        """
+        settings, ent, _bal = await asyncio.to_thread(
+            self._load_role_ctx, guild_id, interaction.user.id
+        )
+        if await self._refuse_disabled(interaction, settings):
+            return False
+        if perk not in ent:
+            await interaction.response.send_message(
+                _PERK_REFUSAL[perk], ephemeral=True
+            )
+            return False
+        return True
+
+    async def _role_icon_gate_ok(
+        self, interaction: discord.Interaction, guild_id: int
+    ) -> bool:
+        """Whether role icons are available here; sends the refusal if not."""
+        if await feature_gate_ok(self.bot, guild_id, "role_icon"):
+            return True
+        await interaction.response.send_message(_NO_ROLE_ICONS_MSG, ephemeral=True)
+        return False
+
+    async def _gated_perks(self, guild_id: int) -> set[str]:
+        """The feature-gated perks this guild currently can't offer."""
+        return {
+            perk
+            for perk in _FEATURE_GATED
+            if not await feature_gate_ok(self.bot, guild_id, perk)
+        }
+
+    async def _store_role_icon(
+        self, interaction: discord.Interaction, guild_id: int, user_id: int, data: bytes
+    ) -> None:
+        """Persist role-icon bytes and re-apply the role.
+
+        Shared tail of the two acquisition paths — the emoji modal and the
+        `/bank role icon` upload — which differ only in where ``data`` and its
+        size refusal come from.
+        """
+        path = _icon_store_path(self.ctx.db_path, guild_id, user_id)
+
+        def _write() -> None:
+            path.write_bytes(data)
+            self._upsert_role(guild_id, user_id, {"icon_path": str(path)})
+
+        await asyncio.to_thread(_write)
+        await self._apply_and_confirm(
+            interaction, guild_id, user_id, "Your role icon is set."
+        )
+
     async def _defer(
         self, interaction: discord.Interaction, *, via_confirm: bool
     ) -> None:
@@ -3445,6 +3406,21 @@ class EconomyCog(commands.Cog):
     def _balance(self, guild_id: int, user_id: int) -> int:
         with self.ctx.open_db() as conn:
             return get_balance(conn, guild_id, user_id)
+
+    async def _short_funds_text(
+        self, settings: EconSettings, guild_id: int, user_id: int, price: int
+    ) -> str:
+        """The shared refusal for a purchase the member can't afford.
+
+        Reads the balance back so the member sees the gap, not just the price.
+        Every "insufficient" handler in the cog renders this one sentence — a
+        reword belongs here, not in four places.
+        """
+        bal = await asyncio.to_thread(self._balance, guild_id, user_id)
+        return (
+            f"❌ You need {settings.currency_emoji} {price:,} "
+            f"but only have {bal:,}."
+        )
 
     def _refundables(
         self, guild_id: int, user_id: int, settings: EconSettings
@@ -3530,8 +3506,7 @@ class EconomyCog(commands.Cog):
         settings, quests_state, board_meta = await asyncio.to_thread(
             self._load_quests_state, guild.id, interaction.user.id
         )
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        if await self._refuse_disabled(interaction, settings):
             return
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
@@ -4086,9 +4061,8 @@ class EconomyCog(commands.Cog):
         actor = interaction.user
         assert isinstance(actor, discord.Member)
 
-        settings = await asyncio.to_thread(self._load_settings, guild_id)
-        if not settings.enabled:
-            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+        settings = await self._settings_or_refuse(interaction, guild_id)
+        if settings is None:
             return
         if not _can_grant(actor, settings):
             await interaction.response.send_message(
@@ -4341,10 +4315,7 @@ class EconomyCog(commands.Cog):
         """The channel shop panel's embed with current gating, icon prices and
         accent — shared by ``/bank post-shop`` and the sticky repost so the two
         can't render different panels."""
-        gated: set[str] = set()
-        for perk in _FEATURE_GATED:
-            if not await feature_gate_ok(self.bot, guild.id, perk):
-                gated.add(perk)
+        gated = await self._gated_perks(guild.id)
         icon_range = await asyncio.to_thread(self._icon_price_range, guild.id)
         accent = await resolve_accent_color(self.ctx.db_path, guild)
         return _build_shop_embed(
