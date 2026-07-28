@@ -41,7 +41,7 @@ Default canvas **900×500**.
 3. **Avatar** (non-`none` modes) — the *unblurred* avatar is drawn on the left
    as a circle or rounded-square with a drop shadow and a double ring
    (cream outer + theme-gold inner). `author_name` is drawn as a small
-   attribution below it.
+   attribution below the quote (see **Attribution placement**).
 4. **Rounded-corner alpha**, then the **border** is composited last.
 
 **`pfp_shape`:**
@@ -53,6 +53,36 @@ Default canvas **900×500**.
   **left-aligned** in the right-hand column — only banner/announcement bodies are
   centered. Body lines are clamped left of the floral corner so centering never
   runs text under the flowers.)
+
+### Attribution placement
+
+In avatar modes the attribution (`— Name`) **left-aligns to the quote column** and
+hangs one `gap` (~0.85 × attribution font size) below the quote's last line. The
+quote and its attribution are then **centred as a single group**, so neither the
+top nor the bottom of the card carries a dead band.
+
+It is *not* centred under the avatar. That was the earlier behaviour, and because
+it centred on the disc (`pfp_cx − attr_w / 2`), any name wider than the disc drove
+the anchor negative, collapsed it onto the left-margin floor, and ran the first
+characters across the avatar's lower-left arc — while leaving the attribution
+aligned to nothing. Anchoring to the text column fixes both at once: the column
+already begins clear of the avatar's drawn footprint (double ring + drop shadow,
+not the bare radius), so **no name length can reach back into the avatar**.
+
+A name too wide for the column is **shrunk** to the largest size that fits (floor
+≈ half the base attribution size) and only then **truncated with an ellipsis** —
+it never runs past the column's right edge into the floral corner.
+
+Placement is factored into pure helpers so the geometry is unit-testable without
+pixel-peeping a blurred card: `attribution_pos()`, `attribution_block_h()`, and
+`fit_attribution_text()`. Both layout paths share them — the bundled-border path
+and the custom-frame (`mask_fit`) path, where a frame opening's bottom edge also
+clamps the line upward. That clamp is safe *because* the line is horizontally
+clear of the avatar; riding it up can no longer cause a collision.
+
+The custom-frame path reserves the attribution's **measured** height rather than a
+`1.7 ×` font-size estimate, since pilmoji draws an emoji taller than the font's own
+line box and an emoji-bearing name overran the estimate.
 
 ### `render_quote(...)` — legacy solid-bg card
 

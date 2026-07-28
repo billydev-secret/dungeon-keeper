@@ -626,6 +626,63 @@ def _wrap_text(text: str, font, max_width: int, draw, measure=None) -> list[str]
     return result or [""]
 
 
+def attribution_pos(
+    *,
+    col_left: int,
+    quote_bot: int,
+    attr_h: int,
+    gap: int,
+    limit_bot: "int | None" = None,
+) -> "tuple[int, int]":
+    """Top-left anchor for the attribution line, as a pure function of the layout.
+
+    The attribution left-aligns to the **quote column** (``col_left``) and hangs a
+    ``gap`` below the quote block's last baseline. Anchoring to the text column
+    rather than centring under the avatar is what keeps a long name off the disc:
+    the column already starts clear of the avatar's drawn footprint, so no name
+    length can reach back into it. Previously this centred on the disc
+    (``pfp_cx - attr_w // 2``), which for any name wider than the disc collapsed
+    onto the left-margin floor and struck the avatar's lower-left arc.
+
+    ``limit_bot`` (a frame opening's bottom edge) clamps the line up so it stays
+    inside the frame. That clamp is safe here precisely because the line is
+    horizontally clear of the avatar — pulling it up can no longer collide.
+    """
+    ay = quote_bot + gap
+    if limit_bot is not None:
+        ay = min(ay, limit_bot - attr_h - 4)
+    return col_left, ay
+
+
+def attribution_block_h(attr_h: int, gap: int) -> int:
+    """Vertical space the attribution claims, for centring quote+name as one group."""
+    return attr_h + gap if attr_h else 0
+
+
+def fit_attribution_text(
+    text: str, avail_w: int, measure, sizes: "list[int]"
+) -> "tuple[int, str]":
+    """Largest size in ``sizes`` whose measured width fits ``avail_w``.
+
+    Anchoring the attribution to the quote column means it can no longer borrow the
+    card's left margin for extra room, so a very long name has to be made to fit
+    rather than run off the column's right edge. Shrink first — a slightly smaller
+    byline still reads — and only truncate at the floor size, where nothing else
+    would keep the name on the card.
+
+    ``measure(text, size) -> width`` so the caller owns font loading (and whether
+    emoji widths come from pilmoji or a bare textbbox).
+    """
+    for sz in sizes:
+        if measure(text, sz) <= avail_w:
+            return sz, text
+    sz = sizes[-1]
+    t = text
+    while len(t) > 4 and measure(f"{t}…", sz) > avail_w:
+        t = t[:-1]
+    return sz, f"{t.rstrip()}…"
+
+
 def _make_emoji_measure(base_fn, emoji_size: int):
     """Wrap a text-measure function to account for Discord custom emoji token widths."""
     def _measure(s: str) -> int:
@@ -851,6 +908,23 @@ def render_quote_card(
     line_h = int(probe[3] - probe[1])
     line_gap = max(6, line_h // 5)
 
+    # Measure the attribution up front: the quote block is centred as a group with
+    # the name below it, so the layout has to know the name's height before it can
+    # pick the text's top. Drawn later (see attribution_pos) from these same
+    # numbers, so measurement and placement can't drift apart.
+    attr_text = f"— {author_name}" if author_name else ""
+    attr_w = attr_h = 0
+    if attr_text and not _no_pfp:
+        if _HAS_PILMOJI:
+            # Measure through pilmoji so an emoji in the name contributes its drawn
+            # width — textbbox would only count the tofu box it replaces.
+            attr_w, attr_h = _emoji_getsize(attr_text, font=attr_font)  # type: ignore[misc]
+        else:
+            _ab = draw.textbbox((0, 0), attr_text, font=attr_font)
+            attr_w, attr_h = int(_ab[2] - _ab[0]), int(_ab[3] - _ab[1])
+    _attr_gap = max(12, int(attr_size * 0.85))
+    _attr_block = attribution_block_h(attr_h, _attr_gap)
+
     if _HAS_PILMOJI:
         def _base_m(t: str) -> int:
             return _emoji_getsize(t, font=body_font)[0]  # type: ignore[misc]
@@ -877,6 +951,18 @@ def render_quote_card(
 
     left_margin = int(width * 0.06)
 
+    # Where the attribution aligns, per layout branch: the quote column's left edge
+    # at a given row, plus any frame bottom that clamps it. Defaults cover the
+    # no-pfp branch, which draws a centered header instead of an attribution.
+    def _col_left(_y: int) -> int:
+        return text_pad_l
+
+    def _col_right(_y: int) -> int:
+        return text_pad_l + text_col_w
+
+    _attr_left, _attr_right = _col_left, _col_right
+    _attr_limit_bot: "int | None" = None
+
     if _mask and _mask_opening is not None:
         # Fit the quote into the frame's own opening: per-row left/right bounds
         # from the transparency, flowing around the fitted avatar disc, with the
@@ -890,7 +976,10 @@ def render_quote_card(
         # a little top/bottom so lines don't kiss the opening edge.
         _linset = max(6, _full_measure("n"))
         _vpad = max(6, int(height * 0.02))
-        _attr_reserve = int(attr_size * 1.7) if (_has_disc and author_name) else 0
+        # Reserve the attribution's *measured* height, not a 1.7×font-size guess —
+        # pilmoji draws an emoji taller than the font's own line box, so a name
+        # bearing one overran the guess and crowded the frame's bottom edge.
+        _attr_reserve = _attr_block if (_has_disc and author_name) else 0
 
         def _m_left(y: int) -> int:
             y = min(max(int(y), op.top), op.bot)
@@ -970,6 +1059,10 @@ def render_quote_card(
                 return lo  # quote-with-avatar: keep the left-aligned column
             hi = _m_right(y)  # banner over a custom frame: center in the opening
             return lo + max(0, (hi - lo - _full_measure(s)) // 2)
+
+        _attr_left = _m_left          # attribution shares the quote column's bounds
+        _attr_right = _m_right
+        _attr_limit_bot = op.bot
     elif _no_pfp:
         # Left-justified body: keep ~one character of buffer off the left frame.
         left_margin += max(1, _full_measure("n"))
@@ -1040,11 +1133,17 @@ def render_quote_card(
     else:
         _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
         lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
-        _content_top = (height - (len(lines) * line_h + max(0, len(lines) - 1) * line_gap)) // 2
+        # Centre the quote AND its attribution as one group. Centring the quote
+        # alone (what this did before) pushed the pair top-heavy: the name hung
+        # below the already-centred block, leaving a dead band along the bottom.
+        _blk_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
+        _content_top = (height - (_blk_h + _attr_block)) // 2
         text_y_start = _content_top
 
         def _line_x(s: str, y: int) -> int:
             return text_pad_l
+        # _attr_left/_attr_right/_attr_limit_bot keep their defaults here: this is
+        # the plain text column the attribution already aligns to.
 
     # Soft gaussian text shadow
     _shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -1154,26 +1253,35 @@ def render_quote_card(
             draw.ellipse(_outer, outline=(255, 248, 220), width=_rt)
             draw.ellipse(_inner, outline=theme.attribution_color, width=3)
 
-        # Author name centered below pfp
+        # Author name below the quote, left-aligned to the quote column (not
+        # centered under the pfp — see attribution_pos for why).
         if author_name:
-            attr_text = f"— {author_name}"
-            if _HAS_PILMOJI:
-                # Measure through pilmoji so an emoji in the name contributes its
-                # drawn width — textbbox would only count the tofu box it replaces.
-                attr_w, attr_h = _emoji_getsize(attr_text, font=attr_font)  # type: ignore[misc]
-            else:
-                attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
-                attr_w = attr_bbox[2] - attr_bbox[0]
-                attr_h = attr_bbox[3] - attr_bbox[1]
-            # Center under the (left-shifted) pfp, but never let a long name slide
-            # behind the left gold frame.
-            ax = max(left_margin, pfp_cx - attr_w // 2)
-            ay = pfp_cy + pfp_r + int(height * 0.04)
-            if _mask and _mask_opening is not None:
-                # Keep the attribution inside the frame's opening.
-                ay = min(ay, _mask_opening.bot - attr_h - 4)
-                _ry = min(max(int(ay), _mask_opening.top), _mask_opening.bot)
-                ax = max(_mask_opening.left[_ry] + 4, pfp_cx - attr_w // 2)
+            _quote_bot = text_y_start + len(lines) * line_h + max(0, len(lines) - 1) * line_gap
+            _row = _quote_bot + _attr_gap
+            ax, ay = attribution_pos(
+                col_left=_attr_left(_row),
+                quote_bot=_quote_bot,
+                attr_h=attr_h,
+                gap=_attr_gap,
+                limit_bot=_attr_limit_bot,
+            )
+            # Shrink (then truncate) a name too wide for the column. Only ever
+            # reduces height, so the space reserved from the full-size measurement
+            # above stays sufficient.
+            def _attr_measure(t: str, sz: int) -> int:
+                _f = _load_font(sz, font_style)
+                if _HAS_PILMOJI:
+                    return _emoji_getsize(t, font=_f)[0]  # type: ignore[misc]
+                _bb = draw.textbbox((0, 0), t, font=_f)
+                return int(_bb[2] - _bb[0])
+
+            _avail = max(60, _attr_right(_row) - ax)
+            if attr_w > _avail:
+                _sz, attr_text = fit_attribution_text(
+                    attr_text, _avail, _attr_measure,
+                    list(range(attr_size, max(14, attr_size // 2) - 1, -1)),
+                )
+                attr_font = _load_font(_sz, font_style)
             _draw_text_layers(
                 bg, draw,
                 [
