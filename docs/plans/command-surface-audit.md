@@ -9,8 +9,9 @@ each deletion candidate was traced to a concrete dashboard route *and* panel
 before being recommended. Two candidates failed that trace and were kept — see
 "Kept after verification".
 
-**Count:** 190 commands before, **177** after — 9 removed as dashboard
-duplicates, then 4 more when the `/dm_*` set folded into a panel (`f24bcf87`).
+**Count:** 190 commands before, **165** after — 9 dashboard duplicates, 4 more
+when the `/dm_*` set folded into a panel (`f24bcf87`), 6 in the Gap 3 redundancy
+pass (`912f4613`), and 6 panel-posters replaced by one dashboard route.
 
 **Naming caveat.** Several groups are attached to a parent at *runtime*
 (`games.add_command(...)` in each cog's `setup()`, over the shared groups in
@@ -25,7 +26,7 @@ the moment** (keep) / **admin config** (delete, panel should exist) /
 
 ---
 
-## Done — 13 commands removed
+## Done — 25 commands removed
 
 ### Round 1 — dashboard duplicates (9)
 
@@ -93,23 +94,27 @@ filename. Renaming that cog is a loose end.
 
 ---
 
-## Gap 1 — admin config with no dashboard route (15 commands)
+## Gap 1 — admin config with no dashboard route (was 15; 8 done, 7 open)
 
-These are admin config by CLAUDE.md's definition, but every one failed its parity
-check: the dashboard has no route to do the same thing. **Do not delete before
-building the route** — each is currently the only way to perform its action.
+These were admin config by CLAUDE.md's definition, and every one failed its
+parity check: the dashboard had no route to do the same thing. **Do not delete
+before building the route** — each is otherwise the only way to perform its
+action.
 
-Almost all of them are the same shape: *post a sticky panel into a channel*.
+The six that were the same shape — *post a sticky panel into a channel* — are
+**done**: they collapsed into one route and one page, ~~struck through~~ below.
+`/quote-role` and `/spotify_authorize` are done too, by different means. Seven
+remain.
 
 | Command | Gap |
 |---|---|
-| `/bank post-guide` | No route. Cog calls `place_or_refresh` (`economy_cog.py:4243`) |
-| `/bank post-leaderboard` | No route (`economy_cog.py:4389`) |
-| `/bank post-shop` | No route (`economy_cog.py:4437`) |
-| `/voice-admin post-panel` | `POST /voice-master/post-howto` exists but posts the *member how-to embed*, a different thing from the persistent owner-control panel |
-| `/ticket panel` | No route |
-| `/guess prompt` | No route |
-| `/quote-role` | No route |
+| ~~`/bank post-guide`~~ | **Done** — Config → Channel Panels |
+| ~~`/bank post-leaderboard`~~ | **Done** — Config → Channel Panels |
+| ~~`/bank post-shop`~~ | **Done** — Config → Channel Panels |
+| ~~`/voice-admin post-panel`~~ | **Done** — Config → Channel Panels. (Not the same as `POST /voice-master/post-howto`, which posts the member how-to embed) |
+| ~~`/ticket panel`~~ | **Done** — Config → Channel Panels |
+| ~~`/guess prompt`~~ | **Done** — Config → Channel Panels |
+| ~~`/quote-role`~~ | **Done** — removed; the trigger matches the role by name, so an admin creates it by hand |
 | `/risky reset_state` | No route |
 | `/games config game-status` | No route |
 | `/games config game-end` | No route |
@@ -118,7 +123,7 @@ Almost all of them are the same shape: *post a sticky panel into a channel*.
 | `/setup` | A DM/button config wizard — a textbook violation, but also the only in-Discord path for a fresh server admin who hasn't found the dashboard. Needs a decision, not a reflex |
 | `/grant_audit` | Half-covered: `GET /api/reports/grant-audit` serves the panel, but nothing posts the auto-updating Discord card |
 
-**Recommended next step — and yes, all of them can move.** Checked 2026-07-28.
+### How the six moved — the pattern for anything similar
 
 Correcting an earlier overstatement in this document: **six** of the commands
 above post a panel, not eight. `/quote-role` creates a mentionable role,
@@ -148,17 +153,32 @@ is-a-text-channel / bot-can-post-here checks a route needs. Per command:
 
 Four of the six are `StickyPanel` instances hanging off a cog, and
 `place_or_refresh` takes exactly `(guild, channel)` — everything a route already
-has. That makes a **single generic route** viable rather than six near-identical
-ones: `POST /api/panels/{panel_key}/post {channel_id}`, backed by a registry
-mapping `panel_key` → `(cog name, attribute)`. `/guess prompt` needs a one-line
-adapter; `/ticket panel` needs its send lifted out of the command body first.
+has. Rather than six near-identical routes, each cog now exposes one uniform
+`async post_*(guild, channel)` method and
+`bot_modules/services/panel_registry.py` maps a key to it. The route
+(`POST /api/panels/{key}/post`) owns only the plumbing the six commands each
+repeated: resolve guild, resolve channel, check the bot can post there, call the
+cog, report what happened. `GET /api/panels` feeds the **Config → Channel
+Panels** page.
 
-The DM panel (`f24bcf87`) is the worked example of the whole shape: route posts
-it, cog auto-posts it on boot, no command. Note the lesson from that one — if a
-panel becomes the only route to something, it needs the boot-time autopost too,
-or a guild whose admin never pressed the button has no surface at all.
+Three things worth carrying to any similar job:
 
----
+- **Two panels own their destination.** Voice Control posts into its configured
+  control channel and Guess Who into the configured Guess channel, because their
+  buttons drive a flow the cog only looks for in that one place. Honouring a
+  picked channel would strand the buttons somewhere nothing reads. The route
+  ignores `channel_id` for these and the API flags them so the UI hides the
+  picker.
+- **These do *not* get the boot-time autopost the DM panel needed.** That one
+  became the only route to a member's DM settings; these six all sit alongside
+  commands that still work (`/ticket open`, `/guess submit`, `/voice …`,
+  `/bank wallet`), so a guild that never posts one loses discoverability, not
+  capability. Posting into someone's channel unasked is the bigger imposition.
+  Worth stating because "the DM panel does it" is the obvious wrong inference.
+- **The registry resolves by name at request time**, so nothing at import time
+  catches a rename — a stale entry would first appear as a 503 when an admin
+  presses Post. `tests/test_panel_registry.py` is the compile-time check the
+  dynamic lookup doesn't get.
 
 ## Gap 2 — features with no dashboard surface at all (13 commands)
 
@@ -177,14 +197,15 @@ arguably self-service for mods rather than config.
 
 ---
 
-## Gap 3 — redundant commands (~10, no dashboard work needed)
+## Gap 3 — redundant commands — DONE 2026-07-28
 
 A different axis from the rest of this document. Everything above is about
 commands being in the *wrong place*; these are commands that shouldn't exist as
 separate commands at all. None of them needs a panel built first, which makes
-this the cheapest list here. Verified by reading the implementations 2026-07-28.
+this the cheapest list here. Verified by reading the implementations 2026-07-28,
+and worked in `912f4613` — six commands removed, 177 → 171.
 
-**Verified duplicates**
+**Verified duplicates** — both removed.
 
 | Commands | Finding |
 |---|---|
@@ -193,17 +214,26 @@ this the cheapest list here. Verified by reading the implementations 2026-07-28.
 
 **"Collapse controls" violations** — CLAUDE.md: *"One dial with a few states
 beats several overlapping toggles."* In each pair the two callbacks are
-byte-identical except for one boolean handed to a shared helper:
+byte-identical except for one boolean handed to a shared helper. Both collapsed
+into an option on the surviving command.
 
 | Commands | Differ only by |
 |---|---|
 | `/risky start` · `/risky start_no_ping` | `ping=True/False` + `skip_min_game_time` into `_start_game`; identical signatures |
-| `/ffa` · `/ffa_banner` | `banner=False/True` into `start_ffa`; identical signatures (`kind`, `tags`, `prompt`) |
 | `/away on` · `/away off` | A two-state toggle split across two commands |
 
-Three commands recoverable from six, no capability lost. Note `/risky start` had
-7 uses in the usage window — the pair is live, so a resignature is visible to
-members.
+**`/ffa_banner` was on this list and should not have been.** The callbacks *are*
+byte-identical but for `banner`, which is what put it here — and that reading
+missed everything else that references the name. It is a first-class game type:
+own emoji, display name "Truth or Dare Card", its own `launch_banner` in the
+scheduler registry (`bot.game_launchers`), a place in the schedulable list, and
+its own prompt-tag mapping. Every other game type has a matching
+`/games play <type>` command, so collapsing this one into an option would break
+that pattern for no gain. Left alone — two collapses, not three.
+
+That makes three near-misses in this audit of the same shape (`/policy list`,
+the corrected-rule regression, this): reading the implementation is not the same
+as checking what *else* points at it.
 
 **Sprawl worth collapsing into a panel**
 

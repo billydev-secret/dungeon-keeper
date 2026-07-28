@@ -484,32 +484,28 @@ class JailCog(commands.Cog):
 
     # ── /ticket ───────────────────────────────────────────────────────────
 
-    @ticket.command(name="panel", description="Post the ticket-creation button in a channel.")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.describe(channel="Channel to post the panel in")
-    async def ticket_panel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        ctx = self.ctx
-        guild = interaction.guild
-        member = interaction.user
-        if (
-            not isinstance(member, discord.Member)
-            or guild is None
-            or not _is_mod(member, ctx)
-        ):
-            await interaction.response.send_message("❌ Mod only.", ephemeral=True)
-            return
+    async def post_ticket_panel(self, guild, channel):
+        """Post the Open Ticket button into ``channel``.
 
-        accent = await resolve_accent_color(ctx.db_path, guild)
+        Entry point for the dashboard's panel poster (``panel_registry``);
+        replaced /ticket panel on 2026-07-28. Unlike the StickyPanel-backed
+        panels this posts a fresh message each time and records it, so an older
+        panel keeps working until someone deletes it — the button is stateless,
+        and silently killing a panel members may have bookmarked would be worse
+        than leaving two live.
+
+        Returns the new message, or None if Discord refused the post.
+        """
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_ticket_panel_embed(color=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
-        msg = await channel.send(embed=embed, view=view)
-        _add_ticket_panel(ctx, guild.id, channel.id, msg.id)
-        await interaction.response.send_message(
-            f"✅ Ticket panel posted in {channel.mention}", ephemeral=True
-        )
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.HTTPException:
+            return None
+        _add_ticket_panel(self.ctx, guild.id, channel.id, msg.id)
+        return msg
 
     @ticket.command(
         name="open", description="Open a private support ticket with the mod team."

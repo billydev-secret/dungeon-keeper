@@ -1639,54 +1639,27 @@ class VoiceMasterCog(commands.Cog):
             return
         await _ephemeral(interaction, f"Owner: {owner.mention}")
 
-    @voice_admin.command(
-        name="post-panel",
-        description="Post (or repost) the persistent owner-control panel in the configured control channel.",
-    )
-    async def post_panel_cmd(self, interaction: discord.Interaction) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("❌ Administrator only.", ephemeral=True)
-            return
-        if interaction.guild is None:
-            await interaction.response.send_message("❌ Server only.", ephemeral=True)
-            return
-        _pp_guild_id = interaction.guild.id
+    async def post_control_panel(self, guild, channel=None):
+        """Place the persistent owner-control panel.
 
-        def _fetch_pp_cfg():
-            with self.ctx.open_db() as conn:
-                return load_voice_master_config(conn, _pp_guild_id)
-
-        cfg = await asyncio.to_thread(_fetch_pp_cfg)
+        Entry point for the dashboard's panel poster (``panel_registry``);
+        replaced /voice-admin post-panel on 2026-07-28. ``channel`` is ignored —
+        this panel belongs in the control channel configured on the Voice
+        Control page, and letting a caller override that would strand the
+        buttons somewhere the cog never looks. Returns None when no control
+        channel is set or it is no longer a text channel.
+        """
+        cfg = await asyncio.to_thread(self._load_config_for, guild.id)
         if not cfg.control_channel_id:
-            await interaction.response.send_message(
-                "❌ No control channel set. Configure it in the web dashboard first.",
-                ephemeral=True,
-            )
-            return
-        channel = (
-            interaction.guild.get_channel(cfg.control_channel_id)
-            if interaction.guild
-            else None
-        )
-        if not isinstance(channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "❌ Configured control channel is missing or not a text channel.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        msg = await self.panel.place(interaction.guild, channel)
-        if msg is None:
-            await interaction.followup.send(
-                "❌ I can't post in the control channel — check my Send Messages "
-                "and Embed Links permissions.",
-                ephemeral=True,
-            )
-            return
-        await interaction.followup.send(
-            f"Panel is live: {msg.jump_url} — it stays at the bottom of the channel.",
-            ephemeral=True,
-        )
+            return None
+        target = guild.get_channel(cfg.control_channel_id)
+        if not isinstance(target, discord.TextChannel):
+            return None
+        return await self.panel.place(guild, target)
+
+    def _load_config_for(self, guild_id: int):
+        with self.ctx.open_db() as conn:
+            return load_voice_master_config(conn, guild_id)
 
 
 async def setup(bot: Bot) -> None:

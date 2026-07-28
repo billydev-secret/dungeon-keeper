@@ -154,6 +154,7 @@ const SECTIONS = [
         { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js", keywords: "dead chat prompts", help: "help-chat-revive" },
         { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true, keywords: "quotes border color" },
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
+        { id: "channel-panels",    label: "Channel Panels",    module: "./panels/channel-panels.js", adminOnly: true, keywords: "post panel sticky ticket shop leaderboard guide prompt voice control" },
       ]},
       { heading: "Voice", items: [
         { id: "config-voice-master", label: "Voice Control",     module: "./panels/config-voice-master.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels" },

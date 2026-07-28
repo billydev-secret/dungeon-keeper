@@ -4197,3 +4197,30 @@ fieldset.field {
   color: var(--ink-dim);
   padding: 0;
 }
+
+/* ── Channel Panels ──────────────────────────────────────────────────
+   One row per postable panel: description on the left, channel picker and
+   Post button on the right. The row wraps rather than sitting on a fixed
+   two-column grid, so the picker drops under the description on a phone
+   instead of squeezing both (see docs/web_testing.md on wrapping flex rows). */
+.panel-list { display: flex; flex-direction: column; gap: 4px; }
+.panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, #333);
+}
+.panel-row:last-child { border-bottom: 0; }
+.panel-row__main { flex: 1 1 260px; min-width: 0; }
+.panel-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.panel-row__actions [data-status] { min-width: 0; overflow-wrap: anywhere; }

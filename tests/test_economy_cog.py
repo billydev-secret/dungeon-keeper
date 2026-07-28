@@ -1010,17 +1010,17 @@ def _shop_panel_stored(db) -> tuple[int, int]:
 
 @pytest.mark.asyncio
 async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
+    """Entry point is post_shop_panel(guild, channel) now — /bank post-shop was
+    replaced by Config → Channel Panels on 2026-07-28."""
     _enable(db)
     cog = _make_cog(ctx)
     channel = _panel_channel()
-    interaction = _interaction(_member(admin=True))
-    interaction.channel = channel
 
     with patch(
         "bot_modules.cogs.economy_cog.feature_gate_ok",
         new=AsyncMock(return_value=True),
     ):
-        await cog.bank_post_shop.callback(cog, interaction, None)
+        await cog.post_shop_panel(FakeGuild(id=GUILD_ID), channel)
 
     kwargs = channel.send.await_args.kwargs
     assert "Perk Shop" in kwargs["embed"].title
@@ -1039,32 +1039,23 @@ async def test_post_shop_refreshes_in_place_with_view(ctx, db):
     channel = _panel_channel()
     old = MagicMock(edit=AsyncMock(), delete=AsyncMock(), id=4444)
     channel.get_partial_message = MagicMock(return_value=old)
-    interaction = _interaction(_member(admin=True))
-    interaction.channel = channel
 
     with patch(
         "bot_modules.cogs.economy_cog.feature_gate_ok",
         new=AsyncMock(return_value=True),
     ):
-        await cog.bank_post_shop.callback(cog, interaction, None)
+        await cog.post_shop_panel(FakeGuild(id=GUILD_ID), channel)
 
     assert "view" in old.edit.await_args.kwargs  # re-priced labels ride along
     channel.send.assert_not_awaited()
     assert _shop_panel_stored(db) == (777, 4444)
 
 
-@pytest.mark.asyncio
-async def test_post_shop_plain_member_refused(ctx, db):
-    _enable(db)
-    cog = _make_cog(ctx)
-    channel = _panel_channel()
-    interaction = _interaction(_member())
-    interaction.channel = channel
-
-    await cog.bank_post_shop.callback(cog, interaction, None)
-
-    assert "permission" in interaction.response.send_message.await_args.args[0]
-    channel.send.assert_not_awaited()
+# The "plain member is refused" case moved with the command. post_shop_panel is
+# unguarded by design — its only caller is POST /api/panels/{key}/post, which is
+# admin-gated by the route (and covered by tests/web/test_panels_routes.py plus
+# the authz sweep). Re-checking permissions in the cog would duplicate a gate
+# that now has exactly one door.
 
 
 # ── shop panel sticky (keep it at the channel bottom) ────────────────────────

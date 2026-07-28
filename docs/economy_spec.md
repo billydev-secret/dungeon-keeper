@@ -1309,7 +1309,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
 - **Discord is the entire v1 member surface** (decided — the member-facing dashboard
   wallet page and role studio are v2). One top-level group **`/bank`** (`wallet`,
   `pay`, `quests`, `shop`, `gift`, `sponsor`, `emoji`, `role`, `mute`, `grant` [mod],
-  `post-guide` [mod], `post-leaderboard` [mod], `post-shop` [mod])
+  the guide, leaderboard, and shop panels are posted from Config → Channel Panels)
   plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
@@ -1349,7 +1349,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
     file uploads, so image icons (256KB max) still arrive via slash command. The
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
     modals.
-- **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
+- **Channel guide panel (shipped):** posted from **Config → Channel Panels on the dashboard (replaced the slash command 2026-07-28)** [admin] —
   single branded "how it works" embed (a **Notifications** field explaining the
   panel's own 🔔 toggle for the opt-in DM role — it replaced a **Joining** field
   that pointed at `<id:customize>` back when that role also gated the channels —
@@ -1369,7 +1369,7 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   with the command under a per-guild lock. All three channel panels (guide, shop,
   leaderboard) stick to the bottom this way, each with its own ref cache, debounce
   task, and lock.
-- **Shop panel (shipped):** **`/bank post-shop [channel]`** [mod] posts the
+- **Shop panel (shipped):** posted from **Config → Channel Panels on the dashboard (replaced the slash command 2026-07-28)** [admin] —
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
   prices templated from `EconSettings`, feature-gated rows annotated) with a
@@ -1391,10 +1391,10 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   per-guild lock), so the one panel members are meant to tap never scrolls away.
   The repost re-derives gating, icon prices, and accent through
   `_build_shop_panel_embed` — the same builder the command uses, so a re-stick
-  can't serve a staler panel than `/bank post-shop` would.
+  can't serve a staler panel than a fresh post from Channel Panels would.
   Gifting stays command-only (`/bank gift` needs a
   target member, which a button can't carry).
-- **Leaderboard panel (shipped, live):** **`/bank post-leaderboard
+- **Leaderboard panel (shipped, live):** posted from Channel Panels (**`/bank post-leaderboard
   [channel]`** [mod] posts a single live status embed — the economy's
   centerpiece surface. Content, top to bottom: **today's pulse** (guild-local
   coins paid / quests completed / distinct earners, plus dailies-reset and

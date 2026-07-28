@@ -269,6 +269,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(docs_routes.router, prefix="/api", tags=["docs"])
 
+    from web_server.routes import panels as panels_routes
+
+    app.include_router(panels_routes.router, prefix="/api", tags=["panels"])
+
     from web_server.routes import role_menus as role_menus_routes
 
     app.include_router(role_menus_routes.router, prefix="/api", tags=["role-menus"])
