@@ -170,19 +170,23 @@ If usage should actually inform future rounds, the fix is a counter table
 hook — a small change that would make the next audit evidence-driven instead of
 inference-driven.
 
-## Known regression from round 1
+## Regression from round 1 — found, fixed
 
 Deleting `/rules-watch label` lost the ability to record a **corrected rule
-number**. The parity check confirmed the panel labels events — it did not check
-that it labels them *with the same fields*. `POST
-/api/rules-watch/events/{id}/label` and `service.upsert_label` both accept
-`corrected_rule`; `rules-watch.js:431` sends only `is_violation`. The column now
-fills only from the **Report Rule Violation** context menu.
+number**. The parity check confirmed the panel labels events; it did not check
+that it labels them *with the same fields*. The endpoint and `service.upsert_label`
+had always accepted `corrected_rule` — `rules-watch.js` simply never sent one.
 
-Fix is a rule-number input beside the label buttons. Logged here rather than
-quietly dropped because "the dashboard has it" was the stated reason for the
-deletion, and it was true only in part — the same failure mode as the
-`/policy list` near-miss, caught by review instead of by the check.
+Fixed by adding a **Correct rule** input beside the label buttons, sent only with
+a confirmation (a dismissal has no correct rule). `tests/test_rules_watch_labels.py`
+locks the persistence contract, because nothing reads the column back into the UI
+where a future break would be visible.
+
+Worth keeping in view as a method note: this is the same failure mode as the
+`/policy list` near-miss — *"a panel for this feature exists"* is not the same
+check as *"this panel does this thing, with this data."* Two of the three
+parity misses in this audit were that exact substitution, and the second one
+shipped. A parity claim should name the field, not the feature.
 
 ## Coordination note
 

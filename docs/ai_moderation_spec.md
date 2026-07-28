@@ -122,13 +122,16 @@ For `immediate` and `digest` events with an identified target, a background task
 #### Label capture
 When a moderator clicks **✅ Confirmed violation** or **❌ False positive** on an alert embed, or confirms/dismisses through the web dashboard:
 - A row is written to `rules_labels` with the verdict, the labeling moderator's ID, and a timestamp.
-- Corrected rule numbers are **not currently capturable from the review queue.**
-  `POST /api/rules-watch/events/{id}/label` and `service.upsert_label` both accept
-  `corrected_rule`, but `rules-watch.js` sends only `is_violation` — the sole
-  surface that ever supplied one was `/rules-watch label`, removed 2026-07-28.
-  Restoring it needs a rule-number input beside the label buttons; until then the
-  column only fills from the **Report Rule Violation** context menu, which
-  captures a rule number in its modal.
+- Corrected rule numbers are captured by the **Correct rule** input beside the
+  review queue's label buttons, which posts `corrected_rule` alongside
+  `is_violation`. It is sent only with a confirmation: a dismissal has no correct
+  rule, so anything typed is dropped rather than written against `is_violation=0`.
+  Leaving it blank omits the field, so the column stays NULL rather than recording
+  an empty-string "correction". Re-labelling an event overwrites the previous
+  correction, and re-labelling it as a false positive clears it.
+  (This input replaced `/rules-watch label`'s `corrected_rule` parameter; the
+  command was removed 2026-07-28 and for one commit the capability was lost —
+  see `docs/plans/command-surface-audit.md`.)
 - The alert embed's buttons are disabled after labeling.
 
 The mod-only **Report Rule Violation** message context menu is the reverse path: instead of labeling an event the monitor raised, it *creates* one — a manual `immediate`-tier event for the reported message, pre-labeled as a confirmed violation, with an optional rule number and note captured in a modal. These are high-value positive training examples and the primary human-reporting capture path (see §12.4 of `rules_watch_cog.md`).

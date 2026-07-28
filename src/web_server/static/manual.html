@@ -1654,7 +1654,9 @@
       dashboard under <strong>Moderation → Rules Watch</strong>. The event list has tier filters
       (<strong>All / Immediate / Digest / Logged</strong>) and shows only unlabeled events by
       default, so the Digest filter is the batch-review queue. Each row carries
-      <strong>✅ Confirmed violation</strong> and <strong>❌ False positive</strong> buttons. The
+      <strong>✅ Confirmed violation</strong> and <strong>❌ False positive</strong> buttons, plus an
+      optional <strong>Correct rule</strong> box — fill that in when the flag was a real violation
+      but the guard matched it to the wrong rule; it's ignored if you dismiss the event instead. The
       <strong>Stats</strong> tab has signal firing rates, label counts, and the false-positive rate.
       Whether monitoring is on and which channel gets immediate alerts lives on
       <strong>Config → Rules Watch</strong>. The old <code>/rules-watch digest</code>,
