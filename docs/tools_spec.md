@@ -1,14 +1,14 @@
 # Tools — Feature Spec
 
-Internal owner-only commands, an admin-only Bot Identity panel on the dashboard, the open `/support` command, and the slash-command sync gate that runs on every startup.
+The owner-only `/reload_cog`, an admin-only Bot Identity panel on the dashboard, the open `/support` command, and the slash-command sync gate that runs on every startup.
 
 ## Commands
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/reload_cog extension:<ext>` | Slash | Bot owner | Hot-reload an extension and its imported modules, then resync the command tree if it changed |
-| `/spotify_authorize` | Slash | Bot owner | Ephemeral link to the dashboard's Spotify OAuth flow |
 | `/support` | Slash | Everyone | Ephemeral message with the support-server invite |
+| Connect Spotify | Web (dashboard) | Admin | Config → Global → Integrations. Starts the Spotify OAuth flow (`GET /spotify/authorize` → `/spotify/callback`). Replaced `/spotify_authorize`, which only printed this link |
 | Bot Identity panel | Web (dashboard) | Admin | Change the bot's per-server nickname and guild avatar without touching the global Discord account |
 
 The command-tree sync gate is invoked automatically — once on bot startup, again from `/reload_cog`. It has no member-facing surface.
@@ -23,9 +23,9 @@ The command-tree sync gate is invoked automatically — once on bot startup, aga
 4. Recompute the slash-command tree signature. If it changed, push the update to Discord. Reply ephemerally with "Reloaded {ext}. (commands resynced)" or "... (commands unchanged)".
 5. On any error during the reload or resync, reply ephemerally with the exception class and message.
 
-### `/spotify_authorize`
+### Connect Spotify
 
-Owner-gated. Replies ephemerally with a link to the dashboard's `/spotify/authorize` route. The dashboard handles the actual OAuth dance — this command is just a convenience shortcut for the owner so they don't have to navigate manually.
+The whole OAuth flow has always lived on the dashboard (`GET /spotify/authorize` → `/spotify/callback`, both admin-gated); the retired `/spotify_authorize` command did nothing but message the owner that URL. It is now a **Connect Spotify** button under Config → Global → Integrations, so the link is discoverable where the rest of the bot's configuration lives. One authorization covers the whole bot.
 
 ### `/support`
 
@@ -55,7 +55,7 @@ If the dev guild sync hits "missing access" (the bot wasn't invited with the `ap
 
 ## Permissions
 
-- `/reload_cog` and `/spotify_authorize`: bot owner only (Application Owner or any id in the bot's explicit owner list).
+- `/reload_cog`: bot owner only (Application Owner or any id in the bot's explicit owner list). The dashboard's Connect Spotify button is admin-gated by the route.
 - `/support`: everyone.
 - Bot Identity panel: dashboard admin perm.
 - Bot-side: standard slash-command perms only. The Bot Identity panel additionally needs **Change Nickname** in the target guild for the nickname edit to land.
@@ -64,7 +64,7 @@ If the dev guild sync hits "missing access" (the bot wasn't invited with the `ap
 
 | When | The user sees |
 |---|---|
-| Non-owner runs `/reload_cog` or `/spotify_authorize` | "Bot owner only." |
+| Non-owner runs `/reload_cog` | "Bot owner only." |
 | `/reload_cog` extension isn't loaded | "Unknown extension `{ext}`." |
 | Reload or resync raises | "Reload failed: `{ExcType}: {message}`" |
 | Bot Identity panel: bot or guild unavailable | "Bot not available" (503) |
@@ -84,7 +84,7 @@ If the dev guild sync hits "missing access" (the bot wasn't invited with the `ap
 
 | Key | Purpose |
 |---|---|
-| `DASHBOARD_BASE_URL` (env) | Where `/spotify_authorize` links to. Defaults to localhost |
+| `DASHBOARD_BASE_URL` (env) | Dashboard base URL, used for OAuth redirects. Defaults to localhost |
 | Dev / prod mode + dev guild id (env) | Picks guild-scoped vs global sync. Documented in [[dungeon-keeper-test-env-spec]] |
 
 The support-server invite is a hard-coded constant — changing it needs a redeploy.

@@ -119,8 +119,11 @@ def _build_help_pages(
                     ),
                     ("/birthday set", "Set your own birthday."),
                     ("/wellness setup", "Opt in to wellness — pick timezone and enforcement style."),
-                    ("/wellness away on", "Turn on your away auto-reply."),
-                    ("/wellness away off", "Turn off your away auto-reply."),
+                    (
+                        "/wellness away set state:[on|off]",
+                        "Turn your away auto-reply on or off; pass a message to "
+                        "change what it says.",
+                    ),
                     ("/confess", "Open the anonymous confession form."),
                     (
                         "DM panel → My DM Settings",

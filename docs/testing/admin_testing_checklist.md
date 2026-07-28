@@ -57,7 +57,7 @@ For testers with **Administrator** (or bot-owner access for the handful of owner
 
 ### Spotify Authorization
 
-- [ ] **`/spotify_authorize`** — Confirm an ephemeral link to the dashboard's Spotify OAuth flow.
+- [ ] **Connect Spotify (dashboard)** — Config → Global → Integrations; confirm the button starts Spotify's consent flow and returns you to the dashboard.
 
 ### Bot Identity
 

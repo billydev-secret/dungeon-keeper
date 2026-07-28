@@ -160,7 +160,8 @@ class _SetupWizardView(discord.ui.View):
                 "• Set message caps, schedule offline hours, find an "
                 "accountability partner and fine-tune everything from the "
                 "**Wellness panel on the web dashboard**.\n"
-                "• `/wellness away on` — Set a custom away message anytime"
+                "• `/wellness away set` — Turn your away auto-reply on or off, with an\n"
+                "  optional custom message"
             ),
             color=WELLNESS_PRIMARY,
         )
@@ -504,12 +505,26 @@ class WellnessCog(commands.Cog):
 
     # ── /wellness away ────────────────────────────────────────────────────
 
-    @away.command(name="on", description="Turn on your away auto-reply.")
+    # One dial with two states rather than two commands (CLAUDE.md: "collapse
+    # controls"). `message` only means anything when switching on, and is
+    # rejected rather than silently dropped when passed with off — a member who
+    # typed a new away message deserves to know it wasn't saved.
+    @away.command(name="set", description="Turn your away auto-reply on or off.")
     @app_commands.describe(
-        message=f"Optional new away message (max {AWAY_MESSAGE_MAX} chars).",
+        state="On or off.",
+        message=f"Optional new away message, when turning on (max {AWAY_MESSAGE_MAX} chars).",
     )
-    async def away_on_cmd(
-        self, interaction: discord.Interaction, message: str | None = None
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="on", value="on"),
+            app_commands.Choice(name="off", value="off"),
+        ]
+    )
+    async def away_set_cmd(
+        self,
+        interaction: discord.Interaction,
+        state: app_commands.Choice[str],
+        message: str | None = None,
     ) -> None:
         ctx = self.ctx
         guild = interaction.guild
@@ -521,48 +536,42 @@ class WellnessCog(commands.Cog):
                 "❌ You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
             )
             return
+
+        turning_on = state.value == "on"
+        if message is not None and not turning_on:
+            await interaction.response.send_message(
+                "❌ An away message only applies when turning away mode **on**.",
+                ephemeral=True,
+            )
+            return
         if message is not None and len(message) > AWAY_MESSAGE_MAX:
             await interaction.response.send_message(
                 f"❌ Away message must be {AWAY_MESSAGE_MAX} characters or fewer.", ephemeral=True
             )
             return
+
         guild_id = guild.id
         user_id = interaction.user.id
 
         def _write():
             with ctx.open_db() as conn:
-                update_away_message(conn, guild_id, user_id, enabled=True, message=message)
+                update_away_message(
+                    conn, guild_id, user_id, enabled=turning_on, message=message
+                )
                 return get_wellness_user(conn, guild_id, user_id)
 
         updated = await asyncio.to_thread(_write)
-        text = (updated.away_message if updated else "") or AWAY_DEFAULT_TEXT
-        embed = _render_away_preview(text, interaction.user)
-        embed.set_footer(text="Away mode ON. Use /wellness away off to turn it off.")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @away.command(name="off", description="Turn off your away auto-reply.")
-    async def away_off_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
-        guild = interaction.guild
-        if guild is None:
-            return
-        user = await _require_active_user(ctx, interaction)
-        if user is None:
+        if not turning_on:
             await interaction.response.send_message(
-                "❌ You haven't opted in yet — run `/wellness setup` first.", ephemeral=True
+                "💚 Away mode is off. Welcome back!", ephemeral=True
             )
             return
-        guild_id = guild.id
-        user_id = interaction.user.id
 
-        def _write():
-            with ctx.open_db() as conn:
-                update_away_message(conn, guild_id, user_id, enabled=False)
-
-        await asyncio.to_thread(_write)
-        await interaction.response.send_message(
-            "💚 Away mode is off. Welcome back!", ephemeral=True
-        )
+        text = (updated.away_message if updated else "") or AWAY_DEFAULT_TEXT
+        embed = _render_away_preview(text, interaction.user)
+        embed.set_footer(text="Away mode ON. Use /wellness away set state:off to turn it off.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: Bot) -> None:

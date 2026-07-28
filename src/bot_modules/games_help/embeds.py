@@ -64,7 +64,7 @@ def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
 
 
 def build_support_embed(color: "discord.Color | None" = None) -> discord.Embed:
-    """Build the ``/games-support`` invite embed."""
+    """Build the ``/support`` invite embed."""
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
@@ -75,5 +75,5 @@ def build_support_embed(color: "discord.Color | None" = None) -> discord.Embed:
         ),
         color=color,
     )
-    embed.set_footer(text="Community Games • /games support")
+    embed.set_footer(text="Dungeon Keeper • /support")
     return embed

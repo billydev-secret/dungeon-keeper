@@ -41,11 +41,10 @@ That is **17 `/games play` commands** (Anonymous AMA's two axes are one command;
 |---|---|---|
 | `/recap` | Everyone | Highlights from the current channel's last 30 minutes of games |
 | `/games help` | Everyone | Catalog embed built from the game name/icon/description registry |
-| `/games support` | Everyone | Static support-server invite |
 | `/games end` | Host or Mod/Admin | End the active game in this channel (confirm popup). AMA additionally tears down its per-question views |
 | `/games join [user]` · `/games leave [user]` | Self, or Host/Mod/Game-Host to move others | Add/remove yourself (or, with elevation, someone else) in a running game that has a roster. Open-submission games reply that there's nothing to join |
 | `/games config game-status` | Mod/Admin (Manage Server or Administrator) | Inspect the active game in the current channel |
-| `/games config game-end` | Mod/Admin | Force-close the active game and post a "Game Force-Closed" notice |
+| `/games end force:true` | Mod/Admin | Force-close the active game without confirming and post a "Game Force-Closed" notice (absorbed `/games config game-end` 2026-07-28) |
 | `/games track watch <channel> <bot> <kind>` | Mod/Admin | Watch a channel + bot and start banking its game-result messages. `kind` (`Gamebot (Cards Against Humanity, Connect 4, Anagrams)` \| `Cat Bot` \| `Wordle` \| `Co-ordle`) selects the parser/payout. Several bots can be tracked per guild, **and the same bot can be watched in several channels at once** — a watch is a `(bot, channel)` pair (migration 135) |
 | `/games track status` | Mod/Admin | List every tracked `(bot, channel)` pair — its kind, enabled/paused state, and messages banked in that channel |
 | `/games track disable [bot]` · `/games track enable [bot]` | Mod/Admin | Pause / resume banking for one bot across **every** channel it's watched in (data retained while paused). `bot` is optional when only one is tracked |

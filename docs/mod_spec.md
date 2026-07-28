@@ -1,6 +1,6 @@
 # Mod — Feature Spec
 
-General moderation and help commands (`ModCog`, `src/bot_modules/cogs/mod_cog.py`): the server-facing `/help` browser and the `/purge` bulk-delete tool. Distinct from `docs/tools_spec.md`, which covers the owner/utility ToolsCog (`/reload_cog`, `/spotify_authorize`, `/support`).
+General moderation and help commands (`ModCog`, `src/bot_modules/cogs/mod_cog.py`): the server-facing `/help` browser and the `/purge` bulk-delete tool. Distinct from `docs/tools_spec.md`, which covers the owner/utility ToolsCog (`/reload_cog`, `/support`).
 
 ## Commands
 

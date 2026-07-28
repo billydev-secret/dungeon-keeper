@@ -116,6 +116,18 @@ export function mount(container) {
             <span data-support-status></span>
           </div>
         </section>
+
+        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
+          <h3 style="margin:0 0 0.25rem">Integrations</h3>
+          <div class="field-hint" style="margin-bottom:1rem">Authorize Spotify so the
+            music player can read private playlists. This opens Spotify's own consent
+            screen and sends you back here — the bot stores only the resulting token.
+            One authorization covers the whole bot, so you only need to do this once,
+            and again if the token is ever revoked. Replaced the
+            <code>/spotify_authorize</code> command, which did nothing but hand you
+            this link.</div>
+          <a href="/spotify/authorize" class="btn btn-secondary">Connect Spotify</a>
+        </section>
       </div>
     `;
 

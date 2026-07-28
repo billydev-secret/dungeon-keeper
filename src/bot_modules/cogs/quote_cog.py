@@ -586,72 +586,10 @@ class QuoteCog(commands.Cog):
             note = f"Posted (trimmed to {QUOTE_MAX_CHARS} characters)."
         await interaction.followup.send(content=note, ephemeral=True)
 
-    @app_commands.command(
-        name="quote-role",
-        description='Create the mentionable "MakeItAQuote" reply-to-quote role.',
-    )
-    @app_commands.default_permissions(manage_roles=True)
-    @app_commands.guild_only()
-    async def quote_role(self, interaction: discord.Interaction) -> None:
-        if not self.bot.ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                NO_PERMISSION, ephemeral=True
-            )
-            return
-        guild = interaction.guild
-        if guild is None:
-            await interaction.response.send_message(
-                "❌ This command can only be used in a server.", ephemeral=True
-            )
-            return
-
-        existing = discord.utils.find(
-            lambda r: _normalize_role_name(r.name) == _TRIGGER_ROLE_NAME, guild.roles
-        )
-        if existing is not None:
-            if not existing.mentionable:
-                try:
-                    await existing.edit(
-                        mentionable=True, reason="Enable reply-to-quote trigger"
-                    )
-                except discord.HTTPException:
-                    await interaction.response.send_message(
-                        f"❌ The {existing.mention} role exists but I couldn't make it "
-                        "mentionable — check that my role sits above it and I have "
-                        "**Manage Roles**.",
-                        ephemeral=True,
-                    )
-                    return
-            await interaction.response.send_message(
-                f"Ready — reply to any message and ping {existing.mention} to "
-                "turn it into a quote card.",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            role = await guild.create_role(
-                name="MakeItAQuote",
-                mentionable=True,
-                reason=f"Reply-to-quote trigger (by {interaction.user})",
-            )
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ I need the **Manage Roles** permission to create the role.",
-                ephemeral=True,
-            )
-            return
-        except discord.HTTPException:
-            await interaction.response.send_message(
-                "❌ Couldn't create the role — please try again.", ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            f"Created {role.mention}. Reply to any message and ping it to turn "
-            "that message into a quote card.",
-            ephemeral=True,
-        )
+    # /quote-role was removed 2026-07-28. It only created a plain Discord role
+    # and made it mentionable — the trigger below matches on the normalized role
+    # *name*, so an admin creating "MakeItAQuote" by hand in Server Settings
+    # works identically. Nothing bot-only was lost with it.
 
     @commands.Cog.listener("on_message")
     async def _on_quote_trigger(self, message: discord.Message) -> None:

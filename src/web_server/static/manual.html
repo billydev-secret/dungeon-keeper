@@ -612,7 +612,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/risky start</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. <code>/risky start_no_ping</code> opens a round without pinging; <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels.</span>
+      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels.</span>
       <div class="cmd-params">
         Both start commands take optional auto-close limits: <strong>auto_close_players</strong> — close signups once this many players join (default 25); <strong>auto_close_minutes</strong> — close signups after this long (default 120).
       </div>
@@ -621,7 +621,7 @@
     <h3 id="games-cmds">Player Utilities</h3>
 
     <div class="cmd-block">
-      <span class="cmd-name">/games help &nbsp;&nbsp; /games support</span>
+      <span class="cmd-name">/games help</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
       <span class="cmd-desc">Browse every game mode with a brief description, or get the support Discord link.</span>
     </div>
@@ -647,7 +647,7 @@
     <h3 id="games-web">For Hosts &amp; Admins</h3>
 
     <div class="cmd-block">
-      <span class="cmd-name">/games config game-status &nbsp;&nbsp; /games config game-end</span>
+      <span class="cmd-name">/games config game-status &nbsp;&nbsp; /games end force:true</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Show the active game in the current channel, or force-close it if it's stuck. The games channel allowlist and the audit log channel are managed on <a href="/#/games-config">Games &rarr; Global Config</a> in the web dashboard.</span>
     </div>
@@ -1029,7 +1029,7 @@
          12. MUSIC
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="music" class="section-break"><span class="section-num">12</span> Music</h2>
-    <p>Music playback in voice channels. Most commands require you to be in the bot's voice channel; <code>/play</code> joins your channel automatically. Spotify URLs require a one-time <code>/spotify_authorize</code> by the bot owner.</p>
+    <p>Music playback in voice channels. Most commands require you to be in the bot's voice channel; <code>/play</code> joins your channel automatically. Spotify URLs require a one-time <strong>Connect Spotify</strong> from Config → Global → Integrations on the dashboard.</p>
 
     <h3 id="music-cmds">Music Commands</h3>
 
@@ -1061,7 +1061,7 @@
       <span class="cmd-desc">Keep the bot in your current voice channel even when no one else is around, with optional Spotify autoplay. Only one channel per server can have 24/7 enabled at a time.</span>
       <div class="cmd-params">
         <strong>enabled</strong> — <code>true</code> to turn on, <code>false</code> to turn off.<br>
-        <strong>autoplay_playlist</strong> — optional Spotify playlist URL; the bot shuffles it when the queue empties. Requires a prior <code>/spotify_authorize</code> by the bot owner.<br>
+        <strong>autoplay_playlist</strong> — optional Spotify playlist URL; the bot shuffles it when the queue empties. Requires a prior <strong>Connect Spotify</strong> from Config → Global → Integrations.<br>
         Pair with <code>/247_status</code> (<span class="perm perm-all">Everyone</span>) to list every 24/7 channel and its autoplay URL.
       </div>
     </div>
@@ -1088,7 +1088,7 @@
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/wellness away on message:&lt;custom message&gt; &nbsp;&nbsp; /wellness away off</span>
+      <span class="cmd-name">/wellness away set state:[on|off] message:&lt;custom message&gt;</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
       <span class="cmd-desc">Enables an away auto-reply. When someone @mentions you, the bot replies automatically.</span>
       <div class="cmd-params">
@@ -1351,11 +1351,12 @@
       </div>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/quote-role</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Roles</span></span>
-      <span class="cmd-desc">One-time setup: creates the mentionable <strong>MakeItAQuote</strong> role. From then on, any member can reply to a message and mention that role to get it rendered as a quote card.</span>
-    </div>
+    <p class="note">One-time setup: create a role called <strong>MakeItAQuote</strong> in
+      Discord's <em>Server Settings → Roles</em> and tick <strong>Allow anyone to
+      @mention this role</strong>. From then on any member can reply to a message and
+      mention that role to get it rendered as a quote card. The bot matches the role by
+      name, so nothing else needs configuring — the old <code>/quote-role</code> command
+      only created this role for you and was removed.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          17. TICKETS, POLICIES & WARNINGS
@@ -2073,11 +2074,11 @@
       <span class="cmd-desc">Hot-reload one cog extension by dotted name (e.g. <code>cogs.mod_cog</code>). The extension argument autocompletes from currently loaded extensions. Re-syncs the slash command tree afterward.</span>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/spotify_authorize</span>
-      <span class="cmd-perm"><span class="perm perm-owner">Bot Owner</span></span>
-      <span class="cmd-desc">Replies privately (only you see it) with a dashboard link to authorize Spotify access for the bot, allowing private playlists in <code>/play</code> and <code>/247 autoplay_playlist</code>.</span>
-    </div>
+    <p class="note">Spotify authorization lives on the dashboard under
+      <strong>Config → Global → Integrations</strong> — press <strong>Connect Spotify</strong>.
+      It allows private playlists in <code>/play</code> and <code>/247 autoplay_playlist</code>.
+      One authorization covers the whole bot. The old <code>/spotify_authorize</code> command
+      only handed you that link and was removed.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          QUICK REFERENCE

@@ -130,7 +130,7 @@ Companion lists: [user_testing_checklist.md](user_testing_checklist.md), [admin_
 
 - [ ] **`/games join` / `/games leave` (others)** — Add/remove another player as a Mod or Game-Host; confirm a non-elevated player attempting the same is rejected.
 - [ ] **`/games config game-status`** — Run in a channel with an active game; confirm it reports live state.
-- [ ] **`/games config game-end`** — Force-close an active game; confirm the "Force-Closed" notice.
+- [ ] **`/games end force:true`** — As a mod, force-close an active game with no confirmation step; confirm the "Force-Closed" notice. As the host (not a mod), confirm `force:true` is refused.
 
 ### Game Tracking
 

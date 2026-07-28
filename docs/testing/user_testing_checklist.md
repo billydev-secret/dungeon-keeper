@@ -135,7 +135,7 @@ Check items off as you go. If something behaves differently than described, note
 
 - [ ] **`/recap`** — After a couple of games, run it within 30 minutes; confirm highlights render.
 - [ ] **`/games help`** — Confirm the full game catalog embed renders.
-- [ ] **`/games support`** — Confirm the support-server invite posts.
+- [ ] **`/support`** — Confirm the support-server invite posts as an embed in the server accent.
 - [ ] **`/games end` (as host)** — Confirm the confirm-popup then archive. As a non-host, non-mod, confirm it's rejected.
 - [ ] **`/games join` / `/games leave` (self)** — Join/leave a roster-based game yourself; on an open-submission game like FFA, confirm "nothing to join."
 
@@ -195,7 +195,7 @@ Check items off as you go. If something behaves differently than described, note
 ### Risky Roll
 
 - [ ] **Risky Roll — `/risky start`** — Start a round; confirm the embed with Roll/How to Play/Close Round buttons.
-- [ ] **Risky Roll — `/risky start_no_ping`** — Confirm no role ping posts.
+- [ ] **Risky Roll — `/risky start ping:false`** — Confirm no role ping posts and Close Round is available immediately.
 - [ ] **Risky Roll — Roll button** — Roll once (confirm you can't roll again); trigger a tie and confirm only tied players can reroll.
 - [ ] **Risky Roll — How to Play button** — Confirm the ephemeral rules text.
 - [ ] **Risky Roll — Close Round button** — As opener, close after the min-game-time floor with ≥2 rollers; confirm resolution. Try before the floor and confirm the wait message.
@@ -350,8 +350,8 @@ Check items off as you go. If something behaves differently than described, note
 > **Prerequisite:** This whole feature is dormant until an admin manually seeds a `wellness_config` row with `role_id`/`channel_id` — nothing in the bot provisions this automatically. Confirm with whoever's running the admin checklist that this has been done before testing anything below.
 
 - [ ] **`/wellness setup`** — With the guild seeded, run it; confirm the 2-step wizard (disclaimer+timezone, then enforcement level) completes and assigns the Wellness Guardian role.
-- [ ] **`/wellness away on [message]`** — Confirm the ephemeral preview embed and that away mode activates.
-- [ ] **`/wellness away off`** — Confirm away mode deactivates.
+- [ ] **`/wellness away set state:on [message]`** — Confirm the ephemeral preview embed and that away mode activates.
+- [ ] **`/wellness away set state:off`** — Confirm away mode deactivates and the stored message survives. Passing a message with `off` is refused.
 - [ ] **Away-mention auto-reply** — Have someone @-mention you while away; confirm an in-channel auto-reply posts (rate-limited) and your message itself isn't deleted.
 - [ ] **Slow-mode friction** — With active per-user slow mode, post again inside the interval; confirm it's deleted and you're DMed the held content + countdown.
 - [ ] **Cap evaluation + escalation** — Exceed a configured cap repeatedly; confirm nudge → cooldown → slow-mode escalation.
